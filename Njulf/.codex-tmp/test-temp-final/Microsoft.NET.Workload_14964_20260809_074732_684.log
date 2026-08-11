@@ -1,0 +1,14 @@
+[2026-08-09 07:47:32.686] [00003A74] === Logging started ===
+[2026-08-09 07:47:32.692] [00003A74] Executing: "C:\Program Files\dotnet\dotnet.exe" test Njulf.Tests/Njulf.Tests.csproj -c Release --no-build --no-restore --disable-build-servers -m:1 --nologo --filter FullyQualifiedName=Njulf.Tests.ContentRendererIntegrationTests.LoadModelMeshAndLoadModel_DoNotShareCacheEntry --logger console;verbosity=minimal, PID: 14964, PPID: 2684
+[2026-08-09 07:47:32.693] [00003A74] IsElevated: False
+[2026-08-09 07:47:32.693] [00003A74] Is64BitProcess: True
+[2026-08-09 07:47:32.693] [00003A74] RebootPending: False
+[2026-08-09 07:47:32.693] [00003A74] ProcessorArchitecture: amd64
+[2026-08-09 07:47:32.693] [00003A74] HostArchitecture: x64
+[2026-08-09 07:47:32.693] [00003A74] SdkDirectory: 10.0.203
+[2026-08-09 07:47:32.693] [00003A74] VerifySignatures: False
+[2026-08-09 07:47:32.693] [00003A74] SDK feature band: 10.0.200
+[2026-08-09 07:47:34.172] [00003A74] Shutting down
+[2026-08-09 07:47:34.172] [00003A74] Shutdown completed.
+[2026-08-09 07:47:34.172] [00003A74] Restart required: False
+[2026-08-09 07:47:34.172] [00003A74] === Logging ended ===

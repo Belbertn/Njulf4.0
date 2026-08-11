@@ -179,6 +179,22 @@ internal sealed class HelloGame : Game
                 StartupLogPath = _smokeOptions.StartupLogPath,
                 HealthReportPath = _smokeOptions.HealthReportPath
             };
+            options.AdvancedGiPrerequisiteManifestPath =
+                _smokeOptions.AdvancedGiPrerequisiteManifestPath;
+            options.AdvancedGiQualificationManifestPath =
+                _smokeOptions.AdvancedGiQualificationManifestPath;
+            options.AdvancedGiRuntimeEvidenceBundlePath =
+                _smokeOptions.AdvancedGiRuntimeEvidenceBundlePath;
+            ApplyPreInitializationRenderSettings(options.InitialSettings);
+            if (_smokeOptions.DdgiOpacityMicromapModeOverride is
+                DdgiOpacityMicromapMode.ExtFourStateExperiment or
+                DdgiOpacityMicromapMode.AutoQualified)
+            {
+                // An explicit C1 override also pins the optional-device request.
+                // Capability, prerequisite, evidence, and static-BLAS gates
+                // still independently fail closed during initialization.
+                options.EnableExtOpacityMicromap = true;
+            }
         });
         services.AddAssets(AppContext.BaseDirectory);
         services.AddInput();
@@ -498,6 +514,8 @@ internal sealed class HelloGame : Game
             renderer.Settings.SceneSubmission.GpuShadowCompactionEnabled = true;
         if (_smokeOptions.EnableSceneSubmissionValidation)
             renderer.Settings.SceneSubmission.ValidationCompareCpuGpuLists = true;
+        if (_smokeOptions.EnableGpuMeshletCounters)
+            renderer.Settings.Diagnostics.GpuMeshletCountersEnabled = true;
         if (_smokeOptions.AsyncComputeModeOverride.HasValue)
             renderer.Settings.AsyncCompute.Mode = _smokeOptions.AsyncComputeModeOverride.Value;
         else if (_smokeOptions.EnableAsyncCompute)
@@ -508,6 +526,14 @@ internal sealed class HelloGame : Game
                 _smokeOptions.SimpleDdgiSchedulerModeOverride.Value;
         }
         GlobalIlluminationSettings gi = renderer.Settings.GlobalIllumination;
+        ApplyAdvancedGiSettings(gi);
+        if (_smokeOptions.EnableDdgiContentConformance)
+        {
+            // Runtime-only authorization: this makes the requested profile
+            // modes effective for a controlled capture without persisting or
+            // claiming a release-qualified device profile.
+            gi.EnableContentDependentFeaturesForConformance();
+        }
         if (_smokeOptions.SimpleDdgiStoragePackingModeOverride.HasValue)
         {
             gi.SimpleDdgiStoragePackingMode =
@@ -602,6 +628,60 @@ internal sealed class HelloGame : Game
                 renderer.Settings,
                 _smokeOptions.Benchmark.CaptureVariant);
         }
+    }
+
+    private void ApplyPreInitializationRenderSettings(RenderSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (_smokeOptions.QualityPresetOverride.HasValue)
+        {
+            settings.ApplyQualityPreset(
+                _smokeOptions.QualityPresetOverride.Value);
+        }
+        if (_smokeOptions.SimpleDdgiSchedulerModeOverride.HasValue)
+        {
+            settings.GlobalIllumination.SimpleDdgiSchedulerMode =
+                _smokeOptions.SimpleDdgiSchedulerModeOverride.Value;
+        }
+        ApplyAdvancedGiSettings(settings.GlobalIllumination);
+    }
+
+    private void ApplyAdvancedGiSettings(GlobalIlluminationSettings gi)
+    {
+        ArgumentNullException.ThrowIfNull(gi);
+        if (_smokeOptions.SimpleDdgiReceiverFeedbackModeOverride.HasValue)
+        {
+            gi.SimpleDdgiReceiverFeedbackMode =
+                _smokeOptions.SimpleDdgiReceiverFeedbackModeOverride.Value;
+        }
+        if (_smokeOptions.DdgiOpacityMicromapModeOverride.HasValue)
+        {
+            gi.DdgiOpacityMicromapMode =
+                _smokeOptions.DdgiOpacityMicromapModeOverride.Value;
+        }
+        if (_smokeOptions.SimpleDdgiDirectionalGuidingModeOverride.HasValue)
+        {
+            gi.SimpleDdgiDirectionalGuidingMode =
+                _smokeOptions.SimpleDdgiDirectionalGuidingModeOverride.Value;
+        }
+        if (_smokeOptions.GiCausticModeOverride.HasValue)
+            gi.GiCausticMode = _smokeOptions.GiCausticModeOverride.Value;
+        if (_smokeOptions.SimpleDdgiNearFieldResidualModeOverride.HasValue)
+        {
+            gi.SimpleDdgiNearFieldResidualMode =
+                _smokeOptions.SimpleDdgiNearFieldResidualModeOverride.Value;
+        }
+
+        if (_smokeOptions.SimpleDdgiReceiverFeedbackQualificationId is { } b1Id)
+            gi.SimpleDdgiReceiverFeedbackQualificationId = b1Id;
+        if (_smokeOptions.DdgiOpacityMicromapQualificationId is { } c1Id)
+            gi.DdgiOpacityMicromapQualificationId = c1Id;
+        if (_smokeOptions.SimpleDdgiDirectionalGuidingQualificationId is { } c3Id)
+            gi.SimpleDdgiDirectionalGuidingQualificationId = c3Id;
+        if (_smokeOptions.GiCausticQualificationId is { } c4Id)
+            gi.GiCausticQualificationId = c4Id;
+        if (_smokeOptions.SimpleDdgiNearFieldResidualQualificationId is { } c5Id)
+            gi.SimpleDdgiNearFieldResidualQualificationId = c5Id;
     }
 
     protected override void OnResize(int width, int height)
@@ -1182,7 +1262,52 @@ internal sealed class HelloGame : Game
             camera);
     }
 
-    private void LoadSceneKind(
+    private bool LoadSceneKind(
+        SampleSceneKind sceneKind,
+        MeshManager meshManager,
+        MaterialManager materialManager,
+        LightManager lightManager,
+        VulkanRenderer renderer,
+        FirstPersonCamera camera)
+    {
+        ClearSceneAndContent();
+        bool requestedSceneLoaded =
+            SampleSceneTransitionRecovery.Execute(
+                loadRequestedScene: () =>
+                    LoadSceneKindCore(
+                        sceneKind,
+                        meshManager,
+                        materialManager,
+                        lightManager,
+                        renderer,
+                        camera),
+                cleanupRequestedScene: ClearSceneAndContent,
+                loadSafeScene: () =>
+                    LoadSceneKindCore(
+                        SampleSceneKind.GlobalIlluminationTest,
+                        meshManager,
+                        materialManager,
+                        lightManager,
+                        renderer,
+                        camera),
+                cleanupFailedSafeScene: ClearSceneAndContent,
+                reportRequestedFailure: failure =>
+                {
+                    Console.Error.WriteLine(
+                        $"Scene '{GetSceneDisplayName(sceneKind)}' exhausted Vulkan device memory. Attempting the safe GI scene.");
+                    Console.Error.WriteLine(failure);
+                });
+
+        if (!requestedSceneLoaded)
+        {
+            Console.Error.WriteLine(
+                $"Recovered from the failed '{GetSceneDisplayName(sceneKind)}' load with '{GetSceneDisplayName(SampleSceneKind.GlobalIlluminationTest)}'.");
+        }
+
+        return requestedSceneLoaded;
+    }
+
+    private void LoadSceneKindCore(
         SampleSceneKind sceneKind,
         MeshManager meshManager,
         MaterialManager materialManager,
@@ -1192,7 +1317,6 @@ internal sealed class HelloGame : Game
     {
         _sceneKind = sceneKind;
 
-        Scene.ClearAndDispose();
         Model model = LoadSampleScene(meshManager, materialManager, lightManager);
         _performanceScenarioRunner = CreatePerformanceScenarioRunner(meshManager, materialManager, lightManager);
         SampleLighting.ConfigureRenderSettings(renderer.Settings, ResolveSceneLightingMode());
@@ -1208,6 +1332,14 @@ internal sealed class HelloGame : Game
         PrintLoadedSceneSummary(model);
 
         Console.WriteLine($"Scene: {GetSceneDisplayName(_sceneKind)}");
+    }
+
+    private void ClearSceneAndContent()
+    {
+        Scene.ClearAndDispose();
+        (Content ?? throw new InvalidOperationException(
+            "Interactive scene transitions require an initialized content manager."))
+            .Clear();
     }
 
     private void ConfigureSceneLighting(LightManager lightManager)

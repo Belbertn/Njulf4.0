@@ -45,7 +45,77 @@ namespace Njulf.Tests
                 Assert.That(snapshot.SimpleAtlasBytes, Is.EqualTo(0UL));
                 Assert.That(snapshot.SimpleGpuTraceMicroseconds, Is.EqualTo(0));
                 Assert.That(snapshot.SimpleGpuBlendMicroseconds, Is.EqualTo(0));
+                Assert.That(snapshot.SimpleDdgiLivenessTelemetry,
+                    Is.EqualTo(SimpleDdgiLivenessTelemetry.Empty));
+                Assert.That(snapshot.SimpleDdgiLivenessWatchdog,
+                    Is.EqualTo(SimpleDdgiLivenessWatchdogResult.Empty));
+                Assert.That(snapshot.ContentDependent,
+                    Is.EqualTo(DdgiContentRuntimeSnapshot.Disabled));
             });
+        }
+
+        [Test]
+        public void DdgiRuntimeSnapshot_ContentDependentEvidenceIsImmutableAndPreserved()
+        {
+            DdgiContentRuntimeSnapshot content =
+                DdgiContentRuntimeSnapshot.Disabled with
+                {
+                    ConfiguredFeatures = DdgiContentFeature.ManyLightSampling |
+                        DdgiContentFeature.FoliageGeometry,
+                    ActiveFeatures = DdgiContentFeature.ManyLightSampling,
+                    RequestedLocalLightSamplingMode =
+                        SimpleDdgiLocalLightSamplingMode.LightTree,
+                    EffectiveLocalLightSamplingMode =
+                        SimpleDdgiLocalLightSamplingMode.LightTree,
+                    LightBufferRevision = 41,
+                    RaySceneContentEpoch = 17,
+                    FoliageFallbackReason = "probe-space far tier excluded"
+                };
+            DdgiRuntimeSnapshot snapshot = DdgiRuntimeSnapshot.Empty with
+            {
+                ContentDependent = content
+            };
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(snapshot.ContentDependent, Is.EqualTo(content));
+                Assert.That(snapshot.ContentDependent.LightBufferRevision,
+                    Is.EqualTo(41));
+                Assert.That(snapshot.ContentDependent.RaySceneContentEpoch,
+                    Is.EqualTo(17));
+                Assert.That(DdgiRuntimeSnapshot.Empty.ContentDependent,
+                    Is.EqualTo(DdgiContentRuntimeSnapshot.Disabled));
+            });
+        }
+
+        [Test]
+        public void DdgiDiagnosticWarningTracker_ReportsBoundedSimpleDdgiLivenessStalls()
+        {
+            var tracker = new DdgiDiagnosticWarningTracker();
+            var snapshot = DdgiRuntimeSnapshot.Empty with
+            {
+                SimpleActive = 1,
+                SimpleDdgiLivenessWatchdog = new SimpleDdgiLivenessWatchdogResult(
+                    Active: 1,
+                    StallDetected: 1,
+                    FirstStalledStage: SimpleDdgiLivenessStage.EligibleProbeNotSelected,
+                    BlockingReason: SimpleDdgiLivenessBlockReason.SchedulerDidNotSelect,
+                    ElapsedFrames: 9,
+                    LatencyBoundFrames: 8,
+                    EligibleProbeCount: 2u,
+                    AdmissionCandidateCount: 0u,
+                    SelectedRequestCount: 0u,
+                    IndirectDispatchRequestCount: 0u,
+                    CommittedUpdateCount: 0u,
+                    CoherentPublicationCount: 0u,
+                    EffectiveRequestBudget: 16u,
+                    EffectiveRayBudget: 1024u,
+                    Generations: default)
+            };
+
+            IReadOnlyList<string> warnings = tracker.Update(snapshot, schedulerOverBudget: false);
+
+            Assert.That(warnings, Has.Some.Contains("liveness watchdog"));
         }
 
         [Test]

@@ -86,6 +86,44 @@ public sealed class RenderGraphResourceDeclarationTests
     }
 
     [Test]
+    public void DeviceIdleFallback_RemovesOptionalPassAndLogicalResourceAtomically()
+    {
+        using var graph = new RenderGraph();
+        graph.RegisterResource(new RenderGraphResourceDescriptor(
+            RenderGraphResourceId.NearFieldDirectSource,
+            "optional near-field source",
+            RenderGraphResourceKind.Image,
+            Format.R16G16B16A16Sfloat,
+            RenderGraphResourceSizePolicy.SceneResolution,
+            RenderGraphResourceLifetime.Transient,
+            Persistent: false));
+        graph.AddPass(CreateUninitializedPass("OptionalC5Pass"));
+        graph.DeclarePassResources(
+            "OptionalC5Pass",
+            new RenderGraphResourceUsage(
+                RenderGraphResourceId.NearFieldDirectSource,
+                RenderGraphResourceAccess.Write));
+
+        Assert.That(() => graph.UnregisterResourcesAfterDeviceIdle(
+                [RenderGraphResourceId.NearFieldDirectSource]),
+            Throws.InvalidOperationException.With.Message.Contains(
+                "OptionalC5Pass"));
+
+        int removedPasses = graph.RemovePassesAfterDeviceIdle(
+            ["OptionalC5Pass"]);
+        int removedResources = graph.UnregisterResourcesAfterDeviceIdle(
+            [RenderGraphResourceId.NearFieldDirectSource]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(removedPasses, Is.EqualTo(1));
+            Assert.That(removedResources, Is.EqualTo(1));
+            Assert.That(graph.PassNames, Does.Not.Contain("OptionalC5Pass"));
+            Assert.That(graph.ResourceInventory, Is.Empty);
+        });
+    }
+
+    [Test]
     public void ValidateResourceDeclarations_FailsWhenImageLayoutIntentHasNoStageOrAccess()
     {
         var graph = new RenderGraph();
@@ -465,6 +503,197 @@ public sealed class RenderGraphResourceDeclarationTests
         });
     }
 
+    [Test]
+    public void ConcreteBindings_SelectCurrentAndPreviousHistoryBanksByFrameParity()
+    {
+        var bindings = new RenderGraphResourceBindings();
+        bindings.Replace(new[]
+        {
+            RenderGraphConcreteResourceBinding.ForBuffer(
+                RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                "history bank zero",
+                new Silk.NET.Vulkan.Buffer { Handle = 901 },
+                byteSize: 64,
+                permittedQueueFamilies: new uint[] { 0 },
+                initialOwnerQueueFamily: 0,
+                historyIndex: 0,
+                allocationGeneration: 901),
+            RenderGraphConcreteResourceBinding.ForBuffer(
+                RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                "history bank one",
+                new Silk.NET.Vulkan.Buffer { Handle = 902 },
+                byteSize: 64,
+                permittedQueueFamilies: new uint[] { 0 },
+                initialOwnerQueueFamily: 0,
+                historyIndex: 1,
+                allocationGeneration: 902)
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bindings.GetBindings(
+                RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                0,
+                RenderGraphHistoryBindingSelection.Current).Single().Buffer.Handle,
+                Is.EqualTo(901));
+            Assert.That(bindings.GetBindings(
+                RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                0,
+                RenderGraphHistoryBindingSelection.Previous).Single().Buffer.Handle,
+                Is.EqualTo(902));
+            Assert.That(bindings.GetBindings(
+                RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                1,
+                RenderGraphHistoryBindingSelection.Current).Single().Buffer.Handle,
+                Is.EqualTo(902));
+            Assert.That(bindings.GetBindings(
+                RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                1,
+                RenderGraphHistoryBindingSelection.Previous).Single().Buffer.Handle,
+                Is.EqualTo(901));
+        });
+    }
+
+    [Test]
+    public void ConcreteBindings_RejectAliasedHistoryBanks()
+    {
+        var bindings = new RenderGraphResourceBindings();
+        var shared = new Silk.NET.Vulkan.Buffer { Handle = 903 };
+
+        Assert.That(() => bindings.Replace(new[]
+        {
+            RenderGraphConcreteResourceBinding.ForBuffer(
+                RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                "aliased history bank zero",
+                shared,
+                byteSize: 64,
+                permittedQueueFamilies: new uint[] { 0 },
+                initialOwnerQueueFamily: 0,
+                historyIndex: 0,
+                allocationGeneration: 903),
+            RenderGraphConcreteResourceBinding.ForBuffer(
+                RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                "aliased history bank one",
+                shared,
+                byteSize: 64,
+                permittedQueueFamilies: new uint[] { 0 },
+                initialOwnerQueueFamily: 0,
+                historyIndex: 1,
+                allocationGeneration: 903)
+        }), Throws.InvalidOperationException.With.Message.Contains("overlap"));
+    }
+
+    [Test]
+    public void HistorySelectedBarriers_TransitionOnlyTheSelectedPhysicalBank()
+    {
+        var graph = new RenderGraph();
+        graph.RegisterResource(new RenderGraphResourceDescriptor(
+            RenderGraphResourceId.TaaHistory,
+            "history chain",
+            RenderGraphResourceKind.ImageChain,
+            Format.R16G16B16A16Sfloat,
+            RenderGraphResourceSizePolicy.SceneResolution,
+            RenderGraphResourceLifetime.Imported,
+            Persistent: true));
+        graph.DeclarePassResources(
+            "WriteCurrent",
+            new RenderGraphResourceUsage(
+                RenderGraphResourceId.TaaHistory,
+                RenderGraphResourceAccess.Write,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                ImageLayout.General,
+                RenderGraphQueueIntent.Compute,
+                HistoryBinding: RenderGraphHistoryBindingSelection.Current));
+        graph.DeclarePassResources(
+            "ReadPrevious",
+            new RenderGraphResourceUsage(
+                RenderGraphResourceId.TaaHistory,
+                RenderGraphResourceAccess.Read,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderSampledReadBit,
+                ImageLayout.ShaderReadOnlyOptimal,
+                RenderGraphQueueIntent.Compute,
+                HistoryBinding: RenderGraphHistoryBindingSelection.Previous));
+        var bank0 = new LayoutTrackedImageStub();
+        var bank1 = new LayoutTrackedImageStub();
+        graph.RegisterImportedImageTarget(RenderGraphResourceId.TaaHistory, bank0);
+        graph.RegisterImportedImageTarget(RenderGraphResourceId.TaaHistory, bank1);
+        var sceneData = new SceneRenderingData();
+
+        ExecuteGraphPlannedBarriers(graph, "WriteCurrent", sceneData, frameIndex: 0);
+        ExecuteGraphPlannedBarriers(graph, "ReadPrevious", sceneData, frameIndex: 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bank0.Transitions, Is.EqualTo(new[] { ImageLayout.General }));
+            Assert.That(bank1.Transitions, Is.EqualTo(new[] { ImageLayout.ShaderReadOnlyOptimal }));
+            Assert.That(graph.LastPlannedBarriers.Select(static barrier => barrier.HistoryIndex),
+                Is.EqualTo(new[] { 0, 1 }));
+        });
+    }
+
+    [Test]
+    public void SameQueueBarriers_PreserveDependenciesAcrossLogicalImageAliases()
+    {
+        var graph = new RenderGraph();
+        graph.RegisterResource(new RenderGraphResourceDescriptor(
+            RenderGraphResourceId.SceneColor,
+            "scene color alias",
+            RenderGraphResourceKind.Image,
+            Format.R16G16B16A16Sfloat,
+            RenderGraphResourceSizePolicy.SceneResolution,
+            RenderGraphResourceLifetime.Imported,
+            Persistent: true));
+        graph.RegisterResource(new RenderGraphResourceDescriptor(
+            RenderGraphResourceId.NearFieldDirectSource,
+            "near-field source alias",
+            RenderGraphResourceKind.Image,
+            Format.R16G16B16A16Sfloat,
+            RenderGraphResourceSizePolicy.SceneResolution,
+            RenderGraphResourceLifetime.Imported,
+            Persistent: true));
+        graph.DeclarePassResources(
+            "WriteAlias",
+            new RenderGraphResourceUsage(
+                RenderGraphResourceId.SceneColor,
+                RenderGraphResourceAccess.Write,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit,
+                ImageLayout.General,
+                RenderGraphQueueIntent.Graphics));
+        graph.DeclarePassResources(
+            "ReadAlias",
+            new RenderGraphResourceUsage(
+                RenderGraphResourceId.NearFieldDirectSource,
+                RenderGraphResourceAccess.Read,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit,
+                ImageLayout.General,
+                RenderGraphQueueIntent.Graphics));
+
+        var sharedTarget = new LayoutTrackedImageStub();
+        graph.RegisterImportedImageTarget(RenderGraphResourceId.SceneColor, sharedTarget);
+        graph.RegisterImportedImageTarget(RenderGraphResourceId.NearFieldDirectSource, sharedTarget);
+        var sceneData = new SceneRenderingData();
+
+        ExecuteGraphPlannedBarriers(graph, "WriteAlias", sceneData);
+        ExecuteGraphPlannedBarriers(graph, "ReadAlias", sceneData);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sharedTarget.Transitions, Is.EqualTo(new[]
+            {
+                ImageLayout.General,
+                ImageLayout.General
+            }));
+            Assert.That(sharedTarget.ForcedTransitions, Is.EqualTo(new[] { false, true }));
+            Assert.That(graph.LastPlannedBarriers, Has.Count.EqualTo(2));
+            Assert.That(graph.LastPlannedBarriers[^1].PreviousAccess, Is.EqualTo(RenderGraphResourceAccess.Write));
+            Assert.That(graph.LastPlannedBarriers[^1].NextAccess, Is.EqualTo(RenderGraphResourceAccess.Read));
+        });
+    }
+
     private static RenderGraphResourceDescriptor CreateSceneColorDescriptor()
     {
         return new RenderGraphResourceDescriptor(
@@ -480,6 +709,7 @@ public sealed class RenderGraphResourceDeclarationTests
     private sealed class LayoutTrackedImageStub : IRenderGraphLayoutTrackedImage
     {
         public List<ImageLayout> Transitions { get; } = new();
+        public List<bool> ForcedTransitions { get; } = new();
         public ImageLayout Layout { get; private set; } = ImageLayout.Undefined;
 
         public void TransitionToLayout(
@@ -493,19 +723,21 @@ public sealed class RenderGraphResourceDeclarationTests
         {
             Layout = newLayout;
             Transitions.Add(newLayout);
+            ForcedTransitions.Add(force);
         }
     }
 
     private static void ExecuteGraphPlannedBarriers(
         RenderGraph graph,
         string passName,
-        SceneRenderingData sceneData)
+        SceneRenderingData sceneData,
+        int frameIndex = 0)
     {
         MethodInfo method = typeof(RenderGraph).GetMethod(
             "ExecuteGraphPlannedBarriers",
             BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingMethodException(typeof(RenderGraph).FullName, "ExecuteGraphPlannedBarriers");
-        method.Invoke(graph, new object[] { default(CommandBuffer), passName, sceneData, false, false });
+        method.Invoke(graph, new object[] { default(CommandBuffer), passName, frameIndex, sceneData, false, false });
     }
 
     private static void ExecuteGraphFinalBarriers(
@@ -517,7 +749,7 @@ public sealed class RenderGraphResourceDeclarationTests
             "ExecuteGraphFinalBarriers",
             BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingMethodException(typeof(RenderGraph).FullName, "ExecuteGraphFinalBarriers");
-        method.Invoke(graph, new object[] { default(CommandBuffer), passName, sceneData, false });
+        method.Invoke(graph, new object[] { default(CommandBuffer), passName, 0, sceneData, false });
     }
 
     private static RenderGraphResourceDescriptor CreateLdrSceneColorDescriptor()

@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
 
@@ -38,6 +39,45 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_SPONZA_GI_CAPTURE_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_MATERIAL_GI_CAPTURE_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_MATERIAL_GI_QUALIFICATION_MANIFEST", null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_ADVANCED_GI_PREREQUISITE_MANIFEST",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_ADVANCED_GI_QUALIFICATION_MANIFEST",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_ADVANCED_GI_RUNTIME_EVIDENCE_BUNDLE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_SIMPLE_DDGI_RECEIVER_FEEDBACK_MODE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_DDGI_OPACITY_MICROMAP_MODE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_SIMPLE_DDGI_DIRECTIONAL_GUIDING_MODE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_GI_CAUSTIC_MODE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_MODE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_SIMPLE_DDGI_RECEIVER_FEEDBACK_QUALIFICATION_ID",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_DDGI_OPACITY_MICROMAP_QUALIFICATION_ID",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_SIMPLE_DDGI_DIRECTIONAL_GUIDING_QUALIFICATION_ID",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_GI_CAUSTIC_QUALIFICATION_ID",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_QUALIFICATION_ID",
+            null);
         Environment.SetEnvironmentVariable(
             "NJULF_MATERIAL_GI_QUALIFICATION_CANDIDATE",
             null);
@@ -602,6 +642,38 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void ParsesGpuMeshletCounterFlagAndDefaultsToStartupSmoke()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--gpu-meshlet-counters"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableGpuMeshletCounters, Is.True);
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void DdgiContentConformanceFlag_IsRuntimeOnlyAndDefaultsToStartupSmoke()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--ddgi-content-conformance"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableDdgiContentConformance, Is.True);
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
     public void ParsesSceneSubmissionSmokeFlags()
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
@@ -890,6 +962,20 @@ public sealed class SampleSmokeOptionsParserTests
             ]),
             Throws.ArgumentException.With.Message.Contains(
                 "--benchmark-max-settle-frames >= 4096"));
+    }
+
+    [Test]
+    public void ProductionBenchmarkRejectsDdgiContentConformanceAuthorization()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(
+            [
+                "--benchmark",
+                "--benchmark-require-production",
+                "--ddgi-content-conformance"
+            ]),
+            Throws.ArgumentException.With.Message.Contains(
+                "non-shipping --ddgi-content-conformance rollout authorization"));
     }
 
     [Test]
@@ -1341,6 +1427,126 @@ public sealed class SampleSmokeOptionsParserTests
         Assert.That(
             options.MaterialGiQualificationManifestPath,
             Is.EqualTo(Path.GetFullPath(manifest)));
+    }
+
+    [Test]
+    public void ParsesAdvancedGiStartupManifestsModesAndQualificationIds()
+    {
+        string prerequisite = Path.Combine(
+            Path.GetTempPath(),
+            "advanced-gi-prerequisites.json");
+        string qualification = Path.Combine(
+            Path.GetTempPath(),
+            "advanced-gi-qualification.json");
+        string runtimeEvidence = Path.Combine(
+            Path.GetTempPath(),
+            "advanced-gi-runtime-evidence.json");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--advanced-gi-prerequisite-manifest", prerequisite,
+            "--advanced-gi-qualification-manifest", qualification,
+            "--advanced-gi-runtime-evidence-bundle", runtimeEvidence,
+            "--simple-ddgi-receiver-feedback-mode", "exact-compacted",
+            "--ddgi-opacity-micromap-mode", "auto-qualified",
+            "--simple-ddgi-directional-guiding-mode",
+                "per-probe-histogram-experiment",
+            "--gi-caustic-mode", "world-cache-experiment",
+            "--simple-ddgi-near-field-residual-mode",
+                "hi-z-half-resolution-experiment",
+            "--simple-ddgi-receiver-feedback-qualification-id", "b1-qid",
+            "--ddgi-opacity-micromap-qualification-id", "c1-qid",
+            "--simple-ddgi-directional-guiding-qualification-id", "c3-qid",
+            "--gi-caustic-qualification-id", "c4-qid",
+            "--simple-ddgi-near-field-residual-qualification-id", "c5-qid"
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.AdvancedGiPrerequisiteManifestPath,
+                Is.EqualTo(Path.GetFullPath(prerequisite)));
+            Assert.That(options.AdvancedGiQualificationManifestPath,
+                Is.EqualTo(Path.GetFullPath(qualification)));
+            Assert.That(options.AdvancedGiRuntimeEvidenceBundlePath,
+                Is.EqualTo(Path.GetFullPath(runtimeEvidence)));
+            Assert.That(options.SimpleDdgiReceiverFeedbackModeOverride,
+                Is.EqualTo(SimpleDdgiReceiverFeedbackMode.ExactCompacted));
+            Assert.That(options.DdgiOpacityMicromapModeOverride,
+                Is.EqualTo(DdgiOpacityMicromapMode.AutoQualified));
+            Assert.That(options.SimpleDdgiDirectionalGuidingModeOverride,
+                Is.EqualTo(SimpleDdgiDirectionalGuidingMode
+                    .PerProbeHistogramExperiment));
+            Assert.That(options.GiCausticModeOverride,
+                Is.EqualTo(GiCausticMode.WorldCacheExperiment));
+            Assert.That(options.SimpleDdgiNearFieldResidualModeOverride,
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode
+                    .HiZHalfResolutionExperiment));
+            Assert.That(options.SimpleDdgiReceiverFeedbackQualificationId,
+                Is.EqualTo("b1-qid"));
+            Assert.That(options.DdgiOpacityMicromapQualificationId,
+                Is.EqualTo("c1-qid"));
+            Assert.That(options.SimpleDdgiDirectionalGuidingQualificationId,
+                Is.EqualTo("c3-qid"));
+            Assert.That(options.GiCausticQualificationId,
+                Is.EqualTo("c4-qid"));
+            Assert.That(options.SimpleDdgiNearFieldResidualQualificationId,
+                Is.EqualTo("c5-qid"));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void ParsesAdvancedGiStartupConfigurationFromEnvironment()
+    {
+        string prerequisite = Path.Combine(
+            Path.GetTempPath(),
+            "advanced-gi-prerequisites-environment.json");
+        Environment.SetEnvironmentVariable(
+            "NJULF_ADVANCED_GI_PREREQUISITE_MANIFEST",
+            prerequisite);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_SIMPLE_DDGI_DIRECTIONAL_GUIDING_MODE",
+            "auto-qualified");
+        Environment.SetEnvironmentVariable(
+            "NJULF_SIMPLE_DDGI_DIRECTIONAL_GUIDING_QUALIFICATION_ID",
+            "c3-environment-qid");
+
+        SampleSmokeOptions options =
+            SampleSmokeOptionsParser.Parse(Array.Empty<string>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.AdvancedGiPrerequisiteManifestPath,
+                Is.EqualTo(Path.GetFullPath(prerequisite)));
+            Assert.That(options.SimpleDdgiDirectionalGuidingModeOverride,
+                Is.EqualTo(SimpleDdgiDirectionalGuidingMode.AutoQualified));
+            Assert.That(options.SimpleDdgiDirectionalGuidingQualificationId,
+                Is.EqualTo("c3-environment-qid"));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+        });
+    }
+
+    [Test]
+    public void AdvancedGiStartupOptionsRejectUnknownModesAndUnsafeIds()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--gi-caustic-mode", "pretend-production"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "--gi-caustic-mode"));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--gi-caustic-qualification-id", new string('x', 257)
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "at most 256"));
+        });
     }
 
     [Test]

@@ -17,6 +17,8 @@ public sealed class FoliagePatch : Njulf.Core.Scene.IIdentifiedSceneEntity
     private bool _visible = true;
     private uint _revision = 1;
 
+    public event Action<FoliagePatch, BoundingBox>? Changed;
+
     public FoliagePatch(FoliagePrototype prototype, BoundingBox bounds)
     {
         _prototype = prototype ?? throw new ArgumentNullException(nameof(prototype));
@@ -62,8 +64,9 @@ public sealed class FoliagePatch : Njulf.Core.Scene.IIdentifiedSceneEntity
             if (_bounds.Equals(value))
                 return;
 
+            BoundingBox previousBounds = _bounds;
             _bounds = value;
-            IncrementRevision();
+            IncrementRevision(previousBounds);
         }
     }
 
@@ -188,10 +191,11 @@ public sealed class FoliagePatch : Njulf.Core.Scene.IIdentifiedSceneEntity
         }
     }
 
-    private void IncrementRevision()
+    private void IncrementRevision(BoundingBox? previousBounds = null)
     {
         _revision++;
         if (_revision == 0)
             _revision = 1;
+        Changed?.Invoke(this, previousBounds ?? _bounds);
     }
 }

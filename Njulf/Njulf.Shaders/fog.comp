@@ -2,14 +2,28 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
+#ifndef NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#define NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION 0
+#endif
+
 #include "common.glsl"
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (gl_LocalInvocationIndex == 0u)
+#define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE (gl_LocalInvocationIndex == 0u)
+#define SIMPLE_DDGI_RECEIVER_COVERAGE_HASH ((gl_WorkGroupID.x * 73856093u) ^ (gl_WorkGroupID.y * 19349663u))
+#define SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS SIMPLE_DDGI_RECEIVER_CONSUMER_FOG
 #define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 1
 #define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 1u
 #include "ddgi_simple_shared.glsl"
 #undef SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET
 #undef SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT
+#undef SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS
+#undef SIMPLE_DDGI_RECEIVER_COVERAGE_HASH
+#undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
 #undef SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#include "ddgi_receiver_feedback_source_abi.glsl"
+#include "ddgi_receiver_feedback_producer.glsl"
+#endif
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -19,6 +33,10 @@ layout(push_constant) uniform FogPushConstantBlock
 {
     GPUFogPushConstants Push;
 } pc;
+
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+shared uint SimpleDdgiFogRepresentativeLane;
+#endif
 
 const uint FOG_MODE_DISABLED = 0u;
 const uint FOG_MODE_DISTANCE = 1u;
@@ -108,8 +126,18 @@ vec3 DirectionalInscattering(vec3 viewDirection, float fogFactor)
         fogFactor;
 }
 
-vec3 ResolveDdgiFogAmbient(vec3 cameraPosition, vec3 worldPosition, vec3 viewDirection, float fogFactor)
+vec3 ResolveDdgiFogAmbient(
+    vec3 cameraPosition,
+    vec3 worldPosition,
+    vec3 viewDirection,
+    float fogFactor,
+    out SimpleDdgiGatherResult gather,
+    out float effectiveOwnership,
+    out float indirectIntensity)
 {
+    gather = EmptySimpleDdgiGatherResult();
+    effectiveOwnership = 0.0;
+    indirectIntensity = 0.0;
     if (fogFactor <= 0.0001)
         return vec3(0.0);
 
@@ -122,12 +150,214 @@ vec3 ResolveDdgiFogAmbient(vec3 cameraPosition, vec3 worldPosition, vec3 viewDir
         (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_FOG_ENABLED) &&
         simpleParams.probeCount > 0u)
     {
-        vec3 simpleIrradiance = SampleSimpleDdgiIrradiance(samplePosition, ambientNormal, -viewDirection);
-        return simpleIrradiance * fogFactor * 0.18;
+        gather = SampleSimpleDdgiGather(
+            simpleParams,
+            samplePosition,
+            ambientNormal,
+            -viewDirection);
+        float radiometricOwnership =
+            SimpleDdgiRadiometricOwnership(gather);
+        float leakAttenuation =
+            SimpleDdgiLeakAttenuation(gather, simpleParams);
+        effectiveOwnership = radiometricOwnership * leakAttenuation;
+        indirectIntensity = max(simpleParams.indirectIntensity, 0.0);
+        vec3 irradiance = gather.irradiance * effectiveOwnership;
+        float fallbackWeight = (1.0 - radiometricOwnership) *
+            simpleParams.environmentFallbackIntensity;
+        if (fallbackWeight >
+            SIMPLE_DDGI_ENVIRONMENT_FALLBACK_MIN_WEIGHT)
+        {
+            vec3 fallback = SimpleDdgiEnvironmentIrradianceFallback(
+                ambientNormal,
+                simpleParams);
+            if ((simpleParams.flags &
+                    SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
+            {
+                fallback *= EstimateFarFieldSkyVisibility(
+                    samplePosition,
+                    ambientNormal,
+                    simpleParams,
+                    1u);
+            }
+            irradiance += fallback * fallbackWeight;
+        }
+        return clamp(irradiance, vec3(0.0), vec3(64.0)) *
+            indirectIntensity * fogFactor * 0.18;
     }
 
     return vec3(0.0);
 }
+
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+const uint SIMPLE_DDGI_FOG_FEEDBACK_PRODUCER = 4u;
+
+float SimpleDdgiFogTriangleSolidAngle(vec3 a, vec3 b, vec3 c)
+{
+    float numerator = abs(dot(a, cross(b, c)));
+    float denominator = max(
+        1.0 + dot(a, b) + dot(b, c) + dot(c, a),
+        0.0000001);
+    return 2.0 * atan(numerator, denominator);
+}
+
+vec3 SimpleDdgiFogViewRay(vec2 uv)
+{
+    vec3 cameraPosition = pc.Push.CameraPositionAndTime.xyz;
+    vec3 nearPoint = ReconstructWorldPosition(
+        clamp(uv, vec2(0.0), vec2(1.0)),
+        1.0);
+    vec3 ray = nearPoint - cameraPosition;
+    float lengthSquared = dot(ray, ray);
+    return lengthSquared > 0.0000001 &&
+            !isnan(lengthSquared) && !isinf(lengthSquared)
+        ? ray * inversesqrt(lengthSquared)
+        : vec3(0.0, 0.0, -1.0);
+}
+
+float SimpleDdgiFogWorkgroupSolidAngle(ivec2 extent)
+{
+    vec2 safeExtent = vec2(max(extent, ivec2(1)));
+    vec2 minimumPixel = vec2(gl_WorkGroupID.xy * gl_WorkGroupSize.xy);
+    vec2 maximumPixel = min(
+        minimumPixel + vec2(gl_WorkGroupSize.xy),
+        safeExtent);
+    vec2 uv00 = minimumPixel / safeExtent;
+    vec2 uv10 = vec2(maximumPixel.x, minimumPixel.y) / safeExtent;
+    vec2 uv01 = vec2(minimumPixel.x, maximumPixel.y) / safeExtent;
+    vec2 uv11 = maximumPixel / safeExtent;
+    vec3 r00 = SimpleDdgiFogViewRay(uv00);
+    vec3 r10 = SimpleDdgiFogViewRay(uv10);
+    vec3 r01 = SimpleDdgiFogViewRay(uv01);
+    vec3 r11 = SimpleDdgiFogViewRay(uv11);
+    float solidAngle =
+        SimpleDdgiFogTriangleSolidAngle(r00, r10, r11) +
+        SimpleDdgiFogTriangleSolidAngle(r00, r11, r01);
+    if (!(solidAngle > 0.0) || isnan(solidAngle) || isinf(solidAngle))
+    {
+        vec2 covered = max(maximumPixel - minimumPixel, vec2(0.0));
+        solidAngle = 4.0 * 3.14159265359 *
+            (covered.x * covered.y) /
+            max(safeExtent.x * safeExtent.y, 1.0);
+    }
+    return solidAngle;
+}
+
+void EmitSimpleDdgiFogReceiverFeedback(
+    SimpleDdgiGatherResult gather,
+    float effectiveOwnership,
+    float indirectIntensity,
+    float fogFactor,
+    ivec2 extent)
+{
+    if (gl_LocalInvocationIndex != SimpleDdgiFogRepresentativeLane ||
+        (pc.Push.DebugView != FOG_DEBUG_NONE &&
+         pc.Push.DebugView != FOG_DEBUG_FOGGED_SCENE))
+    {
+        return;
+    }
+
+    uint controlOffsetWords;
+    uint effectiveProducer =
+        gather.exactFeedbackRefinementOrBaseFallback != 0u
+            ? 6u
+            : SIMPLE_DDGI_FOG_FEEDBACK_PRODUCER;
+    if (!SimpleDdgiReceiverFeedbackTryResolveFrameControlOffset(
+            pc.Push.CurrentFrameIndex,
+            controlOffsetWords) ||
+        !SimpleDdgiReceiverFeedbackProducerControlIsValid(
+            controlOffsetWords,
+            effectiveProducer))
+    {
+        return;
+    }
+    uint samplingPeriod = SimpleDdgiReceiverFeedbackProducerControlWord(
+        controlOffsetWords,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_SAMPLE_PERIOD);
+    uint samplingPhase = SimpleDdgiReceiverFeedbackProducerControlWord(
+        controlOffsetWords,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_SAMPLE_PHASE);
+    uint maximumOwners = SimpleDdgiReceiverFeedbackProducerControlWord(
+        controlOffsetWords,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_MAXIMUM_OWNERS);
+    uint groupCountX = (uint(max(extent.x, 1)) + gl_WorkGroupSize.x - 1u) /
+        gl_WorkGroupSize.x;
+    uint workgroupId = gl_WorkGroupID.y * groupCountX + gl_WorkGroupID.x;
+    bool policyValid = samplingPeriod != 0u &&
+        samplingPhase < samplingPeriod && maximumOwners != 0u &&
+        maximumOwners <= SIMPLE_DDGI_EXACT_FEEDBACK_MAX_OWNERS;
+    if (!policyValid)
+    {
+        SimpleDdgiReceiverFeedbackMarkProducerFailure(
+            controlOffsetWords,
+            effectiveProducer,
+            1u);
+        return;
+    }
+    // Contiguous workgroup strata give the CPU quota compiler an exact upper
+    // bound while the rotating phase visits every froxel tile over time.
+    if (workgroupId % samplingPeriod != samplingPhase)
+        return;
+    if (gather.exactFeedbackOverflow != 0u ||
+        gather.exactFeedbackOwnerCount > maximumOwners)
+    {
+        SimpleDdgiReceiverFeedbackMarkProducerFailure(
+            controlOffsetWords,
+            effectiveProducer,
+            max(gather.exactFeedbackOwnerCount, 1u));
+        return;
+    }
+
+    float physicalContribution =
+        SimpleDdgiFogWorkgroupSolidAngle(extent) *
+        clamp(effectiveOwnership, 0.0, 1.0) *
+        max(indirectIntensity, 0.0) * 0.18 *
+        clamp(fogFactor, 0.0, 1.0) * clamp(fogFactor, 0.0, 1.0);
+    if (!(physicalContribution > 0.0) ||
+        isnan(physicalContribution) || isinf(physicalContribution))
+    {
+        return;
+    }
+
+    SimpleDdgiReceiverFeedbackProducerReservation reservation =
+        SimpleDdgiReceiverFeedbackReserveProducerRecords(
+            controlOffsetWords,
+            effectiveProducer,
+            gather.exactFeedbackOwnerCount);
+    uvec2 stableReceiverIdentity = uvec2(
+        workgroupId,
+        uint(extent.x) ^ (uint(extent.y) << 16u));
+    for (uint ownerIndex = 0u;
+         ownerIndex < gather.exactFeedbackOwnerCount;
+         ++ownerIndex)
+    {
+        uint recordIndex;
+        if (!SimpleDdgiReceiverFeedbackTryGetReservationRecord(
+                reservation,
+                ownerIndex,
+                recordIndex))
+        {
+            continue;
+        }
+        SimpleDdgiExactFeedbackOwner owner =
+            gather.exactFeedbackOwners[ownerIndex];
+        SimpleDdgiReceiverFeedbackWriteCandidate(
+            controlOffsetWords,
+            recordIndex,
+            effectiveProducer,
+            owner.fallbackRole,
+            owner.requestedProbe,
+            owner.resolvedProbe,
+            owner.resolvedPage,
+            owner.requestedPage,
+            workgroupId,
+            owner.normalizedWeight,
+            float(samplingPeriod),
+            physicalContribution,
+            owner.pageGeneration,
+            stableReceiverIdentity);
+    }
+}
+#endif
 
 vec3 DebugColor(
     float distanceFog,
@@ -169,12 +399,26 @@ void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 extent = imageSize(FoggedSceneColor);
-    if (pixel.x >= extent.x || pixel.y >= extent.y)
+    bool inBounds = pixel.x < extent.x && pixel.y < extent.y;
+    float depth = inBounds
+        ? texelFetch(
+            BindlessTextures[nonuniformEXT(int(pc.Push.DepthTextureIndex))],
+            pixel,
+            0).r
+        : 0.0;
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+    if (gl_LocalInvocationIndex == 0u)
+        SimpleDdgiFogRepresentativeLane = 0xffffffffu;
+    barrier();
+    if (inBounds && pc.Push.Mode != FOG_MODE_DISABLED && depth > 0.000001)
+        atomicMin(SimpleDdgiFogRepresentativeLane, gl_LocalInvocationIndex);
+    barrier();
+#endif
+    if (!inBounds)
         return;
 
     vec2 uv = (vec2(pixel) + vec2(0.5)) / max(pc.Push.ScreenDimensions.xy, vec2(1.0));
     vec3 sceneColor = max(texture(BindlessTextures[nonuniformEXT(int(pc.Push.SceneColorTextureIndex))], uv).rgb, vec3(0.0));
-    float depth = texelFetch(BindlessTextures[nonuniformEXT(int(pc.Push.DepthTextureIndex))], pixel, 0).r;
 
     if (pc.Push.Mode == FOG_MODE_DISABLED || depth <= 0.000001)
     {
@@ -201,7 +445,17 @@ void main()
 
     vec3 fogColor = ResolveSkyFogColor(viewDirection);
     vec3 inscattering = DirectionalInscattering(viewDirection, fogFactor);
-    vec3 ddgiFogAmbient = ResolveDdgiFogAmbient(cameraPosition, worldPosition, viewDirection, fogFactor);
+    SimpleDdgiGatherResult fogGather;
+    float fogDdgiOwnership;
+    float fogDdgiIndirectIntensity;
+    vec3 ddgiFogAmbient = ResolveDdgiFogAmbient(
+        cameraPosition,
+        worldPosition,
+        viewDirection,
+        fogFactor,
+        fogGather,
+        fogDdgiOwnership,
+        fogDdgiIndirectIntensity);
     vec3 fogRadiance = fogColor + inscattering + ddgiFogAmbient;
     vec3 fogged = mix(sceneColor, fogRadiance, fogFactor);
 
@@ -216,6 +470,15 @@ void main()
             viewDistance,
             worldPosition.y,
             fogged);
+
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+    EmitSimpleDdgiFogReceiverFeedback(
+        fogGather,
+        fogDdgiOwnership,
+        fogDdgiIndirectIntensity,
+        fogFactor,
+        extent);
+#endif
 
     imageStore(FoggedSceneColor, pixel, vec4(result, 1.0));
 }

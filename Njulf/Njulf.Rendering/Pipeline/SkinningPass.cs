@@ -107,8 +107,11 @@ namespace Njulf.Rendering.Pipeline
                 _bufferManager.GetBuffer(skinnedVertexBuffer),
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit,
-                PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.MeshShaderBitExt,
-                AccessFlags2.ShaderStorageReadBit);
+                PipelineStageFlags2.TaskShaderBitExt |
+                PipelineStageFlags2.MeshShaderBitExt |
+                PipelineStageFlags2.AccelerationStructureBuildBitKhr,
+                AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.AccelerationStructureReadBitKhr);
             BarrierBuilder.ExecuteBarrier(commandBuffer, bufferBarriers: new[] { barrier });
 
             sceneData.CpuSkinningRecordMicroseconds = Stopwatch.GetElapsedTime(start).Ticks / (TimeSpan.TicksPerMillisecond / 1000);

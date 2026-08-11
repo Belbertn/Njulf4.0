@@ -17,6 +17,8 @@ public sealed class FoliagePrototype :
     private uint _revision = 1;
     private Njulf.Core.Scene.RenderObject? _resourceOwner;
 
+    public event Action<FoliagePrototype>? Changed;
+
     public Guid Id { get; set; } = Guid.NewGuid();
 
     public string Name
@@ -180,6 +182,7 @@ public sealed class FoliagePrototype :
         _revision++;
         if (_revision == 0)
             _revision = 1;
+        Changed?.Invoke(this);
     }
 
     private static float ClampPositive(float value, float fallback)

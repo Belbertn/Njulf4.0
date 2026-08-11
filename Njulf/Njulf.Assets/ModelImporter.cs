@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Assets.Gltf;
+using Njulf.Assets.Validation;
 using Njulf.Core.Animation;
 using Njulf.Core.Math;
 using Silk.NET.Assimp;
@@ -1344,6 +1345,7 @@ namespace Njulf.Assets
             target.AnisotropyTexture = material.AnisotropyTexture ?? target.AnisotropyTexture;
             target.TransmissionFactor = material.TransmissionFactor ?? target.TransmissionFactor;
             target.GiTransmissionPolicy = material.GiTransmissionPolicy ?? target.GiTransmissionPolicy;
+            target.GiCausticParticipation = material.GiCausticParticipation ?? target.GiCausticParticipation;
             target.ThinTransmissionTint = material.ThinTransmissionTint ?? target.ThinTransmissionTint;
             target.Ior = material.Ior ?? target.Ior;
             target.ThicknessFactor = material.ThicknessFactor ?? target.ThicknessFactor;
@@ -2093,6 +2095,20 @@ namespace Njulf.Assets
             }
 
             if (extras.TryGetProperty(
+                    Gltf.SharpGltfModelMeshConverter.GiCausticParticipationExtra,
+                    out JsonElement causticParticipation))
+            {
+                if (causticParticipation.ValueKind != JsonValueKind.String ||
+                    !Enum.TryParse(causticParticipation.GetString(), true,
+                        out ModelGiCausticParticipationMode parsed))
+                {
+                    throw new InvalidDataException(
+                        $"glTF material extra '{Gltf.SharpGltfModelMeshConverter.GiCausticParticipationExtra}' is invalid.");
+                }
+                material.GiCausticParticipation = parsed;
+            }
+
+            if (extras.TryGetProperty(
                     Gltf.SharpGltfModelMeshConverter.ThinTransmissionFactorExtra,
                     out JsonElement factor))
             {
@@ -2636,6 +2652,12 @@ namespace Njulf.Assets
         /// alone remains Unsupported because it may describe thick glass.
         /// </summary>
         public ModelGiTransmissionPolicy GiTransmissionPolicy { get; set; } = ModelGiTransmissionPolicy.None;
+        /// <summary>
+        /// Explicit opt-in to the bounded tagged-caustic path. Generic shiny
+        /// or transmissive materials remain <see cref="ModelGiCausticParticipationMode.None"/>.
+        /// </summary>
+        public ModelGiCausticParticipationMode GiCausticParticipation { get; set; } =
+            ModelGiCausticParticipationMode.None;
         public Vector4 ThinTransmissionTint { get; set; } = Vector4.One;
         public float Ior { get; set; } = 1.5f;
         public float ThicknessFactor { get; set; }
@@ -2904,6 +2926,7 @@ namespace Njulf.Assets
         public ModelTextureSlot? AnisotropyTexture { get; set; }
         public float? TransmissionFactor { get; set; }
         public ModelGiTransmissionPolicy? GiTransmissionPolicy { get; set; }
+        public ModelGiCausticParticipationMode? GiCausticParticipation { get; set; }
         public Vector4? ThinTransmissionTint { get; set; }
         public float? Ior { get; set; }
         public float? ThicknessFactor { get; set; }

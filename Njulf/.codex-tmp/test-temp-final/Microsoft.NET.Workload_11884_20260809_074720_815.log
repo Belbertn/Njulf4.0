@@ -1,0 +1,14 @@
+[2026-08-09 07:47:20.818] [00002E6C] === Logging started ===
+[2026-08-09 07:47:20.825] [00002E6C] Executing: "C:\Program Files\dotnet\dotnet.exe" test Njulf.Tests/Njulf.Tests.csproj -c Release --no-build --no-restore --disable-build-servers -m:1 --nologo --filter FullyQualifiedName=Njulf.Tests.ContentRendererIntegrationTests.ModelCreateInstance_CopiesRenderableHandlesWithoutSharingRenderObjects --logger console;verbosity=minimal, PID: 11884, PPID: 2684
+[2026-08-09 07:47:20.827] [00002E6C] IsElevated: False
+[2026-08-09 07:47:20.827] [00002E6C] Is64BitProcess: True
+[2026-08-09 07:47:20.827] [00002E6C] RebootPending: False
+[2026-08-09 07:47:20.827] [00002E6C] ProcessorArchitecture: amd64
+[2026-08-09 07:47:20.827] [00002E6C] HostArchitecture: x64
+[2026-08-09 07:47:20.827] [00002E6C] SdkDirectory: 10.0.203
+[2026-08-09 07:47:20.827] [00002E6C] VerifySignatures: False
+[2026-08-09 07:47:20.827] [00002E6C] SDK feature band: 10.0.200
+[2026-08-09 07:47:22.298] [00002E6C] Shutting down
+[2026-08-09 07:47:22.298] [00002E6C] Shutdown completed.
+[2026-08-09 07:47:22.298] [00002E6C] Restart required: False
+[2026-08-09 07:47:22.298] [00002E6C] === Logging ended ===

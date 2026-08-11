@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Njulf.Core.Animation;
+using Njulf.Assets.Validation;
 using SharpGLTF.Schema2;
 using SharpGLTF.Runtime;
 using SharpGLTF.Transforms;
@@ -36,6 +37,7 @@ internal static class SharpGltfModelMeshConverter
     internal const string DecalLayerExtra = "NJULF_decal_layer";
     internal const string DecalDepthBiasExtra = "NJULF_decal_depth_bias";
     internal const string GiTransmissionPolicyExtra = "NJULF_gi_transmission_policy";
+    internal const string GiCausticParticipationExtra = "NJULF_gi_caustic_participation";
     internal const string ThinTransmissionFactorExtra = "NJULF_thin_transmission_factor";
     internal const string ThinTransmissionTintExtra = "NJULF_thin_transmission_tint";
 
@@ -303,6 +305,20 @@ internal static class SharpGltfModelMeshConverter
                     "one of None, ThinSurface, Volume, or Unsupported");
             }
             imported.GiTransmissionPolicy = policy;
+        }
+
+        if (objectExtras.TryGetPropertyValue(GiCausticParticipationExtra,
+                out JsonNode? causticNode))
+        {
+            if (causticNode is not JsonValue causticValue ||
+                !causticValue.TryGetValue(out string? causticText) ||
+                !Enum.TryParse(causticText, ignoreCase: true,
+                    out ModelGiCausticParticipationMode participation))
+            {
+                throw InvalidMaterialExtra(materialIndex, GiCausticParticipationExtra,
+                    "one of None, MirrorHero, ClosedDielectricHero, or RoughSpecularReference");
+            }
+            imported.GiCausticParticipation = participation;
         }
 
         if (objectExtras.TryGetPropertyValue(ThinTransmissionFactorExtra, out JsonNode? factorNode))

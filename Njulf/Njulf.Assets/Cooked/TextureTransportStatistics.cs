@@ -599,6 +599,38 @@ public sealed class TextureTransportImage
             : SampleLinear(u, v, binding.Sampler.WrapU, binding.Sampler.WrapV);
     }
 
+    /// <summary>
+    /// Copies the decoded alpha channel as tightly packed FP32 values. This is
+    /// intentionally an explicit copy: offline native bakers must never retain
+    /// a pointer into the cooker's managed, double-precision working image.
+    /// </summary>
+    public void CopyAlphaTo(Span<float> destination)
+    {
+        int pixelCount = checked(Width * Height);
+        if (_linearRgba.Length != checked(pixelCount * 4))
+        {
+            throw new InvalidOperationException(
+                "Decoded texture pixels are unavailable or inconsistent with their dimensions.");
+        }
+        if (destination.Length != pixelCount)
+        {
+            throw new ArgumentException(
+                $"Alpha destination contains {destination.Length} values; expected exactly {pixelCount}.",
+                nameof(destination));
+        }
+
+        for (int pixel = 0, source = 3; pixel < pixelCount; pixel++, source += 4)
+        {
+            double alpha = _linearRgba[source];
+            if (!double.IsFinite(alpha) || alpha is < 0.0 or > 1.0)
+            {
+                throw new InvalidDataException(
+                    $"Decoded alpha sample {pixel} is not finite and normalized.");
+            }
+            destination[pixel] = (float)alpha;
+        }
+    }
+
     private TextureTransportVector4 SampleNearest(
         double u,
         double v,

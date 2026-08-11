@@ -54,6 +54,115 @@ public sealed class ProductionRenderPipelineDeclarationTests
     }
 
     [Test]
+    public void UrgentRelightLane_IsImmediatelyPreForwardAndHasNoRaySceneDependency()
+    {
+        var order = ProductionRenderPipelineDeclaration.Instance.PassOrder.ToList();
+        int environmentPrefilter = order.IndexOf("EnvironmentPrefilterPass");
+        int urgent = order.IndexOf("SimpleDdgiUrgentRelightPass");
+        int forward = order.IndexOf("ForwardPlusPass");
+        int ordinarySchedule = order.IndexOf("SimpleDdgiSchedulePass");
+        RenderGraphPassResourceDeclaration declaration =
+            ProductionRenderPipelineDeclaration.Instance
+                .CreatePassResourceDeclarations()
+                .Single(candidate =>
+                    candidate.PassName == "SimpleDdgiUrgentRelightPass");
+        RenderGraphResourceId[] forbiddenRaySceneResources =
+        [
+            RenderGraphResourceId.TlasStorage,
+            RenderGraphResourceId.RayQueryInstanceMetadata,
+            RenderGraphResourceId.MeshGeometryBuffers,
+            RenderGraphResourceId.MaterialBuffers,
+            RenderGraphResourceId.MaterialTextures,
+            RenderGraphResourceId.FarFieldParameters,
+            RenderGraphResourceId.FarFieldVoxels,
+            RenderGraphResourceId.FarFieldInstances,
+            RenderGraphResourceId.FarFieldJumpFlood,
+            RenderGraphResourceId.FarFieldPageTable
+        ];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(urgent, Is.EqualTo(environmentPrefilter + 1));
+            Assert.That(forward, Is.EqualTo(urgent + 1));
+            Assert.That(ordinarySchedule, Is.GreaterThan(forward));
+            Assert.That(
+                declaration.Usages.Where(usage =>
+                    forbiddenRaySceneResources.Contains(usage.Resource)),
+                Is.Empty);
+        });
+    }
+
+    [Test]
+    public void ContentDependentPrelude_DeclaresComputeToAsAndTreeToTraceEdges()
+    {
+        var production = ProductionRenderPipelineDeclaration.Instance;
+        var prelude = production.ExternallyRecordedPassResourceDeclarations
+            .ToList();
+        var declarations = production.CreatePassResourceDeclarations()
+            .ToDictionary(declaration => declaration.PassName);
+        var order = production.PassOrder.ToList();
+
+        RenderGraphPassResourceDeclaration foliage = prelude.Single(
+            declaration =>
+                declaration.PassName == "DdgiFoliageProxyGenerationPass");
+        RenderGraphPassResourceDeclaration blas = prelude.Single(
+            declaration =>
+                declaration.PassName == "AccelerationStructureBlasPass");
+        RenderGraphResourceUsage generatedGeometry = foliage.Usages.Single(
+            usage => usage.Resource ==
+                RenderGraphResourceId.DdgiFoliageProxyGeometry);
+        RenderGraphResourceUsage blasInput = blas.Usages.Single(
+            usage => usage.Resource ==
+                RenderGraphResourceId.DdgiFoliageProxyGeometry);
+        RenderGraphResourceUsage treeWrite =
+            declarations["SimpleDdgiLightTreePass"].Usages.Single(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.SimpleDdgiLightTree);
+        RenderGraphResourceUsage traceRead =
+            declarations["SimpleDdgiTracePass"].Usages.Single(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.SimpleDdgiLightTree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(prelude.FindIndex(candidate =>
+                    candidate.PassName == "SkinningPass"),
+                Is.LessThan(prelude.FindIndex(candidate =>
+                    candidate.PassName == "DdgiFoliageProxyGenerationPass")));
+            Assert.That(prelude.FindIndex(candidate =>
+                    candidate.PassName == "DdgiFoliageProxyGenerationPass"),
+                Is.LessThan(prelude.FindIndex(candidate =>
+                    candidate.PassName == "AccelerationStructureBlasPass")));
+            Assert.That(generatedGeometry.Access,
+                Is.EqualTo(RenderGraphResourceAccess.Write));
+            Assert.That(generatedGeometry.StageMask &
+                PipelineStageFlags2.ComputeShaderBit, Is.Not.Zero);
+            Assert.That(blasInput.Access,
+                Is.EqualTo(RenderGraphResourceAccess.Read));
+            Assert.That(blasInput.StageMask &
+                PipelineStageFlags2.AccelerationStructureBuildBitKhr,
+                Is.Not.Zero);
+            Assert.That(blasInput.AccessMask &
+                AccessFlags2.AccelerationStructureReadBitKhr,
+                Is.Not.Zero);
+            Assert.That(treeWrite.Access,
+                Is.EqualTo(RenderGraphResourceAccess.ReadWrite));
+            Assert.That(traceRead.Access,
+                Is.EqualTo(RenderGraphResourceAccess.Read));
+            Assert.That(order.IndexOf("SimpleDdgiLightTreePass"),
+                Is.LessThan(order.IndexOf("SimpleDdgiTracePass")));
+            Assert.That(AsyncComputePassCatalog.GetClassification(
+                    "SimpleDdgiLightTreePass"),
+                Is.EqualTo(
+                    AsyncComputePassClassification.GraphicsQueueComputeByDesign));
+            Assert.That(AsyncComputePassCatalog.GetClassification(
+                    "DdgiFoliageProxyGenerationPass"),
+                Is.EqualTo(
+                    AsyncComputePassClassification.GraphicsQueueComputeByDesign));
+        });
+    }
+
+    [Test]
     public void SparseResidencyTransaction_DeclaresAllMutationAndConsumerEdges()
     {
         var declarations = ProductionRenderPipelineDeclaration.Instance
@@ -78,6 +187,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
                  {
                      "SimpleDdgiTracePass",
                      "SimpleDdgiRelocateClassifyPass",
+                     "SimpleDdgiDirectionalRadiancePass",
                      "SimpleDdgiAcceleratedSolvePass",
                      "SimpleDdgiTransportPass",
                      "SimpleDdgiBlendPass",
@@ -98,8 +208,10 @@ public sealed class ProductionRenderPipelineDeclarationTests
     {
         string[] consumerNames =
         [
+            "SimpleDdgiUrgentRelightPass",
             "SimpleDdgiTracePass",
             "SimpleDdgiRelocateClassifyPass",
+            "SimpleDdgiDirectionalRadiancePass",
             "SimpleDdgiTransportPass",
             "SimpleDdgiBlendPass",
             "SimpleDdgiPublishPass",
@@ -126,6 +238,44 @@ public sealed class ProductionRenderPipelineDeclarationTests
                 Assert.That(usage.AccessMask & requiredAccess, Is.EqualTo(requiredAccess), name);
             });
         }
+    }
+
+    [Test]
+    public void DirectionalRadianceProjection_IsPostBlendTransactionalScratchConsumer()
+    {
+        var production = ProductionRenderPipelineDeclaration.Instance;
+        var order = production.PassOrder.ToList();
+        var declarations = production.CreatePassResourceDeclarations()
+            .ToDictionary(declaration => declaration.PassName);
+        int blend = order.IndexOf("SimpleDdgiBlendPass");
+        int directional = order.IndexOf("SimpleDdgiDirectionalRadiancePass");
+        int publish = order.IndexOf("SimpleDdgiPublishPass");
+        RenderGraphPassResourceDeclaration directionalDeclaration =
+            declarations["SimpleDdgiDirectionalRadiancePass"];
+        RenderGraphResourceUsage scratch =
+            directionalDeclaration.Usages.Single(usage =>
+                usage.Resource == RenderGraphResourceId.SimpleDdgiRayScratch);
+        RenderGraphResourceUsage sidecar =
+            directionalDeclaration.Usages.Single(usage =>
+                usage.Resource ==
+                    RenderGraphResourceId.SimpleDdgiDirectionalRadiance);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(directional, Is.GreaterThan(blend));
+            Assert.That(directional, Is.LessThan(publish));
+            Assert.That(
+                scratch.Access,
+                Is.EqualTo(RenderGraphResourceAccess.ReadWrite));
+            Assert.That(
+                sidecar.Access,
+                Is.EqualTo(RenderGraphResourceAccess.ReadWrite));
+            Assert.That(
+                declarations["SimpleDdgiBlendPass"].Usages.Any(usage =>
+                    usage.Resource ==
+                        RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
+                Is.False);
+        });
     }
 
     [Test]
@@ -216,6 +366,7 @@ public sealed class ProductionRenderPipelineDeclarationTests
 
         foreach (string producer in new[]
                  {
+                     "SimpleDdgiUrgentRelightPass",
                      "SimpleDdgiPublishPass",
                      "SimpleDdgiSchedulerCommitPass"
                  })

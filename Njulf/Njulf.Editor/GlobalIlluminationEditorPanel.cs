@@ -3,6 +3,7 @@ using System.Text;
 using Hexa.NET.ImGui;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 using NumericsVector3 = System.Numerics.Vector3;
 
@@ -35,6 +36,7 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
 
     internal static bool IsSupportedScalarType(Type type) =>
         type == typeof(bool) ||
+        type == typeof(string) ||
         type == typeof(int) ||
         type == typeof(uint) ||
         type == typeof(long) ||
@@ -124,7 +126,127 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
                 : "Inactive";
             ImGui.Text($"Active backend: {backend} ({diagnostics.GlobalIlluminationMode})");
             ImGui.Text($"Runtime DDGI volumes: {runtimeVolumeCount}    Probes: {Math.Max(diagnostics.SimpleDdgiProbeCount, diagnostics.DdgiProbeCount)}");
+            RenderAdvancedGiRuntimeSummary(diagnostics);
         }
+    }
+
+    private static void RenderAdvancedGiRuntimeSummary(
+        RendererDiagnostics diagnostics)
+    {
+        GiRoadmapExperimentDiagnostics roadmap =
+            diagnostics.GiRoadmapExperiments;
+        if (!ImGui.CollapsingHeader(
+                "Advanced GI experiments",
+                ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            return;
+        }
+
+        SimpleDdgiReceiverFeedbackDiagnostics b1 =
+            roadmap.ReceiverFeedbackRuntime ??
+            SimpleDdgiReceiverFeedbackDiagnostics.Disabled;
+        RenderAdvancedGiMode(
+            "B1 exact receiver feedback",
+            roadmap.Modes.ReceiverFeedback,
+            b1.State.ToString(),
+            b1.Memory.AllocatedBytes,
+            b1.Reason,
+            b1.HasAuthoritativePublication);
+
+        OpacityMicromapGpuRuntimeSnapshot c1 = roadmap.OpacityMicromapRuntime;
+        RenderAdvancedGiMode(
+            "C1 opacity micromaps",
+            roadmap.Modes.OpacityMicromap,
+            c1.Enabled
+                ? $"Published ({c1.PublishedVariantCount:N0} variants)"
+                : c1.Supported ? "Supported / inactive" : "Unavailable",
+            c1.AllocatedBytes,
+            c1.Detail,
+            c1.Enabled && c1.PublicationCount > 0UL);
+
+        SimpleDdgiDirectionalGuidingDiagnostics c3 =
+            roadmap.DirectionalGuidingRuntime ??
+            SimpleDdgiDirectionalGuidingDiagnostics.Disabled;
+        RenderAdvancedGiMode(
+            "C3 directional guiding",
+            roadmap.Modes.DirectionalGuiding,
+            c3.State.ToString(),
+            c3.Memory.AllocatedBytes,
+            c3.Reason,
+            c3.HasAuthoritativeSampleReadback);
+
+        GiCausticDiagnostics c4 = roadmap.CausticRuntime ??
+            GiCausticDiagnostics.Disabled;
+        RenderAdvancedGiMode(
+            "C4 tagged caustic cache",
+            roadmap.Modes.Caustic,
+            c4.State.ToString(),
+            c4.Memory.AllocatedBytes,
+            c4.Reason,
+            c4.HasAuthoritativePublication);
+
+        SimpleDdgiNearFieldResidualDiagnostics c5 =
+            diagnostics.SimpleDdgiNearFieldResidual ??
+            SimpleDdgiNearFieldResidualDiagnostics.Disabled();
+        RenderAdvancedGiMode(
+            "C5 near-field residual",
+            roadmap.Modes.NearFieldResidual,
+            c5.Readback.State.ToString(),
+            c5.Memory.AllocatedBytes,
+            c5.Readback.Reason,
+            c5.IsAuthoritativeReadback);
+
+        ImGui.TextDisabled(
+            "C2 ray-tracing invocation reorder: excluded by this plan");
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "C2/SER has no runtime work, resource ownership, or promotion state.");
+        }
+    }
+
+    private static void RenderAdvancedGiMode<TMode>(
+        string label,
+        in GiExperimentModeState<TMode> mode,
+        string runtimeState,
+        ulong allocatedBytes,
+        string? runtimeReason,
+        bool authoritative)
+        where TMode : struct, Enum
+    {
+        string authority = authoritative ? "authoritative" : "not authoritative";
+        ImGui.Text(
+            $"{label}: {mode.RequestedMode} -> {mode.EffectiveMode} | " +
+            $"{runtimeState} | {FormatBytes(allocatedBytes)} | {authority}");
+        if (!ImGui.IsItemHovered())
+            return;
+
+        string qualification = string.IsNullOrWhiteSpace(mode.QualificationId)
+            ? "none"
+            : mode.QualificationId;
+        string reason = string.IsNullOrWhiteSpace(runtimeReason)
+            ? "none"
+            : runtimeReason.Trim();
+        ImGui.SetTooltip(
+            $"Supported: {mode.SupportedMode}\n" +
+            $"Admitted: {mode.AdmittedMode}\n" +
+            $"Fallback: {mode.FallbackReason} ({mode.FallbackDetail})\n" +
+            $"Qualification ID: {qualification}\n" +
+            $"Runtime: {reason}");
+    }
+
+    private static string FormatBytes(ulong bytes)
+    {
+        const double KiB = 1024d;
+        const double MiB = 1024d * KiB;
+        const double GiB = 1024d * MiB;
+        return bytes switch
+        {
+            >= 1024UL * 1024UL * 1024UL => $"{bytes / GiB:0.##} GiB",
+            >= 1024UL * 1024UL => $"{bytes / MiB:0.##} MiB",
+            >= 1024UL => $"{bytes / KiB:0.##} KiB",
+            _ => $"{bytes:N0} B"
+        };
     }
 
     private void RenderPersistence(EditorController editor)
@@ -177,6 +299,12 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         {
             bool value = (bool)(current ?? false);
             changed = ImGui.Checkbox(item.Label, ref value);
+            next = value;
+        }
+        else if (type == typeof(string))
+        {
+            string value = (string?)current ?? string.Empty;
+            changed = ImGui.InputText(item.Label, ref value, (nuint)256);
             next = value;
         }
         else if (type == typeof(int))

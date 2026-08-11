@@ -104,6 +104,9 @@ foreach ($moduleName in $receiverModuleNames) {
     $functionalAtomicUnsignedMaximums = [regex]::Matches(
         $disassembly,
         '\bOpAtomicUMax\b').Count
+    $functionalAtomicOrs = [regex]::Matches(
+        $disassembly,
+        '\bOpAtomicOr\b').Count
 
     # The optimized source currently contains three inlined gather call sites;
     # each site has exactly one aligned uvec4 receiver-record load instruction.
@@ -117,10 +120,13 @@ foreach ($moduleName in $receiverModuleNames) {
         $violations.Add("${moduleName}: found $sourceCacheAccesses source-cache access chain(s)")
     }
     # Three optimized gather sites share the lock-free epoch marker, deduplicated
-    # receiver-demand claim, overflow rollback, and exact fixed-summary counters.
-    # Pin the complete protocol so it cannot silently grow or disappear.
-    if ($functionalAtomicAdds -ne 11) {
-        $violations.Add("${moduleName}: found $functionalAtomicAdds OpAtomicIAdd instruction(s), expected 11")
+    # receiver-demand claim, overflow rollback, exact fixed-summary counters,
+    # and one B1 interpolation-mass accumulation each. Pin the complete protocol.
+    if ($functionalAtomicAdds -ne 14) {
+        $violations.Add("${moduleName}: found $functionalAtomicAdds OpAtomicIAdd instruction(s), expected 14")
+    }
+    if ($functionalAtomicOrs -ne 3) {
+        $violations.Add("${moduleName}: found $functionalAtomicOrs OpAtomicOr instruction(s), expected 3")
     }
     if ($functionalAtomicExchanges -ne 3) {
         $violations.Add("${moduleName}: found $functionalAtomicExchanges OpAtomicExchange instruction(s), expected 3")
@@ -297,6 +303,6 @@ if ($violations.Count -ne 0) {
     throw "Production Simple-DDGI receiver SPIR-V verification failed: $($violations -join '; ')."
 }
 
-Write-Host "Validated and verified $($receiverModuleNames.Count) production Simple-DDGI receiver modules use exactly one compact uvec4 load per inlined gather site, the exact bounded paging-demand atomic protocol, no compute-state/source-cache access, and no obsolete SSGI artifact."
+Write-Host "Validated and verified $($receiverModuleNames.Count) production Simple-DDGI receiver modules use exactly one compact uvec4 load per inlined gather site, the exact bounded paging-demand/B1 contribution atomic protocol, no compute-state/source-cache access, and no obsolete SSGI artifact."
 Write-Host "Validated $($receiverCacheFragmentModuleNames.Count) cache-required forward modules each perform one aligned fixed set-2 FP16 receiver-cache vector read; the $($giDisabledControlModuleNames.Count) paired controls contain no cache descriptor or read, and all six exclude exact gather ABI resources and atomics."
 Write-Host "Validated the receiver-cache resolve publishes exactly one aligned set-2/binding-0 FP16 cache-buffer write path and contains no atomics."

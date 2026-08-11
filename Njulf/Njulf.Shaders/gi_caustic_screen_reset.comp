@@ -1,0 +1,31 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "gi_caustic_screen.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    if (!GiCausticScreenContractValid())
+        return;
+
+    for (uint word = 0u; word < GI_CAUSTIC_SCREEN_TILE_LIST_WORD_OFFSET;
+         ++word)
+    {
+        WriteStorageWordUniform(
+            giCausticPc.ScratchBufferIndex,
+            word,
+            0u);
+    }
+    // VkDispatchIndirectCommand: x is compacted by classify; y/z remain one.
+    WriteStorageWordUniform(
+        giCausticPc.ScratchBufferIndex,
+        GI_CAUSTIC_SCREEN_INDIRECT_WORD_OFFSET + 1u,
+        1u);
+    WriteStorageWordUniform(
+        giCausticPc.ScratchBufferIndex,
+        GI_CAUSTIC_SCREEN_INDIRECT_WORD_OFFSET + 2u,
+        1u);
+}

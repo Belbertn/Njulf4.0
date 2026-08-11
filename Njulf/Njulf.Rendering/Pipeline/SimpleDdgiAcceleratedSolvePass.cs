@@ -42,15 +42,22 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
         "ddgi_simple_transport_solve_validate.comp.spv";
     private const string PackedTransportShader =
         "ddgi_simple_transport_solve_packed.comp.spv";
-
-    private static readonly string[] SharedShaderNames =
-    [
-        "ddgi_simple_blend.comp.spv",
-        "ddgi_simple_transport_intermediate_publish.comp.spv"
-    ];
+    private const string LegacyGuidedTransportShader =
+        "ddgi_simple_transport_solve_guided_legacy.comp.spv";
+    private const string ValidateGuidedTransportShader =
+        "ddgi_simple_transport_solve_guided_validate.comp.spv";
+    private const string PackedGuidedTransportShader =
+        "ddgi_simple_transport_solve_guided_packed.comp.spv";
+    private const string BlendShader = "ddgi_simple_blend.comp.spv";
+    private const string GuidedBlendShader =
+        "ddgi_simple_blend_guided.comp.spv";
+    private const string IntermediatePublishShader =
+        "ddgi_simple_transport_intermediate_publish.comp.spv";
 
     private readonly RenderSettings _settings;
     private readonly SimpleDdgiVolumeManager _volumeManager;
+    private readonly bool _directionalGuidingTransport;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private nint _entryPointName;
     private readonly VkPipeline[] _pipelines = new VkPipeline[3];
     private SimpleDdgiStoragePackingMode? _transportPipelineAttemptedMode;
@@ -63,11 +70,15 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
         SwapchainManager swapchain,
         BindlessHeap bindlessHeap,
         RenderSettings settings,
-        SimpleDdgiVolumeManager volumeManager)
+        SimpleDdgiVolumeManager volumeManager,
+        bool directionalGuidingTransport = false,
+        GiPipelineCacheService? pipelineCacheService = null)
         : base("SimpleDdgiAcceleratedSolvePass", context, swapchain, bindlessHeap)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _volumeManager = volumeManager ?? throw new ArgumentNullException(nameof(volumeManager));
+        _directionalGuidingTransport = directionalGuidingTransport;
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr("main");
     }
 
@@ -82,15 +93,29 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
     {
         try
         {
-            CreatePipelineCache();
+            if (_pipelineCacheService != null)
+                _pipelineCache = _pipelineCacheService.Cache;
+            else
+                CreatePipelineCache();
             CreatePipelineLayout();
-            for (int i = 0; i < SharedShaderNames.Length; i++)
-                _pipelines[i + 1] = CreatePipeline(SharedShaderNames[i]);
+            _pipelines[1] = CreatePipeline(
+                _directionalGuidingTransport
+                    ? GuidedBlendShader
+                    : BlendShader);
+            _pipelines[2] = CreatePipeline(IntermediatePublishShader);
+            SimpleDdgiStoragePackingMode initialMode =
+                _settings.GlobalIllumination.SimpleDdgiStoragePackingMode.Sanitize();
+            _pipelines[0] = CreatePipeline(
+                ResolveTransportShaderName(
+                    initialMode,
+                    _directionalGuidingTransport));
             // Runtime/CLI settings are resolved after pass initialization.
             // Defer only the storage-specific transport module until the first
             // predicate evaluation; the shared blend/publication pipelines stay
             // eagerly initialized and immutable.
-            _volumeManager.SetTransportAccelerationRuntimeAvailable(false);
+            _transportPipelineAttemptedMode = initialMode;
+            _volumeManager.SetTransportAccelerationRuntimeAvailable(
+                _pipelines[0].Handle != 0);
         }
         catch (Exception)
         {
@@ -102,21 +127,25 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
         }
     }
 
-    private static string ResolveTransportShaderName(
-        SimpleDdgiStoragePackingMode mode) =>
-        mode switch
+    internal static string ResolveTransportShaderName(
+        SimpleDdgiStoragePackingMode mode,
+        bool directionalGuidingTransport) =>
+        (mode.Sanitize(), directionalGuidingTransport) switch
         {
-            SimpleDdgiStoragePackingMode.Legacy => LegacyTransportShader,
-            SimpleDdgiStoragePackingMode.Validate => ValidateTransportShader,
-            SimpleDdgiStoragePackingMode.Packed => PackedTransportShader,
-            _ => throw new InvalidOperationException(
-                "Unsupported Simple-DDGI storage packing mode.")
+            (SimpleDdgiStoragePackingMode.Legacy, false) => LegacyTransportShader,
+            (SimpleDdgiStoragePackingMode.Packed, false) => PackedTransportShader,
+            (SimpleDdgiStoragePackingMode.Legacy, true) =>
+                LegacyGuidedTransportShader,
+            (SimpleDdgiStoragePackingMode.Packed, true) =>
+                PackedGuidedTransportShader,
+            (_, true) => ValidateGuidedTransportShader,
+            _ => ValidateTransportShader
         };
 
     private bool EnsureTransportPipeline()
     {
         SimpleDdgiStoragePackingMode mode =
-            _settings.GlobalIllumination.SimpleDdgiStoragePackingMode;
+            _settings.GlobalIllumination.SimpleDdgiStoragePackingMode.Sanitize();
         if (_pipelines[0].Handle != 0 && _transportPipelineAttemptedMode == mode)
             return true;
         if (_transportPipelineAttemptedMode == mode)
@@ -135,7 +164,10 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
             // from the preceding color. The receiver image mirror
             // is intentionally republished only after the complete transaction,
             // so these storage-specialized modules compile that path out.
-            _pipelines[0] = CreatePipeline(ResolveTransportShaderName(mode));
+            _pipelines[0] = CreatePipeline(
+                ResolveTransportShaderName(
+                    mode,
+                    _directionalGuidingTransport));
             _volumeManager.SetTransportAccelerationRuntimeAvailable(true);
             return true;
         }
@@ -184,7 +216,8 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
         if (_volumeManager.SchedulerMode != SimpleDdgiSchedulerMode.GpuResident &&
             !_volumeManager.CanExecuteTransportTransaction)
         {
-            _volumeManager.AbortUpdateTransaction();
+            _volumeManager.AbortUpdateTransaction(
+                SimpleDdgiUpdateTransactionAbortReason.AcceleratedSolvePrerequisite);
             return;
         }
 
@@ -266,7 +299,7 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
         }
         if (_pipelineLayout.Handle != 0)
             _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService == null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_entryPointName != 0)
         {
@@ -568,13 +601,25 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device,
-                _pipelineCache,
-                1,
-                &pipelineInfo,
-                null,
-                out VkPipeline pipeline);
+            long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+            Result result;
+            VkPipeline pipeline;
+            try
+            {
+                result = _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &pipelineInfo,
+                    null,
+                    out pipeline);
+            }
+            finally
+            {
+                _pipelineCacheService?.EndPipelineCreation(
+                    $"{Name}:{shaderName}",
+                    pipelineStart);
+            }
             if (result != Result.Success)
                 throw new VulkanException(
                     $"Failed to create {Name} compute pipeline '{shaderName}'",

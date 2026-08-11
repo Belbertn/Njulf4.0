@@ -4,6 +4,7 @@ using System.Linq;
 using Njulf.Core.Animation;
 using Njulf.Core.Geometry;
 using Njulf.Core.Math;
+using Njulf.Assets.Validation;
 using CoreSkeleton = Njulf.Core.Animation.Skeleton;
 
 namespace Njulf.Assets;
@@ -79,7 +80,12 @@ public sealed record ProcessedSubMeshAsset(
     BoundingBox BoundingBox,
     BoundingSphere BoundingSphere,
     IReadOnlyList<ProcessedMeshDrawRange> DrawRanges,
-    IReadOnlyList<ProcessedMeshLodRange> LodRanges);
+    IReadOnlyList<ProcessedMeshLodRange> LodRanges)
+{
+    public ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence { get; init; }
+    public ModelGiCausticHeroValidation CausticAuthoringValidation { get; init; }
+    public string CausticTopologyDetail { get; init; } = "participation-disabled";
+}
 
 public sealed record ProcessedMeshAsset(
     string Name,
@@ -149,7 +155,8 @@ public sealed class ProcessedMeshAssetBuilder
 
         foreach (ModelSubMesh subMesh in sourceSubMeshes)
         {
-            ProcessedSubMeshAsset processed = BuildSubMesh(subMesh);
+            ModelMaterial material = ResolveMaterial(modelMesh.Materials, subMesh);
+            ProcessedSubMeshAsset processed = BuildSubMesh(subMesh, material);
             processedSubMeshes.Add(processed);
             aggregateAttributes |= processed.VertexLayout.Attributes;
             totalVertexCount += processed.VertexLayout.VertexCount;
@@ -176,10 +183,56 @@ public sealed class ProcessedMeshAssetBuilder
         };
     }
 
-    private ProcessedSubMeshAsset BuildSubMesh(ModelSubMesh subMesh)
+    private ProcessedSubMeshAsset BuildSubMesh(
+        ModelSubMesh subMesh,
+        ModelMaterial material)
     {
         ValidateSubMesh(subMesh);
         RendererMeshletLodBuild meshletMesh = _meshletLodBuilder.Build(subMesh.Vertices, subMesh.Indices, subMesh.Name);
+
+        ModelGiCausticHeroTopologyEvidence topologyEvidence = default;
+        string topologyDetail = "participation-disabled";
+        ModelGiCausticHeroValidation causticValidation;
+        if (material.GiCausticParticipation ==
+            ModelGiCausticParticipationMode.None)
+        {
+            causticValidation = ModelGiCausticHeroValidator.Validate(
+                material.GiCausticParticipation,
+                material.AlphaMode,
+                material.GiTransmissionPolicy,
+                material.Roughness,
+                material.Ior,
+                material.ThicknessFactor,
+                material.AttenuationDistance,
+                ToNumerics(material.AttenuationColor),
+                topologyEvidence);
+        }
+        else if (!ModelGiCausticHeroTopologyAnalyzer.TryAnalyze(
+                     subMesh.Vertices,
+                     subMesh.Indices,
+                     isSkinned: subMesh.SkinIndex >= 0,
+                     out topologyEvidence,
+                     out topologyDetail))
+        {
+            causticValidation = new ModelGiCausticHeroValidation(
+                false,
+                ModelGiCausticHeroValidationReason.MalformedTopologyEvidence,
+                topologyDetail);
+        }
+        else
+        {
+            topologyDetail = "topology-evidence-authenticated";
+            causticValidation = ModelGiCausticHeroValidator.Validate(
+                material.GiCausticParticipation,
+                material.AlphaMode,
+                material.GiTransmissionPolicy,
+                material.Roughness,
+                material.Ior,
+                material.ThicknessFactor,
+                material.AttenuationDistance,
+                ToNumerics(material.AttenuationColor),
+                topologyEvidence);
+        }
 
         return new ProcessedSubMeshAsset(
             string.IsNullOrWhiteSpace(subMesh.Name) ? "SubMesh" : subMesh.Name,
@@ -213,8 +266,32 @@ public sealed class ProcessedMeshAssetBuilder
                     IndexCount: subMesh.Indices.Length,
                     BaseVertex: 0)
             },
-            meshletMesh.Ranges);
+            meshletMesh.Ranges)
+        {
+            CausticTopologyEvidence = topologyEvidence,
+            CausticAuthoringValidation = causticValidation,
+            CausticTopologyDetail = topologyDetail
+        };
     }
+
+    private static ModelMaterial ResolveMaterial(
+        IReadOnlyList<ModelMaterial> materials,
+        ModelSubMesh subMesh)
+    {
+        if (materials.Count == 0 && subMesh.MaterialIndex == 0)
+            return ModelMaterial.Default;
+        if ((uint)subMesh.MaterialIndex >= (uint)materials.Count)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(subMesh),
+                $"Submesh '{subMesh.Name}' references material {subMesh.MaterialIndex}, " +
+                $"but the model contains {materials.Count} materials.");
+        }
+        return materials[subMesh.MaterialIndex];
+    }
+
+    private static System.Numerics.Vector4 ToNumerics(Vector4 value) =>
+        new(value.X, value.Y, value.Z, value.W);
 
     private static IReadOnlyList<ProcessedMaterialSlot> BuildMaterialSlots(IReadOnlyList<ModelMaterial> materials)
     {

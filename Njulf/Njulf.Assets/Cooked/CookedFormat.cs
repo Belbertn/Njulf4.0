@@ -49,8 +49,12 @@ public readonly record struct CookedFormatVersion(ushort Major, ushort Minor);
 
 public static class CookedFormatVersions
 {
-    public static CookedFormatVersion Model { get; } = new(1, 1);
-    public static CookedFormatVersion Mesh { get; } = new(1, 1);
+    // 1.2 adds the optional, independently validated OMMP section.  Readers
+    // retain 1.0/1.1 compatibility because the section is never required.
+    public static CookedFormatVersion Model { get; } = new(1, 2);
+    // 1.2 adds optional, load-time-revalidated C4 hero topology evidence to
+    // submesh metadata. Legacy 1.0/1.1 meshes remain valid but cannot admit C4.
+    public static CookedFormatVersion Mesh { get; } = new(1, 2);
     public static CookedFormatVersion Material { get; } = new(1, 2);
     public static CookedFormatVersion Texture { get; } = new(1, 3);
     public static CookedFormatVersion Animation { get; } = new(1, 1);
@@ -86,6 +90,7 @@ public static class CookedSectionIds
     public static readonly uint Bounds = FourCc("BNDS");
     public static readonly uint Materials = FourCc("MATS");
     public static readonly uint Animation = FourCc("ANIM");
+    public static readonly uint OpacityMicromap = FourCc("OMMP");
 
     public static uint FourCc(string value)
     {

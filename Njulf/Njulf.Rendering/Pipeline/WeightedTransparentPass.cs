@@ -14,17 +14,21 @@ namespace Njulf.Rendering.Pipeline
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;
+        private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
+            _receiverFeedbackRuntime;
 
         public WeightedTransparentPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
-            RenderTargetManager renderTargets)
+            RenderTargetManager renderTargets,
+            SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime = null)
             : base("WeightedTransparentPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _receiverFeedbackRuntime = receiverFeedbackRuntime;
         }
 
         public override void Initialize()
@@ -53,7 +57,11 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             _renderTargets.WeightedOitAccumulation.TransitionToColorAttachment(cmd);
             _renderTargets.WeightedOitRevealage.TransitionToColorAttachment(cmd);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.WeightedOitTransparentPipeline);
+            bool exactFeedback = TrySelectExactFeedbackPipeline(
+                frameIndex,
+                sceneData,
+                out Silk.NET.Vulkan.Pipeline pipeline);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
             BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
 
             var colorAttachments = stackalloc RenderingAttachmentInfo[2];
@@ -140,6 +148,42 @@ namespace Njulf.Rendering.Pipeline
                 1);
 
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+
+            if (exactFeedback &&
+                !_receiverFeedbackRuntime!.TryRecordOwnedProducerCompletion(
+                    cmd,
+                    frameIndex,
+                    SimpleDdgiReceiverFeedbackProducer.TransparentWeightedOit,
+                    out string completionReason))
+            {
+                _receiverFeedbackRuntime.AbortCapture(
+                    "receiver-feedback-weighted-oit-completion-failed:" +
+                    completionReason);
+            }
+        }
+
+        private bool TrySelectExactFeedbackPipeline(
+            int frameIndex,
+            SceneRenderingData sceneData,
+            out Silk.NET.Vulkan.Pipeline pipeline)
+        {
+            pipeline = _meshPipeline.WeightedOitTransparentPipeline;
+            if (_receiverFeedbackRuntime is null ||
+                !_receiverFeedbackRuntime.IsPendingOwnedProducerRequired(
+                    frameIndex,
+                    SimpleDdgiReceiverFeedbackProducer.TransparentWeightedOit))
+            {
+                return false;
+            }
+            if (sceneData.CurrentFrameIndex != checked((uint)frameIndex) ||
+                _meshPipeline.WeightedOitReceiverFeedbackPipeline.Handle == 0)
+            {
+                _receiverFeedbackRuntime.AbortCapture(
+                    "receiver-feedback-weighted-oit-pipeline-or-frame-slot-unavailable");
+                return false;
+            }
+            pipeline = _meshPipeline.WeightedOitReceiverFeedbackPipeline;
+            return true;
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

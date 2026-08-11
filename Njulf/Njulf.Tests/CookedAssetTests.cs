@@ -456,13 +456,33 @@ public sealed class CookedAssetTests
         using var cooker = new ModelAssetCooker();
         AssetCookResult first = cooker.CookModel(source, _directory, options);
         string packagePath = Path.Combine(CookedPlatform.ResolveOutputRoot(_directory, options.Platform), "models", "Strut.njmodel");
-        var stopwatch = Stopwatch.StartNew();
-        using (var importer = new ModelImporter())
-            _ = importer.Import(source, options.ImporterOptions);
-        double sourceLoadMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
-        stopwatch.Restart();
+        // Cooking has already warmed the source importer and its dependencies.
+        // Warm the reader too, then compare alternating, GC-isolated medians so
+        // JIT, first-open scanning, or a single scheduler preemption cannot turn
+        // this production performance gate into a one-sample lottery.
+        WarmModelLoadPaths(source, packagePath, options.ImporterOptions);
+        double[] sourceLoadSamples = new double[3];
+        double[] cookedLoadSamples = new double[3];
+        for (int sample = 0; sample < sourceLoadSamples.Length; sample++)
+        {
+            if ((sample & 1) == 0)
+            {
+                sourceLoadSamples[sample] = MeasureSourceModelLoad(
+                    source,
+                    options.ImporterOptions);
+                cookedLoadSamples[sample] = MeasureCookedModelLoad(packagePath);
+            }
+            else
+            {
+                cookedLoadSamples[sample] = MeasureCookedModelLoad(packagePath);
+                sourceLoadSamples[sample] = MeasureSourceModelLoad(
+                    source,
+                    options.ImporterOptions);
+            }
+        }
+        double sourceLoadMilliseconds = Median(sourceLoadSamples);
+        double cookedLoadMilliseconds = Median(cookedLoadSamples);
         CookedModelAsset loaded = CookedPackage.LoadModel(packagePath);
-        double cookedLoadMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
         AssetCookResult second = cooker.CookModel(source, _directory, options);
 
         Assert.Multiple(() =>
@@ -483,9 +503,66 @@ public sealed class CookedAssetTests
             Assert.That(
                 cookedLoadMilliseconds,
                 Is.LessThan(sourceLoadMilliseconds * 0.5),
-                $"Cooked CPU load must be at least 50% faster than source import (source={sourceLoadMilliseconds:F2}ms, cooked={cookedLoadMilliseconds:F2}ms).");
+                $"Cooked CPU load must be at least 50% faster than source import " +
+                $"(source median={sourceLoadMilliseconds:F2}ms [{FormatSamples(sourceLoadSamples)}], " +
+                $"cooked median={cookedLoadMilliseconds:F2}ms [{FormatSamples(cookedLoadSamples)}]).");
         });
     }
+
+    private static void WarmModelLoadPaths(
+        string sourcePath,
+        string packagePath,
+        ImporterOptions importerOptions)
+    {
+        using (var importer = new ModelImporter())
+        {
+            ModelMesh source = importer.Import(sourcePath, importerOptions);
+            GC.KeepAlive(source);
+        }
+        CookedModelAsset cooked = CookedPackage.LoadModel(packagePath);
+        GC.KeepAlive(cooked);
+        CollectTimingGarbage();
+    }
+
+    private static double MeasureSourceModelLoad(
+        string sourcePath,
+        ImporterOptions importerOptions)
+    {
+        CollectTimingGarbage();
+        var stopwatch = Stopwatch.StartNew();
+        using var importer = new ModelImporter();
+        ModelMesh source = importer.Import(sourcePath, importerOptions);
+        stopwatch.Stop();
+        GC.KeepAlive(source);
+        return stopwatch.Elapsed.TotalMilliseconds;
+    }
+
+    private static double MeasureCookedModelLoad(string packagePath)
+    {
+        CollectTimingGarbage();
+        var stopwatch = Stopwatch.StartNew();
+        CookedModelAsset cooked = CookedPackage.LoadModel(packagePath);
+        stopwatch.Stop();
+        GC.KeepAlive(cooked);
+        return stopwatch.Elapsed.TotalMilliseconds;
+    }
+
+    private static void CollectTimingGarbage()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+    }
+
+    private static double Median(double[] samples)
+    {
+        double[] sorted = (double[])samples.Clone();
+        Array.Sort(sorted);
+        return sorted[sorted.Length / 2];
+    }
+
+    private static string FormatSamples(double[] samples) =>
+        string.Join(", ", samples.Select(value => $"{value:F2}"));
 
     [Test]
     [Category("AssetIntegration")]
@@ -790,6 +867,36 @@ public sealed class CookedAssetTests
         ];
 
         RendererMeshletLodBuild result = new RendererMeshletLodBuilder().Build(vertices, indices, "Cube");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IndexCounts, Is.EqualTo(new[] { indices.Length, indices.Length, indices.Length }));
+            Assert.That(result.SimplificationErrors, Is.EqualTo(new[] { 0f, 0f, 0f }));
+        });
+    }
+
+    [Test]
+    public void RendererMeshletLodBuilder_PreservesDisconnectedComponentsWhenSimplificationCannotCollapseThem()
+    {
+        const int triangleCount = 25;
+        var vertices = new Vector3[triangleCount * 3];
+        var indices = new uint[triangleCount * 3];
+        for (int triangle = 0; triangle < triangleCount; triangle++)
+        {
+            int vertex = triangle * 3;
+            float x = triangle * 2f;
+            vertices[vertex] = new Vector3(x, 0f, 0f);
+            vertices[vertex + 1] = new Vector3(x + 1f, 0f, 0f);
+            vertices[vertex + 2] = new Vector3(x, 1f, 0f);
+            indices[vertex] = (uint)vertex;
+            indices[vertex + 1] = (uint)(vertex + 1);
+            indices[vertex + 2] = (uint)(vertex + 2);
+        }
+
+        RendererMeshletLodBuild result = new RendererMeshletLodBuilder().Build(
+            vertices,
+            indices,
+            "DisconnectedTriangles");
 
         Assert.Multiple(() =>
         {

@@ -31,7 +31,9 @@ public readonly record struct MaterialTextureTransportInput(
     float AlphaCoverage,
     bool NormalVarianceValid,
     float NormalVariance,
-    ulong SourceContentHash)
+    ulong SourceContentHash,
+    bool EmissiveLuminanceMaximumValid = false,
+    float EmissiveLuminanceMaximum = 0f)
 {
     public static MaterialTextureTransportInput Constant(int bindlessIndex, Vector4 value) => new(
         bindlessIndex,
@@ -41,12 +43,14 @@ public readonly record struct MaterialTextureTransportInput(
         value.W,
         true,
         0f,
-        0);
+        0,
+        true,
+        0.2126f * value.X + 0.7152f * value.Y + 0.0722f * value.Z);
 }
 
 public sealed record MaterialCompilationContext
 {
-    public const uint CurrentAlgorithmVersion = 4;
+    public const uint CurrentAlgorithmVersion = 5;
 
     public Func<MaterialTextureBinding, MaterialTextureSemantic, MaterialTextureTransportInput>? ResolveTexture { get; init; }
     public GiMaterialTransportProfile? PrimitiveProfile { get; init; }
@@ -78,7 +82,10 @@ public static class MaterialTransportCompiler
     {
         context ??= new MaterialCompilationContext();
         MaterialDefinition material = MaterialDefinitionValidator.ValidateAndNormalize(source);
-        if (material.EmissiveStrength != 1f)
+        float effectiveEmissiveScale = EmissivePhotometry.ResolveSceneLinearScale(material);
+        if (material.EmissiveStrength != 1f ||
+            material.EmissiveUnit != EmissivePhotometricUnit.SceneLinearRadiance ||
+            material.EmissiveArtisticMultiplier != 1f)
         {
             material = material with
             {
@@ -86,6 +93,20 @@ public static class MaterialTransportCompiler
             };
         }
         var diagnostics = new List<string>();
+        if (material.EmissiveArtisticMultiplier != 1f)
+        {
+            diagnostics.Add(
+                $"Artistic emission multiplier changes physical emissive energy by " +
+                $"{material.EmissiveArtisticMultiplier:0.####}x after photometric conversion.");
+        }
+        if (material.EmissiveUnit == EmissivePhotometricUnit.LuminanceNits &&
+            material.EmissiveStrength > 0f &&
+            EmissivePhotometry.Luminance(material.EmissiveFactor) <=
+            EmissivePhotometry.MinimumChromaticityLuminance)
+        {
+            diagnostics.Add(
+                "A positive luminance was authored with a black emissive color; resolved radiance is zero because no chromaticity is defined.");
+        }
 
         MaterialTextureTransportInput baseColor = Resolve(
             material.BaseColor,
@@ -244,12 +265,11 @@ public static class MaterialTransportCompiler
                 : Vector3.Zero;
 
         Vector3 meanEmission = material.EmitsIntoGi
-            ? GiMaterialReferenceEvaluator.EvaluateEmission(
-                material.EmissiveFactor,
+            ? EmissivePhotometry.EvaluateSceneLinearRadiance(
+                material,
                 emissive.MeanValid
                     ? new Vector3(emissive.LinearMean.X, emissive.LinearMean.Y, emissive.LinearMean.Z)
-                    : Vector3.One,
-                material.EmissiveStrength)
+                    : Vector3.One)
             : Vector3.Zero;
 
         GiTransportProfileQuality quality = ResolveProfileQuality(
@@ -408,7 +428,7 @@ public static class MaterialTransportCompiler
         };
 
         GPUMaterialExtensionData? extensionData = material.FeatureFlags.RequiresExtensionData()
-            ? CompileExtensions(material, context)
+            ? CompileExtensions(material, context, effectiveEmissiveScale)
             : null;
         MaterialRenderMetadata metadata = CompileMetadata(material);
         ulong combinedHash = CombineHashes(
@@ -433,6 +453,19 @@ public static class MaterialTransportCompiler
             MeanTransmittedDiffuseReflectance = meanTransmittedDiffuse,
             MeanEmissiveRadiance = meanEmission,
             EmissiveImportance = Luminance(meanEmission),
+            EmissiveUnit = material.EmissiveUnit,
+            EffectiveEmissiveScale = effectiveEmissiveScale,
+            EmissiveArtisticMultiplier = material.EmissiveArtisticMultiplier,
+            AverageEmissiveLuminanceNits =
+                EmissivePhotometry.SceneLinearLuminanceToNits(Luminance(meanEmission)),
+            PeakEmissiveLuminanceNits = emissive.EmissiveLuminanceMaximumValid && material.EmitsIntoGi
+                ? EmissivePhotometry.SceneLinearLuminanceToNits(
+                    Math.Max(material.EmissiveFactor.X,
+                        Math.Max(material.EmissiveFactor.Y, material.EmissiveFactor.Z)) *
+                    effectiveEmissiveScale *
+                    Math.Max(emissive.EmissiveLuminanceMaximum, 0f))
+                : 0f,
+            PeakEmissiveLuminanceValid = emissive.EmissiveLuminanceMaximumValid,
             MeanMaterialOcclusion = meanOcclusion,
             AlphaCoverage = alphaCoverage,
             MeanMetallic = meanMetallic,
@@ -589,7 +622,8 @@ public static class MaterialTransportCompiler
 
     private static GPUMaterialExtensionData CompileExtensions(
         MaterialDefinition material,
-        MaterialCompilationContext context)
+        MaterialCompilationContext context,
+        float effectiveEmissiveScale)
     {
         MaterialExtensionDefinition extension = material.Extensions;
         return new GPUMaterialExtensionData
@@ -598,7 +632,7 @@ public static class MaterialTransportCompiler
                 extension.ClearcoatFactor,
                 extension.ClearcoatRoughness,
                 extension.ClearcoatNormalScale,
-                material.EmissiveStrength),
+                effectiveEmissiveScale),
             SheenColor = new Vector4(extension.SheenColorFactor, extension.SheenRoughness),
             Anisotropy = new Vector4(extension.AnisotropyStrength, extension.AnisotropyRotation, 0f, 0f),
             Transmission = new Vector4(
@@ -896,6 +930,8 @@ public static class MaterialTransportCompiler
     private static bool EmissionInputsChanged(MaterialDefinition x, MaterialDefinition y) =>
         x.EmissiveFactor != y.EmissiveFactor ||
         x.EmissiveStrength != y.EmissiveStrength ||
+        x.EmissiveUnit != y.EmissiveUnit ||
+        x.EmissiveArtisticMultiplier != y.EmissiveArtisticMultiplier ||
         x.Emissive != y.Emissive ||
         x.EmissionGiParticipation != y.EmissionGiParticipation;
 
@@ -1067,7 +1103,14 @@ public static class MaterialTransportCompiler
         if (value.NormalVarianceValid &&
             (!float.IsFinite(value.NormalVariance) || value.NormalVariance < 0f))
         {
-            throw new InvalidOperationException($"{semantic} texture normal variance is invalid.");
+                throw new InvalidOperationException($"{semantic} texture normal variance is invalid.");
+        }
+        if (value.EmissiveLuminanceMaximumValid &&
+            (!float.IsFinite(value.EmissiveLuminanceMaximum) ||
+             value.EmissiveLuminanceMaximum < 0f))
+        {
+            throw new InvalidOperationException(
+                $"{semantic} texture maximum emissive luminance is invalid.");
         }
     }
 }

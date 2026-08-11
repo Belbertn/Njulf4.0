@@ -1,0 +1,77 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "gi_caustic_screen.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+shared uint giCausticTileActive;
+
+void main()
+{
+    if (!GiCausticScreenContractValid())
+        return;
+
+    if (gl_LocalInvocationIndex == 0u)
+        giCausticTileActive = 0u;
+    barrier();
+
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    uvec2 extent = GiCausticScreenExtent();
+    if (all(lessThan(uvec2(pixel), extent)))
+    {
+        // Classify owns the full-image reset. This makes a cache miss, empty
+        // tile, or rejected receiver exactly zero without a separate transfer
+        // clear or stale layout dependency.
+        imageStore(giCausticRadiance, pixel, vec4(0.0));
+        imageStore(giCausticMoments, pixel, vec4(0.0));
+
+        vec3 worldPosition;
+        vec3 geometricNormal;
+        vec3 shadingNormal;
+        vec3 diffuseBase;
+        vec3 dielectricF0;
+        if (GiCausticCacheHeaderReadable(
+                giCausticPc.CacheBankHeaderWordOffset) &&
+            GiCausticLoadReceiver(
+                pixel,
+                worldPosition,
+                geometricNormal,
+                shadingNormal,
+                diffuseBase,
+                dielectricF0) &&
+            GiCausticCellNeighborhoodOccupied(worldPosition))
+        {
+            atomicOr(giCausticTileActive, 1u);
+        }
+    }
+    barrier();
+
+    if (gl_LocalInvocationIndex != 0u || giCausticTileActive == 0u)
+        return;
+
+    uint slot = atomicAdd(
+        BindlessStorageBuffers[giCausticPc.ScratchBufferIndex].Words[
+            GI_CAUSTIC_SCREEN_ACTIVE_TILE_COUNT_WORD],
+        1u);
+    if (slot >= GiCausticScreenTileCapacity())
+    {
+        atomicAdd(
+            BindlessStorageBuffers[giCausticPc.ScratchBufferIndex].Words[
+                GI_CAUSTIC_SCREEN_REJECTED_TILE_COUNT_WORD],
+            1u);
+        return;
+    }
+
+    uint tileIndex = gl_WorkGroupID.y * GiCausticScreenTileCount().x +
+        gl_WorkGroupID.x;
+    WriteStorageWordUniform(
+        giCausticPc.ScratchBufferIndex,
+        GI_CAUSTIC_SCREEN_TILE_LIST_WORD_OFFSET + slot,
+        tileIndex);
+    atomicAdd(
+        BindlessStorageBuffers[giCausticPc.ScratchBufferIndex].Words[
+            GI_CAUSTIC_SCREEN_INDIRECT_WORD_OFFSET],
+        1u);
+}

@@ -1,0 +1,49 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "gi_caustic_screen.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+void main()
+{
+    if (!GiCausticScreenContractValid() ||
+        (GiCausticScreenFlags() & GI_CAUSTIC_SCREEN_COMPOSITE_ENABLED) == 0u)
+    {
+        return;
+    }
+
+    uint compactedIndex = gl_WorkGroupID.x;
+    if (compactedIndex >= GiCausticScreenTileCapacity())
+        return;
+    uint tileIndex = ReadStorageWordUniform(
+        giCausticPc.ScratchBufferIndex,
+        GI_CAUSTIC_SCREEN_TILE_LIST_WORD_OFFSET + compactedIndex);
+    uvec2 tileCount = GiCausticScreenTileCount();
+    if (tileIndex >= GiCausticScreenTileCapacity())
+        return;
+    uvec2 tile = uvec2(tileIndex % tileCount.x, tileIndex / tileCount.x);
+    ivec2 pixel = ivec2(tile * GI_CAUSTIC_SCREEN_TILE_SIZE +
+        gl_LocalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, ivec2(GiCausticScreenExtent()))))
+        return;
+
+    vec4 caustic = imageLoad(giCausticRadiance, pixel);
+    vec4 moments = imageLoad(giCausticMoments, pixel);
+    if (!GiCausticScreenFinite(caustic) ||
+        !GiCausticScreenFinite(moments) ||
+        any(lessThan(caustic, vec4(0.0))) ||
+        caustic.a <= 0.0 || moments.x <= 0.0)
+    {
+        return;
+    }
+
+    vec4 scene = imageLoad(giCausticSceneColor, pixel);
+    if (!GiCausticScreenFinite(scene))
+        return;
+    vec3 combined = scene.rgb + caustic.rgb;
+    if (!GiCausticFinite(combined) || any(lessThan(combined, vec3(0.0))))
+        return;
+    imageStore(giCausticSceneColor, pixel, vec4(combined, scene.a));
+}

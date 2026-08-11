@@ -31,7 +31,8 @@ namespace Njulf.Rendering.Pipeline
         // block so a fragment quad shares one cache address. The gather
         // producer scans the whole block for covered reverse-Z depth, so this
         // is not a blind center downsample.
-        internal const uint SimpleDdgiReceiverGatherScale = 12u;
+        internal const uint SimpleDdgiReceiverGatherScale =
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi.SurfaceTileScale;
         internal const uint SimpleDdgiReceiverCacheScale = 2u;
         internal const uint SimpleDdgiReceiverCacheWorkgroupSize = 8u;
         internal const ulong SimpleDdgiReceiverCacheEntryBytes = 16u;
@@ -45,6 +46,15 @@ namespace Njulf.Rendering.Pipeline
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
         private readonly PipelineObjects.SkyboxPipeline? _skyboxPipeline;
+        private readonly GiPipelineCacheService? _giPipelineCacheService;
+        private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
+            _simpleDdgiReceiverFeedbackRuntime;
+        private readonly ForwardNearFieldDirectSourceAttachmentBinding?
+            _nearFieldDirectSourceBinding;
+        private readonly Func<bool>? _nearFieldDirectSourceRuntimeAvailable;
+        private readonly ForwardGiCausticReceiverAttachmentBinding?
+            _giCausticReceiverBinding;
+        private readonly Func<bool>? _giCausticRuntimeAvailable;
         private bool _recordingReflectionCapture;
         private bool _reflectionCaptureIncludesDdgi;
         private readonly BufferHandle[] _simpleDdgiReceiverCacheBuffers =
@@ -61,6 +71,7 @@ namespace Njulf.Rendering.Pipeline
         private PipelineLayout _simpleDdgiReceiverCachePipelineLayout;
         private PipelineCache _simpleDdgiReceiverCachePipelineCache;
         private VkPipeline _simpleDdgiReceiverCachePipeline;
+        private VkPipeline _simpleDdgiReceiverFeedbackPipeline;
         private VkPipeline _simpleDdgiReceiverCacheResolvePipeline;
         private uint _simpleDdgiReceiverCacheWidth;
         private uint _simpleDdgiReceiverCacheHeight;
@@ -69,6 +80,12 @@ namespace Njulf.Rendering.Pipeline
         private uint _simpleDdgiReceiverGatherHeight;
         private ulong _simpleDdgiReceiverGatherBufferBytes;
         private bool _simpleDdgiReceiverCacheAvailableForCurrentView;
+        private bool _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView;
+        private bool _simpleDdgiFoliageFeedbackRequiredForCurrentView;
+        private bool _simpleDdgiReflectionFeedbackRequiredForCurrentView;
+        private int _reflectionFeedbackCubemapArrayLayer;
+        private int _reflectionFeedbackBatchFrameIndex = -1;
+        private int _reflectionFeedbackFacesRecordedForCurrentBatch;
 
         internal ulong SimpleDdgiReceiverCacheBufferBytes
         {
@@ -122,7 +139,16 @@ namespace Njulf.Rendering.Pipeline
             PipelineObjects.FoliagePipeline? foliagePipeline = null,
             BufferManager? bufferManager = null,
             FoliageManager? foliageManager = null,
-            PipelineObjects.SkyboxPipeline? skyboxPipeline = null)
+            PipelineObjects.SkyboxPipeline? skyboxPipeline = null,
+            GiPipelineCacheService? giPipelineCacheService = null,
+            ForwardNearFieldDirectSourceAttachmentBinding?
+                nearFieldDirectSourceBinding = null,
+            Func<bool>? nearFieldDirectSourceRuntimeAvailable = null,
+            ForwardGiCausticReceiverAttachmentBinding?
+                giCausticReceiverBinding = null,
+            Func<bool>? giCausticRuntimeAvailable = null,
+            SimpleDdgiReceiverFeedbackVulkanRuntime?
+                simpleDdgiReceiverFeedbackRuntime = null)
             : base("ForwardPlusPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
@@ -132,12 +158,30 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _skyboxPipeline = skyboxPipeline;
+            _giPipelineCacheService = giPipelineCacheService;
+            _nearFieldDirectSourceBinding = nearFieldDirectSourceBinding;
+            _nearFieldDirectSourceRuntimeAvailable =
+                nearFieldDirectSourceRuntimeAvailable;
+            _giCausticReceiverBinding = giCausticReceiverBinding;
+            _giCausticRuntimeAvailable = giCausticRuntimeAvailable;
+            _simpleDdgiReceiverFeedbackRuntime =
+                simpleDdgiReceiverFeedbackRuntime;
             for (int i = 0; i < FramesInFlight; i++)
             {
                 _simpleDdgiReceiverCacheBuffers[i] = BufferHandle.Invalid;
                 _simpleDdgiReceiverGatherBuffers[i] = BufferHandle.Invalid;
             }
         }
+
+        /// <summary>
+        /// Current C5 source capability observed by this pass.  It is a
+        /// fail-closed status for the eventual renderer integration, not a
+        /// claim that C5 tracing/compositing is active.
+        /// </summary>
+        public string NearFieldDirectSourceFailureReason { get; private set; } =
+            "near-field-direct-source-disabled";
+        public string GiCausticReceiverFailureReason { get; private set; } =
+            "caustic-forward-receiver-disabled";
 
         public override void Initialize()
         {
@@ -148,7 +192,15 @@ namespace Njulf.Rendering.Pipeline
             {
                 _simpleDdgiReceiverCacheEntryPointName =
                     SilkMarshal.StringToPtr("main");
-                CreateSimpleDdgiReceiverCachePipelineCache();
+                if (_giPipelineCacheService != null)
+                {
+                    _simpleDdgiReceiverCachePipelineCache =
+                        _giPipelineCacheService.Cache;
+                }
+                else
+                {
+                    CreateSimpleDdgiReceiverCachePipelineCache();
+                }
                 CreateSimpleDdgiReceiverCacheOutputDescriptors();
                 CreateSimpleDdgiReceiverCachePipelineLayout();
                 _simpleDdgiReceiverCachePipeline =
@@ -179,6 +231,7 @@ namespace Njulf.Rendering.Pipeline
         /// </summary>
         internal void RecordReflectionCapture(
             CommandBuffer cmd,
+            int frameIndex,
             SceneRenderingData sceneData,
             in ReflectionCaptureViewContext view,
             ImageView colorView,
@@ -186,6 +239,8 @@ namespace Njulf.Rendering.Pipeline
         {
             if (colorView.Handle == 0 || depthView.Handle == 0)
                 throw new InvalidOperationException("Reflection capture attachments are unavailable.");
+
+            PrepareReflectionReceiverFeedbackFace(frameIndex, sceneData, view);
 
             Matrix4x4 oldView = sceneData.ViewMatrix;
             Matrix4x4 oldProjection = sceneData.ProjectionMatrix;
@@ -310,11 +365,18 @@ namespace Njulf.Rendering.Pipeline
                     BindlessIndex.FullOpaqueMeshletDrawBufferBase);
                 DrawFoliageForward(cmd, sceneData);
                 _context.KhrDynamicRendering.CmdEndRendering(cmd);
+                if (_simpleDdgiReflectionFeedbackRequiredForCurrentView)
+                {
+                    _reflectionFeedbackFacesRecordedForCurrentBatch = checked(
+                        _reflectionFeedbackFacesRecordedForCurrentBatch + 1);
+                }
             }
             finally
             {
                 _recordingReflectionCapture = false;
                 _reflectionCaptureIncludesDdgi = false;
+                _simpleDdgiReflectionFeedbackRequiredForCurrentView = false;
+                _reflectionFeedbackCubemapArrayLayer = 0;
                 sceneData.ViewMatrix = oldView;
                 sceneData.ProjectionMatrix = oldProjection;
                 sceneData.ViewProjectionMatrix = oldViewProjection;
@@ -335,6 +397,201 @@ namespace Njulf.Rendering.Pipeline
                 sceneData.GlobalIlluminationDdgiActive = oldGlobalIlluminationDdgiActive;
                 sceneData.SimpleDdgiActive = oldSimpleDdgiActive;
             }
+        }
+
+        private void PrepareReflectionReceiverFeedbackFace(
+            int frameIndex,
+            SceneRenderingData sceneData,
+            in ReflectionCaptureViewContext view)
+        {
+            _simpleDdgiReflectionFeedbackRequiredForCurrentView = false;
+            _reflectionFeedbackCubemapArrayLayer = 0;
+            SimpleDdgiReceiverFeedbackVulkanRuntime? runtime =
+                _simpleDdgiReceiverFeedbackRuntime;
+            if (runtime is null ||
+                !runtime.IsPendingOwnedProducerRequired(
+                    frameIndex,
+                    SimpleDdgiReceiverFeedbackProducer.ReflectionCapture))
+            {
+                return;
+            }
+
+            string? unavailableReason = null;
+            bool hasOpaqueDraws = sceneData.SimpleOpaqueMeshletCount > 0 ||
+                sceneData.SimpleNormalOpaqueMeshletCount > 0 ||
+                sceneData.FullOpaqueMeshletCount > 0;
+            bool hasFoliageDraws = sceneData.FoliageClusterCount > 0 &&
+                sceneData.FoliageDrawBufferBytes > 0;
+            if (!view.IncludesDdgi)
+            {
+                unavailableReason =
+                    "receiver-feedback-reflection-capture-ddgi-disabled";
+            }
+            else if (!TryComputeReflectionFeedbackTileNamespace(
+                         view.CubemapArrayLayer,
+                         view.Resolution,
+                         out _,
+                         out unavailableReason))
+            {
+                // The helper supplies the stable reason.
+            }
+            else if (hasOpaqueDraws &&
+                     !_meshPipeline.AlphaMaskReceiverFeedbackPipelinesAvailable)
+            {
+                unavailableReason =
+                    "receiver-feedback-reflection-capture-opaque-pipelines-unavailable";
+            }
+            else if (hasFoliageDraws &&
+                     (_foliagePipeline is null ||
+                      !_foliagePipeline.ReceiverFeedbackPipelinesAvailable))
+            {
+                unavailableReason =
+                    "receiver-feedback-reflection-capture-foliage-pipelines-unavailable";
+            }
+            else if (sceneData.DebugViewMode != 0u ||
+                     sceneData.AmbientOcclusionDebugView !=
+                         AmbientOcclusionDebugView.None ||
+                     sceneData.TransparencyDebugView !=
+                         TransparencyDebugView.None ||
+                     sceneData.AnimationDebugView != AnimationDebugView.None ||
+                     sceneData.ReflectionDebugView != ReflectionDebugView.None ||
+                     sceneData.FoliageDebugView != 0u ||
+                     _settings.GlobalIllumination.DebugView !=
+                         GlobalIlluminationDebugView.None ||
+                     _settings.Environment.DebugView != EnvironmentDebugView.None)
+            {
+                unavailableReason =
+                    "receiver-feedback-reflection-capture-debug-view-active";
+            }
+            else if (_reflectionFeedbackBatchFrameIndex >= 0 &&
+                     _reflectionFeedbackBatchFrameIndex != frameIndex)
+            {
+                unavailableReason =
+                    "receiver-feedback-reflection-capture-batch-frame-mismatch";
+            }
+
+            if (unavailableReason is not null)
+            {
+                runtime.AbortCapture(unavailableReason);
+                return;
+            }
+
+            if (_reflectionFeedbackBatchFrameIndex < 0)
+            {
+                _reflectionFeedbackBatchFrameIndex = frameIndex;
+                _reflectionFeedbackFacesRecordedForCurrentBatch = 0;
+            }
+            _simpleDdgiReflectionFeedbackRequiredForCurrentView = true;
+            _reflectionFeedbackCubemapArrayLayer = view.CubemapArrayLayer;
+        }
+
+        internal void CompleteReflectionReceiverFeedbackBatch(
+            CommandBuffer commandBuffer,
+            int frameIndex,
+            int recordedFaceCount,
+            bool batchSucceeded)
+        {
+            try
+            {
+                SimpleDdgiReceiverFeedbackVulkanRuntime? runtime =
+                    _simpleDdgiReceiverFeedbackRuntime;
+                if (runtime is null ||
+                    !runtime.IsPendingOwnedProducerRequired(
+                        frameIndex,
+                        SimpleDdgiReceiverFeedbackProducer.ReflectionCapture))
+                {
+                    return;
+                }
+
+                string? failureReason = null;
+                if (!batchSucceeded)
+                {
+                    failureReason =
+                        "receiver-feedback-reflection-capture-batch-failed";
+                }
+                else if (recordedFaceCount <= 0)
+                {
+                    failureReason =
+                        "receiver-feedback-reflection-capture-recorded-no-faces";
+                }
+                else if (_reflectionFeedbackBatchFrameIndex != frameIndex ||
+                         _reflectionFeedbackFacesRecordedForCurrentBatch !=
+                         recordedFaceCount)
+                {
+                    failureReason =
+                        "receiver-feedback-reflection-capture-face-count-mismatch";
+                }
+
+                if (failureReason is not null)
+                {
+                    runtime.AbortCapture(failureReason);
+                    return;
+                }
+
+                if (!runtime.TryRecordOwnedProducerCompletion(
+                        commandBuffer,
+                        frameIndex,
+                        SimpleDdgiReceiverFeedbackProducer.ReflectionCapture,
+                        out string completionReason))
+                {
+                    runtime.AbortCapture(
+                        "receiver-feedback-reflection-capture-completion-failed:" +
+                        completionReason);
+                }
+            }
+            finally
+            {
+                _simpleDdgiReflectionFeedbackRequiredForCurrentView = false;
+                _reflectionFeedbackCubemapArrayLayer = 0;
+                _reflectionFeedbackBatchFrameIndex = -1;
+                _reflectionFeedbackFacesRecordedForCurrentBatch = 0;
+            }
+        }
+
+        internal static bool TryComputeReflectionFeedbackTileNamespace(
+            int cubemapArrayLayer,
+            uint resolution,
+            out uint tileNamespaceBase,
+            out string reason)
+        {
+            tileNamespaceBase = 0u;
+            if ((uint)cubemapArrayLayer >
+                GPUForwardPushConstants.MaximumReflectionCaptureLayer)
+            {
+                reason =
+                    "receiver-feedback-reflection-capture-layer-out-of-range";
+                return false;
+            }
+            if (resolution == 0u)
+            {
+                reason =
+                    "receiver-feedback-reflection-capture-resolution-zero";
+                return false;
+            }
+
+            ulong tileResolution = 1UL +
+                ((ulong)resolution - 1UL) /
+                SimpleDdgiReceiverGatherScale;
+            ulong faceTileCount = checked(tileResolution * tileResolution);
+            if (faceTileCount == 0u || faceTileCount > uint.MaxValue ||
+                (ulong)cubemapArrayLayer > uint.MaxValue / faceTileCount)
+            {
+                reason =
+                    "receiver-feedback-reflection-capture-tile-namespace-overflow";
+                return false;
+            }
+
+            ulong baseValue = (ulong)cubemapArrayLayer * faceTileCount;
+            if (baseValue > uint.MaxValue - (faceTileCount - 1u))
+            {
+                reason =
+                    "receiver-feedback-reflection-capture-tile-namespace-overflow";
+                return false;
+            }
+
+            tileNamespaceBase = checked((uint)baseValue);
+            reason = "valid";
+            return true;
         }
 
         private void RecordReflectionSkybox(
@@ -400,6 +657,8 @@ namespace Njulf.Rendering.Pipeline
             Data.SceneRenderingData sceneData,
             GpuTimestampRecorder? timestamps)
         {
+            sceneData.GiCausticReceiverPayloadCompleted = false;
+            sceneData.GiCausticReceiverPayloadFrameSerial = 0UL;
             if (!sceneData.HasCurrentDepthPrePass)
             {
                 throw new InvalidOperationException(
@@ -412,15 +671,39 @@ namespace Njulf.Rendering.Pipeline
                     "ForwardPlusPass requires tiled local-light culling produced from current-frame depth.");
             }
 
+            bool receiverFeedbackCaptureOpen = false;
+            SimpleDdgiReceiverFeedbackCaptureProducerContract
+                receiverFeedbackProducer =
+                    SimpleDdgiReceiverFeedbackCaptureProducerContract.Unavailable;
+            try
+            {
             _simpleDdgiReceiverCacheAvailableForCurrentView = false;
+            _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView = false;
+            _simpleDdgiFoliageFeedbackRequiredForCurrentView = false;
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             bool materialTransportProvenanceEnabled =
                 ShouldWriteMaterialTransportProvenance();
-            bool receiverCacheEligible = ShouldDispatchSimpleDdgiReceiverCache(
-                frameIndex,
+            bool nearFieldDirectSourceEnabled = TryGetNearFieldDirectSourceBinding(
                 sceneData,
                 renderExtent,
-                materialTransportProvenanceEnabled);
+                materialTransportProvenanceEnabled,
+                out ForwardNearFieldDirectSourceAttachmentBinding?
+                    nearFieldDirectSourceBinding);
+            ForwardGiCausticReceiverAttachmentBinding?
+                giCausticReceiverBinding = null;
+            bool giCausticReceiverEnabled =
+                TryGetGiCausticReceiverBinding(
+                    sceneData,
+                    renderExtent,
+                    materialTransportProvenanceEnabled,
+                    out giCausticReceiverBinding);
+            bool receiverCacheEligible = !nearFieldDirectSourceEnabled &&
+                !giCausticReceiverEnabled &&
+                ShouldDispatchSimpleDdgiReceiverCache(
+                    frameIndex,
+                    sceneData,
+                    renderExtent,
+                    materialTransportProvenanceEnabled);
             if (sceneData.GlobalIlluminationDdgiActive != 0 ||
                 sceneData.SimpleDdgiActive != 0)
             {
@@ -432,6 +715,12 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
             if (receiverCacheEligible)
             {
+                receiverFeedbackCaptureOpen =
+                    TryBeginSimpleDdgiReceiverFeedbackCapture(
+                        cmd,
+                        frameIndex,
+                        sceneData,
+                        out receiverFeedbackProducer);
                 timestamps?.BeginPass(
                     cmd,
                     frameIndex,
@@ -443,11 +732,67 @@ namespace Njulf.Rendering.Pipeline
                             cmd,
                             frameIndex,
                             sceneData,
-                            renderExtent);
+                            renderExtent,
+                            receiverFeedbackProducer);
+                    if (receiverFeedbackCaptureOpen &&
+                        _simpleDdgiReceiverCacheAvailableForCurrentView &&
+                        !_simpleDdgiReceiverFeedbackRuntime!
+                            .TryRecordOwnedProducerCompletion(
+                                cmd,
+                                frameIndex,
+                                SimpleDdgiReceiverFeedbackProducer.OpaqueForward,
+                                out string completionReason))
+                    {
+                        _simpleDdgiReceiverFeedbackRuntime.AbortCapture(
+                            completionReason);
+                        receiverFeedbackCaptureOpen = false;
+                    }
                 }
                 finally
                 {
                     timestamps?.EndPass(cmd, frameIndex);
+                }
+            }
+
+            if (receiverFeedbackCaptureOpen &&
+                _simpleDdgiReceiverFeedbackRuntime!
+                    .IsPendingOwnedProducerRequired(
+                        frameIndex,
+                        SimpleDdgiReceiverFeedbackProducer
+                            .AlphaMaskOrFoliage))
+            {
+                bool maskedFeedbackRequired =
+                    sceneData.MaskedMeshletCount > 0;
+                bool foliageFeedbackRequired =
+                    sceneData.FoliageClusterCount > 0;
+                string? unavailableReason = null;
+                if (maskedFeedbackRequired &&
+                    !_meshPipeline.AlphaMaskReceiverFeedbackPipelinesAvailable)
+                {
+                    unavailableReason =
+                        "receiver-feedback-alpha-mask-pipelines-unavailable";
+                }
+                else if (foliageFeedbackRequired &&
+                    (_foliagePipeline is null ||
+                     !_foliagePipeline.ReceiverFeedbackPipelinesAvailable ||
+                     sceneData.FoliageDrawBufferBytes == 0))
+                {
+                    unavailableReason =
+                        "receiver-feedback-foliage-pipelines-or-draws-unavailable";
+                }
+
+                if (unavailableReason is not null)
+                {
+                    _simpleDdgiReceiverFeedbackRuntime.AbortCapture(
+                        unavailableReason);
+                    receiverFeedbackCaptureOpen = false;
+                }
+                else
+                {
+                    _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView =
+                        maskedFeedbackRequired;
+                    _simpleDdgiFoliageFeedbackRequiredForCurrentView =
+                        foliageFeedbackRequired;
                 }
             }
 
@@ -461,6 +806,16 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
             if (materialTransportProvenanceEnabled)
                 _renderTargets.MaterialTransportProvenance.TransitionToColorAttachment(cmd);
+            if (nearFieldDirectSourceEnabled)
+            {
+                foreach (RenderTarget target in nearFieldDirectSourceBinding!.Targets)
+                    target.TransitionToColorAttachment(cmd);
+            }
+            if (giCausticReceiverEnabled)
+            {
+                giCausticReceiverBinding!.ReceiverPayload
+                    .TransitionToColorAttachment(cmd);
+            }
             var colorAttachment = ColorAttachment(
                 _renderTargets.SceneColor.View,
                 ImageLayout.ColorAttachmentOptimal,
@@ -471,9 +826,64 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.ClearColor.Y,
                     sceneData.ClearColor.Z,
                     sceneData.ClearColor.W)));
-            var colorAttachments = stackalloc RenderingAttachmentInfo[2];
+            var colorAttachments = stackalloc RenderingAttachmentInfo[
+                (int)ForwardAdvancedGiCombinedContract.ColorAttachmentCount];
             colorAttachments[0] = colorAttachment;
-            if (materialTransportProvenanceEnabled)
+            if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
+            {
+                // Combined ABI: SceneColor, C4 receiver, C5 direct source,
+                // C5 receiver. All auxiliary values clear to invalid/zero so
+                // omitted pixels can never decode as valid transport input.
+                colorAttachments[1] = ColorAttachment(
+                    giCausticReceiverBinding!.ReceiverPayload.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+                colorAttachments[2] = ColorAttachment(
+                    nearFieldDirectSourceBinding!.DirectSource.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+                colorAttachments[3] = ColorAttachment(
+                    nearFieldDirectSourceBinding.ReceiverPayload.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+            }
+            else if (nearFieldDirectSourceEnabled)
+            {
+                // Clear both auxiliary attachments. A background or omitted
+                // draw therefore decodes as invalid, never as plausible
+                // receiver geometry or radiance.
+                colorAttachments[1] = ColorAttachment(
+                    nearFieldDirectSourceBinding!.DirectSource.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+                colorAttachments[2] = ColorAttachment(
+                    nearFieldDirectSourceBinding.ReceiverPayload.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+            }
+            else if (giCausticReceiverEnabled)
+            {
+                // A cleared uvec4 payload is invalid by ABI. Omitted pixels,
+                // foliage, transparency, and backgrounds therefore cannot be
+                // mistaken for C4 diffuse receivers.
+                colorAttachments[1] = ColorAttachment(
+                    giCausticReceiverBinding!.ReceiverPayload.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+            }
+            else if (materialTransportProvenanceEnabled)
             {
                 // Zero is the stable background/no-geometry code. Rasterized
                 // pixels overwrite it with a categorical source-path byte.
@@ -499,7 +909,9 @@ namespace Njulf.Rendering.Pipeline
                 ColorAttachmentCount =
                     ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
                         hasColorAttachment: true,
-                        materialTransportProvenanceEnabled),
+                        materialTransportProvenanceEnabled,
+                        nearFieldDirectSourceEnabled,
+                        giCausticReceiverEnabled),
                 PColorAttachments = colorAttachments,
                 PDepthAttachment = &depthAttachment,
                 PStencilAttachment = null
@@ -534,7 +946,11 @@ namespace Njulf.Rendering.Pipeline
                         sceneData.ForwardVisibilitySimpleCapacity +
                         sceneData.ForwardVisibilitySimpleNormalCapacity +
                         sceneData.ForwardVisibilityFullCapacity);
-                    DrawForwardVisibilityBucketsIndirect(cmd, sceneData);
+                    DrawForwardVisibilityBucketsIndirect(
+                        cmd,
+                        sceneData,
+                        nearFieldDirectSourceEnabled,
+                        giCausticReceiverEnabled);
                 }
                 else if (sceneData.SceneSubmissionIndirectMeshletDispatchEnabled)
                 {
@@ -551,7 +967,9 @@ namespace Njulf.Rendering.Pipeline
                         UpdateCompactedForwardShadowDiagnostics(sceneData, compactedDrawCapacity);
                         DrawCompactedForwardBucketsIndirect(
                             cmd,
-                            sceneData);
+                            sceneData,
+                            nearFieldDirectSourceEnabled,
+                            giCausticReceiverEnabled);
                     }
                     else
                     {
@@ -561,7 +979,9 @@ namespace Njulf.Rendering.Pipeline
                         UpdateCompactedForwardShadowDiagnostics(sceneData, compactedDrawCapacity);
                         DrawCompactedForwardBucketsDirect(
                             cmd,
-                            sceneData);
+                            sceneData,
+                            nearFieldDirectSourceEnabled,
+                            giCausticReceiverEnabled);
                     }
                 }
                 else
@@ -575,7 +995,9 @@ namespace Njulf.Rendering.Pipeline
                     UpdateCompactedForwardShadowDiagnostics(sceneData, compactedDrawCapacity);
                     DrawCompactedForwardBucketsDirect(
                         cmd,
-                        sceneData);
+                        sceneData,
+                        nearFieldDirectSourceEnabled,
+                        giCausticReceiverEnabled);
                 }
             }
             else
@@ -594,7 +1016,9 @@ namespace Njulf.Rendering.Pipeline
                         ? _meshPipeline.ForwardSimpleGlobalIblPipeline
                         : _meshPipeline.ForwardFullMaterialPipeline,
                     sceneData.SimpleOpaqueMeshletCount,
-                    BindlessIndex.MeshletDrawBufferBase);
+                    BindlessIndex.MeshletDrawBufferBase,
+                    nearFieldDirectSourceEnabled,
+                    giCausticReceiverEnabled);
                 DrawForwardBucket(
                     cmd,
                     sceneData,
@@ -602,18 +1026,87 @@ namespace Njulf.Rendering.Pipeline
                         ? _meshPipeline.ForwardSimpleFullInputGlobalIblPipeline
                         : _meshPipeline.ForwardFullMaterialPipeline,
                     sceneData.SimpleNormalOpaqueMeshletCount,
-                    BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase);
+                    BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase,
+                    nearFieldDirectSourceEnabled,
+                    giCausticReceiverEnabled);
                 DrawForwardBucket(
                     cmd,
                     sceneData,
                     _meshPipeline.ForwardFullMaterialPipeline,
                     sceneData.FullOpaqueMeshletCount,
-                    BindlessIndex.FullOpaqueMeshletDrawBufferBase);
+                    BindlessIndex.FullOpaqueMeshletDrawBufferBase,
+                    nearFieldDirectSourceEnabled,
+                    giCausticReceiverEnabled);
             }
-            DrawFoliageForward(cmd, sceneData);
 
-            _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            if (nearFieldDirectSourceEnabled || giCausticReceiverEnabled)
+            {
+                // Foliage remains visible in SceneColor, but deliberately has
+                // no C5 source write until its own qualified source contract
+                // exists. Transparent and particle paths are separate passes
+                // and therefore never bind the direct-source attachment.
+                _context.KhrDynamicRendering.CmdEndRendering(cmd);
+                DrawFoliageWithoutNearFieldDirectSource(
+                    cmd,
+                    sceneData,
+                    renderExtent);
+            }
+            else
+            {
+                DrawFoliageForward(cmd, sceneData);
+                _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            }
+            if (giCausticReceiverEnabled)
+            {
+                sceneData.GiCausticReceiverPayloadCompleted = true;
+                sceneData.GiCausticReceiverPayloadFrameSerial =
+                    sceneData.DdgiFrameSerial;
+            }
+            bool exactAlphaProducerRequired =
+                _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView ||
+                _simpleDdgiFoliageFeedbackRequiredForCurrentView;
+            if (receiverFeedbackCaptureOpen && exactAlphaProducerRequired &&
+                !_simpleDdgiReceiverFeedbackRuntime!
+                    .TryRecordOwnedProducerCompletion(
+                        cmd,
+                        frameIndex,
+                        SimpleDdgiReceiverFeedbackProducer
+                            .AlphaMaskOrFoliage,
+                        out string alphaCompletionReason))
+            {
+                _simpleDdgiReceiverFeedbackRuntime.AbortCapture(
+                    "receiver-feedback-alpha-foliage-completion-failed:" +
+                    alphaCompletionReason);
+                receiverFeedbackCaptureOpen = false;
+            }
+            bool exactOpaqueProducerCompleted =
+                _simpleDdgiReceiverCacheAvailableForCurrentView;
             _simpleDdgiReceiverCacheAvailableForCurrentView = false;
+            _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView = false;
+            _simpleDdgiFoliageFeedbackRequiredForCurrentView = false;
+            if (receiverFeedbackCaptureOpen)
+            {
+                if (!exactOpaqueProducerCompleted)
+                {
+                    _simpleDdgiReceiverFeedbackRuntime!.AbortCapture(
+                        "receiver-feedback-opaque-producer-did-not-complete");
+                }
+                // A successful producer transaction is intentionally left
+                // open. VulkanRenderer finalizes it only after the late
+                // transparent/particle/fog/capture producer boundary.
+                receiverFeedbackCaptureOpen = false;
+            }
+            }
+            finally
+            {
+                if (receiverFeedbackCaptureOpen)
+                {
+                    _simpleDdgiReceiverFeedbackRuntime?.AbortCapture(
+                        "receiver-feedback-forward-pass-recording-aborted");
+                }
+                _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView = false;
+                _simpleDdgiFoliageFeedbackRequiredForCurrentView = false;
+            }
         }
 
         /// <summary>
@@ -738,16 +1231,63 @@ namespace Njulf.Rendering.Pipeline
             Data.SceneRenderingData sceneData,
             Silk.NET.Vulkan.Pipeline pipeline,
             int meshletCount,
-            int meshletDrawBufferBaseIndex)
+            int meshletDrawBufferBaseIndex,
+            bool nearFieldDirectSourceEnabled = false,
+            bool giCausticReceiverEnabled = false)
         {
             if (meshletCount <= 0)
                 return;
 
-            bool receiverCacheEnabled = ShouldUseSimpleDdgiReceiverCacheForDraw();
-            pipeline = _meshPipeline.ResolveOpaqueSpecializedPipeline(
-                pipeline,
-                receiverCacheEnabled,
-                ShouldUseForwardGiDisabledBenchmarkPipeline());
+            bool receiverCacheEnabled = !nearFieldDirectSourceEnabled &&
+                !giCausticReceiverEnabled &&
+                !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
+                !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
+                ShouldUseSimpleDdgiReceiverCacheForDraw();
+            if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
+            {
+                if (!_meshPipeline.TryResolveCombinedAdvancedGiPipeline(
+                        pipeline,
+                        out Silk.NET.Vulkan.Pipeline combinedPipeline))
+                {
+                    throw new InvalidOperationException(
+                        "The combined C4/C5 pass selected an opaque pipeline without a matching four-attachment semantic variant.");
+                }
+
+                pipeline = combinedPipeline;
+            }
+            else if (nearFieldDirectSourceEnabled)
+            {
+                if (!_meshPipeline.TryResolveNearFieldDirectSourcePipeline(
+                        pipeline,
+                        out Silk.NET.Vulkan.Pipeline nearFieldPipeline))
+                {
+                    throw new InvalidOperationException(
+                        "The C5 direct-source pass selected an opaque pipeline without a matching semantic MRT variant.");
+                }
+
+                pipeline = nearFieldPipeline;
+            }
+            else if (giCausticReceiverEnabled)
+            {
+                if (!_meshPipeline.TryResolveGiCausticReceiverPipeline(
+                        pipeline,
+                        out Silk.NET.Vulkan.Pipeline causticPipeline))
+                {
+                    throw new InvalidOperationException(
+                        "The C4 receiver pass selected an opaque pipeline without a matching semantic MRT variant.");
+                }
+
+                pipeline = causticPipeline;
+            }
+            else
+            {
+                pipeline = _meshPipeline.ResolveOpaqueSpecializedPipeline(
+                    pipeline,
+                    receiverCacheEnabled,
+                    ShouldUseForwardGiDisabledBenchmarkPipeline(),
+                    _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView ||
+                    _simpleDdgiReflectionFeedbackRequiredForCurrentView);
+            }
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
 
             var pushConstants = new Data.GPUForwardPushConstants
@@ -759,7 +1299,9 @@ namespace Njulf.Rendering.Pipeline
                 // Time is unused by opaque forward mesh/fragment stages. The
                 // receiver-cache specialization consumes its exact bit pattern
                 // as the cache width without changing the 256-byte ABI.
-                Time = receiverCacheEnabled
+                Time = nearFieldDirectSourceEnabled
+                    ? BitConverter.UInt32BitsToSingle(sceneData.TemporalSampleIndex)
+                    : receiverCacheEnabled
                     ? BitConverter.UInt32BitsToSingle(
                         _simpleDdgiReceiverCacheWidth)
                     : sceneData.Time,
@@ -787,10 +1329,13 @@ namespace Njulf.Rendering.Pipeline
                     ShouldCollectDirectionalShadowReceiverCounters(sceneData),
                     (uint)sceneData.DirectionalShadowPreviewCascade,
                     materialTransportProvenanceEnabled:
+                        !nearFieldDirectSourceEnabled &&
+                        !giCausticReceiverEnabled &&
                         ShouldWriteMaterialTransportProvenance(),
                     ddgiReceiverCacheEnabled: receiverCacheEnabled),
                 CaptureFlags = Data.GPUForwardPushConstants.PackCaptureFlags(
-                    _recordingReflectionCapture)
+                    _recordingReflectionCapture,
+                    _reflectionFeedbackCubemapArrayLayer)
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -808,7 +1353,9 @@ namespace Njulf.Rendering.Pipeline
 
         private void DrawCompactedForwardBucketsIndirect(
             CommandBuffer cmd,
-            Data.SceneRenderingData sceneData)
+            Data.SceneRenderingData sceneData,
+            bool nearFieldDirectSourceEnabled = false,
+            bool giCausticReceiverEnabled = false)
         {
             bool useSimpleGlobalIblPipeline = ResolveOpaqueVariantSelection(sceneData).UseSimpleGlobalIblPipeline;
             DrawForwardBucketIndirect(
@@ -820,7 +1367,9 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
                 BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
-                sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
+                sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
             DrawForwardBucketIndirect(
                 cmd,
                 sceneData,
@@ -830,7 +1379,9 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
                 BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
-                sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
+                sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
             DrawForwardBucketIndirect(
                 cmd,
                 sceneData,
@@ -838,12 +1389,16 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(0, sceneData.FullOpaqueMeshletCount),
                 BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
-                sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
+                sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
         }
 
         private void DrawForwardVisibilityBucketsIndirect(
             CommandBuffer cmd,
-            Data.SceneRenderingData sceneData)
+            Data.SceneRenderingData sceneData,
+            bool nearFieldDirectSourceEnabled = false,
+            bool giCausticReceiverEnabled = false)
         {
             bool useSimpleGlobalIblPipeline = ResolveOpaqueVariantSelection(sceneData).UseSimpleGlobalIblPipeline;
             DrawForwardBucketIndirect(
@@ -855,7 +1410,9 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(0, sceneData.ForwardVisibilitySimpleCapacity),
                 BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
-                sceneData.ForwardVisibilityIndirectDispatchBuffer);
+                sceneData.ForwardVisibilityIndirectDispatchBuffer,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
             DrawForwardBucketIndirect(
                 cmd,
                 sceneData,
@@ -865,7 +1422,9 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(0, sceneData.ForwardVisibilitySimpleNormalCapacity),
                 BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
-                sceneData.ForwardVisibilityIndirectDispatchBuffer);
+                sceneData.ForwardVisibilityIndirectDispatchBuffer,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
             DrawForwardBucketIndirect(
                 cmd,
                 sceneData,
@@ -873,12 +1432,16 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(0, sceneData.ForwardVisibilityFullCapacity),
                 BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
-                sceneData.ForwardVisibilityIndirectDispatchBuffer);
+                sceneData.ForwardVisibilityIndirectDispatchBuffer,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
         }
 
         private void DrawCompactedForwardBucketsDirect(
             CommandBuffer cmd,
-            Data.SceneRenderingData sceneData)
+            Data.SceneRenderingData sceneData,
+            bool nearFieldDirectSourceEnabled = false,
+            bool giCausticReceiverEnabled = false)
         {
             bool useSimpleGlobalIblPipeline = ResolveOpaqueVariantSelection(sceneData).UseSimpleGlobalIblPipeline;
             DrawForwardBucket(
@@ -888,7 +1451,9 @@ namespace Njulf.Rendering.Pipeline
                     ? _meshPipeline.ForwardSimpleGlobalIblPipeline
                     : _meshPipeline.ForwardFullMaterialPipeline,
                 Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
-                BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase);
+                BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
             DrawForwardBucket(
                 cmd,
                 sceneData,
@@ -896,13 +1461,17 @@ namespace Njulf.Rendering.Pipeline
                     ? _meshPipeline.ForwardSimpleFullInputGlobalIblPipeline
                     : _meshPipeline.ForwardFullMaterialPipeline,
                 Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
-                BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase);
+                BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
             DrawForwardBucket(
                 cmd,
                 sceneData,
                 _meshPipeline.ForwardFullMaterialPipeline,
                 Math.Max(0, sceneData.FullOpaqueMeshletCount),
-                BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase);
+                BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
         }
 
         private void DrawForwardBucketIndirect(
@@ -912,16 +1481,63 @@ namespace Njulf.Rendering.Pipeline
             int meshletCapacity,
             int meshletDrawBufferBaseIndex,
             ulong indirectOffset,
-            BufferHandle indirectBufferHandle)
+            BufferHandle indirectBufferHandle,
+            bool nearFieldDirectSourceEnabled = false,
+            bool giCausticReceiverEnabled = false)
         {
             if (meshletCapacity <= 0 || _bufferManager == null)
                 return;
 
-            bool receiverCacheEnabled = ShouldUseSimpleDdgiReceiverCacheForDraw();
-            pipeline = _meshPipeline.ResolveOpaqueSpecializedPipeline(
-                pipeline,
-                receiverCacheEnabled,
-                ShouldUseForwardGiDisabledBenchmarkPipeline());
+            bool receiverCacheEnabled = !nearFieldDirectSourceEnabled &&
+                !giCausticReceiverEnabled &&
+                !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
+                !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
+                ShouldUseSimpleDdgiReceiverCacheForDraw();
+            if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
+            {
+                if (!_meshPipeline.TryResolveCombinedAdvancedGiPipeline(
+                        pipeline,
+                        out Silk.NET.Vulkan.Pipeline combinedPipeline))
+                {
+                    throw new InvalidOperationException(
+                        "The combined C4/C5 pass selected an indirect opaque pipeline without a matching four-attachment semantic variant.");
+                }
+
+                pipeline = combinedPipeline;
+            }
+            else if (nearFieldDirectSourceEnabled)
+            {
+                if (!_meshPipeline.TryResolveNearFieldDirectSourcePipeline(
+                        pipeline,
+                        out Silk.NET.Vulkan.Pipeline nearFieldPipeline))
+                {
+                    throw new InvalidOperationException(
+                        "The C5 direct-source pass selected an indirect opaque pipeline without a matching semantic MRT variant.");
+                }
+
+                pipeline = nearFieldPipeline;
+            }
+            else if (giCausticReceiverEnabled)
+            {
+                if (!_meshPipeline.TryResolveGiCausticReceiverPipeline(
+                        pipeline,
+                        out Silk.NET.Vulkan.Pipeline causticPipeline))
+                {
+                    throw new InvalidOperationException(
+                        "The C4 receiver pass selected an indirect opaque pipeline without a matching semantic MRT variant.");
+                }
+
+                pipeline = causticPipeline;
+            }
+            else
+            {
+                pipeline = _meshPipeline.ResolveOpaqueSpecializedPipeline(
+                    pipeline,
+                    receiverCacheEnabled,
+                    ShouldUseForwardGiDisabledBenchmarkPipeline(),
+                    _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView ||
+                    _simpleDdgiReflectionFeedbackRequiredForCurrentView);
+            }
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
 
             var pushConstants = new Data.GPUForwardPushConstants
@@ -930,7 +1546,9 @@ namespace Njulf.Rendering.Pipeline
                 InverseViewMatrix = sceneData.InverseViewMatrix,
                 InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
                 CameraPosition = sceneData.CameraPosition,
-                Time = receiverCacheEnabled
+                Time = nearFieldDirectSourceEnabled
+                    ? BitConverter.UInt32BitsToSingle(sceneData.TemporalSampleIndex)
+                    : receiverCacheEnabled
                     ? BitConverter.UInt32BitsToSingle(
                         _simpleDdgiReceiverCacheWidth)
                     : sceneData.Time,
@@ -958,10 +1576,13 @@ namespace Njulf.Rendering.Pipeline
                     ShouldCollectDirectionalShadowReceiverCounters(sceneData),
                     (uint)sceneData.DirectionalShadowPreviewCascade,
                     materialTransportProvenanceEnabled:
+                        !nearFieldDirectSourceEnabled &&
+                        !giCausticReceiverEnabled &&
                         ShouldWriteMaterialTransportProvenance(),
                     ddgiReceiverCacheEnabled: receiverCacheEnabled),
                 CaptureFlags = Data.GPUForwardPushConstants.PackCaptureFlags(
-                    _recordingReflectionCapture)
+                    _recordingReflectionCapture,
+                    _reflectionFeedbackCubemapArrayLayer)
             };
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
@@ -1002,7 +1623,15 @@ namespace Njulf.Rendering.Pipeline
 #else
             float environmentFallbackIntensity =
                 _settings.GlobalIllumination.EnvironmentFallbackIntensity;
+            bool directionalReceiverActive =
+                _settings.GlobalIllumination
+                    .EffectiveSimpleDdgiDirectionalRadianceMode !=
+                    SimpleDdgiDirectionalRadianceMode.Off &&
+                _settings.GlobalIllumination
+                    .EffectiveSimpleDdgiGlossyTransportMode !=
+                    SimpleDdgiGlossyTransportMode.Off;
             if (_recordingReflectionCapture || materialTransportProvenanceEnabled ||
+                directionalReceiverActive ||
                 _settings.Diagnostics.ForceExactForwardGiGatherForBenchmark ||
                 !float.IsFinite(environmentFallbackIntensity) ||
                 environmentFallbackIntensity > 1.0f ||
@@ -1068,7 +1697,9 @@ namespace Njulf.Rendering.Pipeline
             CommandBuffer cmd,
             int frameIndex,
             Data.SceneRenderingData sceneData,
-            Extent2D renderExtent)
+            Extent2D renderExtent,
+            in SimpleDdgiReceiverFeedbackCaptureProducerContract
+                receiverFeedbackProducer)
         {
             if (_bufferManager == null ||
                 _simpleDdgiReceiverCachePipeline.Handle == 0 ||
@@ -1092,7 +1723,9 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindPipeline(
                 cmd,
                 PipelineBindPoint.Compute,
-                _simpleDdgiReceiverCachePipeline);
+                receiverFeedbackProducer.IsAvailable
+                    ? _simpleDdgiReceiverFeedbackPipeline
+                    : _simpleDdgiReceiverCachePipeline);
             BindBindlessStorageAndTextures(
                 cmd,
                 _simpleDdgiReceiverCachePipelineLayout,
@@ -1112,7 +1745,19 @@ namespace Njulf.Rendering.Pipeline
                 CacheBufferIndex = checked((uint)
                     (BindlessIndex.SimpleDdgiReceiverGatherBufferBase +
                      frameIndex)),
-                ReceiverScale = SimpleDdgiReceiverGatherScale
+                ReceiverScale = SimpleDdgiReceiverGatherScale,
+                FeedbackControlOffsetWords = receiverFeedbackProducer.IsAvailable
+                    ? receiverFeedbackProducer.CandidateControlOffsetWords
+                    : 0u,
+                FeedbackSamplePeriod = receiverFeedbackProducer.IsAvailable
+                    ? receiverFeedbackProducer.ScreenSamplingPeriod
+                    : 0u,
+                FeedbackSamplePhase = receiverFeedbackProducer.IsAvailable
+                    ? receiverFeedbackProducer.ScreenSamplingPhase
+                    : 0u,
+                FeedbackMaximumOwnersPerTile = receiverFeedbackProducer.IsAvailable
+                    ? receiverFeedbackProducer.MaximumUniqueGatherOwnersPerTile
+                    : 0u
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -1226,6 +1871,122 @@ namespace Njulf.Rendering.Pipeline
             };
             _context.Api.CmdPipelineBarrier2(cmd, &cacheDependency);
             return true;
+        }
+
+        private bool TryBeginSimpleDdgiReceiverFeedbackCapture(
+            CommandBuffer commandBuffer,
+            int frameIndex,
+            Data.SceneRenderingData sceneData,
+            out SimpleDdgiReceiverFeedbackCaptureProducerContract producer)
+        {
+            producer = SimpleDdgiReceiverFeedbackCaptureProducerContract.Unavailable;
+            SimpleDdgiReceiverFeedbackVulkanRuntime? runtime =
+                _simpleDdgiReceiverFeedbackRuntime;
+            if (runtime is null || !runtime.IsOwnedCaptureReady ||
+                sceneData.DdgiFrameSerial == ulong.MaxValue)
+            {
+                return false;
+            }
+
+            try
+            {
+                EnsureSimpleDdgiReceiverFeedbackPipeline();
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    "Simple-DDGI exact receiver-feedback producer pipeline " +
+                    $"unavailable: {exception.GetType().Name}: {exception.Message}");
+                return false;
+            }
+
+            if (_simpleDdgiReceiverFeedbackPipeline.Handle == 0)
+                return false;
+
+            int resizeCount = Math.Max(0, _renderTargets.ResizeCount);
+            uint viewportGeneration = checked((uint)resizeCount + 1u);
+            uint requiredProducerMask = ResolveRequiredReceiverFeedbackProducerMask(
+                sceneData,
+                _settings.Fog.Enabled &&
+                _settings.Fog.Mode != FogMode.Disabled &&
+                sceneData.AnimationDebugView == AnimationDebugView.None,
+                _settings.Reflections.Enabled &&
+                _settings.Reflections.CaptureIncludesDdgi &&
+                _settings.Reflections.MaxProbeCapturesPerFrame > 0 &&
+                _settings.Reflections.MaxProbeCaptureFacesPerFrame > 0);
+            if (!runtime.TryBeginOwnedCapture(
+                    commandBuffer,
+                    frameIndex,
+                    viewportGeneration,
+                    sceneData.DdgiFrameSerial,
+                    requiredProducerMask,
+                    out producer,
+                    out _))
+            {
+                producer =
+                    SimpleDdgiReceiverFeedbackCaptureProducerContract.Unavailable;
+                return false;
+            }
+
+            return true;
+        }
+
+        internal static uint ResolveRequiredReceiverFeedbackProducerMask(
+            SceneRenderingData sceneData,
+            bool? fogEnabled = null,
+            bool? reflectionCaptureFeedbackEnabled = null)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+            uint mask = SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                SimpleDdgiReceiverFeedbackProducer.OpaqueForward);
+
+            if (sceneData.MaskedMeshletCount > 0 ||
+                sceneData.FoliageClusterCount > 0)
+            {
+                mask |= SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                    SimpleDdgiReceiverFeedbackProducer.AlphaMaskOrFoliage);
+            }
+            if (sceneData.TransparentPassEnabled &&
+                sceneData.TransparentReceiveGlobalIllumination &&
+                sceneData.TransparentMeshletCount > 0)
+            {
+                mask |= SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                    SimpleDdgiReceiverFeedbackProducer.TransparentWeightedOit);
+            }
+            if (sceneData.ParticleDdgiSampleCount > 0)
+            {
+                mask |= SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                    SimpleDdgiReceiverFeedbackProducer.Particles);
+            }
+            if (fogEnabled ?? sceneData.FogEnabled)
+            {
+                mask |= SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                    SimpleDdgiReceiverFeedbackProducer.Fog);
+            }
+            if ((reflectionCaptureFeedbackEnabled ?? true) &&
+                sceneData.ReflectionProbeCapturesQueued >
+                    sceneData.ReflectionProbeCapturesCompleted)
+            {
+                mask |= SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                    SimpleDdgiReceiverFeedbackProducer.ReflectionCapture);
+            }
+            if (sceneData.SimpleDdgiRefinement.Requested ||
+                sceneData.SimpleDdgiRefinement.BaseFallbackBrickCount > 0)
+            {
+                mask |= SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                    SimpleDdgiReceiverFeedbackProducer.RefinementOrBaseFallback);
+            }
+            return mask;
+        }
+
+        private void EnsureSimpleDdgiReceiverFeedbackPipeline()
+        {
+            if (_simpleDdgiReceiverFeedbackPipeline.Handle != 0)
+                return;
+            _simpleDdgiReceiverFeedbackPipeline =
+                CreateSimpleDdgiReceiverCachePipeline(
+                    "ddgi_simple_receiver_cache_b1.comp.spv",
+                    "Simple DDGI Exact Receiver Feedback Gather Pipeline");
         }
 
         private bool ShouldUseSimpleDdgiReceiverCacheForDraw()
@@ -1391,6 +2152,161 @@ namespace Njulf.Rendering.Pipeline
             _settings.GlobalIllumination.DebugView ==
             GlobalIlluminationDebugView.MaterialTransportHitProvenance;
 
+        private bool TryGetNearFieldDirectSourceBinding(
+            Data.SceneRenderingData sceneData,
+            Extent2D renderExtent,
+            bool materialTransportProvenanceEnabled,
+            out ForwardNearFieldDirectSourceAttachmentBinding? binding)
+        {
+            binding = null;
+            if (_nearFieldDirectSourceRuntimeAvailable is not null &&
+                !_nearFieldDirectSourceRuntimeAvailable())
+            {
+                NearFieldDirectSourceFailureReason =
+                    "near-field-runtime-not-effective";
+                return false;
+            }
+            if (_nearFieldDirectSourceBinding == null)
+            {
+                NearFieldDirectSourceFailureReason =
+                    "near-field-direct-source-attachment-binding-unavailable";
+                return false;
+            }
+
+            if (_recordingReflectionCapture)
+            {
+                NearFieldDirectSourceFailureReason =
+                    "near-field-direct-source-reflection-capture-unsupported";
+                return false;
+            }
+
+            if (!_meshPipeline.NearFieldDirectSourceAttachmentEnabled)
+            {
+                NearFieldDirectSourceFailureReason =
+                    _meshPipeline.NearFieldDirectSourceFailureReason;
+                return false;
+            }
+
+            if (materialTransportProvenanceEnabled)
+            {
+                NearFieldDirectSourceFailureReason =
+                    "near-field-direct-source-material-transport-provenance-conflict";
+                return false;
+            }
+
+            // Any forward debug path can return before direct-light evaluation.
+            // The shader initializes the attachment to zero defensively, but an
+            // active C5 trace must never consume those debug pixels as source.
+            if (sceneData.DebugViewMode != 0u ||
+                sceneData.AmbientOcclusionDebugView != AmbientOcclusionDebugView.None ||
+                sceneData.TransparencyDebugView != TransparencyDebugView.None ||
+                sceneData.AnimationDebugView != AnimationDebugView.None ||
+                sceneData.ReflectionDebugView != ReflectionDebugView.None ||
+                _settings.GlobalIllumination.DebugView !=
+                    GlobalIlluminationDebugView.None ||
+                _settings.Environment.DebugView != EnvironmentDebugView.None)
+            {
+                NearFieldDirectSourceFailureReason =
+                    "near-field-direct-source-debug-view-active";
+                return false;
+            }
+
+            if (_settings.Diagnostics.SuppressForwardGiGatherForBenchmark)
+            {
+                NearFieldDirectSourceFailureReason =
+                    "near-field-direct-source-forward-gi-benchmark-control-active";
+                return false;
+            }
+
+            if (!ForwardNearFieldDirectSourceContract.TryValidateAttachmentBinding(
+                    _nearFieldDirectSourceBinding,
+                    _meshPipeline.NearFieldDirectSourceConfiguration,
+                    _renderTargets.SceneColor,
+                    renderExtent,
+                    out string failure))
+            {
+                NearFieldDirectSourceFailureReason = failure;
+                return false;
+            }
+
+            binding = _nearFieldDirectSourceBinding;
+            NearFieldDirectSourceFailureReason = "valid";
+            return true;
+        }
+
+        private bool TryGetGiCausticReceiverBinding(
+            Data.SceneRenderingData sceneData,
+            Extent2D renderExtent,
+            bool materialTransportProvenanceEnabled,
+            out ForwardGiCausticReceiverAttachmentBinding? binding)
+        {
+            binding = null;
+            if (_giCausticRuntimeAvailable is not null &&
+                !_giCausticRuntimeAvailable())
+            {
+                GiCausticReceiverFailureReason =
+                    "caustic-runtime-not-effective";
+                return false;
+            }
+            if (_giCausticReceiverBinding is null)
+            {
+                GiCausticReceiverFailureReason =
+                    "caustic-forward-receiver-attachment-unavailable";
+                return false;
+            }
+            if (_recordingReflectionCapture)
+            {
+                GiCausticReceiverFailureReason =
+                    "caustic-forward-receiver-reflection-capture-unsupported";
+                return false;
+            }
+            if (!_meshPipeline.GiCausticReceiverAttachmentEnabled)
+            {
+                GiCausticReceiverFailureReason =
+                    _meshPipeline.GiCausticReceiverFailureReason;
+                return false;
+            }
+            if (materialTransportProvenanceEnabled)
+            {
+                GiCausticReceiverFailureReason =
+                    "caustic-forward-receiver-material-provenance-conflict";
+                return false;
+            }
+            if (sceneData.DebugViewMode != 0u ||
+                sceneData.AmbientOcclusionDebugView != AmbientOcclusionDebugView.None ||
+                sceneData.TransparencyDebugView != TransparencyDebugView.None ||
+                sceneData.AnimationDebugView != AnimationDebugView.None ||
+                sceneData.ReflectionDebugView != ReflectionDebugView.None ||
+                _settings.GlobalIllumination.DebugView !=
+                    GlobalIlluminationDebugView.None ||
+                _settings.Environment.DebugView != EnvironmentDebugView.None)
+            {
+                GiCausticReceiverFailureReason =
+                    "caustic-forward-receiver-debug-view-active";
+                return false;
+            }
+            if (_settings.Diagnostics.SuppressForwardGiGatherForBenchmark)
+            {
+                GiCausticReceiverFailureReason =
+                    "caustic-forward-receiver-forward-gi-benchmark-control-active";
+                return false;
+            }
+            if (!ForwardGiCausticReceiverContract.TryValidateAttachmentBinding(
+                    _giCausticReceiverBinding,
+                    _meshPipeline.GiCausticReceiverConfiguration,
+                    _renderTargets.SceneColor,
+                    renderExtent,
+                    out string failure))
+            {
+                GiCausticReceiverFailureReason = failure;
+                return false;
+            }
+
+            binding = _giCausticReceiverBinding;
+            GiCausticReceiverFailureReason = "valid";
+            return true;
+        }
+
         internal static bool ShouldApplyDdgi(
             Data.SceneRenderingData sceneData,
             GlobalIlluminationSettings gi)
@@ -1405,7 +2321,15 @@ namespace Njulf.Rendering.Pipeline
             if (_foliagePipeline == null || sceneData.FoliageClusterCount <= 0 || sceneData.FoliageDrawBufferBytes == 0)
                 return;
 
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _foliagePipeline.ForwardPipeline);
+            VkPipeline foliagePipeline =
+                (_simpleDdgiFoliageFeedbackRequiredForCurrentView ||
+                 _simpleDdgiReflectionFeedbackRequiredForCurrentView)
+                    ? _foliagePipeline.ForwardReceiverFeedbackPipeline
+                    : _foliagePipeline.ForwardPipeline;
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Graphics,
+                foliagePipeline);
             BindFoliageDescriptorSets(cmd);
 
             var pushConstants = new GPUFoliageDrawPushConstants
@@ -1416,7 +2340,10 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 ClusterDrawCount = checked((uint)sceneData.FoliageClusterCount),
                 VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
-                Flags = ShouldWriteMaterialTransportProvenance() ? 1u << 2 : 0u,
+                Flags = GPUFoliageDrawPushConstants.PackFlags(
+                    ShouldWriteMaterialTransportProvenance(),
+                    _simpleDdgiReflectionFeedbackRequiredForCurrentView,
+                    _reflectionFeedbackCubemapArrayLayer),
                 DebugView = sceneData.FoliageDebugView,
                 ShadowDensityScale = 1.0f
             };
@@ -1435,6 +2362,56 @@ namespace Njulf.Rendering.Pipeline
             DrawAuthoredFoliageForward(cmd, sceneData);
         }
 
+        private void DrawFoliageWithoutNearFieldDirectSource(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData,
+            Extent2D renderExtent)
+        {
+            if (_foliagePipeline == null || sceneData.FoliageClusterCount <= 0 ||
+                sceneData.FoliageDrawBufferBytes == 0)
+            {
+                return;
+            }
+
+            RenderingAttachmentInfo colorAttachment = ColorAttachment(
+                _renderTargets.SceneColor.View,
+                ImageLayout.ColorAttachmentOptimal,
+                AttachmentLoadOp.Load,
+                AttachmentStoreOp.Store,
+                new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+            RenderingAttachmentInfo depthAttachment = DepthAttachment(
+                _renderTargets.SceneDepth.View,
+                ImageLayout.DepthStencilReadOnlyOptimal,
+                AttachmentLoadOp.Load,
+                AttachmentStoreOp.Store,
+                new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)));
+            var renderingInfo = new RenderingInfo
+            {
+                SType = StructureType.RenderingInfo,
+                RenderArea = new Rect2D
+                {
+                    Offset = new Offset2D { X = 0, Y = 0 },
+                    Extent = renderExtent
+                },
+                LayerCount = 1,
+                ColorAttachmentCount =
+                    ForwardDynamicRenderingContract.SceneColorAttachmentCount,
+                PColorAttachments = &colorAttachment,
+                PDepthAttachment = &depthAttachment,
+                PStencilAttachment = null
+            };
+
+            _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
+            try
+            {
+                DrawFoliageForward(cmd, sceneData);
+            }
+            finally
+            {
+                _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            }
+        }
+
         private void DrawAuthoredFoliageForward(CommandBuffer cmd, Data.SceneRenderingData sceneData)
         {
             if (_foliagePipeline == null || _bufferManager == null || _foliageManager == null || sceneData.FoliageDrawBufferBytes == 0)
@@ -1444,7 +2421,15 @@ namespace Njulf.Rendering.Pipeline
             if (!buffers.IndirectDispatchBuffer.IsValid || buffers.MeshletDrawCapacity <= 0)
                 return;
 
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _foliagePipeline.AuthoredForwardPipeline);
+            VkPipeline authoredFoliagePipeline =
+                (_simpleDdgiFoliageFeedbackRequiredForCurrentView ||
+                 _simpleDdgiReflectionFeedbackRequiredForCurrentView)
+                    ? _foliagePipeline.AuthoredForwardReceiverFeedbackPipeline
+                    : _foliagePipeline.AuthoredForwardPipeline;
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Graphics,
+                authoredFoliagePipeline);
             BindFoliageDescriptorSets(cmd);
 
             var pushConstants = new GPUFoliageDrawPushConstants
@@ -1455,7 +2440,10 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 ClusterDrawCount = checked((uint)buffers.MeshletDrawCapacity),
                 VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
-                Flags = ShouldWriteMaterialTransportProvenance() ? 1u << 2 : 0u,
+                Flags = GPUFoliageDrawPushConstants.PackFlags(
+                    ShouldWriteMaterialTransportProvenance(),
+                    _simpleDdgiReflectionFeedbackRequiredForCurrentView,
+                    _reflectionFeedbackCubemapArrayLayer),
                 DebugView = sceneData.FoliageDebugView,
                 ShadowDensityScale = 1.0f
             };
@@ -1723,13 +2711,26 @@ namespace Njulf.Rendering.Pipeline
                     Layout = _simpleDdgiReceiverCachePipelineLayout,
                     BasePipelineIndex = -1
                 };
-                Result result = _context.Api.CreateComputePipelines(
-                    _context.Device,
-                    _simpleDdgiReceiverCachePipelineCache,
-                    1,
-                    &info,
-                    null,
-                    out VkPipeline pipeline);
+                long pipelineStart =
+                    _giPipelineCacheService?.BeginPipelineCreation() ?? 0L;
+                Result result;
+                VkPipeline pipeline;
+                try
+                {
+                    result = _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _simpleDdgiReceiverCachePipelineCache,
+                        1,
+                        &info,
+                        null,
+                        out pipeline);
+                }
+                finally
+                {
+                    _giPipelineCacheService?.EndPipelineCreation(
+                        $"{Name}:{shaderArtifactName}",
+                        pipelineStart);
+                }
                 if (result != Result.Success)
                 {
                     throw new VulkanException(
@@ -1964,6 +2965,15 @@ namespace Njulf.Rendering.Pipeline
                 _simpleDdgiReceiverCacheResolvePipeline = default;
             }
 
+            if (_simpleDdgiReceiverFeedbackPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _simpleDdgiReceiverFeedbackPipeline,
+                    null);
+                _simpleDdgiReceiverFeedbackPipeline = default;
+            }
+
             if (_simpleDdgiReceiverCachePipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(
@@ -1996,7 +3006,8 @@ namespace Njulf.Rendering.Pipeline
                     null);
                 _simpleDdgiReceiverCacheOutputSetLayout = default;
             }
-            if (_simpleDdgiReceiverCachePipelineCache.Handle != 0)
+            if (_giPipelineCacheService == null &&
+                _simpleDdgiReceiverCachePipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(
                     _context.Device,

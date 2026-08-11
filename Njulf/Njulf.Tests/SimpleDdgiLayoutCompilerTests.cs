@@ -48,10 +48,14 @@ public sealed class SimpleDdgiLayoutCompilerTests
         Assert.Multiple(() =>
         {
             // Production fixture with Compact-28 cache rays, 20-byte
-            // direction-free scratch, and the scheduler's 64-byte private
-            // visible-page cohort reservation extension.
-            Assert.That(dense.LiveBytes, Is.EqualTo(134_803_136UL));
-            Assert.That(sparse.LiveBytes, Is.EqualTo(107_894_224UL));
+            // direction-free scratch, the scheduler's 64-byte private
+            // visible-page cohort reservation extension, bounded eligible-work
+            // liveness evidence, residual generation/deadline state, and B1's
+            // fixed 16-byte double-banked receiver-contribution record for
+            // every virtual probe (15,368 * 16 = 245,888 bytes), the 256-byte
+            // params-header ABI, and the current transport-audit summary.
+            Assert.That(dense.LiveBytes, Is.EqualTo(135_143_408UL));
+            Assert.That(sparse.LiveBytes, Is.EqualTo(108_234_496UL));
             Assert.That(dense.LiveBytes - sparse.LiveBytes,
                 Is.EqualTo(26_908_912UL));
             Assert.That(sparse.VirtualProbeCount, Is.EqualTo(15_368));
@@ -102,7 +106,15 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(plan.RayScratchBytes, Is.EqualTo(16UL));
             Assert.That(plan.ProbeStateReadbackBytes, Is.EqualTo(32UL));
             Assert.That(plan.SampledAtlasImageBytes, Is.Zero);
-            Assert.That(plan.LiveBytes, Is.EqualTo(2_720UL));
+            ulong descriptorSafeBufferFloors = 9UL *
+                SimpleDdgiMemoryPlan.GraphSafePlaceholderBytes;
+            Assert.That(
+                plan.LiveBytes,
+                Is.EqualTo(
+                    plan.ParamsBytes +
+                    descriptorSafeBufferFloors +
+                    plan.ProbeStateReadbackBytes));
+            Assert.That(plan.LiveBytes, Is.EqualTo(2_736UL));
         });
     }
 
@@ -134,7 +146,10 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(
                 SimpleDdgiMemoryPlan.TransportRayCacheBytes,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>()));
-            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(6u));
+            Assert.That(
+                SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion,
+                Is.EqualTo((uint)SimpleDdgiStorageAbiVersion.Packed));
+            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(7u));
             Assert.That(
                 SimpleDdgiMemoryPlan.ProbeStateBytesPerProbe,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>()));

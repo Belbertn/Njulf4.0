@@ -122,13 +122,20 @@ public static class CookedAssetMigrator
         foreach (string modelPath in Directory.EnumerateFiles(stagingRoot, "*.njmodel", SearchOption.AllDirectories))
         {
             CookedModelManifest manifest;
+            CookedOpacityMicromapModelChunk? opacityMicromapChunk;
             using (var reader = new CookedAssetReader(modelPath, CookedAssetKind.Model))
+            {
                 manifest = CookedJson.Deserialize<CookedModelManifest>(reader.GetRequiredSection(CookedSectionIds.Manifest).Span, modelPath, "manifest");
+                opacityMicromapChunk = TryReadOptionalOpacityMicromapChunk(reader);
+            }
             string modelDirectory = Path.GetDirectoryName(modelPath)!;
             CookedAssetReference mesh = RefreshReference(modelDirectory, manifest.Mesh);
             CookedAssetReference material = RefreshReference(modelDirectory, manifest.Material);
             CookedAssetReference? animation = manifest.Animation is null ? null : RefreshReference(modelDirectory, manifest.Animation);
-            WriteModelInPlace(modelPath, manifest with { Mesh = mesh, Material = material, Animation = animation });
+            WriteModelInPlace(
+                modelPath,
+                manifest with { Mesh = mesh, Material = material, Animation = animation },
+                opacityMicromapChunk);
         }
 
         if (!string.IsNullOrWhiteSpace(signingPrivateKey))
@@ -443,14 +450,62 @@ public static class CookedAssetMigrator
         return reference with { ContentHash = CookedHash.File(path) };
     }
 
-    private static void WriteModelInPlace(string path, CookedModelManifest manifest)
+    /// <summary>
+    /// Reads a known optional OMM section only after its outer cooked-section
+    /// checksum and its inner bounded schema have both validated.  A bad or
+    /// unsupported optional section is deliberately dropped while preserving
+    /// the ordinary model migration path; it must never be copied through as
+    /// trusted acceleration-structure input.
+    /// </summary>
+    private static CookedOpacityMicromapModelChunk? TryReadOptionalOpacityMicromapChunk(
+        CookedAssetReader reader)
+    {
+        try
+        {
+            if (!reader.TryGetSection(
+                    CookedSectionIds.OpacityMicromap,
+                    out ReadOnlyMemory<byte> bytes))
+            {
+                return null;
+            }
+
+            OpacityMicromapPayloadReadResult parsed =
+                OpacityMicromapCookedPayloadCodec.TryRead(bytes.Span);
+            if (!parsed.Success || parsed.Payload is null ||
+                !CookedOpacityMicromapModelChunk.TryCreate(
+                    parsed.Payload,
+                    out CookedOpacityMicromapModelChunk? chunk,
+                    out _))
+            {
+                return null;
+            }
+
+            return chunk;
+        }
+        catch (CookedAssetFormatException)
+        {
+            return null;
+        }
+        catch (CookedAssetHashException)
+        {
+            return null;
+        }
+    }
+
+    private static void WriteModelInPlace(
+        string path,
+        CookedModelManifest manifest,
+        CookedOpacityMicromapModelChunk? opacityMicromapChunk)
     {
         string temporary = AssetArtifactFileIo.CreateSiblingTemporaryPath(
             path,
             "migrating.tmp");
         try
         {
-            CookedPackage.WriteModel(temporary, manifest);
+            CookedPackage.WriteModel(
+                temporary,
+                manifest,
+                opacityMicromapChunk: opacityMicromapChunk);
             File.Move(temporary, path, overwrite: true);
         }
         finally

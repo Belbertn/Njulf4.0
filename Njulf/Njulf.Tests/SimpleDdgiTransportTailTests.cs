@@ -768,6 +768,11 @@ public sealed class SimpleDdgiTransportTailTests
         Assert.That(controller.TryAcceptAudit(summary, controller.FrozenGenerations), Is.True);
         Assert.That(controller.IsCertified, Is.True);
         Assert.That(controller.Phase, Is.EqualTo(SimpleDdgiTransportPhase.Certified));
+        Assert.That(controller.TryBeginAudit(controller.FrozenGenerations), Is.False);
+        Assert.That(
+            controller.LastReason,
+            Is.EqualTo(SimpleDdgiTransportCertificationReason.Certified),
+            "An idle render-pass poll must not replace a current certificate's reason.");
     }
 
     [Test]

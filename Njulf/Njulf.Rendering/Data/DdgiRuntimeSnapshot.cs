@@ -1,8 +1,90 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Data
 {
+    /// <summary>
+    /// Capture-stable provenance for content-dependent DDGI additions. Requested
+    /// intent remains separate from the effective runtime mode so qualification,
+    /// capability, budget, and validation fallbacks cannot be silent.
+    /// </summary>
+    public readonly record struct DdgiContentRuntimeSnapshot
+    {
+        public DdgiContentFeature ConfiguredFeatures { get; init; }
+        public DdgiContentFeature ActiveFeatures { get; init; }
+        public SimpleDdgiLocalLightSamplingMode RequestedLocalLightSamplingMode { get; init; }
+        public SimpleDdgiLocalLightSamplingMode EffectiveLocalLightSamplingMode { get; init; }
+        public SimpleDdgiDirectionalRadianceMode RequestedDirectionalRadianceMode { get; init; }
+        public SimpleDdgiDirectionalRadianceMode EffectiveDirectionalRadianceMode { get; init; }
+        public SimpleDdgiGlossyTransportMode RequestedGlossyTransportMode { get; init; }
+        public SimpleDdgiGlossyTransportMode EffectiveGlossyTransportMode { get; init; }
+        public DdgiSkinnedGeometryMode RequestedSkinnedGeometryMode { get; init; }
+        public DdgiSkinnedGeometryMode EffectiveSkinnedGeometryMode { get; init; }
+        public DdgiTransparentGeometryMode RequestedTransparentGeometryMode { get; init; }
+        public DdgiTransparentGeometryMode EffectiveTransparentGeometryMode { get; init; }
+        public DdgiFoliageGeometryMode RequestedFoliageGeometryMode { get; init; }
+        public DdgiFoliageGeometryMode EffectiveFoliageGeometryMode { get; init; }
+        public SimpleDdgiLightTreeRuntimeDiagnostics LightTree { get; init; }
+        public DdgiManyLightGpuCounters ManyLightCounters { get; init; }
+        public ulong LightBufferRevision { get; init; }
+        public ulong LightTreeTopologyRevision { get; init; }
+        public ulong LightTreeContentRevision { get; init; }
+        public ulong RaySceneResourceGeneration { get; init; }
+        public ulong RaySceneContentEpoch { get; init; }
+        public ulong SceneContentRevision { get; init; }
+        public uint MaterialContentRevision { get; init; }
+        public uint SourceLightingEpoch { get; init; }
+        public uint SamplingSequenceEpoch { get; init; }
+        public uint StochasticHashAbiVersion { get; init; }
+        public uint DirectionalRadianceAbiVersion { get; init; }
+        public uint RayQueryInstanceAbiVersion { get; init; }
+        public int RayQueryInstanceRecordBytes { get; init; }
+        public ulong DirectionalRadianceBudgetBytes { get; init; }
+        public ulong DirectionalRadiancePlannedBytes { get; init; }
+        public ulong DirectionalRadianceAllocatedBytes { get; init; }
+        public ulong DirectionalRadianceParityBytes { get; init; }
+        public long DirectionalRadianceProjectionGpuMicroseconds { get; init; }
+        public string DirectionalRadianceFallbackReason { get; init; }
+        public string RaySceneFallbackReason { get; init; }
+        public string FoliageFallbackReason { get; init; }
+        public string SettingsMigrationDiagnostic { get; init; }
+
+        public static DdgiContentRuntimeSnapshot Disabled { get; } = new()
+        {
+            LightTree = SimpleDdgiLightTreeRuntimeDiagnostics.Disabled,
+            EffectiveLocalLightSamplingMode =
+                SimpleDdgiLocalLightSamplingMode.Exact,
+            RequestedDirectionalRadianceMode =
+                SimpleDdgiDirectionalRadianceMode.Off,
+            EffectiveDirectionalRadianceMode =
+                SimpleDdgiDirectionalRadianceMode.Off,
+            RequestedGlossyTransportMode =
+                SimpleDdgiGlossyTransportMode.Off,
+            EffectiveGlossyTransportMode =
+                SimpleDdgiGlossyTransportMode.Off,
+            RequestedSkinnedGeometryMode = DdgiSkinnedGeometryMode.Excluded,
+            EffectiveSkinnedGeometryMode = DdgiSkinnedGeometryMode.Excluded,
+            RequestedTransparentGeometryMode =
+                DdgiTransparentGeometryMode.MaskOnly,
+            EffectiveTransparentGeometryMode =
+                DdgiTransparentGeometryMode.MaskOnly,
+            RequestedFoliageGeometryMode = DdgiFoliageGeometryMode.Excluded,
+            EffectiveFoliageGeometryMode = DdgiFoliageGeometryMode.Excluded,
+            RaySceneResourceGeneration = 1,
+            RaySceneContentEpoch = 1,
+            SamplingSequenceEpoch =
+                DdgiStochasticIdentity.DefaultSamplingSequenceEpoch,
+            StochasticHashAbiVersion = DdgiStochasticIdentity.HashAbiVersion,
+            RayQueryInstanceAbiVersion = DdgiRayQueryInstanceAbi.Version2,
+            RayQueryInstanceRecordBytes = DdgiRayQueryInstanceAbi.SizeInBytes,
+            DirectionalRadianceFallbackReason = "disabled",
+            RaySceneFallbackReason = "disabled",
+            FoliageFallbackReason = "disabled",
+            SettingsMigrationDiagnostic = string.Empty
+        };
+    }
+
     public readonly record struct SimpleDdgiVolumeEnergyCounters(
         uint BlendSampleCount,
         float BlendIrradianceLuminanceAverage,
@@ -170,6 +252,18 @@ namespace Njulf.Rendering.Data
             SimpleGpuTransportMicroseconds: 0,
             SimpleGpuBlendMicroseconds: 0);
 
+        /// <summary>
+        /// Generation-aligned Simple-DDGI producer evidence. Keeping this as a
+        /// value property preserves the positional snapshot contract used by
+        /// existing captures while making liveness data available to warnings
+        /// and JSON evidence.
+        /// </summary>
+        public SimpleDdgiLivenessTelemetry SimpleDdgiLivenessTelemetry { get; init; } =
+            SimpleDdgiLivenessTelemetry.Empty;
+        public SimpleDdgiLivenessWatchdogResult SimpleDdgiLivenessWatchdog { get; init; } =
+            SimpleDdgiLivenessWatchdogResult.Empty;
+        public DdgiContentRuntimeSnapshot ContentDependent { get; init; } =
+            DdgiContentRuntimeSnapshot.Disabled;
     }
 
     public readonly record struct DdgiForwardEstimateCounters(
@@ -475,6 +569,7 @@ namespace Njulf.Rendering.Data
         private int _localWarmupIncompleteFrames;
         private int _cascade0WarmupIncompleteFrames;
         private int _simpleLifecycleBoundExceededFrames;
+        private int _simpleLivenessStallFrames;
 
         public IReadOnlyList<string> Update(
             DdgiRuntimeSnapshot snapshot,
@@ -511,6 +606,9 @@ namespace Njulf.Rendering.Data
                 ref _simpleLifecycleBoundExceededFrames,
                 snapshot.SimpleActive != 0 &&
                 snapshot.SimpleProbeLifecycleBoundExceededCount > 0);
+            UpdateCounter(
+                ref _simpleLivenessStallFrames,
+                snapshot.SimpleDdgiLivenessWatchdog.StallDetected != 0);
 
             List<string>? warnings = null;
             AddIfPersistent(ref warnings, _coverageVisibleCollapseFrames, persistenceFrames,
@@ -534,6 +632,11 @@ namespace Njulf.Rendering.Data
                 _simpleLifecycleBoundExceededFrames,
                 1,
                 "Simple DDGI has visible probes exceeding the bounded fresh/scroll/relocation/publication latency.");
+            AddIfPersistent(
+                ref warnings,
+                _simpleLivenessStallFrames,
+                0,
+                "Simple DDGI liveness watchdog observed a bounded no-progress interval.");
 
             return warnings == null ? Array.Empty<string>() : warnings;
         }

@@ -29,7 +29,7 @@ public sealed class SceneMaterialOverridePersistenceTests
         {
             Assert.That(
                 parsed.RootElement.GetProperty("schemaVersion").GetInt32(),
-                Is.EqualTo(3));
+                Is.EqualTo(SceneDocument.CurrentSchemaVersion));
             Assert.That(
                 serializedOverride.EnumerateObject().Select(static item => item.Name),
                 Is.EqualTo(new[] { "alphaCutoff" }));
@@ -294,6 +294,8 @@ public sealed class SceneMaterialOverridePersistenceTests
                     BaseColorFactor = new Vector4(0.1f, 0.2f, 0.3f, 0.4f),
                     EmissiveFactor = new Vector3(0.6f, 0.5f, 0.4f),
                     EmissiveStrength = 12.75f,
+                    EmissiveUnit = EmissivePhotometricUnit.LuminanceNits,
+                    EmissiveArtisticMultiplier = 1.5f,
                     MetallicFactor = 0.25f,
                     RoughnessFactor = 0.625f,
                     OcclusionStrength = 0.375f,
@@ -363,7 +365,7 @@ public sealed class SceneMaterialOverridePersistenceTests
 
             Assert.Multiple(() =>
             {
-                Assert.That(saved.SchemaVersion, Is.EqualTo(3));
+                Assert.That(saved.SchemaVersion, Is.EqualTo(SceneDocument.CurrentSchemaVersion));
                 Assert.That(persisted.Emissive, Is.Null);
                 Assert.That(
                     persisted.RenderBlendModeOverride,
@@ -378,11 +380,17 @@ public sealed class SceneMaterialOverridePersistenceTests
                 Assert.That(persisted.ReceivesDiffuseGi, Is.Null);
                 Assert.That(persisted.GiTransmissionPolicy, Is.EqualTo(nameof(GiTransmissionPolicy.ThinSurface)));
                 Assert.That(persisted.ThinTransmissionFactor, Is.EqualTo(0.42f));
+                Assert.That(persisted.EmissiveUnit,
+                    Is.EqualTo(nameof(EmissivePhotometricUnit.LuminanceNits)));
+                Assert.That(persisted.EmissiveArtisticMultiplier, Is.EqualTo(1.5f));
 
                 Assert.That(actual.Name, Is.EqualTo("Editor-authored material"));
                 Assert.That(actual.BaseColorFactor, Is.EqualTo(new Vector4(0.1f, 0.2f, 0.3f, 0.4f)));
                 Assert.That(actual.EmissiveFactor, Is.EqualTo(new Vector3(0.6f, 0.5f, 0.4f)));
                 Assert.That(actual.EmissiveStrength, Is.EqualTo(12.75f));
+                Assert.That(actual.EmissiveUnit,
+                    Is.EqualTo(EmissivePhotometricUnit.LuminanceNits));
+                Assert.That(actual.EmissiveArtisticMultiplier, Is.EqualTo(1.5f));
                 Assert.That(actual.MetallicFactor, Is.EqualTo(0.25f));
                 Assert.That(actual.RoughnessFactor, Is.EqualTo(0.625f));
                 Assert.That(actual.OcclusionStrength, Is.EqualTo(0.375f));

@@ -12,7 +12,11 @@ public enum DdgiEmissiveSourceFlags : uint
     DoubleSided = 1u << 1,
     AlphaCoverageApproximation = 1u << 2,
     DynamicTransform = 1u << 3,
-    ProxyRollback = 1u << 4
+    ProxyRollback = 1u << 4,
+    SpatialHierarchy = 1u << 5,
+    MacroEmitter = 1u << 6,
+    DynamicEmissiveTexture = 1u << 7,
+    MacroShapeMask = 0x0f00u
 }
 
 public readonly record struct DdgiEmissiveTriangleCandidate(
@@ -21,7 +25,8 @@ public readonly record struct DdgiEmissiveTriangleCandidate(
     Vector3 Vertex2,
     Vector3 CoveredMeanRadiance,
     DdgiEmissiveSourceFlags Flags,
-    ulong StableKey);
+    ulong StableKey,
+    GPUDdgiEmissiveSurface Surface = default);
 
 public readonly record struct DdgiEmissiveTriangleTableStats(
     int CandidateCount,
@@ -73,11 +78,23 @@ public static class DdgiEmissiveTriangleTable
 
     public static DdgiEmissiveTriangleTableStats Build(
         IEnumerable<DdgiEmissiveTriangleCandidate> candidates,
-        Span<GPUDdgiEmissiveSource> destination)
+        Span<GPUDdgiEmissiveSource> destination) =>
+        Build(candidates, destination, Span<GPUDdgiEmissiveSurface>.Empty);
+
+    public static DdgiEmissiveTriangleTableStats Build(
+        IEnumerable<DdgiEmissiveTriangleCandidate> candidates,
+        Span<GPUDdgiEmissiveSource> destination,
+        Span<GPUDdgiEmissiveSurface> surfaceDestination)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         if (destination.Length > MaximumAliasEntryCount)
             throw new ArgumentOutOfRangeException(nameof(destination));
+        if (!surfaceDestination.IsEmpty && surfaceDestination.Length < destination.Length)
+        {
+            throw new ArgumentException(
+                "Emissive surface destination must cover the complete source destination.",
+                nameof(surfaceDestination));
+        }
         if (destination.Length == 0)
             return default;
 
@@ -162,6 +179,8 @@ public static class DdgiEmissiveTriangleTable
                     entry.Candidate.CoveredMeanRadiance.Z,
                     selectionProbability)
             };
+            if (!surfaceDestination.IsEmpty)
+                surfaceDestination[i] = entry.Candidate.Surface;
         }
 
         return new DdgiEmissiveTriangleTableStats(

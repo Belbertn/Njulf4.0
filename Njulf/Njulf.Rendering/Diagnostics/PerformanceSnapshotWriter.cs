@@ -92,9 +92,17 @@ namespace Njulf.Rendering.Diagnostics
         /// <summary>
         /// Increment when changing the persisted performance-capture contract in an
         /// incompatible way. Version 3 adds reproducible capture contracts, named enum JSON,
-        /// explicit timing attribution, unique residency, and structured GI warnings.
+        /// explicit timing attribution, unique residency, and structured GI warnings. Version 4
+        /// adds requested/supported/admitted/effective advanced-GI mode states. Version 5 adds
+        /// the fail-closed C5 near-field residual observability/readback contract. Version 6
+        /// adds fence-complete C1 micromap lifecycle and memory telemetry. Version 7
+        /// adds immutable C1 content evidence. Version 8 adds fence-complete C3
+        /// runtime/workload/timing/central-memory telemetry. Version 9 adds
+        /// fence-validated C4 cache publication, timing, and memory telemetry.
+        /// Version 10 adds fence-validated B1 publication counters, bounded
+        /// stage timings, and exact central-memory telemetry.
         /// </summary>
-        public const int CurrentSchemaVersion = 3;
+        public const int CurrentSchemaVersion = 10;
 
         public int SchemaVersion { get; init; } = CurrentSchemaVersion;
         /// <summary>Persisted source version before migration, useful when opening baselines.</summary>
@@ -105,6 +113,8 @@ namespace Njulf.Rendering.Diagnostics
         public GiResidencySnapshot GiResidency { get; init; } = GiResidencySnapshot.Unavailable;
         public PerformanceMemoryOwnershipAudit MemoryAudit { get; init; } =
             PerformanceMemoryOwnershipAudit.Unavailable;
+        public DdgiContentRuntimeSnapshot ContentDependentDdgi { get; init; } =
+            DdgiContentRuntimeSnapshot.Disabled;
     }
 
     public sealed record PerformanceFoliageSnapshot(
@@ -126,7 +136,35 @@ namespace Njulf.Rendering.Diagnostics
         long GpuDepthMicroseconds,
         long GpuForwardMicroseconds,
         long GpuShadowMicroseconds,
-        string LikelyBottleneck);
+        string LikelyBottleneck)
+    {
+        public DdgiFoliageGeometryMode DdgiGeometryMode { get; init; }
+        public int DdgiProxyCardCount { get; init; }
+        public int DdgiProxyTriangleCount { get; init; }
+        public int DdgiAuthoredInstanceCount { get; init; }
+        public int DdgiGeneratedInstanceCount { get; init; }
+        public int DdgiDroppedTriangleCount { get; init; }
+        public int DdgiRepresentedBladeCount { get; init; }
+        public int DdgiProxyUpdatedThisFrame { get; init; }
+        public ulong DdgiProxyUploadBytes { get; init; }
+        public ulong DdgiProxyBufferBytes { get; init; }
+        public ulong DdgiProxyPatchBufferBytes { get; init; }
+        public ulong DdgiProxyContentSignature { get; init; }
+        public ulong DdgiProxyCadenceGeneration { get; init; }
+        public long CpuDdgiProxyBuildMicroseconds { get; init; }
+        public long CpuDdgiProxyUploadMicroseconds { get; init; }
+        public long CpuDdgiProxyGenerationRecordMicroseconds { get; init; }
+        public long GpuDdgiProxyGenerationMicroseconds { get; init; }
+        public int DdgiProxyRequestedRepresentedInstanceCount { get; init; }
+        public float DdgiProxyDensityError { get; init; }
+        public float DdgiProxyWindAgeSeconds { get; init; }
+        public int DdgiProxyNearCardCount { get; init; }
+        public int DdgiProxyMidCardCount { get; init; }
+        public int DdgiProxyFarCardCount { get; init; }
+        public int DdgiProxyExcludedPatchCount { get; init; }
+        public uint DdgiProxyLodPolicyVersion { get; init; }
+        public string DdgiProxyFallbackReason { get; init; } = string.Empty;
+    }
 
     public sealed record PerformanceGlobalIlluminationSnapshot(
         bool Enabled,
@@ -199,6 +237,7 @@ namespace Njulf.Rendering.Diagnostics
         string SimpleDdgiSampledAtlasFallbackReason,
         long GpuSimpleDdgiTraceMicroseconds,
         long GpuSimpleDdgiTransportMicroseconds,
+        long GpuSimpleDdgiDirectionalRadianceMicroseconds,
         long GpuSimpleDdgiBlendMicroseconds,
         uint SimpleDdgiTransportEnergySampleCount,
         uint SimpleDdgiTransportSourceCacheHitCount,
@@ -253,6 +292,18 @@ namespace Njulf.Rendering.Diagnostics
         int VfxDirtyProbeEventCount,
         int DdgiNewProbeCount,
         int DdgiDirtyBoundsProbeUpdateCount,
+        ulong SimpleDdgiMutationJournalLastConsumedSerial,
+        ulong SimpleDdgiMutationJournalEnqueuedEventCount,
+        ulong SimpleDdgiMutationJournalCoalescedEventCount,
+        ulong SimpleDdgiMutationJournalOverflowCount,
+        ulong SimpleDdgiMutationJournalConservativeFallbackCount,
+        ulong SimpleDdgiMutationJournalAttachScanCount,
+        ulong SimpleDdgiMutationJournalAttachObjectCount,
+        ulong SimpleDdgiMutationJournalOracleComparisonCount,
+        ulong SimpleDdgiMutationJournalOracleMismatchCount,
+        int SimpleDdgiMutationJournalPendingEventCount,
+        int SimpleDdgiMutationJournalOutputRegionCount,
+        int SimpleDdgiMutationJournalOverflowedThisFrame,
         int DdgiVisibleFrustumProbeUpdateCount,
         int DdgiOutsideFrustumSafetyProbeUpdateCount,
         int DdgiAgeRefreshProbeUpdateCount,
@@ -348,8 +399,44 @@ namespace Njulf.Rendering.Diagnostics
         /// <summary>Visible-first scheduler class and pressure evidence.</summary>
         public SimpleDdgiSchedulerPolicyTelemetry SimpleDdgiSchedulerPolicy { get; init; } =
             SimpleDdgiSchedulerPolicyTelemetry.Unavailable("Simple DDGI scheduler policy was not captured.");
+        /// <summary>Generation-aligned producer evidence and bounded watchdog result.</summary>
+        public SimpleDdgiLivenessTelemetry SimpleDdgiLivenessTelemetry { get; init; } =
+            SimpleDdgiLivenessTelemetry.Empty;
+        public SimpleDdgiLivenessWatchdogResult SimpleDdgiLivenessWatchdog { get; init; } =
+            SimpleDdgiLivenessWatchdogResult.Empty;
+        public bool GiPipelineCacheLoaded { get; init; }
+        public bool GiPipelineCacheRejected { get; init; }
+        public bool GiPipelineCacheSaved { get; init; }
+        public ulong GiPipelineCacheLoadedPayloadBytes { get; init; }
+        public ulong GiPipelineCacheSavedPayloadBytes { get; init; }
+        public ulong GiPipelineCreationCount { get; init; }
+        public long GiPipelineCreationMicroseconds { get; init; }
+        public ulong GiRenderCriticalPipelineCreationCount { get; init; }
+        public string GiPipelineCachePath { get; init; } = string.Empty;
+        public string GiPipelineCacheStatus { get; init; } = string.Empty;
+        public string GiLastCreatedPipeline { get; init; } = string.Empty;
         public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; init; } =
             SimpleDdgiSchedulerMode.CpuReference;
+        public int SimpleDdgiTraceContentProfile { get; init; }
+        public int SimpleDdgiTraceDistanceProfile { get; init; }
+        public bool SimpleDdgiTraceSpecialized { get; init; }
+        public int SimpleDdgiTraceWorkgroupSize { get; init; } = 64;
+        public bool SimpleDdgiCostAwareSchedulingActive { get; init; }
+        public ulong SimpleDdgiSchedulerCostSampleCount { get; init; }
+        public float SimpleDdgiSchedulerVisibilityPerPrimary { get; init; }
+        public float SimpleDdgiSchedulerAlphaCandidatesPerPrimary { get; init; }
+        public float SimpleDdgiSchedulerMaterialEvaluationsPerPrimary { get; init; }
+        public float SimpleDdgiSchedulerFarFieldStepsPerPrimary { get; init; }
+        public bool SimpleDdgiSparseResidualPropagationActive { get; init; }
+        public uint SimpleDdgiResidualSeededCount { get; init; }
+        public uint SimpleDdgiResidualDependentWakeCount { get; init; }
+        public uint SimpleDdgiResidualThresholdRejectedCount { get; init; }
+        public uint SimpleDdgiResidualCompleteSweepFallbackCount { get; init; }
+        public bool SimpleDdgiUrgentRelightActive { get; init; }
+        public uint SimpleDdgiUrgentRelightAcceptedCount { get; init; }
+        public uint SimpleDdgiUrgentRelightCommittedCount { get; init; }
+        public uint SimpleDdgiUrgentRelightRejectedCount { get; init; }
+        public long GpuSimpleDdgiUrgentRelightMicroseconds { get; init; }
         public bool SimpleDdgiSchedulerFallbackLatched { get; init; }
         public bool SimpleDdgiSchedulerFallbackFreshResetPending { get; init; }
         public ulong SimpleDdgiSchedulerFallbackCount { get; init; }
@@ -372,6 +459,24 @@ namespace Njulf.Rendering.Diagnostics
         /// <summary>Exact canonical, cache, scratch, and optional mirror allocation contract.</summary>
         public SimpleDdgiStorageDiagnostics SimpleDdgiStorage { get; init; } =
             SimpleDdgiStorageDiagnostics.Unavailable;
+        public SimpleDdgiWarmStartTelemetry SimpleDdgiWarmStart { get; init; } =
+            SimpleDdgiWarmStartTelemetry.Disabled(
+                "Persistent Simple-DDGI warm-start telemetry is unavailable.");
+        public SimpleDdgiRefinementBrickDiagnostics SimpleDdgiRefinement { get; init; } =
+            new(false, 0, 0, 0, 0, 0, 0, false, "disabled");
+        public SimpleDdgiRefinementEmissiveDemandDiagnostics
+            SimpleDdgiRefinementEmissiveDemand { get; init; }
+        public SimpleDdgiNearVisibilityDiagnostics
+            SimpleDdgiNearVisibility { get; init; } =
+                SimpleDdgiNearVisibilityDiagnostics.Disabled();
+        /// <summary>Fail-closed C5 timing/counter readback and allocation evidence.</summary>
+        public SimpleDdgiNearFieldResidualDiagnostics
+            SimpleDdgiNearFieldResidual { get; init; } =
+                SimpleDdgiNearFieldResidualDiagnostics.Disabled();
+        public GiRoadmapExperimentDiagnostics GiRoadmapExperiments { get; init; } =
+            GiRoadmapExperimentDiagnostics.Disabled;
+        public SimpleDdgiContentMemoryPlan SimpleDdgiContentMemory { get; init; } =
+            SimpleDdgiContentMemoryPlan.Empty;
     }
 
     public sealed class PerformanceSnapshotWriter
@@ -406,9 +511,23 @@ namespace Njulf.Rendering.Diagnostics
             // The diagnostics object is persisted alongside Capture. Normalize the run identity
             // once at the boundary so both representations agree and legacy generic placeholders
             // cannot survive in a release artifact through the diagnostics copy.
+            SimpleDdgiNearFieldResidualDiagnostics nearFieldResidual =
+                (diagnostics.SimpleDdgiNearFieldResidual ??
+                 SimpleDdgiNearFieldResidualDiagnostics.Disabled(
+                     "C5 telemetry was not supplied by renderer diagnostics."))
+                .NormalizeForPersistence();
+            SimpleDdgiReceiverFeedbackDiagnostics receiverFeedback =
+                (diagnostics.GiRoadmapExperiments.ReceiverFeedbackRuntime ??
+                 SimpleDdgiReceiverFeedbackDiagnostics.Disabled)
+                .NormalizeForPersistence();
             diagnostics = diagnostics with
             {
-                CaptureRun = NormalizeCaptureRunMetadata(diagnostics.CaptureRun)
+                CaptureRun = NormalizeCaptureRunMetadata(diagnostics.CaptureRun),
+                SimpleDdgiNearFieldResidual = nearFieldResidual,
+                GiRoadmapExperiments = diagnostics.GiRoadmapExperiments with
+                {
+                    ReceiverFeedbackRuntime = receiverFeedback
+                }
             };
 
             DateTimeOffset capturedAt = DateTimeOffset.UtcNow;
@@ -436,7 +555,8 @@ namespace Njulf.Rendering.Diagnostics
                         budget.Memory,
                         RenderBudgetProfile.GetDefault(
                             diagnostics.ActiveBudgetProfile)),
-                MemoryAudit = CreateMemoryOwnershipAudit(diagnostics, budget.Memory)
+                MemoryAudit = CreateMemoryOwnershipAudit(diagnostics, budget.Memory),
+                ContentDependentDdgi = diagnostics.ContentDependentDdgi
             };
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
                 snapshot,
@@ -469,6 +589,42 @@ namespace Njulf.Rendering.Diagnostics
             var warnings = new List<string>(7);
             if (diagnostics.GlobalIlluminationEmergencyFallbackEnabled != 0)
                 warnings.Add("Emergency GI fallback is active; dynamic GI is suppressed for this capture.");
+            DdgiContentRuntimeSnapshot content =
+                diagnostics.ContentDependentDdgi;
+            if (content.LightTree.AllocationFailureCount > 0)
+            {
+                warnings.Add(
+                    $"DDGI light-tree allocation failed " +
+                    $"{content.LightTree.AllocationFailureCount} time(s); " +
+                    "the exact estimator remains authoritative.");
+            }
+            if (content.LightTree.PublicationValidationFailureCount > 0)
+            {
+                warnings.Add(
+                    $"DDGI light-tree publication validation failed " +
+                    $"{content.LightTree.PublicationValidationFailureCount} " +
+                    "time(s); invalid candidates were rejected.");
+            }
+            if (content.RequestedDirectionalRadianceMode !=
+                    SimpleDdgiDirectionalRadianceMode.Off &&
+                content.EffectiveDirectionalRadianceMode ==
+                    SimpleDdgiDirectionalRadianceMode.Off)
+            {
+                warnings.Add(
+                    "DDGI directional radiance fell back: " +
+                    content.DirectionalRadianceFallbackReason);
+            }
+            if (content.RequestedFoliageGeometryMode !=
+                    DdgiFoliageGeometryMode.Excluded &&
+                content.EffectiveFoliageGeometryMode ==
+                    DdgiFoliageGeometryMode.Excluded)
+            {
+                warnings.Add(
+                    "DDGI foliage geometry fell back: " +
+                    (string.IsNullOrWhiteSpace(content.FoliageFallbackReason)
+                        ? "no qualified proxy representation was active"
+                        : content.FoliageFallbackReason));
+            }
             if (diagnostics.PendingMaterialTextureFanoutCount != 0)
             {
                 warnings.Add(
@@ -603,6 +759,12 @@ namespace Njulf.Rendering.Diagnostics
                 warnings.Add(
                     $"{diagnostics.FoliageDdgiTransportExcludedClusterCount} foliage cluster(s) are excluded " +
                     $"from DDGI occlusion/source transport: {diagnostics.FoliageDdgiTransportExclusionReason}.");
+            }
+            if (diagnostics.DdgiFoliageDroppedTriangleCount > 0)
+            {
+                warnings.Add(
+                    $"The DDGI foliage proxy triangle budget dropped " +
+                    $"{diagnostics.DdgiFoliageDroppedTriangleCount} requested triangle(s).");
             }
             if (diagnostics.SimpleDdgiDirtyFirstUpdateLatencySampleCount > 0 &&
                 diagnostics.SimpleDdgiDirtyFirstUpdateLatencyP95Frames > 1)
@@ -1125,7 +1287,10 @@ namespace Njulf.Rendering.Diagnostics
             ulong bufferBytes = diagnostics.FoliageInstanceBufferBytes +
                 diagnostics.FoliageClusterBufferBytes +
                 diagnostics.FoliageDrawBufferBytes +
-                diagnostics.FoliageImpostorAtlasBytes;
+                diagnostics.FoliageImpostorAtlasBytes +
+                diagnostics.DdgiFoliageProxyVertexBufferBytes +
+                diagnostics.DdgiFoliageProxyIndexBufferBytes +
+                diagnostics.DdgiFoliageProxyPatchBufferBytes;
 
             return new PerformanceFoliageSnapshot(
                 diagnostics.FoliagePatchCount,
@@ -1146,7 +1311,60 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.GpuFoliageDepthMicroseconds,
                 diagnostics.GpuFoliageForwardMicroseconds,
                 diagnostics.GpuFoliageShadowMicroseconds,
-                IdentifyFoliageBottleneck(diagnostics, bufferBytes));
+                IdentifyFoliageBottleneck(diagnostics, bufferBytes))
+            {
+                DdgiGeometryMode = diagnostics.DdgiFoliageGeometryMode,
+                DdgiProxyCardCount = diagnostics.DdgiFoliageProxyCardCount,
+                DdgiProxyTriangleCount =
+                    diagnostics.DdgiFoliageProxyTriangleCount,
+                DdgiAuthoredInstanceCount =
+                    diagnostics.DdgiFoliageAuthoredInstanceCount,
+                DdgiGeneratedInstanceCount =
+                    diagnostics.DdgiFoliageGeneratedInstanceCount,
+                DdgiDroppedTriangleCount =
+                    diagnostics.DdgiFoliageDroppedTriangleCount,
+                DdgiRepresentedBladeCount =
+                    diagnostics.DdgiFoliageRepresentedBladeCount,
+                DdgiProxyUpdatedThisFrame =
+                    diagnostics.DdgiFoliageProxyUpdatedThisFrame,
+                DdgiProxyUploadBytes = diagnostics.DdgiFoliageProxyUploadBytes,
+                DdgiProxyBufferBytes =
+                    diagnostics.DdgiFoliageProxyVertexBufferBytes +
+                    diagnostics.DdgiFoliageProxyIndexBufferBytes +
+                    diagnostics.DdgiFoliageProxyPatchBufferBytes,
+                DdgiProxyPatchBufferBytes =
+                    diagnostics.DdgiFoliageProxyPatchBufferBytes,
+                DdgiProxyContentSignature =
+                    diagnostics.DdgiFoliageProxyContentSignature,
+                DdgiProxyCadenceGeneration =
+                    diagnostics.DdgiFoliageProxyCadenceGeneration,
+                CpuDdgiProxyBuildMicroseconds =
+                    diagnostics.CpuDdgiFoliageProxyBuildMicroseconds,
+                CpuDdgiProxyUploadMicroseconds =
+                    diagnostics.CpuDdgiFoliageProxyUploadMicroseconds,
+                CpuDdgiProxyGenerationRecordMicroseconds =
+                    diagnostics.CpuDdgiFoliageProxyGenerationRecordMicroseconds,
+                GpuDdgiProxyGenerationMicroseconds =
+                    diagnostics.GpuDdgiFoliageProxyGenerationMicroseconds,
+                DdgiProxyRequestedRepresentedInstanceCount =
+                    diagnostics.DdgiFoliageProxyRequestedRepresentedInstanceCount,
+                DdgiProxyDensityError =
+                    diagnostics.DdgiFoliageProxyDensityError,
+                DdgiProxyWindAgeSeconds =
+                    diagnostics.DdgiFoliageProxyWindAgeSeconds,
+                DdgiProxyNearCardCount =
+                    diagnostics.DdgiFoliageProxyNearCardCount,
+                DdgiProxyMidCardCount =
+                    diagnostics.DdgiFoliageProxyMidCardCount,
+                DdgiProxyFarCardCount =
+                    diagnostics.DdgiFoliageProxyFarCardCount,
+                DdgiProxyExcludedPatchCount =
+                    diagnostics.DdgiFoliageProxyExcludedPatchCount,
+                DdgiProxyLodPolicyVersion =
+                    diagnostics.DdgiFoliageProxyLodPolicyVersion,
+                DdgiProxyFallbackReason =
+                    diagnostics.DdgiFoliageProxyFallbackReason
+            };
         }
 
         private static string IdentifyFoliageBottleneck(RendererDiagnostics diagnostics, ulong bufferBytes)
@@ -1176,6 +1394,11 @@ namespace Njulf.Rendering.Diagnostics
 
         internal static PerformanceGlobalIlluminationSnapshot CreateGlobalIlluminationSnapshot(RendererDiagnostics diagnostics)
         {
+            SimpleDdgiNearFieldResidualDiagnostics nearFieldResidual =
+                (diagnostics.SimpleDdgiNearFieldResidual ??
+                 SimpleDdgiNearFieldResidualDiagnostics.Disabled(
+                     "C5 telemetry was not supplied by renderer diagnostics."))
+                .NormalizeForPersistence();
             long cpuRecordMicroseconds = diagnostics.GlobalIlluminationCpuTimingSampleCount > 0
                 ? diagnostics.CpuGlobalIlluminationRecordMicroseconds
                 : diagnostics.CpuDdgiRecordMicroseconds +
@@ -1265,6 +1488,7 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.SimpleDdgiSampledAtlasFallbackReason,
                 diagnostics.GpuSimpleDdgiTraceMicroseconds,
                 diagnostics.GpuSimpleDdgiTransportMicroseconds,
+                diagnostics.GpuSimpleDdgiDirectionalRadianceMicroseconds,
                 diagnostics.GpuSimpleDdgiBlendMicroseconds,
                 diagnostics.SimpleDdgiTransportEnergySampleCount,
                 diagnostics.SimpleDdgiTransportSourceCacheHitCount,
@@ -1319,6 +1543,18 @@ namespace Njulf.Rendering.Diagnostics
                 diagnostics.VfxDdgiDirtyProbeEventCount,
                 diagnostics.DdgiNewProbeCount,
                 diagnostics.DdgiDirtyBoundsProbeUpdateCount,
+                diagnostics.SimpleDdgiMutationJournalLastConsumedSerial,
+                diagnostics.SimpleDdgiMutationJournalEnqueuedEventCount,
+                diagnostics.SimpleDdgiMutationJournalCoalescedEventCount,
+                diagnostics.SimpleDdgiMutationJournalOverflowCount,
+                diagnostics.SimpleDdgiMutationJournalConservativeFallbackCount,
+                diagnostics.SimpleDdgiMutationJournalAttachScanCount,
+                diagnostics.SimpleDdgiMutationJournalAttachObjectCount,
+                diagnostics.SimpleDdgiMutationJournalOracleComparisonCount,
+                diagnostics.SimpleDdgiMutationJournalOracleMismatchCount,
+                diagnostics.SimpleDdgiMutationJournalPendingEventCount,
+                diagnostics.SimpleDdgiMutationJournalOutputRegionCount,
+                diagnostics.SimpleDdgiMutationJournalOverflowedThisFrame,
                 diagnostics.DdgiVisibleFrustumProbeUpdateCount,
                 diagnostics.DdgiOutsideFrustumSafetyProbeUpdateCount,
                 diagnostics.DdgiAgeRefreshProbeUpdateCount,
@@ -1395,7 +1631,54 @@ namespace Njulf.Rendering.Diagnostics
                 ForwardGiIncrementalAttribution = diagnostics.GpuForwardGiIncrementalAttribution,
                 ForwardGiIncrementalReason = diagnostics.GpuForwardGiIncrementalTimingReason,
                 SimpleDdgiScheduling = diagnostics.SimpleDdgiScheduling,
+                GiPipelineCacheLoaded = diagnostics.GiPipelineCacheLoaded != 0,
+                GiPipelineCacheRejected = diagnostics.GiPipelineCacheRejected != 0,
+                GiPipelineCacheSaved = diagnostics.GiPipelineCacheSaved != 0,
+                GiPipelineCacheLoadedPayloadBytes = diagnostics.GiPipelineCacheLoadedPayloadBytes,
+                GiPipelineCacheSavedPayloadBytes = diagnostics.GiPipelineCacheSavedPayloadBytes,
+                GiPipelineCreationCount = diagnostics.GiPipelineCreationCount,
+                GiPipelineCreationMicroseconds = diagnostics.GiPipelineCreationMicroseconds,
+                GiRenderCriticalPipelineCreationCount = diagnostics.GiRenderCriticalPipelineCreationCount,
+                GiPipelineCachePath = diagnostics.GiPipelineCachePath,
+                GiPipelineCacheStatus = diagnostics.GiPipelineCacheStatus,
+                GiLastCreatedPipeline = diagnostics.GiLastCreatedPipeline,
                 SimpleDdgiSchedulerMode = diagnostics.SimpleDdgiSchedulerMode,
+                SimpleDdgiTraceContentProfile = diagnostics.SimpleDdgiTraceContentProfile,
+                SimpleDdgiTraceDistanceProfile = diagnostics.SimpleDdgiTraceDistanceProfile,
+                SimpleDdgiTraceSpecialized = diagnostics.SimpleDdgiTraceSpecialized != 0,
+                SimpleDdgiTraceWorkgroupSize = diagnostics.SimpleDdgiTraceWorkgroupSize,
+                SimpleDdgiCostAwareSchedulingActive =
+                    diagnostics.SimpleDdgiCostAwareSchedulingActive != 0,
+                SimpleDdgiSchedulerCostSampleCount =
+                    diagnostics.SimpleDdgiSchedulerCostSampleCount,
+                SimpleDdgiSchedulerVisibilityPerPrimary =
+                    diagnostics.SimpleDdgiSchedulerVisibilityPerPrimary,
+                SimpleDdgiSchedulerAlphaCandidatesPerPrimary =
+                    diagnostics.SimpleDdgiSchedulerAlphaCandidatesPerPrimary,
+                SimpleDdgiSchedulerMaterialEvaluationsPerPrimary =
+                    diagnostics.SimpleDdgiSchedulerMaterialEvaluationsPerPrimary,
+                SimpleDdgiSchedulerFarFieldStepsPerPrimary =
+                    diagnostics.SimpleDdgiSchedulerFarFieldStepsPerPrimary,
+                SimpleDdgiSparseResidualPropagationActive =
+                    diagnostics.SimpleDdgiSparseResidualPropagationActive != 0,
+                SimpleDdgiResidualSeededCount =
+                    diagnostics.SimpleDdgiResidualSeededCount,
+                SimpleDdgiResidualDependentWakeCount =
+                    diagnostics.SimpleDdgiResidualDependentWakeCount,
+                SimpleDdgiResidualThresholdRejectedCount =
+                    diagnostics.SimpleDdgiResidualThresholdRejectedCount,
+                SimpleDdgiResidualCompleteSweepFallbackCount =
+                    diagnostics.SimpleDdgiResidualCompleteSweepFallbackCount,
+                SimpleDdgiUrgentRelightActive =
+                    diagnostics.SimpleDdgiUrgentRelightActive != 0,
+                SimpleDdgiUrgentRelightAcceptedCount =
+                    diagnostics.SimpleDdgiUrgentRelightAcceptedCount,
+                SimpleDdgiUrgentRelightCommittedCount =
+                    diagnostics.SimpleDdgiUrgentRelightCommittedCount,
+                SimpleDdgiUrgentRelightRejectedCount =
+                    diagnostics.SimpleDdgiUrgentRelightRejectedCount,
+                GpuSimpleDdgiUrgentRelightMicroseconds =
+                    diagnostics.GpuSimpleDdgiUrgentRelightMicroseconds,
                 SimpleDdgiSchedulerFallbackLatched = diagnostics.SimpleDdgiSchedulerFallbackLatched != 0,
                 SimpleDdgiSchedulerFallbackFreshResetPending = diagnostics.SimpleDdgiSchedulerFallbackFreshResetPending != 0,
                 SimpleDdgiSchedulerFallbackCount = diagnostics.SimpleDdgiSchedulerFallbackCount,
@@ -1422,6 +1705,18 @@ namespace Njulf.Rendering.Diagnostics
                 SimpleDdgiReceiverResourceGeneration = diagnostics.SimpleDdgiReceiverResourceGeneration,
                 SimpleDdgiReceiverRecordsPublished = diagnostics.SimpleDdgiReceiverRecordsPublished,
                 SimpleDdgiStorage = diagnostics.SimpleDdgiStorage,
+                SimpleDdgiWarmStart = diagnostics.SimpleDdgiWarmStart,
+                SimpleDdgiRefinement = diagnostics.SimpleDdgiRefinement,
+                SimpleDdgiRefinementEmissiveDemand =
+                    diagnostics.SimpleDdgiRefinementEmissiveDemand,
+                SimpleDdgiNearVisibility =
+                    diagnostics.SimpleDdgiNearVisibility,
+                SimpleDdgiNearFieldResidual =
+                    nearFieldResidual,
+                GiRoadmapExperiments = diagnostics.GiRoadmapExperiments,
+                SimpleDdgiContentMemory =
+                    diagnostics.SimpleDdgiContentMemory
+                        .NormalizeForPersistence(),
                 Requested = diagnostics.GlobalIlluminationRequested != 0,
                 RequestedMode = diagnostics.GlobalIlluminationRequestedMode,
                 RequestedDebugView = diagnostics.GlobalIlluminationRequestedDebugView,
@@ -1429,7 +1724,9 @@ namespace Njulf.Rendering.Diagnostics
                 FallbackReason = diagnostics.GlobalIlluminationFallbackReason,
                 SimpleDdgiLayout = diagnostics.SimpleDdgiLayout,
                 SimpleDdgiProbeResidency = diagnostics.SimpleDdgiProbeResidency,
-                SimpleDdgiSchedulerPolicy = diagnostics.SimpleDdgiSchedulerPolicy
+                SimpleDdgiSchedulerPolicy = diagnostics.SimpleDdgiSchedulerPolicy,
+                SimpleDdgiLivenessTelemetry = diagnostics.SimpleDdgiLivenessTelemetry,
+                SimpleDdgiLivenessWatchdog = diagnostics.SimpleDdgiLivenessWatchdog
             };
         }
 
@@ -1537,12 +1834,14 @@ namespace Njulf.Rendering.Diagnostics
                     throw new InvalidDataException(
                         "Performance snapshot does not contain a valid SchemaVersion.");
                 }
-                if (schemaVersion is not 2 and
+                if (schemaVersion is not 2 and not 3 and not 4 and not 5 and
+                    not 6 and not 7 and not 8 and not 9 and
                     not PerformanceSnapshot.CurrentSchemaVersion)
                 {
                     throw new NotSupportedException(
                         $"Performance snapshot schema {schemaVersion} is not supported. " +
-                        $"Supported schemas are 2 and {PerformanceSnapshot.CurrentSchemaVersion}.");
+                        $"Supported schemas are 2, 3, 4, 5, 6, 7, 8, 9, and " +
+                        $"{PerformanceSnapshot.CurrentSchemaVersion}.");
                 }
 
                 PerformanceSnapshot? deserialized =
@@ -1555,18 +1854,19 @@ namespace Njulf.Rendering.Diagnostics
                         "Performance snapshot could not be deserialized.");
                 }
 
-                return schemaVersion ==
-                        PerformanceSnapshot.CurrentSchemaVersion
-                    ? deserialized with
-                    {
-                        SchemaVersion =
-                            PerformanceSnapshot.CurrentSchemaVersion,
-                        OriginalSchemaVersion =
-                            deserialized.OriginalSchemaVersion == 0
-                                ? PerformanceSnapshot.CurrentSchemaVersion
-                                : deserialized.OriginalSchemaVersion
-                    }
-                    : MigrateSchemaV2(deserialized);
+                return schemaVersion switch
+                {
+                    PerformanceSnapshot.CurrentSchemaVersion =>
+                        NormalizeCurrentSchema(deserialized),
+                    9 => MigrateSchemaV9(deserialized),
+                    8 => MigrateSchemaV8(deserialized),
+                    7 => MigrateSchemaV7(deserialized),
+                    6 => MigrateSchemaV6(deserialized),
+                    5 => MigrateSchemaV5(deserialized),
+                    4 => MigrateSchemaV4(deserialized),
+                    3 => MigrateSchemaV3(deserialized),
+                    _ => MigrateSchemaV2(deserialized)
+                };
             }
             catch (JsonException exception)
             {
@@ -1602,14 +1902,308 @@ namespace Njulf.Rendering.Diagnostics
                     RenderBudgetProfile.GetDefault(
                         diagnostics.ActiveBudgetProfile));
             GiTimingAttributionSnapshot timing = PerformanceSnapshotWriter.CreateGiTimingAttributionSnapshot(diagnostics);
-            return legacy with
+            PerformanceSnapshot migrated = legacy with
             {
-                SchemaVersion = PerformanceSnapshot.CurrentSchemaVersion,
-                OriginalSchemaVersion = 2,
                 Capture = capture,
                 GiTiming = timing,
                 GiResidency = residency,
                 StructuredWarnings = diagnostics.GiWarnings
+            };
+            return WithDisabledAdvancedGiModes(migrated, originalSchemaVersion: 2);
+        }
+
+        private static PerformanceSnapshot MigrateSchemaV3(
+            PerformanceSnapshot legacy) =>
+            WithDisabledAdvancedGiModes(legacy, originalSchemaVersion: 3);
+
+        /// <summary>
+        /// Schema v4 predates the C5 observability/readback contract.  It may
+        /// contain a C5 experiment mode, but contains no trustworthy resource,
+        /// timestamp, counter, or capture-ID evidence, so all C5 telemetry is
+        /// explicitly disabled rather than inferred from the mode.
+        /// </summary>
+        private static PerformanceSnapshot MigrateSchemaV4(
+            PerformanceSnapshot legacy) =>
+            WithDisabledNearFieldResidualTelemetry(legacy, originalSchemaVersion: 4);
+
+        /// <summary>
+        /// Schema v5 has complete C5 telemetry but predates the native C1
+        /// transaction snapshot. Never infer live micromap objects from a mode
+        /// or physical extension bit in an older capture.
+        /// </summary>
+        private static PerformanceSnapshot MigrateSchemaV5(
+            PerformanceSnapshot legacy) =>
+            WithDisabledOpacityMicromapTelemetry(legacy, originalSchemaVersion: 5);
+
+        /// <summary>
+        /// Schema v6 records native C1 transactions and memory but predates
+        /// immutable content/classification/subdivision evidence. Preserve the
+        /// trustworthy transaction counters and explicitly mark only that new
+        /// content evidence unavailable.
+        /// </summary>
+        private static PerformanceSnapshot MigrateSchemaV6(
+            PerformanceSnapshot legacy)
+        {
+            OpacityMicromapGpuRuntimeSnapshot runtime = legacy.Diagnostics
+                .GiRoadmapExperiments
+                .OpacityMicromapRuntime with
+                {
+                    Content = OpacityMicromapContentDiagnostics.Unavailable
+                };
+            GiRoadmapExperimentDiagnostics roadmap = legacy.Diagnostics
+                .GiRoadmapExperiments with
+                {
+                    OpacityMicromapRuntime = runtime
+                };
+            RendererDiagnostics diagnostics = legacy.Diagnostics with
+            {
+                GiRoadmapExperiments = roadmap
+            };
+            PerformanceGlobalIlluminationSnapshot globalIllumination =
+                legacy.GlobalIllumination with
+                {
+                    GiRoadmapExperiments = roadmap
+                };
+            return NormalizeCurrentSchema(legacy with
+            {
+                OriginalSchemaVersion = 6,
+                Diagnostics = diagnostics,
+                GlobalIllumination = globalIllumination
+            });
+        }
+
+        /// <summary>
+        /// Schema v7 has immutable C1 content evidence but predates the C3
+        /// fence-complete observability contract. Never infer sampled rays,
+        /// timings, or allocation from a requested/effective mode alone.
+        /// </summary>
+        private static PerformanceSnapshot MigrateSchemaV7(
+            PerformanceSnapshot legacy)
+        {
+            GiRoadmapExperimentDiagnostics roadmap = legacy.Diagnostics
+                .GiRoadmapExperiments with
+                {
+                    DirectionalGuidingRuntime =
+                        SimpleDdgiDirectionalGuidingDiagnostics.Disabled
+                };
+            return NormalizeCurrentSchema(legacy with
+            {
+                OriginalSchemaVersion = 7,
+                Diagnostics = legacy.Diagnostics with
+                {
+                    GiRoadmapExperiments = roadmap
+                },
+                GlobalIllumination = legacy.GlobalIllumination with
+                {
+                    GiRoadmapExperiments = roadmap
+                }
+            });
+        }
+
+        /// <summary>
+        /// Schema v8 has authoritative C3 telemetry but predates C4's
+        /// fence-validated publication contract.  Never infer a readable
+        /// caustic cache from an active mode, allocated byte count, or GPU
+        /// resource state in such a capture.
+        /// </summary>
+        private static PerformanceSnapshot MigrateSchemaV8(
+            PerformanceSnapshot legacy)
+        {
+            GiRoadmapExperimentDiagnostics roadmap = legacy.Diagnostics
+                .GiRoadmapExperiments with
+                {
+                    CausticRuntime = GiCausticDiagnostics.Disabled
+                };
+            return NormalizeCurrentSchema(legacy with
+            {
+                OriginalSchemaVersion = 8,
+                Diagnostics = legacy.Diagnostics with
+                {
+                    GiRoadmapExperiments = roadmap
+                },
+                GlobalIllumination = legacy.GlobalIllumination with
+                {
+                    GiRoadmapExperiments = roadmap
+                }
+            });
+        }
+
+        /// <summary>
+        /// Schema v9 has authoritative C4 telemetry but predates B1's
+        /// fence-validated publication contract. Never infer emitted records,
+        /// compaction counts, timings, or allocation from an exact mode bit.
+        /// </summary>
+        private static PerformanceSnapshot MigrateSchemaV9(
+            PerformanceSnapshot legacy)
+        {
+            GiRoadmapExperimentDiagnostics roadmap = legacy.Diagnostics
+                .GiRoadmapExperiments with
+                {
+                    ReceiverFeedbackRuntime =
+                        SimpleDdgiReceiverFeedbackDiagnostics.Disabled
+                };
+            return NormalizeCurrentSchema(legacy with
+            {
+                OriginalSchemaVersion = 9,
+                Diagnostics = legacy.Diagnostics with
+                {
+                    GiRoadmapExperiments = roadmap
+                },
+                GlobalIllumination = legacy.GlobalIllumination with
+                {
+                    GiRoadmapExperiments = roadmap
+                }
+            });
+        }
+
+        private static PerformanceSnapshot NormalizeCurrentSchema(
+            PerformanceSnapshot snapshot)
+        {
+            SimpleDdgiNearFieldResidualDiagnostics nearFieldResidual =
+                (snapshot.Diagnostics.SimpleDdgiNearFieldResidual ??
+                 SimpleDdgiNearFieldResidualDiagnostics.Disabled(
+                     "C5 telemetry was absent from a schema-v7 snapshot."))
+                .NormalizeForPersistence();
+            SimpleDdgiContentMemoryPlan contentMemory =
+                snapshot.Diagnostics.SimpleDdgiContentMemory
+                    .NormalizeForPersistence();
+            SimpleDdgiDirectionalGuidingDiagnostics directionalGuiding =
+                (snapshot.Diagnostics.GiRoadmapExperiments
+                    .DirectionalGuidingRuntime ??
+                 SimpleDdgiDirectionalGuidingDiagnostics.Disabled)
+                .NormalizeForPersistence();
+            GiCausticDiagnostics caustic =
+                (snapshot.Diagnostics.GiRoadmapExperiments.CausticRuntime ??
+                 GiCausticDiagnostics.Disabled)
+                .NormalizeForPersistence();
+            SimpleDdgiReceiverFeedbackDiagnostics receiverFeedback =
+                (snapshot.Diagnostics.GiRoadmapExperiments
+                    .ReceiverFeedbackRuntime ??
+                 SimpleDdgiReceiverFeedbackDiagnostics.Disabled)
+                .NormalizeForPersistence();
+            RendererDiagnostics diagnostics = snapshot.Diagnostics with
+            {
+                SimpleDdgiNearFieldResidual = nearFieldResidual,
+                SimpleDdgiContentMemory = contentMemory,
+                GiRoadmapExperiments = snapshot.Diagnostics.GiRoadmapExperiments with
+                {
+                    OpacityMicromapRuntime = snapshot.Diagnostics
+                        .GiRoadmapExperiments
+                        .OpacityMicromapRuntime
+                        .NormalizeForPersistence(),
+                    ReceiverFeedbackRuntime = receiverFeedback,
+                    DirectionalGuidingRuntime = directionalGuiding,
+                    CausticRuntime = caustic
+                }
+            };
+            PerformanceGlobalIlluminationSnapshot globalIllumination =
+                snapshot.GlobalIllumination with
+                {
+                    SimpleDdgiNearFieldResidual = nearFieldResidual,
+                    GiRoadmapExperiments = diagnostics.GiRoadmapExperiments,
+                    SimpleDdgiContentMemory = contentMemory
+                };
+            return snapshot with
+            {
+                SchemaVersion = PerformanceSnapshot.CurrentSchemaVersion,
+                OriginalSchemaVersion = snapshot.OriginalSchemaVersion == 0
+                    ? PerformanceSnapshot.CurrentSchemaVersion
+                    : snapshot.OriginalSchemaVersion,
+                Diagnostics = diagnostics,
+                GlobalIllumination = globalIllumination
+            };
+        }
+
+        /// <summary>
+        /// Schema-v2/v3 snapshots predate the versioned experiment-mode object.
+        /// Preserve their legacy admission text for historical inspection, but
+        /// never infer a requested or active mode from it.
+        /// </summary>
+        private static PerformanceSnapshot WithDisabledAdvancedGiModes(
+            PerformanceSnapshot legacy,
+            int originalSchemaVersion)
+        {
+            GiRoadmapExperimentDiagnostics roadmap =
+                legacy.Diagnostics.GiRoadmapExperiments with
+                {
+                    Modes = GiRoadmapExperimentModeDiagnostics.Disabled
+                };
+            RendererDiagnostics diagnostics = legacy.Diagnostics with
+            {
+                GiRoadmapExperiments = roadmap,
+                SimpleDdgiContentMemory = SimpleDdgiContentMemoryPlan.Empty
+            };
+            PerformanceGlobalIlluminationSnapshot globalIllumination =
+                legacy.GlobalIllumination with
+                {
+                    GiRoadmapExperiments = roadmap,
+                    SimpleDdgiContentMemory = SimpleDdgiContentMemoryPlan.Empty
+                };
+            PerformanceSnapshot migrated = legacy with
+            {
+                Diagnostics = diagnostics,
+                GlobalIllumination = globalIllumination
+            };
+            return WithDisabledNearFieldResidualTelemetry(
+                migrated,
+                originalSchemaVersion);
+        }
+
+        private static PerformanceSnapshot WithDisabledNearFieldResidualTelemetry(
+            PerformanceSnapshot legacy,
+            int originalSchemaVersion)
+        {
+            SimpleDdgiNearFieldResidualDiagnostics nearFieldResidual =
+                SimpleDdgiNearFieldResidualDiagnostics.Disabled(
+                    "C5 telemetry is unavailable in this legacy performance snapshot.");
+            RendererDiagnostics diagnostics = legacy.Diagnostics with
+            {
+                SimpleDdgiNearFieldResidual = nearFieldResidual
+            };
+            PerformanceGlobalIlluminationSnapshot globalIllumination =
+                legacy.GlobalIllumination with
+                {
+                    SimpleDdgiNearFieldResidual = nearFieldResidual
+                };
+            PerformanceSnapshot migrated = legacy with
+            {
+                Diagnostics = diagnostics,
+                GlobalIllumination = globalIllumination
+            };
+            return WithDisabledOpacityMicromapTelemetry(
+                migrated,
+                originalSchemaVersion);
+        }
+
+        private static PerformanceSnapshot WithDisabledOpacityMicromapTelemetry(
+            PerformanceSnapshot legacy,
+            int originalSchemaVersion)
+        {
+            GiRoadmapExperimentDiagnostics roadmap =
+                legacy.Diagnostics.GiRoadmapExperiments with
+                {
+                    OpacityMicromapRuntime =
+                        OpacityMicromapGpuRuntimeSnapshot.Disabled,
+                    DirectionalGuidingRuntime =
+                        SimpleDdgiDirectionalGuidingDiagnostics.Disabled
+                };
+            RendererDiagnostics diagnostics = legacy.Diagnostics with
+            {
+                GiRoadmapExperiments = roadmap,
+                SimpleDdgiContentMemory = SimpleDdgiContentMemoryPlan.Empty
+            };
+            PerformanceGlobalIlluminationSnapshot globalIllumination =
+                legacy.GlobalIllumination with
+                {
+                    GiRoadmapExperiments = roadmap,
+                    SimpleDdgiContentMemory = SimpleDdgiContentMemoryPlan.Empty
+                };
+            return legacy with
+            {
+                SchemaVersion = PerformanceSnapshot.CurrentSchemaVersion,
+                OriginalSchemaVersion = originalSchemaVersion,
+                Diagnostics = diagnostics,
+                GlobalIllumination = globalIllumination
             };
         }
     }

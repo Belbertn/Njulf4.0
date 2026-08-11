@@ -37,6 +37,8 @@ public sealed class SimpleDdgiSchedulerSettingsTests
             Assert.That(gi.SimpleDdgiStructuredGatherEnabled, Is.True);
             Assert.That(gi.SimpleDdgiToroidalScrollingEnabled, Is.True);
             Assert.That(gi.SimpleDdgiRegionalInvalidationEnabled, Is.True);
+            Assert.That(gi.SimpleDdgiReceiverContributionFeedbackEnabled, Is.True);
+            Assert.That(gi.SimpleDdgiPersistentWarmStartEnabled, Is.True);
             Assert.That(gi.SimpleDdgiSchedulerReentryStableFrameCount, Is.EqualTo(120));
             Assert.That(gi.SimpleDdgiProbeResidencyMode,
                 Is.EqualTo(SimpleDdgiProbeResidencyMode.SparseNearRing));
@@ -93,6 +95,8 @@ public sealed class SimpleDdgiSchedulerSettingsTests
             settings.GlobalIllumination.SimpleDdgiSparseMaximumAdmissionsPerFrame = 48;
             settings.GlobalIllumination.SimpleDdgiSparseMaximumReceiverFeedbackRequests = 999;
             settings.GlobalIllumination.SimpleDdgiSparseInactiveRetryFrames = 450;
+            settings.GlobalIllumination.SimpleDdgiReceiverContributionFeedbackEnabled = false;
+            settings.GlobalIllumination.SimpleDdgiPersistentWarmStartEnabled = false;
             settings.Save(path);
 
             RenderSettings loaded = RenderSettings.Load(path);
@@ -118,6 +122,12 @@ public sealed class SimpleDdgiSchedulerSettingsTests
                     Is.EqualTo(999));
                 Assert.That(loaded.GlobalIllumination.SimpleDdgiSparseInactiveRetryFrames,
                     Is.EqualTo(450));
+                Assert.That(
+                    loaded.GlobalIllumination.SimpleDdgiReceiverContributionFeedbackEnabled,
+                    Is.False);
+                Assert.That(
+                    loaded.GlobalIllumination.SimpleDdgiPersistentWarmStartEnabled,
+                    Is.False);
             });
         }
         finally

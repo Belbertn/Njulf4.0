@@ -83,7 +83,7 @@ public static class GiMaterialReferenceEvaluator
             : Vector3.Zero;
 
         Vector3 emission = material.EmitsIntoGi
-            ? EvaluateEmission(material.EmissiveFactor, inputs.EmissiveTexture, material.EmissiveStrength)
+            ? EmissivePhotometry.EvaluateSceneLinearRadiance(material, inputs.EmissiveTexture)
             : Vector3.Zero;
 
         Vector3 geometricNormal = SafeNormal(inputs.GeometricNormal, Vector3.UnitY);
@@ -452,6 +452,9 @@ public static class MaterialDefinitionValidator
             TransmissionPolicy = source.Extensions.TransmissionFactor <= 0f
                 ? GiTransmissionPolicy.None
                 : source.Extensions.TransmissionPolicy,
+            CausticParticipation = Enum.IsDefined(source.Extensions.CausticParticipation)
+                ? source.Extensions.CausticParticipation
+                : GiCausticParticipationMode.None,
             ThinTransmissionTint = Clamp01(source.Extensions.ThinTransmissionTint),
             Ior = Math.Clamp(source.Extensions.Ior, 1f, 3f),
             ThicknessFactor = Math.Max(source.Extensions.ThicknessFactor, 0f),
@@ -486,6 +489,7 @@ public static class MaterialDefinitionValidator
             BaseColorFactor = Clamp01(source.BaseColorFactor),
             EmissiveFactor = Clamp01(source.EmissiveFactor),
             EmissiveStrength = Math.Max(source.EmissiveStrength, 0f),
+            EmissiveArtisticMultiplier = Math.Max(source.EmissiveArtisticMultiplier, 0f),
             MetallicFactor = Saturate(source.MetallicFactor),
             // glTF authoring permits the full [0, 1] roughness range. Preserve
             // that authored value; the BRDF/transport evaluators apply their
@@ -523,6 +527,14 @@ public static class MaterialDefinitionValidator
         EnsureFinite(source.BaseColorFactor, nameof(source.BaseColorFactor));
         EnsureFinite(source.EmissiveFactor, nameof(source.EmissiveFactor));
         EnsureFinite(source.EmissiveStrength, nameof(source.EmissiveStrength));
+        EnsureFinite(source.EmissiveArtisticMultiplier, nameof(source.EmissiveArtisticMultiplier));
+        if (!Enum.IsDefined(source.EmissiveUnit))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(source.EmissiveUnit),
+                source.EmissiveUnit,
+                "Unknown emissive photometric unit.");
+        }
         EnsureFinite(source.MetallicFactor, nameof(source.MetallicFactor));
         EnsureFinite(source.RoughnessFactor, nameof(source.RoughnessFactor));
         EnsureFinite(source.OcclusionStrength, nameof(source.OcclusionStrength));

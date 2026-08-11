@@ -61,7 +61,8 @@ public sealed class SimpleDdgiReceiverProbeEncodingTests
             record,
             spacing,
             out Vector3 decodedRelocation,
-            out float decodedWeight);
+            out float decodedWeight,
+            out uint decodedGeneration);
 
         Assert.Multiple(() =>
         {
@@ -75,11 +76,45 @@ public sealed class SimpleDdgiReceiverProbeEncodingTests
             Assert.That(decodedRelocation.Z, Is.Zero.Within(1.0e-6f));
             Assert.That(decodedWeight, Is.EqualTo(1.0f).Within(1.0e-6f));
             Assert.That(
-                record.Flags,
+                record.Flags & ~SimpleDdgiReceiverProbeEncoding.SlotGenerationMask,
                 Is.EqualTo(
                     SimpleDdgiReceiverProbeEncoding.PublishedCoherentFlag |
                     SimpleDdgiReceiverProbeEncoding.FreshFlag));
+            Assert.That(decodedGeneration, Is.EqualTo(1u));
             Assert.That(record.AtlasProbeAddress, Is.EqualTo(37u));
+        });
+    }
+
+    [Test]
+    public void SlotGeneration_RoundTripsAndCannotCollideWithLifecycleFlags()
+    {
+        const uint generation = 0x00fe_dcabu;
+        Assert.That(SimpleDdgiReceiverProbeEncoding.TryPack(
+            Vector3.Zero,
+            1.0f,
+            0.5f,
+            SimpleDdgiReceiverProbeEncoding.FreshFlag,
+            generation,
+            17u,
+            out GPUSimpleDdgiReceiverProbe record), Is.True);
+        Assert.That(SimpleDdgiReceiverProbeEncoding.TryUnpack(
+            record,
+            1.0f,
+            out _,
+            out _,
+            out uint decodedGeneration), Is.True);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decodedGeneration, Is.EqualTo(generation));
+            Assert.That(
+                record.Flags & ~SimpleDdgiReceiverProbeEncoding.SlotGenerationMask,
+                Is.EqualTo(
+                    SimpleDdgiReceiverProbeEncoding.PublishedCoherentFlag |
+                    SimpleDdgiReceiverProbeEncoding.FreshFlag));
+            Assert.That(
+                record.Flags >> SimpleDdgiReceiverProbeEncoding.SlotGenerationShift,
+                Is.EqualTo(generation));
         });
     }
 

@@ -28,17 +28,22 @@ namespace Njulf.Rendering.Pipeline
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
+        private VkPipeline _receiverFeedbackPipeline;
+        private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
+            _receiverFeedbackRuntime;
 
         public FogPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             RenderTargetManager renderTargets,
-            RenderSettings settings)
+            RenderSettings settings,
+            SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime = null)
             : base("FogPass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _receiverFeedbackRuntime = receiverFeedbackRuntime;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -47,7 +52,12 @@ namespace Njulf.Rendering.Pipeline
             CreateOutputSetLayout();
             CreatePipelineCache();
             CreatePipelineLayout();
-            _pipeline = CreatePipeline();
+            _pipeline = CreatePipeline("fog.comp.spv");
+            if (_settings.GlobalIllumination.SimpleDdgiReceiverFeedbackMode ==
+                SimpleDdgiReceiverFeedbackMode.ExactCompacted)
+            {
+                _receiverFeedbackPipeline = CreatePipeline("fog_b1.comp.spv");
+            }
             RecreateDescriptorSet();
         }
 
@@ -88,7 +98,11 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets.SceneColor.TransitionToComputeShaderRead(cmd);
             _renderTargets.SceneDepth.TransitionToComputeDepthReadOnly(cmd);
 
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
+            bool exactFeedback = TrySelectExactFeedbackPipeline(
+                frameIndex,
+                sceneData,
+                out VkPipeline pipeline);
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, pipeline);
 
             var storageSet = _bindlessHeap.StorageBufferSet;
             var textureSet = _bindlessHeap.TextureSamplerSet;
@@ -134,6 +148,17 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdDispatch(cmd, (extent.Width + 7u) / 8u, (extent.Height + 7u) / 8u, 1);
             _renderTargets.FoggedSceneColor.TransitionToComputeShaderRead(cmd);
             sceneData.ActiveSceneColorTextureIndex = BindlessIndex.FoggedSceneColorTexture;
+            if (exactFeedback &&
+                !_receiverFeedbackRuntime!.TryRecordOwnedProducerCompletion(
+                    cmd,
+                    frameIndex,
+                    SimpleDdgiReceiverFeedbackProducer.Fog,
+                    out string completionReason))
+            {
+                _receiverFeedbackRuntime.AbortCapture(
+                    "receiver-feedback-fog-completion-failed:" +
+                    completionReason);
+            }
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -152,6 +177,14 @@ namespace Njulf.Rendering.Pipeline
             {
                 _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
                 _pipeline = default;
+            }
+            if (_receiverFeedbackPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _receiverFeedbackPipeline,
+                    null);
+                _receiverFeedbackPipeline = default;
             }
 
             DestroyDescriptorPool();
@@ -211,8 +244,34 @@ namespace Njulf.Rendering.Pipeline
                 Mode = (uint)fog.Mode,
                 ColorMode = (uint)fog.ColorMode,
                 DebugView = (uint)fog.DebugView,
-                DirectionalInscatteringEnabled = fog.DirectionalInscatteringEnabled ? 1u : 0u
+                DirectionalInscatteringEnabled =
+                    fog.DirectionalInscatteringEnabled ? 1u : 0u,
+                CurrentFrameIndex = sceneData.CurrentFrameIndex
             };
+        }
+
+        private bool TrySelectExactFeedbackPipeline(
+            int frameIndex,
+            SceneRenderingData sceneData,
+            out VkPipeline pipeline)
+        {
+            pipeline = _pipeline;
+            if (_receiverFeedbackRuntime is null ||
+                !_receiverFeedbackRuntime.IsPendingOwnedProducerRequired(
+                    frameIndex,
+                    SimpleDdgiReceiverFeedbackProducer.Fog))
+            {
+                return false;
+            }
+            if (sceneData.CurrentFrameIndex != checked((uint)frameIndex) ||
+                _receiverFeedbackPipeline.Handle == 0)
+            {
+                _receiverFeedbackRuntime.AbortCapture(
+                    "receiver-feedback-fog-pipeline-or-frame-slot-unavailable");
+                return false;
+            }
+            pipeline = _receiverFeedbackPipeline;
+            return true;
         }
 
         private void CreateOutputSetLayout()
@@ -281,13 +340,14 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private VkPipeline CreatePipeline()
+        private VkPipeline CreatePipeline(string shaderName)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(shaderName);
             ShaderModule shaderModule = default;
             try
             {
-                shaderModule = ShaderModuleLoader.Load(_context, "fog.comp.spv");
-                _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, "fog.comp.spv");
+                shaderModule = ShaderModuleLoader.Load(_context, shaderName);
+                _context.SetDebugName(shaderModule.Handle, ObjectType.ShaderModule, shaderName);
 
                 var shaderStageInfo = new PipelineShaderStageCreateInfo
                 {

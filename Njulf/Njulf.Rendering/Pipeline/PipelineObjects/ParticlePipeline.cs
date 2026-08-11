@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using Njulf.Core.Vfx;
 using Njulf.Rendering.Core;
@@ -16,11 +17,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
+        private readonly bool _receiverFeedbackEnabled;
         private readonly nint _entryPointName;
         private VkPipeline _alphaPipeline;
         private VkPipeline _premultipliedPipeline;
         private VkPipeline _additivePipeline;
         private VkPipeline _softAdditivePipeline;
+        private VkPipeline _alphaReceiverFeedbackPipeline;
+        private VkPipeline _premultipliedReceiverFeedbackPipeline;
+        private VkPipeline _additiveReceiverFeedbackPipeline;
+        private VkPipeline _softAdditiveReceiverFeedbackPipeline;
         private PipelineLayout _layout;
         private PipelineCache _pipelineCache;
         private bool _disposed;
@@ -29,10 +35,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             VulkanContext context,
             BindlessHeap bindlessHeap,
             Format colorFormat,
-            Format depthFormat)
+            Format depthFormat,
+            bool receiverFeedbackEnabled = false)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
+            _receiverFeedbackEnabled = receiverFeedbackEnabled;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Marshal.SizeOf<GPUParticlePushConstants>());
@@ -43,14 +51,40 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         public PipelineLayout Layout => _layout;
 
-        public VkPipeline GetPipeline(ParticleBlendMode blendMode)
+        public bool ReceiverFeedbackPipelinesAvailable =>
+            _receiverFeedbackEnabled &&
+            _alphaReceiverFeedbackPipeline.Handle != 0 &&
+            _premultipliedReceiverFeedbackPipeline.Handle != 0 &&
+            _additiveReceiverFeedbackPipeline.Handle != 0 &&
+            _softAdditiveReceiverFeedbackPipeline.Handle != 0;
+        public string ReceiverFeedbackPipelineFailureReason { get; private set; } =
+            "receiver-feedback-pipelines-not-admitted-at-startup";
+
+        public VkPipeline GetPipeline(
+            ParticleBlendMode blendMode,
+            bool receiverFeedback = false)
         {
+            if (receiverFeedback && !ReceiverFeedbackPipelinesAvailable)
+            {
+                throw new InvalidOperationException(
+                    "Exact particle receiver-feedback pipelines are unavailable.");
+            }
+
             return blendMode switch
             {
-                ParticleBlendMode.AlphaBlend or ParticleBlendMode.AlphaClip => _alphaPipeline,
-                ParticleBlendMode.Additive => _additivePipeline,
-                ParticleBlendMode.SoftAdditive => _softAdditivePipeline,
-                _ => _premultipliedPipeline
+                ParticleBlendMode.AlphaBlend or ParticleBlendMode.AlphaClip =>
+                    receiverFeedback
+                        ? _alphaReceiverFeedbackPipeline
+                        : _alphaPipeline,
+                ParticleBlendMode.Additive => receiverFeedback
+                    ? _additiveReceiverFeedbackPipeline
+                    : _additivePipeline,
+                ParticleBlendMode.SoftAdditive => receiverFeedback
+                    ? _softAdditiveReceiverFeedbackPipeline
+                    : _softAdditivePipeline,
+                _ => receiverFeedback
+                    ? _premultipliedReceiverFeedbackPipeline
+                    : _premultipliedPipeline
             };
         }
 
@@ -112,6 +146,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private void CreatePipelines(Format colorFormat, Format depthFormat)
         {
             ShaderModule vertexModule = default;
+            ShaderModule receiverFeedbackVertexModule = default;
             ShaderModule fragmentModule = default;
 
             try
@@ -125,10 +160,79 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _premultipliedPipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.One, BlendFactor.OneMinusSrcAlpha, "Particle Premultiplied Pipeline");
                 _additivePipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.One, BlendFactor.One, "Particle Additive Pipeline");
                 _softAdditivePipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.One, BlendFactor.One, "Particle Soft Additive Pipeline");
+
+                if (_receiverFeedbackEnabled)
+                {
+                    try
+                    {
+                        receiverFeedbackVertexModule = ShaderModuleLoader.Load(
+                            _context,
+                            "particle_b1.vert.spv");
+                        _context.SetDebugName(
+                            receiverFeedbackVertexModule.Handle,
+                            ObjectType.ShaderModule,
+                            "particle_b1.vert.spv");
+                        _alphaReceiverFeedbackPipeline = CreateGraphicsPipeline(
+                            receiverFeedbackVertexModule,
+                            fragmentModule,
+                            colorFormat,
+                            depthFormat,
+                            BlendFactor.SrcAlpha,
+                            BlendFactor.OneMinusSrcAlpha,
+                            "Particle Alpha B1 Receiver Feedback Pipeline");
+                        _premultipliedReceiverFeedbackPipeline =
+                            CreateGraphicsPipeline(
+                                receiverFeedbackVertexModule,
+                                fragmentModule,
+                                colorFormat,
+                                depthFormat,
+                                BlendFactor.One,
+                                BlendFactor.OneMinusSrcAlpha,
+                                "Particle Premultiplied B1 Receiver Feedback Pipeline");
+                        _additiveReceiverFeedbackPipeline = CreateGraphicsPipeline(
+                            receiverFeedbackVertexModule,
+                            fragmentModule,
+                            colorFormat,
+                            depthFormat,
+                            BlendFactor.One,
+                            BlendFactor.One,
+                            "Particle Additive B1 Receiver Feedback Pipeline");
+                        _softAdditiveReceiverFeedbackPipeline =
+                            CreateGraphicsPipeline(
+                                receiverFeedbackVertexModule,
+                                fragmentModule,
+                                colorFormat,
+                                depthFormat,
+                                BlendFactor.One,
+                                BlendFactor.One,
+                                "Particle Soft Additive B1 Receiver Feedback Pipeline");
+                        ReceiverFeedbackPipelineFailureReason =
+                            "receiver-feedback-pipelines-ready";
+                    }
+                    catch (Exception exception) when (
+                        exception is VulkanException or IOException or
+                        ArgumentException or InvalidOperationException)
+                    {
+                        DestroyPipeline(ref _alphaReceiverFeedbackPipeline);
+                        DestroyPipeline(
+                            ref _premultipliedReceiverFeedbackPipeline);
+                        DestroyPipeline(ref _additiveReceiverFeedbackPipeline);
+                        DestroyPipeline(
+                            ref _softAdditiveReceiverFeedbackPipeline);
+                        ReceiverFeedbackPipelineFailureReason =
+                            "receiver-feedback-particle-pipeline-creation-failed:" +
+                            exception.GetType().Name + ":" + exception.Message;
+                        System.Diagnostics.Debug.WriteLine(
+                            "B1 particle pipelines unavailable; ordinary " +
+                            "particles retained. " +
+                            ReceiverFeedbackPipelineFailureReason);
+                    }
+                }
             }
             finally
             {
                 DestroyShaderModule(fragmentModule);
+                DestroyShaderModule(receiverFeedbackVertexModule);
                 DestroyShaderModule(vertexModule);
             }
         }
@@ -283,6 +387,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline(ref _premultipliedPipeline);
             DestroyPipeline(ref _additivePipeline);
             DestroyPipeline(ref _softAdditivePipeline);
+            DestroyPipeline(ref _alphaReceiverFeedbackPipeline);
+            DestroyPipeline(ref _premultipliedReceiverFeedbackPipeline);
+            DestroyPipeline(ref _additiveReceiverFeedbackPipeline);
+            DestroyPipeline(ref _softAdditiveReceiverFeedbackPipeline);
         }
 
         private void DestroyPipeline(ref VkPipeline pipeline)

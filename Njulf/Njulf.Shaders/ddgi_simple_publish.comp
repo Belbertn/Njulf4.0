@@ -157,6 +157,7 @@ void main()
             volume.spacing,
             state.activeWeight,
             receiverFlags,
+            SimpleDdgiProbeGeneration(state),
             update.physicalProbeIndex);
         if (published)
         {

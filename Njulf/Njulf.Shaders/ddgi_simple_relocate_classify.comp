@@ -136,8 +136,21 @@ void main()
     uint hitCount = 0u;
     uint backfaceCount = 0u;
     uint closeCount = 0u;
+    uint visibilityRayCount = 0u;
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
     uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+    uvec2 guidingExpectedStableProbeId = uvec2(
+        probeIndex,
+        update.expectedGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK);
+    bool guidingProbeBacked =
+        SimpleDdgiGuidingTransportProbeHasCompleteBacking(
+            update.physicalProbeIndex,
+            probeIndex,
+            update.pageMappingGeneration,
+            guidingExpectedStableProbeId,
+            params.raysPerProbe);
+#endif
     float nearestHitDistance = 3.402823466e+38;
     float nearestBackfaceDistance = 3.402823466e+38;
     vec3 nearestBackfaceDirection = vec3(0.0);
@@ -175,6 +188,33 @@ void main()
                 1u << 1u);
             return;
         }
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+        SimpleDdgiGuidingTransportPayload guidingPayload;
+        bool guidingPayloadValid = TryReadSimpleDdgiGuidingTransportPayload(
+            update.physicalProbeIndex,
+            probeIndex,
+            update.pageMappingGeneration,
+            guidingExpectedStableProbeId,
+            directionRayIndex,
+            params.raysPerProbe,
+            guidingPayload);
+        if (guidingProbeBacked && !guidingPayloadValid)
+        {
+            SimpleDdgiSchedulerFailOutcome(
+                pc.SchedulerArenaBufferIndex,
+                pc.SchedulerOutcomesOffsetWords,
+                update.outcomeIndex,
+                1u << 1u);
+            return;
+        }
+        if (guidingPayloadValid)
+        {
+            if (!SimpleDdgiGuidingPayloadOwnsVisibility(guidingPayload))
+                continue;
+            direction = guidingPayload.direction;
+        }
+#endif
+        visibilityRayCount++;
         float hitKind = visibilityHit.y;
         // Use the same nearest two-sided distance that receiver visibility saw.
         // Source radiance remains frontface-only, but a close covered backface
@@ -209,7 +249,16 @@ void main()
         }
     }
 
-    float rayCount = max(float(activeRayCount), 1.0);
+    if (visibilityRayCount == 0u)
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 1u);
+        return;
+    }
+    float rayCount = float(visibilityRayCount);
     float missRatio = float(missCount) / rayCount;
     float hitRatio = float(hitCount) / rayCount;
     float backfaceRatio = float(backfaceCount) / rayCount;

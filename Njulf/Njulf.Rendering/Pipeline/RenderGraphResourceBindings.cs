@@ -299,6 +299,12 @@ namespace Njulf.Rendering.Pipeline
         private readonly IReadOnlyDictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>> _bindings;
         private readonly IReadOnlyDictionary<(RenderGraphResourceId Resource, int FrameIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>> _frameBindings;
         private readonly IReadOnlyDictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>> _staticBindings;
+        // History selection is precomputed with the rest of the immutable
+        // plan. Temporal hot paths must never filter a buffer/image set or
+        // accidentally bind both banks because a logical resource has two
+        // concrete allocations.
+        private readonly IReadOnlyDictionary<(RenderGraphResourceId Resource, int HistoryIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>> _staticHistoryBindings;
+        private readonly IReadOnlyDictionary<(RenderGraphResourceId Resource, int FrameIndex, int HistoryIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>> _frameHistoryBindings;
 
         internal RenderGraphResourcePlan(
             Guid ownerId,
@@ -342,6 +348,8 @@ namespace Njulf.Rendering.Pipeline
             var immutableBindings = new Dictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>>(replacement.Count);
             var staticBindings = new Dictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>>(replacement.Count);
             var selectedBindings = new Dictionary<(RenderGraphResourceId Resource, int FrameIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>>();
+            var staticHistoryBindings = new Dictionary<(RenderGraphResourceId Resource, int HistoryIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>>();
+            var frameHistoryBindings = new Dictionary<(RenderGraphResourceId Resource, int FrameIndex, int HistoryIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>>();
             var frameIndices = new HashSet<int>();
             foreach (RenderGraphConcreteResourceBinding binding in flattened)
             {
@@ -352,18 +360,36 @@ namespace Njulf.Rendering.Pipeline
             foreach ((RenderGraphResourceId resource, List<RenderGraphConcreteResourceBinding> list) in replacement)
             {
                 immutableBindings.Add(resource, AsReadOnly(list));
-                staticBindings.Add(resource, AsReadOnly(list.Where(static binding => binding.FrameIndex < 0)));
+                RenderGraphConcreteResourceBinding[] staticForResource = list
+                    .Where(static binding => binding.FrameIndex < 0)
+                    .ToArray();
+                staticBindings.Add(resource, AsReadOnly(staticForResource));
+                AddHistoryBindings(
+                    staticHistoryBindings,
+                    resource,
+                    frameIndex: -1,
+                    staticForResource);
                 foreach (int frameIndex in frameIndices)
                 {
+                    RenderGraphConcreteResourceBinding[] frameForResource = list
+                        .Where(binding => binding.FrameIndex < 0 || binding.FrameIndex == frameIndex)
+                        .ToArray();
                     selectedBindings.Add(
                         (resource, frameIndex),
-                        AsReadOnly(list.Where(binding => binding.FrameIndex < 0 || binding.FrameIndex == frameIndex)));
+                        AsReadOnly(frameForResource));
+                    AddHistoryBindings(
+                        frameHistoryBindings,
+                        resource,
+                        frameIndex,
+                        frameForResource);
                 }
             }
 
             _bindings = new ReadOnlyDictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>>(immutableBindings);
             _staticBindings = new ReadOnlyDictionary<RenderGraphResourceId, IReadOnlyList<RenderGraphConcreteResourceBinding>>(staticBindings);
             _frameBindings = new ReadOnlyDictionary<(RenderGraphResourceId Resource, int FrameIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>>(selectedBindings);
+            _staticHistoryBindings = new ReadOnlyDictionary<(RenderGraphResourceId Resource, int HistoryIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>>(staticHistoryBindings);
+            _frameHistoryBindings = new ReadOnlyDictionary<(RenderGraphResourceId Resource, int FrameIndex, int HistoryIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>>(frameHistoryBindings);
         }
 
         public ulong Generation { get; }
@@ -383,6 +409,92 @@ namespace Njulf.Rendering.Pipeline
             if (_frameBindings.TryGetValue((resource, frameIndex), out IReadOnlyList<RenderGraphConcreteResourceBinding>? selected))
                 return selected;
             return _staticBindings[resource];
+        }
+
+        /// <summary>
+        /// Resolves one physical history bank without allocating or scanning at
+        /// frame time.  <see cref="RenderGraphHistoryBindingSelection.All"/>
+        /// deliberately preserves the historical set behaviour used by
+        /// non-temporal resources.
+        /// </summary>
+        public IReadOnlyList<RenderGraphConcreteResourceBinding> GetBindings(
+            RenderGraphResourceId resource,
+            int frameIndex,
+            RenderGraphHistoryBindingSelection historyBinding)
+        {
+            if (historyBinding == RenderGraphHistoryBindingSelection.All)
+                return GetBindings(resource, frameIndex);
+
+            int historyIndex = ResolveHistoryIndex(frameIndex, historyBinding);
+            if (frameIndex >= 0 &&
+                _frameHistoryBindings.TryGetValue(
+                    (resource, frameIndex, historyIndex),
+                    out IReadOnlyList<RenderGraphConcreteResourceBinding>? frameBindings))
+            {
+                return frameBindings;
+            }
+
+            return _staticHistoryBindings.TryGetValue(
+                (resource, historyIndex),
+                out IReadOnlyList<RenderGraphConcreteResourceBinding>? staticBindings)
+                ? staticBindings
+                : Array.Empty<RenderGraphConcreteResourceBinding>();
+        }
+
+        internal static int ResolveHistoryIndex(
+            int frameIndex,
+            RenderGraphHistoryBindingSelection historyBinding)
+        {
+            return historyBinding switch
+            {
+                RenderGraphHistoryBindingSelection.Bank0 => 0,
+                RenderGraphHistoryBindingSelection.Bank1 => 1,
+                RenderGraphHistoryBindingSelection.Current when frameIndex >= 0 =>
+                    frameIndex & 1,
+                RenderGraphHistoryBindingSelection.Previous when frameIndex >= 0 =>
+                    (frameIndex + 1) & 1,
+                RenderGraphHistoryBindingSelection.All => -1,
+                RenderGraphHistoryBindingSelection.Current or
+                    RenderGraphHistoryBindingSelection.Previous => throw new ArgumentOutOfRangeException(
+                        nameof(frameIndex),
+                        "Current/previous history selection requires a non-negative frame index."),
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(historyBinding),
+                    historyBinding,
+                    "Unknown render-graph history binding selection.")
+            };
+        }
+
+        private static void AddHistoryBindings(
+            IDictionary<(RenderGraphResourceId Resource, int HistoryIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>> destination,
+            RenderGraphResourceId resource,
+            int frameIndex,
+            IReadOnlyList<RenderGraphConcreteResourceBinding> bindings)
+        {
+            for (int historyIndex = 0; historyIndex <= 1; historyIndex++)
+            {
+                RenderGraphConcreteResourceBinding[] selected = bindings
+                    .Where(binding => binding.HistoryIndex == historyIndex)
+                    .ToArray();
+                if (selected.Length != 0)
+                    destination.Add((resource, historyIndex), AsReadOnly(selected));
+            }
+        }
+
+        private static void AddHistoryBindings(
+            IDictionary<(RenderGraphResourceId Resource, int FrameIndex, int HistoryIndex), IReadOnlyList<RenderGraphConcreteResourceBinding>> destination,
+            RenderGraphResourceId resource,
+            int frameIndex,
+            IReadOnlyList<RenderGraphConcreteResourceBinding> bindings)
+        {
+            for (int historyIndex = 0; historyIndex <= 1; historyIndex++)
+            {
+                RenderGraphConcreteResourceBinding[] selected = bindings
+                    .Where(binding => binding.HistoryIndex == historyIndex)
+                    .ToArray();
+                if (selected.Length != 0)
+                    destination.Add((resource, frameIndex, historyIndex), AsReadOnly(selected));
+            }
         }
 
         private static IReadOnlyList<RenderGraphConcreteResourceBinding> AsReadOnly(
@@ -508,11 +620,15 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphConcreteResourceBinding second)
         {
             if (first.Kind != second.Kind ||
-                !FrameSelectionsOverlap(first.FrameIndex, second.FrameIndex) ||
-                !FrameSelectionsOverlap(first.HistoryIndex, second.HistoryIndex))
+                !FrameSelectionsOverlap(first.FrameIndex, second.FrameIndex))
             {
                 return false;
             }
+
+            // Unlike a frame-slot selection, current and previous history
+            // banks can be accessed by one temporal dispatch at the same
+            // time.  They must therefore never be allowed to overlap merely
+            // because their logical HistoryIndex differs.
 
             if (first.Kind == RenderGraphConcreteResourceKind.Buffer)
                 return RangesOverlap(first.ByteOffset, first.ByteSize, second.ByteOffset, second.ByteSize);
@@ -573,6 +689,15 @@ namespace Njulf.Rendering.Pipeline
             int frameIndex = -1)
         {
             return _currentPlan.GetBindings(resource, frameIndex);
+        }
+
+        /// <summary>Resolves an explicitly selected physical history bank.</summary>
+        public IReadOnlyList<RenderGraphConcreteResourceBinding> GetBindings(
+            RenderGraphResourceId resource,
+            int frameIndex,
+            RenderGraphHistoryBindingSelection historyBinding)
+        {
+            return _currentPlan.GetBindings(resource, frameIndex, historyBinding);
         }
 
         public bool HasCompleteBinding(RenderGraphResourceId resource, int frameIndex = -1) =>

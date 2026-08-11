@@ -1,0 +1,463 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_directional_guiding.glsl"
+
+// Samples the published read bank only.  The write bank is never bound here;
+// a frame therefore cannot observe a partially trained distribution.  Each
+// radiometric output carries the exact generation-time mixture PDF bits.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer GuidingSampleReadBankBuffer
+{
+    uint words[];
+} guidingSampleReadBank;
+
+layout(std430, set = 0, binding = 1) readonly buffer GuidingSampleRequestsBuffer
+{
+    SimpleDdgiGuidingSampleRequest requests[];
+} guidingSampleRequests;
+
+layout(std430, set = 0, binding = 2) buffer GuidingSamplePayloadsBuffer
+{
+    SimpleDdgiGuidingSamplePayload payloads[];
+} guidingSamplePayloads;
+
+layout(std430, set = 0, binding = 3) buffer GuidingSampleCountersBuffer
+{
+    uint counters[];
+} guidingSampleCounters;
+
+SimpleDdgiGuidingDistributionHeader SimpleDdgiGuidingReadHeader(uint baseWord)
+{
+    SimpleDdgiGuidingDistributionHeader header;
+    header.abiVersion = guidingSampleReadBank.words[baseWord + 0u];
+    header.virtualProbeId = guidingSampleReadBank.words[baseWord + 1u];
+    header.pageGeneration = guidingSampleReadBank.words[baseWord + 2u];
+    header.distributionGeneration = guidingSampleReadBank.words[baseWord + 3u];
+    header.directionProposalEpoch = guidingSampleReadBank.words[baseWord + 4u];
+    header.sampleCountAndAge = guidingSampleReadBank.words[baseWord + 5u];
+    header.totalIncidentEnergy = uintBitsToFloat(
+        guidingSampleReadBank.words[baseWord + 6u]);
+    header.packedLeafResolutionAndFlags =
+        guidingSampleReadBank.words[baseWord + 7u];
+    return header;
+}
+
+float SimpleDdgiGuidingReadWeight(uint baseWord, uint weightIndex)
+{
+    return SimpleDdgiGuidingUnpackWeight(
+        guidingSampleReadBank.words[baseWord +
+            SimpleDdgiGuidingWeightWordOffset(weightIndex)],
+        weightIndex);
+}
+
+bool SimpleDdgiGuidingSampleGuidedLeaf(
+    uint baseWord,
+    uint leafResolution,
+    float randomValue,
+    out uint leafIndex,
+    out float guidedPdf)
+{
+    uint x = 0u;
+    uint y = 0u;
+    float remaining = clamp(randomValue, 0.0, 0.99999994);
+    float leafProbability = 1.0;
+
+    for (uint parentSide = 1u;
+         parentSide < leafResolution;
+         parentSide <<= 1u)
+    {
+        uint childSide = parentSide << 1u;
+        uint childX = x << 1u;
+        uint childY = y << 1u;
+        uint childIndices[4] = uint[4](
+            SimpleDdgiGuidingNodeIndex(leafResolution, childSide, childX, childY),
+            SimpleDdgiGuidingNodeIndex(leafResolution, childSide, childX + 1u, childY),
+            SimpleDdgiGuidingNodeIndex(leafResolution, childSide, childX, childY + 1u),
+            SimpleDdgiGuidingNodeIndex(leafResolution, childSide, childX + 1u, childY + 1u));
+        float childWeights[4] = float[4](
+            SimpleDdgiGuidingReadWeight(baseWord, childIndices[0]),
+            SimpleDdgiGuidingReadWeight(baseWord, childIndices[1]),
+            SimpleDdgiGuidingReadWeight(baseWord, childIndices[2]),
+            SimpleDdgiGuidingReadWeight(baseWord, childIndices[3]));
+        float sum = childWeights[0] + childWeights[1] +
+            childWeights[2] + childWeights[3];
+        if (!SimpleDdgiGuidingFinite(sum) || sum < 0.0)
+            return false;
+
+        uint selected = 0u;
+        if (sum <= 0.0)
+        {
+            selected = min(3u, uint(floor(remaining * 4.0)));
+            leafProbability *= 0.25;
+            remaining = fract(remaining * 4.0);
+        }
+        else
+        {
+            float target = remaining * sum;
+            float cumulative = 0.0;
+            for (uint candidate = 0u; candidate < 4u; ++candidate)
+            {
+                float next = cumulative + childWeights[candidate];
+                if (target < next || candidate == 3u)
+                {
+                    selected = candidate;
+                    break;
+                }
+                cumulative = next;
+            }
+            float selectedWeight = childWeights[selected];
+            if (!SimpleDdgiGuidingFinite(selectedWeight) || selectedWeight <= 0.0)
+            {
+                // Preserve the CPU-oracle zero-sibling behavior at a rare
+                // floating-point endpoint: choose the final positive child
+                // and recompute its prefix before deriving the next variate.
+                bool foundPositive = false;
+                for (uint candidate = 0u; candidate < 4u; ++candidate)
+                {
+                    if (childWeights[candidate] > 0.0)
+                    {
+                        selected = candidate;
+                        selectedWeight = childWeights[candidate];
+                        foundPositive = true;
+                    }
+                }
+                if (!foundPositive)
+                    return false;
+                cumulative = 0.0;
+                for (uint candidate = 0u; candidate < selected; ++candidate)
+                    cumulative += childWeights[candidate];
+            }
+            leafProbability *= selectedWeight / sum;
+            remaining = clamp((target - cumulative) / selectedWeight,
+                0.0, 0.99999994);
+        }
+
+        x = x * 2u + (selected & 1u);
+        y = y * 2u + (selected >> 1u);
+    }
+
+    leafIndex = y * leafResolution + x;
+    float leafSolidAngle = 4.0 * SIMPLE_DDGI_GUIDING_PI /
+        float(leafResolution * leafResolution);
+    guidedPdf = leafProbability / leafSolidAngle;
+    return SimpleDdgiGuidingFinite(guidedPdf) && guidedPdf > 0.0;
+}
+
+// Evaluates the same quantized hierarchy used by sampling.  Even a ray that
+// selected the uniform mixture branch must use pMix(direction), not merely the
+// uniform branch PDF, in its estimator denominator.
+bool SimpleDdgiGuidingEvaluateGuidedPdf(
+    uint baseWord,
+    uint leafResolution,
+    uint leafIndex,
+    out float guidedPdf)
+{
+    uint leafX = leafIndex % leafResolution;
+    uint leafY = leafIndex / leafResolution;
+    float probability = 1.0;
+    for (uint parentSide = 1u;
+         parentSide < leafResolution;
+         parentSide <<= 1u)
+    {
+        uint childSide = parentSide << 1u;
+        uint childX = leafX / (leafResolution / childSide);
+        uint childY = leafY / (leafResolution / childSide);
+        uint parentX = childX >> 1u;
+        uint parentY = childY >> 1u;
+        uint firstChildX = parentX << 1u;
+        uint firstChildY = parentY << 1u;
+        float child0 = SimpleDdgiGuidingReadWeight(baseWord,
+            SimpleDdgiGuidingNodeIndex(leafResolution, childSide,
+                firstChildX, firstChildY));
+        float child1 = SimpleDdgiGuidingReadWeight(baseWord,
+            SimpleDdgiGuidingNodeIndex(leafResolution, childSide,
+                firstChildX + 1u, firstChildY));
+        float child2 = SimpleDdgiGuidingReadWeight(baseWord,
+            SimpleDdgiGuidingNodeIndex(leafResolution, childSide,
+                firstChildX, firstChildY + 1u));
+        float child3 = SimpleDdgiGuidingReadWeight(baseWord,
+            SimpleDdgiGuidingNodeIndex(leafResolution, childSide,
+                firstChildX + 1u, firstChildY + 1u));
+        float sum = child0 + child1 + child2 + child3;
+        if (!SimpleDdgiGuidingFinite(sum) || sum < 0.0)
+            return false;
+        if (sum <= 0.0)
+        {
+            probability *= 0.25;
+            continue;
+        }
+        float selected = SimpleDdgiGuidingReadWeight(baseWord,
+            SimpleDdgiGuidingNodeIndex(leafResolution, childSide,
+                childX, childY));
+        if (!SimpleDdgiGuidingFinite(selected) || selected < 0.0)
+            return false;
+        probability *= selected / sum;
+    }
+
+    float leafSolidAngle = 4.0 * SIMPLE_DDGI_GUIDING_PI /
+        float(leafResolution * leafResolution);
+    guidedPdf = probability / leafSolidAngle;
+    return SimpleDdgiGuidingFinite(guidedPdf) && guidedPdf > 0.0;
+}
+
+void SimpleDdgiGuidingWriteInvalidPayload(
+    uint payloadIndex,
+    SimpleDdgiGuidingSampleRequest request)
+{
+    SimpleDdgiGuidingSamplePayload payload;
+    payload.abiVersion = SIMPLE_DDGI_GUIDING_ABI_VERSION;
+    payload.stableProbeIdLow = request.stableProbeIdLow;
+    payload.stableProbeIdHigh = request.stableProbeIdHigh;
+    payload.physicalProbeIndex = request.physicalProbeIndex;
+    payload.virtualProbeId = request.virtualProbeId;
+    payload.pageGeneration = request.pageGeneration;
+    payload.distributionGeneration = 0u;
+    payload.directionProposalEpoch = 0u;
+    payload.slotIndex = request.slotIndex;
+    payload.techniqueAndBranch =
+        SimpleDdgiGuidingPackTechniqueAndBranch(request.technique,
+            SIMPLE_DDGI_GUIDING_BRANCH_UNIFORM);
+    payload.leafIndex = 0u;
+    payload.intraLeafSampleBits = 0u;
+    payload.packedDirectionOct32 = 0u;
+    payload.generationTimePdfBits = 0u;
+    payload.flags = SIMPLE_DDGI_GUIDING_SAMPLE_INVALID_DISTRIBUTION;
+    payload.reserved = 0u;
+    guidingSamplePayloads.payloads[payloadIndex] = payload;
+}
+
+bool SimpleDdgiGuidingResolvePayloadIndex(
+    SimpleDdgiGuidingSampleRequest request,
+    out uint payloadIndex)
+{
+    payloadIndex = 0u;
+    uint slotsPerProbe = guidingPc.reserved;
+    if (slotsPerProbe == 0u || request.slotIndex >= slotsPerProbe ||
+        request.physicalProbeIndex >= guidingPc.physicalProbeCapacity ||
+        request.physicalProbeIndex > 0xffffffffu / slotsPerProbe)
+    {
+        return false;
+    }
+    uint probeBase = request.physicalProbeIndex * slotsPerProbe;
+    if (request.slotIndex > 0xffffffffu - probeBase)
+        return false;
+    payloadIndex = probeBase + request.slotIndex;
+    return payloadIndex < uint(guidingSamplePayloads.payloads.length());
+}
+
+void SimpleDdgiGuidingRecordSampleTelemetry(
+    float generationTimePdf,
+    uint technique,
+    uint branch,
+    bool uniformFallback)
+{
+    float inversePdf = 1.0 / generationTimePdf;
+    // Both values are finite and strictly positive at this point. IEEE-754
+    // positive-float bit ordering is monotonic, so integer atomicMax preserves
+    // the exact observed extrema without requiring float atomics.
+    atomicMax(guidingSampleCounters.counters[
+        SIMPLE_DDGI_GUIDING_COUNTER_MAXIMUM_INVERSE_PDF_BITS],
+        floatBitsToUint(inversePdf));
+    atomicMax(guidingSampleCounters.counters[
+        SIMPLE_DDGI_GUIDING_COUNTER_MAXIMUM_PDF_BITS],
+        floatBitsToUint(generationTimePdf));
+
+    int exponent = int(floor(log2(inversePdf)));
+    uint histogramBin = uint(clamp(exponent + 8, 0, 15));
+    atomicAdd(guidingSampleCounters.counters[
+        SIMPLE_DDGI_GUIDING_COUNTER_INVERSE_PDF_HISTOGRAM_BASE +
+            histogramBin], 1u);
+    atomicAdd(guidingSampleCounters.counters[
+        SIMPLE_DDGI_GUIDING_COUNTER_VALID_SAMPLES], 1u);
+    if (technique == SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE)
+    {
+        atomicAdd(guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_MAINTENANCE_SAMPLES], 1u);
+    }
+    else if (branch == SIMPLE_DDGI_GUIDING_BRANCH_UNIFORM)
+    {
+        atomicAdd(guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_MIXTURE_UNIFORM_SAMPLES], 1u);
+    }
+    else
+    {
+        atomicAdd(guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_MIXTURE_GUIDED_SAMPLES], 1u);
+    }
+    if (uniformFallback)
+    {
+        atomicAdd(guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_UNIFORM_FALLBACK_SAMPLES], 1u);
+    }
+}
+
+void main()
+{
+    uint requestIndex = gl_GlobalInvocationID.x;
+    if (uint(guidingSampleCounters.counters.length()) <
+            SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT ||
+        requestIndex >= guidingPc.dispatchCount ||
+        requestIndex >= uint(guidingSampleRequests.requests.length()))
+    {
+        return;
+    }
+
+    SimpleDdgiGuidingSampleRequest request =
+        guidingSampleRequests.requests[requestIndex];
+    uint payloadIndex;
+    if (!SimpleDdgiGuidingResolvePayloadIndex(request, payloadIndex))
+    {
+        atomicAdd(guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+        return;
+    }
+    bool safePhysicalProbeIndex = request.physicalProbeIndex <
+            guidingPc.physicalProbeCapacity &&
+        guidingPc.bankStrideWords != 0u &&
+        request.physicalProbeIndex <= 0xffffffffu / guidingPc.bankStrideWords;
+    bool baseValid = guidingPc.abiVersion == SIMPLE_DDGI_GUIDING_ABI_VERSION &&
+        safePhysicalProbeIndex &&
+        request.technique <= SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE &&
+        guidingPc.bankStrideWords >= SIMPLE_DDGI_GUIDING_HEADER_WORDS &&
+        SimpleDdgiGuidingSupportedLeafResolution(guidingPc.leafResolution) &&
+        guidingPc.hierarchyWeightCount ==
+            SimpleDdgiGuidingHierarchyWeightCount(guidingPc.leafResolution);
+    uint expectedTechnique = SimpleDdgiGuidingIsMaintenanceSlot(
+            request.slotIndex,
+            guidingPc.reserved)
+        ? SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE
+        : SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE;
+    baseValid = baseValid && request.technique == expectedTechnique;
+    uint baseWord = baseValid
+        ? SimpleDdgiGuidingBankBaseWord(request.physicalProbeIndex)
+        : 0u;
+    baseValid = baseValid && baseWord <= uint(guidingSampleReadBank.words.length()) &&
+        guidingPc.bankStrideWords <=
+            uint(guidingSampleReadBank.words.length()) - baseWord;
+    if (!baseValid)
+    {
+        SimpleDdgiGuidingWriteInvalidPayload(payloadIndex, request);
+        atomicAdd(guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_INVALID_HEADERS], 1u);
+        return;
+    }
+
+    SimpleDdgiGuidingDistributionHeader header =
+        SimpleDdgiGuidingReadHeader(baseWord);
+    if (!SimpleDdgiGuidingHeaderIsCompatible(header, request))
+    {
+        SimpleDdgiGuidingWriteInvalidPayload(payloadIndex, request);
+        atomicAdd(guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_INVALID_HEADERS], 1u);
+        return;
+    }
+
+    float alpha = clamp(request.requestedUniformFraction,
+        SIMPLE_DDGI_GUIDING_MINIMUM_UNIFORM_FRACTION, 1.0);
+    float branchRandom = SimpleDdgiGuidingUnitOpen(request.randomBranchBits);
+    uint branch = request.technique == SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE ||
+        branchRandom < alpha
+        ? SIMPLE_DDGI_GUIDING_BRANCH_UNIFORM
+        : SIMPLE_DDGI_GUIDING_BRANCH_GUIDED;
+    uint leafResolution = SimpleDdgiGuidingLeafResolution(header);
+    uint leafIndex;
+    float guidedPdf = SIMPLE_DDGI_GUIDING_UNIFORM_SPHERE_PDF;
+    float intraU = SimpleDdgiGuidingUnitOpen(request.randomIntraLeafUBits);
+    float intraV = SimpleDdgiGuidingUnitOpen(request.randomIntraLeafVBits);
+
+    if (branch == SIMPLE_DDGI_GUIDING_BRANCH_GUIDED)
+    {
+        float hierarchyRandom = SimpleDdgiGuidingUnitOpen(
+            SimpleDdgiGuidingHash3(request.randomBranchBits,
+                request.slotIndex, request.stableProbeIdLow));
+        if (!SimpleDdgiGuidingSampleGuidedLeaf(baseWord, leafResolution,
+                hierarchyRandom, leafIndex, guidedPdf))
+        {
+            SimpleDdgiGuidingWriteInvalidPayload(payloadIndex, request);
+            atomicAdd(guidingSampleCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_PDFS], 1u);
+            return;
+        }
+    }
+    else
+    {
+        float squareU = SimpleDdgiGuidingUnitOpen(
+            SimpleDdgiGuidingHash3(request.randomBranchBits,
+                request.slotIndex, request.stableProbeIdHigh));
+        float squareV = SimpleDdgiGuidingUnitOpen(request.randomIntraLeafUBits);
+        uint leafX = min(leafResolution - 1u,
+            uint(floor(squareU * float(leafResolution))));
+        uint leafY = min(leafResolution - 1u,
+            uint(floor(squareV * float(leafResolution))));
+        leafIndex = leafY * leafResolution + leafX;
+        intraU = fract(squareU * float(leafResolution));
+        intraV = fract(squareV * float(leafResolution));
+        if (!SimpleDdgiGuidingEvaluateGuidedPdf(baseWord, leafResolution,
+                leafIndex, guidedPdf))
+        {
+            SimpleDdgiGuidingWriteInvalidPayload(payloadIndex, request);
+            atomicAdd(guidingSampleCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_PDFS], 1u);
+            return;
+        }
+    }
+
+    uint intraLeafBits = SimpleDdgiGuidingPackIntraLeaf(intraU, intraV);
+    vec2 quantizedIntra = SimpleDdgiGuidingUnpackIntraLeaf(intraLeafBits);
+    uint leafX = leafIndex % leafResolution;
+    uint leafY = leafIndex / leafResolution;
+    vec3 direction = SimpleDdgiGuidingDirectionFromSquare(
+        (float(leafX) + quantizedIntra.x) / float(leafResolution),
+        (float(leafY) + quantizedIntra.y) / float(leafResolution));
+    // Store pMix(direction) for every radiometric technique. Maintenance
+    // samples are drawn from pUniform, but the balance-heuristic denominator
+    // also needs the other technique's pMix value at that same direction.
+    // The technique field identifies the sample's own proposal density.
+    float generationTimePdf =
+        alpha * SIMPLE_DDGI_GUIDING_UNIFORM_SPHERE_PDF +
+        (1.0 - alpha) * guidedPdf;
+    if (!SimpleDdgiGuidingFinite(generationTimePdf) || generationTimePdf <= 0.0)
+    {
+        SimpleDdgiGuidingWriteInvalidPayload(payloadIndex, request);
+        atomicAdd(guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_INVALID_PDFS], 1u);
+        return;
+    }
+
+    SimpleDdgiGuidingSamplePayload payload;
+    payload.abiVersion = SIMPLE_DDGI_GUIDING_ABI_VERSION;
+    payload.stableProbeIdLow = request.stableProbeIdLow;
+    payload.stableProbeIdHigh = request.stableProbeIdHigh;
+    payload.physicalProbeIndex = request.physicalProbeIndex;
+    payload.virtualProbeId = request.virtualProbeId;
+    payload.pageGeneration = request.pageGeneration;
+    payload.distributionGeneration = header.distributionGeneration;
+    payload.directionProposalEpoch = header.directionProposalEpoch;
+    payload.slotIndex = request.slotIndex;
+    payload.techniqueAndBranch = SimpleDdgiGuidingPackTechniqueAndBranch(
+        request.technique, branch);
+    payload.leafIndex = leafIndex;
+    payload.intraLeafSampleBits = intraLeafBits;
+    payload.packedDirectionOct32 = SimpleDdgiGuidingPackOctahedralSnorm16(direction);
+    payload.generationTimePdfBits = floatBitsToUint(generationTimePdf);
+    payload.flags = request.technique == SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE
+        ? SIMPLE_DDGI_GUIDING_SAMPLE_UNIFORM_MAINTENANCE
+        : branch == SIMPLE_DDGI_GUIDING_BRANCH_UNIFORM
+            ? SIMPLE_DDGI_GUIDING_SAMPLE_MIXTURE_UNIFORM_BRANCH
+            : SIMPLE_DDGI_GUIDING_SAMPLE_MIXTURE_GUIDED_BRANCH;
+    bool uniformFallback = (SimpleDdgiGuidingHeaderFlags(header) &
+        SIMPLE_DDGI_GUIDING_DISTRIBUTION_UNIFORM_FALLBACK) != 0u;
+    if (uniformFallback)
+    {
+        payload.flags |= SIMPLE_DDGI_GUIDING_SAMPLE_UNIFORM_FALLBACK;
+    }
+    payload.reserved = 0u;
+    guidingSamplePayloads.payloads[payloadIndex] = payload;
+    SimpleDdgiGuidingRecordSampleTelemetry(
+        generationTimePdf,
+        request.technique,
+        branch,
+        uniformFallback);
+}

@@ -21,7 +21,7 @@ public sealed class SimpleDdgiStorageLayoutTests
 
         Assert.Multiple(() =>
         {
-            Assert.That((uint)SimpleDdgiStorageAbiVersion.Packed, Is.EqualTo(6u));
+            Assert.That((uint)SimpleDdgiStorageAbiVersion.Packed, Is.EqualTo(7u));
             Assert.That(layout.AbiVersion, Is.EqualTo(SimpleDdgiStorageAbiVersion.Packed));
             Assert.That(layout.Regions[0].Format, Is.EqualTo(SimpleDdgiTransportCacheFormat.Compact24));
             Assert.That(layout.Regions[0].BaseWord, Is.Zero);

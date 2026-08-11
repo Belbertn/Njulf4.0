@@ -1,0 +1,14 @@
+# Target labels
+ dxc-populate
+# Source files and their labels
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/dxc-populate
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/dd56791b70f43a0bf2d8388703ca3e6b/dxc-populate.rule
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/dd0ff07eed81612cd90d81d79147007c/dxc-populate-complete.rule
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/54b709e5afa2b560320c3016e135cd93/dxc-populate-build.rule
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/54b709e5afa2b560320c3016e135cd93/dxc-populate-configure.rule
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/54b709e5afa2b560320c3016e135cd93/dxc-populate-download.rule
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/54b709e5afa2b560320c3016e135cd93/dxc-populate-install.rule
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/54b709e5afa2b560320c3016e135cd93/dxc-populate-mkdir.rule
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/54b709e5afa2b560320c3016e135cd93/dxc-populate-patch.rule
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/54b709e5afa2b560320c3016e135cd93/dxc-populate-test.rule
+D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/_deps/dxc-subbuild/CMakeFiles/54b709e5afa2b560320c3016e135cd93/dxc-populate-update.rule

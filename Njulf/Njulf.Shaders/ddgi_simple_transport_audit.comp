@@ -114,7 +114,6 @@ const uint SIMPLE_DDGI_AUDIT_CACHE_FAILURE_CARDINALITY = 1u << 1u;
 const uint SIMPLE_DDGI_AUDIT_CACHE_FAILURE_SOURCE_GENERATION = 1u << 2u;
 const uint SIMPLE_DDGI_AUDIT_CACHE_FAILURE_SOURCE_EPOCH = 1u << 3u;
 const uint SIMPLE_DDGI_AUDIT_CACHE_FAILURE_PHYSICAL_GENERATION = 1u << 4u;
-const uint SIMPLE_DDGI_AUDIT_PROBE_STATE_WORDS = 11u;
 const uint SIMPLE_DDGI_AUDIT_STATUS_VALID = 1u;
 const uint SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_INACTIVE = 2u;
 const uint SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_NOT_VISIBLE = 3u;
@@ -376,7 +375,7 @@ uint ResolveSimpleDdgiAuditProbe(
         paging,
         SimpleDdgiProbeCoord(context.localProbeIndex, context.volume));
     uint schedulerStateBase = pc.AuditSchedulerProbeStateOffsetWords +
-        probeIndex * SIMPLE_DDGI_AUDIT_PROBE_STATE_WORDS;
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
     uint sourceLightingGeneration = ReadStorageWordUniform(
         pc.SchedulerArenaBufferIndex,
         schedulerStateBase + 2u);
@@ -485,7 +484,7 @@ uint ResolveSimpleDdgiAuditRayProbe(
         return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_INACTIVE;
     }
     uint schedulerStateBase = pc.AuditSchedulerProbeStateOffsetWords +
-        probeIndex * SIMPLE_DDGI_AUDIT_PROBE_STATE_WORDS;
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
     uint sourceLightingGeneration = ReadStorageWordUniform(
         pc.SchedulerArenaBufferIndex,
         schedulerStateBase + 2u);
@@ -705,7 +704,10 @@ void SimpleDdgiAuditRunRayPhase()
     uint generationAndFlags = addressValid && sourceStride != 0u
         ? ReadStorageWordUniform(
             auditParams.transportSourceCacheBufferIndex,
-            sourceBase + sourceStride - 1u)
+            SimpleDdgiStorageGenerationWord(
+                sourceBase,
+                sourceFormat,
+                context.volume.cacheLayoutFlags))
         : 0u;
     uint failureMask = !addressValid || sourceStride == 0u ||
             !SimpleDdgiTransportCacheHitKindIsValid(generationAndFlags)

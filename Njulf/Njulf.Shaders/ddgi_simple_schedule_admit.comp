@@ -633,11 +633,14 @@ void main()
                         bool laneSourceWork =
                             transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
                             transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+                        bool laneCanContainZeroPrimaryRelight =
+                            SchedulerSourceModeUsesRadiometricRelight(
+                                SchedulerSourceRefreshMode());
                         uint laneRequiredSourceRayCount = clamp(
                             SchedulerVolumeFullRays(volumeIndex),
                             1u,
                             SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
-                        if (laneSourceWork &&
+                        if (laneSourceWork && !laneCanContainZeroPrimaryRelight &&
                             (primaryBudget == 0u ||
                                 laneRequiredSourceRayCount >
                                     primaryBudget - min(primaryUsed, primaryBudget)))
@@ -753,6 +756,9 @@ void main()
 
                             bool sourceWork = candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
                                 candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+                            bool sourceUsesPrimaryRays = sourceWork &&
+                                !SchedulerCandidateUsesRadiometricRelight(
+                                    candidateReasons);
                             uint requiredSourceRayCount = clamp(
                                 SchedulerVolumeFullRays(volumeIndex),
                                 1u,
@@ -780,7 +786,7 @@ void main()
                             // entries behind while publishing a current epoch.
                             if (SchedulerTransportV2() || sourceWork)
                                 activeRayCount = requiredSourceRayCount;
-                            if (sourceWork && (primaryBudget == 0u ||
+                            if (sourceUsesPrimaryRays && (primaryBudget == 0u ||
                                 activeRayCount > primaryBudget - min(primaryUsed, primaryBudget)))
                             {
                                 // Source ray cost is invariant within this lane.
@@ -821,7 +827,8 @@ void main()
                             transportUsed += activeRayCount;
                             if (sourceWork)
                             {
-                                primaryUsed += activeRayCount;
+                                if (sourceUsesPrimaryRays)
+                                    primaryUsed += activeRayCount;
                                 sourceUsed += sourceRayCount;
                                 sourceVolumeUsage[volumeIndex] += sourceRayCount;
                                 sourceProbeUsed++;

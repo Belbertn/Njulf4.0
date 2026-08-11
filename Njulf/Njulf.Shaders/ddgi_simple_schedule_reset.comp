@@ -45,7 +45,12 @@ void main()
             SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + i, 0u);
         }
     }
-    for (uint i = localIndex; i < SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS; i += 64u)
+    // Preserve the frame-stamped urgent summary and the host-controlled urgent
+    // budget. The pre-forward pass owns both words and clears the control word
+    // before the ordinary post-forward schedule begins.
+    for (uint i = localIndex;
+         i < SIMPLE_DDGI_SCHEDULER_TRANSIENT_COUNTER_WORDS;
+         i += 64u)
         SchedulerArenaWrite(pc.CountersOffsetWords + i, 0u);
     uint feedbackClearEnd = certifiedQuiesced
         ? 64u

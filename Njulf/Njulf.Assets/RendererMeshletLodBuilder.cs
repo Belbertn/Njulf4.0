@@ -49,6 +49,7 @@ public sealed class RendererMeshletLodBuilder
         var indexCounts = new List<int>(3);
         var simplificationErrors = new List<float>(3);
         uint[] previous = indices;
+        float previousError = 0f;
         bool canSimplify = indices.Length / 3 > MinimumTriangleCountForSimplification;
 
         for (int level = 0; level < 3; level++)
@@ -62,9 +63,22 @@ public sealed class RendererMeshletLodBuilder
             else if (canSimplify)
             {
                 int target = Math.Max(3, (int)Math.Floor(indices.Length * Ratios[level] / 3f) * 3);
-                lodIndices = MeshOptimizerCodec.Simplify(indices, vertices, target, Errors[level], out resultError);
+                lodIndices = MeshOptimizerCodec.Simplify(
+                    indices,
+                    vertices,
+                    target,
+                    Errors[level],
+                    MeshOptimizerSimplificationOptions.LockBorder,
+                    out resultError);
                 if (lodIndices.Length >= previous.Length)
-                    lodIndices = DeterministicTriangleFallback(previous, target);
+                {
+                    // A simplifier is allowed to stop before its requested target when
+                    // topology or the error budget prevents another safe collapse. Never
+                    // manufacture a lower LOD by sampling arbitrary triangles: that opens
+                    // literal holes in closed meshes and along independently cooked parts.
+                    lodIndices = previous;
+                    resultError = previousError;
+                }
             }
             else
             {
@@ -91,25 +105,11 @@ public sealed class RendererMeshletLodBuilder
             indexCounts.Add(lodIndices.Length);
             simplificationErrors.Add(resultError);
             previous = lodIndices;
+            previousError = resultError;
         }
 
         ValidateProgression(ranges, indexCounts, meshlets.Count);
         return new RendererMeshletLodBuild(meshlets.ToArray(), meshletVertices.ToArray(), meshletTriangles.ToArray(), ranges, indexCounts, simplificationErrors);
-    }
-
-    private static uint[] DeterministicTriangleFallback(ReadOnlySpan<uint> source, int targetCount)
-    {
-        int targetTriangles = Math.Max(1, Math.Min(source.Length / 3 - 1, targetCount / 3));
-        if (targetTriangles >= source.Length / 3)
-            return source.ToArray();
-        var result = new uint[targetTriangles * 3];
-        int sourceTriangles = source.Length / 3;
-        for (int i = 0; i < targetTriangles; i++)
-        {
-            int triangle = (int)((long)i * sourceTriangles / targetTriangles);
-            source.Slice(triangle * 3, 3).CopyTo(result.AsSpan(i * 3, 3));
-        }
-        return result;
     }
 
     private static void ValidateProgression(IReadOnlyList<ProcessedMeshLodRange> ranges, IReadOnlyList<int> indexCounts, int meshletCount)
@@ -121,10 +121,8 @@ public sealed class RendererMeshletLodBuilder
             ProcessedMeshLodRange range = ranges[i];
             if (range.Level != i || range.MeshletCount <= 0 || range.FirstMeshlet < 0 || range.FirstMeshlet + range.MeshletCount > meshletCount)
                 throw new InvalidOperationException($"Generated meshlet LOD{i} range is invalid.");
-            if (i > 0 &&
-                indexCounts[i] >= indexCounts[i - 1] &&
-                indexCounts[0] / 3 > MinimumTriangleCountForSimplification)
-                throw new InvalidOperationException($"Generated meshlet LOD{i} did not reduce triangle work.");
+            if (i > 0 && indexCounts[i] > indexCounts[i - 1])
+                throw new InvalidOperationException($"Generated meshlet LOD{i} increased triangle work.");
         }
     }
 }

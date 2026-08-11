@@ -1,0 +1,14 @@
+[2026-08-09 11:19:59.635] [00002548] === Logging started ===
+[2026-08-09 11:19:59.641] [00002548] Executing: "C:\Program Files\dotnet\dotnet.exe" test Njulf.Tests\Njulf.Tests.csproj --no-restore --filter FullyQualifiedName~AssetArtifactFileIoTests.TextureCooker_RejectsOversizedFileSourceBeforeAllocation, PID: 9544, PPID: 25128
+[2026-08-09 11:19:59.644] [00002548] IsElevated: False
+[2026-08-09 11:19:59.644] [00002548] Is64BitProcess: True
+[2026-08-09 11:19:59.644] [00002548] RebootPending: False
+[2026-08-09 11:19:59.644] [00002548] ProcessorArchitecture: amd64
+[2026-08-09 11:19:59.644] [00002548] HostArchitecture: x64
+[2026-08-09 11:19:59.644] [00002548] SdkDirectory: 10.0.203
+[2026-08-09 11:19:59.644] [00002548] VerifySignatures: False
+[2026-08-09 11:19:59.644] [00002548] SDK feature band: 10.0.200
+[2026-08-09 11:20:04.123] [00002548] Shutting down
+[2026-08-09 11:20:04.123] [00002548] Shutdown completed.
+[2026-08-09 11:20:04.123] [00002548] Restart required: False
+[2026-08-09 11:20:04.124] [00002548] === Logging ended ===

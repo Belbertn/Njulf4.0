@@ -1,0 +1,55 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+#include "ddgi_receiver_feedback_abi.glsl"
+
+// One workgroup owns 256 input items. Histograms are written into the admitted
+// scratch partition; no global per-probe accumulation occurs in this stage.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+shared uint radixHistogram[SIMPLE_DDGI_RECEIVER_FEEDBACK_RADIX_BIN_COUNT];
+
+void main()
+{
+    if (receiverFeedbackPc.operation !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_OPERATION_RADIX_HISTOGRAM ||
+        !SimpleDdgiReceiverFeedbackRadixConfigurationIsValid())
+    {
+        return;
+    }
+
+    uint inputCount = SimpleDdgiReceiverFeedbackInputCount();
+    if (inputCount > SimpleDdgiReceiverFeedbackInputCapacity())
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    uint groupIndex = gl_WorkGroupID.x;
+    uint maximumGroups = SimpleDdgiReceiverFeedbackDivideRoundUp(
+        receiverFeedbackPc.recordCapacity,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE);
+    if (groupIndex >= maximumGroups)
+        return;
+
+    uint lane = gl_LocalInvocationIndex;
+    radixHistogram[lane] = 0u;
+    barrier();
+
+    uint itemIndex = groupIndex *
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE + lane;
+    if (itemIndex < inputCount)
+    {
+        uint digit = SimpleDdgiReceiverFeedbackRadixKey(itemIndex);
+        atomicAdd(radixHistogram[digit], 1u);
+    }
+    barrier();
+
+    WriteStorageWordUniform(SimpleDdgiReceiverFeedbackScratchBuffer(),
+        SimpleDdgiReceiverFeedbackRadixPrefixOffsetWords() +
+            groupIndex * SIMPLE_DDGI_RECEIVER_FEEDBACK_RADIX_BIN_COUNT + lane,
+        radixHistogram[lane]);
+}

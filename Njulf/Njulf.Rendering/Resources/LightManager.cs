@@ -68,7 +68,10 @@ namespace Njulf.Rendering.Resources
             int localLightCount,
             int firstShadowCastingDirectionalLightIndex,
             Light firstShadowCastingDirectionalLight,
-            ulong revision)
+            ulong revision,
+            ulong topologyRevision = 0,
+            ulong contentRevision = 0,
+            ReadOnlyMemory<uint> stableIdentities = default)
         {
             Lights = lights;
             Count = count;
@@ -77,6 +80,9 @@ namespace Njulf.Rendering.Resources
             FirstShadowCastingDirectionalLightIndex = firstShadowCastingDirectionalLightIndex;
             FirstShadowCastingDirectionalLight = firstShadowCastingDirectionalLight;
             Revision = revision;
+            TopologyRevision = topologyRevision;
+            ContentRevision = contentRevision;
+            StableIdentities = stableIdentities;
         }
 
         public ReadOnlyMemory<Light> Lights { get; }
@@ -86,13 +92,34 @@ namespace Njulf.Rendering.Resources
         public bool HasShadowCastingDirectionalLight => FirstShadowCastingDirectionalLightIndex >= 0;
         public int FirstShadowCastingDirectionalLightIndex { get; }
         public Light FirstShadowCastingDirectionalLight { get; }
+        /// <summary>Revision of packed GPU-light data.</summary>
         public ulong Revision { get; }
+        public ulong TopologyRevision { get; }
+        public ulong ContentRevision { get; }
+        public ReadOnlyMemory<uint> StableIdentities { get; }
     }
 
     /// <summary>Stable CPU-side light record for editor and scene-source bridges.</summary>
     public readonly record struct LightRecord(LightHandle Handle, Guid Id, string? Name, Light Light);
+
+    public enum LightMutationKind
+    {
+        Added,
+        Updated,
+        Removed,
+        Cleared
+    }
+
+    /// <summary>Producer-side light edit used by regional GI invalidation.</summary>
+    public readonly record struct LightMutation(
+        ulong Revision,
+        LightMutationKind Kind,
+        LightHandle Handle,
+        Guid Id,
+        Light? Previous,
+        Light? Current);
     
-    public sealed unsafe class LightManager : IDisposable
+    public sealed unsafe class LightManager : IDisposable, IDdgiLightMutationSource
     {
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -109,18 +136,27 @@ namespace Njulf.Rendering.Resources
         private readonly Dictionary<Guid, int> _slotsById = new();
         private readonly Stack<int> _freeSlots = new();
         private Light[] _snapshotLights = Array.Empty<Light>();
+        private uint[] _snapshotStableIdentities = Array.Empty<uint>();
         private GPULight[] _gpuLightScratch = Array.Empty<GPULight>();
         private LightFrameSnapshot _cachedSnapshot;
         private ulong _revision;
+        private ulong _topologyRevision;
+        private ulong _contentRevision;
         private ulong _snapshotRevision = ulong.MaxValue;
         private int _lightCount;
         private bool _needsUpload;
         private ulong _lastUploadBytes;
         private bool _disposed;
+
+        public event Action<LightMutation>? Changed;
         
         public const int MaxLights = 1024;
         private static readonly ulong LightStride = (ulong)Marshal.SizeOf<GPULight>();
-        private static readonly ulong LightBufferSize = checked((ulong)MaxLights * (ulong)Marshal.SizeOf<GPULight>());
+        public static readonly ulong LightBufferStateOffset =
+            checked((ulong)MaxLights * LightStride);
+        private static readonly ulong LightBufferSize = checked(
+            LightBufferStateOffset +
+            (ulong)Marshal.SizeOf<GPUDdgiLightBufferState>());
         
         public LightManager(VulkanContext context, BufferManager bufferManager)
         {
@@ -149,67 +185,133 @@ namespace Njulf.Rendering.Resources
         
         public int AddLight(Light light)
         {
+            (int index, LightHandle handle) added;
+            Guid id;
+            ulong revision;
             lock (_lock)
             {
-                return AddLightUnsafe(light, name: null, id: null).index;
+                added = AddLightUnsafe(light, name: null, id: null);
+                id = _slotIds[added.handle.Slot];
+                revision = _revision;
             }
+            PublishMutation(new LightMutation(
+                revision,
+                LightMutationKind.Added,
+                added.handle,
+                id,
+                null,
+                light));
+            return added.index;
         }
 
         /// <summary>Adds a light and returns a stable handle safe across packed-array swap-removals.</summary>
         public LightHandle AddLightHandle(in Light light, string? name = null, Guid? id = null)
         {
+            (int index, LightHandle handle) added;
+            Guid stableId;
+            ulong revision;
             lock (_lock)
-                return AddLightUnsafe(light, name, id).handle;
+            {
+                added = AddLightUnsafe(light, name, id);
+                stableId = _slotIds[added.handle.Slot];
+                revision = _revision;
+            }
+            PublishMutation(new LightMutation(
+                revision,
+                LightMutationKind.Added,
+                added.handle,
+                stableId,
+                null,
+                light));
+            return added.handle;
         }
         
         public void RemoveLight(int index)
         {
+            LightMutation? mutation = null;
             lock (_lock)
             {
                 if (index < 0 || index >= _lightCount)
                     return;
 
+                mutation = CreateRemovalMutationUnsafe(index);
                 RemoveAtIndexUnsafe(index);
+                mutation = mutation.Value with { Revision = _revision };
             }
+            PublishMutation(mutation.Value);
         }
         
         public void UpdateLight(int index, Light light)
         {
+            LightMutation? mutation = null;
             lock (_lock)
             {
                 if (index < 0 || index >= _lightCount)
                     return;
-                
+                Light previous = _cpuLights[index];
+                if (previous.Equals(light))
+                    return;
                 _cpuLights[index] = light;
                 _needsUpload = true;
                 _revision++;
+                int slot = _indexToSlot[index];
+                _contentRevision++;
+                if (HasLocalTreeMembership(previous) != HasLocalTreeMembership(light))
+                    _topologyRevision++;
+                mutation = new LightMutation(
+                    _revision,
+                    LightMutationKind.Updated,
+                    new LightHandle(slot, _slotGenerations[slot]),
+                    _slotIds[slot],
+                    previous,
+                    light);
             }
+            PublishMutation(mutation.Value);
         }
 
         public bool RemoveLight(LightHandle handle)
         {
+            LightMutation? mutation = null;
             lock (_lock)
             {
                 if (!TryResolveHandleUnsafe(handle, out int index))
                     return false;
 
+                mutation = CreateRemovalMutationUnsafe(index);
                 RemoveAtIndexUnsafe(index);
-                return true;
+                mutation = mutation.Value with { Revision = _revision };
             }
+            PublishMutation(mutation.Value);
+            return true;
         }
 
         public bool UpdateLight(LightHandle handle, in Light light)
         {
+            LightMutation? mutation = null;
             lock (_lock)
             {
                 if (!TryResolveHandleUnsafe(handle, out int index))
                     return false;
 
+                Light previous = _cpuLights[index];
+                if (previous.Equals(light))
+                    return true;
                 _cpuLights[index] = light;
                 _needsUpload = true;
                 _revision++;
-                return true;
+                _contentRevision++;
+                if (HasLocalTreeMembership(previous) != HasLocalTreeMembership(light))
+                    _topologyRevision++;
+                mutation = new LightMutation(
+                    _revision,
+                    LightMutationKind.Updated,
+                    handle,
+                    _slotIds[handle.Slot],
+                    previous,
+                    light);
             }
+            PublishMutation(mutation.Value);
+            return true;
         }
 
         public bool TryGetLight(LightHandle handle, out Light light)
@@ -304,10 +406,17 @@ namespace Njulf.Rendering.Resources
         
         public void ClearLights()
         {
+            bool changed;
+            ulong revision;
             lock (_lock)
             {
+                changed = _lightCount != 0;
+                if (!changed)
+                    return;
+                bool hadLocalTreeMembership = false;
                 for (int index = 0; index < _lightCount; index++)
                 {
+                    hadLocalTreeMembership |= HasLocalTreeMembership(_cpuLights[index]);
                     int slot = _indexToSlot[index];
                     ReleaseSlotUnsafe(slot);
                     _indexToSlot[index] = -1;
@@ -315,6 +424,20 @@ namespace Njulf.Rendering.Resources
                 _lightCount = 0;
                 _needsUpload = true;
                 _revision++;
+                _contentRevision++;
+                if (hadLocalTreeMembership)
+                    _topologyRevision++;
+                revision = _revision;
+            }
+            if (changed)
+            {
+                PublishMutation(new LightMutation(
+                    revision,
+                    LightMutationKind.Cleared,
+                    default,
+                    Guid.Empty,
+                    null,
+                    null));
             }
         }
         
@@ -322,6 +445,30 @@ namespace Njulf.Rendering.Resources
         public ulong LightBufferAllocatedBytes => LightBufferSize;
         public int LightCount => _lightCount;
         public int MaxLightCount => MaxLights;
+        public ulong LightBufferRevision
+        {
+            get
+            {
+                lock (_lock)
+                    return _revision;
+            }
+        }
+        public ulong LightTreeTopologyRevision
+        {
+            get
+            {
+                lock (_lock)
+                    return _topologyRevision;
+            }
+        }
+        public ulong LightTreeContentRevision
+        {
+            get
+            {
+                lock (_lock)
+                    return _contentRevision;
+            }
+        }
         public ulong LastUploadBytes
         {
             get
@@ -418,6 +565,11 @@ namespace Njulf.Rendering.Resources
 
                 if (_snapshotLights.Length < _lightCount)
                     _snapshotLights = new Light[Math.Min(MaxLights, Math.Max(16, _lightCount * 2))];
+                if (_snapshotStableIdentities.Length < _lightCount)
+                {
+                    _snapshotStableIdentities = new uint[
+                        Math.Min(MaxLights, Math.Max(16, _lightCount * 2))];
+                }
 
                 int directionalLightCount = 0;
                 int firstShadowCastingDirectionalIndex = -1;
@@ -426,6 +578,10 @@ namespace Njulf.Rendering.Resources
                 {
                     Light light = _cpuLights[i];
                     _snapshotLights[i] = light;
+                    int slot = _indexToSlot[i];
+                    _snapshotStableIdentities[i] = PackStableIdentity(
+                        slot,
+                        _slotGenerations[slot]);
                     if (light.Type != LightType.Directional)
                         continue;
 
@@ -444,7 +600,10 @@ namespace Njulf.Rendering.Resources
                     _lightCount - directionalLightCount,
                     firstShadowCastingDirectionalIndex,
                     firstShadowCastingDirectionalLight,
-                    _revision);
+                    _revision,
+                    _topologyRevision,
+                    _contentRevision,
+                    _snapshotStableIdentities.AsMemory(0, _lightCount));
                 _snapshotRevision = _revision;
                 return _cachedSnapshot;
             }
@@ -479,28 +638,67 @@ namespace Njulf.Rendering.Resources
             lock (_lock)
             {
                 _lastUploadBytes = 0;
-                if (_lightCount == 0)
+                int localLightCount = 0;
+                if (_lightCount > 0)
                 {
-                    _needsUpload = false;
-                    return;
+                    if (_gpuLightScratch.Length < _lightCount)
+                        Array.Resize(ref _gpuLightScratch, _lightCount);
+                    for (int i = 0; i < _lightCount; i++)
+                    {
+                        GPULight gpuLight = ToGpuLight(_cpuLights[i]);
+                        int slot = _indexToSlot[i];
+                        gpuLight.StableIdentity = unchecked((int)PackStableIdentity(
+                            slot,
+                            _slotGenerations[slot]));
+                        _gpuLightScratch[i] = gpuLight;
+                        if (_cpuLights[i].Type != LightType.Directional)
+                            localLightCount++;
+                    }
+
+                    _lastUploadBytes = GpuBufferUploader.UploadSpanToBuffer(
+                        _context,
+                        _bufferManager,
+                        stagingRing,
+                        commandBuffer,
+                        _lightBuffer,
+                        _gpuLightScratch.AsSpan(0, _lightCount),
+                        barrierDescription: new UploadBarrierDescription(
+                            PipelineStageFlags2.ComputeShaderBit |
+                                PipelineStageFlags2.FragmentShaderBit,
+                            AccessFlags2.ShaderStorageReadBit)).ByteCount;
                 }
 
-                if (_gpuLightScratch.Length < _lightCount)
-                    Array.Resize(ref _gpuLightScratch, _lightCount);
-                for (int i = 0; i < _lightCount; i++)
-                    _gpuLightScratch[i] = ToGpuLight(_cpuLights[i]);
-
-                ulong dataSize = GpuBufferUploader.UploadSpanToBuffer(
+                var state = new GPUDdgiLightBufferState
+                {
+                    Magic = GPUDdgiLightBufferState.MagicValue,
+                    LightBufferRevisionLow = (uint)_revision,
+                    LightBufferRevisionHigh = (uint)(_revision >> 32),
+                    TopologyRevisionLow = (uint)_topologyRevision,
+                    TopologyRevisionHigh = (uint)(_topologyRevision >> 32),
+                    ContentRevisionLow = (uint)_contentRevision,
+                    ContentRevisionHigh = (uint)(_contentRevision >> 32),
+                    LightCount = checked((uint)_lightCount),
+                    LocalLightCount = checked((uint)localLightCount),
+                    ValidationChecksum = GPUDdgiLightBufferState.ComputeChecksum(
+                        _revision,
+                        _topologyRevision,
+                        _contentRevision,
+                        checked((uint)_lightCount),
+                        checked((uint)localLightCount))
+                };
+                _lastUploadBytes = checked(
+                    _lastUploadBytes + GpuBufferUploader.UploadValueToBuffer(
                     _context,
                     _bufferManager,
                     stagingRing,
                     commandBuffer,
                     _lightBuffer,
-                    _gpuLightScratch.AsSpan(0, _lightCount),
+                    state,
+                    destinationOffset: LightBufferStateOffset,
                     barrierDescription: new UploadBarrierDescription(
-                        PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
-                        AccessFlags2.ShaderStorageReadBit)).ByteCount;
-                _lastUploadBytes = dataSize;
+                        PipelineStageFlags2.ComputeShaderBit |
+                            PipelineStageFlags2.FragmentShaderBit,
+                        AccessFlags2.ShaderStorageReadBit)).ByteCount);
                 _needsUpload = false;
             }
         }
@@ -570,6 +768,9 @@ namespace Njulf.Rendering.Resources
             _slotsById.Add(stableId, slot);
             _needsUpload = true;
             _revision++;
+            _contentRevision++;
+            if (HasLocalTreeMembership(light))
+                _topologyRevision++;
             return (index, new LightHandle(slot, _slotGenerations[slot]));
         }
 
@@ -587,6 +788,7 @@ namespace Njulf.Rendering.Resources
 
         private void RemoveAtIndexUnsafe(int index)
         {
+            bool removedLocalTreeMember = HasLocalTreeMembership(_cpuLights[index]);
             int removedSlot = _indexToSlot[index];
             int lastIndex = --_lightCount;
             if (index != lastIndex)
@@ -602,7 +804,25 @@ namespace Njulf.Rendering.Resources
             ReleaseSlotUnsafe(removedSlot);
             _needsUpload = true;
             _revision++;
+            _contentRevision++;
+            if (removedLocalTreeMember)
+                _topologyRevision++;
         }
+
+        private LightMutation CreateRemovalMutationUnsafe(int index)
+        {
+            int slot = _indexToSlot[index];
+            return new LightMutation(
+                _revision,
+                LightMutationKind.Removed,
+                new LightHandle(slot, _slotGenerations[slot]),
+                _slotIds[slot],
+                _cpuLights[index],
+                null);
+        }
+
+        private void PublishMutation(in LightMutation mutation) =>
+            Changed?.Invoke(mutation);
 
         private void ReleaseSlotUnsafe(int slot)
         {
@@ -613,6 +833,37 @@ namespace Njulf.Rendering.Resources
             _slotIds[slot] = Guid.Empty;
             _slotGenerations[slot] = _slotGenerations[slot] == int.MaxValue ? 1 : _slotGenerations[slot] + 1;
             _freeSlots.Push(slot);
+        }
+
+        internal static uint PackStableIdentity(int slot, int generation)
+        {
+            uint packedSlot = checked((uint)slot) & 0x3ffu;
+            uint packedGeneration = unchecked((uint)generation) & 0x003f_ffffu;
+            uint identity = (packedGeneration << 10) | packedSlot;
+            return identity == 0 ? 1u : identity;
+        }
+
+        private static bool HasLocalTreeMembership(in Light light)
+        {
+            if (light.Type == LightType.Directional ||
+                !float.IsFinite(light.Position.X) ||
+                !float.IsFinite(light.Position.Y) ||
+                !float.IsFinite(light.Position.Z) ||
+                !float.IsFinite(light.Intensity) ||
+                light.Intensity <= 0f ||
+                !float.IsFinite(light.Color.X) ||
+                !float.IsFinite(light.Color.Y) ||
+                !float.IsFinite(light.Color.Z))
+            {
+                return false;
+            }
+
+            float luminance =
+                MathF.Max(light.Color.X, 0f) * 0.2126f +
+                MathF.Max(light.Color.Y, 0f) * 0.7152f +
+                MathF.Max(light.Color.Z, 0f) * 0.0722f;
+            float flux = luminance * MathF.Max(light.Intensity, 0f);
+            return float.IsFinite(flux) && flux > 1e-20f;
         }
         
         public void Dispose()

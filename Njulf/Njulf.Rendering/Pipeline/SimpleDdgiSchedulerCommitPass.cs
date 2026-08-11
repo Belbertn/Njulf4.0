@@ -27,6 +27,7 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
 
     private readonly RenderSettings _settings;
     private readonly SimpleDdgiVolumeManager _volumeManager;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private nint _entryPointName;
     private readonly VkPipeline[] _pipelines = new VkPipeline[ShaderNames.Length];
     private PipelineLayout _pipelineLayout;
@@ -37,11 +38,13 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         SwapchainManager swapchain,
         BindlessHeap bindlessHeap,
         RenderSettings settings,
-        SimpleDdgiVolumeManager volumeManager)
+        SimpleDdgiVolumeManager volumeManager,
+        GiPipelineCacheService? pipelineCacheService = null)
         : base("SimpleDdgiSchedulerCommitPass", context, swapchain, bindlessHeap)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _volumeManager = volumeManager ?? throw new ArgumentNullException(nameof(volumeManager));
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr("main");
     }
 
@@ -56,7 +59,10 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
     {
         try
         {
-            CreatePipelineCache();
+            if (_pipelineCacheService != null)
+                _pipelineCache = _pipelineCacheService.Cache;
+            else
+                CreatePipelineCache();
             CreatePipelineLayout();
             for (int i = 0; i < _pipelines.Length; i++)
                 _pipelines[i] = CreatePipeline(ShaderNames[i]);
@@ -99,8 +105,7 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         // feedback reduction for delayed validation tooling.
         if (resident)
         {
-            DispatchIndirect(cmd, pushConstants, 0,
-                scheduler.GetIndirectCommandOffset(SimpleDdgiSchedulerDispatchSlot.CommitLocal));
+            DispatchResidentLocal(cmd, pushConstants);
             DispatchIndirect(cmd, pushConstants, 1,
                 scheduler.GetIndirectCommandOffset(SimpleDdgiSchedulerDispatchSlot.CommitPropagation));
         }
@@ -120,6 +125,39 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         _ = scheduler.RecordFeedbackReadback(cmd, frameIndex, _volumeManager.FrameSerial);
     }
 
+    /// <summary>
+    /// Commits the producer-complete urgent cohort without running residual
+    /// propagation or exporting feedback. The ordinary post-forward commit
+    /// retains sole ownership of those stages and its delayed policy sample.
+    /// </summary>
+    public void ExecuteResidentLocalOnly(CommandBuffer cmd)
+    {
+        if (_volumeManager.SchedulerMode != SimpleDdgiSchedulerMode.GpuResident)
+            return;
+
+        SimpleDdgiGpuScheduler scheduler = _volumeManager.GpuScheduler;
+        _ = scheduler.Layout ??
+            throw new InvalidOperationException(
+                "Simple DDGI scheduler layout is not resident.");
+        GPUSimpleDdgiSchedulePushConstants pushConstants =
+            scheduler.BuildPushConstants();
+        pushConstants.PrivateVisibilityAtlasOffsetWords =
+            _volumeManager.GpuSchedulerPrivateVisibilityOffsetWords;
+        DispatchResidentLocal(cmd, pushConstants);
+    }
+
+    private void DispatchResidentLocal(
+        CommandBuffer cmd,
+        GPUSimpleDdgiSchedulePushConstants pushConstants)
+    {
+        DispatchIndirect(
+            cmd,
+            pushConstants,
+            0,
+            _volumeManager.GpuScheduler.GetIndirectCommandOffset(
+                SimpleDdgiSchedulerDispatchSlot.CommitLocal));
+    }
+
     public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
     {
         yield break;
@@ -135,7 +173,7 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
         }
         if (_pipelineLayout.Handle != 0)
             _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService == null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_entryPointName != 0)
         {
@@ -233,13 +271,25 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device,
-                _pipelineCache,
-                1,
-                &pipelineInfo,
-                null,
-                out VkPipeline pipeline);
+            long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+            Result result;
+            VkPipeline pipeline;
+            try
+            {
+                result = _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &pipelineInfo,
+                    null,
+                    out pipeline);
+            }
+            finally
+            {
+                _pipelineCacheService?.EndPipelineCreation(
+                    $"{Name}:{shaderName}",
+                    pipelineStart);
+            }
             if (result != Result.Success)
                 throw new VulkanException($"Failed to create Simple DDGI commit pipeline '{shaderName}'", result);
             return pipeline;

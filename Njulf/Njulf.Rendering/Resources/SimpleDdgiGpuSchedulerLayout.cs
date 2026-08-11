@@ -54,17 +54,26 @@ public readonly record struct SimpleDdgiSchedulerArenaRegion(
 public sealed class SimpleDdgiGpuSchedulerLayout
 {
     public const ulong ArenaAlignmentBytes = 16;
-    // The sparse-capable internal proposal adds two full-width physical owner
-    // words. Keep the maximum shipping arena under an explicit 6.25 MiB gate;
-    // this is concrete allocated capacity, not current scheduler occupancy.
-    public const ulong ShippingArenaBudgetBytes = 25UL * 256UL * 1024UL;
+    // The sparse-capable scheduler plus the two-bank receiver-contribution
+    // signal stays under an explicit 6.75 MiB gate. This is concrete maximum
+    // allocated capacity, not current scheduler occupancy.
+    public const ulong ShippingArenaBudgetBytes = 27UL * 256UL * 1024UL;
     public const int ShippingFeedbackBytes = 4 * 1024;
     public const int MaxDirtyRegionCapacity = 1024;
     public const int SchedulerWorkgroupSize = 64;
     // Private scheduler state is distinct from the public 32-byte probe state.
     // It carries dirty-latency state, the applied invalidation marker, and the
     // producer-validated one-based cache base used by lightweight consumers.
-    public const int ProbeStateStrideBytes = 44;
+    public const int ProbeStateStrideBytes = 48;
+    // B1 receiver feedback is frame-delayed by construction. Each bank owns
+    // one accumulated interpolation-mass word and one coverage/ownership word
+    // per virtual probe; receivers write the current bank while scheduling
+    // consumes and clears the preceding bank.
+    public const int ReceiverContributionBankCount = 2;
+    public const int ReceiverContributionWordsPerProbe = 2;
+    public const int ReceiverContributionStrideBytes =
+        ReceiverContributionBankCount * ReceiverContributionWordsPerProbe *
+        sizeof(uint);
     public const int CandidateStrideBytes = 32;
     // Generation is re-read from immutable public state at admission and the
     // sequence ordinal is the candidate's input index. Together with derived
@@ -89,13 +98,17 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     // the trace/transport shaders and can therefore never be interpreted as a
     // dispatch dimension.
     public const int RayBucketMetadataStrideBytes = 16;
-    public const int FrameBytes = 160;
+    public const int FrameBytes = 224;
     public const int VolumePolicyStrideBytes = 176;
-    public const int DirtyRegionStrideBytes = 48;
+    public const int DirtyRegionStrideBytes = 80;
     public const int LaneScalarStrideBytes = sizeof(uint);
     // The first 64 words are the stable diagnostic ABI. Sixteen private words
     // follow for exact per-volume visible-page publication reservations.
-    public const int CounterBytes = 320;
+    // 64 legacy words + 16 per-volume visible-page counters + 7 exact
+    // eligible-work-class counters + 3 exact eligible-ring counters.
+    // Four trailing counters expose residual seeds, dependent wakes,
+    // threshold rejections, and conservative complete-sweep fallbacks.
+    public const int CounterBytes = 384;
     // One 1 KiB epoch-stamped reduction record keeps the audit summary below
     // the plan's readback budget while leaving room for future counters.
     public const int AuditSummaryBytes = 1024;
@@ -160,6 +173,8 @@ public sealed class SimpleDdgiGpuSchedulerLayout
     public SimpleDdgiSchedulerArenaRegion PreviousVolumePolicies => GetRegion(nameof(PreviousVolumePolicies));
     public SimpleDdgiSchedulerArenaRegion DirtyRegions => GetRegion(nameof(DirtyRegions));
     public SimpleDdgiSchedulerArenaRegion ProbeState => GetRegion(nameof(ProbeState));
+    public SimpleDdgiSchedulerArenaRegion ReceiverContribution =>
+        GetRegion(nameof(ReceiverContribution));
     public SimpleDdgiSchedulerArenaRegion CandidateInput => GetRegion(nameof(CandidateInput));
     public SimpleDdgiSchedulerArenaRegion CandidateGroupLaneCounts => GetRegion(nameof(CandidateGroupLaneCounts));
     public SimpleDdgiSchedulerArenaRegion CandidateOutput => GetRegion(nameof(CandidateOutput));
@@ -276,7 +291,7 @@ public sealed class SimpleDdgiGpuSchedulerLayout
                 "The configured Simple-DDGI scheduler capacity exceeds the device compute dispatch limit.");
         }
 
-        var regions = new List<SimpleDdgiSchedulerArenaRegion>(23);
+        var regions = new List<SimpleDdgiSchedulerArenaRegion>(24);
         ulong cursor = 0;
         Add("Frame", FrameBytes, 1, FrameBytes);
         Add("VolumePolicies", checked((ulong)GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * VolumePolicyStrideBytes),
@@ -287,6 +302,9 @@ public sealed class SimpleDdgiGpuSchedulerLayout
             DirtyRegionStrideBytes, checked((uint)dirtyRegionCapacity));
         Add("ProbeState", checked((ulong)activeProbeCount * ProbeStateStrideBytes),
             ProbeStateStrideBytes, checked((uint)activeProbeCount));
+        Add("ReceiverContribution", checked(
+                (ulong)activeProbeCount * ReceiverContributionStrideBytes),
+            ReceiverContributionStrideBytes, checked((uint)activeProbeCount));
         Add("CandidateInput", checked((ulong)activeProbeCount * CandidateInputStorageStrideBytes),
             CandidateInputStorageStrideBytes, checked((uint)activeProbeCount));
         ulong candidateGroupLaneEntryCount = checked((ulong)probeGroups *

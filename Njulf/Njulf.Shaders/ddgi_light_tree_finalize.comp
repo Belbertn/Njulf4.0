@@ -1,0 +1,69 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "common.glsl"
+#include "ddgi_light_tree.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants
+{
+    uint LightCount; uint LeafCapacity; uint PaddedLeafCount; uint NodeCount;
+    uint TargetStorageIndex; uint PublishedStorageIndex; uint BuildAction; uint MaximumDepth;
+    float UniformMixtureProbability; uint ExactLightThreshold; uint NodeBankStrideWords; uint LeafBankStrideWords;
+    uint ScratchRecordOffsetWords; uint ScratchSortedIndexOffsetWords; uint ScratchIndirectOffsetWords; uint PublicationGeneration;
+    uint LightBufferRevisionLow; uint LightBufferRevisionHigh; uint TopologyRevisionLow; uint TopologyRevisionHigh;
+    uint ContentRevisionLow; uint ContentRevisionHigh; uint Flags; uint Reserved0;
+} pc;
+
+void main()
+{
+    uint nodeBankBase = pc.TargetStorageIndex * pc.NodeBankStrideWords /
+        DDGI_LIGHT_TREE_NODE_WORDS;
+    DdgiLightTreeNode root = DdgiReadLightTreeNode(nodeBankBase);
+    uint leafCount = ReadStorageWordUniform(
+        uint(SIMPLE_DDGI_LIGHT_TREE_SCRATCH_BUFFER_INDEX), 0u);
+    bool valid = leafCount > 0u && leafCount <= pc.PaddedLeafCount &&
+        root.descendantLeafCount == leafCount &&
+        DdgiLightTreeFinite(root.minimum) &&
+        DdgiLightTreeFinite(root.maximum) &&
+        DdgiLightTreeFinite(root.flux) && root.flux >= 0.0;
+    if (!valid)
+    {
+        // Leave the previous complete root untouched. Captures can observe the
+        // unpublished candidate count through the scratch header.
+        WriteStorageWordUniform(
+            uint(SIMPLE_DDGI_LIGHT_TREE_SCRATCH_BUFFER_INDEX),
+            8u,
+            1u);
+        return;
+    }
+
+    uint state = uint(SIMPLE_DDGI_LIGHT_TREE_STATE_BUFFER_INDEX);
+    uint checksum = pc.PublicationGeneration ^ leafCount ^ pc.NodeCount ^
+        pc.LightBufferRevisionLow ^ pc.LightBufferRevisionHigh ^
+        pc.TopologyRevisionLow ^ pc.TopologyRevisionHigh ^
+        pc.ContentRevisionLow ^ pc.ContentRevisionHigh;
+    // One invocation writes the complete candidate, then publishes validity
+    // last. Trace cannot observe a partially initialized hierarchy.
+    WriteStorageWordUniform(state, 13u, 0u);
+    WriteStorageWordUniform(state, 0u, nodeBankBase);
+    WriteStorageWordUniform(state, 1u, pc.NodeCount);
+    WriteStorageWordUniform(state, 2u, leafCount);
+    WriteStorageWordUniform(state, 3u, pc.MaximumDepth);
+    WriteStorageWordUniform(state, 4u, pc.TargetStorageIndex);
+    WriteStorageWordUniform(state, 5u, pc.PublicationGeneration);
+    WriteStorageWordUniform(state, 6u, pc.LightBufferRevisionLow);
+    WriteStorageWordUniform(state, 7u, pc.LightBufferRevisionHigh);
+    WriteStorageWordUniform(state, 8u, pc.TopologyRevisionLow);
+    WriteStorageWordUniform(state, 9u, pc.TopologyRevisionHigh);
+    WriteStorageWordUniform(state, 10u, pc.ContentRevisionLow);
+    WriteStorageWordUniform(state, 11u, pc.ContentRevisionHigh);
+    WriteStorageWordUniform(state, 12u, checksum);
+    WriteStorageWordUniform(state, 14u, pc.BuildAction);
+    WriteStorageWordUniform(state, 15u, pc.PaddedLeafCount);
+    memoryBarrierBuffer();
+    WriteStorageWordUniform(state, 13u, DDGI_LIGHT_TREE_STATE_VALID_BIT);
+}

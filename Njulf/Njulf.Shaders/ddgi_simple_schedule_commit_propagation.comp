@@ -6,12 +6,69 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-// Propagation is retained as a separate fixed dispatch slot for ABI and
-// feedback compatibility. Public lifecycle/visibility state is committed by
-// CommitLocal only; this pass may inspect outcomes but must never fabricate a
-// successful outcome or write a receiver-visible record.
+void MarkResidualDependent(
+    uint probeIndex,
+    float residualUpperBound,
+    uint deadlineFrame)
+{
+    if (probeIndex >= SchedulerActiveProbeCount())
+        return;
+
+    uint stateBase = pc.SchedulerProbeStateOffsetWords +
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    uint generation8 = SchedulerTransportGeneration() & 0xffu;
+    uint deadline8 = deadlineFrame & 0xffu;
+    // Inflate by more than half a binary16 ULP before round-to-nearest so the
+    // packed value remains an upper bound rather than accidentally suppressing
+    // a threshold-crossing dependent.
+    float conservativeResidual = min(
+        max(residualUpperBound, 0.0) * 1.001 + 1.0e-6,
+        65504.0);
+    uint residual16 = packHalf2x16(vec2(
+        conservativeResidual,
+        0.0)) & 0xffffu;
+    uint wordOffset = stateBase + 11u;
+    uint observed = atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+            wordOffset],
+        0u);
+    for (;;)
+    {
+        uint observedGeneration = (observed >> 16u) & 0xffu;
+        uint observedResidual = observedGeneration == generation8
+            ? observed & 0xffffu
+            : 0u;
+        // Positive binary16 encodings are monotonically ordered. All marks in
+        // this dispatch share one deadline, while a generation mismatch drops
+        // stale payload before the atomic replacement.
+        uint replacement = max(observedResidual, residual16) |
+            (generation8 << 16u) | (deadline8 << 24u);
+        uint previous = atomicCompSwap(
+            BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+                wordOffset],
+            observed,
+            replacement);
+        if (previous == observed)
+            break;
+        observed = previous;
+    }
+    SchedulerArenaAtomicAdd(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_DEPENDENT_WAKE,
+        1u);
+}
+
+// The shipping GPU ordering proxy expands a changed probe to its complete
+// 3x3x3 logical neighbourhood. Arbitrary cached-hit gathers can reach farther,
+// so this proxy is intentionally labelled incomplete and the ordinary frozen
+// full sweep remains mandatory. The bounded CPU reverse-list oracle exercises
+// the complete-graph path; promotion to a GPU reverse list can remove this
+// fallback counter without changing queue semantics.
 void main()
 {
+    if (!SchedulerSparseResidualPropagation())
+        return;
+
     uint outcomeIndex = gl_GlobalInvocationID.x;
     uint accepted = min(
         SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
@@ -26,5 +83,103 @@ void main()
     uint failureReason = SchedulerArenaRead(outcomeBase + 9u);
     if (failureReason != 0u || (completionMask & requiredMask) != requiredMask)
         return;
+
     memoryBarrierBuffer();
+
+    uint probeIndex = SchedulerArenaRead(outcomeBase + 5u);
+    if (probeIndex >= SchedulerActiveProbeCount())
+        return;
+    float residual = uintBitsToFloat(SchedulerArenaRead(outcomeBase + 14u));
+    if (isnan(residual) || isinf(residual) || residual < 0.0)
+    {
+        SchedulerArenaAtomicAdd(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_FULL_SWEEP_FALLBACK,
+            1u);
+        return;
+    }
+
+    uint updateFlags = SchedulerArenaRead(outcomeBase + 10u);
+    bool sourceChanged =
+        (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u;
+    float finalErrorBudget = max(
+        uintBitsToFloat(SchedulerFrame(39u)),
+        1.0e-7);
+    float maximumGain = clamp(
+        ReadStorageFloatUniform(pc.ParamsBufferIndex, 49u),
+        0.0,
+        0.99);
+    float propagatedBound = residual * maximumGain;
+    if (!sourceChanged && propagatedBound <= finalErrorBudget)
+    {
+        SchedulerArenaAtomicAdd(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_THRESHOLD_REJECT,
+            1u);
+        return;
+    }
+    if (propagatedBound <= finalErrorBudget)
+        return;
+
+    SchedulerArenaAtomicAdd(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_SEEDED,
+        1u);
+    // The local proxy is never treated as a complete dependency graph. One
+    // frame witness is enough to diagnose why certification still performs a
+    // complete sweep.
+    atomicExchange(
+        BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_FULL_SWEEP_FALLBACK],
+        1u);
+
+    uint volumeIndex;
+    if (!SchedulerFindVolume(probeIndex, volumeIndex))
+        return;
+    uint countX = max(SchedulerVolumeCurrentCountX(volumeIndex), 1u);
+    uint countY = max(SchedulerVolumeCurrentCountY(volumeIndex), 1u);
+    uint countZ = max(SchedulerVolumeCurrentCountZ(volumeIndex), 1u);
+    uint localPhysical = probeIndex - SchedulerVolumeFirstProbe(volumeIndex);
+    uint physicalZ = localPhysical / (countX * countY);
+    uint physicalRem = localPhysical - physicalZ * countX * countY;
+    uint physicalY = physicalRem / countX;
+    uint physicalX = physicalRem - physicalY * countX;
+    uint logicalX = (physicalX + countX -
+        (SchedulerVolumePhysicalOffsetX(volumeIndex) % countX)) % countX;
+    uint logicalY = (physicalY + countY -
+        (SchedulerVolumePhysicalOffsetY(volumeIndex) % countY)) % countY;
+    uint logicalZ = (physicalZ + countZ -
+        (SchedulerVolumePhysicalOffsetZ(volumeIndex) % countZ)) % countZ;
+    // Modulo-256 deadline comparisons are unambiguous only within half the
+    // range. 120 frames remains a generous hard fairness bound.
+    uint deadline = SchedulerFrameIndex() +
+        min(max(SchedulerFrame(28u), 30u), 120u);
+
+    for (int z = -1; z <= 1; z++)
+    for (int y = -1; y <= 1; y++)
+    for (int x = -1; x <= 1; x++)
+    {
+        if (x == 0 && y == 0 && z == 0)
+            continue;
+        ivec3 logical = ivec3(logicalX, logicalY, logicalZ) +
+            ivec3(x, y, z);
+        if (any(lessThan(logical, ivec3(0))) ||
+            logical.x >= int(countX) || logical.y >= int(countY) ||
+            logical.z >= int(countZ))
+        {
+            continue;
+        }
+
+        uint dependentPhysicalX = (uint(logical.x) +
+            SchedulerVolumePhysicalOffsetX(volumeIndex)) % countX;
+        uint dependentPhysicalY = (uint(logical.y) +
+            SchedulerVolumePhysicalOffsetY(volumeIndex)) % countY;
+        uint dependentPhysicalZ = (uint(logical.z) +
+            SchedulerVolumePhysicalOffsetZ(volumeIndex)) % countZ;
+        uint dependentProbe = SchedulerVolumeFirstProbe(volumeIndex) +
+            dependentPhysicalX + dependentPhysicalY * countX +
+            dependentPhysicalZ * countX * countY;
+        MarkResidualDependent(dependentProbe, propagatedBound, deadline);
+    }
 }

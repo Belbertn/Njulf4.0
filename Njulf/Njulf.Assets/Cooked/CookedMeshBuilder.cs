@@ -131,7 +131,10 @@ public static class CookedMeshBuilder
                 MeshletLod1Offset = meshletLod1Offset,
                 MeshletLod1Count = lod1.MeshletCount,
                 MeshletLod2Offset = meshletLod2Offset,
-                MeshletLod2Count = lod2.MeshletCount
+                MeshletLod2Count = lod2.MeshletCount,
+                CausticTopologyEvidence = subMesh.CausticTopologyEvidence,
+                CausticAuthoringValidation = subMesh.CausticAuthoringValidation,
+                CausticTopologyDetail = subMesh.CausticTopologyDetail
             });
         }
 

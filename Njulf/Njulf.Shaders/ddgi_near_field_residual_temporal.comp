@@ -1,0 +1,638 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_near_field_residual.glsl"
+
+// Temporal C5 receives only its own signed candidate/history payload plus
+// geometry identity.  It never reads a final colour target, DDGI field, C4
+// cache, or another indirect-lighting result.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D rawCandidateInput;
+layout(std430, set = 0, binding = 1) readonly buffer CurrentMetadataBuffer
+{
+    SimpleDdgiNearFieldResidualHitMetadata values[];
+} currentMetadata;
+layout(set = 0, binding = 2) uniform sampler2D historyRadianceInput;
+layout(set = 0, binding = 3) uniform sampler2D historyMomentsInput;
+layout(set = 0, binding = 4) uniform usampler2D historyValidityInput;
+layout(std430, set = 0, binding = 5) readonly buffer HistoryMetadataBuffer
+{
+    SimpleDdgiNearFieldResidualHitMetadata values[];
+} historyMetadata;
+layout(rgba16f, set = 0, binding = 6) uniform writeonly image2D temporalRadianceOutput;
+layout(rg16f, set = 0, binding = 7) uniform writeonly image2D temporalMomentsOutput;
+layout(r32ui, set = 0, binding = 8) uniform writeonly uimage2D temporalValidityOutput;
+layout(std430, set = 0, binding = 9) buffer TemporalMetadataOutputBuffer
+{
+    SimpleDdgiNearFieldResidualHitMetadata values[];
+} temporalMetadataOutput;
+layout(set = 0, binding = 10) uniform sampler2D motionVectors;
+layout(set = 0, binding = 11) uniform usampler2D currentReceiverPayload;
+layout(set = 0, binding = 12) uniform sampler2D historyReceiverNormals;
+layout(rgba16f, set = 0, binding = 13) uniform writeonly image2D temporalHistoryNormalOutput;
+layout(std430, set = 0, binding = 14) buffer TemporalTileRecordsBuffer
+{
+    uint words[];
+} temporalTileRecords;
+
+layout(push_constant) uniform NearFieldTemporalPushBlock
+{
+    SimpleDdgiNearFieldResidualTemporalPushConstants pc;
+};
+
+const uint C5_HISTORY_REASON_INVALID_CURRENT = 1u << 0u;
+const uint C5_HISTORY_REASON_EPOCH = 1u << 1u;
+const uint C5_HISTORY_REASON_IDENTITY = 1u << 2u;
+const uint C5_HISTORY_REASON_REPROJECTION = 1u << 3u;
+const uint C5_HISTORY_REASON_DEPTH = 1u << 4u;
+const uint C5_HISTORY_REASON_NORMAL = 1u << 5u;
+const uint C5_HISTORY_REASON_SOURCE_REVISION = 1u << 6u;
+const uint C5_HISTORY_REASON_VARIANCE_CLIPPED = 1u << 7u;
+const uint C5_HISTORY_REASON_NONFINITE = 1u << 8u;
+
+shared uint c5HistoryCovered[64];
+shared uint c5HistoryCandidate[64];
+shared uint c5HistoryAccepted[64];
+shared uint c5HistoryReasonFlags[64];
+shared float c5HistoryVariance[64];
+shared float c5HistorySignedEnergy[64];
+shared float c5HistoryAbsoluteEnergy[64];
+shared float c5HistorySquaredEnergy[64];
+shared uint c5HistoryEnergyFinite[64];
+
+void WriteInvalid(ivec2 pixel, uint outputIndex)
+{
+    imageStore(temporalRadianceOutput, pixel, vec4(0.0));
+    imageStore(temporalMomentsOutput, pixel, vec4(0.0));
+    imageStore(temporalValidityOutput, pixel, uvec4(0u));
+    imageStore(temporalHistoryNormalOutput, pixel, vec4(0.0));
+    if (outputIndex < uint(temporalMetadataOutput.values.length()))
+        temporalMetadataOutput.values[outputIndex] = SimpleDdgiNearFieldZeroMetadata();
+}
+
+bool IsReusableHistory(
+    SimpleDdgiNearFieldResidualHitMetadata current,
+    SimpleDdgiNearFieldResidualHitMetadata previous,
+    vec4 currentPackedNormals,
+    vec4 previousPackedNormals,
+    uint previousValidity,
+    out uint previousHistoryLength,
+    out uint rejectionFlags)
+{
+    previousHistoryLength = 0u;
+    rejectionFlags = 0u;
+    if (!SimpleDdgiNearFieldUnpackHistoryValidity(
+            previousValidity, pc.historyEpoch, previousHistoryLength) ||
+        !SimpleDdgiNearFieldHasFlag(pc.flags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_HISTORY_INPUT_VALID) ||
+        !SimpleDdgiNearFieldHasFlag(previous.packedFlags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE))
+    {
+        rejectionFlags |= C5_HISTORY_REASON_EPOCH;
+    }
+    if (
+        !SimpleDdgiNearFieldFinite(current.receiverDepth) ||
+        !SimpleDdgiNearFieldFinite(current.hitDepth) ||
+        !SimpleDdgiNearFieldFinite(previous.receiverDepth) ||
+        !SimpleDdgiNearFieldFinite(previous.hitDepth))
+    {
+        rejectionFlags |= C5_HISTORY_REASON_NONFINITE;
+    }
+    if (SimpleDdgiNearFieldFinite(current.receiverDepth) &&
+        SimpleDdgiNearFieldFinite(previous.receiverDepth) &&
+        abs(current.receiverDepth - previous.receiverDepth) > pc.depthTolerance ||
+        SimpleDdgiNearFieldFinite(current.hitDepth) &&
+        SimpleDdgiNearFieldFinite(previous.hitDepth) &&
+        abs(current.hitDepth - previous.hitDepth) > pc.depthTolerance ||
+        any(notEqual(current.identity, previous.identity)))
+    {
+        // Identity is split below so both inclusive diagnostic reasons are
+        // retained when a moving hit also crosses a depth discontinuity.
+        if (any(notEqual(current.identity, previous.identity)))
+            rejectionFlags |= C5_HISTORY_REASON_IDENTITY;
+        if ((SimpleDdgiNearFieldFinite(current.receiverDepth) &&
+             SimpleDdgiNearFieldFinite(previous.receiverDepth) &&
+             abs(current.receiverDepth - previous.receiverDepth) > pc.depthTolerance) ||
+            (SimpleDdgiNearFieldFinite(current.hitDepth) &&
+             SimpleDdgiNearFieldFinite(previous.hitDepth) &&
+             abs(current.hitDepth - previous.hitDepth) > pc.depthTolerance))
+        {
+            rejectionFlags |= C5_HISTORY_REASON_DEPTH;
+        }
+    }
+    if (
+        !SimpleDdgiNearFieldFinite(current.hitUv.x) ||
+        !SimpleDdgiNearFieldFinite(current.hitUv.y) ||
+        !SimpleDdgiNearFieldFinite(previous.hitUv.x) ||
+        !SimpleDdgiNearFieldFinite(previous.hitUv.y) ||
+        any(greaterThan(abs(current.hitUv - previous.hitUv),
+            vec2(pc.hitUvTolerance))))
+    {
+        rejectionFlags |= C5_HISTORY_REASON_REPROJECTION;
+    }
+
+    vec3 currentGeometric = SimpleDdgiNearFieldDecodeOctNormal(
+        currentPackedNormals.xy);
+    vec3 currentShading = SimpleDdgiNearFieldDecodeOctNormal(
+        currentPackedNormals.zw);
+    vec3 previousGeometric = SimpleDdgiNearFieldDecodeOctNormal(
+        previousPackedNormals.xy);
+    vec3 previousShading = SimpleDdgiNearFieldDecodeOctNormal(
+        previousPackedNormals.zw);
+    if (dot(currentGeometric, currentGeometric) <= 0.0 ||
+        dot(currentShading, currentShading) <= 0.0 ||
+        dot(previousGeometric, previousGeometric) <= 0.0 ||
+        dot(previousShading, previousShading) <= 0.0)
+    {
+        rejectionFlags |= C5_HISTORY_REASON_NORMAL;
+    }
+    else if (dot(currentGeometric, previousGeometric) < pc.minimumNormalDot ||
+        dot(currentShading, previousShading) < pc.minimumNormalDot)
+    {
+        rejectionFlags |= C5_HISTORY_REASON_NORMAL;
+    }
+    return rejectionFlags == 0u;
+}
+
+bool TryGetCurrentNeighbourhoodBounds(
+    ivec2 centrePixel,
+    ivec2 extent,
+    SimpleDdgiNearFieldResidualHitMetadata centre,
+    out vec3 minimumResidual,
+    out vec3 maximumResidual,
+    out float neighbourhoodMean,
+    out float neighbourhoodVariance)
+{
+    minimumResidual = vec3(3.402823466e+38);
+    maximumResidual = vec3(-3.402823466e+38);
+    float luminanceSum = 0.0;
+    float luminanceSquaredSum = 0.0;
+    uint sampleCount = 0u;
+    for (int y = -1; y <= 1; ++y)
+    {
+        for (int x = -1; x <= 1; ++x)
+        {
+            ivec2 neighbourPixel = centrePixel + ivec2(x, y);
+            if (any(lessThan(neighbourPixel, ivec2(0))) ||
+                any(greaterThanEqual(neighbourPixel, extent)))
+            {
+                continue;
+            }
+            uint neighbourIndex = uint(neighbourPixel.y) * uint(extent.x) +
+                uint(neighbourPixel.x);
+            if (neighbourIndex >= uint(currentMetadata.values.length()))
+                continue;
+            vec4 neighbour = texelFetch(rawCandidateInput, neighbourPixel, 0);
+            SimpleDdgiNearFieldResidualHitMetadata neighbourMetadata =
+                currentMetadata.values[neighbourIndex];
+            if (!SimpleDdgiNearFieldIsValidCandidate(neighbour) ||
+                !SimpleDdgiNearFieldHasFlag(neighbourMetadata.packedFlags,
+                    SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) ||
+                any(notEqual(neighbourMetadata.identity.xy, centre.identity.xy)))
+            {
+                continue;
+            }
+
+            minimumResidual = min(minimumResidual, neighbour.rgb);
+            maximumResidual = max(maximumResidual, neighbour.rgb);
+            float luminance = dot(neighbour.rgb,
+                vec3(0.2126, 0.7152, 0.0722));
+            luminanceSum += luminance;
+            luminanceSquaredSum += luminance * luminance;
+            sampleCount++;
+        }
+    }
+
+    if (sampleCount == 0u)
+    {
+        neighbourhoodMean = 0.0;
+        neighbourhoodVariance = 0.0;
+        return false;
+    }
+    float reciprocalCount = 1.0 / float(sampleCount);
+    neighbourhoodMean = luminanceSum * reciprocalCount;
+    neighbourhoodVariance = max(
+        luminanceSquaredSum * reciprocalCount -
+            neighbourhoodMean * neighbourhoodMean,
+        0.0);
+    return SimpleDdgiNearFieldFinite(minimumResidual) &&
+        SimpleDdgiNearFieldFinite(maximumResidual) &&
+        SimpleDdgiNearFieldFinite(neighbourhoodMean) &&
+        SimpleDdgiNearFieldFinite(neighbourhoodVariance);
+}
+
+bool EvaluateTemporalPixel(
+    ivec2 pixel,
+    ivec2 outputExtent,
+    uint outputIndex,
+    out vec4 outputResidual,
+    out vec2 outputMoments,
+    out uint outputValidity,
+    out vec4 outputPackedNormals,
+    out SimpleDdgiNearFieldResidualHitMetadata outputMetadata,
+    out bool historyCandidate,
+    out bool acceptedHistory,
+    out uint historyReasonFlags,
+    out float outputVariance)
+{
+    outputResidual = vec4(0.0);
+    outputMoments = vec2(0.0);
+    outputValidity = 0u;
+    outputPackedNormals = vec4(0.0);
+    outputMetadata = SimpleDdgiNearFieldZeroMetadata();
+    historyCandidate = false;
+    acceptedHistory = false;
+    historyReasonFlags = C5_HISTORY_REASON_INVALID_CURRENT;
+    outputVariance = 0.0;
+
+    if (pc.abiVersion != SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION ||
+        pc.historyReadIndex > 1u || pc.historyWriteIndex > 1u ||
+        pc.historyReadIndex == pc.historyWriteIndex || pc.historyEpoch == 0u ||
+        pc.traceSourceAbiRevision == 0u || pc.viewportRevision == 0u ||
+        pc.hizRevision == 0u || pc.effectiveModeRevision == 0u ||
+        pc.exposureDomainRevision == 0u || pc.projectionJitterRevision == 0u ||
+        pc.originRebaseRevision == 0u || pc.sceneGeneration == 0u ||
+        pc.traceSourceContentRevision == 0u || pc.nearFieldLayoutRevision == 0u ||
+        pc.b3OwnershipRevision == 0u || pc.traceSourceLayoutRevision == 0u ||
+        pc.maximumHistoryLength == 0u ||
+        pc.maximumHistoryLength > SIMPLE_DDGI_NEAR_FIELD_MAX_HISTORY_LENGTH ||
+        !SimpleDdgiNearFieldFinite(pc.temporalBlend) ||
+        !SimpleDdgiNearFieldFinite(pc.depthTolerance) ||
+        !SimpleDdgiNearFieldFinite(pc.minimumNormalDot) ||
+        !SimpleDdgiNearFieldFinite(pc.hitUvTolerance) ||
+        pc.depthTolerance < 0.0 || pc.hitUvTolerance < 0.0 ||
+        pc.minimumNormalDot < -1.0 || pc.minimumNormalDot > 1.0 ||
+        outputIndex >= uint(currentMetadata.values.length()) ||
+        outputIndex >= uint(temporalMetadataOutput.values.length()))
+    {
+        return false;
+    }
+
+    vec4 candidate = texelFetch(rawCandidateInput, pixel, 0);
+    SimpleDdgiNearFieldResidualHitMetadata current =
+        currentMetadata.values[outputIndex];
+    if (!SimpleDdgiNearFieldIsValidCandidate(candidate) ||
+        !SimpleDdgiNearFieldHasFlag(current.packedFlags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) ||
+        !SimpleDdgiNearFieldFinite(current.confidence) || current.confidence <= 0.0)
+    {
+        return false;
+    }
+
+    historyCandidate = true;
+    historyReasonFlags = 0u;
+    outputResidual = candidate;
+    float candidateLuminance = dot(candidate.rgb,
+        vec3(0.2126, 0.7152, 0.0722));
+    if (!SimpleDdgiNearFieldFinite(candidateLuminance))
+    {
+        historyReasonFlags = C5_HISTORY_REASON_INVALID_CURRENT |
+            C5_HISTORY_REASON_NONFINITE;
+        return false;
+    }
+    outputMoments = vec2(candidateLuminance,
+        candidateLuminance * candidateLuminance);
+    uint outputHistoryLength = 1u;
+
+    vec2 outputUv = (vec2(pixel) + vec2(0.5)) /
+        max(vec2(outputExtent), vec2(1.0));
+    ivec2 receiverExtent = textureSize(currentReceiverPayload, 0);
+    ivec2 receiverPixel = clamp(ivec2(outputUv * vec2(receiverExtent)),
+        ivec2(0), max(receiverExtent - ivec2(1), ivec2(0)));
+    uvec2 ignoredIdentity;
+    vec3 ignoredThroughput;
+    SimpleDdgiNearFieldDecodeReceiverPayload(
+        texelFetch(currentReceiverPayload, receiverPixel, 0),
+        outputPackedNormals,
+        ignoredIdentity,
+        ignoredThroughput);
+
+    vec2 motion = textureLod(motionVectors, outputUv, 0.0).xy;
+    bool finiteMotion = SimpleDdgiNearFieldFinite(motion.x) &&
+        SimpleDdgiNearFieldFinite(motion.y);
+    vec2 previousUv = finiteMotion ? outputUv - motion : vec2(-1.0);
+    bool insidePrevious = finiteMotion &&
+        all(greaterThanEqual(previousUv, vec2(0.0))) &&
+        all(lessThan(previousUv, vec2(1.0)));
+    if (!finiteMotion)
+        historyReasonFlags |= C5_HISTORY_REASON_REPROJECTION |
+            C5_HISTORY_REASON_NONFINITE;
+    else if (!insidePrevious)
+        historyReasonFlags |= C5_HISTORY_REASON_REPROJECTION;
+    if (!SimpleDdgiNearFieldHasFlag(pc.flags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_HISTORY_INPUT_VALID))
+    {
+        historyReasonFlags |= C5_HISTORY_REASON_EPOCH;
+    }
+
+    if (insidePrevious &&
+        SimpleDdgiNearFieldHasFlag(pc.flags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_HISTORY_INPUT_VALID))
+    {
+        ivec2 historyExtent = textureSize(historyRadianceInput, 0);
+        ivec2 previousPixel = clamp(ivec2(previousUv * vec2(historyExtent)),
+            ivec2(0), max(historyExtent - ivec2(1), ivec2(0)));
+        uint previousIndex = uint(previousPixel.y) * uint(historyExtent.x) +
+            uint(previousPixel.x);
+        if (previousIndex >= uint(historyMetadata.values.length()))
+        {
+            historyReasonFlags |= C5_HISTORY_REASON_REPROJECTION;
+        }
+        else
+        {
+            vec4 previousResidual = texelFetch(
+                historyRadianceInput, previousPixel, 0);
+            vec2 previousMoments = texelFetch(
+                historyMomentsInput, previousPixel, 0).rg;
+            uint previousValidity = texelFetch(
+                historyValidityInput, previousPixel, 0).r;
+            SimpleDdgiNearFieldResidualHitMetadata previous =
+                historyMetadata.values[previousIndex];
+            vec4 previousPackedNormals = textureLod(
+                historyReceiverNormals, previousUv, 0.0);
+            uint previousHistoryLength;
+            uint reuseRejections;
+            bool previousPayloadValid =
+                SimpleDdgiNearFieldIsValidCandidate(previousResidual) &&
+                SimpleDdgiNearFieldFinite(previousMoments.x) &&
+                SimpleDdgiNearFieldFinite(previousMoments.y) &&
+                previousMoments.y >= previousMoments.x * previousMoments.x;
+            if (!previousPayloadValid)
+            {
+                historyReasonFlags |= C5_HISTORY_REASON_EPOCH;
+                if (!SimpleDdgiNearFieldFinite(previousMoments.x) ||
+                    !SimpleDdgiNearFieldFinite(previousMoments.y))
+                {
+                    historyReasonFlags |= C5_HISTORY_REASON_NONFINITE;
+                }
+            }
+            else if (!IsReusableHistory(
+                    current,
+                    previous,
+                    outputPackedNormals,
+                    previousPackedNormals,
+                    previousValidity,
+                    previousHistoryLength,
+                    reuseRejections))
+            {
+                historyReasonFlags |= reuseRejections;
+            }
+            else
+            {
+                vec3 neighbourhoodMinimum;
+                vec3 neighbourhoodMaximum;
+                float neighbourhoodMean;
+                float neighbourhoodVariance;
+                if (!TryGetCurrentNeighbourhoodBounds(
+                        pixel,
+                        outputExtent,
+                        current,
+                        neighbourhoodMinimum,
+                        neighbourhoodMaximum,
+                        neighbourhoodMean,
+                        neighbourhoodVariance))
+                {
+                    historyReasonFlags |=
+                        C5_HISTORY_REASON_VARIANCE_CLIPPED;
+                }
+                else
+                {
+                    float previousVariance = max(previousMoments.y -
+                        previousMoments.x * previousMoments.x, 0.0);
+                    float sigma = sqrt(max(previousVariance,
+                        neighbourhoodVariance));
+                    vec3 clipExpansion = vec3(1.5 * sigma);
+                    vec3 clippedHistory = clamp(previousResidual.rgb,
+                        neighbourhoodMinimum - clipExpansion,
+                        neighbourhoodMaximum + clipExpansion);
+                    if (any(greaterThan(abs(clippedHistory -
+                            previousResidual.rgb), vec3(1.0e-6))))
+                    {
+                        historyReasonFlags |=
+                            C5_HISTORY_REASON_VARIANCE_CLIPPED;
+                    }
+                    outputHistoryLength = min(previousHistoryLength + 1u,
+                        min(pc.maximumHistoryLength,
+                            SIMPLE_DDGI_NEAR_FIELD_MAX_HISTORY_LENGTH));
+                    float runningHistoryAuthority = float(
+                        outputHistoryLength - 1u) / float(outputHistoryLength);
+                    float varianceAuthority = 1.0 / (1.0 + sqrt(
+                        max(previousVariance, neighbourhoodVariance)));
+                    float blend = min(clamp(pc.temporalBlend, 0.0, 1.0),
+                        runningHistoryAuthority) * varianceAuthority;
+                    outputResidual.rgb = mix(
+                        candidate.rgb, clippedHistory, blend);
+                    outputResidual.a = min(candidate.a, previousResidual.a);
+                    float sampleWeight = 1.0 / float(outputHistoryLength);
+                    outputMoments = mix(previousMoments,
+                        vec2(candidateLuminance,
+                            candidateLuminance * candidateLuminance),
+                        sampleWeight);
+                    outputVariance = max(outputMoments.y -
+                        outputMoments.x * outputMoments.x, 0.0);
+                    acceptedHistory = true;
+                }
+            }
+        }
+    }
+
+    if (!SimpleDdgiNearFieldFinite(outputResidual.rgb) ||
+        !SimpleDdgiNearFieldFinite(outputResidual.a) || outputResidual.a <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(outputMoments.x) ||
+        !SimpleDdgiNearFieldFinite(outputMoments.y) ||
+        !SimpleDdgiNearFieldFinite(outputVariance))
+    {
+        historyReasonFlags |= C5_HISTORY_REASON_INVALID_CURRENT |
+            C5_HISTORY_REASON_NONFINITE;
+        return false;
+    }
+
+    if (!acceptedHistory && historyReasonFlags == 0u)
+        historyReasonFlags = C5_HISTORY_REASON_EPOCH;
+    uint outputFlags = current.packedFlags;
+    if (acceptedHistory)
+        outputFlags |= SIMPLE_DDGI_NEAR_FIELD_FLAG_HISTORY_ACCEPTED;
+    else
+        outputFlags &= ~SIMPLE_DDGI_NEAR_FIELD_FLAG_HISTORY_ACCEPTED;
+    current.packedFlags = outputFlags;
+    current.confidence = clamp(outputResidual.a, 0.0, 1.0);
+    outputMetadata = current;
+    outputValidity = SimpleDdgiNearFieldPackHistoryValidity(
+        outputHistoryLength, pc.historyEpoch);
+    return true;
+}
+
+void RecordTemporalTileSummary()
+{
+    uint candidateCount = 0u;
+    uint acceptedCount = 0u;
+    uint invalidCurrentCount = 0u;
+    uint epochRejects = 0u;
+    uint identityRejects = 0u;
+    uint reprojectionRejects = 0u;
+    uint depthRejects = 0u;
+    uint normalRejects = 0u;
+    uint sourceRevisionRejects = 0u;
+    uint varianceClipped = 0u;
+    uint nonFiniteEnergy = 0u;
+    float varianceSum = 0.0;
+    float maximumVariance = 0.0;
+    float signedEnergy = 0.0;
+    float absoluteEnergy = 0.0;
+    float squaredEnergy = 0.0;
+    float maximumAbsoluteEnergy = 0.0;
+    for (uint lane = 0u; lane < 64u; ++lane)
+    {
+        if (c5HistoryCovered[lane] == 0u)
+            continue;
+        candidateCount += c5HistoryCandidate[lane];
+        acceptedCount += c5HistoryAccepted[lane];
+        uint reasons = c5HistoryReasonFlags[lane];
+        invalidCurrentCount += (reasons & C5_HISTORY_REASON_INVALID_CURRENT) != 0u ? 1u : 0u;
+        epochRejects += (reasons & C5_HISTORY_REASON_EPOCH) != 0u ? 1u : 0u;
+        identityRejects += (reasons & C5_HISTORY_REASON_IDENTITY) != 0u ? 1u : 0u;
+        reprojectionRejects += (reasons & C5_HISTORY_REASON_REPROJECTION) != 0u ? 1u : 0u;
+        depthRejects += (reasons & C5_HISTORY_REASON_DEPTH) != 0u ? 1u : 0u;
+        normalRejects += (reasons & C5_HISTORY_REASON_NORMAL) != 0u ? 1u : 0u;
+        sourceRevisionRejects += (reasons & C5_HISTORY_REASON_SOURCE_REVISION) != 0u ? 1u : 0u;
+        varianceClipped += (reasons & C5_HISTORY_REASON_VARIANCE_CLIPPED) != 0u ? 1u : 0u;
+        varianceSum += c5HistoryVariance[lane];
+        maximumVariance = max(maximumVariance, c5HistoryVariance[lane]);
+        if (c5HistoryEnergyFinite[lane] != 0u)
+        {
+            float energy = c5HistorySignedEnergy[lane];
+            float absolute = c5HistoryAbsoluteEnergy[lane];
+            signedEnergy += energy;
+            absoluteEnergy += absolute;
+            squaredEnergy += c5HistorySquaredEnergy[lane];
+            maximumAbsoluteEnergy = max(maximumAbsoluteEnergy, absolute);
+        }
+        else if (c5HistoryCandidate[lane] != 0u)
+        {
+            nonFiniteEnergy++;
+        }
+    }
+
+    uint tileIndex = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    uint recordBase = SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS +
+        tileIndex * SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS;
+    if (recordBase > uint(temporalTileRecords.words.length()) ||
+        SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS >
+            uint(temporalTileRecords.words.length()) - recordBase)
+    {
+        if (uint(temporalTileRecords.words.length()) > 15u)
+            atomicOr(temporalTileRecords.words[15u], 2u);
+        return;
+    }
+    if (temporalTileRecords.words[recordBase] != tileIndex ||
+        ((temporalTileRecords.words[recordBase + 15u] >> 16u) &
+            SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE) == 0u)
+    {
+        atomicOr(temporalTileRecords.words[15u], 4u);
+        return;
+    }
+
+    uint traceNonFinite = temporalTileRecords.words[recordBase + 4u] & 0xffu;
+    temporalTileRecords.words[recordBase + 4u] = traceNonFinite |
+        (candidateCount << 8u) | (acceptedCount << 16u) |
+        (invalidCurrentCount << 24u);
+    temporalTileRecords.words[recordBase + 5u] =
+        SimpleDdgiNearFieldPackFourTileCounts(uvec4(
+            epochRejects, identityRejects, reprojectionRejects, depthRejects));
+    temporalTileRecords.words[recordBase + 6u] =
+        SimpleDdgiNearFieldPackFourTileCounts(uvec4(
+            normalRejects, sourceRevisionRejects, varianceClipped,
+            nonFiniteEnergy));
+    temporalTileRecords.words[recordBase + 9u] = floatBitsToUint(varianceSum);
+    temporalTileRecords.words[recordBase + 10u] = floatBitsToUint(maximumVariance);
+    temporalTileRecords.words[recordBase + 11u] = floatBitsToUint(signedEnergy);
+    temporalTileRecords.words[recordBase + 12u] = floatBitsToUint(absoluteEnergy);
+    temporalTileRecords.words[recordBase + 13u] = floatBitsToUint(squaredEnergy);
+    temporalTileRecords.words[recordBase + 14u] =
+        floatBitsToUint(maximumAbsoluteEnergy);
+    temporalTileRecords.words[recordBase + 15u] |=
+        SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TEMPORAL_COMPLETE << 16u;
+    if (tileIndex == 0u)
+    {
+        atomicOr(temporalTileRecords.words[7u],
+            SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TEMPORAL_COMPLETE);
+    }
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputExtent = imageSize(temporalRadianceOutput);
+    bool covered = pixel.x < outputExtent.x && pixel.y < outputExtent.y &&
+        pixel.x < int(pc.traceWidth) && pixel.y < int(pc.traceHeight);
+    uint outputIndex = covered
+        ? uint(pixel.y) * uint(outputExtent.x) + uint(pixel.x)
+        : 0u;
+    vec4 outputResidual;
+    vec2 outputMoments;
+    uint outputValidity;
+    vec4 outputPackedNormals;
+    SimpleDdgiNearFieldResidualHitMetadata outputMetadata;
+    bool historyCandidate;
+    bool acceptedHistory;
+    uint historyReasonFlags;
+    float outputVariance;
+    bool validOutput = covered && EvaluateTemporalPixel(
+        pixel,
+        outputExtent,
+        outputIndex,
+        outputResidual,
+        outputMoments,
+        outputValidity,
+        outputPackedNormals,
+        outputMetadata,
+        historyCandidate,
+        acceptedHistory,
+        historyReasonFlags,
+        outputVariance);
+
+    float signedEnergy = 0.0;
+    float absoluteEnergy = 0.0;
+    float squaredEnergy = 0.0;
+    bool finiteEnergy = false;
+    if (validOutput)
+    {
+        signedEnergy = dot(outputResidual.rgb * outputMetadata.confidence,
+            vec3(0.2126, 0.7152, 0.0722));
+        absoluteEnergy = abs(signedEnergy);
+        squaredEnergy = signedEnergy * signedEnergy;
+        finiteEnergy = SimpleDdgiNearFieldFinite(signedEnergy) &&
+            SimpleDdgiNearFieldFinite(squaredEnergy);
+    }
+
+    uint lane = gl_LocalInvocationIndex;
+    c5HistoryCovered[lane] = covered ? 1u : 0u;
+    c5HistoryCandidate[lane] = historyCandidate ? 1u : 0u;
+    c5HistoryAccepted[lane] = acceptedHistory ? 1u : 0u;
+    c5HistoryReasonFlags[lane] = historyReasonFlags;
+    c5HistoryVariance[lane] = validOutput ? outputVariance : 0.0;
+    c5HistorySignedEnergy[lane] = finiteEnergy ? signedEnergy : 0.0;
+    c5HistoryAbsoluteEnergy[lane] = finiteEnergy ? absoluteEnergy : 0.0;
+    c5HistorySquaredEnergy[lane] = finiteEnergy ? squaredEnergy : 0.0;
+    c5HistoryEnergyFinite[lane] = finiteEnergy ? 1u : 0u;
+    barrier();
+    if (lane == 0u)
+        RecordTemporalTileSummary();
+    barrier();
+
+    if (!covered)
+        return;
+    if (!validOutput)
+    {
+        WriteInvalid(pixel, outputIndex);
+        return;
+    }
+    imageStore(temporalRadianceOutput, pixel, outputResidual);
+    imageStore(temporalMomentsOutput, pixel,
+        vec4(outputMoments, 0.0, 0.0));
+    imageStore(temporalValidityOutput, pixel,
+        uvec4(outputValidity, 0u, 0u, 0u));
+    imageStore(temporalHistoryNormalOutput, pixel, outputPackedNormals);
+    temporalMetadataOutput.values[outputIndex] = outputMetadata;
+}

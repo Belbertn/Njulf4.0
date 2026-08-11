@@ -12,6 +12,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
+using Njulf.Core.Foliage;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
@@ -52,6 +53,14 @@ namespace Njulf.Rendering
     {
         private const long LocalShadowGpuCompactionRecordThresholdMicroseconds = 750;
         private const int LocalShadowGpuCompactionWorkThreshold = 8192;
+        private const ulong SimpleDdgiReceiverFeedbackExperimentBudgetBytes =
+            32UL * 1024UL * 1024UL;
+        private const ulong SimpleDdgiDirectionalGuidingExperimentBudgetBytes =
+            16UL * 1024UL * 1024UL;
+        private const ulong SimpleDdgiNearFieldResidualExperimentBudgetBytes =
+            96UL * 1024UL * 1024UL;
+        private const ulong GiCausticExperimentBudgetBytes =
+            96UL * 1024UL * 1024UL;
 
         internal static IReadOnlyList<string> ProductionRenderPassOrder => ProductionRenderPipelineDeclaration.Instance.PassOrder;
 
@@ -85,6 +94,18 @@ namespace Njulf.Rendering
         private readonly List<DeferredAsyncSubmission> _deferredAsyncSubmissions = new();
         private readonly AsyncComputeTimingFrame?[] _asyncComputeTimingFrames = new AsyncComputeTimingFrame?[FramesInFlight];
         private readonly bool _ownsDependencies;
+        // Advanced GI may be evaluated only against an explicit frozen
+        // prerequisite manifest. It starts empty/fail-closed so a repository
+        // build or an extension query can never silently promote research
+        // work into the renderer.
+        private AdvancedGiPrerequisiteManifest _advancedGiPrerequisiteManifest = new();
+        // AutoQualified is a separate, stricter gate. It can only be populated by the
+        // load-authenticated qualification codec; direct booleans or extension presence never
+        // create an entry.
+        private AdvancedGiQualificationManifest _advancedGiQualificationManifest =
+            AdvancedGiQualificationManifest.Empty;
+        private AdvancedGiRenderGraphModes _advancedGiGraphModes =
+            AdvancedGiRenderGraphModes.Disabled;
         // Captured after pipeline creation, when the effective shader assets have been loaded.
         // Keeping this renderer-local prevents a later on-disk asset change from being reported
         // as though it had affected the already-created Vulkan pipeline.
@@ -109,9 +130,92 @@ namespace Njulf.Rendering
         private ReflectionProbePublishPass? _reflectionProbePublishPass;
         private readonly ReflectionProbeCompletionValueProvider _reflectionProbeCompletionValues = new();
         private SimpleDdgiVolumeManager? _simpleDdgiVolumeManager;
+        private SimpleDdgiLightTreeGpuResources? _simpleDdgiLightTreeResources;
+        // B1 owns a real 48-byte all-producer capture source. Construction is
+        // still allocation-free; exact buffers and pipelines are created only
+        // after the prerequisite/mode/memory/producer transaction is admitted.
+        private SimpleDdgiReceiverFeedbackVulkanRuntime?
+            _simpleDdgiReceiverFeedbackRuntime;
+        private SimpleDdgiReceiverFeedbackPlan _simpleDdgiReceiverFeedbackPlan =
+            SimpleDdgiReceiverFeedbackPlan.Disabled();
+        private SimpleDdgiReceiverFeedbackConfigurationKey?
+            _simpleDdgiReceiverFeedbackConfigurationKey;
+        private bool _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested;
+        // Buffer-only transient categories use one physical arena when graph
+        // lifetimes prove they cannot overlap. Optional images remain owned by
+        // their format-specific render-target allocators.
+        private AdvancedGiTransientBufferArena? _advancedGiTransientBufferArena;
+        // C3 uses a source-cache-owned direction/PDF sidecar and an exact
+        // generation-time variable-PDF handshake. Construction remains
+        // allocation-free until that handshake and the workload are admitted.
+        private SimpleDdgiGuidingVulkanRuntime? _simpleDdgiGuidingRuntime;
+        private SimpleDdgiGuidingSourceCacheSidecar?
+            _simpleDdgiGuidingSourceCacheSidecar;
+        private SimpleDdgiGuidingFrameCoordinator?
+            _simpleDdgiGuidingFrameCoordinator;
+        private SimpleDdgiGuidingFrameConfiguration
+            _simpleDdgiGuidingFrameConfiguration =
+                SimpleDdgiGuidingFrameConfiguration.Disabled;
+        private SimpleDdgiGuidingFrameConfiguration
+            _simpleDdgiGuidingAppliedArenaConfiguration =
+                SimpleDdgiGuidingFrameConfiguration.Disabled;
+        private string _simpleDdgiGuidingConfigurationReason =
+            "directional-guiding-disabled";
+        // C4 is an independently admitted authored-hero experiment. Its
+        // graph and allocations exist only when immutable evidence binds the
+        // exact content/device/source/layout tuple selected at initialization.
+        private bool _hasGiCausticEvidence;
+        private GiCausticQualificationEvidence _giCausticEvidence;
+        private GiCausticAdmissionContext _giCausticAdmissionContext;
+        private GiTaggedCausticCacheConfiguration
+            _giCausticRequestedConfiguration;
+        private GiTaggedCausticCachePlan _giCausticPlan;
+        private GiExperimentModeState<GiCausticMode> _giCausticMode =
+            GiExperimentModeState<GiCausticMode>.Disabled(GiCausticMode.Off);
+        private ForwardGiCausticReceiverPipelineConfiguration
+            _giCausticReceiverPipelineConfiguration =
+                ForwardGiCausticReceiverPipelineConfiguration.Disabled;
+        private GiCausticVulkanRuntime? _giCausticRuntime;
+        private GiCausticTaggedTransportGpuProducer?
+            _giCausticTaggedTransportProducer;
+        private GiCausticCacheRevision _giCausticCurrentRevision;
+        private ulong _giCausticProducerRevisionFingerprint;
+        private bool _giCausticRuntimeConfigured;
+        private bool _giCausticFrameAvailable;
+        // C5 is admitted only from a caller-supplied immutable post-B3
+        // measurement artifact. The default records are intentionally absent,
+        // which keeps its graph, MRT variants, images, buffers, and pipelines
+        // at zero cost.
+        private bool _hasSimpleDdgiNearFieldResidualEvidence;
+        private SimpleDdgiNearFieldResidualQualificationEvidence
+            _simpleDdgiNearFieldResidualEvidence;
+        private SimpleDdgiNearFieldResidualAdmissionContext
+            _simpleDdgiNearFieldResidualAdmissionContext;
+        private SimpleDdgiNearFieldResidualProfile
+            _simpleDdgiNearFieldResidualRequestedProfile =
+                SimpleDdgiNearFieldResidualProfile.HalfResolutionReference;
+        private SimpleDdgiNearFieldResidualPlan _simpleDdgiNearFieldResidualPlan;
+        private SimpleDdgiNearFieldResidualGpuConfiguration
+            _simpleDdgiNearFieldResidualGpuConfiguration;
+        private GiExperimentModeState<SimpleDdgiNearFieldResidualMode>
+            _simpleDdgiNearFieldResidualMode =
+                GiExperimentModeState<SimpleDdgiNearFieldResidualMode>
+                    .Disabled(SimpleDdgiNearFieldResidualMode.Off);
+        private ForwardNearFieldDirectSourcePipelineConfiguration
+            _nearFieldDirectSourcePipelineConfiguration =
+                ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
+        private SimpleDdgiNearFieldResidualVulkanRuntime?
+            _simpleDdgiNearFieldResidualRuntime;
         private FarFieldClipmapManager? _farFieldClipmapManager;
         private AccelerationStructureManager? _accelerationStructureManager;
+        private DdgiFoliageProxyManager? _ddgiFoliageProxyManager;
+        private DdgiFoliageProxyFrame _ddgiFoliageProxyFrame =
+            DdgiFoliageProxyFrame.Empty(0);
+        private ulong _lastDdgiFoliageProxyDirtySignature;
+        private bool _hasDdgiFoliageProxyDirtySignature;
+        private BoundingBox? _lastDdgiFoliageProxyInfluenceBounds;
         private AutoExposureManager? _autoExposureManager;
+        private GiPipelineCacheService? _giPipelineCacheService;
         private SmaaResources? _smaaResources;
         private SkinningManager _skinningManager = null!;
         private GpuParticleRuntimeManager _gpuParticleRuntimeManager = null!;
@@ -121,40 +225,93 @@ namespace Njulf.Rendering
         private readonly GPULocalLightShadowIndex[] _localShadowIndexScratch = new GPULocalLightShadowIndex[LightManager.MaxLights];
         private readonly List<BoundingBox> _ddgiDirtyBoundsScratch = new();
         private readonly List<DdgiDirtyRegion> _ddgiDirtyRegionScratch = new();
+        private readonly List<DdgiDirtyRegion>
+            _ddgiMergedDirtyRegionScratch = new();
+        private readonly DdgiMutationJournal _ddgiMutationJournal;
         private readonly Dictionary<RenderObject, DdgiTrackedRenderObject> _ddgiTrackedRenderObjects = new();
         private readonly List<RenderObject> _ddgiTrackedRenderObjectRemovalScratch = new();
+        private readonly Dictionary<Guid, DdgiTrackedSkinnedPose>
+            _ddgiTrackedSkinnedPoses = new();
+        private readonly HashSet<Guid> _ddgiSeenSkinnedPoseIdentities = new();
+        private readonly List<Guid> _ddgiTrackedSkinnedPoseRemovalScratch = new();
         private readonly Dictionary<ParticleEffectInstance, DdgiTrackedVfxProxy> _ddgiTrackedVfxProxies = new();
         private readonly List<ParticleEffectInstance> _ddgiTrackedVfxProxyRemovalScratch = new();
-        private const int MaxDdgiEmissiveSourceCount =
+        private const int MaxDdgiEmissiveMeshSourceCount =
             GlobalIlluminationSettings.MaxDdgiEmissiveTriangleBudget;
+        private const int MaxDdgiEmissiveSourceCount =
+            MaxDdgiEmissiveMeshSourceCount +
+            DdgiVfxMacroEmitterReducer.DefaultMaximumSourceCount;
         private const int MaximumDdgiEmissiveRuntimeRecordScans = 262144;
         private static readonly ulong DdgiEmissiveSourceStride = (ulong)Marshal.SizeOf<GPUDdgiEmissiveSource>();
+        private static readonly ulong DdgiEmissiveSurfaceStride = (ulong)Marshal.SizeOf<GPUDdgiEmissiveSurface>();
         private readonly GPUDdgiEmissiveSource[] _ddgiEmissiveSourceScratch = new GPUDdgiEmissiveSource[MaxDdgiEmissiveSourceCount];
+        private readonly GPUDdgiEmissiveSurface[] _ddgiEmissiveSurfaceScratch =
+            new GPUDdgiEmissiveSurface[MaxDdgiEmissiveSourceCount];
         private readonly float[] _ddgiEmissiveSourceImportanceScratch = new float[MaxDdgiEmissiveSourceCount];
-        private readonly DdgiEmissiveTableCache _ddgiEmissiveTableCache = new(MaxDdgiEmissiveSourceCount);
+        private readonly DdgiEmissiveTableCache _ddgiEmissiveTableCache = new(MaxDdgiEmissiveMeshSourceCount);
+        private readonly DdgiEmissiveSourceSetBuilder _ddgiEmissiveSourceSetBuilder =
+            new(MaxDdgiEmissiveSourceCount);
+        private readonly double[] _ddgiEmissiveCombinedImportanceScratch =
+            new double[MaxDdgiEmissiveSourceCount];
+        private readonly DdgiEmissiveSpatialHierarchy _ddgiEmissiveSpatialHierarchy =
+            new(MaxDdgiEmissiveSourceCount);
+        private readonly DdgiVfxMacroEmitterReducer _ddgiVfxMacroEmitterReducer = new();
+        private readonly DdgiVfxMacroEmitter[] _ddgiVfxMacroEmitterScratch =
+            new DdgiVfxMacroEmitter[DdgiVfxMacroEmitterReducer.DefaultMaximumSourceCount];
+        private DdgiVfxMacroReductionResult _ddgiVfxMacroReductionResult;
         private BufferHandle _ddgiEmissiveSourceBuffer = BufferHandle.Invalid;
+        private BufferHandle _ddgiEmissiveSurfaceBuffer = BufferHandle.Invalid;
         private ulong _ddgiEmissiveSourceBufferSize;
+        private ulong _ddgiEmissiveSurfaceBufferSize;
         private bool _ddgiEmissiveSourceBufferContentValid;
         private ulong _ddgiEmissiveSourceUploadCount;
         private int _ddgiEmissiveSourceCount;
+        private int _ddgiEmissiveHierarchyNodeCount;
         private uint _ddgiEmissiveSourceRevision;
         private ulong _lastDdgiEmissiveSourceSignature;
+        private ulong _lastDdgiEmissiveBasePayloadSignature;
+        private ulong _lastDdgiVfxMacroRevision;
         private DdgiEmissiveTriangleTableStats _ddgiEmissiveTriangleTableStats;
         private int _ddgiEmissiveSkippedSkinnedObjectCount;
         private double _ddgiEmissiveSkippedSkinnedImportance;
         private int _ddgiEmissiveExcludedCandidateCount;
         private double _ddgiEmissiveExcludedImportance;
         private int _ddgiEmissiveRuntimeRecordScanCount;
+        private DdgiEmissiveEnergyDiagnostics _ddgiEmissiveEnergyDiagnostics;
+        private bool _hasDdgiEmissiveEnergyDiagnostics;
+        private ulong _ddgiEmissiveEnergyWarningCount;
+        private string _lastDdgiEmissiveEnergyWarning = string.Empty;
+        private readonly List<SimpleDdgiRefinementDemand>
+            _simpleDdgiRefinementEmissiveDemandScratch = new(
+                SimpleDdgiRefinementEmissiveDemandBuilder.MaximumDemandCount);
+        private SimpleDdgiRefinementEmissiveDemandDiagnostics
+            _simpleDdgiRefinementEmissiveDemandDiagnostics;
+        private bool _hasSimpleDdgiRefinementEmissiveDemandSignature;
+        private ulong _simpleDdgiRefinementEmissiveDemandSignature;
         private int _ddgiTrackingFrame;
         private ulong _lastDdgiLightSignature;
         private Light[] _lastDdgiLights = Array.Empty<Light>();
         private bool _hasDdgiDynamicSignature;
+        private bool _ddgiMutationOraclePrimed;
         private bool _hasSimpleDdgiDirtySignature;
         private ulong _lastSimpleDdgiLightSignature;
         private ulong _lastSimpleDdgiStableLightSignature;
+        private ulong _lastSimpleDdgiSourcePolicySignature;
+        private ulong _lastSimpleDdgiEnvironmentSignature;
         private ulong _lastSimpleDdgiAtmosphereStepSignature;
         private ulong _lastSimpleDdgiEmissiveSignature;
         private ulong _lastSimpleDdgiDynamicGeometrySignature;
+        private bool _hasLastSimpleDdgiSoleDirectionalLight;
+        private Light _lastSimpleDdgiSoleDirectionalLight;
+        private bool _lastSimpleDdgiHadNoEmissiveSources;
+        private Scene? _simpleDdgiWarmStartIdentityScene;
+        private ulong _simpleDdgiWarmStartIdentityMutationSerial;
+        private ulong _simpleDdgiWarmStartIdentityContentRevision;
+        private uint _simpleDdgiWarmStartIdentityMaterialRevision;
+        private ulong _simpleDdgiWarmStartIdentityLightSignature;
+        private ulong _simpleDdgiWarmStartIdentityEnvironmentSignature;
+        private ulong _simpleDdgiWarmStartIdentityEmissiveSignature;
+        private SimpleDdgiWarmStartSceneIdentity? _simpleDdgiWarmStartSceneIdentity;
         private bool _lastReflectionProbeGiReady;
         private uint _lastReflectionProbeSimpleDirtyReasonFlags;
         private ulong _lastSpotShadowUploadSignature;
@@ -184,6 +341,8 @@ namespace Njulf.Rendering
         private SimpleDdgiPageResidencyPass? _simpleDdgiPageResidencyPass;
         private SimpleDdgiPageFeedbackPass? _simpleDdgiPageFeedbackPass;
         private SimpleDdgiRelocateClassifyPass? _simpleDdgiRelocateClassifyPass;
+        private SimpleDdgiDirectionalRadiancePass?
+            _simpleDdgiDirectionalRadiancePass;
         private SimpleDdgiAcceleratedSolvePass? _simpleDdgiAcceleratedSolvePass;
         private SimpleDdgiTransportPass? _simpleDdgiTransportPass;
         private SimpleDdgiBlendPass? _simpleDdgiBlendPass;
@@ -191,6 +350,8 @@ namespace Njulf.Rendering
         private SimpleDdgiTransportAuditPass? _simpleDdgiTransportAuditPass;
         private SimpleDdgiSchedulerCommitPass? _simpleDdgiSchedulerCommitPass;
         private SkinningPass _skinningPass = null!;
+        private DdgiFoliageProxyGenerationPass?
+            _ddgiFoliageProxyGenerationPass;
         private GpuParticleResetPass _gpuParticleResetPass = null!;
         private GpuParticleSimulatePass _gpuParticleSimulatePass = null!;
         private GpuParticleSortPass _gpuParticleSortPass = null!;
@@ -202,6 +363,7 @@ namespace Njulf.Rendering
         private FoliageCullPass _foliageCullPass = null!;
         private SceneOpaqueCompactionPass _sceneOpaqueCompactionPass = null!;
         private ForwardVisibilityCompactionPass _forwardVisibilityCompactionPass = null!;
+        private DirectionalShadowPass? _directionalShadowPass;
 
         // State
         private int _currentFrame = 0;
@@ -235,15 +397,39 @@ namespace Njulf.Rendering
         private DdgiForwardEstimateCounters _completedDdgiForwardEstimateCounters;
         private DdgiInvestigationCounters _completedDdgiInvestigationCounters;
         private DirectionalShadowReceiverCounters _completedDirectionalShadowReceiverCounters = DirectionalShadowReceiverCounters.Empty;
+        private DirectionalShadowCasterDiagnostics _completedDirectionalShadowCasterDiagnostics =
+            DirectionalShadowCasterDiagnostics.Empty;
+        private readonly DirectionalShadowCasterFrameCapture[] _directionalShadowCasterFrameCaptures =
+            new DirectionalShadowCasterFrameCapture[FramesInFlight];
         private FarFieldMaterialV2Counters _completedFarFieldMaterialV2Counters;
         private MaterialGiGpuCounters _completedMaterialGiCounters;
         private ThinSurfaceTransportCounters _completedThinSurfaceTransportCounters;
+        private DdgiGeometryParticipationGpuCounters
+            _completedDdgiGeometryParticipationCounters;
+        private DdgiManyLightGpuCounters _completedDdgiManyLightCounters;
         private GpuParticleCounterSnapshot _completedGpuParticleCounters;
         private FoliageCounterSnapshot _completedFoliageCounters;
         private SceneSubmissionCounterSnapshot _completedSceneSubmissionCounters;
         private SceneSubmissionCounterSnapshot _completedForwardVisibilityCounters;
         private SceneSubmissionValidationSnapshot _completedSceneSubmissionValidation;
         private readonly DdgiDiagnosticWarningTracker _ddgiDiagnosticWarningTracker = new();
+        // Each delayed feedback source occupies one in-flight slot. Keep the
+        // liveness bound explicit and conservative rather than treating a
+        // frame-local schedule count as a missing-progress failure.
+        private readonly SimpleDdgiLivenessWatchdog _simpleDdgiLivenessWatchdog = new(
+            FramesInFlight,
+            schedulerFeedbackLatencyFrames: FramesInFlight,
+            residencyFeedbackLatencyFrames: FramesInFlight,
+            publicationReadbackLatencyFrames: FramesInFlight);
+        private readonly SimpleDdgiSchedulerCostModel _simpleDdgiSchedulerCostModel =
+            new();
+        // Generation-rejection counters are cumulative. Keep a renderer-local
+        // baseline so the liveness record reports only a rejection observed in
+        // the current diagnostic interval, rather than attributing an old
+        // rejected readback to otherwise healthy work.
+        private bool _simpleDdgiLivenessFeedbackRejectionBaselineInitialized;
+        private ulong _lastSimpleDdgiSchedulerFeedbackGenerationRejectionCount;
+        private ulong _lastSimpleDdgiResidencyFeedbackGenerationRejectionCount;
         private readonly HiZVisibilityPolicyRuntimeState _hizVisibilityPolicyState = new();
         private Scene? _lastHiZScene;
         private bool _hasLastHiZCameraPose;
@@ -322,6 +508,42 @@ namespace Njulf.Rendering
         public MemoryHeapBudgetSnapshot CurrentMemoryHeapBudget => _context.GetMemoryHeapBudgetSnapshot();
         public DebugDrawList DebugDraw => _debugDraw;
         public DebugOverlaySettings DebugOverlays => Settings.Debug;
+        /// <summary>
+        /// B1's explicit capability, allocation, and fence-publication state.
+        /// Disabled or rejected modes report zero B1-owned buffers.
+        /// </summary>
+        public SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics
+            SimpleDdgiReceiverFeedbackRuntimeDiagnostics =>
+            _simpleDdgiReceiverFeedbackRuntime?.Diagnostics ??
+            SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics.Disabled;
+
+        /// <summary>
+        /// C3's explicit source-cache capability and allocation state. Slot
+        /// 203 remains source-cache-owned; rejected handshakes own zero C3
+        /// allocations and cannot publish a guided sample.
+        /// </summary>
+        public SimpleDdgiGuidingGpuRuntimeDiagnostics
+            SimpleDdgiGuidingRuntimeDiagnostics =>
+            _simpleDdgiGuidingRuntime?.Diagnostics ??
+            SimpleDdgiGuidingGpuRuntimeDiagnostics.Disabled;
+
+        /// <summary>
+        /// C4's authoritative resource/publication state. A renderer without
+        /// bound qualification evidence or an eligible authored hero reports
+        /// the disabled zero-allocation snapshot.
+        /// </summary>
+        public GiCausticVulkanRuntimeDiagnostics GiCausticRuntimeDiagnostics =>
+            _giCausticRuntime?.Diagnostics ??
+            GiCausticVulkanRuntimeDiagnostics.Disabled;
+
+        /// <summary>
+        /// C5's concrete allocation/history state. A default renderer reports
+        /// Disabled and owns no C5 resources because no post-B3 evidence has
+        /// been supplied.
+        /// </summary>
+        public SimpleDdgiNearFieldResidualGpuRuntimeSnapshot
+            SimpleDdgiNearFieldResidualRuntimeSnapshot =>
+            _simpleDdgiNearFieldResidualRuntime?.Snapshot ?? default;
 
         /// <summary>
         /// Explicit development-only sparse residency command. Merely selecting
@@ -415,7 +637,319 @@ namespace Njulf.Rendering
         }
         public bool EnableTransparentPass { get; set; } = true;
         public bool EnableMeshletDebugView { get; set; }
-        public RenderSettings Settings { get; } = new();
+        public RenderSettings Settings { get; }
+
+        /// <summary>
+        /// Installs the independently reviewed prerequisite evidence used when
+        /// the renderer is next initialized. Advanced graph variants are
+        /// constructed transactionally, therefore changing this evidence on a
+        /// live renderer requires a normal renderer restart rather than a
+        /// partial descriptor/pass transition.
+        /// </summary>
+        public void ConfigureAdvancedGiPrerequisiteManifest(
+            AdvancedGiPrerequisiteManifest manifest)
+        {
+            ArgumentNullException.ThrowIfNull(manifest);
+            if (_isInitialized)
+            {
+                throw new InvalidOperationException(
+                    "Advanced GI prerequisite evidence can only change before renderer initialization; restart to rebuild graph resources transactionally.");
+            }
+            _advancedGiPrerequisiteManifest = manifest;
+        }
+
+        /// <summary>
+        /// Loads Phase 0 evidence before initialization.  A missing, malformed,
+        /// or incomplete file deliberately installs an empty manifest and
+        /// returns <see langword="false"/>; callers may surface the detail in
+        /// their launch report, but the renderer continues on canonical GI.
+        /// </summary>
+        public bool TryConfigureAdvancedGiPrerequisiteManifestFile(
+            string path,
+            out string failureDetail)
+        {
+            if (_isInitialized)
+            {
+                throw new InvalidOperationException(
+                    "Advanced GI prerequisite evidence can only change before renderer initialization; restart to rebuild graph resources transactionally.");
+            }
+
+            if (!AdvancedGiPrerequisiteManifestCodec.TryLoad(
+                    path,
+                    out AdvancedGiPrerequisiteManifest manifest,
+                    out failureDetail))
+            {
+                _advancedGiPrerequisiteManifest = new AdvancedGiPrerequisiteManifest();
+                return false;
+            }
+
+            _advancedGiPrerequisiteManifest = manifest;
+            return true;
+        }
+
+        /// <summary>
+        /// Installs a previously load-authenticated feature qualification set. The immutable graph
+        /// inventory and optional native backends are selected during initialization, so changing
+        /// qualification evidence on a live renderer requires a normal restart.
+        /// </summary>
+        public void ConfigureAdvancedGiQualificationManifest(
+            AdvancedGiQualificationManifest manifest)
+        {
+            ArgumentNullException.ThrowIfNull(manifest);
+            if (_isInitialized)
+            {
+                throw new InvalidOperationException(
+                    "Advanced GI qualification evidence can only change before renderer initialization; restart to rebuild graph resources transactionally.");
+            }
+            _advancedGiQualificationManifest = manifest;
+        }
+
+        /// <summary>
+        /// Installs the independently measured C4 artifact and the exact
+        /// bounded world-cache/screen profile for the next initialization.
+        /// The profile is recompiled against the selected device and scene
+        /// extent before the graph can expose any C4 resource.
+        /// </summary>
+        public void ConfigureGiCausticEvidence(
+            in GiCausticQualificationEvidence evidence,
+            in GiCausticAdmissionContext admissionContext,
+            in GiTaggedCausticCacheConfiguration configuration)
+        {
+            if (_isInitialized)
+            {
+                throw new InvalidOperationException(
+                    "C4 evidence can only change before renderer initialization; restart to rebuild its immutable graph variant.");
+            }
+            if (!admissionContext.TryValidate(out string contextFailure))
+                throw new ArgumentException(contextFailure, nameof(admissionContext));
+            if (!configuration.Enabled || configuration.MemoryBudgetBytes == 0UL ||
+                configuration.MemoryBudgetBytes > GiCausticExperimentBudgetBytes)
+            {
+                throw new ArgumentException(
+                    "C4 requires an enabled profile within its independent 96 MiB budget.",
+                    nameof(configuration));
+            }
+            if (!configuration.ScreenResolveProfile.TryValidate(
+                    out string profileFailure))
+            {
+                throw new ArgumentException(profileFailure, nameof(configuration));
+            }
+
+            GiTaggedCausticCachePlan candidate =
+                GiTaggedCausticCacheExperiment.CreatePlan(
+                    configuration,
+                    new GiTaggedCausticCacheQualification(
+                        SeparateOwnershipImplemented: true,
+                        DiffuseTransportFeedDisabled: true,
+                        ReferenceParityPassed:
+                            evidence.CpuGpuPdfAndThroughputParity,
+                        StabilityProofPassed:
+                            evidence.PublicationAndMotionStabilityPassed,
+                        QualityPerMillisecondImproved:
+                            evidence.QualityPerMillisecondImproved),
+                    evidence,
+                    admissionContext);
+            if (!candidate.Active)
+            {
+                throw new ArgumentException(
+                    candidate.Status,
+                    nameof(evidence));
+            }
+
+            _giCausticEvidence = evidence;
+            _giCausticAdmissionContext = admissionContext;
+            _giCausticRequestedConfiguration = configuration;
+            _hasGiCausticEvidence = true;
+        }
+
+        /// <summary>
+        /// Installs the immutable C5 measure-before-build result for the next
+        /// renderer initialization. The evidence is revalidated against the
+        /// selected device, exact scene extent, source ABI/profile, B3
+        /// identity, and compiled byte layout before any C5 graph resource is
+        /// registered.
+        /// </summary>
+        public void ConfigureSimpleDdgiNearFieldResidualEvidence(
+            in SimpleDdgiNearFieldResidualQualificationEvidence evidence,
+            in SimpleDdgiNearFieldResidualAdmissionContext admissionContext)
+        {
+            if (!TryResolveNearFieldEvidenceProfile(
+                    evidence.Binding.ProfileFingerprint,
+                    out SimpleDdgiNearFieldResidualProfile profile))
+            {
+                throw new ArgumentException(
+                    "C5 evidence does not bind one of the production graph profiles.",
+                    nameof(evidence));
+            }
+            ConfigureSimpleDdgiNearFieldResidualEvidence(
+                evidence, admissionContext, profile);
+        }
+
+        /// <summary>
+        /// Installs evidence together with the exact measured production
+        /// profile. AutoQualified may use half, quarter, or eighth resolution;
+        /// the explicit HiZHalfResolutionExperiment remains half-resolution.
+        /// </summary>
+        public void ConfigureSimpleDdgiNearFieldResidualEvidence(
+            in SimpleDdgiNearFieldResidualQualificationEvidence evidence,
+            in SimpleDdgiNearFieldResidualAdmissionContext admissionContext,
+            in SimpleDdgiNearFieldResidualProfile profile)
+        {
+            if (_isInitialized)
+            {
+                throw new InvalidOperationException(
+                    "C5 evidence can only change before renderer initialization; restart to rebuild its immutable graph variant.");
+            }
+            if (!admissionContext.TryValidate(out string contextFailure))
+                throw new ArgumentException(contextFailure, nameof(admissionContext));
+            if (!evidence.HasEvidenceId || !evidence.Binding.IsValid)
+            {
+                throw new ArgumentException(
+                    "C5 evidence requires a valid ID and complete immutable binding.",
+                    nameof(evidence));
+            }
+            AdvancedGiNearFieldGraphProfile graphProfile =
+                AdvancedGiNearFieldGraphProfile.From(profile);
+            if (!graphProfile.IsSupported ||
+                evidence.Binding.ProfileFingerprint !=
+                    SimpleDdgiNearFieldResidualEvidenceEvaluator
+                        .ComputeProfileFingerprint(profile))
+            {
+                throw new ArgumentException(
+                    "C5 evidence/profile fingerprint is unsupported or mismatched.",
+                    nameof(profile));
+            }
+
+            _simpleDdgiNearFieldResidualEvidence = evidence;
+            _simpleDdgiNearFieldResidualAdmissionContext = admissionContext;
+            _simpleDdgiNearFieldResidualRequestedProfile = profile;
+            _hasSimpleDdgiNearFieldResidualEvidence = true;
+        }
+
+        private static bool TryResolveNearFieldEvidenceProfile(
+            ulong fingerprint,
+            out SimpleDdgiNearFieldResidualProfile profile)
+        {
+            SimpleDdgiNearFieldResidualProfile[] candidates =
+            [
+                SimpleDdgiNearFieldResidualProfile.HalfResolutionReference,
+                SimpleDdgiNearFieldResidualProfile.QuarterResolutionPerformance,
+                SimpleDdgiNearFieldResidualProfile.EighthResolutionMemoryBound
+            ];
+            foreach (SimpleDdgiNearFieldResidualProfile candidate in candidates)
+            {
+                if (fingerprint == SimpleDdgiNearFieldResidualEvidenceEvaluator
+                        .ComputeProfileFingerprint(candidate))
+                {
+                    profile = candidate;
+                    return true;
+                }
+            }
+            profile = default;
+            return false;
+        }
+
+        /// <summary>
+        /// Loads and authenticates the complete AutoQualified evidence set before initialization.
+        /// Any missing report, stale hash, unknown JSON member, device-matrix gap, or failed
+        /// promotion floor installs the empty fail-closed set atomically.
+        /// </summary>
+        public bool TryConfigureAdvancedGiQualificationManifestFile(
+            string path,
+            out string failureDetail)
+        {
+            if (_isInitialized)
+            {
+                throw new InvalidOperationException(
+                    "Advanced GI qualification evidence can only change before renderer initialization; restart to rebuild graph resources transactionally.");
+            }
+
+            if (!AdvancedGiQualificationManifestCodec.TryLoad(
+                    path,
+                    out AdvancedGiQualificationManifest manifest,
+                    out failureDetail))
+            {
+                _advancedGiQualificationManifest =
+                    AdvancedGiQualificationManifest.Empty;
+                return false;
+            }
+
+            _advancedGiQualificationManifest = manifest;
+            return true;
+        }
+
+        /// <summary>
+        /// Atomically loads the exact scene/layout-bound C4 and C5 evidence
+        /// used by the next initialization. A malformed or stale bundle clears
+        /// both feature-specific records, so a partially accepted file cannot
+        /// leave one experimental graph branch enabled.
+        /// </summary>
+        public bool TryConfigureAdvancedGiRuntimeEvidenceBundleFile(
+            string path,
+            out string failureDetail)
+        {
+            if (_isInitialized)
+            {
+                throw new InvalidOperationException(
+                    "Advanced GI runtime evidence can only change before renderer initialization; restart to rebuild graph resources transactionally.");
+            }
+
+            if (!AdvancedGiRuntimeEvidenceBundleCodec.TryLoad(
+                    path,
+                    out AdvancedGiRuntimeEvidenceBundleDocument bundle,
+                    out failureDetail))
+            {
+                ClearAdvancedGiRuntimeEvidence();
+                return false;
+            }
+
+            try
+            {
+                // The codec has already compiled both plans. Reuse the public
+                // setters here so renderer-owned budget/profile invariants stay
+                // centralized and cannot drift from programmatic startup.
+                ClearAdvancedGiRuntimeEvidence();
+                if (bundle.Caustics is { } caustics)
+                {
+                    ConfigureGiCausticEvidence(
+                        caustics.Evidence,
+                        caustics.AdmissionContext,
+                        caustics.Configuration);
+                }
+                if (bundle.NearFieldResidual is { } nearField)
+                {
+                    ConfigureSimpleDdgiNearFieldResidualEvidence(
+                        nearField.Evidence,
+                        nearField.AdmissionContext,
+                        nearField.Configuration.Profile);
+                }
+
+                failureDetail = "valid";
+                return true;
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException or OverflowException)
+            {
+                ClearAdvancedGiRuntimeEvidence();
+                failureDetail =
+                    "advanced-gi-runtime-evidence-bundle-renderer-rejected:" +
+                    exception.Message;
+                return false;
+            }
+        }
+
+        private void ClearAdvancedGiRuntimeEvidence()
+        {
+            _hasGiCausticEvidence = false;
+            _giCausticEvidence = default;
+            _giCausticAdmissionContext = default;
+            _giCausticRequestedConfiguration = default;
+            _hasSimpleDdgiNearFieldResidualEvidence = false;
+            _simpleDdgiNearFieldResidualEvidence = default;
+            _simpleDdgiNearFieldResidualAdmissionContext = default;
+            _simpleDdgiNearFieldResidualRequestedProfile =
+                SimpleDdgiNearFieldResidualProfile.HalfResolutionReference;
+        }
         /// <summary>
         /// Optional application-supplied active scenario identifier included in performance
         /// captures. Set this before drawing the scenario; when it is not supplied, captures
@@ -615,7 +1149,8 @@ namespace Njulf.Rendering
             StagingRing stagingRing,
             FenceBasedDeleter deleter,
             IModelRenderUploadService modelUploadService,
-            bool ownsDependencies)
+            bool ownsDependencies,
+            RenderSettings? initialSettings = null)
         {
             _window = window ?? throw new ArgumentNullException(nameof(window));
             _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -633,6 +1168,10 @@ namespace Njulf.Rendering
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
             _modelUploadService = modelUploadService ?? throw new ArgumentNullException(nameof(modelUploadService));
+            Settings = initialSettings ?? new RenderSettings();
+            _ddgiMutationJournal = new DdgiMutationJournal(
+                _materialManager,
+                _lightManager);
             Settings.QualityPresetChanging += OnQualityPresetChanging;
             OnQualityPresetChanging(Settings.QualityPreset);
             _diagnosticsBuffer = new RendererDiagnosticsBuffer(_context, _bufferManager);
@@ -659,13 +1198,52 @@ namespace Njulf.Rendering
 
             System.Diagnostics.Debug.WriteLine("Initializing VulkanRenderer...");
 
+            // Auto-qualified admission is shader-bundle keyed. Resolve the effective embedded
+            // bytes before any optional backend or immutable graph inventory is selected; doing
+            // this later would make startup admission compare against a placeholder identity.
+            _captureShaderBundleHash = ResolvePerformanceCaptureShaderBundleHash();
+
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
             bool materialTransportProvenanceTargetEnabled =
                 IsMaterialTransportProvenanceTargetEnabled(Settings);
             float sceneResolutionScale = ResolveSceneResolutionScale();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
+            GlobalIlluminationSettings giSettings = Settings.GlobalIllumination;
+            AdvancedGiPrerequisiteGateResult opacityPrerequisite =
+                _advancedGiPrerequisiteManifest.Evaluate(
+                    AdvancedGiPrerequisiteFeature.OpacityMicromaps);
+            bool opacityPreflightSupported =
+                IsOpacityMicromapRuntimePreflightSupported();
+            AdvancedGiQualificationGateResult opacityQualification =
+                EvaluateAdvancedGiQualification(
+                    AdvancedGiPrerequisiteFeature.OpacityMicromaps,
+                    opacityPrerequisite,
+                    opacityPreflightSupported,
+                    giSettings.DdgiOpacityMicromapQualificationId);
+            bool enableOpacityMicromapRuntime = opacityPrerequisite.Passed &&
+                (giSettings.DdgiOpacityMicromapMode ==
+                    DdgiOpacityMicromapMode.ExtFourStateExperiment ||
+                 giSettings.DdgiOpacityMicromapMode ==
+                    DdgiOpacityMicromapMode.AutoQualified &&
+                 opacityQualification.Passed);
+            _accelerationStructureManager = new AccelerationStructureManager(
+                _context,
+                _bufferManager,
+                _meshManager,
+                _materialManager,
+                (_modelUploadService as ModelRenderUploadService)
+                    ?.OpacityMicromapRegistrations,
+                enableOpacityMicromapRuntime: enableOpacityMicromapRuntime);
+            _advancedGiGraphModes = ResolveInitialAdvancedGiGraphModes(
+                sceneRenderExtent);
+            _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested =
+                ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
+                    giSettings,
+                    _advancedGiPrerequisiteManifest.Evaluate(
+                        AdvancedGiPrerequisiteFeature.ReceiverFeedback));
             RegisterGraphResources();
-            bool motionVectorTargetEnabled = NeedsMotionVectors(Settings);
+            bool motionVectorTargetEnabled = NeedsMotionVectors(Settings) ||
+                _advancedGiGraphModes.UsesNearFieldHiZResidual;
             _renderTargets = new RenderTargetManager(
                 _context,
                 sceneRenderExtent,
@@ -679,7 +1257,15 @@ namespace Njulf.Rendering
                 fogTargetEnabled,
                 IsWeightedOitTargetEnabled(Settings),
                 _renderGraph,
-                materialTransportProvenanceTargetEnabled);
+                materialTransportProvenanceTargetEnabled,
+                nearFieldResidualEnabled:
+                    _advancedGiGraphModes.UsesNearFieldHiZResidual,
+                nearFieldResidualLayout:
+                    _simpleDdgiNearFieldResidualPlan.Layout,
+                giCausticEnabled:
+                    _advancedGiGraphModes.UsesCausticWorldCache,
+                giCausticScreenLayout:
+                    _giCausticPlan.GpuLayout.ScreenResolve);
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAmbientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
@@ -703,14 +1289,55 @@ namespace Njulf.Rendering
                 _bufferManager,
                 Settings,
                 _swapchain.DepthFormat);
+            // Persistent GI priors and AutoQualified admission share the exact same effective
+            // shader identity resolved at the start of this initialization transaction.
             _simpleDdgiVolumeManager = new SimpleDdgiVolumeManager(
                 _context,
                 _bufferManager,
                 Settings,
                 RecordDeviceWaitIdle,
                 WaitForSimpleDdgiBindlessDescriptorReaders);
+            _simpleDdgiLightTreeResources = new SimpleDdgiLightTreeGpuResources(
+                _context,
+                _bufferManager,
+                _lightManager,
+                Settings,
+                () => { WaitForSimpleDdgiBindlessDescriptorReaders(); });
+            _advancedGiTransientBufferArena =
+                new AdvancedGiTransientBufferArena(
+                    _bufferManager,
+                    () => { WaitForSimpleDdgiBindlessDescriptorReaders(); });
+            _simpleDdgiReceiverFeedbackRuntime =
+                new SimpleDdgiReceiverFeedbackVulkanRuntime(
+                    _context,
+                    _bufferManager,
+                    () => { WaitForSimpleDdgiBindlessDescriptorReaders(); },
+                    _advancedGiTransientBufferArena);
+            _simpleDdgiGuidingRuntime = new SimpleDdgiGuidingVulkanRuntime(
+                _context,
+                _bufferManager,
+                () => { WaitForSimpleDdgiBindlessDescriptorReaders(); },
+                _advancedGiTransientBufferArena);
+            _simpleDdgiGuidingSourceCacheSidecar =
+                new SimpleDdgiGuidingSourceCacheSidecar(
+                    _context,
+                    _bufferManager,
+                    () => { WaitForSimpleDdgiBindlessDescriptorReaders(); });
+            _simpleDdgiGuidingFrameCoordinator =
+                new SimpleDdgiGuidingFrameCoordinator(
+                    _context,
+                    _bufferManager,
+                    _stagingRing,
+                    _simpleDdgiVolumeManager,
+                    _advancedGiTransientBufferArena,
+                    _simpleDdgiGuidingSourceCacheSidecar,
+                    _simpleDdgiGuidingRuntime);
             _ddgiEmissiveSourceBuffer = CreateDdgiEmissiveSourceBuffer();
-            _accelerationStructureManager = new AccelerationStructureManager(_context, _bufferManager, _meshManager, _materialManager);
+            _ddgiEmissiveSurfaceBuffer = CreateDdgiEmissiveSurfaceBuffer();
+            _ddgiFoliageProxyManager = new DdgiFoliageProxyManager(
+                _context,
+                _bufferManager,
+                _stagingRing);
             _farFieldClipmapManager = new FarFieldClipmapManager(
                 _context,
                 _bufferManager,
@@ -722,14 +1349,47 @@ namespace Njulf.Rendering
             _autoExposureManager = new AutoExposureManager(_context, _bufferManager, Settings);
             _skinningManager = new SkinningManager(_context, _bufferManager, _stagingRing, _meshManager);
 
+            // Resolve the exact shader identity before any GI pipeline is
+            // created so compatible driver data can be admitted up front.
+            _giPipelineCacheService = new GiPipelineCacheService(
+                _context,
+                _captureShaderBundleHash);
+
+            if (_advancedGiGraphModes.UsesCausticWorldCache)
+            {
+                _giCausticRuntime = new GiCausticVulkanRuntime(
+                    _context,
+                    _bufferManager,
+                    _accelerationStructureManager,
+                    () => { WaitForSimpleDdgiBindlessDescriptorReaders(); },
+                    _renderTargets);
+            }
+
+            if (_advancedGiGraphModes.UsesNearFieldHiZResidual)
+            {
+                _simpleDdgiNearFieldResidualRuntime =
+                    new SimpleDdgiNearFieldResidualVulkanRuntime(
+                        _context,
+                        _bufferManager,
+                        _bindlessHeap,
+                        _renderTargets!,
+                        _hizDepthPyramid!,
+                        _simpleDdgiNearFieldResidualPlan.Layout,
+                        _simpleDdgiNearFieldResidualGpuConfiguration,
+                        _simpleDdgiNearFieldResidualAdmissionContext
+                            .B3QualificationRevision,
+                        SimpleDdgiNearFieldResidualExperimentBudgetBytes);
+            }
+
             // Create pipelines
             CreatePipelines();
-            _captureShaderBundleHash = ResolvePerformanceCaptureShaderBundleHash();
             _captureExecutableHash = ResolvePerformanceCaptureExecutableHash();
             _captureDirtyWorktreeState = ResolvePerformanceCaptureDirtyWorktreeState();
 
             // Initialize render graph with passes
             InitializeRenderGraph();
+            _giPipelineCacheService.Persist();
+            _giPipelineCacheService.MarkRenderCriticalFramesStarted();
 
             // Register static buffers in bindless heap
             RegisterSceneBuffers();
@@ -749,14 +1409,18 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 RenderTargetManager.SceneColorFormat,
                 _swapchain.DepthFormat,
-                Settings);
+                Settings,
+                _nearFieldDirectSourcePipelineConfiguration,
+                _giCausticReceiverPipelineConfiguration,
+                _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested);
             _foliagePipeline = new FoliagePipeline(
                 _context,
                 _bindlessHeap,
                 RenderTargetManager.SceneColorFormat,
                 RenderTargetManager.MotionVectorFormat,
                 _swapchain.DepthFormat,
-                Settings);
+                Settings,
+                _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested);
 
             // Create compute pipeline for light culling
             _computePipeline = new ComputePipeline(_context, _bindlessHeap);
@@ -773,8 +1437,15 @@ namespace Njulf.Rendering
                 _context,
                 _bindlessHeap,
                 RenderTargetManager.SceneColorFormat,
-                _swapchain.DepthFormat);
+                _swapchain.DepthFormat,
+                _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested);
             _skinningPass = new SkinningPass(_context, _bindlessHeap, _bufferManager, _skinningManager);
+            _ddgiFoliageProxyGenerationPass =
+                new DdgiFoliageProxyGenerationPass(
+                    _context,
+                    _bindlessHeap,
+                    _bufferManager,
+                    _giPipelineCacheService);
             _gpuParticleResetPass = new GpuParticleResetPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
             _gpuParticleSimulatePass = new GpuParticleSimulatePass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
             _gpuParticleSortPass = new GpuParticleSortPass(_context, _bindlessHeap, _bufferManager, _gpuParticleRuntimeManager);
@@ -788,11 +1459,29 @@ namespace Njulf.Rendering
             System.Diagnostics.Debug.WriteLine("Pipelines created.");
         }
 
+        internal static bool
+            ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
+                GlobalIlluminationSettings settings,
+                in AdvancedGiPrerequisiteGateResult prerequisiteGate)
+        {
+            ArgumentNullException.ThrowIfNull(settings);
+            return prerequisiteGate.Passed &&
+                settings.EffectiveUseDdgi &&
+                settings.SimpleDdgiReceiverFeedbackMode ==
+                    SimpleDdgiReceiverFeedbackMode.ExactCompacted;
+        }
+
         private void InitializeRenderGraph()
         {
             System.Diagnostics.Debug.WriteLine("Initializing render graph...");
 
-            ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(_renderGraph);
+            // The selected state is computed only from effective modes and is
+            // frozen for this renderer lifetime.  A mode transition therefore
+            // cannot leave a graph declaration, resource descriptor, or pass
+            // instance from a previous generation alive.
+            ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(
+                _renderGraph,
+                _advancedGiGraphModes);
 
             var passInstances = new Dictionary<string, RenderPassBase>(StringComparer.Ordinal);
             void AddPassInstance(RenderPassBase pass)
@@ -812,6 +1501,7 @@ namespace Njulf.Rendering
                 _foliagePipeline,
                 _bufferManager,
                 _foliageManager);
+            _directionalShadowPass = directionalShadowPass;
             _sceneOpaqueCompactionPass.SetDirectionalStaticShadowRefreshQuery(directionalShadowPass.NeedsStaticCacheRefresh);
             AddPassInstance(directionalShadowPass);
 
@@ -879,7 +1569,29 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 _environmentManager!));
 
+            AddPassInstance(new SimpleDdgiLightTreePass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _simpleDdgiLightTreeResources!,
+                _giPipelineCacheService));
+
             // Create forward+ rendering pass
+            ForwardNearFieldDirectSourceAttachmentBinding?
+                nearFieldDirectSourceBinding =
+                    _advancedGiGraphModes.UsesNearFieldHiZResidual
+                        ? new ForwardNearFieldDirectSourceAttachmentBinding(
+                            _renderTargets!.NearFieldDirectSource!,
+                            _renderTargets.NearFieldReceiverPayload!,
+                            _nearFieldDirectSourcePipelineConfiguration)
+                        : null;
+            ForwardGiCausticReceiverAttachmentBinding?
+                giCausticReceiverBinding =
+                    _advancedGiGraphModes.UsesCausticWorldCache
+                        ? new ForwardGiCausticReceiverAttachmentBinding(
+                            _renderTargets!.GiCausticReceiverPayload!,
+                            _giCausticReceiverPipelineConfiguration)
+                        : null;
             var forwardPass = new ForwardPlusPass(
                 _context,
                 _swapchain,
@@ -890,9 +1602,79 @@ namespace Njulf.Rendering
                 _foliagePipeline,
                 _bufferManager,
                 _foliageManager,
-                _skyboxPipeline);
+                _skyboxPipeline,
+                _giPipelineCacheService,
+                nearFieldDirectSourceBinding,
+                nearFieldDirectSourceRuntimeAvailable: () =>
+                    _simpleDdgiNearFieldResidualRuntime is { IsActive: true },
+                giCausticReceiverBinding: giCausticReceiverBinding,
+                giCausticRuntimeAvailable: () =>
+                    _giCausticFrameAvailable,
+                simpleDdgiReceiverFeedbackRuntime:
+                    _simpleDdgiReceiverFeedbackRuntime);
             _forwardPlusPass = forwardPass;
             AddPassInstance(forwardPass);
+
+            if (_advancedGiGraphModes.UsesDirectionalGuiding)
+            {
+                SimpleDdgiGuidingFrameCoordinator guidingCoordinator =
+                    _simpleDdgiGuidingFrameCoordinator ??
+                    throw new InvalidOperationException(
+                        "The admitted C3 graph has no frame coordinator.");
+                AddPassInstance(new SimpleDdgiGuidingSampleGraphPass(
+                    _context, _swapchain, _bindlessHeap, guidingCoordinator));
+                AddPassInstance(new SimpleDdgiGuidingTrainGraphPass(
+                    _context, _swapchain, _bindlessHeap, guidingCoordinator));
+                AddPassInstance(new SimpleDdgiGuidingBuildGraphPass(
+                    _context, _swapchain, _bindlessHeap, guidingCoordinator));
+                AddPassInstance(new SimpleDdgiGuidingValidateGraphPass(
+                    _context, _swapchain, _bindlessHeap, guidingCoordinator));
+            }
+
+            if (_advancedGiGraphModes.UsesCausticWorldCache)
+            {
+                GiCausticVulkanRuntime causticRuntime = _giCausticRuntime ??
+                    throw new InvalidOperationException(
+                        "The admitted C4 graph has no concrete Vulkan runtime.");
+                AddPassInstance(new GiCausticTaskGraphPass(
+                    _context, _swapchain, _bindlessHeap, causticRuntime));
+                AddPassInstance(new GiCausticTraceGraphPass(
+                    _context, _swapchain, _bindlessHeap, causticRuntime));
+                AddPassInstance(new GiCausticCacheBuildGraphPass(
+                    _context, _swapchain, _bindlessHeap, causticRuntime));
+                AddPassInstance(new GiCausticResolveGraphPass(
+                    _context, _swapchain, _bindlessHeap, causticRuntime));
+                AddPassInstance(new GiCausticCompositeGraphPass(
+                    _context, _swapchain, _bindlessHeap, causticRuntime));
+            }
+
+            if (_advancedGiGraphModes.UsesNearFieldHiZResidual)
+            {
+                SimpleDdgiNearFieldResidualVulkanRuntime nearFieldRuntime =
+                    _simpleDdgiNearFieldResidualRuntime ??
+                    throw new InvalidOperationException(
+                        "The admitted C5 graph has no concrete Vulkan runtime.");
+                AddPassInstance(new SimpleDdgiNearFieldResidualResetPass(
+                    _context, _swapchain, _bindlessHeap, nearFieldRuntime));
+                AddPassInstance(new SimpleDdgiNearFieldResidualTracePass(
+                    _context, _swapchain, _bindlessHeap, nearFieldRuntime));
+                AddPassInstance(new SimpleDdgiNearFieldResidualTemporalPass(
+                    _context, _swapchain, _bindlessHeap, nearFieldRuntime));
+                for (int iteration = 0;
+                     iteration < _simpleDdgiNearFieldResidualPlan.Layout
+                         .FilterIterationCount;
+                     iteration++)
+                {
+                    AddPassInstance(new SimpleDdgiNearFieldResidualFilterPass(
+                        _context,
+                        _swapchain,
+                        _bindlessHeap,
+                        nearFieldRuntime,
+                        iteration));
+                }
+                AddPassInstance(new SimpleDdgiNearFieldResidualCompositePass(
+                    _context, _swapchain, _bindlessHeap, nearFieldRuntime));
+            }
 
             var simpleDdgiPageDemandPass = new SimpleDdgiPageDemandPass(
                 _context,
@@ -900,7 +1682,8 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 Settings,
                 _renderTargets!,
-                _simpleDdgiVolumeManager!);
+                _simpleDdgiVolumeManager!,
+                _giPipelineCacheService);
             _simpleDdgiPageDemandPass = simpleDdgiPageDemandPass;
             AddPassInstance(simpleDdgiPageDemandPass);
 
@@ -909,7 +1692,8 @@ namespace Njulf.Rendering
                 _swapchain,
                 _bindlessHeap,
                 Settings,
-                _simpleDdgiVolumeManager!);
+                _simpleDdgiVolumeManager!,
+                _giPipelineCacheService);
             _simpleDdgiPageResidencyPass = simpleDdgiPageResidencyPass;
             AddPassInstance(simpleDdgiPageResidencyPass);
 
@@ -945,7 +1729,8 @@ namespace Njulf.Rendering
                 _swapchain,
                 _bindlessHeap,
                 Settings,
-                _farFieldClipmapManager!);
+                _farFieldClipmapManager!,
+                _giPipelineCacheService);
             AddPassInstance(farFieldClipmapBakePass);
 
             var simpleDdgiSchedulePass = new SimpleDdgiSchedulePass(
@@ -953,7 +1738,8 @@ namespace Njulf.Rendering
                 _swapchain,
                 _bindlessHeap,
                 Settings,
-                _simpleDdgiVolumeManager!);
+                _simpleDdgiVolumeManager!,
+                _giPipelineCacheService);
             _simpleDdgiSchedulePass = simpleDdgiSchedulePass;
             AddPassInstance(simpleDdgiSchedulePass);
 
@@ -964,7 +1750,10 @@ namespace Njulf.Rendering
                 Settings,
                 _simpleDdgiVolumeManager!,
                 _farFieldClipmapManager!,
-                _accelerationStructureManager!);
+                 _accelerationStructureManager!,
+                 _simpleDdgiLightTreeResources!,
+                 _advancedGiGraphModes.UsesDirectionalGuiding,
+                 _giPipelineCacheService);
             _simpleDdgiTracePass = simpleDdgiTracePass;
             AddPassInstance(simpleDdgiTracePass);
 
@@ -974,7 +1763,9 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 Settings,
                 _simpleDdgiVolumeManager!,
-                _farFieldClipmapManager!);
+                _farFieldClipmapManager!,
+                _advancedGiGraphModes.UsesDirectionalGuiding,
+                _giPipelineCacheService);
             _simpleDdgiRelocateClassifyPass = simpleDdgiRelocateClassifyPass;
             AddPassInstance(simpleDdgiRelocateClassifyPass);
 
@@ -983,7 +1774,9 @@ namespace Njulf.Rendering
                 _swapchain,
                 _bindlessHeap,
                 Settings,
-                _simpleDdgiVolumeManager!);
+                _simpleDdgiVolumeManager!,
+                _advancedGiGraphModes.UsesDirectionalGuiding,
+                _giPipelineCacheService);
             _simpleDdgiAcceleratedSolvePass = simpleDdgiAcceleratedSolvePass;
             AddPassInstance(simpleDdgiAcceleratedSolvePass);
 
@@ -993,7 +1786,9 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 Settings,
                 _simpleDdgiVolumeManager!,
-                _farFieldClipmapManager!);
+                _farFieldClipmapManager!,
+                _advancedGiGraphModes.UsesDirectionalGuiding,
+                _giPipelineCacheService);
             _simpleDdgiTransportPass = simpleDdgiTransportPass;
             AddPassInstance(simpleDdgiTransportPass);
 
@@ -1003,16 +1798,33 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 Settings,
                 _simpleDdgiVolumeManager!,
-                _farFieldClipmapManager!);
+                _farFieldClipmapManager!,
+                _advancedGiGraphModes.UsesDirectionalGuiding,
+                _giPipelineCacheService);
             _simpleDdgiBlendPass = simpleDdgiBlendPass;
             AddPassInstance(simpleDdgiBlendPass);
+
+            var simpleDdgiDirectionalRadiancePass =
+                new SimpleDdgiDirectionalRadiancePass(
+                    _context,
+                    _swapchain,
+                    _bindlessHeap,
+                    Settings,
+                    _simpleDdgiVolumeManager!,
+                    _farFieldClipmapManager!,
+                    _advancedGiGraphModes.UsesDirectionalGuiding,
+                    _giPipelineCacheService);
+            _simpleDdgiDirectionalRadiancePass =
+                simpleDdgiDirectionalRadiancePass;
+            AddPassInstance(simpleDdgiDirectionalRadiancePass);
 
             var simpleDdgiPublishPass = new SimpleDdgiPublishPass(
                 _context,
                 _swapchain,
                 _bindlessHeap,
                 Settings,
-                _simpleDdgiVolumeManager!);
+                _simpleDdgiVolumeManager!,
+                _giPipelineCacheService);
             _simpleDdgiPublishPass = simpleDdgiPublishPass;
             AddPassInstance(simpleDdgiPublishPass);
 
@@ -1021,7 +1833,8 @@ namespace Njulf.Rendering
                 _swapchain,
                 _bindlessHeap,
                 Settings,
-                _simpleDdgiVolumeManager!);
+                _simpleDdgiVolumeManager!,
+                _giPipelineCacheService);
             _simpleDdgiTransportAuditPass = simpleDdgiTransportAuditPass;
             AddPassInstance(simpleDdgiTransportAuditPass);
 
@@ -1030,16 +1843,33 @@ namespace Njulf.Rendering
                 _swapchain,
                 _bindlessHeap,
                 Settings,
-                _simpleDdgiVolumeManager!);
+                _simpleDdgiVolumeManager!,
+                _giPipelineCacheService);
             _simpleDdgiSchedulerCommitPass = simpleDdgiSchedulerCommitPass;
             AddPassInstance(simpleDdgiSchedulerCommitPass);
+
+            AddPassInstance(new SimpleDdgiUrgentRelightPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                Settings,
+                _simpleDdgiVolumeManager!,
+                simpleDdgiSchedulePass,
+                simpleDdgiTracePass,
+                simpleDdgiRelocateClassifyPass,
+                simpleDdgiDirectionalRadiancePass,
+                simpleDdgiTransportPass,
+                simpleDdgiBlendPass,
+                simpleDdgiPublishPass,
+                simpleDdgiSchedulerCommitPass));
 
             var simpleDdgiPageFeedbackPass = new SimpleDdgiPageFeedbackPass(
                 _context,
                 _swapchain,
                 _bindlessHeap,
                 Settings,
-                _simpleDdgiVolumeManager!);
+                _simpleDdgiVolumeManager!,
+                _giPipelineCacheService);
             _simpleDdgiPageFeedbackPass = simpleDdgiPageFeedbackPass;
             AddPassInstance(simpleDdgiPageFeedbackPass);
 
@@ -1048,11 +1878,21 @@ namespace Njulf.Rendering
             AddPassInstance(skyboxPass);
 
             var transparentForwardPass = new TransparentForwardPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _meshPipeline,
+                _renderTargets!,
+                _simpleDdgiReceiverFeedbackRuntime);
             AddPassInstance(transparentForwardPass);
 
             var weightedTransparentPass = new WeightedTransparentPass(
-                _context, _swapchain, _bindlessHeap, _meshPipeline, _renderTargets!);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _meshPipeline,
+                _renderTargets!,
+                _simpleDdgiReceiverFeedbackRuntime);
             AddPassInstance(weightedTransparentPass);
 
             var weightedOitCompositePass = new WeightedOitCompositePass(
@@ -1060,7 +1900,14 @@ namespace Njulf.Rendering
             AddPassInstance(weightedOitCompositePass);
 
             var particlePass = new ParticlePass(
-                _context, _swapchain, _bindlessHeap, _particlePipeline, _bufferManager, _renderTargets!, Settings.Particles);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _particlePipeline,
+                _bufferManager,
+                _renderTargets!,
+                Settings.Particles,
+                _simpleDdgiReceiverFeedbackRuntime);
             AddPassInstance(_gpuParticleResetGraphPass);
             AddPassInstance(_gpuParticleSimulateGraphPass);
             AddPassInstance(_gpuParticleSortGraphPass);
@@ -1071,7 +1918,12 @@ namespace Njulf.Rendering
             AddPassInstance(debugDrawPass);
 
             var fogPass = new FogPass(
-                _context, _swapchain, _bindlessHeap, _renderTargets!, Settings);
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings,
+                _simpleDdgiReceiverFeedbackRuntime);
             AddPassInstance(fogPass);
 
             var autoExposurePass = new AutoExposurePass(
@@ -1095,7 +1947,10 @@ namespace Njulf.Rendering
                 () => _smaaResources?.IsReady == true);
             AddPassInstance(antiAliasingPass);
             AddPassInstance(new ImGuiRenderPass(_context, _swapchain, _bindlessHeap, _bufferManager, _stagingRing, _overlayDrawData));
-            ProductionRenderPipelineDeclaration.Instance.RegisterPasses(_renderGraph, passInstances);
+            ProductionRenderPipelineDeclaration.Instance.RegisterPasses(
+                _renderGraph,
+                passInstances,
+                _advancedGiGraphModes);
             foreach (RenderPassBase asyncCandidate in passInstances.Values.Where(pass => pass.SupportsAsyncCompute))
             {
                 if (!AsyncComputePassCatalog.IsProductionCandidate(asyncCandidate.Name))
@@ -1104,7 +1959,9 @@ namespace Njulf.Rendering
                         $"Async-capable pass '{asyncCandidate.Name}' has no production async-compute audit classification.");
                 }
             }
-            ProductionRenderPipelineDeclaration.Instance.ValidatePassOrder(_renderGraph.PassNames);
+            ProductionRenderPipelineDeclaration.Instance.ValidatePassOrder(
+                _renderGraph.PassNames,
+                _advancedGiGraphModes);
 
             _renderGraph.Initialize();
             System.Diagnostics.Debug.WriteLine("Render graph initialized.");
@@ -1115,7 +1972,521 @@ namespace Njulf.Rendering
             ProductionRenderPipelineDeclaration.Instance.RegisterResources(
                 _renderGraph,
                 _swapchain.DepthFormat,
-                _swapchain.SurfaceFormat);
+                _swapchain.SurfaceFormat,
+                _advancedGiGraphModes);
+        }
+
+        private AdvancedGiRenderGraphModes ResolveInitialAdvancedGiGraphModes(
+            Extent2D sceneRenderExtent)
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            AdvancedGiPrerequisiteGateResult gate =
+                _advancedGiPrerequisiteManifest.Evaluate(
+                    AdvancedGiPrerequisiteFeature.OpacityMicromaps);
+            OpacityMicromapGpuRuntimeSnapshot runtime =
+                _accelerationStructureManager
+                    ?.OpacityMicromapGpuRuntimeSnapshot ??
+                OpacityMicromapGpuRuntimeSnapshot.Disabled;
+            AdvancedGiQualificationGateResult qualification =
+                EvaluateAdvancedGiQualification(
+                    AdvancedGiPrerequisiteFeature.OpacityMicromaps,
+                    gate,
+                    runtime.Supported,
+                    gi.DdgiOpacityMicromapQualificationId);
+            GiExperimentModeState<DdgiOpacityMicromapMode> opacityMode =
+                ResolveAdvancedGiMode(
+                    gi.DdgiOpacityMicromapMode,
+                    DdgiOpacityMicromapMode.Off,
+                    runtime.Supported,
+                    gate,
+                    qualification,
+                    runtime.Enabled,
+                    gi.DdgiOpacityMicromapQualificationId,
+                    runtime.Detail);
+
+            AdvancedGiPrerequisiteGateResult guidingGate =
+                _advancedGiPrerequisiteManifest.Evaluate(
+                    AdvancedGiPrerequisiteFeature.DirectionalGuiding);
+            bool guidingRuntimeSupported =
+                gi.SimpleDdgiSchedulerMode != SimpleDdgiSchedulerMode.GpuResident;
+            AdvancedGiQualificationGateResult guidingQualification =
+                EvaluateAdvancedGiQualification(
+                    AdvancedGiPrerequisiteFeature.DirectionalGuiding,
+                    guidingGate,
+                    guidingRuntimeSupported,
+                    gi.SimpleDdgiDirectionalGuidingQualificationId);
+            GiExperimentModeState<SimpleDdgiDirectionalGuidingMode> guidingMode =
+                ResolveAdvancedGiMode(
+                    gi.SimpleDdgiDirectionalGuidingMode,
+                    SimpleDdgiDirectionalGuidingMode.Off,
+                    supported: guidingRuntimeSupported,
+                    prerequisiteGate: guidingGate,
+                    qualificationGate: guidingQualification,
+                    // This preflight controls immutable graph inventory. Exact
+                    // per-scene resources are still admitted transactionally
+                    // after the DDGI physical layout is known.
+                    resourcesComplete: guidingRuntimeSupported,
+                    gi.SimpleDdgiDirectionalGuidingQualificationId,
+                    guidingRuntimeSupported
+                        ? "guiding-frame-integration-available"
+                        : "guiding-requires-cpu-authoritative-scheduler");
+
+            ResolveInitialGiCausticMode(sceneRenderExtent);
+
+            SimpleDdgiNearFieldResidualProfile nearFieldProfile =
+                gi.SimpleDdgiNearFieldResidualMode ==
+                    SimpleDdgiNearFieldResidualMode.AutoQualified
+                    ? _simpleDdgiNearFieldResidualRequestedProfile
+                    : SimpleDdgiNearFieldResidualProfile.HalfResolutionReference;
+            AdvancedGiPrerequisiteGateResult nearFieldGate =
+                _advancedGiPrerequisiteManifest.Evaluate(
+                    AdvancedGiPrerequisiteFeature.NearFieldResidual);
+            bool gpuNearFieldRequested = gi.SimpleDdgiNearFieldResidualMode is
+                SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment or
+                SimpleDdgiNearFieldResidualMode.AutoQualified;
+            SimpleDdgiNearFieldResidualLayout preliminaryLayout =
+                SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
+                    checked((int)sceneRenderExtent.Width),
+                    checked((int)sceneRenderExtent.Height),
+                    nearFieldProfile,
+                    SimpleDdgiNearFieldResidualExperimentBudgetBytes);
+            SimpleDdgiNearFieldTraceSourceContract sourceContract =
+                _hasSimpleDdgiNearFieldResidualEvidence
+                    ? _simpleDdgiNearFieldResidualEvidence.Binding
+                        .TraceSourceContract
+                    : preliminaryLayout.IsValid
+                        ? SimpleDdgiNearFieldTraceSourceContract
+                            .CreatePreDdgiDirectDiffuseAndEmissive(
+                                preliminaryLayout,
+                                nearFieldProfile)
+                        : default;
+            var nearFieldConfiguration =
+                new SimpleDdgiNearFieldResidualConfiguration(
+                    Enabled: gpuNearFieldRequested,
+                    Width: checked((int)sceneRenderExtent.Width),
+                    Height: checked((int)sceneRenderExtent.Height),
+                    MemoryBudgetBytes:
+                        SimpleDdgiNearFieldResidualExperimentBudgetBytes,
+                    Profile: nearFieldProfile,
+                    SourceContract: sourceContract);
+            SimpleDdgiNearFieldResidualQualificationEvidence evidence =
+                _hasSimpleDdgiNearFieldResidualEvidence
+                    ? _simpleDdgiNearFieldResidualEvidence
+                    : default;
+            SimpleDdgiNearFieldResidualAdmissionContext admissionContext =
+                _hasSimpleDdgiNearFieldResidualEvidence
+                    ? _simpleDdgiNearFieldResidualAdmissionContext
+                    : default;
+            var nearFieldPrerequisites =
+                new SimpleDdgiNearFieldResidualPrerequisites(
+                    RefinementBricksActive: nearFieldGate.Passed,
+                    RefinementQualityGatePassed: nearFieldGate.Passed,
+                    RemainingContactScaleErrorMeasured:
+                        _hasSimpleDdgiNearFieldResidualEvidence,
+                    SourceOwnershipImplemented: true,
+                    DisocclusionRejectionImplemented: true,
+                    CameraAndScreenEdgeStabilityPassed:
+                        evidence.TemporalStabilityVerified,
+                    ReferenceErrorPerMillisecondImproved:
+                        evidence.WholeFrameRegressionVerified,
+                    NoDoubleCountingOrFalseDarkening:
+                        evidence.SignedResidualEnergyVerified &&
+                        evidence.TraceSourceIndependenceVerified);
+            _simpleDdgiNearFieldResidualPlan =
+                SimpleDdgiNearFieldResidualExperiment.CreatePlan(
+                    nearFieldConfiguration,
+                    nearFieldPrerequisites,
+                    evidence,
+                    admissionContext);
+
+            bool nearFieldRuntimeSupported =
+                TryValidateNearFieldRuntimePreflight(
+                    _simpleDdgiNearFieldResidualPlan,
+                    out string nearFieldPreflightFailure);
+            AdvancedGiQualificationGateResult nearFieldQualification =
+                EvaluateAdvancedGiQualification(
+                    AdvancedGiPrerequisiteFeature.NearFieldResidual,
+                    nearFieldGate,
+                    nearFieldRuntimeSupported,
+                    gi.SimpleDdgiNearFieldResidualQualificationId);
+            _simpleDdgiNearFieldResidualMode = ResolveAdvancedGiMode(
+                gi.SimpleDdgiNearFieldResidualMode,
+                SimpleDdgiNearFieldResidualMode.Off,
+                supported: nearFieldRuntimeSupported,
+                prerequisiteGate: nearFieldGate,
+                qualificationGate: nearFieldQualification,
+                resourcesComplete:
+                    _simpleDdgiNearFieldResidualPlan.Active,
+                gi.SimpleDdgiNearFieldResidualQualificationId,
+                _simpleDdgiNearFieldResidualPlan.Active
+                    ? "valid"
+                    : string.IsNullOrWhiteSpace(nearFieldPreflightFailure)
+                        ? _simpleDdgiNearFieldResidualPlan.Status
+                        : nearFieldPreflightFailure);
+            if (_simpleDdgiNearFieldResidualMode.EffectiveMode is
+                SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment or
+                SimpleDdgiNearFieldResidualMode.AutoQualified)
+            {
+                _simpleDdgiNearFieldResidualGpuConfiguration =
+                    SimpleDdgiNearFieldResidualGpuConfiguration.CreateReference(
+                        _simpleDdgiNearFieldResidualPlan.Layout,
+                        nearFieldProfile,
+                        sourceContract.AbiRevision,
+                        sourceContract.LayoutRevision,
+                        sourceContract.SourceRevision) with
+                    {
+                        TraceSourceContract = sourceContract,
+                        MaximumTraceSteps = nearFieldProfile.MaximumTraceSteps,
+                        MaximumMipVisits = nearFieldProfile.MaximumMipVisits,
+                        BinaryRefinementSteps =
+                            nearFieldProfile.BinaryRefinementSteps,
+                        FilterIterationCount =
+                            nearFieldProfile.FilterIterationCount
+                    };
+                _nearFieldDirectSourcePipelineConfiguration = new(
+                    IsC5EffectivelyEnabled: true,
+                    sourceContract,
+                    ForwardNearFieldDirectSourceContract.ShaderSemanticVersion);
+            }
+            else
+            {
+                _simpleDdgiNearFieldResidualGpuConfiguration = default;
+                _nearFieldDirectSourcePipelineConfiguration =
+                    ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
+            }
+
+            EnforceCombinedAdvancedGiForwardPreflight();
+
+            // Every optional graph branch is derived from an effective mode.
+            // C3's live allocation still fails closed later if the exact
+            // source-cache prefix, transient arena, or frame workload cannot
+            // be admitted.
+            return new AdvancedGiRenderGraphModes(
+                SimpleDdgiReceiverFeedbackMode.Off,
+                opacityMode.EffectiveMode,
+                guidingMode.EffectiveMode,
+                _giCausticMode.EffectiveMode,
+                _simpleDdgiNearFieldResidualMode.EffectiveMode,
+                AdvancedGiNearFieldGraphProfile.From(nearFieldProfile));
+        }
+
+        private void EnforceCombinedAdvancedGiForwardPreflight()
+        {
+            bool c4Effective = _giCausticMode.EffectiveMode is
+                GiCausticMode.WorldCacheExperiment or
+                GiCausticMode.AutoQualified;
+            bool c5Effective = _simpleDdgiNearFieldResidualMode.EffectiveMode is
+                SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment or
+                SimpleDdgiNearFieldResidualMode.AutoQualified;
+            if (!c4Effective || !c5Effective)
+                return;
+
+            PhysicalDeviceProperties properties = default;
+            _context.Api.GetPhysicalDeviceProperties(
+                _context.PhysicalDevice,
+                &properties);
+            if (properties.Limits.MaxColorAttachments >=
+                ForwardAdvancedGiCombinedContract.ColorAttachmentCount)
+            {
+                return;
+            }
+
+            // Both experiments remain independently selectable. On a device
+            // that cannot bind their frozen combined ABI, preserve C4 (which
+            // was admitted first) and fail the later C5 admission closed.
+            const string reason =
+                "combined-C4-C5-forward-path-requires-four-color-attachments";
+            _simpleDdgiNearFieldResidualPlan =
+                SimpleDdgiNearFieldResidualExperiment.InvalidateRuntimePlan(
+                    _simpleDdgiNearFieldResidualPlan,
+                    reason,
+                    GiExperimentFallbackReason.VulkanLimitExceeded);
+            _simpleDdgiNearFieldResidualMode =
+                _simpleDdgiNearFieldResidualMode with
+                {
+                    AdmittedMode = SimpleDdgiNearFieldResidualMode.Off,
+                    EffectiveMode = SimpleDdgiNearFieldResidualMode.Off,
+                    FallbackReason =
+                        GiExperimentFallbackReason.VulkanLimitExceeded,
+                    FallbackDetail = reason
+                };
+            _simpleDdgiNearFieldResidualGpuConfiguration = default;
+            _nearFieldDirectSourcePipelineConfiguration =
+                ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
+        }
+
+        private void ResolveInitialGiCausticMode(Extent2D sceneRenderExtent)
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            AdvancedGiPrerequisiteGateResult gate =
+                _advancedGiPrerequisiteManifest.Evaluate(
+                    AdvancedGiPrerequisiteFeature.TaggedCaustics);
+            bool cpuReference = gi.GiCausticMode == GiCausticMode.PhotonReference;
+            bool gpuRequested = gi.GiCausticMode is
+                GiCausticMode.WorldCacheExperiment or
+                GiCausticMode.AutoQualified;
+
+            GiTaggedCausticCacheConfiguration configuration =
+                _hasGiCausticEvidence
+                    ? _giCausticRequestedConfiguration with
+                    {
+                        Enabled = gpuRequested
+                    }
+                    : new GiTaggedCausticCacheConfiguration(
+                        Enabled: gpuRequested,
+                        HeroMaterialCount: 0,
+                        PhotonTaskCapacity: 1,
+                        MaximumWorldCells: 1,
+                        MaximumPhotonsPerCell: 1,
+                        MemoryBudgetBytes: GiCausticExperimentBudgetBytes,
+                        ScreenResolveProfile: new GiCausticScreenResolveProfile(
+                            checked((int)sceneRenderExtent.Width),
+                            checked((int)sceneRenderExtent.Height)));
+            GiCausticQualificationEvidence evidence = _hasGiCausticEvidence
+                ? _giCausticEvidence
+                : default;
+            GiCausticAdmissionContext context = _hasGiCausticEvidence
+                ? _giCausticAdmissionContext
+                : default;
+            _giCausticPlan = GiTaggedCausticCacheExperiment.CreatePlan(
+                configuration,
+                new GiTaggedCausticCacheQualification(
+                    SeparateOwnershipImplemented: true,
+                    DiffuseTransportFeedDisabled: true,
+                    ReferenceParityPassed:
+                        evidence.CpuGpuPdfAndThroughputParity,
+                    StabilityProofPassed:
+                        evidence.PublicationAndMotionStabilityPassed,
+                    QualityPerMillisecondImproved:
+                        evidence.QualityPerMillisecondImproved),
+                evidence,
+                context);
+
+            string preflightFailure = _giCausticPlan.Status;
+            bool runtimeSupported = gpuRequested &&
+                TryValidateGiCausticRuntimePreflight(
+                    _giCausticPlan,
+                    sceneRenderExtent,
+                    out preflightFailure);
+            AdvancedGiQualificationGateResult qualification =
+                EvaluateAdvancedGiQualification(
+                    AdvancedGiPrerequisiteFeature.TaggedCaustics,
+                    gate,
+                    runtimeSupported,
+                    gi.GiCausticQualificationId);
+            _giCausticMode = ResolveAdvancedGiMode(
+                gi.GiCausticMode,
+                GiCausticMode.Off,
+                supported: cpuReference || runtimeSupported,
+                prerequisiteGate: gate,
+                qualificationGate: qualification,
+                resourcesComplete: cpuReference || _giCausticPlan.Active,
+                gi.GiCausticQualificationId,
+                cpuReference
+                    ? "caustic-CPU-reference-mode"
+                    : _giCausticPlan.Active
+                        ? "valid"
+                        : string.IsNullOrWhiteSpace(preflightFailure)
+                            ? _giCausticPlan.Status
+                            : preflightFailure);
+
+            if (_giCausticMode.EffectiveMode is
+                GiCausticMode.WorldCacheExperiment or
+                GiCausticMode.AutoQualified)
+            {
+                _giCausticReceiverPipelineConfiguration = new(
+                    IsC4EffectivelyEnabled: true,
+                    configuration.ScreenResolveProfile,
+                    _giCausticPlan.EvidenceValidation.BindingFingerprint,
+                    GiCausticGpuAbi.Version,
+                    GiCausticScreenGpuAbi.Version,
+                    ForwardGiCausticReceiverContract.ShaderSemanticVersion);
+            }
+            else
+            {
+                _giCausticReceiverPipelineConfiguration =
+                    ForwardGiCausticReceiverPipelineConfiguration.Disabled;
+            }
+        }
+
+        private bool TryValidateGiCausticRuntimePreflight(
+            in GiTaggedCausticCachePlan plan,
+            Extent2D sceneRenderExtent,
+            out string failure)
+        {
+            if (!plan.Active || !plan.GpuLayout.IsValid)
+            {
+                failure = plan.Status;
+                return false;
+            }
+            GiCausticScreenResolveLayout screen = plan.GpuLayout.ScreenResolve;
+            if (!screen.IsValid || screen.Width != checked((int)sceneRenderExtent.Width) ||
+                screen.Height != checked((int)sceneRenderExtent.Height))
+            {
+                failure = "caustic-screen-profile-does-not-match-scene-extent";
+                return false;
+            }
+
+            PhysicalDeviceProperties properties = default;
+            _context.Api.GetPhysicalDeviceProperties(_context.PhysicalDevice,
+                &properties);
+            ulong maximumStorageRange = properties.Limits.MaxStorageBufferRange;
+            if (sceneRenderExtent.Width > properties.Limits.MaxImageDimension2D ||
+                sceneRenderExtent.Height > properties.Limits.MaxImageDimension2D ||
+                properties.Limits.MaxColorAttachments <
+                    ForwardGiCausticReceiverContract.ColorAttachmentCount ||
+                properties.Limits.MaxPushConstantsSize <
+                    GiCausticScreenGpuAbi.PushConstantsBytes ||
+                plan.GpuLayout.TaskQueueBytes > maximumStorageRange ||
+                checked(plan.GpuLayout.CandidateStagingBytes +
+                    plan.GpuLayout.PublishedPhotonBytes) > maximumStorageRange ||
+                plan.GpuLayout.CacheBytes > maximumStorageRange ||
+                plan.GpuLayout.ScratchBytes > maximumStorageRange)
+            {
+                failure = "caustic-device-image-MRT-push-or-storage-range-limit";
+                return false;
+            }
+            if (!_context.RayQuerySupported ||
+                _context.KhrAccelerationStructure is null ||
+                !HasFormatFeatures(
+                    GiCausticScreenGpuAbi.ReceiverPayloadFormat,
+                    FormatFeatureFlags.ColorAttachmentBit |
+                    FormatFeatureFlags.SampledImageBit) ||
+                !HasFormatFeatures(
+                    GiCausticScreenGpuAbi.RadianceFormat,
+                    FormatFeatureFlags.SampledImageBit |
+                    FormatFeatureFlags.StorageImageBit) ||
+                !HasFormatFeatures(
+                    GiCausticScreenGpuAbi.MomentsFormat,
+                    FormatFeatureFlags.SampledImageBit |
+                    FormatFeatureFlags.StorageImageBit) ||
+                !HasFormatFeatures(
+                    RenderTargetManager.SceneColorFormat,
+                    FormatFeatureFlags.ColorAttachmentBit |
+                    FormatFeatureFlags.SampledImageBit |
+                    FormatFeatureFlags.StorageImageBit))
+            {
+                failure = "caustic-ray-query-or-screen-format-capability-unavailable";
+                return false;
+            }
+
+            failure = "valid";
+            return true;
+        }
+
+        private bool TryValidateNearFieldRuntimePreflight(
+            in SimpleDdgiNearFieldResidualPlan plan,
+            out string failure)
+        {
+            if (!plan.Active)
+            {
+                failure = plan.Status;
+                return false;
+            }
+
+            PhysicalDeviceProperties properties = default;
+            _context.Api.GetPhysicalDeviceProperties(
+                _context.PhysicalDevice,
+                &properties);
+            if ((uint)plan.Layout.SourceWidth >
+                    properties.Limits.MaxImageDimension2D ||
+                (uint)plan.Layout.SourceHeight >
+                    properties.Limits.MaxImageDimension2D ||
+                properties.Limits.MaxColorAttachments <
+                    ForwardNearFieldDirectSourceContract.ColorAttachmentCount ||
+                properties.Limits.MaxPushConstantsSize <
+                    SimpleDdgiNearFieldResidualGpuAbi
+                        .TemporalPushConstantByteCount)
+            {
+                failure = "near-field-device-image-MRT-or-push-constant-limit";
+                return false;
+            }
+
+            if (!HasFormatFeatures(
+                    Format.R16G16B16A16Sfloat,
+                    FormatFeatureFlags.ColorAttachmentBit |
+                    FormatFeatureFlags.SampledImageBit |
+                    FormatFeatureFlags.StorageImageBit) ||
+                !HasFormatFeatures(
+                    Format.R32G32B32A32Uint,
+                    FormatFeatureFlags.ColorAttachmentBit |
+                    FormatFeatureFlags.SampledImageBit) ||
+                !HasFormatFeatures(
+                    Format.R16G16Sfloat,
+                    FormatFeatureFlags.SampledImageBit |
+                    FormatFeatureFlags.StorageImageBit) ||
+                !HasFormatFeatures(
+                    Format.R32Uint,
+                    FormatFeatureFlags.SampledImageBit |
+                    FormatFeatureFlags.StorageImageBit))
+            {
+                failure = "near-field-required-format-features-unavailable";
+                return false;
+            }
+
+            failure = "valid";
+            return true;
+        }
+
+        private bool HasFormatFeatures(
+            Format format,
+            FormatFeatureFlags required)
+        {
+            FormatProperties properties = default;
+            _context.Api.GetPhysicalDeviceFormatProperties(
+                _context.PhysicalDevice,
+                format,
+                &properties);
+            return (properties.OptimalTilingFeatures & required) == required;
+        }
+
+        private bool IsOpacityMicromapRuntimePreflightSupported()
+        {
+            OpacityMicromapRuntimeCapabilities capabilities =
+                _context.OpacityMicromapExtCapability.Capabilities;
+            // Before the AS manager is constructed, the context deliberately has not yet marked
+            // the matching static-BLAS attachment owner as integrated. Check every independent
+            // logical-device/native fact here and let manager construction establish that final
+            // ownership fact before it reports the authoritative runtime capability.
+            return _context.RayQuerySupported &&
+                _context.KhrAccelerationStructure is not null &&
+                _context.OpacityMicromapExtCommandApi is not null &&
+                capabilities.ExtensionAvailable &&
+                capabilities.FeatureEnabled &&
+                capabilities.CommandBufferBuildAvailable &&
+                capabilities.FourStateFormatAvailable &&
+                capabilities.MaximumFourStateSubdivisionLevel != 0u;
+        }
+
+        private AdvancedGiQualificationGateResult EvaluateAdvancedGiQualification(
+            AdvancedGiPrerequisiteFeature feature,
+            in AdvancedGiPrerequisiteGateResult prerequisite,
+            bool supported,
+            string? configuredQualificationId)
+        {
+            if (!prerequisite.Passed)
+            {
+                return AdvancedGiQualificationGateResult.Reject(
+                    prerequisite.FailureDetail);
+            }
+
+            PhysicalDeviceProperties properties = default;
+            _context.Api.GetPhysicalDeviceProperties(
+                _context.PhysicalDevice,
+                &properties);
+            var context = new AdvancedGiRuntimeQualificationContext(
+                properties.VendorID,
+                properties.DeviceID,
+                properties.DriverVersion,
+                properties.ApiVersion,
+                supported,
+                _captureShaderBundleHash,
+                AdvancedGiQualificationContract.SettingsContractSha256);
+            return _advancedGiQualificationManifest.Evaluate(
+                feature,
+                context,
+                prerequisite.QualificationId,
+                configuredQualificationId);
         }
 
         private void RegisterSceneBuffers()
@@ -1132,6 +2503,56 @@ namespace Njulf.Rendering
 
             // Register light manager buffer (index 12)
             _lightManager.RegisterBuffer(_bindlessHeap, BindlessIndex.LightBuffer);
+            if (_simpleDdgiReceiverFeedbackRuntime is not null &&
+                !_simpleDdgiReceiverFeedbackRuntime.TryRegisterDescriptors(
+                    _bindlessHeap,
+                    _lightManager.LightBuffer,
+                    _lightManager.LightBufferAllocatedBytes,
+                    out string receiverFeedbackDescriptorReason))
+            {
+                // The B1 runtime stays fail-closed. This diagnostic does not
+                // alter the global prerequisite/mode gate and does not cause
+                // a legacy receiver buffer to become a capture source.
+                System.Diagnostics.Debug.WriteLine(
+                    "B1 receiver-feedback descriptor fallback unavailable: " +
+                    receiverFeedbackDescriptorReason);
+            }
+            if (_simpleDdgiGuidingRuntime is not null &&
+                !_simpleDdgiGuidingRuntime.TryRegisterDescriptors(
+                    _bindlessHeap,
+                    _lightManager.LightBuffer,
+                    _lightManager.LightBufferAllocatedBytes,
+                    out string guidingDescriptorReason))
+            {
+                // This affects only C3's dormant descriptor fallback. It
+                // neither admits the global guiding mode nor writes source
+                // cache slot 203.
+                System.Diagnostics.Debug.WriteLine(
+                    "C3 guiding descriptor fallback unavailable: " +
+                    guidingDescriptorReason);
+            }
+            if (_simpleDdgiGuidingSourceCacheSidecar is not null &&
+                !_simpleDdgiGuidingSourceCacheSidecar.TryRegisterDescriptorContext(
+                    _bindlessHeap,
+                    _lightManager.LightBuffer,
+                    _lightManager.LightBufferAllocatedBytes,
+                    out string guidingSidecarDescriptorReason))
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    "C3 source-cache sidecar fallback unavailable: " +
+                    guidingSidecarDescriptorReason);
+            }
+            if (_giCausticRuntime is not null &&
+                !_giCausticRuntime.TryRegisterDescriptors(
+                    _bindlessHeap,
+                    _lightManager.LightBuffer,
+                    _lightManager.LightBufferAllocatedBytes,
+                    out string causticDescriptorReason))
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    "C4 caustic descriptor fallback unavailable: " +
+                    causticDescriptorReason);
+            }
             RegisterDdgiEmissiveSourceBuffer();
 
             _bindlessHeap.RegisterTexture(
@@ -1162,6 +2583,8 @@ namespace Njulf.Rendering
             _environmentManager.RegisterReflectionProbeFallback(_bindlessHeap);
             _reflectionProbeManager!.Register(_bindlessHeap);
             _simpleDdgiVolumeManager!.Register(_bindlessHeap);
+            _simpleDdgiLightTreeResources!.Register(_bindlessHeap);
+            _ddgiFoliageProxyManager!.Register(_bindlessHeap);
             _farFieldClipmapManager!.Register(_bindlessHeap);
             _accelerationStructureManager!.Register(_bindlessHeap);
 
@@ -1171,14 +2594,36 @@ namespace Njulf.Rendering
         private BufferHandle CreateDdgiEmissiveSourceBuffer()
         {
             _ddgiEmissiveTableCache.Clear();
+            _ddgiEmissiveSpatialHierarchy.Clear();
+            _ddgiEmissiveHierarchyNodeCount = 0;
             _ddgiEmissiveSourceBufferContentValid = false;
-            _ddgiEmissiveSourceBufferSize = checked((ulong)MaxDdgiEmissiveSourceCount * DdgiEmissiveSourceStride);
+            // Sources occupy the prefix. A complete binary hierarchy with the
+            // maximum (power-of-two) source budget needs 2N-1 additional
+            // records and starts at the live source count, which the shader
+            // already receives in its push constants.
+            int maximumHierarchyNodeCount =
+                DdgiEmissiveSpatialHierarchy.GetNodeCapacity(MaxDdgiEmissiveSourceCount);
+            _ddgiEmissiveSourceBufferSize = checked(
+                (ulong)(MaxDdgiEmissiveSourceCount + maximumHierarchyNodeCount) *
+                DdgiEmissiveSourceStride);
             return _bufferManager.CreateDeviceBuffer(
                 _ddgiEmissiveSourceBufferSize,
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
                 requireDeviceAddress: false,
                 MemoryBudgetCategory.GlobalIllumination,
                 "DDGI Emissive Source Buffer");
+        }
+
+        private BufferHandle CreateDdgiEmissiveSurfaceBuffer()
+        {
+            _ddgiEmissiveSurfaceBufferSize = checked(
+                (ulong)MaxDdgiEmissiveSourceCount * DdgiEmissiveSurfaceStride);
+            return _bufferManager.CreateDeviceBuffer(
+                _ddgiEmissiveSurfaceBufferSize,
+                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                requireDeviceAddress: false,
+                MemoryBudgetCategory.GlobalIllumination,
+                "DDGI Emissive Surface Sidecar Buffer");
         }
 
         private void RegisterDdgiEmissiveSourceBuffer()
@@ -1191,6 +2636,14 @@ namespace Njulf.Rendering
                 _bufferManager.GetBuffer(_ddgiEmissiveSourceBuffer),
                 0,
                 _ddgiEmissiveSourceBufferSize);
+            if (_ddgiEmissiveSurfaceBuffer.IsValid)
+            {
+                _bindlessHeap.RegisterStorageBuffer(
+                    BindlessIndex.SimpleDdgiEmissiveSurfaceBuffer,
+                    _bufferManager.GetBuffer(_ddgiEmissiveSurfaceBuffer),
+                    0,
+                    _ddgiEmissiveSurfaceBufferSize);
+            }
         }
 
         public bool BeginFrame()
@@ -1234,11 +2687,43 @@ namespace Njulf.Rendering
             _simpleDdgiVolumeManager?.ObserveFrameFenceCompletion(
                 _ddgiFrameSerial,
                 _completedGraphicsFrameFenceValue);
+            _simpleDdgiVolumeManager?.TryConsumePersistentWarmStartReadback(
+                _currentFrame);
             // This is deliberately the same ring slot whose fence was just
             // observed. A screenshot never reads a newer frame's buffer.
             _screenshotReadbackManager.CompleteFrameAfterFence(_currentFrame);
             _linearHdrReadbackManager.CompleteFrameAfterFence(_currentFrame);
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
+            _simpleDdgiLightTreeResources?.ReadCompletedFrame(_currentFrame);
+            if (_ddgiFrameSerial < ulong.MaxValue)
+            {
+                // This is intentionally a no-op while B1 has no exact
+                // all-producer capture contract. Once such a source exists,
+                // the runtime routes the fence-complete 64-byte header through
+                // its strict resource manager before any scheduler binding can
+                // be exposed.
+                if (_simpleDdgiReceiverFeedbackRuntime is { } receiverFeedbackRuntime)
+                {
+                    _ = receiverFeedbackRuntime.TryReadCompletedFrame(
+                        _currentFrame,
+                        _ddgiFrameSerial + 1UL,
+                        out _);
+                }
+                // With no source-cache handshake no C3 build can be pending,
+                // so this is normally a no-op. If a future exact integration
+                // records one, publication still occurs only after this frame
+                // slot's fence has completed.
+                if (_simpleDdgiGuidingFrameCoordinator is { } guidingCoordinator)
+                {
+                    guidingCoordinator.CompleteFrameAfterFence(_currentFrame);
+                }
+                else if (_simpleDdgiGuidingRuntime is { } guidingRuntime)
+                {
+                    _ = guidingRuntime.TryReadCompletedFrame(
+                        _currentFrame,
+                        out _);
+                }
+            }
             _gpuParticleRuntimeManager.ReadCompletedFrame(_currentFrame);
             _foliageManager.ReadCompletedFrame(_currentFrame);
             _sceneOpaqueCompactionPass?.ReadCompletedFrame(_currentFrame);
@@ -1248,15 +2733,41 @@ namespace Njulf.Rendering
             _completedDdgiForwardEstimateCounters = _diagnosticsBuffer.GetLastCompletedDdgiForwardEstimateCounters(_currentFrame);
             _completedDdgiInvestigationCounters = _diagnosticsBuffer.GetLastCompletedDdgiInvestigationCounters(_currentFrame);
             _completedDirectionalShadowReceiverCounters = _diagnosticsBuffer.GetLastCompletedDirectionalShadowReceiverCounters(_currentFrame);
+            _completedDirectionalShadowCasterDiagnostics =
+                DirectionalShadowCasterDiagnosticsEvaluator.AttachCpuReference(
+                    _diagnosticsBuffer.GetLastCompletedDirectionalShadowCasterDiagnostics(_currentFrame),
+                    _directionalShadowCasterFrameCaptures[_currentFrame]);
             _completedFarFieldMaterialV2Counters = _diagnosticsBuffer.GetLastCompletedFarFieldMaterialV2Counters(_currentFrame);
             _completedMaterialGiCounters = _diagnosticsBuffer.GetLastCompletedMaterialGiCounters(_currentFrame);
             _completedThinSurfaceTransportCounters = _diagnosticsBuffer.GetLastCompletedThinSurfaceTransportCounters(_currentFrame);
+            _completedDdgiGeometryParticipationCounters =
+                _diagnosticsBuffer.GetLastCompletedDdgiGeometryParticipationCounters(
+                    _currentFrame);
+            _completedDdgiManyLightCounters =
+                _diagnosticsBuffer.GetLastCompletedDdgiManyLightCounters(
+                    _currentFrame);
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
             _completedSceneSubmissionCounters = _sceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
             _completedForwardVisibilityCounters = _forwardVisibilityCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
             _completedSceneSubmissionValidation = _sceneOpaqueCompactionPass?.GetLastCompletedValidation(_currentFrame) ?? SceneSubmissionValidationSnapshot.Invalid;
             _gpuTimestamps.ReadCompletedFrame(_currentFrame);
+            if (_giCausticRuntime is { } causticRuntime)
+            {
+                _ = causticRuntime.TryReadCompletedFrame(
+                    _currentFrame,
+                    _sync.GetInFlightFence(_currentFrame),
+                    out _);
+            }
+            if (_simpleDdgiNearFieldResidualRuntime is { } nearFieldRuntime)
+            {
+                // The frame-slot fence was waited above. This is the only
+                // point at which C5 turns a recorded command transaction into
+                // a GPU-complete witness and reuses its readback ring slot.
+                _ = nearFieldRuntime.TryReadCompletedFrame(
+                    _currentFrame,
+                    out _);
+            }
             RecordCompletedAsyncComputeTimingFrame(_currentFrame, _gpuTimestamps.LastCompletedSnapshot);
             if (_simpleDdgiVolumeManager != null &&
                 _ddgiFrameSerial < ulong.MaxValue)
@@ -1502,6 +3013,12 @@ namespace Njulf.Rendering
                     ? ulong.MaxValue
                     : _ddgiFrameSerial + 1UL;
 
+            // Static shadow layers recorded by this frame are not reused by
+            // another command buffer until the owning graphics submission has
+            // been accepted. All later graphics submissions are ordered after
+            // this one, while resource replacement waits for device idle.
+            _directionalShadowPass?.ConfirmCurrentFrameSubmission();
+
             // The terminal graphics submit owns both the acquired swapchain
             // image and its readback copy. Do not permit CPU mapping until this
             // exact frame fence has completed on a later reuse of this slot.
@@ -1679,6 +3196,7 @@ namespace Njulf.Rendering
             _lightManager.UploadToGPU(_stagingRing, _currentCommandBuffer);
             ulong lightUploadBytes = _lightManager.LastUploadBytes;
             LightFrameSnapshot lightSnapshot = _lightManager.GetFrameSnapshot();
+            _simpleDdgiLightTreeResources?.Prepare(lightSnapshot);
             int lightCount = lightSnapshot.Count;
             int directionalLightCount = lightSnapshot.DirectionalLightCount;
             int localLightCount = lightSnapshot.LocalLightCount;
@@ -2046,28 +3564,27 @@ namespace Njulf.Rendering
             sceneData.JitterY = jitter.Y;
             if (shadowsAllowed)
             {
-                PrepareDirectionalShadows(sceneData, shadowData, directionalShadowsEnabled, shadowedDirectionalLightIndex);
+                System.Numerics.Vector3 selectedShadowLightDirection =
+                    lightSnapshot.FirstShadowCastingDirectionalLight.Direction;
+                Vector3 shadowDiagnosticLightDirection = directionalShadowsEnabled
+                    ? new Vector3(
+                        selectedShadowLightDirection.X,
+                        selectedShadowLightDirection.Y,
+                        selectedShadowLightDirection.Z)
+                    : Vector3.Zero;
+                PrepareDirectionalShadows(
+                    sceneData,
+                    shadowData,
+                    directionalShadowsEnabled,
+                    shadowedDirectionalLightIndex,
+                    shadowDiagnosticLightDirection);
                 PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
             }
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             if (reflectionsAllowed)
                 PrepareReflectionProbes(scene, sceneData);
+            PrepareDdgiFoliageProxies(scene, sceneData);
             PrepareAccelerationStructures(scene, sceneData);
-            PrepareDdgiProbeVolumes(scene, camera, sceneData, lightSnapshot, hiZDecision.CameraCut);
-            // Layered forward receivers resolve their policy after probe
-            // preparation has populated the current-frame DDGI counts.
-            bool ddgiAvailableForLayeredReceivers =
-                ForwardPlusPass.ShouldApplyDdgi(sceneData, Settings.GlobalIllumination);
-            sceneData.TransparentReceiveGlobalIllumination &=
-                ddgiAvailableForLayeredReceivers;
-            sceneData.DecalReceiveGlobalIllumination &=
-                ddgiAvailableForLayeredReceivers;
-            sceneData.TransparentDdgiReceiverCountersEnabled =
-                ddgiAvailableForLayeredReceivers &&
-                RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled &&
-                Settings.Diagnostics.DdgiForwardEstimateCountersEnabled;
-            BuildDebugOverlayDrawCommands(scene, sceneData);
-            sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
             ApplyCompletedSceneSubmissionCounters(sceneData, _completedSceneSubmissionCounters);
             ApplyCompletedForwardVisibilityCounters(sceneData, _completedForwardVisibilityCounters);
             ApplyCompletedSceneSubmissionValidation(sceneData, _completedSceneSubmissionValidation);
@@ -2078,7 +3595,16 @@ namespace Njulf.Rendering
             sceneData.SceneSubmissionCompactionSkipReason =
                 SceneSubmissionDiagnosticsPolicy.BuildCompactionSkipReason(sceneData);
             UpdateHiZFallbackDiagnostics(sceneData);
-            _diagnosticsBuffer.ResetCounters(_currentCommandBuffer, _currentFrame);
+            DirectionalShadowCasterFrameCapture directionalShadowCasterCapture =
+                (uint)_currentFrame < (uint)_directionalShadowCasterFrameCaptures.Length
+                    ? _directionalShadowCasterFrameCaptures[_currentFrame]
+                    : DirectionalShadowCasterFrameCapture.Empty;
+            _diagnosticsBuffer.ResetCounters(
+                _currentCommandBuffer,
+                _currentFrame,
+                directionalShadowCasterCapture.FrameSerial,
+                directionalShadowCasterCapture.ResourceGeneration,
+                directionalShadowCasterCapture.Valid != 0);
 
             if (!isolateSkinnedAnimationDebug)
             {
@@ -2090,6 +3616,28 @@ namespace Njulf.Rendering
                 finally
                 {
                     _gpuTimestamps.EndPass(_currentCommandBuffer, _currentFrame);
+                }
+            }
+
+            if (_ddgiFoliageProxyGenerationPass != null &&
+                _ddgiFoliageProxyFrame.RequiresGpuGeneration)
+            {
+                _gpuTimestamps.BeginPass(
+                    _currentCommandBuffer,
+                    _currentFrame,
+                    "DdgiFoliageProxyGenerationPass");
+                try
+                {
+                    _ddgiFoliageProxyGenerationPass.Execute(
+                        _currentCommandBuffer,
+                        _ddgiFoliageProxyFrame,
+                        sceneData);
+                }
+                finally
+                {
+                    _gpuTimestamps.EndPass(
+                        _currentCommandBuffer,
+                        _currentFrame);
                 }
             }
 
@@ -2106,11 +3654,48 @@ namespace Njulf.Rendering
                 }
             }
 
+            // Skinning output is now complete and visible to AS-build reads.
+            // Publish the new TLAS/metadata transaction before DDGI chooses a
+            // trace backend or records any ray-query consumer.
+            RecordAccelerationStructures(sceneData);
+            PrepareDdgiProbeVolumes(
+                scene,
+                camera,
+                sceneData,
+                lightSnapshot,
+                hiZDecision.CameraCut);
+            PrepareGiCausticFrame(sceneData, lightSnapshot);
+            PopulateAdvancedGiFrameDiagnostics(sceneData);
+            bool ddgiAvailableForLayeredReceivers =
+                ForwardPlusPass.ShouldApplyDdgi(
+                    sceneData,
+                    Settings.GlobalIllumination);
+            sceneData.TransparentReceiveGlobalIllumination &=
+                ddgiAvailableForLayeredReceivers;
+            sceneData.DecalReceiveGlobalIllumination &=
+                ddgiAvailableForLayeredReceivers;
+            sceneData.TransparentDdgiReceiverCountersEnabled =
+                ddgiAvailableForLayeredReceivers &&
+                RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled &&
+                Settings.Diagnostics.DdgiForwardEstimateCountersEnabled;
+            BuildDebugOverlayDrawCommands(scene, sceneData);
+            sceneData.DebugDrawSnapshot = _debugDraw.Snapshot();
+
             SetViewportAndScissor(_currentCommandBuffer);
 
             // Execute render graph
             sceneData.SecondaryCommandBufferEnabled = Settings.UseSecondaryCommandBuffers ? 1 : 0;
             AsyncComputePlan frameAsyncComputePlan = BuildAsyncComputePlan(sceneData);
+            if (_simpleDdgiReceiverFeedbackRuntime?.IsOwnedCaptureReady == true &&
+                frameAsyncComputePlan.SubmissionPlan.ContainsAsyncCompute)
+            {
+                // The exact candidate transaction currently has one graphics
+                // queue completion domain. Do not infer cross-queue visibility
+                // until every producer has an explicit release/acquire proof.
+                frameAsyncComputePlan = CreateGraphicsFallbackAsyncPlan(
+                    frameAsyncComputePlan,
+                    "exact receiver-feedback capture requires one graphics queue completion domain");
+            }
             _frameAsyncComputePlan = frameAsyncComputePlan;
             _frameAsyncComputeSubmissionPlan = frameAsyncComputePlan.SubmissionPlan;
 
@@ -2146,6 +3731,7 @@ namespace Njulf.Rendering
             }
 
             RecordReflectionProbeWork(sceneData);
+            FinalizeSimpleDdgiReceiverFeedbackCapture();
 
             // SceneColor still contains the linear, pre-exposure result here.
             // Tone mapping only sampled it; capture before any subsequent
@@ -2161,6 +3747,7 @@ namespace Njulf.Rendering
             ApplyCompletedDdgiForwardEstimateCounters(sceneData, _completedDdgiForwardEstimateCounters);
             ApplyCompletedDdgiInvestigationCounters(sceneData, _completedDdgiInvestigationCounters);
             ApplyCompletedDirectionalShadowReceiverCounters(sceneData, _completedDirectionalShadowReceiverCounters);
+            sceneData.DirectionalShadowCasterDiagnosticReadback = _completedDirectionalShadowCasterDiagnostics;
             if (particlesAllowed)
                 ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
             if (!isolateSkinnedAnimationDebug)
@@ -2486,6 +4073,8 @@ namespace Njulf.Rendering
             int kind = (int)MathF.Round(volume.WorldMaxAndKind.W);
             if (kind == 1)
                 return new Vector4(0.95f, 0.9f, 0.25f, 0.95f);
+            if (kind == 3)
+                return new Vector4(1.0f, 0.48f, 0.08f, 0.98f);
 
             return (volumeIndex % 3) switch
             {
@@ -3071,8 +4660,15 @@ namespace Njulf.Rendering
 
         private void EnsureMeshPipelineDiagnosticVariant()
         {
-            if (_meshPipeline == null ||
-                _meshPipeline.GpuMeshletCountersEnabled == Settings.Diagnostics.GpuMeshletCountersEnabled)
+            bool diagnosticCountersEnabled = Settings.Diagnostics.GpuMeshletCountersEnabled;
+            bool meshNeedsRecreate = _meshPipeline != null &&
+                _meshPipeline.GpuMeshletCountersEnabled != diagnosticCountersEnabled;
+            // Foliage has a dedicated mesh-shader shadow path. Keep it in
+            // lockstep with the opaque diagnostic variant so a runtime toggle
+            // never produces a partial caster-attribution capture.
+            bool foliageNeedsRecreate = _foliagePipeline != null &&
+                _foliagePipeline.GpuMeshletCountersEnabled != diagnosticCountersEnabled;
+            if (!meshNeedsRecreate && !foliageNeedsRecreate)
             {
                 return;
             }
@@ -3087,11 +4683,19 @@ namespace Njulf.Rendering
                         throw new VulkanException("Failed to wait for device before recreating mesh diagnostic pipelines", result);
                 });
 
-            _meshPipeline.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
+            if (meshNeedsRecreate)
+                _meshPipeline!.Recreate(RenderTargetManager.SceneColorFormat, _swapchain.DepthFormat);
+            if (foliageNeedsRecreate)
+            {
+                _foliagePipeline!.Recreate(
+                    RenderTargetManager.SceneColorFormat,
+                    RenderTargetManager.MotionVectorFormat,
+                    _swapchain.DepthFormat);
+            }
             System.Diagnostics.Debug.WriteLine(
-                Settings.Diagnostics.GpuMeshletCountersEnabled
-                    ? "GPU meshlet diagnostic counters enabled; using diagnostic task shader variants."
-                    : "GPU meshlet diagnostic counters disabled; using normal task shader variants.");
+                diagnosticCountersEnabled
+                    ? "GPU meshlet diagnostic counters enabled; using diagnostic opaque and foliage shadow variants."
+                    : "GPU meshlet diagnostic counters disabled; using normal opaque and foliage shadow variants.");
         }
 
         private GPUShadowData CreateDirectionalShadowData(
@@ -3166,7 +4770,8 @@ namespace Njulf.Rendering
             SceneRenderingData sceneData,
             GPUShadowData shadowData,
             bool enabled,
-            int lightIndex)
+            int lightIndex,
+            Vector3 lightDirection)
         {
             if (_directionalShadowResources == null)
                 return;
@@ -3200,6 +4805,25 @@ namespace Njulf.Rendering
             sceneData.ShadowSlopeScaledDepthBias = shadowSettings.SlopeScaledDepthBias;
             sceneData.DirectionalShadowPcfRadius = shadowSettings.PcfRadius;
             sceneData.ShadowData = shadowData;
+            int frameIndex = sceneData.FrameIndex;
+            if ((uint)frameIndex < (uint)_directionalShadowCasterFrameCaptures.Length &&
+                enabled &&
+                MeshletDiagnosticCountersActive)
+            {
+                _directionalShadowCasterFrameCaptures[frameIndex] =
+                    DirectionalShadowCasterFrameCapture.Create(
+                        sceneData.DdgiFrameSerial,
+                        _directionalShadowResources.ResourceGeneration,
+                        sceneData.DirectionalShadowCascadeCount,
+                        sceneData.CameraPosition,
+                        lightDirection,
+                        shadowData);
+            }
+            else if ((uint)frameIndex < (uint)_directionalShadowCasterFrameCaptures.Length)
+            {
+                _directionalShadowCasterFrameCaptures[frameIndex] =
+                    DirectionalShadowCasterFrameCapture.Empty;
+            }
         }
 
         private void EnsureDirectionalShadowResources(bool requiresShadowMap)
@@ -3801,9 +5425,20 @@ namespace Njulf.Rendering
             string localShadowOverflowSummary = BuildLocalShadowOverflowSummary(
                 spotShadowGpuCompactionJustified,
                 pointShadowGpuCompactionJustified);
+            DdgiContentRuntimeSnapshot contentDependentDdgi =
+                CreateDdgiContentRuntimeSnapshot(
+                    sceneData,
+                    giUsesSimpleDdgi,
+                    giRayQueryActive);
             DdgiRuntimeSnapshot ddgiRuntimeSnapshot = giUsesDdgi
-                ? CreateDdgiRuntimeSnapshot(sceneData)
-                : DdgiRuntimeSnapshot.Empty;
+                ? CreateDdgiRuntimeSnapshot(sceneData) with
+                {
+                    ContentDependent = contentDependentDdgi
+                }
+                : DdgiRuntimeSnapshot.Empty with
+                {
+                    ContentDependent = contentDependentDdgi
+                };
             IReadOnlyList<string> ddgiDiagnosticWarnings = _ddgiDiagnosticWarningTracker.Update(
                 ddgiRuntimeSnapshot,
                 schedulerOverBudget: false);
@@ -3812,6 +5447,9 @@ namespace Njulf.Rendering
             MaterialManagerDiagnostics materialDiagnostics = _materialManager.Diagnostics;
             MaterialGiRolloutEvaluation materialGiRollout =
                 giSettings.EvaluateMaterialGiRollout();
+            GiPipelineCacheTelemetry giPipelineCacheTelemetry =
+                _giPipelineCacheService?.Telemetry ??
+                GiPipelineCacheTelemetry.Empty;
             RendererValidationMessageSnapshot validationMessages = _context.ValidationMessageSnapshot;
             RendererDiagnostics diagnostics = new RendererDiagnostics(
                 sceneData.ObjectCount,
@@ -4220,6 +5858,48 @@ namespace Njulf.Rendering
                 SimpleDdgiStorage = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiStorage
                     : SimpleDdgiStorageDiagnostics.Unavailable,
+                SimpleDdgiWarmStart = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiWarmStart
+                    : SimpleDdgiWarmStartTelemetry.Disabled(
+                        "Simple DDGI is inactive."),
+                SimpleDdgiRefinement = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiRefinement
+                    : new SimpleDdgiRefinementBrickDiagnostics(
+                        false,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        false,
+                        "inactive"),
+                SimpleDdgiRefinementEmissiveDemand = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiRefinementEmissiveDemand
+                    : default,
+                SimpleDdgiNearVisibility = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiNearVisibility
+                    : SimpleDdgiNearVisibilityDiagnostics.Disabled(
+                        "Simple DDGI is inactive."),
+                GiRoadmapExperiments = sceneData.GiRoadmapExperiments,
+                SimpleDdgiNearFieldResidual =
+                    _simpleDdgiNearFieldResidualRuntime?.Diagnostics ??
+                    (_simpleDdgiNearFieldResidualPlan.Requested
+                        ? SimpleDdgiNearFieldResidualDiagnostics
+                            .PendingRendererIntegration(
+                                new SimpleDdgiNearFieldResidualMemoryTelemetry(
+                                    _simpleDdgiNearFieldResidualPlan.AllocatedBytes,
+                                    _simpleDdgiNearFieldResidualPlan.Active
+                                        ? _simpleDdgiNearFieldResidualPlan.AllocatedBytes
+                                        : 0UL,
+                                    0UL,
+                                    0UL,
+                                    0UL),
+                                _simpleDdgiNearFieldResidualPlan.Status)
+                        : SimpleDdgiNearFieldResidualDiagnostics.Disabled(
+                            _simpleDdgiNearFieldResidualPlan.Status)),
+                SimpleDdgiContentMemory =
+                    sceneData.SimpleDdgiContentMemory,
                 SimpleDdgiRayScratchBytes = giUsesSimpleDdgi
                     ? _simpleDdgiVolumeManager?.RayScratchBytes ?? 0UL
                     : 0UL,
@@ -4419,11 +6099,17 @@ namespace Njulf.Rendering
                 GpuSimpleDdgiScheduleEmitMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiScheduleEmitMicroseconds : 0,
                 GpuSimpleDdgiTransportMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiTransportMicroseconds : 0,
                 GpuSimpleDdgiAcceleratedSolveMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiAcceleratedSolveMicroseconds : 0,
+                GpuSimpleDdgiDirectionalRadianceMicroseconds = giUsesSimpleDdgi
+                    ? sceneData.GpuSimpleDdgiDirectionalRadianceMicroseconds
+                    : 0,
                 GpuSimpleDdgiBlendMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiBlendMicroseconds : 0,
                 GpuSimpleDdgiRelocateClassifyMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiRelocateClassifyMicroseconds : 0,
                 GpuSimpleDdgiPublishMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiPublishMicroseconds : 0,
                 GpuSimpleDdgiTransportAuditMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiTransportAuditMicroseconds : 0,
                 GpuSimpleDdgiCommitMicroseconds = giUsesSimpleDdgi ? sceneData.GpuSimpleDdgiCommitMicroseconds : 0,
+                GpuSimpleDdgiUrgentRelightMicroseconds = giUsesSimpleDdgi
+                    ? sceneData.GpuSimpleDdgiUrgentRelightMicroseconds
+                    : 0,
                 SimpleDdgiSchedulerMode = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiSchedulerMode
                     : SimpleDdgiSchedulerMode.CpuReference,
@@ -4509,6 +6195,66 @@ namespace Njulf.Rendering
                 SimpleDdgiSchedulerArenaBytes = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiSchedulerArenaBytes
                     : 0UL,
+                SimpleDdgiCostAwareSchedulingActive = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiCostAwareSchedulingActive
+                    : 0,
+                SimpleDdgiSchedulerCostSampleCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerCostSampleCount
+                    : 0UL,
+                SimpleDdgiSchedulerVisibilityPerPrimary = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerVisibilityPerPrimary
+                    : 0.0f,
+                SimpleDdgiSchedulerAlphaCandidatesPerPrimary = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerAlphaCandidatesPerPrimary
+                    : 0.0f,
+                SimpleDdgiSchedulerMaterialEvaluationsPerPrimary = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerMaterialEvaluationsPerPrimary
+                    : 0.0f,
+                SimpleDdgiSchedulerFarFieldStepsPerPrimary = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerFarFieldStepsPerPrimary
+                    : 0.0f,
+                SimpleDdgiSparseResidualPropagationActive = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSparseResidualPropagationActive
+                    : 0,
+                SimpleDdgiResidualSeededCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiResidualSeededCount
+                    : 0u,
+                SimpleDdgiResidualDependentWakeCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiResidualDependentWakeCount
+                    : 0u,
+                SimpleDdgiResidualThresholdRejectedCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiResidualThresholdRejectedCount
+                    : 0u,
+                SimpleDdgiResidualCompleteSweepFallbackCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiResidualCompleteSweepFallbackCount
+                    : 0u,
+                SimpleDdgiReceiverContributionFeedbackActive = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiReceiverContributionFeedbackActive
+                    : 0,
+                SimpleDdgiReceiverContributingProbeCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiReceiverContributingProbeCount
+                    : 0u,
+                SimpleDdgiReceiverCoverageBucketCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiReceiverCoverageBucketCount
+                    : 0u,
+                SimpleDdgiReceiverFallbackProbeCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiReceiverFallbackProbeCount
+                    : 0u,
+                SimpleDdgiReceiverConsumerMask = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiReceiverConsumerMask
+                    : 0u,
+                SimpleDdgiUrgentRelightActive = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiUrgentRelightActive
+                    : 0,
+                SimpleDdgiUrgentRelightAcceptedCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiUrgentRelightAcceptedCount
+                    : 0u,
+                SimpleDdgiUrgentRelightCommittedCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiUrgentRelightCommittedCount
+                    : 0u,
+                SimpleDdgiUrgentRelightRejectedCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiUrgentRelightRejectedCount
+                    : 0u,
                 SimpleDdgiSchedulerFeedbackReadbackBytes = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiSchedulerFeedbackReadbackBytes
                     : 0UL,
@@ -4666,6 +6412,42 @@ namespace Njulf.Rendering
                 DdgiThinUnsupportedTransmissionHitCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.UnsupportedTransmissionHitCount : 0u,
                 DdgiThinEnergyClampCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.EnergyClampCount : 0u,
                 DdgiThinInvalidTransmissionCount = giUsesDdgi ? _completedThinSurfaceTransportCounters.InvalidTransmissionCount : 0u,
+                DdgiTransparentVisibilityLayerCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.TransparentVisibilityLayerCount
+                    : 0u,
+                DdgiTransparentVisibilityLimitCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.TransparentVisibilityLimitCount
+                    : 0u,
+                DdgiRayDecalCandidateCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.DecalCandidateCount
+                    : 0u,
+                DdgiRayDecalRetainedCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.DecalRetainedCount
+                    : 0u,
+                DdgiRayDecalAssociatedCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.DecalAssociatedCount
+                    : 0u,
+                DdgiRayDecalDepthRejectCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.DecalDepthRejectCount
+                    : 0u,
+                DdgiRayDecalFacingRejectCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.DecalFacingRejectCount
+                    : 0u,
+                DdgiRayDecalCandidateLimitCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.DecalCandidateLimitCount
+                    : 0u,
+                DdgiFoliageProxyHitCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.FoliageProxyHitCount
+                    : 0u,
+                DdgiInvalidRayMetadataCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.InvalidRayMetadataCount
+                    : 0u,
+                DdgiStochasticAlphaAcceptCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.StochasticAlphaAcceptCount
+                    : 0u,
+                DdgiStochasticAlphaRejectCount = giUsesDdgi
+                    ? _completedDdgiGeometryParticipationCounters.StochasticAlphaRejectCount
+                    : 0u,
                 DdgiTraceEarlyOutDisabledCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutDisabledCount : 0u,
                 DdgiTraceEarlyOutBeyondRequestCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutBeyondRequestCount : 0u,
                 DdgiTraceEarlyOutResolveBoundsCount = giUsesDdgi ? sceneData.DdgiTraceEarlyOutResolveBoundsCount : 0u,
@@ -4721,6 +6503,58 @@ namespace Njulf.Rendering
                 DdgiScrollCount = giUsesDdgi ? sceneData.DdgiScrollCount : 0,
                 DdgiNewProbeCount = giUsesDdgi ? sceneData.DdgiNewProbeCount : 0,
                 DdgiDirtyBoundsProbeUpdateCount = giUsesDdgi ? sceneData.DdgiDirtyBoundsProbeUpdateCount : 0,
+                SimpleDdgiMutationJournalLastConsumedSerial = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalLastConsumedSerial
+                    : 0UL,
+                SimpleDdgiMutationJournalEnqueuedEventCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalEnqueuedEventCount
+                    : 0UL,
+                SimpleDdgiMutationJournalCoalescedEventCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalCoalescedEventCount
+                    : 0UL,
+                SimpleDdgiMutationJournalOverflowCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalOverflowCount
+                    : 0UL,
+                SimpleDdgiMutationJournalConservativeFallbackCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalConservativeFallbackCount
+                    : 0UL,
+                SimpleDdgiMutationJournalAttachScanCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalAttachScanCount
+                    : 0UL,
+                SimpleDdgiMutationJournalAttachObjectCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalAttachObjectCount
+                    : 0UL,
+                SimpleDdgiMutationJournalOracleComparisonCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalOracleComparisonCount
+                    : 0UL,
+                SimpleDdgiMutationJournalOracleMismatchCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalOracleMismatchCount
+                    : 0UL,
+                SimpleDdgiMutationJournalPendingEventCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalPendingEventCount
+                    : 0,
+                SimpleDdgiMutationJournalOutputRegionCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalOutputRegionCount
+                    : 0,
+                SimpleDdgiMutationJournalOverflowedThisFrame = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiMutationJournalOverflowedThisFrame
+                    : 0,
+                GiPipelineCacheLoaded = giPipelineCacheTelemetry.CacheLoaded ? 1 : 0,
+                GiPipelineCacheRejected = giPipelineCacheTelemetry.CacheRejected ? 1 : 0,
+                GiPipelineCacheSaved = giPipelineCacheTelemetry.CacheSaved ? 1 : 0,
+                GiPipelineCacheLoadedPayloadBytes =
+                    giPipelineCacheTelemetry.LoadedPayloadBytes,
+                GiPipelineCacheSavedPayloadBytes =
+                    giPipelineCacheTelemetry.SavedPayloadBytes,
+                GiPipelineCreationCount =
+                    giPipelineCacheTelemetry.PipelineCreationCount,
+                GiPipelineCreationMicroseconds =
+                    giPipelineCacheTelemetry.PipelineCreationMicroseconds,
+                GiRenderCriticalPipelineCreationCount =
+                    giPipelineCacheTelemetry.RenderCriticalPipelineCreationCount,
+                GiPipelineCachePath = giPipelineCacheTelemetry.CachePath,
+                GiPipelineCacheStatus = giPipelineCacheTelemetry.LoadStatus,
+                GiLastCreatedPipeline = giPipelineCacheTelemetry.LastCreatedPipeline,
                 DdgiVisibleFrustumProbeUpdateCount = giUsesDdgi ? sceneData.DdgiVisibleFrustumProbeUpdateCount : 0,
                 DdgiOutsideFrustumSafetyProbeUpdateCount = giUsesDdgi ? sceneData.DdgiOutsideFrustumSafetyProbeUpdateCount : 0,
                 DdgiAgeRefreshProbeUpdateCount = giUsesDdgi ? sceneData.DdgiAgeRefreshProbeUpdateCount : 0,
@@ -4737,6 +6571,18 @@ namespace Njulf.Rendering
                 DdgiSkippedLocalLightCount = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiSkippedLocalLightCount : 0UL,
                 DdgiLightSelectionMode = giUsesDdgi || giUsesSimpleDdgi ? sceneData.DdgiLightSelectionMode : string.Empty,
                 DdgiEmissiveSourceCount = giUsesDdgi ? sceneData.DdgiEmissiveSourceCount : 0,
+                SimpleDdgiTraceContentProfile = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiTraceContentProfile
+                    : 0,
+                SimpleDdgiTraceDistanceProfile = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiTraceDistanceProfile
+                    : 0,
+                SimpleDdgiTraceSpecialized = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiTraceSpecialized
+                    : 0,
+                SimpleDdgiTraceWorkgroupSize = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiTraceWorkgroupSize
+                    : 64,
                 DdgiEmissiveSourceRevision = giUsesDdgi ? sceneData.DdgiEmissiveSourceRevision : 0,
                 DdgiEmissiveSamplingMode = giUsesDdgi ? sceneData.DdgiEmissiveSamplingMode : string.Empty,
                 DdgiEmissiveTriangleCandidateCount = giUsesDdgi ? sceneData.DdgiEmissiveTriangleCandidateCount : 0,
@@ -4744,6 +6590,18 @@ namespace Njulf.Rendering
                 DdgiEmissiveSkippedEnergyFraction = giUsesDdgi ? sceneData.DdgiEmissiveSkippedEnergyFraction : 0.0f,
                 DdgiEmissiveSkippedSkinnedObjectCount = giUsesDdgi ? sceneData.DdgiEmissiveSkippedSkinnedObjectCount : 0,
                 DdgiEmissiveSkippedSkinnedImportance = giUsesDdgi ? sceneData.DdgiEmissiveSkippedSkinnedImportance : 0.0,
+                DdgiEmissiveAverageRadianceRed = giUsesDdgi ? sceneData.DdgiEmissiveAverageRadiance.X : 0.0f,
+                DdgiEmissiveAverageRadianceGreen = giUsesDdgi ? sceneData.DdgiEmissiveAverageRadiance.Y : 0.0f,
+                DdgiEmissiveAverageRadianceBlue = giUsesDdgi ? sceneData.DdgiEmissiveAverageRadiance.Z : 0.0f,
+                DdgiEmissivePeakLuminanceNits = giUsesDdgi ? sceneData.DdgiEmissivePeakLuminanceNits : 0.0f,
+                DdgiEmissiveCoveredAreaSquareMeters = giUsesDdgi ? sceneData.DdgiEmissiveCoveredAreaSquareMeters : 0.0,
+                DdgiEmissiveIntegratedPowerRed = giUsesDdgi ? sceneData.DdgiEmissiveIntegratedPowerRed : 0.0,
+                DdgiEmissiveIntegratedPowerGreen = giUsesDdgi ? sceneData.DdgiEmissiveIntegratedPowerGreen : 0.0,
+                DdgiEmissiveIntegratedPowerBlue = giUsesDdgi ? sceneData.DdgiEmissiveIntegratedPowerBlue : 0.0,
+                DdgiEmissiveIntegratedPowerLuminance = giUsesDdgi ? sceneData.DdgiEmissiveIntegratedPowerLuminance : 0.0,
+                DdgiEmissiveSelectedProbability = giUsesDdgi ? sceneData.DdgiEmissiveSelectedProbability : 0.0f,
+                DdgiEmissiveEnergyWarningCount = giUsesDdgi ? sceneData.DdgiEmissiveEnergyWarningCount : 0UL,
+                DdgiEmissiveLastEnergyWarning = giUsesDdgi ? sceneData.DdgiEmissiveLastEnergyWarning : string.Empty,
                 DdgiEmissiveSamplingInvocationCount = giUsesDdgi
                     ? _completedMaterialGiCounters.EstimatedEmissiveSamplingInvocationCount
                     : 0u,
@@ -4753,6 +6611,18 @@ namespace Njulf.Rendering
                 DdgiEmissiveTableRebuildCount = giUsesDdgi ? sceneData.DdgiEmissiveTableRebuildCount : 0UL,
                 DdgiEmissiveTableInvalidationCount = giUsesDdgi ? sceneData.DdgiEmissiveTableInvalidationCount : 0UL,
                 DdgiEmissiveTableUploadCount = giUsesDdgi ? sceneData.DdgiEmissiveTableUploadCount : 0UL,
+                DdgiEmissiveHierarchyNodeCount = giUsesDdgi ? sceneData.DdgiEmissiveHierarchyNodeCount : 0,
+                DdgiEmissiveHierarchyBuildCount = giUsesDdgi ? sceneData.DdgiEmissiveHierarchyBuildCount : 0UL,
+                DdgiEmissiveHierarchyRefitCount = giUsesDdgi ? sceneData.DdgiEmissiveHierarchyRefitCount : 0UL,
+                DdgiEmissiveHierarchyUpdatedNodeCount = giUsesDdgi ? sceneData.DdgiEmissiveHierarchyUpdatedNodeCount : 0,
+                DdgiVfxMacroSourceCount = giUsesDdgi ? sceneData.DdgiVfxMacroSourceCount : 0,
+                DdgiVfxMacroEligibleEmitterCount = giUsesDdgi ? sceneData.DdgiVfxMacroEligibleEmitterCount : 0,
+                DdgiVfxMacroRejectedTransientCount = giUsesDdgi ? sceneData.DdgiVfxMacroRejectedTransientCount : 0,
+                DdgiVfxMacroOverflowCount = giUsesDdgi ? sceneData.DdgiVfxMacroOverflowCount : 0,
+                DdgiVfxMacroAuthoredPowerCount = giUsesDdgi ? sceneData.DdgiVfxMacroAuthoredPowerCount : 0,
+                DdgiVfxMacroAutoPowerCount = giUsesDdgi ? sceneData.DdgiVfxMacroAutoPowerCount : 0,
+                DdgiVfxMacroRevision = giUsesDdgi ? sceneData.DdgiVfxMacroRevision : 0UL,
+                DdgiVfxMacroRefitCount = giUsesDdgi ? sceneData.DdgiVfxMacroRefitCount : 0UL,
                 DdgiProbeVolumeBufferBytes = giUsesDdgi ? sceneData.DdgiProbeVolumeBufferBytes : 0UL,
                 DdgiProbeStateBufferBytes = giUsesDdgi ? sceneData.DdgiProbeStateBufferBytes : 0UL,
                 DdgiProbeUpdateQueueBytes = giUsesDdgi ? sceneData.DdgiProbeUpdateQueueBytes : 0UL,
@@ -4826,6 +6696,28 @@ namespace Njulf.Rendering
                 AccelerationStructureBlasEvictionCount = sceneData.AccelerationStructureBlasEvictionCount,
                 AccelerationStructureBlasEvictionBytes = sceneData.AccelerationStructureBlasEvictionBytes,
                 AccelerationStructureBlasBudgetRejectedCount = sceneData.AccelerationStructureBlasBudgetRejectedCount,
+                AccelerationStructureDynamicBottomLevelCount =
+                    sceneData.AccelerationStructureDynamicBottomLevelCount,
+                AccelerationStructureDynamicBlasBytes =
+                    sceneData.AccelerationStructureDynamicBlasBytes,
+                AccelerationStructureDynamicBlasPeakBytes =
+                    sceneData.AccelerationStructureDynamicBlasPeakBytes,
+                AccelerationStructureDynamicFullBuildCount =
+                    sceneData.AccelerationStructureDynamicFullBuildCount,
+                AccelerationStructureDynamicRefitCount =
+                    sceneData.AccelerationStructureDynamicRefitCount,
+                AccelerationStructureDynamicProxyFallbackCount =
+                    sceneData.AccelerationStructureDynamicProxyFallbackCount,
+                AccelerationStructureDynamicExcludedCount =
+                    sceneData.AccelerationStructureDynamicExcludedCount,
+                AccelerationStructureDynamicBudgetDeferredCount =
+                    sceneData.AccelerationStructureDynamicBudgetDeferredCount,
+                AccelerationStructureDynamicTopologyMismatchCount =
+                    sceneData.AccelerationStructureDynamicTopologyMismatchCount,
+                AccelerationStructureDynamicScratchBytes =
+                    sceneData.AccelerationStructureDynamicScratchBytes,
+                AccelerationStructureDynamicPrimitiveCount =
+                    sceneData.AccelerationStructureDynamicPrimitiveCount,
                 AccelerationStructureBlasBytes = sceneData.AccelerationStructureBlasBytes,
                 AccelerationStructureTlasBytes = sceneData.AccelerationStructureTlasBytes,
                 AccelerationStructureRetiredBytes = sceneData.AccelerationStructureRetiredBytes,
@@ -5011,13 +6903,24 @@ namespace Njulf.Rendering
                 FoliageCulledClusterCount = sceneData.FoliageCulledClusterCount,
                 FoliageVisibleMeshletDrawCount = sceneData.FoliageVisibleMeshletDrawCount,
                 FoliageDdgiSampleCount = sceneData.FoliageDdgiSampleCount,
-                FoliageDdgiTransportExcludedClusterCount = giUsesDdgi
+                FoliageDdgiTransportExcludedClusterCount = giUsesDdgi &&
+                    (sceneData.DdgiFoliageGeometryMode ==
+                        DdgiFoliageGeometryMode.Excluded ||
+                     !string.IsNullOrWhiteSpace(
+                         sceneData.DdgiFoliageProxyFallbackReason))
                     ? sceneData.FoliageClusterCount
                     : 0,
-                FoliageDdgiTransportExclusionReason = giUsesDdgi &&
-                    sceneData.FoliageClusterCount > 0
-                        ? AccelerationStructureManager.FoliageDdgiExclusionReason
-                        : string.Empty,
+                FoliageDdgiTransportExclusionReason = !giUsesDdgi ||
+                    sceneData.FoliageClusterCount == 0
+                        ? string.Empty
+                        : !string.IsNullOrWhiteSpace(
+                            sceneData.DdgiFoliageProxyFallbackReason)
+                            ? sceneData.DdgiFoliageProxyFallbackReason
+                            : sceneData.DdgiFoliageGeometryMode ==
+                                DdgiFoliageGeometryMode.Excluded
+                                ? AccelerationStructureManager
+                                    .FoliageDdgiExclusionReason
+                                : string.Empty,
                 FoliageGrassBladeEstimate = sceneData.FoliageGrassBladeEstimate,
                 FoliageLod0VisibleCount = sceneData.FoliageLod0VisibleCount,
                 FoliageLod1VisibleCount = sceneData.FoliageLod1VisibleCount,
@@ -5030,6 +6933,61 @@ namespace Njulf.Rendering
                 FoliageIndirectMeshletDispatchEnabled = sceneData.FoliageIndirectMeshletDispatchEnabled,
                 FoliageInstanceBufferBytes = sceneData.FoliageInstanceBufferBytes,
                 FoliageClusterBufferBytes = sceneData.FoliageClusterBufferBytes,
+                DdgiFoliageGeometryMode = sceneData.DdgiFoliageGeometryMode,
+                DdgiFoliageProxyVertexCount =
+                    sceneData.DdgiFoliageProxyVertexCount,
+                DdgiFoliageProxyCardCount =
+                    sceneData.DdgiFoliageProxyCardCount,
+                DdgiFoliageProxyTriangleCount =
+                    sceneData.DdgiFoliageProxyTriangleCount,
+                DdgiFoliageAuthoredInstanceCount =
+                    sceneData.DdgiFoliageAuthoredInstanceCount,
+                DdgiFoliageGeneratedInstanceCount =
+                    sceneData.DdgiFoliageGeneratedInstanceCount,
+                DdgiFoliageDroppedTriangleCount =
+                    sceneData.DdgiFoliageDroppedTriangleCount,
+                DdgiFoliageRepresentedBladeCount =
+                    sceneData.DdgiFoliageRepresentedBladeCount,
+                DdgiFoliageProxyUpdatedThisFrame =
+                    sceneData.DdgiFoliageProxyUpdatedThisFrame,
+                DdgiFoliageProxyUploadBytes =
+                    sceneData.DdgiFoliageProxyUploadBytes,
+                DdgiFoliageProxyVertexBufferBytes =
+                    sceneData.DdgiFoliageProxyVertexBufferBytes,
+                DdgiFoliageProxyIndexBufferBytes =
+                    sceneData.DdgiFoliageProxyIndexBufferBytes,
+                DdgiFoliageProxyPatchBufferBytes =
+                    sceneData.DdgiFoliageProxyPatchBufferBytes,
+                DdgiFoliageProxyContentSignature =
+                    sceneData.DdgiFoliageProxyContentSignature,
+                DdgiFoliageProxyCadenceGeneration =
+                    sceneData.DdgiFoliageProxyCadenceGeneration,
+                CpuDdgiFoliageProxyBuildMicroseconds =
+                    sceneData.CpuDdgiFoliageProxyBuildMicroseconds,
+                CpuDdgiFoliageProxyUploadMicroseconds =
+                    sceneData.CpuDdgiFoliageProxyUploadMicroseconds,
+                CpuDdgiFoliageProxyGenerationRecordMicroseconds =
+                    sceneData.CpuDdgiFoliageProxyGenerationRecordMicroseconds,
+                GpuDdgiFoliageProxyGenerationMicroseconds =
+                    sceneData.GpuDdgiFoliageProxyGenerationMicroseconds,
+                DdgiFoliageProxyRequestedRepresentedInstanceCount =
+                    sceneData.DdgiFoliageProxyRequestedRepresentedInstanceCount,
+                DdgiFoliageProxyDensityError =
+                    sceneData.DdgiFoliageProxyDensityError,
+                DdgiFoliageProxyWindAgeSeconds =
+                    sceneData.DdgiFoliageProxyWindAgeSeconds,
+                DdgiFoliageProxyNearCardCount =
+                    sceneData.DdgiFoliageProxyNearCardCount,
+                DdgiFoliageProxyMidCardCount =
+                    sceneData.DdgiFoliageProxyMidCardCount,
+                DdgiFoliageProxyFarCardCount =
+                    sceneData.DdgiFoliageProxyFarCardCount,
+                DdgiFoliageProxyExcludedPatchCount =
+                    sceneData.DdgiFoliageProxyExcludedPatchCount,
+                DdgiFoliageProxyLodPolicyVersion =
+                    sceneData.DdgiFoliageProxyLodPolicyVersion,
+                DdgiFoliageProxyFallbackReason =
+                    sceneData.DdgiFoliageProxyFallbackReason,
                 FoliageDrawBufferBytes = sceneData.FoliageDrawBufferBytes,
                 FoliageImpostorAtlasBytes = sceneData.FoliageImpostorAtlasBytes,
                 CpuFoliageBuildMicroseconds = sceneData.CpuFoliageBuildMicroseconds,
@@ -5213,6 +7171,9 @@ namespace Njulf.Rendering
                     ? sceneData.DdgiVolumeDiagnostics.ToArray()
                     : Array.Empty<DdgiVolumeDiagnosticsEntry>(),
                 DdgiRuntimeSnapshot = ddgiRuntimeSnapshot,
+                ContentDependentDdgi = contentDependentDdgi,
+                SimpleDdgiLivenessTelemetry = sceneData.SimpleDdgiLivenessTelemetry,
+                SimpleDdgiLivenessWatchdog = sceneData.SimpleDdgiLivenessWatchdog,
                 DdgiDiagnosticWarnings = ddgiDiagnosticWarnings,
                 LargestTextureAssets = _textureManager.GetLargestFileTextures(10),
                 MeshletQualityEntries = _meshManager.GetMeshletQualityEntries(10)
@@ -5455,6 +7416,13 @@ namespace Njulf.Rendering
                 MeshBufferUtilization = _meshManager.MeshBufferUtilization,
                 MeshBufferCompactionCount = _meshManager.MeshBufferCompactionCount,
                 MeshBufferCompactedBytesSaved = _meshManager.MeshBufferCompactedBytesSaved,
+                MeshBufferGrowthRetryCount =
+                    _meshManager.MeshBufferGrowthRetryCount,
+                MeshBufferGrowthRetrySuccessCount =
+                    _meshManager.MeshBufferGrowthRetrySuccessCount,
+                MeshBufferCompactionOutOfDeviceMemorySkipCount =
+                    _meshManager
+                        .MeshBufferCompactionOutOfDeviceMemorySkipCount,
                 MeshRetainedDeadBytes =
                     _meshManager.RetainedDeadMeshBytes,
                 MeshRetainedDeadByteBudget =
@@ -6775,6 +8743,9 @@ namespace Njulf.Rendering
             _linearHdrReadbackManager.FailAll(
                 $"Linear HDR capture was cancelled because frame submission failed: {_frameSubmissionFaultReason}",
                 includeQueuedRequests: true);
+            _simpleDdgiReceiverFeedbackRuntime?.AbortCapture(
+                "receiver-feedback-frame-submission-failed:" +
+                _frameSubmissionFaultReason);
             LatchAsyncComputeEmergencyFallback(_frameSubmissionFaultReason);
             _asyncComputeTimingFrames[_currentFrame] = null;
             _deferredAsyncSubmissions.Clear();
@@ -7254,7 +9225,10 @@ namespace Njulf.Rendering
                     {
                         RenderGraphResourceUsage usage = usages[usageIndex];
                         IReadOnlyList<RenderGraphConcreteResourceBinding> bindings =
-                            _renderGraph.ConcreteResourceBindings.GetBindings(usage.Resource, _currentFrame);
+                            _renderGraph.ConcreteResourceBindings.GetBindings(
+                                usage.Resource,
+                                _currentFrame,
+                                usage.HistoryBinding);
                         for (int bindingIndex = 0; bindingIndex < bindings.Count; bindingIndex++)
                         {
                             RenderGraphConcreteResourceBinding binding = bindings[bindingIndex];
@@ -7403,7 +9377,8 @@ namespace Njulf.Rendering
                 _environmentManager?.EnvironmentBuffer ?? BufferHandle.Invalid,
                 _environmentManager?.PrefilterEnvironmentBuffer ?? BufferHandle.Invalid,
                 _environmentManager?.GiEnvironmentBuffer ?? BufferHandle.Invalid,
-                _ddgiEmissiveSourceBuffer);
+                _ddgiEmissiveSourceBuffer,
+                _ddgiEmissiveSurfaceBuffer);
 
             FarFieldClipmapManager? farField = _farFieldClipmapManager;
             var farFieldBuffers = farField == null
@@ -7433,6 +9408,16 @@ namespace Njulf.Rendering
                     simpleDdgi.ProbeUpdateQueueBuffer,
                     simpleDdgi.RelocationClassificationBuffer,
                     simpleDdgi.GpuSchedulerArenaBuffer);
+            SimpleDdgiNearFieldResidualVulkanBuffers nearFieldBuffers =
+                _simpleDdgiNearFieldResidualRuntime?.Buffers ?? default;
+            GiCausticVulkanBuffers causticBuffers =
+                _giCausticRuntime?.Buffers ?? default;
+            SimpleDdgiGuidingGraphResourceSnapshot guidingResources =
+                _simpleDdgiGuidingFrameCoordinator is { } guidingCoordinator &&
+                guidingCoordinator.TryGetGraphResourceSnapshot(
+                    out SimpleDdgiGuidingGraphResourceSnapshot capturedGuidingResources)
+                    ? capturedGuidingResources
+                    : default;
 
             return new AsyncComputeResourcePlanGeneration(
                 _renderGraph.ResourceAllocationGeneration,
@@ -7449,7 +9434,35 @@ namespace Njulf.Rendering
                 _hizDepthPyramid?.Image.Handle ?? 0,
                 coreBuffers,
                 farFieldBuffers,
-                simpleDdgiBuffers);
+                simpleDdgiBuffers,
+                new CausticAsyncBufferIdentity(
+                    causticBuffers.Tasks,
+                    causticBuffers.Photons,
+                    causticBuffers.Cache,
+                    causticBuffers.Scratch,
+                    _giCausticRuntime?.GetFrameConstantBuffer(0) ??
+                        BufferHandle.Invalid,
+                    _giCausticRuntime?.GetFrameConstantBuffer(1) ??
+                        BufferHandle.Invalid),
+                new GuidingAsyncBufferIdentity(
+                    guidingResources.Distributions.DistributionBank0,
+                    guidingResources.Distributions.DistributionBank1,
+                    guidingResources.Distributions.BankBytes,
+                    guidingResources.Distributions.AllocationGeneration,
+                    guidingResources.WorkspaceBuffer,
+                    guidingResources.WorkspaceOffsetBytes,
+                    guidingResources.WorkspaceBytes,
+                    guidingResources.WorkspaceGeneration,
+                    guidingResources.DirectionPayloadSidecar,
+                    guidingResources.DirectionPayloadBytes,
+                    guidingResources.DirectionPayloadGeneration),
+                new NearFieldResidualAsyncBufferIdentity(
+                    nearFieldBuffers.HitMetadata,
+                    nearFieldBuffers.HistoryMetadata0,
+                    nearFieldBuffers.HistoryMetadata1,
+                    nearFieldBuffers.TileRecords,
+                    nearFieldBuffers.TraceFrameConstants0,
+                    nearFieldBuffers.TraceFrameConstants1));
         }
 
         /// <summary>
@@ -7612,6 +9625,8 @@ namespace Njulf.Rendering
                 _environmentManager?.GiEnvironmentBuffer ?? BufferHandle.Invalid, queueFamilies, graphicsFamily);
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.DdgiEmissiveSources, "DDGI emissive sources",
                 _ddgiEmissiveSourceBuffer, queueFamilies, graphicsFamily);
+            AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.DdgiEmissiveSources, "DDGI emissive surface sidecars",
+                _ddgiEmissiveSurfaceBuffer, queueFamilies, graphicsFamily);
             for (int frameIndex = 0; frameIndex < FramesInFlight; frameIndex++)
             {
                 AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.RendererDiagnosticsBuffer, "Renderer diagnostics",
@@ -7687,12 +9702,164 @@ namespace Njulf.Rendering
                     _simpleDdgiVolumeManager.ProbeStateBuffer, queueFamilies, graphicsFamily);
                 AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiReceiverProbes, "Simple DDGI compact receiver probes",
                     _simpleDdgiVolumeManager.ReceiverProbeBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiDirectionalRadiance, "Simple DDGI directional radiance",
+                    _simpleDdgiVolumeManager.DirectionalRadianceBuffer, queueFamilies, graphicsFamily);
+                AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiDirectionalRadiance, "Simple DDGI directional radiance parity",
+                    _simpleDdgiVolumeManager.DirectionalRadianceParityBuffer, queueFamilies, graphicsFamily);
                 AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiUpdateQueue, "Simple DDGI update queue",
                     _simpleDdgiVolumeManager.ProbeUpdateQueueBuffer, queueFamilies, graphicsFamily);
                 AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiRelocationData, "Simple DDGI relocation classification",
                     _simpleDdgiVolumeManager.RelocationClassificationBuffer, queueFamilies, graphicsFamily);
                 AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.SimpleDdgiScheduler, "Simple DDGI GPU scheduler arena",
                     _simpleDdgiVolumeManager.GpuSchedulerArenaBuffer, queueFamilies, graphicsFamily);
+            }
+
+            if (_simpleDdgiGuidingFrameCoordinator is { } guidingCoordinator &&
+                guidingCoordinator.TryGetGraphResourceSnapshot(
+                    out SimpleDdgiGuidingGraphResourceSnapshot guiding))
+            {
+                AddAsyncComputeBufferRangeBinding(
+                    bindings,
+                    RenderGraphResourceId.SimpleDdgiGuidingDistributions,
+                    "C3 directional-guiding distribution bank 0",
+                    guiding.Distributions.DistributionBank0,
+                    0UL,
+                    guiding.Distributions.BankBytes,
+                    guiding.Distributions.AllocationGeneration,
+                    queueFamilies,
+                    graphicsFamily);
+                AddAsyncComputeBufferRangeBinding(
+                    bindings,
+                    RenderGraphResourceId.SimpleDdgiGuidingDistributions,
+                    "C3 directional-guiding distribution bank 1",
+                    guiding.Distributions.DistributionBank1,
+                    0UL,
+                    guiding.Distributions.BankBytes,
+                    guiding.Distributions.AllocationGeneration,
+                    queueFamilies,
+                    graphicsFamily);
+                AddAsyncComputeBufferRangeBinding(
+                    bindings,
+                    RenderGraphResourceId.SimpleDdgiGuidingScratch,
+                    "C3 directional-guiding transient workspace",
+                    guiding.WorkspaceBuffer,
+                    guiding.WorkspaceOffsetBytes,
+                    guiding.WorkspaceBytes,
+                    guiding.WorkspaceGeneration,
+                    queueFamilies,
+                    graphicsFamily);
+                AddAsyncComputeBufferRangeBinding(
+                    bindings,
+                    RenderGraphResourceId.SimpleDdgiGuidingDirectionPayloadSidecar,
+                    "C3 source-cache direction/PDF sidecar",
+                    guiding.DirectionPayloadSidecar,
+                    0UL,
+                    guiding.DirectionPayloadBytes,
+                    guiding.DirectionPayloadGeneration,
+                    queueFamilies,
+                    graphicsFamily);
+            }
+
+            if (_giCausticRuntime is not null)
+            {
+                GiCausticVulkanBuffers caustic = _giCausticRuntime.Buffers;
+                if (caustic.IsComplete)
+                {
+                    AddAsyncComputeBufferBinding(
+                        bindings,
+                        RenderGraphResourceId.GiCausticTasks,
+                        "C4 task and source metadata",
+                        caustic.Tasks,
+                        queueFamilies,
+                        graphicsFamily);
+                    AddAsyncComputeBufferBinding(
+                        bindings,
+                        RenderGraphResourceId.GiCausticPhotons,
+                        "C4 candidate and published photons",
+                        caustic.Photons,
+                        queueFamilies,
+                        graphicsFamily);
+                    AddAsyncComputeBufferBinding(
+                        bindings,
+                        RenderGraphResourceId.GiCausticCache,
+                        "C4 cache tables and publication headers",
+                        caustic.Cache,
+                        queueFamilies,
+                        graphicsFamily);
+                    AddAsyncComputeBufferBinding(
+                        bindings,
+                        RenderGraphResourceId.GiCausticScratch,
+                        "C4 deterministic build and tile scratch",
+                        caustic.Scratch,
+                        queueFamilies,
+                        graphicsFamily);
+                    for (int frameIndex = 0;
+                         frameIndex < FramesInFlight;
+                         frameIndex++)
+                    {
+                        AddAsyncComputeBufferBinding(
+                            bindings,
+                            RenderGraphResourceId.GiCausticScreenFrameConstants,
+                            $"C4 screen frame constants {frameIndex}",
+                            _giCausticRuntime.GetFrameConstantBuffer(frameIndex),
+                            queueFamilies,
+                            graphicsFamily,
+                            frameIndex: frameIndex);
+                    }
+                }
+            }
+
+            if (_simpleDdgiNearFieldResidualRuntime is { IsActive: true }
+                nearFieldRuntime)
+            {
+                SimpleDdgiNearFieldResidualVulkanBuffers nearField =
+                    nearFieldRuntime.Buffers;
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.NearFieldResidualHitMetadata,
+                    "C5 current hit metadata",
+                    nearField.HitMetadata,
+                    queueFamilies,
+                    graphicsFamily);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                    "C5 history metadata 0",
+                    nearField.HistoryMetadata0,
+                    queueFamilies,
+                    graphicsFamily,
+                    historyIndex: 0);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                    "C5 history metadata 1",
+                    nearField.HistoryMetadata1,
+                    queueFamilies,
+                    graphicsFamily,
+                    historyIndex: 1);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.NearFieldResidualTileBuffers,
+                    "C5 tile records",
+                    nearField.TileRecords,
+                    queueFamilies,
+                    graphicsFamily);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.NearFieldResidualTraceFrameConstants,
+                    "C5 trace frame constants 0",
+                    nearField.TraceFrameConstants0,
+                    queueFamilies,
+                    graphicsFamily,
+                    frameIndex: 0);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.NearFieldResidualTraceFrameConstants,
+                    "C5 trace frame constants 1",
+                    nearField.TraceFrameConstants1,
+                    queueFamilies,
+                    graphicsFamily,
+                    frameIndex: 1);
             }
 
             GpuParticleAsyncResourceSet firstParticleResources =
@@ -7796,7 +9963,8 @@ namespace Njulf.Rendering
             uint graphicsFamily,
             PipelineStageFlags2 initialStageMask = PipelineStageFlags2.None,
             AccessFlags2 initialAccessMask = AccessFlags2.None,
-            int frameIndex = -1)
+            int frameIndex = -1,
+            int historyIndex = -1)
         {
             if (!handle.IsValid)
                 return;
@@ -7814,9 +9982,49 @@ namespace Njulf.Rendering
                 graphicsFamily,
                 SharingMode.Exclusive,
                 frameIndex: frameIndex,
+                historyIndex: historyIndex,
                 allocationGeneration: handle.Generation,
                 lifetime: RenderGraphResourceLifetime.Imported,
                 allocationSize: byteSize,
+                initialStageMask: initialStageMask,
+                initialAccessMask: initialAccessMask));
+        }
+
+        private void AddAsyncComputeBufferRangeBinding(
+            ICollection<RenderGraphConcreteResourceBinding> bindings,
+            RenderGraphResourceId resource,
+            string name,
+            BufferHandle handle,
+            ulong byteOffset,
+            ulong byteSize,
+            ulong allocationGeneration,
+            IReadOnlyList<uint> queueFamilies,
+            uint graphicsFamily,
+            PipelineStageFlags2 initialStageMask = PipelineStageFlags2.None,
+            AccessFlags2 initialAccessMask = AccessFlags2.None)
+        {
+            if (!handle.IsValid || byteSize == 0UL || allocationGeneration == 0UL)
+                return;
+
+            ulong allocationSize = _bufferManager.GetBufferSize(handle);
+            if (allocationSize == 0UL || byteOffset > allocationSize ||
+                byteSize > allocationSize - byteOffset)
+            {
+                return;
+            }
+
+            bindings.Add(RenderGraphConcreteResourceBinding.ForBuffer(
+                resource,
+                $"{name}#{handle.Index}.{handle.Generation}",
+                _bufferManager.GetBuffer(handle),
+                byteSize,
+                queueFamilies,
+                graphicsFamily,
+                SharingMode.Exclusive,
+                byteOffset: byteOffset,
+                allocationGeneration: allocationGeneration,
+                lifetime: RenderGraphResourceLifetime.Imported,
+                allocationSize: allocationSize,
                 initialStageMask: initialStageMask,
                 initialAccessMask: initialAccessMask));
         }
@@ -8073,7 +10281,7 @@ namespace Njulf.Rendering
 
         private static AsyncComputePath? GetAsyncComputePath(string passName) => passName switch
         {
-            "SimpleDdgiSchedulePass" or "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiAcceleratedSolvePass" or "SimpleDdgiTransportPass" or "SimpleDdgiBlendPass" or "SimpleDdgiPublishPass" or "SimpleDdgiTransportAuditPass" or "SimpleDdgiSchedulerCommitPass" => AsyncComputePath.SimpleDdgiUpdate,
+            "SimpleDdgiSchedulePass" or "SimpleDdgiTracePass" or "SimpleDdgiRelocateClassifyPass" or "SimpleDdgiDirectionalRadiancePass" or "SimpleDdgiAcceleratedSolvePass" or "SimpleDdgiTransportPass" or "SimpleDdgiBlendPass" or "SimpleDdgiPublishPass" or "SimpleDdgiTransportAuditPass" or "SimpleDdgiSchedulerCommitPass" => AsyncComputePath.SimpleDdgiUpdate,
             "FarFieldClipmapBakePass" => AsyncComputePath.FarFieldClipmapBake,
             "AmbientOcclusionBlurPass" => AsyncComputePath.AmbientOcclusionBlur,
             "HiZBuildPass" => AsyncComputePath.HiZBuild,
@@ -8201,7 +10409,43 @@ namespace Njulf.Rendering
             ulong HiZImage,
             AsyncCoreBufferIdentity CoreBuffers,
             FarFieldAsyncBufferIdentity FarFieldBuffers,
-            SimpleDdgiAsyncBufferIdentity SimpleDdgiBuffers);
+            SimpleDdgiAsyncBufferIdentity SimpleDdgiBuffers,
+            CausticAsyncBufferIdentity CausticBuffers,
+            GuidingAsyncBufferIdentity GuidingBuffers,
+            NearFieldResidualAsyncBufferIdentity NearFieldResidualBuffers);
+
+        private readonly record struct CausticAsyncBufferIdentity(
+            BufferHandle Tasks,
+            BufferHandle Photons,
+            BufferHandle Cache,
+            BufferHandle Scratch,
+            BufferHandle FrameConstants0,
+            BufferHandle FrameConstants1);
+
+        private readonly record struct GuidingAsyncBufferIdentity(
+            BufferHandle DistributionBank0,
+            BufferHandle DistributionBank1,
+            ulong DistributionBankBytes,
+            ulong DistributionAllocationGeneration,
+            BufferHandle Workspace,
+            ulong WorkspaceOffsetBytes,
+            ulong WorkspaceBytes,
+            ulong WorkspaceGeneration,
+            BufferHandle DirectionPayloadSidecar,
+            ulong DirectionPayloadBytes,
+            ulong DirectionPayloadGeneration);
+
+        private readonly record struct
+            SimpleDdgiReceiverFeedbackConfigurationKey(
+                SimpleDdgiReceiverFeedbackMode RequestedMode,
+                bool SimpleDdgiActive,
+                int PhysicalProbeCapacity,
+                SimpleDdgiReceiverFeedbackProductionWorkload ProducerWorkload,
+                uint PageGeneration,
+                ulong MaximumStorageBufferRange,
+                bool PrerequisiteGatePassed,
+                string PrerequisiteQualificationId,
+                bool ExperimentBudgetHeadroomAvailable);
 
         private readonly record struct AsyncCoreBufferIdentity(
             BufferHandle MeshPositions,
@@ -8215,7 +10459,8 @@ namespace Njulf.Rendering
             BufferHandle Environment,
             BufferHandle PrefilterEnvironment,
             BufferHandle GiEnvironment,
-            BufferHandle DdgiEmissiveSources);
+            BufferHandle DdgiEmissiveSources,
+            BufferHandle DdgiEmissiveSurfaces);
 
         private readonly record struct FarFieldAsyncBufferIdentity(
             BufferHandle Parameters,
@@ -8239,6 +10484,14 @@ namespace Njulf.Rendering
             BufferHandle UpdateQueue,
             BufferHandle RelocationClassification,
             BufferHandle Scheduler);
+
+        private readonly record struct NearFieldResidualAsyncBufferIdentity(
+            BufferHandle HitMetadata,
+            BufferHandle HistoryMetadata0,
+            BufferHandle HistoryMetadata1,
+            BufferHandle TileRecords,
+            BufferHandle TraceFrameConstants0,
+            BufferHandle TraceFrameConstants1);
 
         private sealed record AsyncComputePlan(
             AsyncComputeMode RequestedMode,
@@ -8497,6 +10750,9 @@ namespace Njulf.Rendering
                 HasCompletedGpuTiming(timings, "SimpleDdgiPageFeedbackPass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiSchedulePass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiTracePass") ||
+                HasCompletedGpuTiming(
+                    timings,
+                    "SimpleDdgiDirectionalRadiancePass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiAcceleratedSolvePass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiTransportPass") ||
                 HasCompletedGpuTiming(timings, "SimpleDdgiBlendPass") ||
@@ -8526,8 +10782,17 @@ namespace Njulf.Rendering
             sceneData.GpuHiZBuildMicroseconds = timings.GetGpuMicrosecondsOrZero("HiZBuildPass");
             sceneData.GpuAmbientOcclusionMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionPass");
             sceneData.GpuAmbientOcclusionBlurMicroseconds = timings.GetGpuMicrosecondsOrZero("AmbientOcclusionBlurPass");
-            sceneData.GpuAccelerationStructureBlasMicroseconds = timings.GetGpuMicrosecondsOrZero("AccelerationStructureBlasPass");
+            sceneData.GpuOpacityMicromapBuildMicroseconds =
+                timings.GetGpuMicrosecondsOrZero(
+                    "OpacityMicromapBuildPass");
+            sceneData.GpuAccelerationStructureBlasMicroseconds = checked(
+                timings.GetGpuMicrosecondsOrZero(
+                    "AccelerationStructureBlasPass") +
+                sceneData.GpuOpacityMicromapBuildMicroseconds);
             sceneData.GpuAccelerationStructureTlasMicroseconds = timings.GetGpuMicrosecondsOrZero("AccelerationStructureTlasPass");
+            sceneData.GpuDdgiFoliageProxyGenerationMicroseconds =
+                timings.GetGpuMicrosecondsOrZero(
+                    "DdgiFoliageProxyGenerationPass");
             sceneData.GpuSimpleDdgiPageDemandMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("SimpleDdgiPageDemandPass");
             sceneData.GpuSimpleDdgiPageResidencyMicroseconds =
@@ -8545,6 +10810,9 @@ namespace Njulf.Rendering
             sceneData.GpuSimpleDdgiScheduleMaterializeMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.Materialize");
             sceneData.GpuSimpleDdgiScheduleEmitMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedule.Emit");
             sceneData.GpuSimpleDdgiTraceMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTracePass");
+            sceneData.GpuSimpleDdgiDirectionalRadianceMicroseconds =
+                timings.GetGpuMicrosecondsOrZero(
+                    "SimpleDdgiDirectionalRadiancePass");
             sceneData.GpuSimpleDdgiAcceleratedSolveMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("SimpleDdgiAcceleratedSolvePass");
             sceneData.GpuSimpleDdgiTransportMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiTransportPass");
@@ -8556,14 +10824,18 @@ namespace Njulf.Rendering
             sceneData.GpuSimpleDdgiTransportAuditMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("SimpleDdgiTransportAuditPass");
             sceneData.GpuSimpleDdgiCommitMicroseconds = timings.GetGpuMicrosecondsOrZero("SimpleDdgiSchedulerCommitPass");
+            sceneData.GpuSimpleDdgiUrgentRelightMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("SimpleDdgiUrgentRelightPass");
             sceneData.GpuFarFieldUpdateMicroseconds = timings.GetGpuMicrosecondsOrZero("FarFieldClipmapBakePass");
             sceneData.GpuFarFieldUpdateTimingValid = HasCompletedGpuTiming(timings, "FarFieldClipmapBakePass") ? 1 : 0;
             sceneData.GpuDdgiUpdateMicroseconds =
+                sceneData.GpuDdgiFoliageProxyGenerationMicroseconds +
                 sceneData.GpuSimpleDdgiPageDemandMicroseconds +
                 sceneData.GpuSimpleDdgiPageResidencyMicroseconds +
                 sceneData.GpuSimpleDdgiPageFeedbackMicroseconds +
                 sceneData.GpuSimpleDdgiScheduleMicroseconds +
                 sceneData.GpuSimpleDdgiTraceMicroseconds +
+                sceneData.GpuSimpleDdgiDirectionalRadianceMicroseconds +
                 sceneData.GpuSimpleDdgiAcceleratedSolveMicroseconds +
                 sceneData.GpuSimpleDdgiTransportMicroseconds +
                 sceneData.GpuSimpleDdgiBlendMicroseconds +
@@ -8848,6 +11120,46 @@ namespace Njulf.Rendering
             }
         }
 
+        private void FinalizeSimpleDdgiReceiverFeedbackCapture()
+        {
+            SimpleDdgiReceiverFeedbackVulkanRuntime? runtime =
+                _simpleDdgiReceiverFeedbackRuntime;
+            if (runtime is null || !runtime.HasPendingOwnedCapture(_currentFrame))
+                return;
+
+            // Refinement/base-fallback ownership is identified inside the live
+            // gathers of every earlier receiver producer. Close that shared
+            // class only here, after opaque, layered, transparent, particle,
+            // fog, and reflection-capture work have all recorded their writes.
+            if (runtime.IsPendingOwnedProducerRequired(
+                    _currentFrame,
+                    SimpleDdgiReceiverFeedbackProducer
+                        .RefinementOrBaseFallback) &&
+                !runtime.TryRecordOwnedProducerCompletion(
+                    _currentCommandBuffer,
+                    _currentFrame,
+                    SimpleDdgiReceiverFeedbackProducer
+                        .RefinementOrBaseFallback,
+                    out string refinementCompletionReason))
+            {
+                runtime.AbortCapture(
+                    "receiver-feedback-refinement-completion-failed:" +
+                    refinementCompletionReason);
+                return;
+            }
+
+            if (!runtime.TryRecordPendingOwnedReduction(
+                    _currentCommandBuffer,
+                    _currentFrame,
+                    _gpuTimestamps,
+                    out string reason))
+            {
+                runtime.AbortCapture(string.IsNullOrWhiteSpace(reason)
+                    ? "receiver-feedback-late-frame-reduction-rejected"
+                    : reason);
+            }
+        }
+
         private bool IncludeAsyncComputePass(string passName) =>
             _asyncComputePassNameScratch.Contains(passName);
 
@@ -8870,9 +11182,22 @@ namespace Njulf.Rendering
 
             if (!simpleDdgiActive)
             {
+                _ddgiMutationJournal.DetachScene();
+                _ddgiMutationOraclePrimed = false;
+                _simpleDdgiLivenessWatchdog.Reset();
+                _simpleDdgiVolumeManager?.SetReceiverFeedbackSchedulingBinding(
+                    SimpleDdgiReceiverFeedbackGpuSchedulingBinding.Disabled(
+                        "receiver-feedback-simple-ddgi-disabled"),
+                    sceneData.DdgiFrameSerial);
                 _simpleDdgiVolumeManager?.EnsureDisabled(_stagingRing, _currentCommandBuffer);
                 ResetDdgiDynamicTracking();
                 UploadDdgiEmissiveSources(scene, sceneData, ddgiRayUpdateActive: false);
+                _simpleDdgiGuidingFrameConfiguration =
+                    SimpleDdgiGuidingFrameConfiguration.Disabled;
+                _simpleDdgiGuidingConfigurationReason =
+                    "directional-guiding-simple-ddgi-disabled";
+                ReconcileSimpleDdgiReceiverFeedback(
+                    simpleDdgiActive: false);
                 ScheduleReflectionProbeRecapturesFromGi(sceneData, simpleDdgiActive: false);
                 return;
             }
@@ -8880,10 +11205,27 @@ namespace Njulf.Rendering
             // Simple DDGI owns its own camera-relative rings.  Only the scene-change
             // regions are shared with the scheduler, so the retired full-DDGI
             // clipmap layout is no longer built or uploaded.
-            IReadOnlyList<DdgiDirtyRegion> dirtyRegions = CollectDdgiDirtyRegions(
+            IReadOnlyList<DdgiDirtyRegion> dirtyRegions;
+            if (Settings.GlobalIllumination.SimpleDdgiMutationJournalEnabled)
+            {
+                dirtyRegions = CollectDdgiDirtyRegionsFromJournal(
+                    scene,
+                    lightSnapshot,
+                    sceneData);
+            }
+            else
+            {
+                _ddgiMutationJournal.DetachScene();
+                _ddgiMutationOraclePrimed = false;
+                dirtyRegions = CollectDdgiDirtyRegions(
+                    scene,
+                    lightSnapshot,
+                    sceneData);
+            }
+            dirtyRegions = MergeDdgiFoliageProxyDirtyRegion(dirtyRegions);
+            dirtyRegions = MergeDdgiSkinnedPoseDirtyRegions(
                 scene,
-                lightSnapshot,
-                sceneData);
+                dirtyRegions);
 
             UploadDdgiEmissiveSources(scene, sceneData, simpleDdgiRayUpdateActive);
 
@@ -8916,6 +11258,64 @@ namespace Njulf.Rendering
                 lightSnapshot,
                 _ddgiEmissiveSourceRevision,
                 farFieldCoverageAvailable);
+            SimpleDdgiWarmStartSceneIdentity? warmStartIdentity =
+                ResolveSimpleDdgiWarmStartSceneIdentity(
+                    scene,
+                    sceneData,
+                    lightSnapshot);
+            UpdateSimpleDdgiSchedulerCostEstimate();
+            _simpleDdgiVolumeManager!.SetSchedulerCostEstimate(
+                _simpleDdgiSchedulerCostModel.Estimate);
+            IReadOnlyList<SimpleDdgiRefinementDemand> refinementEmissiveDemands =
+                ResolveSimpleDdgiRefinementEmissiveDemands();
+            Vector3 receiverForward = camera.Forward.Normalized();
+            if (receiverForward == Vector3.Zero)
+                receiverForward = new Vector3(0f, 0f, -1f);
+            float visibleReceiverFocusDistance = Math.Max(
+                1.5f,
+                SimpleDdgiVolumeManager.ResolveRingSpacing(
+                    Settings.GlobalIllumination,
+                    0) * 2f);
+            Vector3 visibleReceiverFocus = camera.Position +
+                receiverForward * visibleReceiverFocusDistance;
+
+            // Reconcile B1 before the scheduler-frame upload. Frame N consumes
+            // only frame N-1's immutable summary bank; the current frame's
+            // receiver gather is recorded later by ForwardPlus and cannot
+            // influence this scheduling decision.
+            // C3 shares the same transient arena. Compile its desired state
+            // before reconciliation as well so a live setting/prerequisite
+            // disable publishes fallbacks and releases C3 in this transition,
+            // rather than retaining the previous frame's arena request.
+            _simpleDdgiGuidingFrameConfiguration =
+                CompileSimpleDdgiGuidingFrameConfiguration(
+                    simpleDdgiActive,
+                    out _simpleDdgiGuidingConfigurationReason);
+            ReconcileSimpleDdgiReceiverFeedback(simpleDdgiActive: true);
+            SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime =
+                _simpleDdgiReceiverFeedbackRuntime;
+            SimpleDdgiReceiverFeedbackGpuSchedulingBinding receiverFeedbackBinding =
+                receiverFeedbackRuntime is not null &&
+                _renderTargets is { } receiverFeedbackTargets
+                    ? receiverFeedbackRuntime.AcquirePendingForGpuScheduling(
+                        checked((uint)Math.Max(0,
+                            receiverFeedbackTargets.ResizeCount) + 1u),
+                        sceneData.DdgiFrameSerial)
+                    : SimpleDdgiReceiverFeedbackGpuSchedulingBinding.Disabled(
+                        "receiver-feedback-runtime-or-render-targets-unavailable");
+            if (receiverFeedbackBinding.UseFeedback &&
+                !receiverFeedbackRuntime!.TryRecordSchedulingReadBarrier(
+                    _currentCommandBuffer,
+                    receiverFeedbackBinding,
+                    out string receiverFeedbackBarrierReason))
+            {
+                receiverFeedbackBinding =
+                    SimpleDdgiReceiverFeedbackGpuSchedulingBinding.Disabled(
+                        receiverFeedbackBarrierReason);
+            }
+            _simpleDdgiVolumeManager.SetReceiverFeedbackSchedulingBinding(
+                receiverFeedbackBinding,
+                sceneData.DdgiFrameSerial);
             _simpleDdgiVolumeManager!.Upload(
                 scene,
                 camera.Position,
@@ -8929,7 +11329,44 @@ namespace Njulf.Rendering
                 dirtyRegions,
                 dirtySignature.CohortTransition,
                 scene.GlobalIlluminationProbeVolumes,
-                sceneData.SceneContentRevision);
+                sceneData.SceneContentRevision,
+                dirtySignature.SourceRefreshMode,
+                dirtySignature.SourceRelightScale,
+                warmStartIdentity,
+                refinementEmissiveDemands,
+                visibleReceiverFocus);
+
+            _simpleDdgiGuidingFrameConfiguration =
+                CompileSimpleDdgiGuidingFrameConfiguration(
+                    simpleDdgiActive,
+                    out _simpleDdgiGuidingConfigurationReason);
+            if (_simpleDdgiGuidingFrameConfiguration.IsEnabled &&
+                _simpleDdgiGuidingFrameConfiguration.Equals(
+                    _simpleDdgiGuidingAppliedArenaConfiguration))
+            {
+                SimpleDdgiGuidingFrameCoordinator? guidingCoordinator =
+                    _simpleDdgiGuidingFrameCoordinator;
+                if (guidingCoordinator is null)
+                {
+                    _simpleDdgiGuidingConfigurationReason =
+                        "guiding-frame-coordinator-unavailable";
+                }
+                else if (!guidingCoordinator.TryConfigure(
+                             _simpleDdgiGuidingFrameConfiguration,
+                             _currentCommandBuffer,
+                             out string guidingConfigureReason))
+                {
+                    _simpleDdgiGuidingConfigurationReason = guidingConfigureReason;
+                }
+                else if (!guidingCoordinator.TryPrepareFrame(
+                        _currentFrame,
+                        Math.Max(1UL, sceneData.DdgiFrameSerial),
+                        _currentCommandBuffer,
+                        out string guidingPrepareReason))
+                {
+                    _simpleDdgiGuidingConfigurationReason = guidingPrepareReason;
+                }
+            }
 
             sceneData.SimpleDdgiPageFullManagementRequired =
                 _simpleDdgiVolumeManager.PrepareProbePageManagement(
@@ -8946,6 +11383,590 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiUploadTiming = _simpleDdgiVolumeManager.LastUploadTiming;
             sceneData.CpuFarFieldRecordMicroseconds = _farFieldClipmapManager.LastUploadMicroseconds;
             ScheduleReflectionProbeRecapturesFromGi(sceneData, simpleDdgiActive: true);
+        }
+
+        private SimpleDdgiGuidingFrameConfiguration
+            CompileSimpleDdgiGuidingFrameConfiguration(
+                bool simpleDdgiActive,
+                out string reason)
+        {
+            SimpleDdgiVolumeManager? manager = _simpleDdgiVolumeManager;
+            if (!simpleDdgiActive || !_advancedGiGraphModes.UsesDirectionalGuiding ||
+                Settings.GlobalIllumination.SimpleDdgiDirectionalGuidingMode is not
+                    (SimpleDdgiDirectionalGuidingMode.PerProbeHistogramExperiment or
+                     SimpleDdgiDirectionalGuidingMode.AutoQualified) ||
+                manager is null)
+            {
+                reason = "directional-guiding-disabled";
+                return SimpleDdgiGuidingFrameConfiguration.Disabled;
+            }
+
+            AdvancedGiPrerequisiteGateResult gate =
+                _advancedGiPrerequisiteManifest.Evaluate(
+                    AdvancedGiPrerequisiteFeature.DirectionalGuiding);
+            if (!gate.Passed)
+            {
+                reason = string.IsNullOrWhiteSpace(gate.FailureDetail)
+                    ? "guiding-global-prerequisite-gate-rejected"
+                    : gate.FailureDetail;
+                return SimpleDdgiGuidingFrameConfiguration.Disabled;
+            }
+            if (manager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+            {
+                reason = "guiding-requires-cpu-authoritative-scheduler";
+                return SimpleDdgiGuidingFrameConfiguration.Disabled;
+            }
+
+            int totalPhysical = manager.PhysicalProbeCapacity;
+            int directionSlots = manager.RaysPerProbe;
+            if (totalPhysical <= 0 || directionSlots is <= 0 or >
+                SimpleDdgiGuidingSourceCacheLayoutCompiler
+                    .MaximumDirectionSlotsPerProbe)
+            {
+                reason = "guiding-ddgi-physical-or-ray-capacity-unavailable";
+                return SimpleDdgiGuidingFrameConfiguration.Disabled;
+            }
+
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            int configuredUpdates = gi.SimpleDdgiProbeUpdatesPerFrame <= 0
+                ? totalPhysical
+                : Math.Min(totalPhysical, gi.SimpleDdgiProbeUpdatesPerFrame);
+            int rayBudgetUpdates = gi.DdgiProbeUpdatePrimaryRayBudget <= 0
+                ? 0
+                : gi.DdgiProbeUpdatePrimaryRayBudget / directionSlots;
+            int requestedScheduled = Math.Min(
+                configuredUpdates,
+                rayBudgetUpdates);
+            if (requestedScheduled <= 0)
+            {
+                reason = "guiding-ddgi-frame-ray-budget-admits-no-probes";
+                return SimpleDdgiGuidingFrameConfiguration.Disabled;
+            }
+
+            MemoryHeapBudgetSnapshot heapBudget =
+                _context.GetMemoryHeapBudgetSnapshot();
+            ulong memoryHeadroom = heapBudget.IsAvailable &&
+                heapBudget.PrimaryBudgetBytes > heapBudget.PrimaryUsageBytes
+                    ? heapBudget.PrimaryBudgetBytes - heapBudget.PrimaryUsageBytes
+                    : 0UL;
+            if (memoryHeadroom == 0UL)
+            {
+                reason = "guiding-device-memory-headroom-unavailable";
+                return SimpleDdgiGuidingFrameConfiguration.Disabled;
+            }
+
+            int low = 1;
+            int high = totalPhysical;
+            SimpleDdgiGuidingFrameConfiguration best =
+                SimpleDdgiGuidingFrameConfiguration.Disabled;
+            while (low <= high)
+            {
+                int candidate = low + ((high - low) >> 1);
+                if (TryCompileSimpleDdgiGuidingCandidate(
+                        totalPhysical,
+                        candidate,
+                        Math.Min(requestedScheduled, candidate),
+                        directionSlots,
+                        memoryHeadroom,
+                        gate.Passed,
+                        out SimpleDdgiGuidingFrameConfiguration compiled))
+                {
+                    best = compiled;
+                    low = candidate + 1;
+                }
+                else
+                {
+                    high = candidate - 1;
+                }
+            }
+
+            if (!best.IsEnabled)
+            {
+                reason = "guiding-16-mib-budget-admits-no-complete-layout";
+                return SimpleDdgiGuidingFrameConfiguration.Disabled;
+            }
+            reason = best.RuntimeRequest.Layout.PhysicalProbeCapacity < totalPhysical
+                ? "guiding-admitted-deterministic-physical-probe-prefix"
+                : "guiding-full-physical-probe-domain-admitted";
+            return best;
+        }
+
+        private bool TryCompileSimpleDdgiGuidingCandidate(
+            int totalPhysicalProbeCapacity,
+            int guidedPhysicalProbeCapacity,
+            int scheduledGuidedProbeCapacity,
+            int directionSlotsPerProbe,
+            ulong memoryHeadroom,
+            bool globalPrerequisiteGateAdmitted,
+            out SimpleDdgiGuidingFrameConfiguration configuration)
+        {
+            configuration = SimpleDdgiGuidingFrameConfiguration.Disabled;
+            try
+            {
+                var sidecar = SimpleDdgiGuidingSourceCacheLayoutCompiler.Compile(
+                    new SimpleDdgiGuidingSourceCacheLayoutRequest(
+                        Enabled: true,
+                        TotalPhysicalProbeCapacity: totalPhysicalProbeCapacity,
+                        RequestedGuidedPhysicalProbeCapacity:
+                            guidedPhysicalProbeCapacity,
+                        DirectionSlotsPerProbe: directionSlotsPerProbe,
+                        MemoryBudgetBytes:
+                            SimpleDdgiDirectionalGuidingExperimentBudgetBytes));
+                if (!sidecar.IsAdmitted ||
+                    sidecar.AdmittedGuidedPhysicalProbeCapacity !=
+                        guidedPhysicalProbeCapacity)
+                {
+                    return false;
+                }
+
+                SimpleDdgiGuidingLayout layout =
+                    SimpleDdgiGuidingLayoutCompiler.Compile(
+                        new SimpleDdgiGuidingLayoutRequest(
+                            SimpleDdgiGuidingDistributionConfiguration.EightByEight,
+                            guidedPhysicalProbeCapacity,
+                            scheduledGuidedProbeCapacity,
+                            _context.MinimumStorageBufferOffsetAlignment,
+                            AllocateValidationReferenceBank: false)
+                        {
+                            DirectionSlotsPerProbe = directionSlotsPerProbe,
+                            DirectionPdfSidecarBudgetBytes =
+                                SimpleDdgiDirectionalGuidingExperimentBudgetBytes
+                        });
+                ulong bankBytes = layout.PersistentDoubleBufferedBytes / 2UL;
+                ulong maximumRange = _context.MaximumStorageBufferRange;
+                if (!layout.TransientWorkspace.IsComplete ||
+                    layout.TotalBytes >
+                        SimpleDdgiDirectionalGuidingExperimentBudgetBytes ||
+                    layout.TotalBytes > memoryHeadroom || bankBytes > maximumRange ||
+                    layout.TransientWorkspace.TotalBytes > maximumRange ||
+                    layout.DirectionPdfSidecarBytes > maximumRange)
+                {
+                    return false;
+                }
+
+                configuration = new SimpleDdgiGuidingFrameConfiguration(
+                    new SimpleDdgiGuidingRuntimeRequest(true, layout)
+                    {
+                        SourceStoragePackingMode =
+                            _simpleDdgiVolumeManager!.StoragePackingMode
+                    },
+                    sidecar,
+                    globalPrerequisiteGateAdmitted,
+                    SimpleDdgiGuidingProposalPolicy.ProductionBaseline);
+                return true;
+            }
+            catch (Exception exception) when (exception is ArgumentException or
+                OverflowException)
+            {
+                return false;
+            }
+        }
+
+        private void ReconcileSimpleDdgiReceiverFeedback(bool simpleDdgiActive)
+        {
+            SimpleDdgiReceiverFeedbackVulkanRuntime? runtime =
+                _simpleDdgiReceiverFeedbackRuntime;
+            SimpleDdgiVolumeManager? manager = _simpleDdgiVolumeManager;
+            RenderTargetManager? renderTargets = _renderTargets;
+            if (runtime is null || manager is null || renderTargets is null)
+                return;
+
+            SimpleDdgiReceiverFeedbackMode requestedMode = simpleDdgiActive
+                ? Settings.GlobalIllumination.SimpleDdgiReceiverFeedbackMode
+                : SimpleDdgiReceiverFeedbackMode.Off;
+            Extent2D extent = renderTargets.SceneColor.Extent;
+            ulong screenTileCount = extent.Width == 0u || extent.Height == 0u
+                ? 0UL
+                : checked(
+                    (((ulong)extent.Width +
+                      ForwardPlusPass.SimpleDdgiReceiverGatherScale - 1UL) /
+                     ForwardPlusPass.SimpleDdgiReceiverGatherScale) *
+                    (((ulong)extent.Height +
+                      ForwardPlusPass.SimpleDdgiReceiverGatherScale - 1UL) /
+                     ForwardPlusPass.SimpleDdgiReceiverGatherScale));
+            int physicalProbeCapacity = manager.PhysicalProbeCapacity;
+            uint pageGeneration = Math.Max(
+                1u,
+                manager.ProbeResidencyResourceGeneration);
+            AdvancedGiPrerequisiteGateResult gate =
+                _advancedGiPrerequisiteManifest.Evaluate(
+                    AdvancedGiPrerequisiteFeature.ReceiverFeedback);
+            MemoryHeapBudgetSnapshot heapBudget =
+                _context.GetMemoryHeapBudgetSnapshot();
+            ulong memoryHeadroom = heapBudget.IsAvailable &&
+                heapBudget.PrimaryBudgetBytes > heapBudget.PrimaryUsageBytes
+                    ? heapBudget.PrimaryBudgetBytes - heapBudget.PrimaryUsageBytes
+                    : 0UL;
+            ulong maximumStorageBufferRange =
+                _context.MaximumStorageBufferRange;
+            SimpleDdgiReceiverFeedbackProductionWorkload producerWorkload =
+                CreateSimpleDdgiReceiverFeedbackProductionWorkload(
+                    extent,
+                    screenTileCount);
+
+            var key = new SimpleDdgiReceiverFeedbackConfigurationKey(
+                requestedMode,
+                simpleDdgiActive,
+                physicalProbeCapacity,
+                producerWorkload,
+                pageGeneration,
+                maximumStorageBufferRange,
+                gate.Passed,
+                gate.QualificationId,
+                memoryHeadroom >= SimpleDdgiReceiverFeedbackExperimentBudgetBytes);
+            if (_simpleDdgiReceiverFeedbackConfigurationKey == key &&
+                _simpleDdgiGuidingAppliedArenaConfiguration.Equals(
+                    _simpleDdgiGuidingFrameConfiguration))
+                return;
+
+            SimpleDdgiReceiverFeedbackPlan plan =
+                CompileSimpleDdgiReceiverFeedbackPlan(
+                    requestedMode,
+                    physicalProbeCapacity,
+                    producerWorkload,
+                    pageGeneration,
+                    maximumStorageBufferRange,
+                    memoryHeadroom,
+                    gate);
+            AdvancedGiTransientBufferArena? transientArena =
+                _advancedGiTransientBufferArena;
+            SimpleDdgiGuidingFrameConfiguration guidingArenaConfiguration =
+                _simpleDdgiGuidingFrameConfiguration;
+            if (!_simpleDdgiGuidingAppliedArenaConfiguration.Equals(
+                    guidingArenaConfiguration) &&
+                _simpleDdgiGuidingAppliedArenaConfiguration.IsEnabled)
+            {
+                // Slot 202 may name the old arena generation. Publish all C3
+                // fallbacks and retire its persistent sidecar/banks before an
+                // arena replacement can destroy that physical buffer.
+                if (_simpleDdgiGuidingFrameCoordinator is null ||
+                    !_simpleDdgiGuidingFrameCoordinator.TryConfigure(
+                        SimpleDdgiGuidingFrameConfiguration.Disabled,
+                        _currentCommandBuffer,
+                        out _))
+                {
+                    // A C3 frame is still in flight. Keep the old arena and B1
+                    // allocation unchanged; the requested transition will be
+                    // retried after its owning frame fence.
+                    return;
+                }
+            }
+
+            string arenaFailure = "advanced-gi-transient-arena-is-unavailable";
+            bool arenaReady = transientArena is not null &&
+                TryReconcileAdvancedGiScratchArena(
+                    transientArena,
+                    plan,
+                    guidingArenaConfiguration,
+                    maximumStorageBufferRange,
+                    memoryHeadroom,
+                    out arenaFailure);
+            if (!arenaReady && guidingArenaConfiguration.IsEnabled)
+            {
+                // C3 is independently optional. Preserve an otherwise valid
+                // B1 transaction by retrying the central arena without C3.
+                guidingArenaConfiguration =
+                    SimpleDdgiGuidingFrameConfiguration.Disabled;
+                arenaReady = transientArena is not null &&
+                    TryReconcileAdvancedGiScratchArena(
+                        transientArena,
+                        plan,
+                        guidingArenaConfiguration,
+                        maximumStorageBufferRange,
+                        memoryHeadroom,
+                        out arenaFailure);
+            }
+            if (!arenaReady)
+                plan = RejectReceiverFeedbackForTransientArena(plan, arenaFailure);
+
+            if (!runtime.TryConfigureOwned(
+                    plan,
+                    gate.Passed,
+                    out string runtimeFailure) && plan.UsesExactCompacted)
+            {
+                plan = RejectReceiverFeedbackForTransientArena(
+                    plan,
+                    string.IsNullOrWhiteSpace(runtimeFailure)
+                        ? "receiver-feedback-owned-runtime-rejected"
+                        : runtimeFailure);
+                _ = runtime.TryConfigureOwned(plan, gate.Passed, out _);
+            }
+            _simpleDdgiReceiverFeedbackPlan = plan;
+            _simpleDdgiReceiverFeedbackConfigurationKey = key;
+            _simpleDdgiGuidingAppliedArenaConfiguration =
+                guidingArenaConfiguration;
+        }
+
+        private bool TryReconcileAdvancedGiScratchArena(
+            AdvancedGiTransientBufferArena arena,
+            in SimpleDdgiReceiverFeedbackPlan plan,
+            in SimpleDdgiGuidingFrameConfiguration guidingConfiguration,
+            ulong maximumStorageBufferRange,
+            ulong memoryHeadroom,
+            out string failure)
+        {
+            ulong alignment = _context.MinimumStorageBufferOffsetAlignment;
+            Span<GiExperimentScratchAllocation> requests =
+                stackalloc GiExperimentScratchAllocation[2];
+            int requestCount = 0;
+            if (plan.UsesExactCompacted)
+            {
+                requests[requestCount++] = new GiExperimentScratchAllocation(
+                    SimpleDdgiAdvancedMemoryCategory.ReceiverFeedbackSortScratch,
+                    plan.Layout.SortScratchBytes,
+                    // B1 capture/sort/reduce is late, after the last receiver
+                    // producer. It cannot overlap the C3 schedule-to-validate
+                    // interval below.
+                    new GiExperimentScratchInterval(100, 106),
+                    alignment);
+            }
+            if (guidingConfiguration.IsEnabled)
+            {
+                SimpleDdgiGuidingLayout layout =
+                    guidingConfiguration.RuntimeRequest.Layout;
+                requests[requestCount++] = new GiExperimentScratchAllocation(
+                    SimpleDdgiAdvancedMemoryCategory.DirectionalGuidingBuildScratch,
+                    layout.TransientWorkspace.TotalBytes,
+                    // Sample precedes DDGI trace; extract/train/build/validate
+                    // follow it. The shared workspace remains live across the
+                    // complete transaction.
+                    new GiExperimentScratchInterval(10, 40),
+                    layout.StorageAlignmentBytes);
+            }
+            if (!GiExperimentScratchAliasing.TryCompileArenaPlan(
+                    requests[..requestCount],
+                    out GiExperimentScratchArenaPlan arenaPlan,
+                    out failure))
+            {
+                return false;
+            }
+
+            return arena.TryReconcile(
+                arenaPlan,
+                maximumStorageBufferRange,
+                memoryHeadroom,
+                out failure);
+        }
+
+        private static SimpleDdgiReceiverFeedbackPlan
+            RejectReceiverFeedbackForTransientArena(
+                in SimpleDdgiReceiverFeedbackPlan plan,
+                string failure)
+        {
+            GiExperimentModeState<SimpleDdgiReceiverFeedbackMode> mode =
+                plan.Mode with
+                {
+                    EffectiveMode = SimpleDdgiReceiverFeedbackMode.Off,
+                    FallbackReason = GiExperimentFallbackReason.ResourceIncomplete,
+                    FallbackDetail = string.IsNullOrWhiteSpace(failure)
+                        ? "advanced-gi-transient-arena-rejected"
+                        : failure
+                };
+            return new SimpleDdgiReceiverFeedbackPlan(
+                mode,
+                SimpleDdgiReceiverFeedbackLayout.Empty,
+                SimpleDdgiAdvancedExperimentMemoryPlan
+                    .CreateReceiverFeedbackRejected(
+                        GiExperimentFallbackReason.ResourceIncomplete));
+        }
+
+        private static SimpleDdgiReceiverFeedbackPlan
+            CompileSimpleDdgiReceiverFeedbackPlan(
+                SimpleDdgiReceiverFeedbackMode requestedMode,
+                int physicalProbeCapacity,
+                in SimpleDdgiReceiverFeedbackProductionWorkload
+                    producerWorkload,
+                uint maximumPagePublicationGeneration,
+                ulong maximumStorageBufferRange,
+                ulong rendererMemoryHeadroom,
+                in AdvancedGiPrerequisiteGateResult prerequisiteGate)
+        {
+            if (requestedMode is SimpleDdgiReceiverFeedbackMode.Off or
+                SimpleDdgiReceiverFeedbackMode.LegacyPackedReference)
+            {
+                return SimpleDdgiReceiverFeedbackPlanner.Compile(
+                    requestedMode,
+                    default,
+                    ReadOnlySpan<SimpleDdgiReceiverFeedbackProducerQuota>.Empty,
+                    default);
+            }
+
+            SimpleDdgiReceiverFeedbackPlan lastPlan =
+                SimpleDdgiReceiverFeedbackPlan.Disabled();
+            ReadOnlySpan<double> samplingProbabilities =
+                [
+                    1.0 / 8.0,
+                    1.0 / 16.0,
+                    1.0 / 32.0,
+                    1.0 / 64.0,
+                    1.0 / 128.0,
+                    1.0 / 256.0,
+                    1.0 / 512.0,
+                    1.0 / 1024.0,
+                    1.0 / 2048.0,
+                    1.0 / 4096.0
+                ];
+            Span<SimpleDdgiReceiverFeedbackProducerQuota> producerQuotas =
+                stackalloc SimpleDdgiReceiverFeedbackProducerQuota[
+                    SimpleDdgiReceiverFeedbackProductionQuotaPlan
+                        .NonOpaqueQuotaCount];
+            foreach (double samplingProbability in samplingProbabilities)
+            {
+                if (!SimpleDdgiReceiverFeedbackProductionQuotaPlanner.TryCompile(
+                        producerWorkload,
+                        samplingProbability,
+                        SimpleDdgiReceiverFeedbackCaptureSourceAbi
+                            .MaximumUniqueGatherOwnersPerTile,
+                        out SimpleDdgiReceiverFeedbackProductionQuotaPlan
+                            quotaPlan,
+                        out string quotaFailure))
+                {
+                    return new SimpleDdgiReceiverFeedbackPlan(
+                        new GiExperimentModeState<
+                            SimpleDdgiReceiverFeedbackMode>(
+                            requestedMode,
+                            SimpleDdgiReceiverFeedbackMode.Off,
+                            SimpleDdgiReceiverFeedbackMode.Off,
+                            SimpleDdgiReceiverFeedbackMode.Off,
+                            GiExperimentFallbackReason.InvalidConfiguration,
+                            quotaFailure,
+                            prerequisiteGate.QualificationId),
+                        SimpleDdgiReceiverFeedbackLayout.Empty,
+                        SimpleDdgiAdvancedExperimentMemoryPlan
+                            .CreateReceiverFeedbackRejected(
+                                GiExperimentFallbackReason.InvalidConfiguration));
+                }
+                quotaPlan.WriteNonOpaqueQuotas(producerQuotas);
+                var request = new SimpleDdgiReceiverFeedbackLayoutRequest(
+                    physicalProbeCapacity,
+                    producerWorkload.SourceScreenTileCount,
+                    samplingProbability,
+                    SimpleDdgiReceiverFeedbackCaptureSourceAbi
+                        .MaximumUniqueGatherOwnersPerTile,
+                    SafetyMarginRecords: quotaPlan.SafetyMarginRecords,
+                    WorkgroupSize:
+                        SimpleDdgiReceiverFeedbackGpuSortAbi.WorkgroupSize,
+                    SortScratchBytesPerRecord: 0UL,
+                    IndependentMemoryBudgetBytes:
+                        SimpleDdgiReceiverFeedbackExperimentBudgetBytes,
+                    RendererMemoryHeadroomBytes: rendererMemoryHeadroom,
+                    MaximumStorageBufferRange: maximumStorageBufferRange,
+                    MaximumPagePublicationGeneration:
+                        maximumPagePublicationGeneration);
+                lastPlan = SimpleDdgiReceiverFeedbackPlanner.Compile(
+                    requestedMode,
+                    request,
+                    producerQuotas,
+                    new SimpleDdgiReceiverFeedbackPrerequisites(
+                        ExactBackendSupported:
+                            physicalProbeCapacity > 0 &&
+                            producerWorkload.SourceScreenTileCount > 0UL &&
+                            maximumStorageBufferRange > 0UL,
+                        PrerequisitesSatisfied: prerequisiteGate.Passed,
+                        ExactQualificationPassed: false,
+                        QualificationId: prerequisiteGate.QualificationId,
+                        ResourcesComplete: true));
+                if (lastPlan.UsesExactCompacted ||
+                    lastPlan.Mode.FallbackReason is not (
+                        GiExperimentFallbackReason
+                            .IndependentMemoryBudgetExceeded or
+                        GiExperimentFallbackReason
+                            .RendererMemoryHeadroomExceeded))
+                {
+                    break;
+                }
+            }
+
+            return lastPlan;
+        }
+
+        private SimpleDdgiReceiverFeedbackProductionWorkload
+            CreateSimpleDdgiReceiverFeedbackProductionWorkload(
+                Extent2D extent,
+                ulong screenTileCount)
+        {
+            static ulong DivideRoundUp(ulong value, ulong divisor) =>
+                value == 0UL ? 0UL : 1UL + (value - 1UL) / divisor;
+
+            ulong fogWorkgroups = Settings.Fog.Enabled
+                ? checked(
+                    DivideRoundUp(extent.Width, 8UL) *
+                    DivideRoundUp(extent.Height, 8UL))
+                : 0UL;
+            uint maximumParticleCount =
+                Settings.Particles.Enabled &&
+                Settings.GlobalIllumination.SimpleDdgiParticlesEnabled
+                    ? checked((uint)Settings.Particles.MaxParticles)
+                    : 0u;
+            ulong reflectionCaptureTiles = 0UL;
+            if (Settings.Reflections.Enabled &&
+                Settings.Reflections.CaptureIncludesDdgi &&
+                Settings.Reflections.MaxProbeCapturesPerFrame > 0 &&
+                Settings.Reflections.MaxProbeCaptureFacesPerFrame > 0)
+            {
+                ulong faceTiles = checked(
+                    DivideRoundUp(
+                        Settings.Reflections.ProbeResolution,
+                        ForwardPlusPass.SimpleDdgiReceiverGatherScale) *
+                    DivideRoundUp(
+                        Settings.Reflections.ProbeResolution,
+                        ForwardPlusPass.SimpleDdgiReceiverGatherScale));
+                reflectionCaptureTiles = checked(
+                    faceTiles *
+                    (ulong)Settings.Reflections.MaxProbeCapturesPerFrame *
+                    (ulong)Settings.Reflections.MaxProbeCaptureFacesPerFrame);
+            }
+
+            return new SimpleDdgiReceiverFeedbackProductionWorkload(
+                screenTileCount,
+                fogWorkgroups,
+                maximumParticleCount,
+                reflectionCaptureTiles,
+                SimpleDdgiReceiverFeedbackProductionWorkload
+                    .DefaultMaximumTransparentLayersPerTile);
+        }
+
+        private void UpdateSimpleDdgiSchedulerCostEstimate()
+        {
+            SceneRenderingData? previous = _lastSceneData;
+            if (previous == null)
+                return;
+
+            ulong farFieldSteps =
+                (ulong)_completedDdgiInvestigationCounters.FarFieldStepBucket0Count * 2UL +
+                (ulong)_completedDdgiInvestigationCounters.FarFieldStepBucket1Count * 6UL +
+                (ulong)_completedDdgiInvestigationCounters.FarFieldStepBucket2Count * 12UL +
+                (ulong)_completedDdgiInvestigationCounters.FarFieldStepBucket3Count * 24UL +
+                (ulong)_completedDdgiInvestigationCounters.FarFieldStepBucket4Count * 48UL;
+            ulong materialEvaluations =
+                (ulong)_completedMaterialGiCounters.EstimatedDetailedTransportHitCount +
+                _completedMaterialGiCounters.EstimatedCompactTransportHitCount +
+                _completedMaterialGiCounters.EstimatedCorrectnessFallbackHitCount +
+                _completedMaterialGiCounters.EstimatedFarFieldTransportHitCount;
+            _simpleDdgiSchedulerCostModel.Observe(
+                new SimpleDdgiSchedulerCostSample(
+                    previous.DdgiScheduledPrimaryRayCount,
+                    previous.DdgiVisibilityRayCount,
+                    _completedMaterialGiCounters.EstimatedAlphaCandidateTestCount,
+                    materialEvaluations,
+                    farFieldSteps));
+
+            ulong completedHits = previous.DdgiTraceEnergyHitCount;
+            ulong completedMisses = previous.DdgiTraceEnergyMissCount;
+            ulong rejectedBackFaces = previous.DdgiTraceOneSidedBackFaceHitCount;
+            if (completedHits == 0 && completedMisses == 0)
+            {
+                completedHits = previous.DdgiSimpleTraceHitCount;
+                completedMisses = previous.DdgiSimpleTraceMissCount;
+                rejectedBackFaces = 0;
+            }
+            ulong shadeableHits = completedHits > rejectedBackFaces
+                ? completedHits - rejectedBackFaces
+                : 0UL;
+            _simpleDdgiVolumeManager?.ObserveSourceCacheWorkload(
+                shadeableHits,
+                completedMisses,
+                rejectedBackFaces);
         }
 
 
@@ -9140,6 +12161,65 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiSchedulerResourceGeneration =
                 _simpleDdgiVolumeManager.GpuScheduler.ResourceGeneration;
             sceneData.SimpleDdgiSchedulerArenaBytes = _simpleDdgiVolumeManager.GpuSchedulerArenaBytes;
+            SimpleDdgiSchedulerCostEstimate schedulerCost =
+                _simpleDdgiVolumeManager.SchedulerCostEstimate;
+            sceneData.SimpleDdgiCostAwareSchedulingActive =
+                Settings.GlobalIllumination.SimpleDdgiCostAwareSchedulingEnabled ? 1 : 0;
+            sceneData.SimpleDdgiSchedulerCostSampleCount = schedulerCost.AcceptedSampleCount;
+            sceneData.SimpleDdgiSchedulerVisibilityPerPrimary =
+                SimpleDdgiSchedulerCostModel.DecodeQ8(schedulerCost.VisibilityPerPrimaryQ8);
+            sceneData.SimpleDdgiSchedulerAlphaCandidatesPerPrimary =
+                SimpleDdgiSchedulerCostModel.DecodeQ8(schedulerCost.AlphaCandidatesPerPrimaryQ8);
+            sceneData.SimpleDdgiSchedulerMaterialEvaluationsPerPrimary =
+                SimpleDdgiSchedulerCostModel.DecodeQ8(schedulerCost.MaterialEvaluationsPerPrimaryQ8);
+            sceneData.SimpleDdgiSchedulerFarFieldStepsPerPrimary =
+                SimpleDdgiSchedulerCostModel.DecodeQ8(schedulerCost.FarFieldStepsPerPrimaryQ8);
+            sceneData.SimpleDdgiSparseResidualPropagationActive =
+                Settings.GlobalIllumination.SimpleDdgiSparseResidualPropagationEnabled
+                    ? 1
+                    : 0;
+            SimpleDdgiResidualPropagationEvidence residualEvidence =
+                _simpleDdgiVolumeManager.GpuScheduler
+                    .LastResidualPropagationEvidence;
+            sceneData.SimpleDdgiResidualSeededCount =
+                residualEvidence.SeededCount;
+            sceneData.SimpleDdgiResidualDependentWakeCount =
+                residualEvidence.DependentWakeCount;
+            sceneData.SimpleDdgiResidualThresholdRejectedCount =
+                residualEvidence.ThresholdRejectedCount;
+            sceneData.SimpleDdgiResidualCompleteSweepFallbackCount =
+                residualEvidence.CompleteSweepFallbackCount;
+            sceneData.SimpleDdgiReceiverContributionFeedbackActive =
+                Settings.GlobalIllumination
+                    .SimpleDdgiReceiverContributionFeedbackEnabled &&
+                _simpleDdgiVolumeManager.SchedulerMode.IsGpuMode()
+                    ? 1
+                    : 0;
+            SimpleDdgiReceiverContributionEvidence receiverEvidence =
+                _simpleDdgiVolumeManager.GpuScheduler
+                    .LastReceiverContributionEvidence;
+            sceneData.SimpleDdgiReceiverContributingProbeCount =
+                receiverEvidence.ContributingProbeCount;
+            sceneData.SimpleDdgiReceiverCoverageBucketCount =
+                receiverEvidence.CoverageBucketCount;
+            sceneData.SimpleDdgiReceiverFallbackProbeCount =
+                receiverEvidence.FallbackProbeCount;
+            sceneData.SimpleDdgiReceiverConsumerMask =
+                receiverEvidence.ConsumerMask;
+            sceneData.SimpleDdgiUrgentRelightActive =
+                Settings.GlobalIllumination.SimpleDdgiUrgentRelightEnabled &&
+                _simpleDdgiVolumeManager.SchedulerMode ==
+                    SimpleDdgiSchedulerMode.GpuResident
+                    ? 1
+                    : 0;
+            SimpleDdgiUrgentRelightEvidence urgentEvidence =
+                _simpleDdgiVolumeManager.GpuScheduler.LastUrgentRelightEvidence;
+            sceneData.SimpleDdgiUrgentRelightAcceptedCount =
+                urgentEvidence.AcceptedProbeCount;
+            sceneData.SimpleDdgiUrgentRelightCommittedCount =
+                urgentEvidence.CommittedProbeCount;
+            sceneData.SimpleDdgiUrgentRelightRejectedCount =
+                urgentEvidence.RejectedProbeCount;
             sceneData.SimpleDdgiSchedulerFeedbackReadbackBytes =
                 _simpleDdgiVolumeManager.GpuSchedulerFeedbackReadbackBytes;
             sceneData.SimpleDdgiSchedulerRetiredBytes = _simpleDdgiVolumeManager.GpuSchedulerRetiredBytes;
@@ -9316,6 +12396,14 @@ namespace Njulf.Rendering
             {
                 ValidationCounters = sceneData.SimpleDdgiStorageValidation
             };
+            sceneData.SimpleDdgiWarmStart =
+                _simpleDdgiVolumeManager.WarmStartTelemetry;
+            sceneData.SimpleDdgiRefinement =
+                _simpleDdgiVolumeManager.RefinementBrickDiagnostics;
+            sceneData.SimpleDdgiRefinementEmissiveDemand =
+                _simpleDdgiRefinementEmissiveDemandDiagnostics;
+            sceneData.SimpleDdgiNearVisibility =
+                _simpleDdgiVolumeManager.NearVisibilityDiagnostics;
             sceneData.SimpleDdgiRecentered = _simpleDdgiVolumeManager.RecenteredThisFrame ? 1 : 0;
             sceneData.SimpleDdgiAtlasPreservedOnRecenter = _simpleDdgiVolumeManager.AtlasPreservedOnRecenterThisFrame ? 1 : 0;
             sceneData.SimpleDdgiAtlasCleared = _simpleDdgiVolumeManager.AtlasClearedThisFrame ? 1 : 0;
@@ -9430,6 +12518,1247 @@ namespace Njulf.Rendering
             sceneData.DdgiWarmedCascade0ProbeFraction = 1.0f;
             sceneData.DdgiUpdateSkipReason = string.Empty;
             sceneData.DdgiPublishSkipReason = string.Empty;
+            UpdateSimpleDdgiLivenessTelemetry(sceneData);
+        }
+
+        /// <summary>
+        /// Captures advanced-GI admission and physical ownership only after
+        /// AS/DDGI reconciliation for the frame has completed. This method is
+        /// intentionally called even when Simple-DDGI is inactive: C1 may
+        /// still have retirement work in flight, and suppressing it would
+        /// under-report live Vulkan residency.
+        /// </summary>
+        private void PopulateAdvancedGiFrameDiagnostics(
+            SceneRenderingData sceneData)
+        {
+            sceneData.GiRoadmapExperiments =
+                CreateGiRoadmapExperimentDiagnostics(sceneData);
+
+            SimpleDdgiAdvancedExperimentMemoryPlan advanced =
+                SimpleDdgiAdvancedExperimentMemoryPlan.Empty;
+
+            SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics feedbackRuntime =
+                _simpleDdgiReceiverFeedbackRuntime?.Diagnostics ??
+                SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics.Disabled;
+            SimpleDdgiAdvancedExperimentMemoryPlan feedbackMemory =
+                _simpleDdgiReceiverFeedbackPlan.Memory;
+            if (_simpleDdgiReceiverFeedbackPlan.UsesExactCompacted &&
+                (!feedbackRuntime.Resource.IsEffectivelyEnabled ||
+                 feedbackRuntime.Resource.AllocatedBytes !=
+                    feedbackMemory.AllocatedBytes))
+            {
+                feedbackMemory = SimpleDdgiAdvancedExperimentMemoryPlan
+                    .CreateReceiverFeedbackRejected(
+                        GiExperimentFallbackReason.ResourceIncomplete);
+            }
+            advanced = SimpleDdgiAdvancedExperimentMemoryPlan.CombineDisjoint(
+                advanced,
+                feedbackMemory);
+
+            OpacityMicromapGpuRuntimeSnapshot opacityRuntime =
+                _accelerationStructureManager?.OpacityMicromapGpuRuntimeSnapshot ??
+                OpacityMicromapGpuRuntimeSnapshot.Disabled;
+            advanced = SimpleDdgiAdvancedExperimentMemoryPlan.CombineDisjoint(
+                advanced,
+                opacityRuntime.Memory.NormalizeForPersistence());
+
+            SimpleDdgiAdvancedExperimentMemoryPlan guidingMemory;
+            if (_simpleDdgiGuidingFrameConfiguration.IsEnabled &&
+                _simpleDdgiGuidingFrameCoordinator is { } guidingCoordinator &&
+                guidingCoordinator.TryGetGraphResourceSnapshot(
+                    out SimpleDdgiGuidingGraphResourceSnapshot guidingResources))
+            {
+                SimpleDdgiGuidingLayout guidingLayout =
+                    _simpleDdgiGuidingFrameConfiguration.RuntimeRequest.Layout;
+                ulong allocatedHistoryBytes = checked(
+                    guidingResources.Distributions.BankBytes * 2UL +
+                    guidingLayout.ValidationReferenceBankBytes +
+                    guidingResources.DirectionPayloadBytes);
+                guidingMemory = SimpleDdgiAdvancedExperimentMemoryPlan
+                    .CreateDirectionalGuiding(
+                        guidingLayout,
+                        allocatedHistoryBytes,
+                        guidingResources.WorkspaceBytes);
+            }
+            else
+            {
+                bool guidingRequested = Settings.GlobalIllumination
+                    .SimpleDdgiDirectionalGuidingMode !=
+                    SimpleDdgiDirectionalGuidingMode.Off;
+                guidingMemory = guidingRequested
+                    ? SimpleDdgiAdvancedExperimentMemoryPlan
+                        .CreateDirectionalGuidingRejected(
+                            GiExperimentFallbackReason.ResourceIncomplete)
+                    : SimpleDdgiAdvancedExperimentMemoryPlan.Empty;
+            }
+            advanced = SimpleDdgiAdvancedExperimentMemoryPlan.CombineDisjoint(
+                advanced,
+                guidingMemory);
+
+            SimpleDdgiAdvancedExperimentMemoryPlan causticMemory =
+                _giCausticPlan.Memory;
+            GiCausticVulkanRuntimeDiagnostics causticRuntime =
+                _giCausticRuntime?.Diagnostics ??
+                GiCausticVulkanRuntimeDiagnostics.Disabled;
+            if (_giCausticPlan.Active &&
+                (!_giCausticRuntimeConfigured ||
+                 !causticRuntime.Resource.IsEffectivelyEnabled ||
+                 causticRuntime.Resource.AllocatedBytes !=
+                    causticMemory.AllocatedBytes))
+            {
+                causticMemory = SimpleDdgiAdvancedExperimentMemoryPlan
+                    .CreateCausticRejected(
+                        GiExperimentFallbackReason.ResourceIncomplete);
+            }
+            advanced = SimpleDdgiAdvancedExperimentMemoryPlan.CombineDisjoint(
+                advanced,
+                causticMemory);
+
+            SimpleDdgiAdvancedExperimentMemoryPlan nearFieldMemory =
+                _simpleDdgiNearFieldResidualPlan.Memory;
+            if (_simpleDdgiNearFieldResidualPlan.Active &&
+                (_simpleDdgiNearFieldResidualRuntime is not { IsActive: true }
+                    nearFieldRuntime ||
+                 nearFieldRuntime.ActualAllocationBytes !=
+                    nearFieldMemory.AllocatedBytes))
+            {
+                nearFieldMemory = SimpleDdgiAdvancedExperimentMemoryPlan
+                    .CreateNearFieldResidualRejected(
+                        GiExperimentFallbackReason.ResourceIncomplete);
+            }
+            advanced = SimpleDdgiAdvancedExperimentMemoryPlan.CombineDisjoint(
+                advanced,
+                nearFieldMemory);
+
+            sceneData.SimpleDdgiContentMemory =
+                SimpleDdgiContentMemoryPlan.Compile(
+                    Settings.GlobalIllumination,
+                    sceneData.LocalLightCount,
+                    _simpleDdgiVolumeManager?.PhysicalProbeCapacity ?? 0,
+                    dynamicBlasRequiredBytes:
+                        _accelerationStructureManager?
+                            .DynamicBottomLevelAccelerationStructureBytes ?? 0UL,
+                    dynamicBlasScratchRequiredBytes:
+                        sceneData.AccelerationStructureDynamicScratchBytes,
+                    dynamicBlasRetiredRequiredBytes:
+                        _accelerationStructureManager?
+                            .RetiredDynamicBottomLevelAccelerationStructureBytes ??
+                        0UL,
+                    foliageProxyTriangleCount:
+                        _ddgiFoliageProxyFrame.TriangleCount,
+                    foliageProxyPatchCount:
+                        _ddgiFoliageProxyFrame.PatchCount,
+                    frameSlotCount: RenderingConstants.FramesInFlight,
+                    advancedExperimentMemory: advanced);
+
+            sceneData.GiRoadmapExperiments =
+                sceneData.GiRoadmapExperiments with
+                {
+                    ReceiverFeedbackRuntime =
+                        CreateReceiverFeedbackDiagnostics(
+                            feedbackMemory,
+                            sceneData.GiRoadmapExperiments.Modes
+                                .ReceiverFeedback),
+                    DirectionalGuidingRuntime =
+                        CreateDirectionalGuidingDiagnostics(
+                            advanced,
+                            sceneData.GiRoadmapExperiments.Modes
+                                .DirectionalGuiding),
+                    CausticRuntime = CreateGiCausticDiagnostics(
+                        causticMemory,
+                        sceneData.GiRoadmapExperiments.Modes.Caustic)
+                };
+        }
+
+        private SimpleDdgiReceiverFeedbackDiagnostics
+            CreateReceiverFeedbackDiagnostics(
+                in SimpleDdgiAdvancedExperimentMemoryPlan memory,
+                in GiExperimentModeState<SimpleDdgiReceiverFeedbackMode> mode)
+        {
+            SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics runtime =
+                _simpleDdgiReceiverFeedbackRuntime?.Diagnostics ??
+                SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics.Disabled;
+            var feedbackMemory = new SimpleDdgiReceiverFeedbackMemoryTelemetry(
+                memory.ReceiverFeedbackRecordBanks,
+                memory.ReceiverFeedbackSortScratch,
+                memory.ReceiverFeedbackProbeSummaries);
+
+            FrameTimingSnapshot completed = _gpuTimestamps.LastCompletedSnapshot;
+            SimpleDdgiReceiverFeedbackTimedStage availableStages =
+                SimpleDdgiReceiverFeedbackTimedStage.None;
+            if (HasCompletedGpuTiming(
+                    completed,
+                    SimpleDdgiReceiverFeedbackGpuTimingNames.Reset))
+            {
+                availableStages |=
+                    SimpleDdgiReceiverFeedbackTimedStage.Reset;
+            }
+            if (HasCompletedGpuTiming(
+                    completed,
+                    SimpleDdgiReceiverFeedbackGpuTimingNames.Capture))
+            {
+                availableStages |=
+                    SimpleDdgiReceiverFeedbackTimedStage.Capture;
+            }
+            if (HasCompletedGpuTiming(
+                    completed,
+                    SimpleDdgiReceiverFeedbackGpuTimingNames.RawRadix))
+            {
+                availableStages |=
+                    SimpleDdgiReceiverFeedbackTimedStage.RawRadix;
+            }
+            if (HasCompletedGpuTiming(
+                    completed,
+                    SimpleDdgiReceiverFeedbackGpuTimingNames
+                        .PartialBuildAndRadix))
+            {
+                availableStages |= SimpleDdgiReceiverFeedbackTimedStage
+                    .PartialBuildAndRadix;
+            }
+            if (HasCompletedGpuTiming(
+                    completed,
+                    SimpleDdgiReceiverFeedbackGpuTimingNames
+                        .ReduceAndFinalize))
+            {
+                availableStages |= SimpleDdgiReceiverFeedbackTimedStage
+                    .ReduceAndFinalize;
+            }
+
+            var timings = new SimpleDdgiReceiverFeedbackStageTimings(
+                completed.GetGpuMicrosecondsOrZero(
+                    SimpleDdgiReceiverFeedbackGpuTimingNames.Reset),
+                completed.GetGpuMicrosecondsOrZero(
+                    SimpleDdgiReceiverFeedbackGpuTimingNames.Capture),
+                completed.GetGpuMicrosecondsOrZero(
+                    SimpleDdgiReceiverFeedbackGpuTimingNames.RawRadix),
+                completed.GetGpuMicrosecondsOrZero(
+                    SimpleDdgiReceiverFeedbackGpuTimingNames
+                        .PartialBuildAndRadix),
+                completed.GetGpuMicrosecondsOrZero(
+                    SimpleDdgiReceiverFeedbackGpuTimingNames
+                        .ReduceAndFinalize),
+                availableStages);
+
+            bool exactRequested = mode.RequestedMode ==
+                SimpleDdgiReceiverFeedbackMode.ExactCompacted;
+            bool resourcesComplete = runtime.Resource.IsEffectivelyEnabled &&
+                feedbackMemory.AllocatedBytes != 0UL &&
+                runtime.Resource.AllocatedBytes == feedbackMemory.AllocatedBytes;
+            bool publicationReadable = runtime.Publication.IsValid &&
+                runtime.Resource.PublishedBankIndex is 0 or 1 &&
+                runtime.Resource.PublishedGeneration ==
+                    runtime.Publication.FeedbackGeneration;
+
+            SimpleDdgiReceiverFeedbackTelemetryState state;
+            string reason;
+            if (!exactRequested)
+            {
+                state = SimpleDdgiReceiverFeedbackTelemetryState.Disabled;
+                reason = mode.RequestedMode ==
+                    SimpleDdgiReceiverFeedbackMode.LegacyPackedReference
+                    ? "receiver-feedback-legacy-reference-has-no-B1-GPU-publication"
+                    : "receiver-feedback-disabled";
+            }
+            else if (!resourcesComplete)
+            {
+                state = runtime.CapabilityReason is
+                    SimpleDdgiReceiverFeedbackGpuCapabilityReason
+                        .CaptureSubmissionRejected or
+                    SimpleDdgiReceiverFeedbackGpuCapabilityReason
+                        .HeaderReadbackRejected or
+                    SimpleDdgiReceiverFeedbackGpuCapabilityReason
+                        .SchedulerBindingRejected
+                    ? SimpleDdgiReceiverFeedbackTelemetryState.Faulted
+                    : SimpleDdgiReceiverFeedbackTelemetryState
+                        .ResourceIncomplete;
+                reason = string.IsNullOrWhiteSpace(mode.FallbackDetail)
+                    ? runtime.Detail
+                    : mode.FallbackDetail;
+            }
+            else if (publicationReadable)
+            {
+                state = SimpleDdgiReceiverFeedbackTelemetryState.Readable;
+                reason =
+                    "receiver-feedback-fence-validated-publication-available";
+            }
+            else if (runtime.HeaderReadbackPending ||
+                     runtime.Resource.State ==
+                        SimpleDdgiReceiverFeedbackGpuResourceState.Capturing)
+            {
+                state = SimpleDdgiReceiverFeedbackTelemetryState
+                    .PendingGpuPublication;
+                reason = runtime.Detail;
+            }
+            else if (runtime.CapabilityReason !=
+                     SimpleDdgiReceiverFeedbackGpuCapabilityReason.None)
+            {
+                state = SimpleDdgiReceiverFeedbackTelemetryState.Faulted;
+                reason = runtime.Detail;
+            }
+            else
+            {
+                state = SimpleDdgiReceiverFeedbackTelemetryState
+                    .PendingGpuPublication;
+                reason = runtime.Detail;
+            }
+
+            return new SimpleDdgiReceiverFeedbackDiagnostics
+            {
+                State = state,
+                Runtime = runtime,
+                Publication = runtime.Publication,
+                Timings = timings,
+                Memory = feedbackMemory,
+                Reason = reason
+            }.NormalizeForPersistence();
+        }
+
+        private SimpleDdgiDirectionalGuidingDiagnostics
+            CreateDirectionalGuidingDiagnostics(
+                in SimpleDdgiAdvancedExperimentMemoryPlan memory,
+                in GiExperimentModeState<SimpleDdgiDirectionalGuidingMode> mode)
+        {
+            bool requested = mode.RequestedMode !=
+                SimpleDdgiDirectionalGuidingMode.Off;
+            SimpleDdgiGuidingGpuRuntimeDiagnostics runtime =
+                _simpleDdgiGuidingRuntime?.Diagnostics ??
+                SimpleDdgiGuidingGpuRuntimeDiagnostics.Disabled;
+            SimpleDdgiGuidingFrameCoordinatorDiagnostics frame =
+                _simpleDdgiGuidingFrameCoordinator?.Diagnostics ??
+                SimpleDdgiGuidingFrameCoordinatorDiagnostics.Disabled;
+            var guidingMemory = new SimpleDdgiGuidingMemoryTelemetry(
+                memory.DirectionalGuidingHistoryBanks,
+                memory.DirectionalGuidingBuildScratch);
+
+            FrameTimingSnapshot completed = _gpuTimestamps.LastCompletedSnapshot;
+            SimpleDdgiGuidingTimedStage availableStages =
+                SimpleDdgiGuidingTimedStage.None;
+            if (HasCompletedGpuTiming(
+                    completed,
+                    SimpleDdgiGuidingGpuPassNames.Sample))
+            {
+                availableStages |= SimpleDdgiGuidingTimedStage.Sample;
+            }
+            if (HasCompletedGpuTiming(
+                    completed,
+                    SimpleDdgiGuidingGpuPassNames.Train))
+            {
+                availableStages |= SimpleDdgiGuidingTimedStage.Train;
+            }
+            if (HasCompletedGpuTiming(
+                    completed,
+                    SimpleDdgiGuidingGpuPassNames.Build))
+            {
+                availableStages |= SimpleDdgiGuidingTimedStage.Build;
+            }
+            if (HasCompletedGpuTiming(
+                    completed,
+                    SimpleDdgiGuidingGpuPassNames.Validate))
+            {
+                availableStages |= SimpleDdgiGuidingTimedStage.Validate;
+            }
+
+            var timings = new SimpleDdgiGuidingStageTimings(
+                completed.GetGpuMicrosecondsOrZero(
+                    SimpleDdgiGuidingGpuPassNames.Sample),
+                completed.GetGpuMicrosecondsOrZero(
+                    SimpleDdgiGuidingGpuPassNames.Train),
+                completed.GetGpuMicrosecondsOrZero(
+                    SimpleDdgiGuidingGpuPassNames.Build),
+                completed.GetGpuMicrosecondsOrZero(
+                    SimpleDdgiGuidingGpuPassNames.Validate),
+                availableStages);
+
+            bool resourcesComplete = runtime.Resource.HasResources &&
+                frame.Configured && guidingMemory.AllocatedBytes > 0UL;
+            SimpleDdgiGuidingTelemetryState state;
+            string reason;
+            if (!requested)
+            {
+                state = SimpleDdgiGuidingTelemetryState.Disabled;
+                reason = "directional-guiding-disabled";
+            }
+            else if (!resourcesComplete)
+            {
+                state = SimpleDdgiGuidingTelemetryState.ResourceIncomplete;
+                reason = string.IsNullOrWhiteSpace(mode.FallbackDetail)
+                    ? runtime.Detail
+                    : mode.FallbackDetail;
+            }
+            else if (frame.SampleReadbackValid)
+            {
+                state = SimpleDdgiGuidingTelemetryState.Available;
+                reason = frame.SampleValidationCounters.AreZero
+                    ? "directional-guiding-fence-complete-sample-available"
+                    : "directional-guiding-sample-validation-reported-errors";
+            }
+            else if (frame.CompletedFrameSerial != 0UL && frame.SampleRecorded)
+            {
+                state = SimpleDdgiGuidingTelemetryState.Faulted;
+                reason = frame.State;
+            }
+            else
+            {
+                state = SimpleDdgiGuidingTelemetryState.PendingGpuReadback;
+                reason = frame.State;
+            }
+
+            return new SimpleDdgiDirectionalGuidingDiagnostics
+            {
+                State = state,
+                Runtime = runtime,
+                Frame = frame,
+                Timings = timings,
+                Memory = guidingMemory,
+                Reason = reason
+            }.NormalizeForPersistence();
+        }
+
+        private GiCausticDiagnostics CreateGiCausticDiagnostics(
+            in SimpleDdgiAdvancedExperimentMemoryPlan memory,
+            in GiExperimentModeState<GiCausticMode> mode)
+        {
+            bool requested = mode.RequestedMode != GiCausticMode.Off;
+            GiCausticVulkanRuntimeDiagnostics runtime =
+                _giCausticRuntime?.Diagnostics ??
+                GiCausticVulkanRuntimeDiagnostics.Disabled;
+            GiCausticGpuMemoryRequirements causticMemory =
+                new(
+                    memory.CausticPhotonRecords,
+                    memory.CausticCellTableAndSortScratch,
+                    memory.CausticHistory,
+                    _giCausticPlan.GpuLayout.TaskQueueBytes,
+                    _giCausticPlan.GpuLayout.CandidateStagingBytes,
+                    _giCausticPlan.GpuLayout.PublishedPhotonBytes,
+                    _giCausticPlan.GpuLayout.PublicationHeaderBytes);
+
+            FrameTimingSnapshot completed = _gpuTimestamps.LastCompletedSnapshot;
+            GiCausticTimedStage availableStages = GiCausticTimedStage.None;
+            if (HasCompletedGpuTiming(completed, GiCausticGpuPassNames.Task))
+                availableStages |= GiCausticTimedStage.Task;
+            if (HasCompletedGpuTiming(completed, GiCausticGpuPassNames.Trace))
+                availableStages |= GiCausticTimedStage.Trace;
+            if (HasCompletedGpuTiming(completed, GiCausticGpuPassNames.CacheBuild))
+                availableStages |= GiCausticTimedStage.CacheBuild;
+            if (HasCompletedGpuTiming(completed, GiCausticGpuPassNames.Resolve))
+                availableStages |= GiCausticTimedStage.Resolve;
+            if (HasCompletedGpuTiming(completed, GiCausticGpuPassNames.Composite))
+                availableStages |= GiCausticTimedStage.Composite;
+
+            var timings = new GiCausticStageTimings(
+                completed.GetGpuMicrosecondsOrZero(GiCausticGpuPassNames.Task),
+                completed.GetGpuMicrosecondsOrZero(GiCausticGpuPassNames.Trace),
+                completed.GetGpuMicrosecondsOrZero(
+                    GiCausticGpuPassNames.CacheBuild),
+                completed.GetGpuMicrosecondsOrZero(GiCausticGpuPassNames.Resolve),
+                completed.GetGpuMicrosecondsOrZero(
+                    GiCausticGpuPassNames.Composite),
+                availableStages);
+
+            GiCausticTelemetryState state;
+            string reason;
+            if (!requested)
+            {
+                state = GiCausticTelemetryState.Disabled;
+                reason = "caustic-disabled";
+            }
+            else if (mode.EffectiveMode == GiCausticMode.PhotonReference)
+            {
+                state = GiCausticTelemetryState.Disabled;
+                reason = "caustic-CPU-reference-has-no-C4-GPU-publication";
+            }
+            else if (!_giCausticRuntimeConfigured ||
+                     !runtime.Resource.IsEffectivelyEnabled ||
+                     causticMemory.AllocatedBytes == 0UL)
+            {
+                state = GiCausticTelemetryState.ResourceIncomplete;
+                reason = string.IsNullOrWhiteSpace(mode.FallbackDetail)
+                    ? runtime.Detail
+                    : mode.FallbackDetail;
+            }
+            else if (runtime.Resource.HasReadableCache &&
+                     runtime.Publication.Available)
+            {
+                state = GiCausticTelemetryState.Readable;
+                reason = "caustic-fence-validated-cache-publication-available";
+            }
+            else if (runtime.HeaderReadbackPending ||
+                     runtime.Resource.State == GiCausticGpuResourceState.Building)
+            {
+                state = GiCausticTelemetryState.PendingGpuPublication;
+                reason = runtime.Detail;
+            }
+            else if (runtime.CapabilityReason !=
+                     GiCausticVulkanRuntimeCapabilityReason.None)
+            {
+                state = GiCausticTelemetryState.Faulted;
+                reason = runtime.Detail;
+            }
+            else
+            {
+                state = GiCausticTelemetryState.PendingGpuPublication;
+                reason = runtime.Detail;
+            }
+
+            return new GiCausticDiagnostics
+            {
+                State = state,
+                Runtime = runtime,
+                Publication = runtime.Publication,
+                Timings = timings,
+                Memory = causticMemory,
+                Reason = reason
+            }.NormalizeForPersistence();
+        }
+
+        /// <summary>
+        /// Builds one fail-closed, generation-aligned Simple-DDGI liveness
+        /// sample.  It is intentionally diagnostic-only: no scheduler budget,
+        /// residency admission, or receiver fallback is changed from this
+        /// method.  In particular, a delayed sparse-page summary is never
+        /// combined with a current CPU queue, because that would manufacture a
+        /// plausible-looking but invalid progress predicate.
+        /// </summary>
+        private GiRoadmapExperimentDiagnostics
+            CreateGiRoadmapExperimentDiagnostics(SceneRenderingData sceneData)
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            GiExperimentAdmission directionalFog =
+                SimpleDdgiDirectionalFogExperiment.EvaluateAdmission(
+                    gi.SimpleDdgiDirectionalFogEnabled,
+                    new SimpleDdgiDirectionalFogCapabilities(
+                        L2IncidentRadianceSidecarAvailable: false,
+                        FroxelPhaseIntegrationAvailable: false,
+                        DirectIndirectOwnershipSeparated: true));
+
+            Core.GiHardwareResearchCapabilities hardware =
+                _context.GiHardwareResearchCapabilities;
+            Core.OpacityMicromapCapabilitySnapshot opacityHardware =
+                hardware.OpacityMicromap;
+            OpacityMicromapGpuRuntimeSnapshot opacityRuntime =
+                _accelerationStructureManager
+                    ?.OpacityMicromapGpuRuntimeSnapshot ??
+                OpacityMicromapGpuRuntimeSnapshot.Disabled;
+            opacityRuntime = opacityRuntime with
+            {
+                LastGpuBuildMicroseconds = Math.Max(
+                    0L,
+                    sceneData.GpuOpacityMicromapBuildMicroseconds)
+            };
+            GiExperimentAdmission opacityMicromap =
+                GiOpacityMicromapExperiment.EvaluateAdmission(
+                    gi.DdgiOpacityMicromapExperimentEnabled,
+                    new GiOpacityMicromapHardwareCapabilities(
+                        opacityHardware.ExtensionAvailable,
+                        opacityHardware.FeatureAvailable,
+                        opacityHardware.HostCommandsAvailable,
+                        opacityHardware.MaximumTwoStateSubdivisionLevel,
+                        opacityHardware.MaximumFourStateSubdivisionLevel,
+                        RuntimeBackendEnabled: opacityRuntime.Enabled),
+                    new GiOpacityMicromapQualification(
+                        VisibilityParityPassed: false,
+                        ThinTransmissionParityPassed: false,
+                        BuildCostAmortized: false,
+                        TotalGiTimeImproved: false,
+                        ResidentBytes: opacityRuntime.AllocatedBytes,
+                        MemoryBudgetBytes: 128UL * 1024UL * 1024UL));
+
+            Core.RayTracingInvocationReorderCapabilitySnapshot rayHardware =
+                hardware.RayTracingInvocationReorder;
+            GiRayTracingBackendSelection raySelection =
+                GiRayTracingInvocationReorderExperiment.Select(
+                    gi.DdgiRayTracingPipelineExperimentEnabled,
+                    new GiRayTracingPipelineHardwareCapabilities(
+                        rayHardware.RayTracingPipelineExtensionAvailable,
+                        rayHardware.RayTracingPipelineFeatureAvailable,
+                        rayHardware.InvocationReorderExtensionAvailable,
+                        rayHardware.InvocationReorderFeatureAvailable,
+                        rayHardware.EffectiveReorderingHint,
+                        rayHardware.MaximumShaderBindingTableRecordIndex,
+                        RuntimeBackendEnabled: false),
+                    default,
+                    default,
+                    default);
+
+            GiExperimentAdmission directionalGuiding =
+                SimpleDdgiDirectionalGuidingExperiment.EvaluateAdmission(
+                    gi.SimpleDdgiDirectionalRayGuidingExperimentEnabled,
+                    new SimpleDdgiDirectionalGuidingPrerequisites(
+                        SpatialEmissiveSamplingReady: true,
+                        CachedRelightingReady: true,
+                        VariablePdfDirectionIdentityAvailable: false,
+                        MaintenanceSubsetPdfAudited: false,
+                        CacheCardinalityAndTailAuditUpdated: false,
+                        ReferenceParityPassed: false,
+                        QualityPerMillisecondImproved: false));
+
+            GiTaggedCausticCachePlan causticPlan =
+                GiTaggedCausticCacheExperiment.CreatePlan(
+                    new GiTaggedCausticCacheConfiguration(
+                        gi.DdgiTaggedCausticCacheExperimentEnabled,
+                        HeroMaterialCount:
+                            gi.DdgiTaggedCausticCacheExperimentEnabled ? 1 : 0,
+                        PhotonTaskCapacity: 4_096,
+                        MaximumWorldCells: 4_096,
+                        MaximumPhotonsPerCell: 8,
+                        MemoryBudgetBytes: 8UL * 1024UL * 1024UL,
+                        ScreenResolveProfile: new(1, 1)),
+                    new GiTaggedCausticCacheQualification(
+                        SeparateOwnershipImplemented: false,
+                        DiffuseTransportFeedDisabled: true,
+                        ReferenceParityPassed: false,
+                        StabilityProofPassed: false,
+                        QualityPerMillisecondImproved: false));
+
+            SimpleDdgiNearFieldResidualPlan residualPlan =
+                _simpleDdgiNearFieldResidualPlan;
+
+            // The legacy admission records above remain snapshot-compatible,
+            // but the mode state below is authoritative. In particular, it
+            // evaluates frozen prerequisite evidence before considering a
+            // capability setting or a not-yet-allocated resource complete.
+            AdvancedGiPrerequisiteGateResult ommGate =
+                _advancedGiPrerequisiteManifest.Evaluate(
+                    AdvancedGiPrerequisiteFeature.OpacityMicromaps);
+            AdvancedGiPrerequisiteGateResult guidingGate =
+                _advancedGiPrerequisiteManifest.Evaluate(
+                    AdvancedGiPrerequisiteFeature.DirectionalGuiding);
+            AdvancedGiQualificationGateResult ommQualification =
+                EvaluateAdvancedGiQualification(
+                    AdvancedGiPrerequisiteFeature.OpacityMicromaps,
+                    ommGate,
+                    opacityRuntime.Supported,
+                    gi.DdgiOpacityMicromapQualificationId);
+            AdvancedGiQualificationGateResult guidingQualification =
+                EvaluateAdvancedGiQualification(
+                    AdvancedGiPrerequisiteFeature.DirectionalGuiding,
+                    guidingGate,
+                    supported: gi.SimpleDdgiSchedulerMode !=
+                        SimpleDdgiSchedulerMode.GpuResident,
+                    gi.SimpleDdgiDirectionalGuidingQualificationId);
+            bool residualRuntimeReady =
+                _simpleDdgiNearFieldResidualRuntime is { IsActive: true };
+            bool guidingRuntimeSupported = gi.SimpleDdgiSchedulerMode !=
+                SimpleDdgiSchedulerMode.GpuResident;
+            SimpleDdgiGuidingGpuRuntimeDiagnostics guidingRuntime =
+                _simpleDdgiGuidingRuntime?.Diagnostics ??
+                SimpleDdgiGuidingGpuRuntimeDiagnostics.Disabled;
+            SimpleDdgiGuidingFrameCoordinatorDiagnostics guidingFrame =
+                _simpleDdgiGuidingFrameCoordinator?.Diagnostics ??
+                SimpleDdgiGuidingFrameCoordinatorDiagnostics.Disabled;
+            bool guidingResourcesReady =
+                _simpleDdgiGuidingFrameCoordinator is { IsConfigured: true }
+                    configuredGuidingCoordinator &&
+                configuredGuidingCoordinator.TryGetGraphResourceSnapshot(out _) &&
+                guidingRuntime.Resource.HasResources;
+            string guidingDetail = guidingResourcesReady
+                ? guidingFrame.State
+                : !string.IsNullOrWhiteSpace(_simpleDdgiGuidingConfigurationReason)
+                    ? _simpleDdgiGuidingConfigurationReason
+                    : guidingRuntime.Detail;
+
+            GiExperimentModeState<SimpleDdgiReceiverFeedbackMode>
+                receiverFeedbackMode = _simpleDdgiReceiverFeedbackPlan.Mode;
+            SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics feedbackRuntime =
+                _simpleDdgiReceiverFeedbackRuntime?.Diagnostics ??
+                SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics.Disabled;
+            if (receiverFeedbackMode.EffectiveMode ==
+                    SimpleDdgiReceiverFeedbackMode.ExactCompacted &&
+                !feedbackRuntime.Resource.IsEffectivelyEnabled)
+            {
+                receiverFeedbackMode = receiverFeedbackMode with
+                {
+                    EffectiveMode = SimpleDdgiReceiverFeedbackMode.Off,
+                    FallbackReason =
+                        GiExperimentFallbackReason.ResourceIncomplete,
+                    FallbackDetail = feedbackRuntime.Detail
+                };
+            }
+
+            GiExperimentModeState<SimpleDdgiNearFieldResidualMode>
+                nearFieldMode = _simpleDdgiNearFieldResidualMode;
+            if (nearFieldMode.IsEffective && !residualRuntimeReady)
+            {
+                nearFieldMode = nearFieldMode with
+                {
+                    EffectiveMode = SimpleDdgiNearFieldResidualMode.Off,
+                    FallbackReason = GiExperimentFallbackReason.ResourceIncomplete,
+                    FallbackDetail =
+                        _simpleDdgiNearFieldResidualRuntime?.Snapshot.Reason ??
+                        residualPlan.Status
+                };
+            }
+
+            GiExperimentModeState<GiCausticMode> causticMode =
+                _giCausticMode;
+            bool causticGpuEffective = causticMode.EffectiveMode is
+                GiCausticMode.WorldCacheExperiment or
+                GiCausticMode.AutoQualified;
+            GiCausticVulkanRuntimeDiagnostics liveCausticRuntime =
+                _giCausticRuntime?.Diagnostics ??
+                GiCausticVulkanRuntimeDiagnostics.Disabled;
+            if (causticGpuEffective &&
+                (!_giCausticRuntimeConfigured ||
+                 !liveCausticRuntime.Resource.IsEffectivelyEnabled))
+            {
+                causticMode = causticMode with
+                {
+                    EffectiveMode = GiCausticMode.Off,
+                    FallbackReason = GiExperimentFallbackReason.ResourceIncomplete,
+                    FallbackDetail = liveCausticRuntime.Detail
+                };
+            }
+
+            var modes = new GiRoadmapExperimentModeDiagnostics(
+                receiverFeedbackMode,
+                ResolveAdvancedGiMode(
+                    gi.DdgiOpacityMicromapMode,
+                    DdgiOpacityMicromapMode.Off,
+                    supported: opacityRuntime.Supported,
+                    prerequisiteGate: ommGate,
+                    qualificationGate: ommQualification,
+                    resourcesComplete: opacityRuntime.Enabled,
+                    gi.DdgiOpacityMicromapQualificationId,
+                    opacityRuntime.Detail),
+                ResolveAdvancedGiMode(
+                    gi.SimpleDdgiDirectionalGuidingMode,
+                    SimpleDdgiDirectionalGuidingMode.Off,
+                    supported: guidingRuntimeSupported,
+                    prerequisiteGate: guidingGate,
+                    qualificationGate: guidingQualification,
+                    resourcesComplete: guidingResourcesReady,
+                    gi.SimpleDdgiDirectionalGuidingQualificationId,
+                    guidingDetail),
+                causticMode,
+                nearFieldMode);
+            return new GiRoadmapExperimentDiagnostics(
+                directionalFog,
+                opacityMicromap,
+                raySelection.Admission,
+                directionalGuiding,
+                causticPlan.Admission,
+                residualPlan.Admission)
+            {
+                Modes = modes,
+                OpacityMicromapRuntime = opacityRuntime,
+                CausticRuntime = GiCausticDiagnostics.Disabled
+            };
+        }
+
+        private static GiExperimentModeState<TMode> ResolveAdvancedGiMode<TMode>(
+            TMode requestedMode,
+            TMode offMode,
+            bool supported,
+            in AdvancedGiPrerequisiteGateResult prerequisiteGate,
+            in AdvancedGiQualificationGateResult qualificationGate,
+            bool resourcesComplete,
+            string? configuredQualificationId,
+            string? resourceFailureDetail = null)
+            where TMode : struct, Enum
+        {
+            bool isAutoQualified = string.Equals(
+                requestedMode.ToString(),
+                "AutoQualified",
+                StringComparison.Ordinal);
+            // Auto mode must name the authenticated feature-qualification ID explicitly. An
+            // ordinary experimental mode may still carry the prerequisite ID diagnostically,
+            // but that prerequisite hash is never substituted as promotion evidence.
+            string qualificationId = isAutoQualified
+                ? configuredQualificationId?.Trim() ?? string.Empty
+                : string.IsNullOrWhiteSpace(configuredQualificationId)
+                    ? prerequisiteGate.QualificationId
+                    : configuredQualificationId.Trim();
+            return GiExperimentModeResolver.Resolve(
+                requestedMode,
+                offMode,
+                new GiExperimentModeEvaluation(
+                    Supported: supported,
+                    PrerequisitesSatisfied: prerequisiteGate.Passed,
+                    MemoryAdmitted: prerequisiteGate.Passed,
+                    ResourcesComplete: resourcesComplete,
+                    RequiresQualification: isAutoQualified,
+                    QualificationPassed: !isAutoQualified || qualificationGate.Passed,
+                    QualificationId: qualificationId,
+                    FailureDetail: !prerequisiteGate.Passed
+                        ? prerequisiteGate.FailureDetail
+                        : isAutoQualified && !qualificationGate.Passed
+                            ? qualificationGate.FailureDetail
+                        : resourceFailureDetail));
+        }
+
+        private void UpdateSimpleDdgiLivenessTelemetry(SceneRenderingData sceneData)
+        {
+            SimpleDdgiVolumeManager? manager = _simpleDdgiVolumeManager;
+            if (manager == null || sceneData.SimpleDdgiActive == 0)
+            {
+                ResetSimpleDdgiLivenessFeedbackBaseline();
+                _simpleDdgiLivenessWatchdog.Reset();
+                sceneData.SimpleDdgiLivenessTelemetry = SimpleDdgiLivenessTelemetry.Empty;
+                sceneData.SimpleDdgiLivenessWatchdog = SimpleDdgiLivenessWatchdogResult.Empty;
+                return;
+            }
+
+            bool gpuSchedulerAuthoritative =
+                manager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident;
+            bool sparseResidencyAuthoritative =
+                manager.ProbeResidencyMode.UsesSparsePayloads();
+            GPUSimpleDdgiSchedulerFeedback schedulerFeedback =
+                manager.LastGpuSchedulerFeedback;
+            GPUSimpleDdgiResidencyFeedback residencyFeedback =
+                manager.LastProbeResidencyFeedback;
+
+            // GPU-mirror remains a CPU-authoritative rendering path. Its delayed
+            // comparison stream is valuable elsewhere, but must not be used as
+            // evidence that the CPU-owned producer did or did not make progress.
+            bool schedulerFeedbackValid = !gpuSchedulerAuthoritative ||
+                manager.GpuSchedulerFeedbackValid;
+            bool residencyFeedbackValid = !sparseResidencyAuthoritative ||
+                manager.ProbeResidencyFeedbackValid;
+            ulong schedulerFeedbackFrameSerial = gpuSchedulerAuthoritative
+                ? manager.GpuSchedulerFeedbackFrameSerial
+                : sceneData.DdgiFrameSerial;
+            ulong residencyFeedbackFrameSerial = sparseResidencyAuthoritative
+                ? manager.ProbeResidencyFeedbackFrameSerial
+                : schedulerFeedbackFrameSerial;
+
+            bool feedbackGenerationsCompatible = schedulerFeedbackValid &&
+                residencyFeedbackValid;
+            bool generationTransition =
+                manager.SourceCohortTransitionActive ||
+                sceneData.SimpleDdgiTransportSourceCohortTransitionActive != 0;
+
+            if (gpuSchedulerAuthoritative && schedulerFeedbackValid)
+            {
+                bool schedulerResourceMatches =
+                    schedulerFeedback.SchedulerResourceGeneration ==
+                    manager.GpuScheduler.ResourceGeneration;
+                bool schedulerTemporalGenerationKnown =
+                    schedulerFeedback.VolumeTableGeneration ==
+                    manager.VolumeTableGeneration &&
+                    schedulerFeedback.SourceLightingGeneration ==
+                    manager.SourceLightingGeneration &&
+                    IsCurrentOrNextSimpleDdgiGeneration(
+                        schedulerFeedback.TransportGeneration,
+                        manager.TransportGeneration);
+                bool schedulerGenerationCurrent = schedulerResourceMatches &&
+                    schedulerFeedback.VolumeTableGeneration ==
+                    manager.VolumeTableGeneration &&
+                    schedulerFeedback.SourceLightingGeneration ==
+                    manager.SourceLightingGeneration &&
+                    schedulerFeedback.TransportGeneration ==
+                    manager.TransportGeneration;
+
+                // A resource-generation mismatch cannot be a harmless delayed
+                // observation. A source/transport transition can be: it is held
+                // behind an explicit barrier until a new matching packet arrives.
+                feedbackGenerationsCompatible &= schedulerResourceMatches;
+                generationTransition |= !schedulerTemporalGenerationKnown ||
+                    !schedulerGenerationCurrent;
+            }
+
+            if (sparseResidencyAuthoritative && residencyFeedbackValid)
+            {
+                bool residencyResourceMatches =
+                    residencyFeedback.ResidencyResourceGeneration ==
+                    manager.ProbeResidencyResourceGeneration;
+                feedbackGenerationsCompatible &= residencyResourceMatches;
+
+                if (gpuSchedulerAuthoritative && schedulerFeedbackValid)
+                {
+                    bool feedbackFramesMatch = residencyFeedbackFrameSerial ==
+                        schedulerFeedbackFrameSerial;
+                    bool sourceGenerationsMatch =
+                        residencyFeedback.EventSourceGeneration ==
+                        schedulerFeedback.SourceLightingGeneration &&
+                        residencyFeedback.EventCohortGeneration ==
+                        schedulerFeedback.SourceLightingGeneration;
+                    feedbackGenerationsCompatible &= feedbackFramesMatch &&
+                        sourceGenerationsMatch;
+                }
+                else
+                {
+                    // The CPU queue is frame-local while sparse feedback is
+                    // delayed. Until a matching CPU queue snapshot is retained,
+                    // fail closed rather than crossing those serials.
+                    feedbackGenerationsCompatible = false;
+                }
+
+                bool residencyGenerationCurrent = residencyResourceMatches &&
+                    residencyFeedback.EventSourceGeneration ==
+                    manager.SourceLightingGeneration &&
+                    residencyFeedback.EventCohortGeneration ==
+                    manager.SourceLightingGeneration;
+                generationTransition |= !residencyGenerationCurrent;
+            }
+
+            SimpleDdgiLivenessBlockReason feedbackRejectionReason =
+                ObserveSimpleDdgiFeedbackGenerationRejections(
+                    manager,
+                    gpuSchedulerAuthoritative,
+                    sparseResidencyAuthoritative);
+
+            SimpleDdgiSchedulerClassCounts eligibleByClass =
+                SimpleDdgiSchedulerClassCounts.Empty;
+            SimpleDdgiRingCounts eligibleByRing = SimpleDdgiRingCounts.Empty;
+            SimpleDdgiEligibilityRejectionCounts eligibilityRejections =
+                SimpleDdgiEligibilityRejectionCounts.Empty;
+            uint eligibleProbeCount;
+            uint selectedRequestCount;
+            uint indirectDispatchRequestCount;
+            uint committedUpdateCount;
+            uint blendedUpdateCount;
+            uint coherentPublicationCount;
+            uint effectiveRequestBudget;
+            uint effectiveRayBudget;
+            int globalConvergencePending;
+            int localConvergencePending;
+
+            if (gpuSchedulerAuthoritative && schedulerFeedbackValid)
+            {
+                SimpleDdgiSchedulerEligibilityEvidence eligibilityEvidence =
+                    manager.GpuSchedulerEligibilityEvidence;
+                eligibleByClass = eligibilityEvidence.ByClass;
+                eligibleByRing = eligibilityEvidence.ByRing;
+                eligibleProbeCount = SumSimpleDdgiSchedulerClassCounts(eligibleByClass);
+                uint eligibleByRingTotal = SumSimpleDdgiRingCounts(eligibleByRing);
+
+                // The two independent bounded reductions must agree with the
+                // fixed feedback header before either one can drive liveness.
+                // Treat an ABI or readback disagreement as invalid evidence, not
+                // as a zero-work frame.
+                if (eligibleProbeCount != schedulerFeedback.EligibleCount ||
+                    eligibleByRingTotal != schedulerFeedback.EligibleCount)
+                {
+                    schedulerFeedbackValid = false;
+                    feedbackGenerationsCompatible = false;
+                    eligibleProbeCount = 0u;
+                    eligibleByClass = SimpleDdgiSchedulerClassCounts.Empty;
+                    eligibleByRing = SimpleDdgiRingCounts.Empty;
+                }
+
+                selectedRequestCount = schedulerFeedback.AcceptedCount;
+                indirectDispatchRequestCount = schedulerFeedback.DispatchedLaneCount != 0u
+                    ? schedulerFeedback.AcceptedCount
+                    : 0u;
+                committedUpdateCount = schedulerFeedback.CommittedCount;
+                // The scheduler's publication count is a canonical receiver
+                // publication witness; it is consequently also the only safe
+                // delayed blend witness for the resident path.
+                blendedUpdateCount = schedulerFeedback.PublishedCount;
+                coherentPublicationCount = schedulerFeedback.PublishedCount;
+                effectiveRequestBudget = schedulerFeedback.RequestBudget;
+                effectiveRayBudget = schedulerFeedback.PrimaryRayBudget;
+                eligibilityRejections = new SimpleDdgiEligibilityRejectionCounts(
+                    schedulerFeedback.RejectedCount,
+                    schedulerFeedback.InvalidGenerationCount,
+                    schedulerFeedback.OverflowCount);
+                globalConvergencePending =
+                    schedulerFeedback.StaticConvergencePending != 0u ||
+                    manager.TransportGlobalConvergencePending
+                        ? 1
+                        : 0;
+                localConvergencePending =
+                    schedulerFeedback.PendingFreshCount != 0u ||
+                    schedulerFeedback.PendingExposedCount != 0u ||
+                    schedulerFeedback.PendingRelocationCount != 0u ||
+                    schedulerFeedback.PendingSourceCount != 0u ||
+                    schedulerFeedback.PendingSolverCount != 0u ||
+                    eligibleProbeCount != 0u ||
+                    manager.HasPendingUpdateTransaction
+                        ? 1
+                        : 0;
+            }
+            else
+            {
+                // CPU-reference and GPU-mirror rendering use the persistent
+                // queue as their authority. Pending class counts are sampled
+                // before budget admission, whereas scheduled counts are not.
+                SimpleDdgiSchedulerTelemetry schedulerTelemetry =
+                    manager.SchedulerTelemetry;
+                eligibleByClass = new SimpleDdgiSchedulerClassCounts(
+                    ToUIntNonNegative(schedulerTelemetry.PendingVisibleZeroSupport),
+                    ToUIntNonNegative(schedulerTelemetry.PendingFreshExposedVisible),
+                    ToUIntNonNegative(schedulerTelemetry.PendingVisibleDirty),
+                    ToUIntNonNegative(schedulerTelemetry.PendingVisibleRetry),
+                    ToUIntNonNegative(schedulerTelemetry.PendingNearMaintenance),
+                    ToUIntNonNegative(schedulerTelemetry.PendingMidMaintenance),
+                    ToUIntNonNegative(schedulerTelemetry.PendingFarMaintenance));
+                eligibleProbeCount = SumSimpleDdgiSchedulerClassCounts(eligibleByClass);
+                selectedRequestCount =
+                    ToUIntNonNegative(sceneData.SimpleDdgiProbesUpdated);
+                // CPU dispatch is direct rather than indirect. A selected queue
+                // is therefore the matching dispatch request witness.
+                indirectDispatchRequestCount = selectedRequestCount;
+                coherentPublicationCount = ToUIntNonNegative(
+                    manager.ReceiverRecordsPublishedCount);
+                committedUpdateCount = coherentPublicationCount;
+                blendedUpdateCount = coherentPublicationCount;
+                effectiveRequestBudget = ToUIntNonNegative(
+                    schedulerTelemetry.EffectiveRequestBudget);
+                effectiveRayBudget = ToUIntNonNegative(
+                    ResolveConfiguredSimpleDdgiPrimaryRayBudget(
+                        Settings.GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget));
+                globalConvergencePending = manager.TransportGlobalConvergencePending
+                    ? 1
+                    : 0;
+                localConvergencePending = eligibleProbeCount != 0u ||
+                    selectedRequestCount != 0u ||
+                    manager.HasPendingUpdateTransaction
+                        ? 1
+                        : 0;
+            }
+
+            uint visibleDemandPageCount = 0u;
+            uint visibleDemandSuppressedCount = 0u;
+            uint visibleDemandInitializingOrUnpublishedCount = 0u;
+            uint admissionCandidateCount = 0u;
+            uint freePageCount = 0u;
+            bool useAlignedSparseFeedback = gpuSchedulerAuthoritative &&
+                sparseResidencyAuthoritative && schedulerFeedbackValid &&
+                residencyFeedbackValid && feedbackGenerationsCompatible;
+            if (useAlignedSparseFeedback)
+            {
+                visibleDemandPageCount = residencyFeedback.VisibleDemandPageCount;
+                visibleDemandSuppressedCount =
+                    residencyFeedback.VisibleDemandSuppressedPageCount;
+                visibleDemandInitializingOrUnpublishedCount =
+                    residencyFeedback.VisibleDemandInitializingOrUnpublishedPageCount;
+                admissionCandidateCount = SaturatingSubtract(
+                    SaturatingSubtract(
+                        residencyFeedback.VisibleDemandMissingPageCount,
+                        visibleDemandSuppressedCount),
+                    visibleDemandInitializingOrUnpublishedCount);
+                freePageCount = residencyFeedback.FreePageCount;
+                localConvergencePending |= admissionCandidateCount != 0u ? 1 : 0;
+            }
+
+            SimpleDdgiSourceCacheInvalidationDeltas sourceInvalidationDeltas =
+                manager.LivenessSourceCacheInvalidationReasonDeltas;
+            generationTransition |= sourceInvalidationDeltas.Any;
+            SimpleDdgiGenerationTuple generations = new(
+                FrameSerial: sceneData.DdgiFrameSerial,
+                SchedulerFeedbackFrameSerial: schedulerFeedbackFrameSerial,
+                ResidencyFeedbackFrameSerial: residencyFeedbackFrameSerial,
+                VolumeTableGeneration: gpuSchedulerAuthoritative && schedulerFeedbackValid
+                    ? schedulerFeedback.VolumeTableGeneration
+                    : manager.VolumeTableGeneration,
+                SchedulerArenaGeneration: gpuSchedulerAuthoritative && schedulerFeedbackValid
+                    ? schedulerFeedback.SchedulerResourceGeneration
+                    : manager.GpuScheduler.ResourceGeneration,
+                ResidencyArenaGeneration: sparseResidencyAuthoritative && residencyFeedbackValid
+                    ? residencyFeedback.ResidencyResourceGeneration
+                    : manager.ProbeResidencyResourceGeneration,
+                SourceLightingGeneration: gpuSchedulerAuthoritative && schedulerFeedbackValid
+                    ? schedulerFeedback.SourceLightingGeneration
+                    : manager.SourceLightingGeneration,
+                TransportGeneration: gpuSchedulerAuthoritative && schedulerFeedbackValid
+                    ? schedulerFeedback.TransportGeneration
+                    : manager.TransportGeneration);
+            SimpleDdgiLivenessTelemetry telemetry = new(
+                Generations: generations,
+                SchedulerFeedbackValid: schedulerFeedbackValid ? 1 : 0,
+                ResidencyFeedbackValid: residencyFeedbackValid ? 1 : 0,
+                FeedbackGenerationsCompatible: feedbackGenerationsCompatible ? 1 : 0,
+                GlobalConvergencePending: globalConvergencePending,
+                LocalConvergencePending: localConvergencePending,
+                EligibleProbeCount: eligibleProbeCount,
+                AdmissionCandidateCount: admissionCandidateCount,
+                SelectedRequestCount: selectedRequestCount,
+                IndirectDispatchRequestCount: indirectDispatchRequestCount,
+                CommittedUpdateCount: committedUpdateCount,
+                BlendedUpdateCount: blendedUpdateCount,
+                CoherentPublicationCount: coherentPublicationCount,
+                VisibleDemandPageCount: visibleDemandPageCount,
+                VisibleDemandSuppressedCount: visibleDemandSuppressedCount,
+                VisibleDemandInitializingOrUnpublishedCount:
+                    visibleDemandInitializingOrUnpublishedCount,
+                FreePageCount: freePageCount,
+                EffectiveRequestBudget: effectiveRequestBudget,
+                EffectiveRayBudget: effectiveRayBudget,
+                ReconfigurationBarrier: sceneData.SimpleDdgiRecentered != 0 ||
+                    sceneData.SimpleDdgiAtlasCleared != 0 ||
+                    manager.ProbeResidencyBootstrapClassificationActive
+                        ? 1
+                        : 0,
+                PublicationBarrier: 0,
+                AuditBarrier: manager.TransportTailAuditPending ? 1 : 0,
+                GenerationTransitionBarrier: generationTransition ? 1 : 0,
+                FeedbackRejectionReason: feedbackRejectionReason,
+                EligibleBySchedulerClass: eligibleByClass,
+                EligibleByRing: eligibleByRing,
+                EligibilityRejections: eligibilityRejections,
+                TransactionAbortDeltas: manager.LivenessTransactionAbortReasonDeltas,
+                SourceCacheInvalidationDeltas: sourceInvalidationDeltas);
+            sceneData.SimpleDdgiLivenessTelemetry = telemetry;
+            sceneData.SimpleDdgiLivenessWatchdog =
+                _simpleDdgiLivenessWatchdog.Evaluate(telemetry);
+        }
+
+        private SimpleDdgiLivenessBlockReason
+            ObserveSimpleDdgiFeedbackGenerationRejections(
+                SimpleDdgiVolumeManager manager,
+                bool observeSchedulerFeedback,
+                bool observeResidencyFeedback)
+        {
+            if (!observeSchedulerFeedback && !observeResidencyFeedback)
+            {
+                ResetSimpleDdgiLivenessFeedbackBaseline();
+                return SimpleDdgiLivenessBlockReason.None;
+            }
+
+            ulong schedulerRejectionCount = observeSchedulerFeedback
+                ? manager.GpuSchedulerFeedbackGenerationRejectionCount
+                : 0UL;
+            ulong residencyRejectionCount = observeResidencyFeedback
+                ? manager.ProbeResidencyFeedbackGenerationRejectionCount
+                : 0UL;
+            if (!_simpleDdgiLivenessFeedbackRejectionBaselineInitialized)
+            {
+                _simpleDdgiLivenessFeedbackRejectionBaselineInitialized = true;
+                _lastSimpleDdgiSchedulerFeedbackGenerationRejectionCount =
+                    schedulerRejectionCount;
+                _lastSimpleDdgiResidencyFeedbackGenerationRejectionCount =
+                    residencyRejectionCount;
+                return SimpleDdgiLivenessBlockReason.None;
+            }
+
+            bool rejected = schedulerRejectionCount >
+                    _lastSimpleDdgiSchedulerFeedbackGenerationRejectionCount ||
+                residencyRejectionCount >
+                    _lastSimpleDdgiResidencyFeedbackGenerationRejectionCount;
+            _lastSimpleDdgiSchedulerFeedbackGenerationRejectionCount =
+                schedulerRejectionCount;
+            _lastSimpleDdgiResidencyFeedbackGenerationRejectionCount =
+                residencyRejectionCount;
+            return rejected
+                ? SimpleDdgiLivenessBlockReason.GenerationMismatch
+                : SimpleDdgiLivenessBlockReason.None;
+        }
+
+        private void ResetSimpleDdgiLivenessFeedbackBaseline()
+        {
+            _simpleDdgiLivenessFeedbackRejectionBaselineInitialized = false;
+            _lastSimpleDdgiSchedulerFeedbackGenerationRejectionCount = 0UL;
+            _lastSimpleDdgiResidencyFeedbackGenerationRejectionCount = 0UL;
+        }
+
+        private static bool IsCurrentOrNextSimpleDdgiGeneration(
+            uint recordedGeneration,
+            uint currentGeneration)
+        {
+            if (recordedGeneration == currentGeneration)
+                return true;
+
+            uint nextGeneration = recordedGeneration + 1u;
+            if (nextGeneration == 0u)
+                nextGeneration = 1u;
+            return nextGeneration == currentGeneration;
+        }
+
+        private DdgiContentRuntimeSnapshot CreateDdgiContentRuntimeSnapshot(
+            SceneRenderingData sceneData,
+            bool simpleDdgiActive,
+            bool rayQueryActive)
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            SimpleDdgiVolumeManager? volumeManager = _simpleDdgiVolumeManager;
+            SimpleDdgiLightTreeRuntimeDiagnostics lightTree = simpleDdgiActive
+                ? _simpleDdgiLightTreeResources?.Diagnostics ??
+                    SimpleDdgiLightTreeRuntimeDiagnostics.Disabled
+                : SimpleDdgiLightTreeRuntimeDiagnostics.Disabled;
+            SimpleDdgiDirectionalRadianceMode effectiveDirectional =
+                simpleDdgiActive && volumeManager != null
+                    ? volumeManager.DirectionalRadianceMode
+                    : SimpleDdgiDirectionalRadianceMode.Off;
+            SimpleDdgiGlossyTransportMode effectiveGlossy =
+                simpleDdgiActive && volumeManager != null
+                    ? volumeManager.GlossyTransportMode
+                    : SimpleDdgiGlossyTransportMode.Off;
+            ulong directionalAllocated = volumeManager == null
+                ? 0UL
+                : checked(
+                    volumeManager.DirectionalRadianceBytes +
+                    volumeManager.DirectionalRadianceParityBytes);
+
+            return new DdgiContentRuntimeSnapshot
+            {
+                ConfiguredFeatures = gi.ConfiguredContentDependentFeatures,
+                ActiveFeatures = simpleDdgiActive
+                    ? gi.ActiveContentDependentFeatures
+                    : DdgiContentFeature.None,
+                RequestedLocalLightSamplingMode =
+                    gi.SimpleDdgiLocalLightSamplingMode,
+                EffectiveLocalLightSamplingMode = simpleDdgiActive
+                    ? _simpleDdgiLightTreeResources?.EffectiveSamplingMode ??
+                        SimpleDdgiLocalLightSamplingMode.Exact
+                    : SimpleDdgiLocalLightSamplingMode.Exact,
+                RequestedDirectionalRadianceMode =
+                    gi.SimpleDdgiDirectionalRadianceMode,
+                EffectiveDirectionalRadianceMode = effectiveDirectional,
+                RequestedGlossyTransportMode =
+                    gi.SimpleDdgiGlossyTransportMode,
+                EffectiveGlossyTransportMode = effectiveGlossy,
+                RequestedSkinnedGeometryMode = gi.DdgiSkinnedGeometryMode,
+                EffectiveSkinnedGeometryMode = rayQueryActive
+                    ? gi.EffectiveDdgiSkinnedGeometryMode
+                    : DdgiSkinnedGeometryMode.Excluded,
+                RequestedTransparentGeometryMode =
+                    gi.DdgiTransparentGeometryMode,
+                EffectiveTransparentGeometryMode = rayQueryActive
+                    ? gi.EffectiveDdgiTransparentGeometryMode
+                    : DdgiTransparentGeometryMode.MaskOnly,
+                RequestedFoliageGeometryMode = gi.DdgiFoliageGeometryMode,
+                EffectiveFoliageGeometryMode = rayQueryActive
+                    ? sceneData.DdgiFoliageGeometryMode
+                    : DdgiFoliageGeometryMode.Excluded,
+                LightTree = lightTree,
+                ManyLightCounters = simpleDdgiActive
+                    ? _completedDdgiManyLightCounters
+                    : default,
+                LightBufferRevision = _lightManager.LightBufferRevision,
+                LightTreeTopologyRevision =
+                    _lightManager.LightTreeTopologyRevision,
+                LightTreeContentRevision =
+                    _lightManager.LightTreeContentRevision,
+                RaySceneResourceGeneration =
+                    _accelerationStructureManager?.ResourceGeneration ?? 1UL,
+                RaySceneContentEpoch =
+                    _accelerationStructureManager?.RaySceneContentEpoch ?? 1UL,
+                SceneContentRevision = sceneData.SceneContentRevision,
+                MaterialContentRevision = _materialManager.MaterialDataRevision,
+                SourceLightingEpoch = volumeManager?.SourceLightingGeneration ?? 0u,
+                SamplingSequenceEpoch =
+                    DdgiStochasticIdentity.DefaultSamplingSequenceEpoch,
+                StochasticHashAbiVersion = DdgiStochasticIdentity.HashAbiVersion,
+                DirectionalRadianceAbiVersion =
+                    DdgiDirectionalRadianceAbi.ForMode(effectiveDirectional),
+                RayQueryInstanceAbiVersion = DdgiRayQueryInstanceAbi.Version2,
+                RayQueryInstanceRecordBytes =
+                    DdgiRayQueryInstanceAbi.SizeInBytes,
+                DirectionalRadianceBudgetBytes =
+                    gi.SimpleDdgiDirectionalRadianceMemoryBudgetBytes,
+                DirectionalRadiancePlannedBytes =
+                    volumeManager?.DirectionalRadianceRequiredBytes ?? 0UL,
+                DirectionalRadianceAllocatedBytes = directionalAllocated,
+                DirectionalRadianceParityBytes =
+                    volumeManager?.DirectionalRadianceParityBytes ?? 0UL,
+                DirectionalRadianceProjectionGpuMicroseconds = simpleDdgiActive
+                    ? sceneData.GpuSimpleDdgiDirectionalRadianceMicroseconds
+                    : 0,
+                DirectionalRadianceFallbackReason = simpleDdgiActive
+                    ? volumeManager?.DirectionalRadianceFallbackReason ??
+                        "directional-radiance-manager-unavailable"
+                    : "simple-ddgi-disabled",
+                RaySceneFallbackReason = rayQueryActive
+                    ? _accelerationStructureManager?.LastFallbackReason ??
+                        string.Empty
+                    : "ray-query-scene-disabled",
+                FoliageFallbackReason =
+                    sceneData.DdgiFoliageProxyFallbackReason,
+                SettingsMigrationDiagnostic =
+                    gi.ContentDependentSettingsMigrationDiagnostic ??
+                    string.Empty
+            };
         }
 
         private DdgiRuntimeSnapshot CreateDdgiRuntimeSnapshot(SceneRenderingData sceneData)
@@ -9536,7 +13865,11 @@ namespace Njulf.Rendering
                 SimpleGpuPageResidencyMicroseconds:
                     sceneData.GpuSimpleDdgiPageResidencyMicroseconds,
                 SimpleGpuPageFeedbackMicroseconds:
-                    sceneData.GpuSimpleDdgiPageFeedbackMicroseconds);
+                    sceneData.GpuSimpleDdgiPageFeedbackMicroseconds)
+            {
+                SimpleDdgiLivenessTelemetry = sceneData.SimpleDdgiLivenessTelemetry,
+                SimpleDdgiLivenessWatchdog = sceneData.SimpleDdgiLivenessWatchdog
+            };
         }
 
         internal static int SelectPrimaryDdgiDirectionalLight(LightFrameSnapshot lightSnapshot)
@@ -9642,12 +13975,15 @@ namespace Njulf.Rendering
 
         private void UploadDdgiEmissiveSources(Scene scene, SceneRenderingData sceneData, bool ddgiRayUpdateActive)
         {
-            if (!ddgiRayUpdateActive || !_ddgiEmissiveSourceBuffer.IsValid)
+            if (!ddgiRayUpdateActive ||
+                !_ddgiEmissiveSourceBuffer.IsValid ||
+                !_ddgiEmissiveSurfaceBuffer.IsValid)
             {
                 _ddgiEmissiveSourceCount = 0;
                 _ddgiEmissiveTriangleTableStats = default;
                 _ddgiEmissiveSkippedSkinnedObjectCount = 0;
                 _ddgiEmissiveSkippedSkinnedImportance = 0.0;
+                _ddgiEmissiveEnergyDiagnostics = default;
                 sceneData.DdgiEmissiveSourceCount = 0;
                 sceneData.DdgiEmissiveSourceRevision = _ddgiEmissiveSourceRevision;
                 PopulateDdgiEmissiveDiagnostics(sceneData, active: false);
@@ -9660,8 +13996,8 @@ namespace Njulf.Rendering
                 ? Math.Clamp(
                     Settings.GlobalIllumination.DdgiEmissiveTriangleBudget,
                     1,
-                    MaxDdgiEmissiveSourceCount)
-                : MaxDdgiEmissiveSourceCount;
+                    MaxDdgiEmissiveMeshSourceCount)
+                : MaxDdgiEmissiveMeshSourceCount;
             var cacheKey = new DdgiEmissiveTableCacheKey(
                 scene.Id,
                 sceneData.SceneContentRevision,
@@ -9683,18 +14019,103 @@ namespace Njulf.Rendering
                 _ddgiEmissiveTableCache.Store(
                     cacheKey,
                     _ddgiEmissiveSourceScratch.AsSpan(0, rebuiltCount),
+                    _ddgiEmissiveSurfaceScratch.AsSpan(0, rebuiltCount),
                     buildResult);
             }
-            else if (!_ddgiEmissiveSourceBufferContentValid)
-            {
-                _ddgiEmissiveTableCache.CopyPayloadTo(_ddgiEmissiveSourceScratch);
-            }
-
             _ddgiEmissiveTriangleTableStats = buildResult.TriangleStats;
             _ddgiEmissiveSkippedSkinnedObjectCount = buildResult.SkippedSkinnedObjectCount;
             _ddgiEmissiveSkippedSkinnedImportance = buildResult.SkippedSkinnedImportance;
-            int count = buildResult.Count;
-            ulong signature = buildResult.PayloadSignature;
+
+            _ddgiVfxMacroReductionResult = triangleSampling
+                ? _ddgiVfxMacroEmitterReducer.Reduce(
+                    scene,
+                    sceneData.GpuParticleDeltaSeconds,
+                    _ddgiVfxMacroEmitterScratch)
+                : default;
+            bool compositionUnchanged =
+                cacheHit &&
+                _ddgiEmissiveSourceBufferContentValid &&
+                buildResult.PayloadSignature == _lastDdgiEmissiveBasePayloadSignature &&
+                _ddgiVfxMacroReductionResult.Revision == _lastDdgiVfxMacroRevision;
+            if (compositionUnchanged)
+            {
+                sceneData.DdgiEmissiveSourceCount = _ddgiEmissiveSourceCount;
+                sceneData.DdgiEmissiveSourceRevision = _ddgiEmissiveSourceRevision;
+                PopulateDdgiEmissiveDiagnostics(sceneData, active: true);
+                return;
+            }
+
+            // A cache hit may leave the CPU scratch containing the previous
+            // heterogeneous composition. Restore the immutable mesh prefix
+            // before appending the current macro sources.
+            if (cacheHit)
+            {
+                _ddgiEmissiveTableCache.CopyPayloadTo(_ddgiEmissiveSourceScratch);
+                _ddgiEmissiveTableCache.CopySurfacePayloadTo(_ddgiEmissiveSurfaceScratch);
+            }
+
+            int meshSourceCount = buildResult.Count;
+            int macroSourceCount = triangleSampling
+                ? _ddgiVfxMacroReductionResult.SourceCount
+                : 0;
+            int count = checked(meshSourceCount + macroSourceCount);
+            if (count > MaxDdgiEmissiveSourceCount)
+                throw new InvalidOperationException("DDGI heterogeneous emissive source capacity was exceeded.");
+
+            double meshImportanceScale = buildResult.TriangleStats.SelectedImportance > 0.0
+                ? buildResult.TriangleStats.SelectedImportance
+                : 1.0;
+            for (int index = 0; index < meshSourceCount; index++)
+            {
+                _ddgiEmissiveCombinedImportanceScratch[index] = Math.Max(
+                    _ddgiEmissiveSourceScratch[index].RadianceSelectionProbability.W *
+                        meshImportanceScale,
+                    1e-20);
+            }
+            for (int macroIndex = 0; macroIndex < macroSourceCount; macroIndex++)
+            {
+                DdgiVfxMacroEmitter macro = _ddgiVfxMacroEmitterScratch[macroIndex];
+                int destinationIndex = meshSourceCount + macroIndex;
+                _ddgiEmissiveSourceScratch[destinationIndex] =
+                    DdgiVfxMacroEmitterReducer.PackSource(macro);
+                _ddgiEmissiveSurfaceScratch[destinationIndex] = default;
+                _ddgiEmissiveCombinedImportanceScratch[destinationIndex] = Math.Max(
+                    DdgiVfxMacroEmitterReducer.MeasureImportance(macro),
+                    1e-20);
+            }
+
+            if (triangleSampling && count > 0)
+            {
+                _ddgiEmissiveSourceSetBuilder.OrderAndRebuildAlias(
+                    _ddgiEmissiveSourceScratch.AsSpan(0, count),
+                    _ddgiEmissiveSurfaceScratch.AsSpan(0, count),
+                    _ddgiEmissiveCombinedImportanceScratch.AsSpan(0, count));
+                _ddgiEmissiveSpatialHierarchy.BuildOrRefit(
+                    _ddgiEmissiveSourceScratch.AsSpan(0, count));
+            }
+            else
+            {
+                _ddgiEmissiveSpatialHierarchy.Clear();
+            }
+
+            UpdateDdgiEmissiveEnergyDiagnostics(
+                _ddgiEmissiveSourceScratch.AsSpan(0, count),
+                buildResult.TriangleStats);
+
+            ulong signature = HashAdd(HashStart, buildResult.PayloadSignature);
+            signature = HashAdd(signature, _ddgiVfxMacroReductionResult.Revision);
+            signature = HashAdd(signature, count);
+            for (int index = 0; index < count; index++)
+            {
+                signature = HashAdd(signature, _ddgiEmissiveSourceScratch[index].Vertex0Area);
+                signature = HashAdd(signature, _ddgiEmissiveSourceScratch[index].Edge1AliasProbability);
+                signature = HashAdd(signature, _ddgiEmissiveSourceScratch[index].Edge2AliasFlags);
+                signature = HashAdd(signature, _ddgiEmissiveSourceScratch[index].RadianceSelectionProbability);
+                signature = HashAdd(signature, _ddgiEmissiveSurfaceScratch[index].Uv0Vertex01);
+                signature = HashAdd(signature, _ddgiEmissiveSurfaceScratch[index].Uv0Vertex2Uv1Vertex0);
+                signature = HashAdd(signature, _ddgiEmissiveSurfaceScratch[index].Uv1Vertex12);
+                signature = HashAdd(signature, _ddgiEmissiveSurfaceScratch[index].MaterialAndVertexAlpha);
+            }
             bool signatureChanged = signature != _lastDdgiEmissiveSourceSignature;
             if (signatureChanged)
             {
@@ -9703,18 +14124,22 @@ namespace Njulf.Rendering
                     _ddgiEmissiveSourceRevision = 1;
             }
             _lastDdgiEmissiveSourceSignature = signature;
+            _lastDdgiEmissiveBasePayloadSignature = buildResult.PayloadSignature;
+            _lastDdgiVfxMacroRevision = _ddgiVfxMacroReductionResult.Revision;
 
             _ddgiEmissiveSourceCount = count;
+            _ddgiEmissiveHierarchyNodeCount = triangleSampling
+                ? _ddgiEmissiveSpatialHierarchy.NodeCount
+                : 0;
             sceneData.DdgiEmissiveSourceCount = count;
             sceneData.DdgiEmissiveSourceRevision = _ddgiEmissiveSourceRevision;
             PopulateDdgiEmissiveDiagnostics(sceneData, active: true);
             if (count == 0)
                 return;
-            if (cacheHit && _ddgiEmissiveSourceBufferContentValid)
-                return;
             if (!signatureChanged && _ddgiEmissiveSourceBufferContentValid)
                 return;
 
+            bool uploadHierarchy = triangleSampling && _ddgiEmissiveHierarchyNodeCount > 0;
             GpuBufferUploader.UploadSpanToBuffer(
                 _context,
                 _bufferManager,
@@ -9722,6 +14147,32 @@ namespace Njulf.Rendering
                 _currentCommandBuffer,
                 _ddgiEmissiveSourceBuffer,
                 _ddgiEmissiveSourceScratch.AsSpan(0, count),
+                barrierDescription: uploadHierarchy
+                    ? null
+                    : new UploadBarrierDescription(
+                        PipelineStageFlags2.ComputeShaderBit,
+                        AccessFlags2.ShaderStorageReadBit));
+            if (uploadHierarchy)
+            {
+                GpuBufferUploader.UploadSpanToBuffer(
+                    _context,
+                    _bufferManager,
+                    _stagingRing,
+                    _currentCommandBuffer,
+                    _ddgiEmissiveSourceBuffer,
+                    _ddgiEmissiveSpatialHierarchy.Nodes,
+                    destinationOffset: checked((ulong)count * DdgiEmissiveSourceStride),
+                    barrierDescription: new UploadBarrierDescription(
+                        PipelineStageFlags2.ComputeShaderBit,
+                        AccessFlags2.ShaderStorageReadBit));
+            }
+            GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                _stagingRing,
+                _currentCommandBuffer,
+                _ddgiEmissiveSurfaceBuffer,
+                _ddgiEmissiveSurfaceScratch.AsSpan(0, count),
                 barrierDescription: new UploadBarrierDescription(
                     PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageReadBit));
@@ -9736,7 +14187,9 @@ namespace Njulf.Rendering
             sceneData.DdgiEmissiveSamplingMode = !active
                 ? "Inactive"
                 : triangleSampling
-                    ? "TriangleAlias"
+                    ? _ddgiVfxMacroReductionResult.SourceCount > 0
+                        ? "TriangleVfxSpatialAliasMixture"
+                        : "TriangleSpatialAliasMixture"
                     : "ProxyRollback";
             sceneData.DdgiEmissiveTriangleCandidateCount =
                 triangleSampling ? _ddgiEmissiveTriangleTableStats.CandidateCount : 0;
@@ -9744,7 +14197,7 @@ namespace Njulf.Rendering
                 ? Math.Clamp(
                     Settings.GlobalIllumination.DdgiEmissiveTriangleBudget,
                     1,
-                    MaxDdgiEmissiveSourceCount)
+                    MaxDdgiEmissiveMeshSourceCount)
                 : 0;
             sceneData.DdgiEmissiveSkippedEnergyFraction =
                 triangleSampling ? _ddgiEmissiveTriangleTableStats.SkippedEnergyFraction : 0.0f;
@@ -9752,6 +14205,21 @@ namespace Njulf.Rendering
                 triangleSampling ? _ddgiEmissiveSkippedSkinnedObjectCount : 0;
             sceneData.DdgiEmissiveSkippedSkinnedImportance =
                 triangleSampling ? _ddgiEmissiveSkippedSkinnedImportance : 0.0;
+            DdgiEmissiveEnergyDiagnostics energy = active
+                ? _ddgiEmissiveEnergyDiagnostics
+                : default;
+            sceneData.DdgiEmissiveAverageRadiance = energy.AreaWeightedAverageRadiance;
+            sceneData.DdgiEmissivePeakLuminanceNits = energy.PeakSelectedLuminanceNits;
+            sceneData.DdgiEmissiveCoveredAreaSquareMeters =
+                energy.SelectedCoveredAreaSquareMeters;
+            sceneData.DdgiEmissiveIntegratedPowerRed = energy.IntegratedPowerRed;
+            sceneData.DdgiEmissiveIntegratedPowerGreen = energy.IntegratedPowerGreen;
+            sceneData.DdgiEmissiveIntegratedPowerBlue = energy.IntegratedPowerBlue;
+            sceneData.DdgiEmissiveIntegratedPowerLuminance =
+                energy.IntegratedPowerLuminance;
+            sceneData.DdgiEmissiveSelectedProbability = energy.SelectedProbability;
+            sceneData.DdgiEmissiveEnergyWarningCount = _ddgiEmissiveEnergyWarningCount;
+            sceneData.DdgiEmissiveLastEnergyWarning = _lastDdgiEmissiveEnergyWarning;
             DdgiEmissiveTableCacheDiagnostics cache = _ddgiEmissiveTableCache.Diagnostics;
             sceneData.DdgiEmissiveTableCacheHit = active && cache.LastLookupWasHit ? 1 : 0;
             sceneData.DdgiEmissiveTableCacheHitCount = cache.HitCount;
@@ -9759,6 +14227,103 @@ namespace Njulf.Rendering
             sceneData.DdgiEmissiveTableRebuildCount = cache.RebuildCount;
             sceneData.DdgiEmissiveTableInvalidationCount = cache.InvalidationCount;
             sceneData.DdgiEmissiveTableUploadCount = _ddgiEmissiveSourceUploadCount;
+            DdgiEmissiveHierarchyDiagnostics hierarchy =
+                _ddgiEmissiveSpatialHierarchy.Diagnostics;
+            sceneData.DdgiEmissiveHierarchyNodeCount = active ? hierarchy.NodeCount : 0;
+            sceneData.DdgiEmissiveHierarchyBuildCount = hierarchy.BuildCount;
+            sceneData.DdgiEmissiveHierarchyRefitCount = hierarchy.RefitCount;
+            sceneData.DdgiEmissiveHierarchyUpdatedNodeCount = active
+                ? hierarchy.LastUpdatedNodeCount
+                : 0;
+            sceneData.DdgiVfxMacroSourceCount = active
+                ? _ddgiVfxMacroReductionResult.SourceCount
+                : 0;
+            sceneData.DdgiVfxMacroEligibleEmitterCount = active
+                ? _ddgiVfxMacroReductionResult.EligibleEmitterCount
+                : 0;
+            sceneData.DdgiVfxMacroRejectedTransientCount = active
+                ? _ddgiVfxMacroReductionResult.RejectedTransientCount
+                : 0;
+            sceneData.DdgiVfxMacroOverflowCount = active
+                ? _ddgiVfxMacroReductionResult.OverflowCount
+                : 0;
+            sceneData.DdgiVfxMacroAuthoredPowerCount = active
+                ? _ddgiVfxMacroReductionResult.AuthoredPowerCount
+                : 0;
+            sceneData.DdgiVfxMacroAutoPowerCount = active
+                ? _ddgiVfxMacroReductionResult.AutoPowerCount
+                : 0;
+            sceneData.DdgiVfxMacroRevision = _ddgiVfxMacroReductionResult.Revision;
+            sceneData.DdgiVfxMacroRefitCount = _ddgiVfxMacroReductionResult.RefitCount;
+        }
+
+        private void UpdateDdgiEmissiveEnergyDiagnostics(
+            ReadOnlySpan<GPUDdgiEmissiveSource> sources,
+            DdgiEmissiveTriangleTableStats meshStats)
+        {
+            DdgiEmissiveEnergyDiagnostics next =
+                DdgiEmissiveEnergyDiagnostics.Calculate(sources, meshStats);
+            if (_hasDdgiEmissiveEnergyDiagnostics)
+            {
+                DdgiEmissiveEnergyChangeWarning warning =
+                    DdgiEmissiveEnergyChangeEvaluator.Evaluate(
+                        _ddgiEmissiveEnergyDiagnostics,
+                        next);
+                if (warning.HasWarning)
+                {
+                    _ddgiEmissiveEnergyWarningCount++;
+                    _lastDdgiEmissiveEnergyWarning = warning.Message;
+                }
+            }
+
+            _ddgiEmissiveEnergyDiagnostics = next;
+            _hasDdgiEmissiveEnergyDiagnostics = sources.Length > 0;
+        }
+
+        private IReadOnlyList<SimpleDdgiRefinementDemand>
+            ResolveSimpleDdgiRefinementEmissiveDemands()
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            bool enabled = gi.SimpleDdgiRefinementBricksEnabled &&
+                           gi.SimpleDdgiTransportV2Enabled &&
+                           gi.SimpleDdgiTransportTailCertificationEnabled &&
+                           gi.SimpleDdgiRefinementMaximumBricks > 0;
+            if (!enabled || _ddgiEmissiveSourceCount <= 0)
+            {
+                _simpleDdgiRefinementEmissiveDemandScratch.Clear();
+                _simpleDdgiRefinementEmissiveDemandDiagnostics = default;
+                _hasSimpleDdgiRefinementEmissiveDemandSignature = false;
+                return _simpleDdgiRefinementEmissiveDemandScratch;
+            }
+
+            ulong signature = HashStart;
+            signature = HashAdd(signature, _lastDdgiEmissiveSourceSignature);
+            signature = HashAdd(signature, _ddgiEmissiveSourceCount);
+            signature = HashAdd(
+                signature,
+                gi.SimpleDdgiRefinementMinimumEmissiveLuminanceNits);
+            signature = HashAdd(
+                signature,
+                gi.SimpleDdgiRefinementMaximumEmitterAreaSquareMeters);
+            if (_hasSimpleDdgiRefinementEmissiveDemandSignature &&
+                signature == _simpleDdgiRefinementEmissiveDemandSignature)
+            {
+                return _simpleDdgiRefinementEmissiveDemandScratch;
+            }
+
+            _simpleDdgiRefinementEmissiveDemandDiagnostics =
+                SimpleDdgiRefinementEmissiveDemandBuilder.Build(
+                    _ddgiEmissiveSourceScratch.AsSpan(
+                        0,
+                        _ddgiEmissiveSourceCount),
+                    new SimpleDdgiRefinementEmissiveDemandConfiguration(
+                        gi.SimpleDdgiRefinementMinimumEmissiveLuminanceNits,
+                        gi.SimpleDdgiRefinementMaximumEmitterAreaSquareMeters,
+                        MaximumDemandCount: 32),
+                    _simpleDdgiRefinementEmissiveDemandScratch);
+            _simpleDdgiRefinementEmissiveDemandSignature = signature;
+            _hasSimpleDdgiRefinementEmissiveDemandSignature = true;
+            return _simpleDdgiRefinementEmissiveDemandScratch;
         }
 
         private int BuildDdgiEmissiveSources(Scene scene, out ulong signature)
@@ -9770,6 +14335,9 @@ namespace Njulf.Rendering
             // mutually exclusive, so disabling the feature cannot double energy.
             int count = 0;
             _ddgiEmissiveTriangleTableStats = default;
+            Array.Clear(_ddgiEmissiveSurfaceScratch, 0, MaxDdgiEmissiveMeshSourceCount);
+            _ddgiEmissiveSpatialHierarchy.Clear();
+            _ddgiEmissiveHierarchyNodeCount = 0;
             _ddgiEmissiveSkippedSkinnedObjectCount = 0;
             _ddgiEmissiveSkippedSkinnedImportance = 0.0;
             signature = HashStart;
@@ -9805,22 +14373,37 @@ namespace Njulf.Rendering
             int budget = Math.Clamp(
                 Settings.GlobalIllumination.DdgiEmissiveTriangleBudget,
                 1,
-                MaxDdgiEmissiveSourceCount);
+                MaxDdgiEmissiveMeshSourceCount);
             DdgiEmissiveTriangleTableStats retainedStats = DdgiEmissiveTriangleTable.Build(
                 EnumerateDdgiEmissiveTriangles(scene),
-                _ddgiEmissiveSourceScratch.AsSpan(0, budget));
+                _ddgiEmissiveSourceScratch.AsSpan(0, budget),
+                _ddgiEmissiveSurfaceScratch.AsSpan(0, budget));
             _ddgiEmissiveTriangleTableStats = DdgiEmissiveTriangleTable.IncludeExcluded(
                 retainedStats,
                 _ddgiEmissiveExcludedCandidateCount,
                 _ddgiEmissiveExcludedImportance);
 
             int count = _ddgiEmissiveTriangleTableStats.SelectedCount;
+            for (int index = 0; index < count; index++)
+            {
+                _ddgiEmissiveCombinedImportanceScratch[index] = Math.Max(
+                    _ddgiEmissiveSourceScratch[index].RadianceSelectionProbability.W,
+                    1e-20f);
+            }
+            _ddgiEmissiveSourceSetBuilder.OrderAndRebuildAlias(
+                _ddgiEmissiveSourceScratch.AsSpan(0, count),
+                _ddgiEmissiveSurfaceScratch.AsSpan(0, count),
+                _ddgiEmissiveCombinedImportanceScratch.AsSpan(0, count));
+            _ddgiEmissiveSpatialHierarchy.BuildOrRefit(
+                _ddgiEmissiveSourceScratch.AsSpan(0, count));
+            _ddgiEmissiveHierarchyNodeCount = _ddgiEmissiveSpatialHierarchy.NodeCount;
             signature = HashAdd(HashStart, 1u);
             signature = HashAdd(signature, budget);
             signature = HashAdd(signature, _ddgiEmissiveTriangleTableStats.CandidateCount);
             signature = HashAdd(signature, _ddgiEmissiveTriangleTableStats.SkippedEnergyFraction);
             signature = HashAdd(signature, _ddgiEmissiveSkippedSkinnedObjectCount);
             signature = HashAdd(signature, (float)_ddgiEmissiveSkippedSkinnedImportance);
+            signature = HashAdd(signature, _ddgiEmissiveHierarchyNodeCount);
             for (int i = 0; i < count; i++)
             {
                 signature = HashAdd(signature, _ddgiEmissiveSourceScratch[i].Vertex0Area);
@@ -9951,6 +14534,7 @@ namespace Njulf.Rendering
             ulong stableKey)
         {
             ReadOnlyMemory<GPUVertexPositionStream> vertices = geometry.VertexPositions;
+            ReadOnlyMemory<GPUVertexUvColorStream> vertexUvColors = geometry.VertexUvColors;
             ReadOnlyMemory<uint> indices = geometry.Indices;
             GiPrimitiveTransportProfile? profile = geometry.PrimitiveTransportProfile;
             bool compatible = DdgiCookedEmissiveTransport.TryValidateCompatibility(
@@ -9958,7 +14542,9 @@ namespace Njulf.Rendering
                 material.Definition,
                 material.TransportProfile,
                 out _);
-            if (!compatible && !CanUseUniformAnalyticEmission(material.Definition))
+            if (!compatible &&
+                !material.DynamicEmissiveTexture &&
+                !CanUseUniformAnalyticEmission(material.Definition))
             {
                 AddDdgiEmissiveExclusion(
                     EstimateExcludedDdgiEmissiveCandidateCount(geometry),
@@ -9971,6 +14557,7 @@ namespace Njulf.Rendering
             }
 
             if (compatible &&
+                !material.DynamicEmissiveTexture &&
                 profile is not null &&
                 (profile.EmissiveCandidateTriangleCount > 0 ||
                  !CanUseUniformAnalyticEmission(material.Definition)))
@@ -9999,6 +14586,7 @@ namespace Njulf.Rendering
                     _ddgiEmissiveRuntimeRecordScanCount++;
                     if (!TryBuildDdgiEmissiveTriangleCandidate(
                             vertices,
+                            vertexUvColors,
                             indices,
                             record.TriangleIndex,
                             worldMatrix,
@@ -10007,6 +14595,7 @@ namespace Njulf.Rendering
                                 material.Definition),
                             sourceFlags,
                             HashAdd(stableKey, record.TriangleIndex),
+                            material.MaterialIndex,
                             out DdgiEmissiveTriangleCandidate candidate))
                     {
                         AddDdgiEmissiveExclusion(
@@ -10038,7 +14627,14 @@ namespace Njulf.Rendering
                 yield break;
             }
 
-            Vector3 radiance = EvaluateUniformCoveredRadiance(material.Definition);
+            Vector3 radiance = material.DynamicEmissiveTexture
+                ? Vector3.Max(
+                    material.AverageCoveredRadiance,
+                    EmissivePhotometry.EvaluateSceneLinearRadiance(
+                        material.Definition,
+                        Vector3.One) *
+                        1e-4f)
+                : EvaluateUniformCoveredRadiance(material.Definition);
             int analyticScanCount = Math.Min(
                 geometry.TriangleCount,
                 Math.Max(
@@ -10050,12 +14646,14 @@ namespace Njulf.Rendering
                 _ddgiEmissiveRuntimeRecordScanCount++;
                 if (TryBuildDdgiEmissiveTriangleCandidate(
                         vertices,
+                        vertexUvColors,
                         indices,
                         triangleIndex,
                         worldMatrix,
                         radiance,
                         sourceFlags,
                         HashAdd(stableKey, triangleIndex),
+                        material.MaterialIndex,
                         out DdgiEmissiveTriangleCandidate candidate))
                 {
                     yield return candidate;
@@ -10079,12 +14677,14 @@ namespace Njulf.Rendering
 
         private static bool TryBuildDdgiEmissiveTriangleCandidate(
             ReadOnlyMemory<GPUVertexPositionStream> vertices,
+            ReadOnlyMemory<GPUVertexUvColorStream> vertexUvColors,
             ReadOnlyMemory<uint> indices,
             int triangleIndex,
             Matrix4x4 worldMatrix,
             Vector3 radiance,
             DdgiEmissiveSourceFlags sourceFlags,
             ulong stableKey,
+            int materialIndex,
             out DdgiEmissiveTriangleCandidate candidate)
         {
             candidate = default;
@@ -10094,7 +14694,9 @@ namespace Njulf.Rendering
             uint i0 = indices.Span[indexBase];
             uint i1 = indices.Span[indexBase + 1];
             uint i2 = indices.Span[indexBase + 2];
-            if (i0 >= vertices.Length || i1 >= vertices.Length || i2 >= vertices.Length)
+            if (i0 >= vertices.Length || i1 >= vertices.Length || i2 >= vertices.Length ||
+                i0 >= vertexUvColors.Length || i1 >= vertexUvColors.Length || i2 >= vertexUvColors.Length ||
+                materialIndex < 0)
                 return false;
 
             Vector4 p0 = vertices.Span[(int)i0].Position;
@@ -10103,13 +14705,40 @@ namespace Njulf.Rendering
             Vector3 v0 = new Vector3(p0.X, p0.Y, p0.Z) * worldMatrix;
             Vector3 v1 = new Vector3(p1.X, p1.Y, p1.Z) * worldMatrix;
             Vector3 v2 = new Vector3(p2.X, p2.Y, p2.Z) * worldMatrix;
+            GPUVertexUvColorStream uv0 = vertexUvColors.Span[(int)i0];
+            GPUVertexUvColorStream uv1 = vertexUvColors.Span[(int)i1];
+            GPUVertexUvColorStream uv2 = vertexUvColors.Span[(int)i2];
+            var surface = new GPUDdgiEmissiveSurface
+            {
+                Uv0Vertex01 = new Vector4(
+                    uv0.TexCoord.X,
+                    uv0.TexCoord.Y,
+                    uv1.TexCoord.X,
+                    uv1.TexCoord.Y),
+                Uv0Vertex2Uv1Vertex0 = new Vector4(
+                    uv2.TexCoord.X,
+                    uv2.TexCoord.Y,
+                    uv0.TexCoord2.X,
+                    uv0.TexCoord2.Y),
+                Uv1Vertex12 = new Vector4(
+                    uv1.TexCoord2.X,
+                    uv1.TexCoord2.Y,
+                    uv2.TexCoord2.X,
+                    uv2.TexCoord2.Y),
+                MaterialAndVertexAlpha = new Vector4(
+                    BitConverter.UInt32BitsToSingle(checked((uint)materialIndex)),
+                    uv0.Color.W,
+                    uv1.Color.W,
+                    uv2.Color.W)
+            };
             candidate = new DdgiEmissiveTriangleCandidate(
                 v0,
                 v1,
                 v2,
                 radiance,
                 sourceFlags | DdgiEmissiveSourceFlags.Triangle,
-                stableKey);
+                stableKey,
+                surface);
             return true;
         }
 
@@ -10154,9 +14783,9 @@ namespace Njulf.Rendering
                     Math.Max(gpuMaterial.DdgiAverageEmissive.Y, 0.0f),
                     Math.Max(gpuMaterial.DdgiAverageEmissive.Z, 0.0f));
                 averageCoveredRadiance *= alphaCoverage;
-                Vector3 factorRadiance =
-                    definition.EmissiveFactor *
-                    Math.Clamp(definition.EmissiveStrength, 0.0f, 65504.0f);
+                Vector3 factorRadiance = EmissivePhotometry.EvaluateSceneLinearRadiance(
+                    definition,
+                    Vector3.One);
                 float luminance =
                     0.2126f * factorRadiance.X +
                     0.7152f * factorRadiance.Y +
@@ -10168,11 +14797,16 @@ namespace Njulf.Rendering
                     flags |= DdgiEmissiveSourceFlags.DoubleSided;
                 if (metadata.RenderMode == MaterialRenderMode.Mask)
                     flags |= DdgiEmissiveSourceFlags.AlphaCoverageApproximation;
+                bool dynamicEmissiveTexture = definition.Emissive.IsBound;
+                if (dynamicEmissiveTexture)
+                    flags |= DdgiEmissiveSourceFlags.DynamicEmissiveTexture;
                 resolved = new DdgiResolvedEmissiveMaterial(
                     definition,
                     transportProfile,
                     averageCoveredRadiance,
-                    metadata.DoubleSided);
+                    metadata.DoubleSided,
+                    materialHandle.Index,
+                    dynamicEmissiveTexture);
                 return true;
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -10246,8 +14880,7 @@ namespace Njulf.Rendering
                 MaterialAlphaMode.Opaque => 1.0f,
                 _ => 0.0f
             };
-            return material.EmissiveFactor *
-                   Math.Clamp(material.EmissiveStrength, 0.0f, 65504.0f) *
+            return EmissivePhotometry.EvaluateSceneLinearRadiance(material, Vector3.One) *
                    coverage;
         }
 
@@ -10287,7 +14920,9 @@ namespace Njulf.Rendering
             MaterialDefinition Definition,
             GiMaterialTransportProfile TransportProfile,
             Vector3 AverageCoveredRadiance,
-            bool DoubleSided);
+            bool DoubleSided,
+            int MaterialIndex,
+            bool DynamicEmissiveTexture);
 
         private bool TryCreateDdgiEmissiveSource(
             RenderObject renderObject,
@@ -10364,7 +14999,7 @@ namespace Njulf.Rendering
 
         private void InsertDdgiEmissiveSource(GPUDdgiEmissiveSource source, float importance, ref int count)
         {
-            if (count < MaxDdgiEmissiveSourceCount)
+            if (count < MaxDdgiEmissiveMeshSourceCount)
             {
                 _ddgiEmissiveSourceScratch[count] = source;
                 _ddgiEmissiveSourceImportanceScratch[count] = importance;
@@ -10374,7 +15009,7 @@ namespace Njulf.Rendering
 
             int weakestIndex = 0;
             float weakestImportance = _ddgiEmissiveSourceImportanceScratch[0];
-            for (int i = 1; i < MaxDdgiEmissiveSourceCount; i++)
+            for (int i = 1; i < MaxDdgiEmissiveMeshSourceCount; i++)
             {
                 if (_ddgiEmissiveSourceImportanceScratch[i] >= weakestImportance)
                     continue;
@@ -10429,6 +15064,327 @@ namespace Njulf.Rendering
                    MathF.Abs(a.M44 - b.M44) <= epsilon;
         }
 
+        private IReadOnlyList<DdgiDirtyRegion> CollectDdgiDirtyRegionsFromJournal(
+            Scene scene,
+            LightFrameSnapshot lightSnapshot,
+            SceneRenderingData sceneData)
+        {
+            _ddgiMutationJournal.AttachScene(scene);
+            IReadOnlyList<DdgiDirtyRegion> journalRegions =
+                _ddgiMutationJournal.Drain(
+                    EstimateSceneProbeBounds(scene),
+                    ResolveDdgiMutation);
+
+            int journalVfxDirtyEventCount = 0;
+            for (int index = 0; index < journalRegions.Count; index++)
+            {
+                if (journalRegions[index].Reason == DdgiDirtyReason.EmissiveChanged)
+                    journalVfxDirtyEventCount++;
+            }
+
+            if (Settings.GlobalIllumination
+                .SimpleDdgiMutationJournalValidationOracleEnabled)
+            {
+                IReadOnlyList<DdgiDirtyRegion> referenceRegions =
+                    CollectDdgiDirtyRegions(scene, lightSnapshot, sceneData);
+                if (_ddgiMutationOraclePrimed)
+                {
+                    _ddgiMutationJournal.RecordOracleComparison(
+                        HaveEquivalentDdgiDirtyCoverage(
+                            journalRegions,
+                            referenceRegions));
+                }
+                else
+                {
+                    _ddgiMutationOraclePrimed = true;
+                }
+            }
+            else
+            {
+                _ddgiMutationOraclePrimed = false;
+            }
+
+            sceneData.VfxDdgiDirtyProbeEventCount =
+                journalVfxDirtyEventCount;
+            DdgiMutationJournalTelemetry telemetry =
+                _ddgiMutationJournal.Telemetry;
+            sceneData.SimpleDdgiMutationJournalLastConsumedSerial =
+                telemetry.LastConsumedSerial;
+            sceneData.SimpleDdgiMutationJournalEnqueuedEventCount =
+                telemetry.EnqueuedEventCount;
+            sceneData.SimpleDdgiMutationJournalCoalescedEventCount =
+                telemetry.CoalescedEventCount;
+            sceneData.SimpleDdgiMutationJournalOverflowCount =
+                telemetry.OverflowCount;
+            sceneData.SimpleDdgiMutationJournalConservativeFallbackCount =
+                telemetry.ConservativeFallbackCount;
+            sceneData.SimpleDdgiMutationJournalAttachScanCount =
+                telemetry.SceneAttachScanCount;
+            sceneData.SimpleDdgiMutationJournalAttachObjectCount =
+                telemetry.SceneAttachObjectCount;
+            sceneData.SimpleDdgiMutationJournalOracleComparisonCount =
+                telemetry.OracleComparisonCount;
+            sceneData.SimpleDdgiMutationJournalOracleMismatchCount =
+                telemetry.OracleMismatchCount;
+            sceneData.SimpleDdgiMutationJournalPendingEventCount =
+                telemetry.PendingEventCount;
+            sceneData.SimpleDdgiMutationJournalOutputRegionCount =
+                telemetry.LastOutputRegionCount;
+            sceneData.SimpleDdgiMutationJournalOverflowedThisFrame =
+                telemetry.OverflowedThisFrame ? 1 : 0;
+
+            return journalRegions;
+        }
+
+        private DdgiMutationResolution ResolveDdgiMutation(
+            SceneMutation mutation)
+        {
+            DdgiDirtyReason reason = ResolveDdgiMutationReason(mutation.Kind);
+            switch (mutation.Producer)
+            {
+                case RenderObject renderObject:
+                {
+                    BoundingBox? currentBounds = mutation.NewWorldBounds;
+                    if (!mutation.Kind.HasFlag(SceneMutationKind.Removed) &&
+                        TryCreateDdgiTrackedRenderObject(
+                            renderObject,
+                            out DdgiTrackedRenderObject current))
+                    {
+                        currentBounds = current.Bounds;
+                    }
+                    else if ((!renderObject.Enabled || !renderObject.Visible) &&
+                             mutation.Kind.HasFlag(SceneMutationKind.Visibility))
+                    {
+                        currentBounds = null;
+                    }
+
+                    return CreateDdgiMutationResolution(
+                        mutation.OldWorldBounds,
+                        currentBounds,
+                        reason,
+                        1.0f,
+                        ignoreWhenUntracked: true);
+                }
+                case ParticleEffectInstance particle:
+                {
+                    if (!HasDdgiSustainedEmissiveVfxDefinition(particle))
+                        return DdgiMutationResolution.Ignored;
+
+                    BoundingBox? currentBounds = null;
+                    if (!mutation.Kind.HasFlag(SceneMutationKind.Removed) &&
+                        TryCreateDdgiTrackedVfxProxy(
+                            particle,
+                            out DdgiTrackedVfxProxy current))
+                    {
+                        currentBounds = current.Bounds;
+                    }
+
+                    return CreateDdgiMutationResolution(
+                        mutation.OldWorldBounds,
+                        currentBounds,
+                        DdgiDirtyReason.EmissiveChanged,
+                        1.0f,
+                        ignoreWhenUntracked: true);
+                }
+                case StaticInstanceBatch batch:
+                {
+                    BoundingBox? currentBounds = null;
+                    if (!mutation.Kind.HasFlag(SceneMutationKind.Removed) &&
+                        TryGetStaticInstanceBatchBounds(batch, out BoundingBox bounds))
+                    {
+                        currentBounds = bounds;
+                    }
+
+                    return CreateDdgiMutationResolution(
+                        mutation.OldWorldBounds,
+                        currentBounds,
+                        reason,
+                        1.0f,
+                        ignoreWhenUntracked: true);
+                }
+                case FoliagePatch patch:
+                {
+                    BoundingBox? currentBounds =
+                        mutation.Kind.HasFlag(SceneMutationKind.Removed) ||
+                        !patch.Visible
+                            ? null
+                            : patch.Bounds;
+                    return CreateDdgiMutationResolution(
+                        mutation.OldWorldBounds,
+                        currentBounds,
+                        reason,
+                        1.0f,
+                        ignoreWhenUntracked: true);
+                }
+                default:
+                    return default;
+            }
+        }
+
+        private static DdgiMutationResolution CreateDdgiMutationResolution(
+            BoundingBox? oldBounds,
+            BoundingBox? newBounds,
+            DdgiDirtyReason reason,
+            float padding,
+            bool ignoreWhenUntracked)
+        {
+            BoundingBox? influenceBounds = null;
+            if (oldBounds.HasValue || newBounds.HasValue)
+            {
+                BoundingBox swept = oldBounds.HasValue && newBounds.HasValue
+                    ? Union(oldBounds.Value, newBounds.Value)
+                    : oldBounds ?? newBounds!.Value;
+                Vector3 extent = new(MathF.Max(0.0f, padding));
+                influenceBounds = new BoundingBox(
+                    swept.Min - extent,
+                    swept.Max + extent);
+            }
+
+            return new DdgiMutationResolution(
+                oldBounds,
+                newBounds,
+                influenceBounds,
+                reason,
+                Priority: 1u,
+                IgnoreWhenUntracked: ignoreWhenUntracked);
+        }
+
+        private static DdgiDirtyReason ResolveDdgiMutationReason(
+            SceneMutationKind kind)
+        {
+            if (kind.HasFlag(SceneMutationKind.Removed))
+                return DdgiDirtyReason.GeometryRemoved;
+            if (kind.HasFlag(SceneMutationKind.Added))
+                return DdgiDirtyReason.GeometryAdded;
+            if (kind.HasFlag(SceneMutationKind.Emission))
+                return DdgiDirtyReason.EmissiveChanged;
+            if (kind.HasFlag(SceneMutationKind.Material))
+                return DdgiDirtyReason.MaterialChanged;
+            if (kind.HasFlag(SceneMutationKind.ParticleState))
+                return DdgiDirtyReason.EmissiveChanged;
+            return DdgiDirtyReason.TransformChanged;
+        }
+
+        private static bool HasDdgiSustainedEmissiveVfxDefinition(
+            ParticleEffectInstance instance)
+        {
+            IReadOnlyList<ParticleEmitterDefinition> emitters =
+                instance.Effect.Emitters;
+            for (int index = 0; index < emitters.Count; index++)
+            {
+                if (IsDdgiSustainedEmissiveVfx(emitters[index]))
+                    return true;
+            }
+            IReadOnlyList<BeamDefinition> beams = instance.Effect.Beams;
+            for (int index = 0; index < beams.Count; index++)
+            {
+                if (IsDdgiBeamMacroSource(beams[index]))
+                    return true;
+            }
+            return false;
+        }
+
+        private bool TryGetStaticInstanceBatchBounds(
+            StaticInstanceBatch batch,
+            out BoundingBox bounds)
+        {
+            bounds = default;
+            if (!batch.Visible ||
+                batch.Mesh is not MeshHandle meshHandle ||
+                !meshHandle.IsValid ||
+                batch.WorldMatrices.Count == 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                MeshInfo meshInfo = _meshManager.GetMeshInfo(meshHandle);
+                var localBounds = new BoundingBox(
+                    ToCoreVector(meshInfo.BoundingBoxMin),
+                    ToCoreVector(meshInfo.BoundingBoxMax));
+                bool hasBounds = false;
+                foreach (Matrix4x4 worldMatrix in batch.WorldMatrices)
+                {
+                    BoundingBox instanceBounds =
+                        SceneDataBuilder.TransformBoundingBox(
+                            localBounds,
+                            worldMatrix);
+                    bounds = hasBounds
+                        ? Union(bounds, instanceBounds)
+                        : instanceBounds;
+                    hasBounds = true;
+                }
+                return hasBounds;
+            }
+            catch (Exception ex) when (
+                ex is ArgumentException or InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        private static bool HaveEquivalentDdgiDirtyCoverage(
+            IReadOnlyList<DdgiDirtyRegion> left,
+            IReadOnlyList<DdgiDirtyRegion> right)
+        {
+            Span<BoundingBox> leftBounds = stackalloc BoundingBox[5];
+            Span<BoundingBox> rightBounds = stackalloc BoundingBox[5];
+            Span<bool> leftHasBounds = stackalloc bool[5];
+            Span<bool> rightHasBounds = stackalloc bool[5];
+            AccumulateDdgiDirtyCoverage(left, leftBounds, leftHasBounds);
+            AccumulateDdgiDirtyCoverage(right, rightBounds, rightHasBounds);
+            for (int index = 0; index < leftBounds.Length; index++)
+            {
+                if (leftHasBounds[index] != rightHasBounds[index])
+                    return false;
+                if (leftHasBounds[index] &&
+                    (!DdgiVectorsApproximatelyEqual(
+                         leftBounds[index].Min,
+                         rightBounds[index].Min,
+                         0.001f) ||
+                     !DdgiVectorsApproximatelyEqual(
+                         leftBounds[index].Max,
+                         rightBounds[index].Max,
+                         0.001f)))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static void AccumulateDdgiDirtyCoverage(
+            IReadOnlyList<DdgiDirtyRegion> regions,
+            Span<BoundingBox> bounds,
+            Span<bool> hasBounds)
+        {
+            for (int index = 0; index < regions.Count; index++)
+            {
+                DdgiDirtyRegion region = regions[index];
+                int reasonClass = region.Reason switch
+                {
+                    DdgiDirtyReason.LocalLightChanged or
+                    DdgiDirtyReason.DirectionalLightChanged => 1,
+                    DdgiDirtyReason.EmissiveChanged => 2,
+                    DdgiDirtyReason.MaterialChanged => 3,
+                    _ => 4
+                };
+                bounds[reasonClass] = hasBounds[reasonClass]
+                    ? Union(bounds[reasonClass], region.InfluenceBounds)
+                    : region.InfluenceBounds;
+                hasBounds[reasonClass] = true;
+            }
+        }
+
+        private static bool DdgiVectorsApproximatelyEqual(
+            Vector3 left,
+            Vector3 right,
+            float epsilon) =>
+            MathF.Abs(left.X - right.X) <= epsilon &&
+            MathF.Abs(left.Y - right.Y) <= epsilon &&
+            MathF.Abs(left.Z - right.Z) <= epsilon;
+
         private IReadOnlyList<DdgiDirtyRegion> CollectDdgiDirtyRegions(
             Scene scene,
             LightFrameSnapshot lightSnapshot,
@@ -10436,6 +15392,10 @@ namespace Njulf.Rendering
         {
             _ddgiDirtyBoundsScratch.Clear();
             _ddgiDirtyRegionScratch.Clear();
+            _ddgiMergedDirtyRegionScratch.Clear();
+            _lastDdgiFoliageProxyDirtySignature = 0UL;
+            _hasDdgiFoliageProxyDirtySignature = false;
+            _lastDdgiFoliageProxyInfluenceBounds = null;
             sceneData.VfxDdgiDirtyProbeEventCount = 0;
 
             if (!Settings.GlobalIllumination.EffectiveUseDdgi)
@@ -10571,6 +15531,38 @@ namespace Njulf.Rendering
                 signature = HashAdd(signature, emitter.DurationSeconds);
                 signature = HashAdd(signature, emitter.Looping);
                 signature = HashAdd(signature, SampleMaxEmissive(emitter));
+                signature = HashAdd(signature, (uint)emitter.GlobalIlluminationEmission);
+                signature = HashAdd(signature, (uint)emitter.GlobalIlluminationSourceShape);
+                signature = HashAdd(signature, emitter.GlobalIlluminationPower);
+                signature = HashAdd(signature, emitter.GlobalIlluminationEnergyHysteresis);
+            }
+
+            IReadOnlyList<BeamDefinition> beams = instance.Effect.Beams;
+            for (int i = 0; i < beams.Count; i++)
+            {
+                BeamDefinition beam = beams[i];
+                if (!IsDdgiBeamMacroSource(beam))
+                    continue;
+
+                Vector3 start = beam.LocalStart * instance.WorldMatrix;
+                Vector3 end = beam.LocalEnd * instance.WorldMatrix;
+                float radius = MathF.Max(
+                    MathF.Max(beam.Width.Sample(0.0f), beam.Width.Sample(1.0f)) * 0.5f +
+                        MathF.Max(beam.NoiseAmplitude, 0.0f),
+                    0.001f);
+                Vector3 extent = new(radius);
+                BoundingBox beamBounds = new(
+                    Vector3.Min(start, end) - extent,
+                    Vector3.Max(start, end) + extent);
+                bounds = hasBounds ? Union(bounds, beamBounds) : beamBounds;
+                hasBounds = true;
+                sustainedEmitterCount++;
+                signature = HashAdd(signature, i);
+                signature = HashAdd(signature, beam.LocalStart);
+                signature = HashAdd(signature, beam.LocalEnd);
+                signature = HashAdd(signature, beam.GlobalIlluminationPower);
+                signature = HashAdd(signature, (uint)beam.GlobalIlluminationEmission);
+                signature = HashAdd(signature, beam.GlobalIlluminationEnergyHysteresis);
             }
 
             if (!hasBounds || sustainedEmitterCount == 0)
@@ -10587,6 +15579,15 @@ namespace Njulf.Rendering
         {
             if (emitter == null)
                 return false;
+
+            if (emitter.GlobalIlluminationEmission == ParticleGiEmissionMode.Disabled)
+                return false;
+            if (emitter.GlobalIlluminationEmission == ParticleGiEmissionMode.Force)
+            {
+                Vector3 power = emitter.GlobalIlluminationPower;
+                return float.IsFinite(power.X) && float.IsFinite(power.Y) && float.IsFinite(power.Z) &&
+                       (power.X > 0.0f || power.Y > 0.0f || power.Z > 0.0f);
+            }
 
             float maxEmissive = SampleMaxEmissive(emitter);
             bool transientBurstOnly = !emitter.Looping &&
@@ -10606,6 +15607,19 @@ namespace Njulf.Rendering
                 MathF.Max(
                     emitter.EmissiveOverLife.Sample(0.5f),
                     emitter.EmissiveOverLife.Sample(1.0f)));
+        }
+
+        private static bool IsDdgiBeamMacroSource(BeamDefinition beam)
+        {
+            if (beam == null ||
+                beam.GlobalIlluminationEmission == ParticleGiEmissionMode.Disabled)
+            {
+                return false;
+            }
+
+            Vector3 power = beam.GlobalIlluminationPower;
+            return float.IsFinite(power.X) && float.IsFinite(power.Y) && float.IsFinite(power.Z) &&
+                   (power.X > 0.0f || power.Y > 0.0f || power.Z > 0.0f);
         }
 
         private static BoundingBox EstimateDdgiVfxEmitterBounds(
@@ -10849,10 +15863,519 @@ namespace Njulf.Rendering
             _ddgiDirtyRegionScratch.Clear();
             _ddgiTrackedRenderObjects.Clear();
             _ddgiTrackedRenderObjectRemovalScratch.Clear();
+            _ddgiTrackedSkinnedPoses.Clear();
+            _ddgiSeenSkinnedPoseIdentities.Clear();
+            _ddgiTrackedSkinnedPoseRemovalScratch.Clear();
             _ddgiTrackedVfxProxies.Clear();
             _ddgiTrackedVfxProxyRemovalScratch.Clear();
             _lastDdgiLights = Array.Empty<Light>();
             _hasDdgiDynamicSignature = false;
+            _ddgiEmissiveEnergyDiagnostics = default;
+            _hasDdgiEmissiveEnergyDiagnostics = false;
+            _lastDdgiEmissiveEnergyWarning = string.Empty;
+            _simpleDdgiRefinementEmissiveDemandScratch.Clear();
+            _simpleDdgiRefinementEmissiveDemandDiagnostics = default;
+            _hasSimpleDdgiRefinementEmissiveDemandSignature = false;
+            _simpleDdgiRefinementEmissiveDemandSignature = 0UL;
+        }
+
+        private IReadOnlyList<DdgiDirtyRegion>
+            MergeDdgiFoliageProxyDirtyRegion(
+                IReadOnlyList<DdgiDirtyRegion> regions)
+        {
+            ulong signature = _ddgiFoliageProxyFrame.ContentSignature;
+            BoundingBox? currentBounds =
+                _ddgiFoliageProxyFrame.InfluenceBounds;
+            if (!_hasDdgiFoliageProxyDirtySignature)
+            {
+                _lastDdgiFoliageProxyDirtySignature = signature;
+                _lastDdgiFoliageProxyInfluenceBounds = currentBounds;
+                _hasDdgiFoliageProxyDirtySignature = true;
+                return regions;
+            }
+            if (signature == _lastDdgiFoliageProxyDirtySignature)
+                return regions;
+
+            BoundingBox? previousBounds =
+                _lastDdgiFoliageProxyInfluenceBounds;
+            _lastDdgiFoliageProxyDirtySignature = signature;
+            _lastDdgiFoliageProxyInfluenceBounds = currentBounds;
+            if (!previousBounds.HasValue && !currentBounds.HasValue)
+                return regions;
+
+            BoundingBox oldBounds = previousBounds ?? currentBounds!.Value;
+            BoundingBox newBounds = currentBounds ?? previousBounds!.Value;
+            BoundingBox influence =
+                DdgiGeometryParticipation.CreateSweptInfluenceBounds(
+                    oldBounds,
+                    newBounds,
+                    1.0f);
+            DdgiDirtyReason reason = !previousBounds.HasValue
+                ? DdgiDirtyReason.GeometryAdded
+                : !currentBounds.HasValue
+                    ? DdgiDirtyReason.GeometryRemoved
+                    : DdgiDirtyReason.TransformChanged;
+            return AppendDdgiDirtyRegion(
+                regions,
+                new DdgiDirtyRegion(influence, reason)
+                {
+                    OldWorldBounds = oldBounds,
+                    NewWorldBounds = newBounds,
+                    InfluenceBounds = influence,
+                    ReasonFlags = 1u << (int)reason,
+                    Priority = 1u,
+                    SourceRevision = signature,
+                    SourceIdentifier = 0x464F4C4941474547UL
+                });
+        }
+
+        private IReadOnlyList<DdgiDirtyRegion>
+            MergeDdgiSkinnedPoseDirtyRegions(
+                Scene scene,
+                IReadOnlyList<DdgiDirtyRegion> regions)
+        {
+            bool currentPoseEnabled = Settings.GlobalIllumination
+                .EffectiveDdgiSkinnedGeometryMode ==
+                DdgiSkinnedGeometryMode.CurrentPose;
+            _ddgiSeenSkinnedPoseIdentities.Clear();
+            if (currentPoseEnabled)
+            {
+                foreach (RenderObject renderObject in scene.RenderObjects)
+                {
+                    if (renderObject is not SkinnedRenderObject skinned ||
+                        !skinned.Enabled ||
+                        !skinned.Visible ||
+                        !skinned.SkinningEnabled ||
+                        skinned.Animator == null ||
+                        !TryResolveSkinnedDdgiBounds(
+                            skinned,
+                            out BoundingBox bounds))
+                    {
+                        continue;
+                    }
+
+                    Guid identity = skinned.Id;
+                    _ddgiSeenSkinnedPoseIdentities.Add(identity);
+                    ulong poseRevision = skinned.Animator.PoseRevision;
+                    if (_ddgiTrackedSkinnedPoses.TryGetValue(
+                            identity,
+                            out DdgiTrackedSkinnedPose previous))
+                    {
+                        if (previous.PoseRevision != poseRevision)
+                        {
+                            BoundingBox influence =
+                                DdgiGeometryParticipation
+                                    .CreateSweptInfluenceBounds(
+                                        previous.Bounds,
+                                        bounds,
+                                        1.0f);
+                            regions = AppendDdgiDirtyRegion(
+                                regions,
+                                new DdgiDirtyRegion(
+                                    influence,
+                                    DdgiDirtyReason.TransformChanged)
+                                {
+                                    OldWorldBounds = previous.Bounds,
+                                    NewWorldBounds = bounds,
+                                    InfluenceBounds = influence,
+                                    ReasonFlags = 1u <<
+                                        (int)DdgiDirtyReason.TransformChanged,
+                                    Priority = 1u,
+                                    SourceRevision = poseRevision,
+                                    SourceIdentifier =
+                                        AccelerationStructureManager
+                                            .StableInstanceIdentity(identity)
+                                });
+                        }
+                    }
+                    else
+                    {
+                        BoundingBox influence =
+                            DdgiGeometryParticipation
+                                .CreateSweptInfluenceBounds(
+                                    bounds,
+                                    bounds,
+                                    1.0f);
+                        regions = AppendDdgiDirtyRegion(
+                            regions,
+                            new DdgiDirtyRegion(
+                                influence,
+                                DdgiDirtyReason.GeometryAdded)
+                            {
+                                OldWorldBounds = bounds,
+                                NewWorldBounds = bounds,
+                                InfluenceBounds = influence,
+                                ReasonFlags = 1u <<
+                                    (int)DdgiDirtyReason.GeometryAdded,
+                                Priority = 1u,
+                                SourceRevision = poseRevision,
+                                SourceIdentifier =
+                                    AccelerationStructureManager
+                                        .StableInstanceIdentity(identity)
+                            });
+                    }
+                    _ddgiTrackedSkinnedPoses[identity] =
+                        new DdgiTrackedSkinnedPose(
+                            poseRevision,
+                            bounds);
+                }
+            }
+
+            foreach (KeyValuePair<Guid, DdgiTrackedSkinnedPose> pair in
+                     _ddgiTrackedSkinnedPoses)
+            {
+                if (_ddgiSeenSkinnedPoseIdentities.Contains(pair.Key))
+                    continue;
+                // Scene mutation events own ordinary removals. This branch also
+                // covers a current-pose admission loss or mode toggle, where no
+                // scene event exists.
+                BoundingBox influence =
+                    DdgiGeometryParticipation.CreateSweptInfluenceBounds(
+                        pair.Value.Bounds,
+                        pair.Value.Bounds,
+                        1.0f);
+                regions = AppendDdgiDirtyRegion(
+                    regions,
+                    new DdgiDirtyRegion(
+                        influence,
+                        DdgiDirtyReason.GeometryRemoved)
+                    {
+                        OldWorldBounds = pair.Value.Bounds,
+                        NewWorldBounds = pair.Value.Bounds,
+                        InfluenceBounds = influence,
+                        ReasonFlags = 1u <<
+                            (int)DdgiDirtyReason.GeometryRemoved,
+                        Priority = 1u,
+                        SourceRevision = pair.Value.PoseRevision,
+                        SourceIdentifier =
+                            AccelerationStructureManager
+                                .StableInstanceIdentity(pair.Key)
+                    });
+                _ddgiTrackedSkinnedPoseRemovalScratch.Add(pair.Key);
+            }
+            for (int index = 0;
+                 index < _ddgiTrackedSkinnedPoseRemovalScratch.Count;
+                 index++)
+            {
+                _ddgiTrackedSkinnedPoses.Remove(
+                    _ddgiTrackedSkinnedPoseRemovalScratch[index]);
+            }
+            _ddgiTrackedSkinnedPoseRemovalScratch.Clear();
+            return regions;
+        }
+
+        private bool TryResolveSkinnedDdgiBounds(
+            SkinnedRenderObject skinned,
+            out BoundingBox bounds)
+        {
+            BoundingBox? localBounds = skinned.AnimatedBoundingBox ??
+                skinned.LocalMeshBounds;
+            if (!localBounds.HasValue &&
+                skinned.Mesh is MeshHandle mesh &&
+                mesh.IsValid)
+            {
+                try
+                {
+                    MeshInfo meshInfo = _meshManager.GetMeshInfo(mesh);
+                    localBounds = new BoundingBox(
+                        ToCoreVector(meshInfo.BoundingBoxMin),
+                        ToCoreVector(meshInfo.BoundingBoxMax));
+                }
+                catch (Exception exception) when (exception is
+                    ArgumentException or InvalidOperationException)
+                {
+                    bounds = default;
+                    return false;
+                }
+            }
+            if (!localBounds.HasValue)
+            {
+                bounds = default;
+                return false;
+            }
+
+            bounds = SceneDataBuilder.TransformBoundingBox(
+                localBounds.Value,
+                skinned.WorldMatrix);
+            return true;
+        }
+
+        private IReadOnlyList<DdgiDirtyRegion> AppendDdgiDirtyRegion(
+            IReadOnlyList<DdgiDirtyRegion> regions,
+            DdgiDirtyRegion region)
+        {
+            if (ReferenceEquals(regions, _ddgiMergedDirtyRegionScratch))
+            {
+                _ddgiMergedDirtyRegionScratch.Add(region);
+                return _ddgiMergedDirtyRegionScratch;
+            }
+
+            _ddgiMergedDirtyRegionScratch.Clear();
+            for (int index = 0; index < regions.Count; index++)
+                _ddgiMergedDirtyRegionScratch.Add(regions[index]);
+            _ddgiMergedDirtyRegionScratch.Add(region);
+            return _ddgiMergedDirtyRegionScratch;
+        }
+
+        private void PrepareGiCausticFrame(
+            SceneRenderingData sceneData,
+            in LightFrameSnapshot lightSnapshot)
+        {
+            _giCausticFrameAvailable = false;
+            if (!_advancedGiGraphModes.UsesCausticWorldCache ||
+                _giCausticRuntime is null ||
+                _accelerationStructureManager is null ||
+                !_giCausticPlan.Active)
+            {
+                return;
+            }
+
+            GiCausticHeroExtractionProfile extractionProfile =
+                GiCausticHeroExtractionProfile.Reference with
+                {
+                    MaximumHeroCount =
+                        _giCausticRequestedConfiguration.MaximumHeroCount
+                };
+            if (!_accelerationStructureManager.TryCreateGiCausticHeroSourceSnapshot(
+                    extractionProfile,
+                    out GiCausticHeroSourceSnapshot? heroSnapshot,
+                    out string heroReason) ||
+                heroSnapshot is null || !heroSnapshot.HasEligibleHeroes)
+            {
+                RejectGiCausticFrame(heroReason);
+                return;
+            }
+
+            GiCausticHeroRevisionIdentity heroIdentity =
+                GiCausticTaskGenerationCompiler.ComputeHeroRevisionIdentity(
+                    heroSnapshot);
+            ulong punctualRevision = lightSnapshot.ContentRevision;
+            ulong emissiveRevision = _ddgiEmissiveSourceRevision;
+            GiCausticAdmissionContext context = _giCausticAdmissionContext;
+            if (!heroIdentity.IsValid ||
+                heroSnapshot.SceneContentRevision != context.ContentRevision ||
+                punctualRevision != context.LightDistributionRevision ||
+                emissiveRevision != context.EmissiveDistributionRevision ||
+                heroIdentity.AggregateSourceRevision !=
+                    context.HeroSourceRevision ||
+                heroSnapshot.TopLevelInstanceSignature !=
+                    context.CurrentPoseTlasSignature)
+            {
+                RejectGiCausticFrame(
+                    "caustic-live-content-or-source-revision-does-not-match-qualified-evidence");
+                return;
+            }
+
+            ulong combinedEmitterRevision =
+                GiCausticTaskGenerationCompiler.ComputeEmitterDistributionRevision(
+                    punctualRevision,
+                    emissiveRevision);
+            var revision = new GiCausticCacheRevision(
+                GiCausticGpuAbi.Version,
+                heroIdentity.MaterialRevision,
+                combinedEmitterRevision,
+                heroIdentity.GeometryRevision,
+                heroIdentity.TransformRevision,
+                heroSnapshot.SceneContentRevision,
+                heroIdentity.StableIdentityRevision);
+            if (!revision.IsValid)
+            {
+                RejectGiCausticFrame("caustic-live-cache-revision-invalid");
+                return;
+            }
+
+            ulong revisionFingerprint =
+                GiCausticGpuAbi.ComputeRevisionFingerprint(revision);
+            if (_giCausticTaggedTransportProducer is null ||
+                _giCausticProducerRevisionFingerprint != revisionFingerprint)
+            {
+                if (!TryCreateGiCausticProducer(
+                        lightSnapshot,
+                        heroSnapshot,
+                        revision,
+                        out GiCausticTaggedTransportGpuProducer? producer,
+                        out string producerReason) ||
+                    producer is null)
+                {
+                    RejectGiCausticFrame(producerReason);
+                    return;
+                }
+                _giCausticTaggedTransportProducer = producer;
+                _giCausticProducerRevisionFingerprint = revisionFingerprint;
+            }
+
+            GiCausticTaggedTransportGpuProducer currentProducer =
+                _giCausticTaggedTransportProducer;
+            if (!_giCausticRuntimeConfigured)
+            {
+                var request = new GiCausticGpuRuntimeRequest(
+                    IsEffectivelyEnabled: true,
+                    _giCausticPlan.GpuLayout,
+                    new GiCausticGpuFeatureSupport(
+                        ComputeSupported: true,
+                        RayQuerySupported: _context.RayQuerySupported,
+                        CurrentPoseAccelerationStructuresAvailable: true,
+                        TaggedTransportBackendIntegrated: true,
+                        DeterministicParallelCacheBuildIntegrated: true,
+                        PublicationReadbackSupported: true,
+                        DedicatedBindlessSlotsAvailable: true,
+                        ScreenResolvePipelineIntegrated: true,
+                        ScreenResolveResourcesAvailable: true));
+                var qualification = new GiCausticGpuPipelineQualification(
+                    TaggedFirstDiffuseTraceQualified:
+                        _giCausticEvidence.CpuGpuPdfAndThroughputParity &&
+                        _giCausticEvidence.MirrorAndDielectricEnergyConservation &&
+                        _giCausticEvidence.DifferentialReferencePassed,
+                    DeterministicParallelCacheBuildQualified:
+                        _giCausticEvidence.BottomKUnbiasednessPassed);
+                if (!_giCausticRuntime.TryConfigure(
+                        request,
+                        qualification,
+                        currentProducer,
+                        out string configureReason))
+                {
+                    RejectGiCausticFrame(configureReason);
+                    return;
+                }
+                _giCausticRuntimeConfigured = true;
+            }
+
+            _giCausticRuntime.Invalidate(
+                revision,
+                "caustic-live-semantic-revision-changed");
+            _giCausticCurrentRevision = revision;
+            _ = _giCausticRuntime.TryPrepareScreenFrame(
+                _currentFrame,
+                revision,
+                out _);
+            bool readable = _giCausticRuntime.IsReadableForRevision(revision);
+            if (!readable &&
+                !_giCausticRuntime.TryPrepareGraphFrame(
+                    _currentFrame,
+                    revision,
+                    new System.Numerics.Vector4(
+                        0.0f,
+                        0.0f,
+                        0.0f,
+                        _giCausticRequestedConfiguration.WorldCellSize),
+                    currentProducer,
+                    out string prepareReason))
+            {
+                RejectGiCausticFrame(prepareReason);
+                return;
+            }
+
+            _giCausticFrameAvailable = true;
+        }
+
+        private bool TryCreateGiCausticProducer(
+            in LightFrameSnapshot lightSnapshot,
+            GiCausticHeroSourceSnapshot heroSnapshot,
+            in GiCausticCacheRevision revision,
+            out GiCausticTaggedTransportGpuProducer? producer,
+            out string reason)
+        {
+            producer = null;
+            GiCausticEmitterSource[] punctualSources =
+                Array.Empty<GiCausticEmitterSource>();
+            if (lightSnapshot.Count > 0 &&
+                !GiCausticTaskGenerationCompiler.TryCreatePunctualSources(
+                    lightSnapshot,
+                    _giCausticRequestedConfiguration
+                        .DirectionalEmissionDiskRadius,
+                    _giCausticRequestedConfiguration
+                        .TargetingMixtureProbability,
+                    out punctualSources,
+                    out reason))
+            {
+                return false;
+            }
+
+            GiCausticEmitterSource[] emissiveSources =
+                Array.Empty<GiCausticEmitterSource>();
+            if (_ddgiEmissiveSourceCount > 0 &&
+                !GiCausticTaskGenerationCompiler.TryCreateEmissiveTriangleSources(
+                    _ddgiEmissiveSourceScratch.AsSpan(
+                        0, _ddgiEmissiveSourceCount),
+                    _ddgiEmissiveSourceRevision,
+                    _giCausticRequestedConfiguration
+                        .TargetingMixtureProbability,
+                    out emissiveSources,
+                    out reason))
+            {
+                return false;
+            }
+
+            int emitterCount = checked(
+                punctualSources.Length + emissiveSources.Length);
+            if (emitterCount <= 0 || emitterCount >
+                _giCausticRequestedConfiguration.MaximumEmitterCount)
+            {
+                reason = emitterCount <= 0
+                    ? "caustic-frame-has-no-exact-eligible-emitter"
+                    : "caustic-frame-emitter-capacity-exceeded";
+                return false;
+            }
+            var emitters = new GiCausticEmitterSource[emitterCount];
+            punctualSources.CopyTo(emitters, 0);
+            emissiveSources.CopyTo(emitters, punctualSources.Length);
+            var emitterIds = new HashSet<uint>();
+            for (int index = 0; index < emitters.Length; index++)
+            {
+                if (!emitterIds.Add(emitters[index].StableSourceId))
+                {
+                    reason = "caustic-punctual-and-emissive-stable-ID-collision";
+                    return false;
+                }
+            }
+
+            if (!GiCausticTaskGenerationCompiler.TryCompile(
+                    emitters,
+                    heroSnapshot.Heroes.Span,
+                    _giCausticRequestedConfiguration.PhotonTaskCapacity,
+                    revision,
+                    out GiCausticTaskGenerationBatch? batch,
+                    out reason) ||
+                batch is null)
+            {
+                return false;
+            }
+            if (batch.ProposalPairs.Length >
+                _giCausticRequestedConfiguration.MaximumProposalPairCount)
+            {
+                reason = "caustic-frame-proposal-pair-capacity-exceeded";
+                return false;
+            }
+
+            try
+            {
+                producer = new GiCausticTaggedTransportGpuProducer(
+                    _context,
+                    _bufferManager,
+                    _stagingRing,
+                    _giCausticPlan.GpuLayout,
+                    batch);
+                reason = "valid";
+                return true;
+            }
+            catch (Exception exception) when (exception is ArgumentException or
+                InvalidOperationException or OverflowException)
+            {
+                reason = "caustic-tagged-transport-producer-creation-failed:" +
+                    exception.GetType().Name;
+                return false;
+            }
+        }
+
+        private void RejectGiCausticFrame(string? reason)
+        {
+            _giCausticFrameAvailable = false;
+            _giCausticCurrentRevision = default;
+            _giCausticRuntime?.Invalidate(
+                default,
+                string.IsNullOrWhiteSpace(reason)
+                    ? "caustic-frame-input-rejected"
+                    : reason.Trim());
         }
 
         private void PrepareAccelerationStructures(Scene scene, SceneRenderingData sceneData)
@@ -10867,12 +16390,9 @@ namespace Njulf.Rendering
                 DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
             bool farFieldCoverageReady = qualityAllowsStaticStreaming &&
                 _farFieldClipmapManager?.CoverageReady == true;
-            AccelerationStructureFrameStats stats = _accelerationStructureManager.PrepareFrame(
+            _accelerationStructureManager.PrepareFrameRayScene(
                 scene,
-                _stagingRing,
-                _currentCommandBuffer,
                 enabled,
-                _gpuTimestamps,
                 _currentFrame,
                 new AccelerationStructureResidencyPolicy(
                     gi.StreamedGiAccelerationStructuresEnabled,
@@ -10886,8 +16406,123 @@ namespace Njulf.Rendering
                         : int.MaxValue,
                     gi.GiAccelerationStructureEvictionGraceFrames,
                     AllowStaticMemoryCulling: farFieldCoverageReady),
-                alphaMaskedTransportEnabled: gi.DdgiAlphaMaskedTransportEnabled,
-                sceneContentRevision: sceneData.SceneContentRevision);
+                new DdgiDynamicRayScenePolicy(
+                    gi.EffectiveDdgiSkinnedGeometryMode,
+                    gi.EffectiveDdgiTransparentGeometryMode,
+                    gi.EffectiveDdgiFoliageGeometryMode,
+                    GeometryDecalsEnabled:
+                        Settings.Decals.GeometryDecalsEnabled &&
+                        (gi.ActiveContentDependentFeatures &
+                            DdgiContentFeature.TransparentGeometry) != 0,
+                    AlphaMaskedTransportEnabled: gi.DdgiAlphaMaskedTransportEnabled,
+                    DynamicStorageBudgetBytes: gi.DdgiDynamicBlasMemoryBudgetBytes,
+                    DynamicScratchBudgetBytes: gi.DdgiDynamicBlasScratchBudgetBytes,
+                    MaximumBuildsPerFrame: gi.DdgiDynamicBlasBuildsPerFrame,
+                    MaximumPrimitivesPerFrame: gi.DdgiDynamicBlasPrimitivesPerFrame,
+                    DecalCandidateLimit: gi.DdgiDecalCandidateLimit),
+                sceneContentRevision: sceneData.SceneContentRevision,
+                foliageProxyFrame: _ddgiFoliageProxyFrame);
+        }
+
+        private void PrepareDdgiFoliageProxies(
+            Scene scene,
+            SceneRenderingData sceneData)
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            DdgiFoliageGeometryMode mode =
+                gi.EffectiveUseDdgi &&
+                gi.EffectiveUseRayQueryBackend &&
+                Settings.Foliage.Enabled &&
+                _context.RayQuerySupported
+                    ? gi.EffectiveDdgiFoliageGeometryMode
+                    : DdgiFoliageGeometryMode.Excluded;
+            sceneData.DdgiFoliageGeometryMode = mode;
+            if (_ddgiFoliageProxyManager == null ||
+                mode == DdgiFoliageGeometryMode.Excluded)
+            {
+                _ddgiFoliageProxyFrame =
+                    DdgiFoliageProxyFrame.Empty(_currentFrame);
+                return;
+            }
+
+            _ddgiFoliageProxyFrame =
+                _ddgiFoliageProxyManager.PrepareFrame(
+                    scene,
+                    mode,
+                    gi.DdgiFoliageProxyTriangleBudget,
+                    gi.DdgiFoliageProxyUpdateCadenceFrames,
+                    _ddgiFrameSerial,
+                    _particleTimeSeconds,
+                    Settings.Foliage.DensityScale,
+                    _ddgiFoliageProxyGenerationPass?.IsAvailable == true,
+                    _ddgiFoliageProxyGenerationPass?
+                        .InitializationFailureReason,
+                    _currentCommandBuffer,
+                    _currentFrame);
+            DdgiFoliageProxyFrame frame = _ddgiFoliageProxyFrame;
+            sceneData.DdgiFoliageProxyVertexCount = frame.VertexCount;
+            sceneData.DdgiFoliageProxyCardCount =
+                frame.VertexCount / DdgiFoliageProxyManager.VerticesPerCrossedCard;
+            sceneData.DdgiFoliageProxyTriangleCount = frame.TriangleCount;
+            sceneData.DdgiFoliageAuthoredInstanceCount =
+                frame.AuthoredInstanceCount;
+            sceneData.DdgiFoliageGeneratedInstanceCount =
+                frame.GeneratedInstanceCount;
+            sceneData.DdgiFoliageDroppedTriangleCount =
+                frame.DroppedTriangleCount;
+            sceneData.DdgiFoliageRepresentedBladeCount =
+                frame.EstimatedRepresentedBladeCount;
+            sceneData.DdgiFoliageProxyUpdatedThisFrame =
+                frame.UpdatedThisFrame ? 1 : 0;
+            sceneData.DdgiFoliageProxyUploadBytes = frame.UploadedBytes;
+            sceneData.DdgiFoliageProxyVertexBufferBytes =
+                frame.VertexBufferBytes;
+            sceneData.DdgiFoliageProxyIndexBufferBytes =
+                frame.IndexBufferBytes;
+            sceneData.DdgiFoliageProxyPatchBufferBytes =
+                frame.PatchBufferBytes;
+            sceneData.DdgiFoliageProxyContentSignature =
+                frame.ContentSignature;
+            sceneData.DdgiFoliageProxyCadenceGeneration =
+                frame.CadenceGeneration;
+            sceneData.DdgiFoliageProxyRequestedRepresentedInstanceCount =
+                frame.RequestedRepresentedInstanceCount;
+            sceneData.DdgiFoliageProxyDensityError = frame.DensityError;
+            sceneData.DdgiFoliageProxyWindAgeSeconds = frame.CardCount > 0
+                ? MathF.Max(0f, _particleTimeSeconds - frame.WindTimeSeconds)
+                : 0f;
+            sceneData.DdgiFoliageProxyNearCardCount = frame.NearCardCount;
+            sceneData.DdgiFoliageProxyMidCardCount = frame.MidCardCount;
+            sceneData.DdgiFoliageProxyFarCardCount = frame.FarCardCount;
+            sceneData.DdgiFoliageProxyExcludedPatchCount =
+                frame.ExcludedPatchCount;
+            sceneData.DdgiFoliageProxyLodPolicyVersion =
+                frame.LodPolicyVersion;
+            sceneData.CpuDdgiFoliageProxyBuildMicroseconds =
+                frame.CpuBuildMicroseconds;
+            sceneData.CpuDdgiFoliageProxyUploadMicroseconds =
+                frame.CpuUploadMicroseconds;
+            sceneData.DdgiFoliageProxyFallbackReason =
+                frame.FallbackReason;
+            sceneData.UploadedBytes = checked(
+                sceneData.UploadedBytes + frame.UploadedBytes);
+        }
+
+        private void RecordAccelerationStructures(SceneRenderingData sceneData)
+        {
+            if (_accelerationStructureManager == null)
+                return;
+
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            BufferHandle skinnedVertexBuffer =
+                _skinningManager.GetSkinnedVertexBuffer(_currentFrame);
+            AccelerationStructureFrameStats stats =
+                _accelerationStructureManager.RecordDynamicRaySceneBuilds(
+                    _stagingRing,
+                    _currentCommandBuffer,
+                    skinnedVertexBuffer,
+                    _gpuTimestamps,
+                    _currentFrame);
             sceneData.AccelerationStructureBottomLevelCount = stats.BottomLevelCount;
             sceneData.AccelerationStructureTopLevelInstanceCount = stats.TopLevelInstanceCount;
             sceneData.AccelerationStructureBlasBuildCount = stats.BlasBuildCount;
@@ -10914,6 +16549,28 @@ namespace Njulf.Rendering
             sceneData.AccelerationStructureBlasEvictionCount = stats.BlasEvictionCount;
             sceneData.AccelerationStructureBlasEvictionBytes = stats.BlasEvictionBytes;
             sceneData.AccelerationStructureBlasBudgetRejectedCount = stats.BlasBudgetRejectedCount;
+            sceneData.AccelerationStructureDynamicBottomLevelCount =
+                stats.DynamicBottomLevelCount;
+            sceneData.AccelerationStructureDynamicBlasBytes =
+                stats.DynamicBottomLevelBytes;
+            sceneData.AccelerationStructureDynamicBlasPeakBytes =
+                stats.PeakDynamicBottomLevelBytes;
+            sceneData.AccelerationStructureDynamicFullBuildCount =
+                stats.DynamicFullBuildCount;
+            sceneData.AccelerationStructureDynamicRefitCount =
+                stats.DynamicRefitCount;
+            sceneData.AccelerationStructureDynamicProxyFallbackCount =
+                stats.DynamicProxyFallbackCount;
+            sceneData.AccelerationStructureDynamicExcludedCount =
+                stats.DynamicExcludedCount;
+            sceneData.AccelerationStructureDynamicBudgetDeferredCount =
+                stats.DynamicBudgetDeferredCount;
+            sceneData.AccelerationStructureDynamicTopologyMismatchCount =
+                stats.DynamicTopologyMismatchCount;
+            sceneData.AccelerationStructureDynamicScratchBytes =
+                stats.DynamicScratchBytes;
+            sceneData.AccelerationStructureDynamicPrimitiveCount =
+                stats.DynamicPrimitiveCount;
             sceneData.AccelerationStructureBlasBytes = stats.BottomLevelAccelerationStructureBytes;
             sceneData.AccelerationStructureTlasBytes = stats.TopLevelAccelerationStructureBytes;
             sceneData.AccelerationStructureRetiredBytes = stats.RetiredAccelerationStructureBytes;
@@ -10955,6 +16612,137 @@ namespace Njulf.Rendering
         {
             ulong hash = CreateDdgiLightSignature(lightSnapshot);
             return HashAdd(hash, emissiveSourceRevision);
+        }
+
+        private static ulong CreateSimpleDdgiWarmStartLightSignature(
+            LightFrameSnapshot lightSnapshot)
+        {
+            ulong hash = HashStart;
+            ReadOnlySpan<Light> lights = lightSnapshot.Lights.Span;
+            int count = Math.Min(lightSnapshot.Count, lights.Length);
+            hash = HashAdd(hash, count);
+            for (int index = 0; index < count; index++)
+                hash = HashAdd(hash, lights[index]);
+            return hash;
+        }
+
+        private ulong CreateSimpleDdgiWarmStartEnvironmentSignature()
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            ulong hash = CreateSimpleDdgiEnvironmentSignature(
+                Settings.Environment);
+            hash = HashAdd(
+                hash,
+                _environmentManager?.GiLightingSignature ?? 0UL);
+            hash = HashAdd(hash, gi.EnvironmentFallbackIntensity);
+            hash = HashAdd(hash, gi.DdgiAlphaMaskedTransportEnabled);
+            hash = HashAdd(hash, gi.DdgiThinWallPolicyEnabled);
+            hash = HashAdd(hash, gi.DdgiSelfShadowBiasScale);
+            hash = HashAdd(hash, gi.DdgiThinWallLeakClampStrength);
+            hash = HashAdd(hash, gi.SimpleDdgiNormalBias);
+            hash = HashAdd(hash, gi.SimpleDdgiViewBias);
+            hash = HashAdd(hash, gi.SimpleDdgiMaximumWorldBiasMeters);
+            hash = HashAdd(hash, gi.SimpleDdgiArchitecturalThicknessMeters);
+            hash = HashAdd(hash, gi.SimpleDdgiThinSurfaceTransmissionEnabled);
+            hash = HashAdd(hash, gi.SimpleDdgiReducedBlendEnabled);
+            hash = HashAdd(hash, gi.SimpleDdgiHysteresis);
+            hash = HashAdd(hash, gi.SimpleDdgiHysteresisChangeThreshold);
+            hash = HashAdd(hash, gi.SimpleDdgiHysteresisStepThreshold);
+            hash = HashAdd(hash, gi.SimpleDdgiTransportSolverRelaxation);
+            hash = HashAdd(hash, gi.SimpleDdgiTransportAlbedoClamp);
+            hash = HashAdd(hash, gi.SimpleDdgiNearMaterialTextureMaxCascade);
+            hash = HashAdd(hash, gi.SimpleDdgiMidMaterialTextureMaxCascade);
+            hash = HashAdd(hash, gi.SimpleDdgiFarMaterialTextureMaxCascade);
+            hash = HashAdd(hash, gi.SimpleDdgiNearMaxShadedLights);
+            hash = HashAdd(hash, gi.SimpleDdgiMidMaxShadedLights);
+            hash = HashAdd(hash, gi.SimpleDdgiFarMaxShadedLights);
+            hash = HashAdd(hash, gi.EffectiveGiEmissiveMeshSampling);
+            hash = HashAdd(hash, gi.DdgiEmissiveTriangleBudget);
+            hash = HashAdd(hash, gi.FarFieldClipmapEnabled);
+            hash = HashAdd(hash, gi.FarFieldPagedEnabled);
+            hash = HashAdd(hash, gi.GiFarFieldMaterialV2);
+            hash = HashAdd(hash, gi.FarFieldForceAll);
+            hash = HashAdd(hash, gi.FarFieldSkyVisibilityEnabled);
+            hash = HashAdd(hash, gi.FarFieldSunShadowEnabled);
+            hash = HashAdd(hash, gi.FarFieldStartDistance);
+            return HashAdd(hash, gi.FarFieldMaxTraceSteps);
+        }
+
+        private SimpleDdgiWarmStartSceneIdentity?
+            ResolveSimpleDdgiWarmStartSceneIdentity(
+                Scene scene,
+                SceneRenderingData sceneData,
+                LightFrameSnapshot lightSnapshot)
+        {
+            ulong lightSignature =
+                CreateSimpleDdgiWarmStartLightSignature(lightSnapshot);
+            ulong environmentSignature =
+                CreateSimpleDdgiWarmStartEnvironmentSignature();
+            ulong emissiveSignature = _lastDdgiEmissiveSourceSignature;
+            bool unchanged = ReferenceEquals(
+                    _simpleDdgiWarmStartIdentityScene,
+                    scene) &&
+                _simpleDdgiWarmStartIdentityMutationSerial ==
+                    scene.MutationSerial &&
+                _simpleDdgiWarmStartIdentityContentRevision ==
+                    sceneData.SceneContentRevision &&
+                _simpleDdgiWarmStartIdentityMaterialRevision ==
+                    sceneData.GiTransportMaterialRevision &&
+                _simpleDdgiWarmStartIdentityLightSignature ==
+                    lightSignature &&
+                _simpleDdgiWarmStartIdentityEnvironmentSignature ==
+                    environmentSignature &&
+                _simpleDdgiWarmStartIdentityEmissiveSignature ==
+                    emissiveSignature;
+            if (unchanged)
+                return _simpleDdgiWarmStartSceneIdentity;
+
+            _simpleDdgiWarmStartIdentityScene = scene;
+            _simpleDdgiWarmStartIdentityMutationSerial = scene.MutationSerial;
+            _simpleDdgiWarmStartIdentityContentRevision =
+                sceneData.SceneContentRevision;
+            _simpleDdgiWarmStartIdentityMaterialRevision =
+                sceneData.GiTransportMaterialRevision;
+            _simpleDdgiWarmStartIdentityLightSignature = lightSignature;
+            _simpleDdgiWarmStartIdentityEnvironmentSignature =
+                environmentSignature;
+            _simpleDdgiWarmStartIdentityEmissiveSignature =
+                emissiveSignature;
+
+            // A persisted background prior must not capture a transient VFX
+            // phase. Static mesh emission remains eligible and is represented
+            // by the exact source/surface payload signature above.
+            if (_ddgiVfxMacroReductionResult.SourceCount > 0)
+            {
+                _simpleDdgiWarmStartSceneIdentity = null;
+                return null;
+            }
+
+            try
+            {
+                _simpleDdgiWarmStartSceneIdentity =
+                    SimpleDdgiWarmStartIdentityBuilder.Create(
+                        scene,
+                        _meshManager,
+                        _materialManager,
+                        lightSignature,
+                        environmentSignature,
+                        emissiveSignature,
+                        _captureShaderBundleHash);
+            }
+            catch (Exception exception) when (
+                exception is InvalidOperationException or
+                ArgumentException or
+                OverflowException)
+            {
+                // Cache identity construction is an optional optimization. Any
+                // malformed or unavailable producer data fails closed without
+                // taking the live GI renderer down with it.
+                System.Diagnostics.Debug.WriteLine(
+                    $"Persistent Simple-DDGI warm-start identity rejected: {exception.Message}");
+                _simpleDdgiWarmStartSceneIdentity = null;
+            }
+            return _simpleDdgiWarmStartSceneIdentity;
         }
 
         internal static ulong CreateSimpleDdgiEnvironmentSignature(EnvironmentSettings environment)
@@ -11005,31 +16793,55 @@ namespace Njulf.Rendering
             ulong stableLightSignature = steppedAtmosphere
                 ? CreateSimpleDdgiStableLightSignature(lightSnapshot)
                 : CreateDdgiLightSignature(lightSnapshot);
-            stableLightSignature = HashAdd(
-                stableLightSignature,
-                CreateSimpleDdgiEnvironmentSignature(Settings.Environment));
+            ulong environmentSignature =
+                CreateSimpleDdgiEnvironmentSignature(Settings.Environment);
             ulong atmosphereStepSignature = steppedAtmosphere
                 ? _environmentManager!.GiLightingSignature
                 : 0UL;
-            ulong lightSignature = HashAdd(
-                stableLightSignature,
-                atmosphereStepSignature);
             GlobalIlluminationSettings gi = Settings.GlobalIllumination;
-            lightSignature = HashAdd(lightSignature, gi.EnvironmentFallbackIntensity);
-            lightSignature = HashAdd(lightSignature, gi.DdgiSelfShadowBiasScale);
-            lightSignature = HashAdd(lightSignature, gi.DdgiThinWallPolicyEnabled);
-            lightSignature = HashAdd(lightSignature, gi.DdgiThinWallLeakClampStrength);
-            lightSignature = HashAdd(lightSignature, gi.SimpleDdgiNormalBias);
-            lightSignature = HashAdd(lightSignature, gi.SimpleDdgiViewBias);
-            lightSignature = HashAdd(lightSignature, gi.SimpleDdgiMaximumWorldBiasMeters);
-            lightSignature = HashAdd(lightSignature, gi.SimpleDdgiArchitecturalThicknessMeters);
-            lightSignature = HashAdd(lightSignature, gi.FarFieldClipmapEnabled);
-            lightSignature = HashAdd(lightSignature, gi.FarFieldPagedEnabled);
-            lightSignature = HashAdd(lightSignature, gi.FarFieldForceAll);
-            lightSignature = HashAdd(lightSignature, gi.FarFieldSkyVisibilityEnabled);
-            lightSignature = HashAdd(lightSignature, gi.FarFieldStartDistance);
-            lightSignature = HashAdd(lightSignature, gi.FarFieldMaxTraceSteps);
-            lightSignature = HashAdd(lightSignature, farFieldCoverageAvailable);
+            environmentSignature = HashAdd(
+                environmentSignature,
+                gi.EnvironmentFallbackIntensity);
+            ulong sourcePolicySignature = HashStart;
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.DdgiSelfShadowBiasScale);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.DdgiThinWallPolicyEnabled);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.DdgiThinWallLeakClampStrength);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.SimpleDdgiNormalBias);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.SimpleDdgiViewBias);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.SimpleDdgiMaximumWorldBiasMeters);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.SimpleDdgiArchitecturalThicknessMeters);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.FarFieldClipmapEnabled);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.FarFieldPagedEnabled);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.FarFieldForceAll);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.FarFieldSkyVisibilityEnabled);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.FarFieldStartDistance);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, gi.FarFieldMaxTraceSteps);
+            sourcePolicySignature = HashAdd(sourcePolicySignature, farFieldCoverageAvailable);
+            ulong sourceContractSignature = HashAdd(
+                stableLightSignature,
+                sourcePolicySignature);
+            bool hasSoleDirectionalLight = TryGetSoleDirectionalLight(
+                lightSnapshot,
+                out Light soleDirectionalLight);
+            // The normal DDGI light signature is intentionally quantized to
+            // suppress insignificant scene churn. A sole-sun relight is cheap
+            // enough to retain exact color/intensity responsiveness, so fold an
+            // exact witness into this path only.
+            ulong exactSoleDirectionalSignature = HashStart;
+            exactSoleDirectionalSignature = HashAdd(
+                exactSoleDirectionalSignature,
+                hasSoleDirectionalLight);
+            if (hasSoleDirectionalLight)
+                exactSoleDirectionalSignature = HashAdd(
+                    exactSoleDirectionalSignature,
+                    soleDirectionalLight);
+            ulong lightSignature = HashStart;
+            lightSignature = HashAdd(lightSignature, sourceContractSignature);
+            lightSignature = HashAdd(lightSignature, environmentSignature);
+            lightSignature = HashAdd(lightSignature, atmosphereStepSignature);
+            lightSignature = HashAdd(
+                lightSignature,
+                exactSoleDirectionalSignature);
             ulong emissiveSignature = HashAdd(HashStart, emissiveSourceRevision);
             // Region events are the normal Simple DDGI dynamic path.  Retain the
             // whole-scene signature only as the explicit legacy/validation mode;
@@ -11042,6 +16854,14 @@ namespace Njulf.Rendering
 
             uint reasonFlags = 0u;
             bool cohortTransition = false;
+            SimpleDdgiSourceRefreshMode sourceRefreshMode =
+                SimpleDdgiSourceRefreshMode.None;
+            Vector3 sourceRelightScale = Vector3.One;
+            bool hasNoEmissiveSources =
+                _ddgiEmissiveSourceCount == 0 &&
+                _ddgiEmissiveTriangleTableStats.CandidateCount == 0 &&
+                _ddgiEmissiveSkippedSkinnedObjectCount == 0 &&
+                _ddgiEmissiveExcludedCandidateCount == 0;
             if (_hasSimpleDdgiDirtySignature)
             {
                 if (lightSignature != _lastSimpleDdgiLightSignature)
@@ -11053,16 +16873,63 @@ namespace Njulf.Rendering
 
                 cohortTransition = steppedAtmosphere &&
                     atmosphereStepSignature != _lastSimpleDdgiAtmosphereStepSignature &&
-                    stableLightSignature == _lastSimpleDdgiStableLightSignature &&
+                    sourceContractSignature == _lastSimpleDdgiStableLightSignature &&
+                    environmentSignature == _lastSimpleDdgiEnvironmentSignature &&
                     emissiveSignature == _lastSimpleDdgiEmissiveSignature &&
                     geometrySignature == _lastSimpleDdgiDynamicGeometrySignature;
+
+                bool environmentOnlyChange =
+                    environmentSignature != _lastSimpleDdgiEnvironmentSignature &&
+                    sourceContractSignature == _lastSimpleDdgiStableLightSignature &&
+                    atmosphereStepSignature == _lastSimpleDdgiAtmosphereStepSignature &&
+                    emissiveSignature == _lastSimpleDdgiEmissiveSignature &&
+                    geometrySignature == _lastSimpleDdgiDynamicGeometrySignature;
+                bool soleSunRadianceOnlyChange =
+                    !steppedAtmosphere &&
+                    lightSignature != _lastSimpleDdgiLightSignature &&
+                    hasSoleDirectionalLight &&
+                    _hasLastSimpleDdgiSoleDirectionalLight &&
+                    hasNoEmissiveSources &&
+                    _lastSimpleDdgiHadNoEmissiveSources &&
+                    sourcePolicySignature ==
+                        _lastSimpleDdgiSourcePolicySignature &&
+                    environmentSignature ==
+                        _lastSimpleDdgiEnvironmentSignature &&
+                    atmosphereStepSignature ==
+                        _lastSimpleDdgiAtmosphereStepSignature &&
+                    emissiveSignature ==
+                        _lastSimpleDdgiEmissiveSignature &&
+                    geometrySignature ==
+                        _lastSimpleDdgiDynamicGeometrySignature &&
+                    TryComputeSoleDirectionalRelightScale(
+                        _lastSimpleDdgiSoleDirectionalLight,
+                        soleDirectionalLight,
+                        out sourceRelightScale);
+                sourceRefreshMode = environmentOnlyChange
+                    ? SimpleDdgiSourceRefreshMode.EnvironmentMissRelight
+                    : soleSunRadianceOnlyChange
+                        ? SimpleDdgiSourceRefreshMode.CachedHitRelight
+                        : (lightSignature != _lastSimpleDdgiLightSignature ||
+                           emissiveSignature != _lastSimpleDdgiEmissiveSignature ||
+                           geometrySignature != _lastSimpleDdgiDynamicGeometrySignature
+                            ? SimpleDdgiSourceRefreshMode.FullTrace
+                            : SimpleDdgiSourceRefreshMode.None);
+            }
+            else
+            {
+                sourceRefreshMode = SimpleDdgiSourceRefreshMode.FullTrace;
             }
 
             _lastSimpleDdgiLightSignature = lightSignature;
-            _lastSimpleDdgiStableLightSignature = stableLightSignature;
+            _lastSimpleDdgiStableLightSignature = sourceContractSignature;
+            _lastSimpleDdgiSourcePolicySignature = sourcePolicySignature;
+            _lastSimpleDdgiEnvironmentSignature = environmentSignature;
             _lastSimpleDdgiAtmosphereStepSignature = atmosphereStepSignature;
             _lastSimpleDdgiEmissiveSignature = emissiveSignature;
             _lastSimpleDdgiDynamicGeometrySignature = geometrySignature;
+            _hasLastSimpleDdgiSoleDirectionalLight = hasSoleDirectionalLight;
+            _lastSimpleDdgiSoleDirectionalLight = soleDirectionalLight;
+            _lastSimpleDdgiHadNoEmissiveSources = hasNoEmissiveSources;
             _hasSimpleDdgiDirtySignature = true;
 
             ulong combined = HashStart;
@@ -11072,8 +16939,90 @@ namespace Njulf.Rendering
             return new SimpleDdgiDirtySignature(
                 combined,
                 reasonFlags,
-                cohortTransition);
+                cohortTransition,
+                sourceRefreshMode,
+                sourceRelightScale);
         }
+
+        private static bool TryGetSoleDirectionalLight(
+            LightFrameSnapshot lightSnapshot,
+            out Light light)
+        {
+            ReadOnlySpan<Light> lights = lightSnapshot.Lights.Span;
+            bool sole = lightSnapshot.Count == 1 &&
+                lights.Length >= 1 &&
+                lightSnapshot.DirectionalLightCount == 1 &&
+                lightSnapshot.LocalLightCount == 0 &&
+                lights[0].Type == LightType.Directional;
+            light = sole ? lights[0] : default;
+            return sole;
+        }
+
+        internal static bool TryComputeSoleDirectionalRelightScale(
+            in Light previous,
+            in Light current,
+            out Vector3 scale)
+        {
+            scale = Vector3.One;
+            if (previous.Type != LightType.Directional ||
+                current.Type != LightType.Directional ||
+                previous.Position != current.Position ||
+                previous.Range != current.Range ||
+                previous.Direction != current.Direction ||
+                previous.SpotAngle != current.SpotAngle ||
+                previous.CastsShadows != current.CastsShadows ||
+                previous.ShadowStrength != current.ShadowStrength ||
+                previous.ShadowMapSizeOverride != current.ShadowMapSizeOverride ||
+                previous.ShadowNearPlane != current.ShadowNearPlane ||
+                previous.ShadowFarPlane != current.ShadowFarPlane ||
+                previous.ShadowPriority != current.ShadowPriority ||
+                !IsFiniteNonNegative(previous.Color) ||
+                !IsFiniteNonNegative(current.Color) ||
+                !float.IsFinite(previous.Intensity) ||
+                !float.IsFinite(current.Intensity) ||
+                previous.Intensity < 0.0f || current.Intensity < 0.0f)
+            {
+                return false;
+            }
+
+            System.Numerics.Vector3 oldRadiance =
+                previous.Color * previous.Intensity;
+            System.Numerics.Vector3 newRadiance =
+                current.Color * current.Intensity;
+            if (!IsFiniteNonNegative(oldRadiance) ||
+                !IsFiniteNonNegative(newRadiance) ||
+                !TryResolveRadianceScale(oldRadiance.X, newRadiance.X, out float x) ||
+                !TryResolveRadianceScale(oldRadiance.Y, newRadiance.Y, out float y) ||
+                !TryResolveRadianceScale(oldRadiance.Z, newRadiance.Z, out float z))
+            {
+                return false;
+            }
+
+            scale = new Vector3(x, y, z);
+            return true;
+        }
+
+        private static bool TryResolveRadianceScale(
+            float previous,
+            float current,
+            out float scale)
+        {
+            if (previous == 0.0f)
+            {
+                scale = 1.0f;
+                return current == 0.0f;
+            }
+
+            scale = current / previous;
+            return float.IsFinite(scale) && scale >= 0.0f;
+        }
+
+        private static bool IsFiniteNonNegative(
+            System.Numerics.Vector3 value) =>
+            float.IsFinite(value.X) &&
+            float.IsFinite(value.Y) &&
+            float.IsFinite(value.Z) &&
+            value.X >= 0.0f && value.Y >= 0.0f && value.Z >= 0.0f;
 
         private ulong CreateSimpleDdgiStableLightSignature(
             LightFrameSnapshot lightSnapshot)
@@ -11946,6 +17895,33 @@ namespace Njulf.Rendering
             return sum > uint.MaxValue ? uint.MaxValue : (uint)sum;
         }
 
+        private static uint SaturatingSubtract(uint value, uint subtrahend)
+        {
+            return value > subtrahend ? value - subtrahend : 0u;
+        }
+
+        private static uint ToUIntNonNegative(int value)
+        {
+            return value <= 0 ? 0u : (uint)value;
+        }
+
+        private static uint SumSimpleDdgiSchedulerClassCounts(
+            in SimpleDdgiSchedulerClassCounts counts)
+        {
+            uint sum = SaturatingAdd(counts.VisibleZeroSupport,
+                counts.FreshExposedVisible);
+            sum = SaturatingAdd(sum, counts.VisibleDirty);
+            sum = SaturatingAdd(sum, counts.VisibleRetry);
+            sum = SaturatingAdd(sum, counts.NearMaintenance);
+            sum = SaturatingAdd(sum, counts.MidMaintenance);
+            return SaturatingAdd(sum, counts.FarMaintenance);
+        }
+
+        private static uint SumSimpleDdgiRingCounts(in SimpleDdgiRingCounts counts)
+        {
+            return SaturatingAdd(SaturatingAdd(counts.Near, counts.Mid), counts.Far);
+        }
+
         private static int ClampUlongToInt(ulong value)
         {
             return value > int.MaxValue ? int.MaxValue : (int)value;
@@ -12089,7 +18065,20 @@ namespace Njulf.Rendering
                 DynamicRejectedCounts: CopyDiagnosticCounters(sceneData.SceneSubmissionGpuDirectionalDynamicShadowRejectedCounts),
                 DynamicOverflowCounts: CopyDiagnosticCounters(sceneData.SceneSubmissionGpuDirectionalDynamicShadowOverflowCounts),
                 ConservativeLodFallbackCount: sceneData.SceneSubmissionGpuDirectionalShadowLodFallbackCount,
-                ReceiverCounters: receiverCounters);
+                ReceiverCounters: receiverCounters)
+            {
+                CacheLayerProvenance = CopyDirectionalShadowCacheLayerProvenance(
+                    sceneData.DirectionalShadowCacheLayerProvenance),
+                CasterDiagnostics = sceneData.DirectionalShadowCasterDiagnosticReadback
+            };
+        }
+
+        private static DirectionalShadowCacheLayerProvenance[] CopyDirectionalShadowCacheLayerProvenance(
+            DirectionalShadowCacheLayerProvenance[] source)
+        {
+            var copy = new DirectionalShadowCacheLayerProvenance[source.Length];
+            Array.Copy(source, copy, source.Length);
+            return copy;
         }
 
         private static float GetDirectionalShadowSplit(in GPUShadowData shadowData, int cascade)
@@ -12179,6 +18168,166 @@ namespace Njulf.Rendering
             // (Camera aspect ratio should be updated by the caller)
         }
 
+        private void DisableGiCausticForIncompatibleExtent(
+            Extent2D nextSceneExtent)
+        {
+            if (!_advancedGiGraphModes.UsesCausticWorldCache)
+                return;
+            GiCausticScreenResolveLayout screen =
+                _giCausticPlan.GpuLayout.ScreenResolve;
+            if (screen.IsValid && nextSceneExtent.Width == (uint)screen.Width &&
+                nextSceneExtent.Height == (uint)screen.Height)
+            {
+                return;
+            }
+
+            const string reason = "caustic-resize-requires-new-bound-evidence";
+            _giCausticFrameAvailable = false;
+            _giCausticRuntimeConfigured = false;
+            _giCausticTaggedTransportProducer = null;
+            _giCausticProducerRevisionFingerprint = 0UL;
+            _giCausticCurrentRevision = default;
+            _giCausticRuntime?.DisableAndReleaseAfterDeviceIdle(reason);
+            _renderTargets?.ReleaseGiCausticTargetsAfterDeviceIdle();
+            _meshPipeline?.DisableGiCausticReceiverAfterDeviceIdle(reason);
+            _giCausticPlan = _giCausticPlan with
+            {
+                Active = false,
+                AllocatedBytes = 0UL,
+                GpuLayout = GiCausticGpuResourceLayout.Empty(reason),
+                Memory = SimpleDdgiAdvancedExperimentMemoryPlan
+                    .CreateCausticRejected(
+                        GiExperimentFallbackReason.EvidenceBindingMismatch),
+                Status = reason,
+                Admission = new GiExperimentAdmission(
+                    "C4",
+                    Requested: true,
+                    CapabilitySupported: true,
+                    Active: false,
+                    Stage: GiExperimentStage.QualificationFailed,
+                    AllocatedBytes: 0UL,
+                    Status: reason)
+            };
+            _giCausticMode = _giCausticMode with
+            {
+                AdmittedMode = GiCausticMode.Off,
+                EffectiveMode = GiCausticMode.Off,
+                FallbackReason =
+                    GiExperimentFallbackReason.EvidenceBindingMismatch,
+                FallbackDetail = reason
+            };
+            _advancedGiGraphModes = _advancedGiGraphModes with
+            {
+                Caustics = GiCausticMode.Off
+            };
+            _giCausticReceiverPipelineConfiguration =
+                ForwardGiCausticReceiverPipelineConfiguration.Disabled;
+
+            ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(
+                _renderGraph,
+                _advancedGiGraphModes);
+            _renderGraph.RemovePassesAfterDeviceIdle(
+            [
+                GiCausticGpuPassNames.Task,
+                GiCausticGpuPassNames.Trace,
+                GiCausticGpuPassNames.CacheBuild,
+                GiCausticGpuPassNames.Resolve,
+                GiCausticGpuPassNames.Composite
+            ]);
+            _renderGraph.UnregisterResourcesAfterDeviceIdle(
+            [
+                RenderGraphResourceId.GiCausticTasks,
+                RenderGraphResourceId.GiCausticPhotons,
+                RenderGraphResourceId.GiCausticCache,
+                RenderGraphResourceId.GiCausticScratch,
+                RenderGraphResourceId.GiCausticReceiverPayload,
+                RenderGraphResourceId.GiCausticRadiance,
+                RenderGraphResourceId.GiCausticMoments,
+                RenderGraphResourceId.GiCausticScreenFrameConstants
+            ]);
+        }
+
+        private void DisableNearFieldResidualForIncompatibleExtent(
+            Extent2D nextSceneExtent)
+        {
+            if (!_advancedGiGraphModes.UsesNearFieldHiZResidual)
+                return;
+
+            SimpleDdgiNearFieldResidualLayout layout =
+                _simpleDdgiNearFieldResidualPlan.Layout;
+            if (layout.IsValid && nextSceneExtent.Width == (uint)layout.SourceWidth &&
+                nextSceneExtent.Height == (uint)layout.SourceHeight)
+            {
+                return;
+            }
+
+            const string reason =
+                "near-field-resize-requires-new-bound-evidence";
+            int filterIterationCount = Math.Max(
+                0,
+                _simpleDdgiNearFieldResidualPlan.Layout.FilterIterationCount);
+            _simpleDdgiNearFieldResidualRuntime?
+                .DisableAndReleaseAfterDeviceIdle(reason);
+            _renderTargets?.ReleaseNearFieldResidualTargetsAfterDeviceIdle();
+            _meshPipeline?.DisableNearFieldDirectSourceAfterDeviceIdle(reason);
+            _simpleDdgiNearFieldResidualPlan =
+                SimpleDdgiNearFieldResidualExperiment.InvalidateRuntimePlan(
+                    _simpleDdgiNearFieldResidualPlan,
+                    reason,
+                    GiExperimentFallbackReason.EvidenceBindingMismatch);
+            _simpleDdgiNearFieldResidualMode =
+                _simpleDdgiNearFieldResidualMode with
+                {
+                    AdmittedMode = SimpleDdgiNearFieldResidualMode.Off,
+                    EffectiveMode = SimpleDdgiNearFieldResidualMode.Off,
+                    FallbackReason =
+                        GiExperimentFallbackReason.EvidenceBindingMismatch,
+                    FallbackDetail = reason
+                };
+            _advancedGiGraphModes = _advancedGiGraphModes with
+            {
+                NearFieldResidual = SimpleDdgiNearFieldResidualMode.Off,
+                NearFieldProfile = default
+            };
+            _simpleDdgiNearFieldResidualGpuConfiguration = default;
+            _nearFieldDirectSourcePipelineConfiguration =
+                ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
+
+            // Rewrite shared pass usage before removing the optional C5
+            // inventory so ForwardPlus no longer names the released MRTs.
+            ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(
+                _renderGraph,
+                _advancedGiGraphModes);
+            var c5PassNames = new List<string>(filterIterationCount + 4)
+            {
+                SimpleDdgiNearFieldResidualGpuPassNames.Reset,
+                SimpleDdgiNearFieldResidualGpuPassNames.Trace,
+                SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
+                SimpleDdgiNearFieldResidualGpuPassNames.Composite
+            };
+            for (int iteration = 0; iteration < filterIterationCount; iteration++)
+            {
+                c5PassNames.Add(
+                    SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(iteration));
+            }
+            _renderGraph.RemovePassesAfterDeviceIdle(c5PassNames);
+            _renderGraph.UnregisterResourcesAfterDeviceIdle(
+            [
+                RenderGraphResourceId.NearFieldDirectSource,
+                RenderGraphResourceId.NearFieldReceiverPayload,
+                RenderGraphResourceId.NearFieldResidualRaw,
+                RenderGraphResourceId.NearFieldResidualHitMetadata,
+                RenderGraphResourceId.NearFieldResidualHistory,
+                RenderGraphResourceId.NearFieldResidualMoments,
+                RenderGraphResourceId.NearFieldResidualValidity,
+                RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                RenderGraphResourceId.NearFieldResidualFilterScratch,
+                RenderGraphResourceId.NearFieldResidualTileBuffers,
+                RenderGraphResourceId.NearFieldResidualTraceFrameConstants
+            ]);
+        }
+
         private void EnsureRenderTargetProfile()
         {
             if (_renderTargets == null)
@@ -12187,7 +18336,8 @@ namespace Njulf.Rendering
             bool aoEnabled = Settings.AmbientOcclusion.Enabled;
             float ambientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
             AntiAliasingMode aaMode = Settings.AntiAliasing.EffectiveMode;
-            bool motionVectorTargetEnabled = NeedsMotionVectors(Settings);
+            bool motionVectorTargetEnabled = NeedsMotionVectors(Settings) ||
+                _advancedGiGraphModes.UsesNearFieldHiZResidual;
             int bloomMipCount = Settings.Bloom.MipCount;
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
             bool weightedOitTargetEnabled = IsWeightedOitTargetEnabled(Settings);
@@ -12229,6 +18379,10 @@ namespace Njulf.Rendering
                 RuntimeStallReason.ResourceResize,
                 $"Render target profile rebuild: {recreateReason}",
                 _context.WaitIdle);
+            DisableGiCausticForIncompatibleExtent(sceneRenderExtent);
+            DisableNearFieldResidualForIncompatibleExtent(sceneRenderExtent);
+            motionVectorTargetEnabled = NeedsMotionVectors(Settings) ||
+                _advancedGiGraphModes.UsesNearFieldHiZResidual;
             _renderTargets.Recreate(
                 sceneRenderExtent,
                 _swapchain.Extent,
@@ -12435,6 +18589,8 @@ namespace Njulf.Rendering
             _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
             float sceneResolutionScale = ResolveSceneResolutionScale();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
+            DisableGiCausticForIncompatibleExtent(sceneRenderExtent);
+            DisableNearFieldResidualForIncompatibleExtent(sceneRenderExtent);
             _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
             _hizVisibilityPolicyState.PyramidValid = false;
             _renderTargets?.Recreate(
@@ -12444,7 +18600,8 @@ namespace Njulf.Rendering
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
                 Settings.AntiAliasing.EffectiveMode,
-                NeedsMotionVectors(Settings),
+                NeedsMotionVectors(Settings) ||
+                    _advancedGiGraphModes.UsesNearFieldHiZResidual,
                 IsFogTargetEnabled(Settings),
                 IsWeightedOitTargetEnabled(Settings),
                 IsMaterialTransportProvenanceTargetEnabled(Settings));
@@ -12462,7 +18619,8 @@ namespace Njulf.Rendering
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAmbientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
-            _lastMotionVectorTargetEnabled = NeedsMotionVectors(Settings);
+            _lastMotionVectorTargetEnabled = NeedsMotionVectors(Settings) ||
+                _advancedGiGraphModes.UsesNearFieldHiZResidual;
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = IsFogTargetEnabled(Settings);
@@ -12767,6 +18925,10 @@ namespace Njulf.Rendering
             BoundingBox Bounds,
             int LastSeenFrame);
 
+        private readonly record struct DdgiTrackedSkinnedPose(
+            ulong PoseRevision,
+            BoundingBox Bounds);
+
         private sealed class ReflectionProbeCompletionValueProvider :
             IReflectionProbeCompletionValueProvider
         {
@@ -12786,7 +18948,9 @@ namespace Njulf.Rendering
         private readonly record struct SimpleDdgiDirtySignature(
             ulong Signature,
             uint ReasonFlags,
-            bool CohortTransition);
+            bool CohortTransition,
+            SimpleDdgiSourceRefreshMode SourceRefreshMode,
+            Vector3 SourceRelightScale);
 
         protected virtual void Dispose(bool disposing)
         {
@@ -12900,6 +19064,14 @@ namespace Njulf.Rendering
                 "render-graph",
                 _renderGraph.Cleanup);
             AddResourceStage(
+                "gi-pipeline-cache",
+                () =>
+                {
+                    _giPipelineCacheService?.Dispose();
+                    _giPipelineCacheService = null;
+                },
+                "render-graph");
+            AddResourceStage(
                 "gpu-timestamps",
                 _gpuTimestamps.Dispose);
             AddResourceStage(
@@ -12927,6 +19099,9 @@ namespace Njulf.Rendering
                     _reflectionProbeManager
                         ?.Dispose());
             AddResourceStage(
+                "ddgi-mutation-journal",
+                _ddgiMutationJournal.Dispose);
+            AddResourceStage(
                 "ddgi-emissive-table-cache",
                 () =>
                 {
@@ -12937,6 +19112,56 @@ namespace Njulf.Rendering
             AddResourceStage(
                 "ddgi-emissive-source-buffer",
                 DestroyDdgiEmissiveSourceBuffer);
+            AddResourceStage(
+                "simple-ddgi-receiver-feedback-runtime",
+                () =>
+                {
+                    _simpleDdgiReceiverFeedbackRuntime?.Dispose();
+                    _simpleDdgiReceiverFeedbackRuntime = null;
+                });
+            AddResourceStage(
+                "simple-ddgi-guiding-runtime",
+                () =>
+                {
+                    _simpleDdgiGuidingFrameCoordinator?.Dispose();
+                    _simpleDdgiGuidingFrameCoordinator = null;
+                    _simpleDdgiGuidingSourceCacheSidecar?.Dispose();
+                    _simpleDdgiGuidingSourceCacheSidecar = null;
+                    _simpleDdgiGuidingRuntime?.Dispose();
+                    _simpleDdgiGuidingRuntime = null;
+                });
+            AddResourceStage(
+                "simple-ddgi-near-field-residual-runtime",
+                () =>
+                {
+                    _simpleDdgiNearFieldResidualRuntime?.Dispose();
+                    _simpleDdgiNearFieldResidualRuntime = null;
+                },
+                "render-graph");
+            AddResourceStage(
+                "gi-caustic-runtime",
+                () =>
+                {
+                    _giCausticRuntime?.Dispose();
+                    _giCausticRuntime = null;
+                    _giCausticTaggedTransportProducer = null;
+                },
+                "render-graph");
+            AddResourceStage(
+                "advanced-gi-transient-buffer-arena",
+                () =>
+                {
+                    _advancedGiTransientBufferArena?.Dispose();
+                    _advancedGiTransientBufferArena = null;
+                },
+                "simple-ddgi-receiver-feedback-runtime",
+                "simple-ddgi-guiding-runtime",
+                "simple-ddgi-near-field-residual-runtime");
+            AddResourceStage(
+                "simple-ddgi-light-tree-resources",
+                () =>
+                    _simpleDdgiLightTreeResources
+                        ?.Dispose());
             AddResourceStage(
                 "simple-ddgi-volume-manager",
                 () =>
@@ -12952,6 +19177,12 @@ namespace Njulf.Rendering
                 () =>
                     _accelerationStructureManager
                         ?.Dispose());
+            AddResourceStage(
+                "ddgi-foliage-proxy-manager",
+                () =>
+                    _ddgiFoliageProxyManager
+                        ?.Dispose(),
+                "acceleration-structure-manager");
             AddResourceStage(
                 "auto-exposure-manager",
                 () =>
@@ -12975,6 +19206,11 @@ namespace Njulf.Rendering
             AddResourceStage(
                 "skinning-pass",
                 () => _skinningPass?.Dispose());
+            AddResourceStage(
+                "ddgi-foliage-proxy-generation-pass",
+                () =>
+                    _ddgiFoliageProxyGenerationPass
+                        ?.Dispose());
             AddResourceStage(
                 "gpu-particle-reset-pass",
                 () =>
@@ -13148,14 +19384,22 @@ namespace Njulf.Rendering
 
         private void DestroyDdgiEmissiveSourceBuffer()
         {
-            if (!_ddgiEmissiveSourceBuffer.IsValid)
-                return;
-
-            _bufferManager.DestroyBuffer(
-                _ddgiEmissiveSourceBuffer);
-            _ddgiEmissiveSourceBuffer =
-                BufferHandle.Invalid;
+            if (_ddgiEmissiveSourceBuffer.IsValid)
+            {
+                _bufferManager.DestroyBuffer(
+                    _ddgiEmissiveSourceBuffer);
+                _ddgiEmissiveSourceBuffer =
+                    BufferHandle.Invalid;
+            }
+            if (_ddgiEmissiveSurfaceBuffer.IsValid)
+            {
+                _bufferManager.DestroyBuffer(
+                    _ddgiEmissiveSurfaceBuffer);
+                _ddgiEmissiveSurfaceBuffer =
+                    BufferHandle.Invalid;
+            }
             _ddgiEmissiveSourceBufferSize = 0;
+            _ddgiEmissiveSurfaceBufferSize = 0;
         }
     }
 

@@ -410,8 +410,8 @@ public sealed class MaterialTransportV2Tests
             Assert.That(
                 highCompiled.TransportProfile.MeanDiffuseReflectance.X,
                 Is.LessThan(lowCompiled.TransportProfile.MeanDiffuseReflectance.X));
-            Assert.That(MaterialCompilationContext.CurrentAlgorithmVersion, Is.EqualTo(4u));
-            Assert.That(highCompiled.TransportProfile.AlgorithmVersion, Is.EqualTo(4u));
+            Assert.That(MaterialCompilationContext.CurrentAlgorithmVersion, Is.EqualTo(5u));
+            Assert.That(highCompiled.TransportProfile.AlgorithmVersion, Is.EqualTo(5u));
         });
     }
 

@@ -1,0 +1,51 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_near_field_residual.glsl"
+
+// Reset is deliberately a separate dispatch from trace. Trace has atomic tile
+// counters, so attempting to clear them from an arbitrary trace workgroup
+// would race the very records it appends. The renderer dispatches enough
+// groups for max(metadataCount, tileWordCount), with both counts bounded by
+// the admitted C5 allocation.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) buffer ResetHitMetadataBuffer
+{
+    SimpleDdgiNearFieldResidualHitMetadata values[];
+} resetHitMetadata;
+
+layout(std430, set = 0, binding = 1) buffer ResetTileRecordsBuffer
+{
+    uint words[];
+} resetTileRecords;
+
+layout(push_constant) uniform NearFieldResetPushBlock
+{
+    SimpleDdgiNearFieldResidualResetPushConstants pc;
+};
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    if (pc.abiVersion != SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION)
+        return;
+
+    if (index < pc.metadataCount && index < uint(resetHitMetadata.values.length()))
+        resetHitMetadata.values[index] = SimpleDdgiNearFieldZeroMetadata();
+    if (index < pc.tileWordCount && index < uint(resetTileRecords.words.length()))
+    {
+        uint value = 0u;
+        if (index == 0u)
+            value = SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_MAGIC;
+        else if (index == 1u)
+            value = pc.abiVersion;
+        else if (index == 2u)
+            value = pc.frameSerialLow;
+        else if (index == 3u)
+            value = pc.frameSerialHigh;
+        else if (index == 6u)
+            value = pc.tileCount;
+        resetTileRecords.words[index] = value;
+    }
+}

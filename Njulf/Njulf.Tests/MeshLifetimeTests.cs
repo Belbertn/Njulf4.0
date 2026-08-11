@@ -102,14 +102,30 @@ public sealed class MeshLifetimeTests
                 index,
                 table.GetNextGeneration(index));
             table.CommitSlot(index, current.Generation);
-            foreach (MeshHandle prior in stale)
-                Assert.That(table.IsLive(prior), Is.False);
+            Assert.That(
+                current.Generation,
+                Is.EqualTo(checked((uint)cycle + 1u)),
+                "Single-slot reuse must advance the generation monotonically.");
+            if (stale.Count > 0)
+            {
+                // The immediately preceding generation and the oldest retained
+                // generation bracket the complete stale range. Combined with
+                // the monotonic generation assertion above, checking all prior
+                // handles on every cycle would add O(n^2) duplicate assertions
+                // without increasing coverage.
+                Assert.That(table.IsLive(stale[^1]), Is.False);
+                Assert.That(table.IsLive(stale[0]), Is.False);
+            }
             stale.Add(current);
             Assert.That(table.Release(current), Is.True);
         }
 
         Assert.Multiple(() =>
         {
+            Assert.That(
+                stale.Any(table.IsLive),
+                Is.False,
+                "Every retained generation must remain stale after churn.");
             Assert.That(table.Count, Is.EqualTo(1));
             Assert.That(table.ActiveCount, Is.Zero);
             Assert.That(table.FreeCount, Is.EqualTo(1));

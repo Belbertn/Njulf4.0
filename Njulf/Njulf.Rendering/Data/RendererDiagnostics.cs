@@ -25,7 +25,9 @@ namespace Njulf.Rendering.Data
         SchedulerCapacity = 1u << 13,
         SchedulerValidation = 1u << 14,
         ResidencyMode = 1u << 15,
-        ResidencyCapacity = 1u << 16
+        ResidencyCapacity = 1u << 16,
+        NearVisibilitySidecar = 1u << 17,
+        DirectionalRadiance = 1u << 18
     }
 
     /// <summary>
@@ -225,6 +227,8 @@ namespace Njulf.Rendering.Data
         public SimpleDdgiCapacityResourceTelemetry RayScratch { get; init; }
         public SimpleDdgiCapacityResourceTelemetry ProbeState { get; init; }
         public SimpleDdgiCapacityResourceTelemetry ReceiverProbes { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry DirectionalRadiance { get; init; }
+        public SimpleDdgiCapacityResourceTelemetry DirectionalRadianceParity { get; init; }
         public SimpleDdgiCapacityResourceTelemetry UpdateQueue { get; init; }
         public SimpleDdgiCapacityResourceTelemetry RelocationClassification { get; init; }
         public SimpleDdgiCapacityResourceTelemetry ReadbackBuffers { get; init; }
@@ -771,6 +775,35 @@ namespace Njulf.Rendering.Data
         public bool FoliageIndirectMeshletDispatchEnabled { get; init; } = true;
         public ulong FoliageInstanceBufferBytes { get; init; }
         public ulong FoliageClusterBufferBytes { get; init; }
+        public DdgiFoliageGeometryMode DdgiFoliageGeometryMode { get; init; }
+        public int DdgiFoliageProxyVertexCount { get; init; }
+        public int DdgiFoliageProxyCardCount { get; init; }
+        public int DdgiFoliageProxyTriangleCount { get; init; }
+        public int DdgiFoliageAuthoredInstanceCount { get; init; }
+        public int DdgiFoliageGeneratedInstanceCount { get; init; }
+        public int DdgiFoliageDroppedTriangleCount { get; init; }
+        public int DdgiFoliageRepresentedBladeCount { get; init; }
+        public int DdgiFoliageProxyUpdatedThisFrame { get; init; }
+        public ulong DdgiFoliageProxyUploadBytes { get; init; }
+        public ulong DdgiFoliageProxyVertexBufferBytes { get; init; }
+        public ulong DdgiFoliageProxyIndexBufferBytes { get; init; }
+        public ulong DdgiFoliageProxyPatchBufferBytes { get; init; }
+        public ulong DdgiFoliageProxyContentSignature { get; init; }
+        public ulong DdgiFoliageProxyCadenceGeneration { get; init; }
+        public long CpuDdgiFoliageProxyBuildMicroseconds { get; init; }
+        public long CpuDdgiFoliageProxyUploadMicroseconds { get; init; }
+        public long CpuDdgiFoliageProxyGenerationRecordMicroseconds { get; init; }
+        public long GpuDdgiFoliageProxyGenerationMicroseconds { get; init; }
+        public int DdgiFoliageProxyRequestedRepresentedInstanceCount { get; init; }
+        public float DdgiFoliageProxyDensityError { get; init; }
+        public float DdgiFoliageProxyWindAgeSeconds { get; init; }
+        public int DdgiFoliageProxyNearCardCount { get; init; }
+        public int DdgiFoliageProxyMidCardCount { get; init; }
+        public int DdgiFoliageProxyFarCardCount { get; init; }
+        public int DdgiFoliageProxyExcludedPatchCount { get; init; }
+        public uint DdgiFoliageProxyLodPolicyVersion { get; init; }
+        public string DdgiFoliageProxyFallbackReason { get; init; } =
+            string.Empty;
         public ulong FoliageDrawBufferBytes { get; init; }
         public ulong FoliageImpostorAtlasBytes { get; init; }
         public long CpuFoliageBuildMicroseconds { get; init; }
@@ -1041,6 +1074,13 @@ namespace Njulf.Rendering.Data
         public float MeshBufferUtilization { get; init; }
         public int MeshBufferCompactionCount { get; init; }
         public ulong MeshBufferCompactedBytesSaved { get; init; }
+        public long MeshBufferGrowthRetryCount { get; init; }
+        public long MeshBufferGrowthRetrySuccessCount { get; init; }
+        public long MeshBufferCompactionOutOfDeviceMemorySkipCount
+        {
+            get;
+            init;
+        }
         public ulong MeshRetainedDeadBytes { get; init; }
         public ulong MeshRetainedDeadByteBudget { get; init; }
         public long MeshRetainedDeadByteBudgetRejectionCount
@@ -1143,6 +1183,8 @@ namespace Njulf.Rendering.Data
         public int GlobalIlluminationRayQueryActive { get; init; }
         public int GlobalIlluminationDdgiActive { get; init; }
         public int SimpleDdgiActive { get; init; }
+        public DdgiContentRuntimeSnapshot ContentDependentDdgi { get; init; } =
+            DdgiContentRuntimeSnapshot.Disabled;
         public int SimpleDdgiStructuredGatherEnabled { get; init; }
         public int SimpleDdgiReducedBlendEnabled { get; init; }
         public int SimpleDdgiToroidalScrollingEnabled { get; init; }
@@ -1285,6 +1327,33 @@ namespace Njulf.Rendering.Data
         public ulong SimpleDdgiSampledAtlasImageBytes { get; init; }
         public SimpleDdgiStorageDiagnostics SimpleDdgiStorage { get; init; } =
             SimpleDdgiStorageDiagnostics.Unavailable;
+        public SimpleDdgiWarmStartTelemetry SimpleDdgiWarmStart { get; init; } =
+            SimpleDdgiWarmStartTelemetry.Disabled(
+                "Persistent Simple-DDGI warm-start telemetry is unavailable.");
+        public SimpleDdgiRefinementBrickDiagnostics SimpleDdgiRefinement { get; init; } =
+            new(false, 0, 0, 0, 0, 0, 0, false, "disabled");
+        public SimpleDdgiRefinementEmissiveDemandDiagnostics
+            SimpleDdgiRefinementEmissiveDemand { get; init; }
+        public SimpleDdgiNearVisibilityDiagnostics
+            SimpleDdgiNearVisibility { get; init; } =
+                SimpleDdgiNearVisibilityDiagnostics.Disabled();
+        /// <summary>
+        /// C5 diagnostics are deliberately disabled until a renderer-owned
+        /// resource/readback path has completed both counter and timestamp
+        /// readback for the same frame.
+        /// </summary>
+        public SimpleDdgiNearFieldResidualDiagnostics
+            SimpleDdgiNearFieldResidual { get; init; } =
+                SimpleDdgiNearFieldResidualDiagnostics.Disabled();
+        public GiRoadmapExperimentDiagnostics GiRoadmapExperiments { get; init; } =
+            GiRoadmapExperimentDiagnostics.Disabled;
+        /// <summary>
+        /// Central, non-overlapping memory ownership record for content DDGI
+        /// plus B1/C1/C3/C4/C5. Persisted captures use this instead of adding
+        /// feature-local totals that may share or retire physical resources.
+        /// </summary>
+        public SimpleDdgiContentMemoryPlan SimpleDdgiContentMemory { get; init; } =
+            SimpleDdgiContentMemoryPlan.Empty;
         public ulong SimpleDdgiRayScratchBytes { get; init; }
         public ulong SimpleDdgiProbeStateBytes { get; init; }
         public ulong SimpleDdgiReceiverProbeBytes { get; init; }
@@ -1509,6 +1578,18 @@ namespace Njulf.Rendering.Data
         public uint DdgiThinUnsupportedTransmissionHitCount { get; init; }
         public uint DdgiThinEnergyClampCount { get; init; }
         public uint DdgiThinInvalidTransmissionCount { get; init; }
+        public uint DdgiTransparentVisibilityLayerCount { get; init; }
+        public uint DdgiTransparentVisibilityLimitCount { get; init; }
+        public uint DdgiRayDecalCandidateCount { get; init; }
+        public uint DdgiRayDecalRetainedCount { get; init; }
+        public uint DdgiRayDecalAssociatedCount { get; init; }
+        public uint DdgiRayDecalDepthRejectCount { get; init; }
+        public uint DdgiRayDecalFacingRejectCount { get; init; }
+        public uint DdgiRayDecalCandidateLimitCount { get; init; }
+        public uint DdgiFoliageProxyHitCount { get; init; }
+        public uint DdgiInvalidRayMetadataCount { get; init; }
+        public uint DdgiStochasticAlphaAcceptCount { get; init; }
+        public uint DdgiStochasticAlphaRejectCount { get; init; }
         public uint DdgiTraceEarlyOutDisabledCount { get; init; }
         public uint DdgiTraceEarlyOutBeyondRequestCount { get; init; }
         public uint DdgiTraceEarlyOutResolveBoundsCount { get; init; }
@@ -1564,6 +1645,29 @@ namespace Njulf.Rendering.Data
         public int DdgiScrollCount { get; init; }
         public int DdgiNewProbeCount { get; init; }
         public int DdgiDirtyBoundsProbeUpdateCount { get; init; }
+        public ulong SimpleDdgiMutationJournalLastConsumedSerial { get; init; }
+        public ulong SimpleDdgiMutationJournalEnqueuedEventCount { get; init; }
+        public ulong SimpleDdgiMutationJournalCoalescedEventCount { get; init; }
+        public ulong SimpleDdgiMutationJournalOverflowCount { get; init; }
+        public ulong SimpleDdgiMutationJournalConservativeFallbackCount { get; init; }
+        public ulong SimpleDdgiMutationJournalAttachScanCount { get; init; }
+        public ulong SimpleDdgiMutationJournalAttachObjectCount { get; init; }
+        public ulong SimpleDdgiMutationJournalOracleComparisonCount { get; init; }
+        public ulong SimpleDdgiMutationJournalOracleMismatchCount { get; init; }
+        public int SimpleDdgiMutationJournalPendingEventCount { get; init; }
+        public int SimpleDdgiMutationJournalOutputRegionCount { get; init; }
+        public int SimpleDdgiMutationJournalOverflowedThisFrame { get; init; }
+        public int GiPipelineCacheLoaded { get; init; }
+        public int GiPipelineCacheRejected { get; init; }
+        public int GiPipelineCacheSaved { get; init; }
+        public ulong GiPipelineCacheLoadedPayloadBytes { get; init; }
+        public ulong GiPipelineCacheSavedPayloadBytes { get; init; }
+        public ulong GiPipelineCreationCount { get; init; }
+        public long GiPipelineCreationMicroseconds { get; init; }
+        public ulong GiRenderCriticalPipelineCreationCount { get; init; }
+        public string GiPipelineCachePath { get; init; } = string.Empty;
+        public string GiPipelineCacheStatus { get; init; } = string.Empty;
+        public string GiLastCreatedPipeline { get; init; } = string.Empty;
         public int DdgiVisibleFrustumProbeUpdateCount { get; init; }
         public int DdgiOutsideFrustumSafetyProbeUpdateCount { get; init; }
         public int DdgiAgeRefreshProbeUpdateCount { get; init; }
@@ -1580,6 +1684,10 @@ namespace Njulf.Rendering.Data
         public ulong DdgiSkippedLocalLightCount { get; init; }
         public string DdgiLightSelectionMode { get; init; } = string.Empty;
         public int DdgiEmissiveSourceCount { get; init; }
+        public int SimpleDdgiTraceContentProfile { get; init; }
+        public int SimpleDdgiTraceDistanceProfile { get; init; }
+        public int SimpleDdgiTraceSpecialized { get; init; }
+        public int SimpleDdgiTraceWorkgroupSize { get; init; } = 64;
         public uint DdgiEmissiveSourceRevision { get; init; }
         public string DdgiEmissiveSamplingMode { get; init; } = string.Empty;
         public int DdgiEmissiveTriangleCandidateCount { get; init; }
@@ -1587,6 +1695,18 @@ namespace Njulf.Rendering.Data
         public float DdgiEmissiveSkippedEnergyFraction { get; init; }
         public int DdgiEmissiveSkippedSkinnedObjectCount { get; init; }
         public double DdgiEmissiveSkippedSkinnedImportance { get; init; }
+        public float DdgiEmissiveAverageRadianceRed { get; init; }
+        public float DdgiEmissiveAverageRadianceGreen { get; init; }
+        public float DdgiEmissiveAverageRadianceBlue { get; init; }
+        public float DdgiEmissivePeakLuminanceNits { get; init; }
+        public double DdgiEmissiveCoveredAreaSquareMeters { get; init; }
+        public double DdgiEmissiveIntegratedPowerRed { get; init; }
+        public double DdgiEmissiveIntegratedPowerGreen { get; init; }
+        public double DdgiEmissiveIntegratedPowerBlue { get; init; }
+        public double DdgiEmissiveIntegratedPowerLuminance { get; init; }
+        public float DdgiEmissiveSelectedProbability { get; init; }
+        public ulong DdgiEmissiveEnergyWarningCount { get; init; }
+        public string DdgiEmissiveLastEnergyWarning { get; init; } = string.Empty;
         public uint DdgiEmissiveSamplingInvocationCount { get; init; }
         public int DdgiEmissiveTableCacheHit { get; init; }
         public ulong DdgiEmissiveTableCacheHitCount { get; init; }
@@ -1594,6 +1714,18 @@ namespace Njulf.Rendering.Data
         public ulong DdgiEmissiveTableRebuildCount { get; init; }
         public ulong DdgiEmissiveTableInvalidationCount { get; init; }
         public ulong DdgiEmissiveTableUploadCount { get; init; }
+        public int DdgiEmissiveHierarchyNodeCount { get; init; }
+        public ulong DdgiEmissiveHierarchyBuildCount { get; init; }
+        public ulong DdgiEmissiveHierarchyRefitCount { get; init; }
+        public int DdgiEmissiveHierarchyUpdatedNodeCount { get; init; }
+        public int DdgiVfxMacroSourceCount { get; init; }
+        public int DdgiVfxMacroEligibleEmitterCount { get; init; }
+        public int DdgiVfxMacroRejectedTransientCount { get; init; }
+        public int DdgiVfxMacroOverflowCount { get; init; }
+        public int DdgiVfxMacroAuthoredPowerCount { get; init; }
+        public int DdgiVfxMacroAutoPowerCount { get; init; }
+        public ulong DdgiVfxMacroRevision { get; init; }
+        public ulong DdgiVfxMacroRefitCount { get; init; }
         public ulong DdgiProbeVolumeBufferBytes { get; init; }
         public ulong DdgiProbeStateBufferBytes { get; init; }
         public ulong DdgiProbeUpdateQueueBytes { get; init; }
@@ -1647,11 +1779,13 @@ namespace Njulf.Rendering.Data
         public long GpuSimpleDdgiScheduleEmitMicroseconds { get; init; }
         public long GpuSimpleDdgiTransportMicroseconds { get; init; }
         public long GpuSimpleDdgiAcceleratedSolveMicroseconds { get; init; }
+        public long GpuSimpleDdgiDirectionalRadianceMicroseconds { get; init; }
         public long GpuSimpleDdgiBlendMicroseconds { get; init; }
         public long GpuSimpleDdgiRelocateClassifyMicroseconds { get; init; }
         public long GpuSimpleDdgiPublishMicroseconds { get; init; }
         public long GpuSimpleDdgiTransportAuditMicroseconds { get; init; }
         public long GpuSimpleDdgiCommitMicroseconds { get; init; }
+        public long GpuSimpleDdgiUrgentRelightMicroseconds { get; init; }
         public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; init; } = SimpleDdgiSchedulerMode.CpuReference;
         public int SimpleDdgiSchedulerReady { get; init; }
         public int SimpleDdgiSchedulerFeedbackValid { get; init; }
@@ -1682,6 +1816,26 @@ namespace Njulf.Rendering.Data
         public uint SimpleDdgiSchedulerFeedbackPublishedCount { get; init; }
         public uint SimpleDdgiSchedulerResourceGeneration { get; init; }
         public ulong SimpleDdgiSchedulerArenaBytes { get; init; }
+        public int SimpleDdgiCostAwareSchedulingActive { get; init; }
+        public ulong SimpleDdgiSchedulerCostSampleCount { get; init; }
+        public float SimpleDdgiSchedulerVisibilityPerPrimary { get; init; }
+        public float SimpleDdgiSchedulerAlphaCandidatesPerPrimary { get; init; }
+        public float SimpleDdgiSchedulerMaterialEvaluationsPerPrimary { get; init; }
+        public float SimpleDdgiSchedulerFarFieldStepsPerPrimary { get; init; }
+        public int SimpleDdgiSparseResidualPropagationActive { get; init; }
+        public uint SimpleDdgiResidualSeededCount { get; init; }
+        public uint SimpleDdgiResidualDependentWakeCount { get; init; }
+        public uint SimpleDdgiResidualThresholdRejectedCount { get; init; }
+        public uint SimpleDdgiResidualCompleteSweepFallbackCount { get; init; }
+        public int SimpleDdgiReceiverContributionFeedbackActive { get; init; }
+        public uint SimpleDdgiReceiverContributingProbeCount { get; init; }
+        public uint SimpleDdgiReceiverCoverageBucketCount { get; init; }
+        public uint SimpleDdgiReceiverFallbackProbeCount { get; init; }
+        public uint SimpleDdgiReceiverConsumerMask { get; init; }
+        public int SimpleDdgiUrgentRelightActive { get; init; }
+        public uint SimpleDdgiUrgentRelightAcceptedCount { get; init; }
+        public uint SimpleDdgiUrgentRelightCommittedCount { get; init; }
+        public uint SimpleDdgiUrgentRelightRejectedCount { get; init; }
         public ulong SimpleDdgiSchedulerFeedbackReadbackBytes { get; init; }
         public ulong SimpleDdgiSchedulerAuditReadbackBytes { get; init; }
         public ulong SimpleDdgiSchedulerRetiredBytes { get; init; }
@@ -1731,6 +1885,17 @@ namespace Njulf.Rendering.Data
         public int AccelerationStructureBlasEvictionCount { get; init; }
         public ulong AccelerationStructureBlasEvictionBytes { get; init; }
         public int AccelerationStructureBlasBudgetRejectedCount { get; init; }
+        public int AccelerationStructureDynamicBottomLevelCount { get; init; }
+        public ulong AccelerationStructureDynamicBlasBytes { get; init; }
+        public ulong AccelerationStructureDynamicBlasPeakBytes { get; init; }
+        public int AccelerationStructureDynamicFullBuildCount { get; init; }
+        public int AccelerationStructureDynamicRefitCount { get; init; }
+        public int AccelerationStructureDynamicProxyFallbackCount { get; init; }
+        public int AccelerationStructureDynamicExcludedCount { get; init; }
+        public int AccelerationStructureDynamicBudgetDeferredCount { get; init; }
+        public int AccelerationStructureDynamicTopologyMismatchCount { get; init; }
+        public ulong AccelerationStructureDynamicScratchBytes { get; init; }
+        public ulong AccelerationStructureDynamicPrimitiveCount { get; init; }
         public ulong AccelerationStructureBlasBytes { get; init; }
         public ulong AccelerationStructureTlasBytes { get; init; }
         public ulong AccelerationStructureRetiredBytes { get; init; }
@@ -1805,6 +1970,11 @@ namespace Njulf.Rendering.Data
         public string ValidationFirstErrorMessage { get; init; } = string.Empty;
         public string ValidationLastErrorMessage { get; init; } = string.Empty;
         public DdgiRuntimeSnapshot DdgiRuntimeSnapshot { get; init; } = DdgiRuntimeSnapshot.Empty;
+        /// <summary>Generation-aligned Simple-DDGI liveness evidence for this frame.</summary>
+        public SimpleDdgiLivenessTelemetry SimpleDdgiLivenessTelemetry { get; init; } =
+            SimpleDdgiLivenessTelemetry.Empty;
+        public SimpleDdgiLivenessWatchdogResult SimpleDdgiLivenessWatchdog { get; init; } =
+            SimpleDdgiLivenessWatchdogResult.Empty;
         public IReadOnlyList<string> DdgiDiagnosticWarnings { get; init; } = [];
         public IReadOnlyList<DdgiVolumeDiagnosticsEntry> DdgiVolumes { get; init; } = [];
         /// <summary>Schema-v3 capture context. Defaults keep legacy diagnostics construction compatible.</summary>

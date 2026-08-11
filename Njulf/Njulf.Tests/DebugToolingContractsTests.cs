@@ -64,7 +64,10 @@ namespace Njulf.Tests
                 ("simple DDGI gather multiplicity", RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterCount),
                 ("decal fragment attribution", RendererDiagnosticsBuffer.DecalFragmentAttributionCounterBase, RendererDiagnosticsBuffer.DecalFragmentAttributionCounterCount),
                 ("simple DDGI storage validation", RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterBase, RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount),
-                ("simple DDGI per-volume energy evidence", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterCount)
+                ("simple DDGI per-volume energy evidence", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterCount),
+                ("directional shadow caster attribution", RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterBase, RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterCount),
+                ("DDGI geometry participation", RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterBase, RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterCount),
+                ("DDGI many-light estimator", RendererDiagnosticsBuffer.DdgiManyLightCounterBase, RendererDiagnosticsBuffer.DdgiManyLightCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -108,6 +111,15 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterStride, Is.EqualTo(39));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterCount, Is.EqualTo(
                     GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount * 39));
+                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticHeaderWordCount, Is.EqualTo(7));
+                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticFrameMetadataMagic,
+                    Is.EqualTo(0x44534346u));
+                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticRecordCapacity, Is.EqualTo(16));
+                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticRecordStride, Is.EqualTo(28));
+                Assert.That(RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterCount, Is.EqualTo(12));
+                Assert.That(RendererDiagnosticsBuffer.DdgiManyLightCounterCount, Is.EqualTo(16));
+                Assert.That(RendererDiagnosticsBuffer.CounterCount,
+                    Is.EqualTo(RendererDiagnosticsBuffer.DdgiManyLightCounterBase + 16));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount * sizeof(uint)));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize % 256ul, Is.Zero);
@@ -127,6 +139,14 @@ namespace Njulf.Tests
                     "SIMPLE_DDGI_INVALID_HIT_KIND_COUNTER ="));
                 Assert.That(commonShader, Does.Contain(
                     "SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_BASE ="));
+                Assert.That(commonShader, Does.Contain(
+                    "DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_COUNTER_BASE ="));
+                Assert.That(commonShader, Does.Contain(
+                    "DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_FRAME_METADATA_MAGIC = 0x44534346u"));
+                Assert.That(commonShader, Does.Contain(
+                    "DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE ="));
+                Assert.That(commonShader, Does.Contain(
+                    "DDGI_MANY_LIGHT_COUNTER_BASE ="));
                 Assert.That(simpleSharedShader, Does.Contain(
                     "void RecordSimpleDdgiVolumeEnergyEvidence("));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -421,6 +441,60 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void DirectionalShadowCasterDiagnostics_CoversFoliageOnlyInDiagnosticVariants()
+        {
+            string shaderProject = ReadRepoText("Njulf.Shaders", "Njulf.Shaders.csproj");
+            string sharedDiagnostics = ReadRepoText(
+                "Njulf.Shaders",
+                "directional_shadow_caster_diagnostics.glsl");
+            string grassMesh = ReadRepoText("Njulf.Shaders", "foliage_grass.mesh");
+            string authoredMesh = ReadRepoText("Njulf.Shaders", "foliage_mesh.mesh");
+            string foliagePipeline = ReadRepoText(
+                "Njulf.Rendering",
+                "Pipeline",
+                "PipelineObjects",
+                "FoliagePipeline.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(shaderProject, Does.Contain(
+                    "<GpuDiagnosticMeshShader Include=\"foliage_grass.mesh;foliage_mesh.mesh\" />"));
+                Assert.That(sharedDiagnostics, Does.Contain(
+                    "const uint DIRECTIONAL_SHADOW_CASTER_CLASS_FOLIAGE = 3u;"));
+                Assert.That(sharedDiagnostics, Does.Contain(
+                    "#if NJULF_GPU_DIAGNOSTIC_COUNTERS"));
+                Assert.That(grassMesh, Does.Contain(
+                    "DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_FOLIAGE"));
+                Assert.That(authoredMesh, Does.Contain(
+                    "DIRECTIONAL_SHADOW_CASTER_CLASS_FOLIAGE"));
+                Assert.That(foliagePipeline, Does.Contain(
+                    "foliage_grass_diagnostics.mesh.spv"));
+                Assert.That(foliagePipeline, Does.Contain(
+                    "foliage_mesh_diagnostics.mesh.spv"));
+            });
+        }
+
+        [Test]
+        public void DirectionalShadowCasterDiagnostics_RuntimeToggleRecreatesFoliageShadowVariants()
+        {
+            string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(renderer, Does.Contain(
+                    "bool foliageNeedsRecreate = _foliagePipeline != null &&"));
+                Assert.That(renderer, Does.Contain(
+                    "_foliagePipeline.GpuMeshletCountersEnabled != diagnosticCountersEnabled"));
+                Assert.That(renderer, Does.Contain(
+                    "if (!meshNeedsRecreate && !foliageNeedsRecreate)"));
+                Assert.That(renderer, Does.Contain(
+                    "_foliagePipeline!.Recreate("));
+                Assert.That(renderer, Does.Contain(
+                    "RenderTargetManager.MotionVectorFormat"));
+            });
+        }
+
+        [Test]
         public void SimpleDdgiReceiverDebugViews_RespectCompiledArtifactCapability()
         {
             bool detailedCompiled =
@@ -571,7 +645,10 @@ namespace Njulf.Tests
             {
                 Assert.That(settings.GlobalIllumination.SimpleDdgiFogEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiParticlesEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.False);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.True);
+                Assert.That(
+                    settings.GlobalIllumination.EffectiveSimpleDdgiGlossyTransportMode,
+                    Is.EqualTo(SimpleDdgiGlossyTransportMode.Off));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiReducedBlendEnabled, Is.False);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.True);
@@ -605,6 +682,48 @@ namespace Njulf.Tests
                 Assert.That(manager, Does.Contain("_capturedProbeIds.Add(capture.ProbeId);"));
                 Assert.That(manager.Split("_capturesCompletedThisFrame++", StringSplitOptions.None), Has.Length.EqualTo(2));
                 Assert.That(manager, Does.Not.Contain("DrainCaptureQueue"));
+            });
+        }
+
+        [Test]
+        public void DirectionalDdgiReflectionDebugViews_ExposeLobeAndNormalizedOwnership()
+        {
+            string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string controller = ReadRepoText(
+                "NjulfHelloGame",
+                "SampleInputController.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    (uint)ReflectionDebugView.DdgiDirectionalRadianceLobe,
+                    Is.EqualTo(11u));
+                Assert.That(
+                    (uint)ReflectionDebugView.SourceOwnership,
+                    Is.EqualTo(12u));
+                Assert.That(
+                    shader,
+                    Does.Contain(
+                        "REFLECTION_DEBUG_DDGI_DIRECTIONAL_RADIANCE_LOBE = 11u"));
+                Assert.That(
+                    shader,
+                    Does.Contain("REFLECTION_DEBUG_SOURCE_OWNERSHIP = 12u"));
+                Assert.That(
+                    shader,
+                    Does.Contain(
+                        "debugColor = vec3(localWeight, ddgiWeight, globalWeight)"));
+                Assert.That(
+                    shader,
+                    Does.Contain(
+                        "debugColor = vec3(0.0, ddgiWeight, 1.0 - ddgiWeight)"));
+                Assert.That(
+                    controller,
+                    Does.Contain(
+                        "ReflectionDebugView.GlobalFallbackOnly => ReflectionDebugView.DdgiDirectionalRadianceLobe"));
+                Assert.That(
+                    controller,
+                    Does.Contain(
+                        "ReflectionDebugView.DdgiDirectionalRadianceLobe => ReflectionDebugView.SourceOwnership"));
             });
         }
 

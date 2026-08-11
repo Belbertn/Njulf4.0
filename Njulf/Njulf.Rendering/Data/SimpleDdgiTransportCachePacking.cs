@@ -287,6 +287,60 @@ public static class SimpleDdgiTransportCachePacking
         return true;
     }
 
+    /// <summary>
+    /// CPU oracle for the shader's radiometric-only cache update. The method
+    /// validates geometric provenance first and mutates only RGB source
+    /// radiance; distance and every conditional hit/provenance word are
+    /// preserved exactly.
+    /// </summary>
+    public static bool TryUpdateRadiance(
+        SimpleDdgiTransportCacheFormat format,
+        Span<uint> record,
+        uint expectedProbeGeneration,
+        uint expectedSourceEpoch,
+        Vector3 sourceRadiance)
+    {
+        int wordCount = format.WordCount();
+        if (wordCount == 0 || record.Length < wordCount ||
+            expectedProbeGeneration == 0u || expectedSourceEpoch == 0u ||
+            !IsFiniteNonNegative(sourceRadiance))
+        {
+            return false;
+        }
+
+        uint generationAndFlags = record[wordCount - 1];
+        uint classificationCode =
+            (generationAndFlags & ClassificationMask) >> ClassificationShift;
+        uint directionEpoch =
+            (generationAndFlags & DirectionEpochMask) >> DirectionEpochShift;
+        if (classificationCode is < 1u or > 5u ||
+            (generationAndFlags & GenerationMask) !=
+                (expectedProbeGeneration & GenerationMask) ||
+            directionEpoch != (expectedSourceEpoch & 0x1fu))
+        {
+            return false;
+        }
+
+        Vector3 bounded = ClampTransportRadiance(sourceRadiance);
+        if (format == SimpleDdgiTransportCacheFormat.Legacy36)
+        {
+            record[0] = BitConverter.SingleToUInt32Bits(bounded.X);
+            record[1] = BitConverter.SingleToUInt32Bits(bounded.Y);
+            record[2] = BitConverter.SingleToUInt32Bits(bounded.Z);
+            return true;
+        }
+
+        record[0] = PackHalf2(bounded.X, bounded.Y);
+        uint preservedDistance =
+            format == SimpleDdgiTransportCacheFormat.Compact24
+                ? record[1] & 0xffff_0000u
+                : 0u;
+        record[1] =
+            (PackHalf2(bounded.Z, 0.0f) & 0x0000_ffffu) |
+            preservedDistance;
+        return true;
+    }
+
     public static uint PackRayMetadata(
         float visibilityDistance,
         int hitKind,

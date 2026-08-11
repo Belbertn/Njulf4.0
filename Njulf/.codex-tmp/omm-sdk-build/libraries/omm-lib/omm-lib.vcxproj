@@ -1,0 +1,388 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{F58D0BFA-E177-3091-BEDA-EBFBD82479FD}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>omm-lib</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\bin\Debug\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">omm-lib.dir\Debug\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">omm-lib</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.dll</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\bin\Release\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">omm-lib.dir\Release\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">omm-lib</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.dll</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\bin\MinSizeRel\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">omm-lib.dir\MinSizeRel\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">omm-lib</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.dll</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\bin\RelWithDebInfo\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">omm-lib.dir\RelWithDebInfo\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">omm-lib</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.dll</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</GenerateManifest>
+  </PropertyGroup>
+  <PropertyGroup />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_UNICODE;UNICODE;OMM_API=extern "C" __declspec(dllexport);OMM_VK_S_SHIFT=100;OMM_VK_T_SHIFT=200;OMM_VK_B_SHIFT=300;OMM_VK_U_SHIFT=400;CMAKE_INTDIR="Debug";omm_lib_EXPORTS</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_UNICODE;UNICODE;OMM_API=extern \"C\" __declspec(dllexport);OMM_VK_S_SHIFT=100;OMM_VK_T_SHIFT=200;OMM_VK_B_SHIFT=300;OMM_VK_U_SHIFT=400;CMAKE_INTDIR=\"Debug\";omm_lib_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\external\glm\glm\Debug\glm.lib;..\..\external\xxHash\build\cmake\Debug\xxhash.lib;..\..\external\lz4\build\cmake\Debug\lz4.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImportLibrary>D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/libraries/omm-lib/Debug/omm-lib.lib</ImportLibrary>
+      <ProgramDataBaseFile>D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/bin/Debug/omm-lib.pdb</ProgramDataBaseFile>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_UNICODE;UNICODE;OMM_API=extern "C" __declspec(dllexport);OMM_VK_S_SHIFT=100;OMM_VK_T_SHIFT=200;OMM_VK_B_SHIFT=300;OMM_VK_U_SHIFT=400;CMAKE_INTDIR="Release";omm_lib_EXPORTS</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_UNICODE;UNICODE;OMM_API=extern \"C\" __declspec(dllexport);OMM_VK_S_SHIFT=100;OMM_VK_T_SHIFT=200;OMM_VK_B_SHIFT=300;OMM_VK_U_SHIFT=400;CMAKE_INTDIR=\"Release\";omm_lib_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\external\glm\glm\Release\glm.lib;..\..\external\xxHash\build\cmake\Release\xxhash.lib;..\..\external\lz4\build\cmake\Release\lz4.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImportLibrary>D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/libraries/omm-lib/Release/omm-lib.lib</ImportLibrary>
+      <ProgramDataBaseFile>D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/bin/Release/omm-lib.pdb</ProgramDataBaseFile>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MinSpace</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_UNICODE;UNICODE;OMM_API=extern "C" __declspec(dllexport);OMM_VK_S_SHIFT=100;OMM_VK_T_SHIFT=200;OMM_VK_B_SHIFT=300;OMM_VK_U_SHIFT=400;CMAKE_INTDIR="MinSizeRel";omm_lib_EXPORTS</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_UNICODE;UNICODE;OMM_API=extern \"C\" __declspec(dllexport);OMM_VK_S_SHIFT=100;OMM_VK_T_SHIFT=200;OMM_VK_B_SHIFT=300;OMM_VK_U_SHIFT=400;CMAKE_INTDIR=\"MinSizeRel\";omm_lib_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\external\glm\glm\MinSizeRel\glm.lib;..\..\external\xxHash\build\cmake\MinSizeRel\xxhash.lib;..\..\external\lz4\build\cmake\MinSizeRel\lz4.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImportLibrary>D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/libraries/omm-lib/MinSizeRel/omm-lib.lib</ImportLibrary>
+      <ProgramDataBaseFile>D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/bin/MinSizeRel/omm-lib.pdb</ProgramDataBaseFile>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_UNICODE;UNICODE;OMM_API=extern "C" __declspec(dllexport);OMM_VK_S_SHIFT=100;OMM_VK_T_SHIFT=200;OMM_VK_B_SHIFT=300;OMM_VK_U_SHIFT=400;CMAKE_INTDIR="RelWithDebInfo";omm_lib_EXPORTS</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_UNICODE;UNICODE;OMM_API=extern \"C\" __declspec(dllexport);OMM_VK_S_SHIFT=100;OMM_VK_T_SHIFT=200;OMM_VK_B_SHIFT=300;OMM_VK_U_SHIFT=400;CMAKE_INTDIR=\"RelWithDebInfo\";omm_lib_EXPORTS</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\shaders;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\glm;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\stb;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash;D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\lz4\build\cmake\..\..\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\external\glm\glm\RelWithDebInfo\glm.lib;..\..\external\xxHash\build\cmake\RelWithDebInfo\xxhash.lib;..\..\external\lz4\build\cmake\RelWithDebInfo\lz4.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImportLibrary>D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/libraries/omm-lib/RelWithDebInfo/omm-lib.lib</ImportLibrary>
+      <ProgramDataBaseFile>D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/bin/RelWithDebInfo/omm-lib.pdb</ProgramDataBaseFile>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-audit/libraries/omm-lib/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" "-SD:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-audit" "-BD:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build" --check-stamp-file "D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/libraries/omm-lib/CMakeFiles/generate.stamp"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\libraries\omm-lib\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-audit/libraries/omm-lib/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" "-SD:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-audit" "-BD:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build" --check-stamp-file "D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/libraries/omm-lib/CMakeFiles/generate.stamp"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\libraries\omm-lib\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-audit/libraries/omm-lib/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" "-SD:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-audit" "-BD:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build" --check-stamp-file "D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/libraries/omm-lib/CMakeFiles/generate.stamp"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\libraries\omm-lib\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-audit/libraries/omm-lib/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" "-SD:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-audit" "-BD:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build" --check-stamp-file "D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-sdk-build/libraries/omm-lib/CMakeFiles/generate.stamp"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\libraries\omm-lib\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake.cpp" />
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake_cpu_impl.cpp" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake_cpu_impl.h" />
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake_gpu_impl.cpp" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake_gpu_impl.h" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake_kernels_cpu.h" />
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\debug_impl.cpp" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\debug_impl.h" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\defines.h" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\log.h" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\omm_handle.h" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\resource.h" />
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\serialize_impl.cpp" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\serialize_impl.h" />
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\shader_bindings.cpp" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\shader_bindings.h" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\shader_bindings_expand.h" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\shader_registry.h" />
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\stb_lib.cpp" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\std_allocator.h" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\std_containers.h" />
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\texture_impl.cpp" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\texture_impl.h" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\version.h" />
+    <ResourceCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake.rc" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include\omm.h" />
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include\omm.hpp" />
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\ZERO_CHECK.vcxproj">
+      <Project>{C957133E-2D7F-3C48-A11D-F9C165DC5E93}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\external\glm\glm\glm.vcxproj">
+      <Project>{1A990688-8EBA-3B88-A44C-8EDC1A9EE6C8}</Project>
+      <Name>glm</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\external\lz4\build\cmake\lz4_static.vcxproj">
+      <Project>{57CFD61C-A1F9-3FD0-A7F3-4F698A2245C9}</Project>
+      <Name>lz4_static</Name>
+    </ProjectReference>
+    <ProjectReference Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\external\xxHash\build\cmake\xxhash.vcxproj">
+      <Project>{F52D6ADE-55E6-3260-AC6D-55841D42BDD1}</Project>
+      <Name>xxhash</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

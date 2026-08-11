@@ -179,6 +179,12 @@ Reflection modes:
 - `StaticProbesAndSsr`
 - `StaticProbesAndPlanar`
 
+The reflection debug cycle includes `DdgiDirectionalRadianceLobe`, which shows
+the directional SH radiance evaluated along the receiver reflection vector
+before the split-sum BRDF, and `SourceOwnership`. Ownership encodes normalized
+local-reflection, DDGI, and global-environment weights in red, green, and blue.
+The channels sum to one wherever reflections are enabled.
+
 Reflection debug views:
 
 - `None`
@@ -239,7 +245,25 @@ AO debug views:
 | `DdgiMaxProbeUpdatesPerFrame` | Hard probe-update count cap. |
 | `DdgiProbeUpdatePrimaryRayBudget` | Steady-frame primary ray budget for scheduled probe updates. |
 | `DdgiMaxRaysPerProbe` | Upper bound for rays per updated probe. |
-| `DdgiMaxShadedLights` | Maximum lights shaded at a DDGI ray hit before the shader hard cap. |
+| `DdgiMaxShadedLights` | Compatibility-wide DDGI hit-light cap. Content-dependent Simple-DDGI uses the per-ring local-light sample settings below; directional lights remain exact. |
+| `SimpleDdgiLocalLightSamplingMode` | `Auto` uses exact local-light evaluation through the threshold and the qualified GPU light tree above it. `Exact` forces all local lights. `LightTree` requests the production stochastic estimator. `LegacyTopKReference` is validation-authorized rollback only. |
+| `SimpleDdgiNear/Mid/FarLocalLightSamplesPerHit` | Independent stochastic local-light samples per DDGI hit for each camera-relative ring; authored volumes use the near value. Values are clamped to the bounded production maximum of 64. A zero value causes the exact safety path. |
+| `SimpleDdgiExactLocalLightThreshold` | Local-light count at or below which every local light is evaluated exactly. Directional lights do not consume this threshold or sample budget. |
+| `SimpleDdgiLightTreeUniformMixtureProbability` | Exact uniform-over-tree-leaves proposal mixed with the point-dependent contribution-bound proposal so every represented nonzero light retains support. Default `0.02`; clamped to `[0.001, 0.25]`. |
+| `SimpleDdgiLightTreeMaximumRefitAge` | Maximum consecutive refits before a deterministic inactive-bank rebuild is requested. Default `120`; clamped to `[1, 4096]`. |
+| `SimpleDdgiDirectionalRadianceMode` | Probe incident-radiance sidecar: `Off`, validation-only `L1Reference`, or canonical RGB L2 SH. Each representation has a distinct ABI and cannot reinterpret live data from another mode. |
+| `SimpleDdgiGlossyTransportMode` | `Off`, `ReceiverOnly`, bounded `OneBounce`, or validation-only `RecursiveExperimental`. One-bounce reads the previous compatible directional-radiance generation; recursive mode is never release-authorized by this plan. |
+| `SimpleDdgiDirectionalRadianceMemoryBudgetBytes` | Independent hard admission budget for the canonical 64-byte-per-probe L2 sidecar and any mode-required parity allocation. Allocation failure leaves diffuse DDGI active and disables the DDGI rough-specular source. |
+| `SimpleDdgiRoughSpecularMinimumRoughness`, `SimpleDdgiRoughSpecularFullWeightRoughness` | Lower edge and full-weight edge of the DDGI directional-radiance receiver band. DDGI ownership is exactly zero below the minimum and cross-fades to full weight over the nonzero band. Defaults are `0.55` and `0.70`. |
+| `DdgiSkinnedGeometryMode` | Dynamic ray-scene representation: `Excluded`, `ConservativeProxy`, or frame-slot-owned `CurrentPose` geometry built from the GPU skinning output. |
+| `DdgiTransparentGeometryMode` | `MaskOnly`, `MaskAndThin`, or stable `StochasticBlend`. Thick refraction, nested dielectric transport, caustics, and participating volumes remain unsupported and are explicitly diagnosed. |
+| `DdgiFoliageGeometryMode` | `Excluded`, `AuthoredMeshOnly`, or `AuthoredAndProceduralProxy`. Procedural proxies are generated into AS-build-capable GPU buffers from stable patch/material/seed identity. |
+| `DdgiDynamicBlasMemoryBudgetBytes`, `DdgiDynamicBlasScratchBudgetBytes` | Independent storage and scratch ceilings for current-pose and proxy BLAS work. Exhaustion selects the declared proxy/exclusion policy; it never reuses an arbitrary stale pose. |
+| `DdgiDynamicBlasBuildsPerFrame`, `DdgiDynamicBlasPrimitivesPerFrame` | Hard per-frame dynamic-AS work caps. Topology-compatible entries refit; topology/format/count changes require a full build within these limits. |
+| `DdgiFoliageProxyTriangleBudget` | Hard crossed-card/authored foliage proxy triangle budget. Stable probe-space priority admits near, then mid, then far work; lower-priority work is explicitly excluded when capacity is exhausted. |
+| `DdgiFoliageProxyUpdateCadenceFrames` | Bounded wind/proxy regeneration cadence. Placement remains stable while deformation uses the raster wind clock/family; captures report wind age. |
+| `DdgiTransparencyCandidateLimit`, `DdgiTransparencyLayerLimit` | Bounded ray-candidate and deterministic thin-transmittance layer limits. Overflow takes the documented conservative result and increments qualification counters. |
+| `DdgiDecalCandidateLimit` | Maximum retained nearest geometry-decal overlays for a DDGI primary hit. Decals never become primary, shadow, or visibility blockers. |
 | `DdgiMaterialTextureMaxCascade` | Highest camera-relative cascade that samples material textures in DDGI hit shading; `-1` disables cascade texture sampling while authored volumes still sample textures. |
 | `DdgiSelfShadowBiasScale` | Artist-facing multiplier for authored DDGI normal/view self-shadow bias. Default `1.0`; higher values reduce acne/leaks at the cost of contact accuracy. |
 | `DdgiThinWallPolicyEnabled`, `DdgiThinWallLeakClampStrength` | Enables and controls Simple-DDGI visibility-based leak attenuation. Simple-DDGI keeps one-sided source shading, records covered backfaces in receiver visibility, and uses close backface hits to relocate probes trapped behind architectural shells. |
@@ -270,6 +294,85 @@ AO debug views:
 `DdgiHigh` is the default production profile. It enables Simple DDGI with ray-query updates, camera-relative rings, AO, reflections, and optional async compute. Authored Simple-DDGI volumes add density to specific rooms or locations; they are not a second GI backend.
 
 Authored Simple-DDGI volumes are optional standalone local overrides, not required scene coverage. A normal scene starts with an empty authored-volume list and uses the quality tier's camera-relative rings. Add a volume explicitly with only its world-space bounds and desired spacing when a specific room or location needs extra probe density; phase, purpose, and priority have safe defaults for the simple case.
+
+Content-dependent modes have separate requested and effective state. Quality presets configure requested modes and budgets; `DdgiContentRolloutPolicy` independently admits reviewed features for the current device/profile. `ConfiguredContentDependentFeatures` therefore describes intent, while `ActiveContentDependentFeatures` and the effective mode properties describe what shaders and resource managers may use. Validation-only reference modes additionally require explicit conformance authorization. The `ContentDependentDdgi` runtime/performance snapshot records both sides plus the fallback reason, so a copied settings file cannot silently promote an unqualified feature.
+
+### Advanced GI experiments
+
+The remaining advanced-GI settings are versioned mode selections rather than
+activation booleans. Their legacy boolean aliases remain readable in saved
+settings, but new tools should write the mode properties below. A requested
+mode is never proof that GPU work is enabled: every frame records separately
+requested, supported, admitted, effective, qualification, and fallback state.
+An `AutoQualified` request additionally requires a current evidence identifier
+for the selected device, driver, shader ABI, content revision, and profile.
+
+| Setting | Values and behavior |
+| --- | --- |
+| `SimpleDdgiReceiverFeedbackMode` | `Off`, `LegacyPackedReference`, or `ExactCompacted`. `ExactCompacted` is the versioned B1 receiver-feedback ABI. It remains a one-frame-late scheduler priority signal and never controls probe liveness, residency, or visibility. |
+| `DdgiOpacityMicromapMode` | `Off`, `ExtFourStateExperiment`, or `AutoQualified`. The production experiment is four-state only; unsupported, dynamic, or ambiguous alpha content uses the unchanged candidate-confirmation path. |
+| `SimpleDdgiDirectionalGuidingMode` | `Off`, `CpuOracle`, `PerProbeHistogramExperiment`, or `AutoQualified`. Guiding retains a nonzero uniform proposal and an independent uniform-maintenance subset. |
+| `GiCausticMode` | `Off`, `PhotonReference`, `WorldCacheExperiment`, or `AutoQualified`. It is a separate hero-specular/refractive path; caustic flux never becomes DDGI source/transport data. |
+| `SimpleDdgiNearFieldResidualMode` | `Off`, `Reference`, `HiZHalfResolutionExperiment`, or `AutoQualified`. It requires measured post-B3 evidence and an exact direct-diffuse-plus-emissive source contract; it never samples final scene color. |
+
+New settings request every completed advanced-GI production path in every
+preset: B1 `ExactCompacted`, C1 `ExtFourStateExperiment`, C3
+`PerProbeHistogramExperiment`, C4 `WorldCacheExperiment`, and C5
+`HiZHalfResolutionExperiment`. These are intent defaults, not qualification or
+unconditional activation. Existing saved settings retain their persisted mode.
+Unsupported, inadmissible, rejected, or resource-incomplete modes allocate no
+persistent resources, bind no optional descriptors, and contribute no
+render-graph passes. A transition, resize, content reload, device loss, ABI
+mismatch, evidence mismatch, or failed publication falls back transactionally
+to the canonical DDGI path without changing the persisted requested mode.
+
+Advanced-GI graph inventory is immutable for a renderer instance. Applications
+must set startup modes and qualification IDs through
+`RenderingOptions.InitialSettings.GlobalIllumination` before resolving
+`VulkanRenderer`; changing those values after `Initialize()` cannot add a graph
+branch or enable an optional Vulkan device extension. The sample exposes the
+same startup contract through these command-line options:
+
+| Command-line option | Environment variable |
+| --- | --- |
+| `--advanced-gi-prerequisite-manifest=<path>` | `NJULF_ADVANCED_GI_PREREQUISITE_MANIFEST` |
+| `--advanced-gi-qualification-manifest=<path>` | `NJULF_ADVANCED_GI_QUALIFICATION_MANIFEST` |
+| `--advanced-gi-runtime-evidence-bundle=<path>` | `NJULF_ADVANCED_GI_RUNTIME_EVIDENCE_BUNDLE` |
+| `--simple-ddgi-receiver-feedback-mode=<mode>` | `NJULF_RENDERER_SIMPLE_DDGI_RECEIVER_FEEDBACK_MODE` |
+| `--ddgi-opacity-micromap-mode=<mode>` | `NJULF_RENDERER_DDGI_OPACITY_MICROMAP_MODE` |
+| `--simple-ddgi-directional-guiding-mode=<mode>` | `NJULF_RENDERER_SIMPLE_DDGI_DIRECTIONAL_GUIDING_MODE` |
+| `--gi-caustic-mode=<mode>` | `NJULF_RENDERER_GI_CAUSTIC_MODE` |
+| `--simple-ddgi-near-field-residual-mode=<mode>` | `NJULF_RENDERER_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_MODE` |
+| `--simple-ddgi-receiver-feedback-qualification-id=<id>` | `NJULF_SIMPLE_DDGI_RECEIVER_FEEDBACK_QUALIFICATION_ID` |
+| `--ddgi-opacity-micromap-qualification-id=<id>` | `NJULF_DDGI_OPACITY_MICROMAP_QUALIFICATION_ID` |
+| `--simple-ddgi-directional-guiding-qualification-id=<id>` | `NJULF_SIMPLE_DDGI_DIRECTIONAL_GUIDING_QUALIFICATION_ID` |
+| `--gi-caustic-qualification-id=<id>` | `NJULF_GI_CAUSTIC_QUALIFICATION_ID` |
+| `--simple-ddgi-near-field-residual-qualification-id=<id>` | `NJULF_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_QUALIFICATION_ID` |
+
+Startup is intentionally ordered: the application first supplies requested
+modes, then the frozen prerequisite manifest, the per-device qualification
+manifest, and finally the scene/layout-bound C4/C5 runtime-evidence bundle.
+`RenderingOptions.ConfigureAdvancedGiEvidence` runs last for applications that
+already own strongly typed evidence. Each document is bounded, strict-schema,
+and revalidated against the production planner. A missing, malformed, stale, or
+mismatched document leaves canonical DDGI running and allocates no rejected
+experiment resources. Unless the application supplies an explicit optional
+device-feature override, a C1 request in
+`RenderingOptions.InitialSettings.GlobalIllumination` also requests the
+`VK_EXT_opacity_micromap` logical-device chain. Setting
+`RenderingOptions.EnableExtOpacityMicromap` explicitly remains an application
+override and can serve as a startup kill switch.
+
+The local-light tree is an exact-capacity, double-banked GPU resource. Zero local lights allocate and dispatch nothing. Small sets use exact evaluation; larger qualified sets use a point-dependent bound proposal mixed with an exact uniform-support proposal. A finalized tree carries the complete 64-bit light, topology, and content revisions plus a checksum. Trace validates that state in O(1), and a fence-owned readback confirms publication before CPU diagnostics mark it valid. Invalid, stale, or partially published state falls back without exposing an incomplete hierarchy.
+
+Directional projection is an ordered three-dispatch prepare/project/publish
+stage after diffuse blend. It accumulates in FP32 but reuses 128 bytes from the
+queue-local ray scratch after its diffuse consumers, then stores only the
+budgeted FP16 sidecar; the setting does not allocate a persistent FP32
+projection buffer. A checked record with zero usable samples is valid for
+transaction completion but supplies no rough-reflection ownership.
+
+Foliage proxy LOD is world/probe-space stable. Enabled authored probe volumes determine near, mid, far, and excluded tiers from their bounds, spacing, blend distance, and ray influence. With no authored volumes, patches conservatively remain near; camera position never participates. Mid and far procedural tiers reduce card density while increasing represented-instance weight so integrated density remains stable. Captures report requested/represented density, error, tier card counts, excluded patches, wind age, cadence generation, and the policy ABI version.
 
 The `DdgiHigh` Simple-DDGI profile uses three asymmetric camera-relative rings: near `28x14x28` at `1.25 m`, mid `18x10x18` at `3.75 m`, and far `12x8x12` at `11.25 m`. This is 15,368 virtual probes total, reaching approximately `±16.9 m / ±8.1 m`, `±31.9 m / ±16.9 m`, and `±61.9 m / ±39.4 m` horizontally/vertically before authored volumes. The near ring has 1,372 fixed 2×2×2 virtual pages. Its 960-page sparse pool reserves 7,680 near payload probes alongside 4,392 dense mid/far probes; authored volumes remain dense. The exact resident-scheduler fixture is 160,821,296 live bytes versus 201,263,392 bytes for the same-binary Dense plan, a 40,442,096-byte saving, with a 139,024-byte residency arena. Its global update budget remains 2,048 probes per frame, with near/mid/far preferred quotas of 1,024/324/128 and 128/64/32 full-refresh rays per probe.
 

@@ -32,5 +32,8 @@ namespace Njulf.Assets
         int PrimitiveProfileCacheMissCount = 0,
         int PrimitiveTextureAnalysisFailureCount = 0,
         int OmittedEmissiveTriangleRecordCount = 0,
-        string PrimitiveProfileDiagnostic = "");
+        string PrimitiveProfileDiagnostic = "",
+        int OpacityMicromapPayloadAcceptedCount = 0,
+        int OpacityMicromapRuntimeRegistrationCount = 0,
+        string OpacityMicromapRuntimeDetail = "opacity-micromap-section-absent");
 }

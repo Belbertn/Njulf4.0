@@ -189,6 +189,36 @@ void main()
         activeRayCount,
         sourceRayCount,
         params);
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+    uvec2 guidingExpectedStableProbeId = uvec2(
+        update.probeIndex,
+        update.expectedGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK);
+    bool guidingProbeBacked =
+        SimpleDdgiGuidingTransportProbeHasCompleteBacking(
+            update.physicalProbeIndex,
+            update.probeIndex,
+            update.pageMappingGeneration,
+            guidingExpectedStableProbeId,
+            params.raysPerProbe);
+    SimpleDdgiGuidingTransportPayload guidingPayload;
+    bool guidingPayloadValid = TryReadSimpleDdgiGuidingTransportPayload(
+        update.physicalProbeIndex,
+        update.probeIndex,
+        update.pageMappingGeneration,
+        guidingExpectedStableProbeId,
+        directionRayIndex,
+        params.raysPerProbe,
+        guidingPayload);
+    if (guidingProbeBacked && !guidingPayloadValid)
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 1u);
+        return;
+    }
+#endif
     uint sourceCacheProbeGeneration = SimpleDdgiProbeGeneration(probeState);
     if (SimpleDdgiUpdateRequiresSourceRefresh(update) &&
         (update.flags & SIMPLE_DDGI_UPDATE_INVALIDATE) != 0u)
@@ -241,6 +271,10 @@ void main()
             update.sourceEpoch,
             sourceRayCount,
             source);
+#endif
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+    if (sourceCacheValid && guidingPayloadValid)
+        source.direction = guidingPayload.direction;
 #endif
     if (!sourceCacheValid)
     {
@@ -301,6 +335,10 @@ void main()
                 params);
             sourceVisibilityHit = vec2(0.0);
         }
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+        if (guidingPayloadValid)
+            sourceDirection = guidingPayload.direction;
+#endif
         RecordSimpleDdgiTransportEnergyDiagnostics(
             params,
             pc.CurrentFrameIndex,

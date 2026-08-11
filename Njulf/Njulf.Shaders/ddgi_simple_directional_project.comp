@@ -1,0 +1,505 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_simple_shared.glsl"
+#include "ddgi_simple_directional_scratch.glsl"
+
+// Probe work remains parallel across workgroups. A single invocation performs
+// each probe's bounded FP32 projection, matching the proven serial SH builder
+// used by the diffuse fallback while avoiding native-driver barrier lowering.
+// Each source sample is fetched exactly once.
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SimpleDdgiPushBlock
+{
+    uint ParamsBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint RayResultScratchBufferIndex;
+    uint CurrentFrameIndex;
+    uint LightCount;
+    uint DirectionalLightCount;
+    uint LocalLightCount;
+    uint MaxShadedLights;
+    uint EmissiveSourceCount;
+    uint FarFieldParamsBufferIndex;
+    uint FarFieldVoxelBufferIndex;
+    uint FarFieldInstanceBufferIndex;
+    uint Flags;
+    uint MaterialTextureMaxCascade;
+    uint ProbeStateBufferIndex;
+    uint ProbeUpdateQueueBufferIndex;
+    uint RelocationClassificationBufferIndex;
+    uint TransportSourceCacheBufferIndex;
+    uint TransportReadIrradianceAtlasBufferIndex;
+    uint TransportWriteIrradianceAtlasBufferIndex;
+    uint PrivateVisibilityAtlasOffsetWords;
+    uint TransportGeneration;
+    uint PrimaryDirectionalLightIndex;
+    uint DispatchQueueOffset;
+    uint DispatchProbeCount;
+    uint DispatchRaysPerProbe;
+    uint SchedulerArenaBufferIndex;
+    uint SchedulerRayBucketIndex;
+    uint SchedulerRayBucketCommandsOffsetWords;
+    uint SchedulerRayBucketMetadataOffsetWords;
+    uint SchedulerOutcomesOffsetWords;
+    uint SchedulerCountersOffsetWords;
+    uint SchedulerUpdateRecordsOffsetWords;
+} pc;
+
+void MarkSimpleDdgiDirectionalProjectionFailure(
+    uint scratchBaseWord,
+    uint status,
+    uint reason)
+{
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_WORD,
+        (status & ~SIMPLE_DDGI_DIRECTIONAL_SCRATCH_COEFFICIENT_MASK) |
+            SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FAILURE_BIT |
+            (reason & SIMPLE_DDGI_DIRECTIONAL_SCRATCH_COEFFICIENT_MASK));
+}
+
+void WriteSimpleDdgiDirectionalScratchCoefficient(
+    uint scratchBaseWord,
+    uint coefficient,
+    vec3 value)
+{
+    uint coefficientWord = scratchBaseWord + coefficient * 3u;
+    WriteStorageFloatUniform(
+        pc.RayResultScratchBufferIndex,
+        coefficientWord,
+        value.x);
+    WriteStorageFloatUniform(
+        pc.RayResultScratchBufferIndex,
+        coefficientWord + 1u,
+        value.y);
+    WriteStorageFloatUniform(
+        pc.RayResultScratchBufferIndex,
+        coefficientWord + 2u,
+        value.z);
+}
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint mode = SimpleDdgiDirectionalRadianceMode(params.residencyFlags);
+    if (mode == SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF ||
+        params.probeCount == 0u)
+    {
+        return;
+    }
+
+    uint localProbeOffset = gl_WorkGroupID.x;
+    bool gpuScheduler = SimpleDdgiGpuSchedulerActive(
+        pc.SchedulerArenaBufferIndex);
+    uint requestCount = gpuScheduler
+        ? SimpleDdgiSchedulerAcceptedCount(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerCountersOffsetWords)
+        : params.probesToUpdate;
+    if (localProbeOffset >= requestCount)
+        return;
+
+    SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(
+        pc.ProbeUpdateQueueBufferIndex,
+        localProbeOffset);
+    uint probeIndex = update.probeIndex;
+    if (probeIndex >= params.probeCount)
+        return;
+
+    SimpleDdgiVolume volume;
+    uint localProbeIndex;
+    if (!ResolveSimpleDdgiProbeVolume(
+            probeIndex,
+            params,
+            volume,
+            localProbeIndex) ||
+        !SimpleDdgiUpdateMatchesLiveAddress(params, update))
+    {
+        return;
+    }
+
+    SimpleDdgiProbeState initialState = ReadSimpleDdgiProbeState(
+        pc.ProbeStateBufferIndex,
+        probeIndex);
+    if (!SimpleDdgiUpdateMatchesProbeGenerationAndRecord(
+            params,
+            update,
+            initialState))
+    {
+        return;
+    }
+
+    uint scratchCapacityWords =
+        SimpleDdgiDirectionalScratchCapacityWords(params, volume);
+    if (scratchCapacityWords < SIMPLE_DDGI_DIRECTIONAL_SCRATCH_WORDS)
+        return;
+    uint scratchBaseWord = SimpleDdgiDirectionalScratchBaseWord(
+        params,
+        volume,
+        localProbeOffset);
+    bool transportV2 =
+        (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u;
+    uint status = SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_PROJECTING;
+    uint rayCount = min(
+        transportV2
+            ? SimpleDdgiUpdateSourceRayCount(update, params)
+            : SimpleDdgiUpdateRayCount(update, params),
+        SIMPLE_DDGI_MAX_RAYS_PER_PROBE);
+    uint slotGeneration = SimpleDdgiDirectionalPublicationGeneration(
+        update,
+        initialState);
+    uint sourceCacheGeneration =
+        SimpleDdgiDirectionalSourceCacheGeneration(update, initialState);
+    uint fingerprint = SimpleDdgiDirectionalScratchFingerprint(
+        update,
+        slotGeneration,
+        rayCount,
+        mode);
+
+    // V2 preparation is a separate cheap dispatch because its source data
+    // lives outside ray scratch. V1 cannot write that header until all ray
+    // records have been consumed, so it constructs the same transaction in
+    // registers and publishes the metadata only after the projection loop.
+    if (transportV2)
+    {
+        status = ReadStorageWordUniform(
+            pc.RayResultScratchBufferIndex,
+            scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_WORD);
+        if (!SimpleDdgiDirectionalScratchStatusIsOwned(status) ||
+            (status & SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FAILURE_BIT) != 0u)
+        {
+            return;
+        }
+
+        rayCount = ReadStorageWordUniform(
+            pc.RayResultScratchBufferIndex,
+            scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_RAY_COUNT_WORD);
+        slotGeneration = ReadStorageWordUniform(
+            pc.RayResultScratchBufferIndex,
+            scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_GENERATION_WORD);
+        fingerprint = ReadStorageWordUniform(
+            pc.RayResultScratchBufferIndex,
+            scratchBaseWord +
+                SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FINGERPRINT_WORD);
+    }
+    bool headerValid =
+        rayCount > 0u &&
+        rayCount <= min(params.raysPerProbe, SIMPLE_DDGI_MAX_RAYS_PER_PROBE) &&
+        slotGeneration == SimpleDdgiDirectionalPublicationGeneration(
+            update,
+            initialState) &&
+        fingerprint == SimpleDdgiDirectionalScratchFingerprint(
+            update,
+            slotGeneration,
+            rayCount,
+            mode);
+    if (!headerValid)
+    {
+        MarkSimpleDdgiDirectionalProjectionFailure(
+            scratchBaseWord,
+            status,
+            SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FAILURE_HEADER);
+        return;
+    }
+
+    vec3 coefficient0 = vec3(0.0);
+    vec3 coefficient1 = vec3(0.0);
+    vec3 coefficient2 = vec3(0.0);
+    vec3 coefficient3 = vec3(0.0);
+    vec3 coefficient4 = vec3(0.0);
+    vec3 coefficient5 = vec3(0.0);
+    vec3 coefficient6 = vec3(0.0);
+    vec3 coefficient7 = vec3(0.0);
+    vec3 coefficient8 = vec3(0.0);
+    uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);
+    uint validCount = 0u;
+    bool projectionFailed = false;
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+    uvec2 guidingExpectedStableProbeId = uvec2(
+        probeIndex,
+        update.expectedGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK);
+    bool guidingActive =
+        SimpleDdgiGuidingTransportProbeHasCompleteBacking(
+            update.physicalProbeIndex,
+            probeIndex,
+            update.pageMappingGeneration,
+            guidingExpectedStableProbeId,
+            params.raysPerProbe);
+    uint guidingMaintenanceCount = 0u;
+    uint guidingMixtureCount = 0u;
+    // A probe may retain multiple proposal epochs while bounded slot rotation
+    // is in progress. Only stable probe ownership is required to match across
+    // the set; every slot carries and validates its own immutable PDF.
+    uvec2 guidingStableProbeId = uvec2(0u);
+    if (guidingActive)
+    {
+        for (uint ray = 0u; ray < rayCount; ray++)
+        {
+            uint directionRayIndex = SimpleDdgiUpdateDirectionRayIndex(
+                ray,
+                rayCount,
+                sourceRayCount,
+                params);
+            SimpleDdgiGuidingTransportPayload payload;
+            if (!TryReadSimpleDdgiGuidingTransportPayload(
+                    update.physicalProbeIndex,
+                    probeIndex,
+                    update.pageMappingGeneration,
+                    guidingExpectedStableProbeId,
+                    directionRayIndex,
+                    params.raysPerProbe,
+                    payload))
+            {
+                projectionFailed = true;
+                break;
+            }
+            if (ray == 0u)
+                guidingStableProbeId = payload.stableProbeId;
+            else if (any(notEqual(
+                    payload.stableProbeId,
+                    guidingStableProbeId)))
+            {
+                projectionFailed = true;
+                break;
+            }
+            if (payload.technique ==
+                SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE)
+            {
+                guidingMaintenanceCount++;
+            }
+            else
+            {
+                guidingMixtureCount++;
+            }
+        }
+        if (guidingMaintenanceCount + guidingMixtureCount != rayCount ||
+            guidingMaintenanceCount == 0u)
+        {
+            projectionFailed = true;
+        }
+    }
+#endif
+
+    for (uint ray = 0u; ray < rayCount; ray++)
+    {
+        vec3 sourceRadiance = vec3(0.0);
+        vec3 sourceDirection = vec3(0.0, 1.0, 0.0);
+        float hitKind = SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE;
+        bool valid = false;
+        uint directionRayIndex = SimpleDdgiUpdateDirectionRayIndex(
+            ray,
+            rayCount,
+            sourceRayCount,
+            params);
+        if (transportV2)
+        {
+            vec4 sourceRadianceDistance;
+            uint cacheFormat = volume.cacheLayoutFlags &
+                SIMPLE_DDGI_CACHE_FORMAT_MASK;
+            if (cacheFormat == SIMPLE_DDGI_CACHE_FORMAT_LEGACY_36)
+            {
+                valid = ReadSimpleDdgiLegacyTransportRayCacheForTrace(
+                    pc.TransportSourceCacheBufferIndex,
+                    update.cacheProbeBaseWordPlusOne &
+                        SIMPLE_DDGI_DIRECTIONAL_CACHE_BASE_MASK,
+                    directionRayIndex,
+                    volume,
+                    params,
+                    sourceCacheGeneration,
+                    update.sourceLightingGeneration,
+                    update.sourceEpoch,
+                    sourceRayCount,
+                    sourceRadianceDistance,
+                    sourceDirection,
+                    hitKind);
+            }
+            else
+            {
+                valid = ReadSimpleDdgiPackedTransportRayCacheForTrace(
+                    pc.TransportSourceCacheBufferIndex,
+                    update.cacheProbeBaseWordPlusOne &
+                        SIMPLE_DDGI_DIRECTIONAL_CACHE_BASE_MASK,
+                    directionRayIndex,
+                    volume,
+                    params,
+                    sourceCacheGeneration,
+                    update.sourceLightingGeneration,
+                    update.sourceEpoch,
+                    sourceRayCount,
+                    sourceRadianceDistance,
+                    hitKind);
+                sourceDirection = SimpleDdgiReconstructRayDirection(
+                    probeIndex,
+                    directionRayIndex,
+                    update.sourceEpoch,
+                    params);
+            }
+            sourceRadiance = sourceRadianceDistance.rgb;
+        }
+        else
+        {
+            uint rayResultIndex =
+                localProbeOffset * params.raysPerProbe + ray;
+            vec4 radianceDistance;
+            vec2 visibilityHit;
+            uint directionEpoch;
+            valid = ReadSimpleDdgiRayResultStorage(
+                pc.RayResultScratchBufferIndex,
+                rayResultIndex,
+                volume,
+                params,
+                probeIndex,
+                directionRayIndex,
+                update.sourceEpoch,
+                radianceDistance,
+                sourceDirection,
+                visibilityHit,
+                directionEpoch);
+            sourceRadiance = radianceDistance.rgb;
+            hitKind = visibilityHit.y;
+        }
+
+        float sampleWeight = 1.0;
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+        if (guidingActive)
+        {
+            SimpleDdgiGuidingTransportPayload payload;
+            bool payloadValid = TryReadSimpleDdgiGuidingTransportPayload(
+                update.physicalProbeIndex,
+                probeIndex,
+                update.pageMappingGeneration,
+                guidingExpectedStableProbeId,
+                directionRayIndex,
+                params.raysPerProbe,
+                payload);
+            float denominator = payloadValid
+                ? SimpleDdgiGuidingBalanceDenominator(
+                    guidingMaintenanceCount,
+                    guidingMixtureCount,
+                    payload.generationTimeMixturePdf)
+                : 0.0;
+            if (!payloadValid || denominator <= 0.0 ||
+                isnan(denominator) || isinf(denominator))
+            {
+                projectionFailed = true;
+                continue;
+            }
+            sourceDirection = payload.direction;
+            sampleWeight = 1.0 / denominator;
+        }
+#endif
+
+        float directionLengthSquared = dot(sourceDirection, sourceDirection);
+        bool finiteSource =
+            !any(isnan(sourceRadiance)) &&
+            !any(isinf(sourceRadiance)) &&
+            !any(lessThan(sourceRadiance, vec3(0.0))) &&
+            !isnan(directionLengthSquared) &&
+            !isinf(directionLengthSquared) &&
+            directionLengthSquared > 1.0e-12;
+        if (!valid || !finiteSource)
+        {
+            projectionFailed = true;
+            continue;
+        }
+        if (SimpleDdgiRayHitKindIsOneSidedBackFace(hitKind))
+            continue;
+
+        validCount++;
+        vec3 omega = sourceDirection * inversesqrt(directionLengthSquared);
+        float x = omega.x;
+        float y = omega.y;
+        float z = omega.z;
+        coefficient0 += sourceRadiance * (0.2820947918 * sampleWeight);
+        coefficient1 += sourceRadiance *
+            (-0.4886025119 * y * sampleWeight);
+        coefficient2 += sourceRadiance *
+            (0.4886025119 * z * sampleWeight);
+        coefficient3 += sourceRadiance *
+            (-0.4886025119 * x * sampleWeight);
+        coefficient4 += sourceRadiance *
+            (1.0925484306 * x * y * sampleWeight);
+        coefficient5 += sourceRadiance *
+            (-1.0925484306 * y * z * sampleWeight);
+        coefficient6 += sourceRadiance *
+            (0.3153915653 * (3.0 * z * z - 1.0) * sampleWeight);
+        coefficient7 += sourceRadiance *
+            (-1.0925484306 * x * z * sampleWeight);
+        coefficient8 += sourceRadiance *
+            (0.5462742153 * (x * x - y * y) * sampleWeight);
+    }
+
+    if (projectionFailed)
+    {
+        MarkSimpleDdgiDirectionalProjectionFailure(
+            scratchBaseWord,
+            status,
+            SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FAILURE_SOURCE);
+        return;
+    }
+    // A probe fully enclosed by authored one-sided reverse faces has no
+    // representable incident-radiance samples. This is a valid zero-support
+    // result, not a failed producer transaction: publish zero coefficients so
+    // the independently certified diffuse result can commit. The packed sample
+    // count remains zero and makes every directional receiver fall through to
+    // the next reflection source.
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+    float normalization = guidingActive
+        ? 1.0
+        : validCount > 0u
+            ? (4.0 * SIMPLE_DDGI_PI) / float(validCount)
+            : 0.0;
+#else
+    float normalization = validCount > 0u
+        ? (4.0 * SIMPLE_DDGI_PI) / float(validCount)
+        : 0.0;
+#endif
+    WriteSimpleDdgiDirectionalScratchCoefficient(
+        scratchBaseWord, 0u, coefficient0 * normalization);
+    WriteSimpleDdgiDirectionalScratchCoefficient(
+        scratchBaseWord, 1u, coefficient1 * normalization);
+    WriteSimpleDdgiDirectionalScratchCoefficient(
+        scratchBaseWord, 2u, coefficient2 * normalization);
+    WriteSimpleDdgiDirectionalScratchCoefficient(
+        scratchBaseWord, 3u, coefficient3 * normalization);
+    if (mode == SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_L2)
+    {
+        WriteSimpleDdgiDirectionalScratchCoefficient(
+            scratchBaseWord, 4u, coefficient4 * normalization);
+        WriteSimpleDdgiDirectionalScratchCoefficient(
+            scratchBaseWord, 5u, coefficient5 * normalization);
+        WriteSimpleDdgiDirectionalScratchCoefficient(
+            scratchBaseWord, 6u, coefficient6 * normalization);
+        WriteSimpleDdgiDirectionalScratchCoefficient(
+            scratchBaseWord, 7u, coefficient7 * normalization);
+        WriteSimpleDdgiDirectionalScratchCoefficient(
+            scratchBaseWord, 8u, coefficient8 * normalization);
+    }
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_VALID_COUNT_WORD,
+        validCount);
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_RAY_COUNT_WORD,
+        rayCount);
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_GENERATION_WORD,
+        slotGeneration);
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FINGERPRINT_WORD,
+        fingerprint);
+    memoryBarrierBuffer();
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_WORD,
+        SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_PROJECTING |
+            SimpleDdgiDirectionalScratchExpectedCoefficientMask(mode));
+}

@@ -29,6 +29,7 @@ namespace Njulf.Rendering.Pipeline
 
         private readonly RenderSettings _settings;
         private readonly FarFieldClipmapManager _manager;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private DescriptorSetLayout[] _setLayouts = Array.Empty<DescriptorSetLayout>();
         private PipelineLayout _pipelineLayout;
@@ -41,11 +42,13 @@ namespace Njulf.Rendering.Pipeline
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
             RenderSettings settings,
-            FarFieldClipmapManager manager)
+            FarFieldClipmapManager manager,
+            GiPipelineCacheService? pipelineCacheService = null)
             : base("FarFieldClipmapBakePass", context, swapchain, bindlessHeap)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -56,7 +59,10 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Initialize()
         {
-            CreatePipelineCache();
+            if (_pipelineCacheService != null)
+                _pipelineCache = _pipelineCacheService.Cache;
+            else
+                CreatePipelineCache();
             CreatePipelineLayout();
             _pipeline = CreatePipeline();
             _jumpFloodPipeline = CreateJumpFloodPipeline();
@@ -313,7 +319,7 @@ namespace Njulf.Rendering.Pipeline
                 _pipelineLayout = default;
             }
 
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService == null && _pipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
                 _pipelineCache = default;
@@ -401,7 +407,19 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                Result result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out VkPipeline pipeline);
+                long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+                Result result;
+                VkPipeline pipeline;
+                try
+                {
+                    result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out pipeline);
+                }
+                finally
+                {
+                    _pipelineCacheService?.EndPipelineCreation(
+                        $"{Name}:farfield_voxelize.comp.spv",
+                        pipelineStart);
+                }
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create far-field bake compute pipeline", result);
                 return pipeline;
@@ -435,7 +453,19 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                Result result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out VkPipeline pipeline);
+                long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+                Result result;
+                VkPipeline pipeline;
+                try
+                {
+                    result = _context.Api.CreateComputePipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out pipeline);
+                }
+                finally
+                {
+                    _pipelineCacheService?.EndPipelineCreation(
+                        $"{Name}:farfield_jumpflood.comp.spv",
+                        pipelineStart);
+                }
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create far-field jump-flood compute pipeline", result);
                 return pipeline;

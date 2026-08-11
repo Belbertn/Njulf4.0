@@ -3,7 +3,7 @@
 
 // Central address/format contract shared by ordinary DDGI consumers and the
 // resident commit shader. All mixed-stride cache access must pass this gate.
-const uint SIMPLE_DDGI_STORAGE_HEADER_WORDS = 60u;
+const uint SIMPLE_DDGI_STORAGE_HEADER_WORDS = 64u;
 const uint SIMPLE_DDGI_STORAGE_VOLUME_WORDS = 28u;
 const uint SIMPLE_DDGI_STORAGE_MAX_VOLUMES = 16u;
 const uint SIMPLE_DDGI_STORAGE_PAGING_WORDS = 8u;
@@ -20,12 +20,17 @@ const uint SIMPLE_DDGI_STORAGE_FORMAT_INVALID = 3u;
 const uint SIMPLE_DDGI_STORAGE_ABI_SHIFT = 4u;
 const uint SIMPLE_DDGI_STORAGE_ABI_MASK = 0xfu << SIMPLE_DDGI_STORAGE_ABI_SHIFT;
 const uint SIMPLE_DDGI_STORAGE_ABI_LEGACY = 4u;
-const uint SIMPLE_DDGI_STORAGE_ABI_PACKED = 6u;
+const uint SIMPLE_DDGI_STORAGE_ABI_PACKED = 7u;
 const uint SIMPLE_DDGI_STORAGE_CODEBOOK_SHIFT = 8u;
 const uint SIMPLE_DDGI_STORAGE_CODEBOOK_MASK = 0xffu <<
     SIMPLE_DDGI_STORAGE_CODEBOOK_SHIFT;
 const uint SIMPLE_DDGI_STORAGE_CODEBOOK_VERSION = 1u;
-const uint SIMPLE_DDGI_STORAGE_RESERVED_MASK = 0xffff0000u;
+// Version 7 optionally transposes each packed probe page into a dense hot
+// header array followed by a three-word surface-response sidecar. Capacity is
+// unchanged, but misses and authored one-sided backfaces never fetch sidecar
+// words during solve/audit.
+const uint SIMPLE_DDGI_STORAGE_HOT_COLD_LAYOUT_BIT = 1u << 16u;
+const uint SIMPLE_DDGI_STORAGE_RESERVED_MASK = 0xfffe0000u;
 
 uint SimpleDdgiStorageExpectedStride(uint format)
 {
@@ -36,6 +41,48 @@ uint SimpleDdgiStorageExpectedStride(uint format)
     if (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24)
         return 6u;
     return 0u;
+}
+
+bool SimpleDdgiStorageUsesHotColdLayout(uint layoutFlags)
+{
+    return (layoutFlags & SIMPLE_DDGI_STORAGE_HOT_COLD_LAYOUT_BIT) != 0u;
+}
+
+uint SimpleDdgiStorageHotHeaderStride(uint format)
+{
+    return format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28 ? 4u :
+        format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24 ? 3u :
+        SimpleDdgiStorageExpectedStride(format);
+}
+
+uint SimpleDdgiStorageGenerationWord(
+    uint cacheWord,
+    uint format,
+    uint layoutFlags)
+{
+    uint stride = SimpleDdgiStorageUsesHotColdLayout(layoutFlags)
+        ? SimpleDdgiStorageHotHeaderStride(format)
+        : SimpleDdgiStorageExpectedStride(format);
+    return cacheWord + stride - 1u;
+}
+
+uint SimpleDdgiStorageSurfacePayloadWord(
+    uint cacheWord,
+    uint directionRayIndex,
+    uint raysPerProbe,
+    uint format,
+    uint layoutFlags)
+{
+    if (!SimpleDdgiStorageUsesHotColdLayout(layoutFlags))
+    {
+        return cacheWord + (format == SIMPLE_DDGI_STORAGE_FORMAT_LEGACY_36
+            ? 5u
+            : format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28 ? 3u : 2u);
+    }
+
+    uint headerStride = SimpleDdgiStorageHotHeaderStride(format);
+    uint probeBase = cacheWord - directionRayIndex * headerStride;
+    return probeBase + raysPerProbe * headerStride + directionRayIndex * 3u;
 }
 
 // Scheduler volume policy is compiled from the same authoritative cache region
@@ -126,24 +173,32 @@ bool TryResolveSimpleDdgiTransportCacheAddressFromProbeBase(
         (abi == SIMPLE_DDGI_STORAGE_ABI_PACKED &&
             (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28 ||
              format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24));
+    bool hotColdLayoutValid =
+        !SimpleDdgiStorageUsesHotColdLayout(layoutFlags) ||
+        (abi == SIMPLE_DDGI_STORAGE_ABI_PACKED &&
+            (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28 ||
+             format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24));
     uint expectedStride = SimpleDdgiStorageExpectedStride(format);
     if (cacheProbeBaseWordPlusOne == 0u || raysPerProbe == 0u ||
         directionRayIndex >= raysPerProbe ||
         (layoutFlags & SIMPLE_DDGI_STORAGE_RESERVED_MASK) != 0u ||
         codebook != SIMPLE_DDGI_STORAGE_CODEBOOK_VERSION ||
-        !formatMatchesAbi || expectedStride == 0u ||
+        !formatMatchesAbi || !hotColdLayoutValid || expectedStride == 0u ||
         cacheStrideWords != expectedStride)
     {
         return false;
     }
 
     uint cacheProbeBaseWord = cacheProbeBaseWordPlusOne - 1u;
+    uint addressStride = SimpleDdgiStorageUsesHotColdLayout(layoutFlags)
+        ? SimpleDdgiStorageHotHeaderStride(format)
+        : cacheStrideWords;
     if (directionRayIndex >
-            (0xffffffffu - cacheProbeBaseWord) / cacheStrideWords)
+            (0xffffffffu - cacheProbeBaseWord) / addressStride)
     {
         return false;
     }
-    cacheWord = cacheProbeBaseWord + directionRayIndex * cacheStrideWords;
+    cacheWord = cacheProbeBaseWord + directionRayIndex * addressStride;
     return true;
 }
 
@@ -198,9 +253,14 @@ bool TryResolveSimpleDdgiTransportCacheAddress(
         (abi == SIMPLE_DDGI_STORAGE_ABI_PACKED &&
             (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28 ||
              format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24));
+    bool hotColdLayoutValid =
+        !SimpleDdgiStorageUsesHotColdLayout(layoutFlags) ||
+        (abi == SIMPLE_DDGI_STORAGE_ABI_PACKED &&
+            (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28 ||
+             format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24));
     if ((layoutFlags & SIMPLE_DDGI_STORAGE_RESERVED_MASK) != 0u ||
         codebook != SIMPLE_DDGI_STORAGE_CODEBOOK_VERSION ||
-        !formatMatchesAbi ||
+        !formatMatchesAbi || !hotColdLayoutValid ||
         cacheStrideWords != SimpleDdgiStorageExpectedStride(format))
     {
         return false;
@@ -230,13 +290,23 @@ bool TryResolveSimpleDdgiTransportCacheAddress(
         return false;
 
     uint localProbeIndex = physicalProbeIndex - physicalFirst;
-    if (localProbeIndex >
-            (0xffffffffu - directionRayIndex) / raysPerProbe)
+    uint wordsPerProbeHigh;
+    uint wordsPerProbe;
+    umulExtended(raysPerProbe, cacheStrideWords, wordsPerProbeHigh, wordsPerProbe);
+    if (wordsPerProbeHigh != 0u || wordsPerProbe == 0u)
         return false;
-    uint rayIndex = localProbeIndex * raysPerProbe + directionRayIndex;
-    if (rayIndex > (0xffffffffu - cacheBaseWord) / cacheStrideWords)
+    uint probeOffsetHigh;
+    uint probeOffset;
+    umulExtended(localProbeIndex, wordsPerProbe, probeOffsetHigh, probeOffset);
+    if (probeOffsetHigh != 0u || probeOffset > 0xffffffffu - cacheBaseWord)
         return false;
-    cacheWord = cacheBaseWord + rayIndex * cacheStrideWords;
+    uint probeBase = cacheBaseWord + probeOffset;
+    uint addressStride = SimpleDdgiStorageUsesHotColdLayout(layoutFlags)
+        ? SimpleDdgiStorageHotHeaderStride(format)
+        : cacheStrideWords;
+    if (directionRayIndex > (0xffffffffu - probeBase) / addressStride)
+        return false;
+    cacheWord = probeBase + directionRayIndex * addressStride;
     return true;
 }
 

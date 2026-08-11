@@ -61,6 +61,60 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
                 Is.LessThan(
                     SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes /
                     sizeof(uint)));
+            Assert.That(
+                SimpleDdgiSchedulerAbi.FeedbackEligibleClassOffsetWords,
+                Is.EqualTo(976));
+            Assert.That(
+                SimpleDdgiSchedulerAbi.FeedbackEligibleRingOffsetWords,
+                Is.EqualTo(
+                    SimpleDdgiSchedulerAbi.FeedbackEligibleClassOffsetWords +
+                    (int)SimpleDdgiSchedulerWorkClass.Count));
+            Assert.That(
+                SimpleDdgiSchedulerAbi.FeedbackEligibleRingOffsetWords + 3,
+                Is.LessThanOrEqualTo(
+                    SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes /
+                    sizeof(uint)));
+            Assert.That(
+                SimpleDdgiGpuSchedulerLayout.CounterBytes,
+                Is.EqualTo(96 * sizeof(uint)));
+        });
+    }
+
+    [Test]
+    public void SchedulerEligibilityEvidence_UsesBoundedExactCountersAndFeedbackTail()
+    {
+        string shared = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_shared.glsl");
+        string classify = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_classify.comp");
+        string feedback = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_feedback.comp");
+        string scheduler = ReadRepoText(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiGpuScheduler.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shared, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE_CLASS_BASE = 80u"));
+            Assert.That(shared, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE_RING_BASE = 87u"));
+            Assert.That(shared, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_FEEDBACK_ELIGIBLE_CLASS_OFFSET = 976u"));
+            Assert.That(classify, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE_CLASS_BASE + workClass"));
+            Assert.That(classify, Does.Contain(
+                "min(SchedulerVolumeRing(volumeIndex), 2u)"));
+            Assert.That(feedback, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_FEEDBACK_ELIGIBLE_CLASS_OFFSET + workClass"));
+            Assert.That(feedback, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_FEEDBACK_ELIGIBLE_RING_OFFSET + ring"));
+            Assert.That(scheduler, Does.Contain("_lastEligibilityEvidence = new("));
+            Assert.That(scheduler, Does.Contain("public SimpleDdgiSchedulerEligibilityEvidence LastEligibilityEvidence"));
         });
     }
 

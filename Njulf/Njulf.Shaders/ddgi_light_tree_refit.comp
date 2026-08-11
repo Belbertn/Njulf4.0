@@ -1,0 +1,142 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "common.glsl"
+#include "ddgi_light_tree.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants
+{
+    uint LightCount; uint LeafCapacity; uint PaddedLeafCount; uint NodeCount;
+    uint TargetStorageIndex; uint PublishedStorageIndex; uint BuildAction; uint MaximumDepth;
+    float UniformMixtureProbability; uint ExactLightThreshold; uint NodeBankStrideWords; uint LeafBankStrideWords;
+    uint ScratchRecordOffsetWords; uint ScratchSortedIndexOffsetWords; uint ScratchIndirectOffsetWords; uint PublicationGeneration;
+    uint LightBufferRevisionLow; uint LightBufferRevisionHigh; uint TopologyRevisionLow; uint TopologyRevisionHigh;
+    uint ContentRevisionLow; uint ContentRevisionHigh; uint Flags; uint Reserved0;
+} pc;
+
+DdgiLightTreeNode DdgiRefitCombine(
+    DdgiLightTreeNode left,
+    DdgiLightTreeNode right,
+    uint leftIndex,
+    uint rightIndex)
+{
+    DdgiLightTreeNode node;
+    bool leftValid = left.descendantLeafCount > 0u;
+    bool rightValid = right.descendantLeafCount > 0u;
+    node.minimum = leftValid && rightValid ? min(left.minimum, right.minimum) :
+        leftValid ? left.minimum : right.minimum;
+    node.maximum = leftValid && rightValid ? max(left.maximum, right.maximum) :
+        leftValid ? left.maximum : right.maximum;
+    node.flux = max(left.flux, 0.0) + max(right.flux, 0.0);
+    node.maximumRange = left.maximumRange < 0.0 || right.maximumRange < 0.0
+        ? -1.0
+        : max(left.maximumRange, right.maximumRange);
+    node.coneAxis = vec3(0.0, 0.0, 1.0);
+    node.coneCosine = -1.0;
+    node.leftOrFirstLeaf = leftIndex;
+    node.rightOrLeafCount = rightIndex;
+    node.descendantLeafCount = left.descendantLeafCount + right.descendantLeafCount;
+    node.flagsAndChecksum = (left.flagsAndChecksum | right.flagsAndChecksum) &
+        DDGI_LIGHT_TREE_NODE_INVALID_BOUND_BIT;
+    return node;
+}
+
+void main()
+{
+    uint scratch = uint(SIMPLE_DDGI_LIGHT_TREE_SCRATCH_BUFFER_INDEX);
+    uint count = ReadStorageWordUniform(scratch, 0u);
+    uint sourceLeafBase = pc.PublishedStorageIndex * pc.LeafBankStrideWords /
+        DDGI_LIGHT_TREE_LEAF_WORDS;
+    uint targetLeafBase = pc.TargetStorageIndex * pc.LeafBankStrideWords /
+        DDGI_LIGHT_TREE_LEAF_WORDS;
+    uint targetNodeBase = pc.TargetStorageIndex * pc.NodeBankStrideWords /
+        DDGI_LIGHT_TREE_NODE_WORDS;
+    uint targetLeafNodeBase = targetNodeBase + pc.PaddedLeafCount - 1u;
+    uint invalidCount = 0u;
+    for (uint ordinal = 0u; ordinal < pc.PaddedLeafCount; ordinal++)
+    {
+        DdgiLightTreeLeaf targetLeaf;
+        DdgiLightTreeNode targetNode;
+        if (ordinal < count)
+        {
+            DdgiLightTreeLeaf sourceLeaf = DdgiReadLightTreeLeaf(
+                sourceLeafBase + ordinal);
+            GPULight light = ReadLight(sourceLeaf.packedLightIndex);
+            float flux = dot(max(light.Color, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) *
+                max(light.Intensity, 0.0);
+            bool identityValid = light.StableIdentity == sourceLeaf.stableLightIdentity;
+            bool malformedRange = !DdgiLightTreeFinite(light.Range) || light.Range <= 0.0;
+            float extent = malformedRange ? 1000000.0 : light.Range;
+            vec3 minimum = light.Position - vec3(extent);
+            vec3 maximum = light.Position + vec3(extent);
+            bool valid = identityValid && flux > 1e-20 &&
+                DdgiLightTreeFinite(flux) &&
+                DdgiLightTreeFinite(minimum) &&
+                DdgiLightTreeFinite(maximum);
+            if (!valid)
+            {
+                invalidCount++;
+                minimum = vec3(-1000000.0);
+                maximum = vec3(1000000.0);
+                flux = max(flux, 0.0);
+            }
+            targetLeaf.packedLightIndex = sourceLeaf.packedLightIndex;
+            targetLeaf.stableLightIdentity = sourceLeaf.stableLightIdentity;
+            targetLeaf.lightBufferRevision = uvec2(
+                pc.LightBufferRevisionLow,
+                pc.LightBufferRevisionHigh);
+            targetLeaf.center = light.Position;
+            targetLeaf.range = malformedRange ? -1.0 : light.Range;
+            targetNode.minimum = minimum;
+            targetNode.flux = flux;
+            targetNode.maximum = maximum;
+            targetNode.maximumRange = targetLeaf.range;
+            targetNode.coneAxis = vec3(0.0, 0.0, 1.0);
+            targetNode.coneCosine = -1.0;
+            targetNode.leftOrFirstLeaf = ordinal;
+            targetNode.rightOrLeafCount = 1u;
+            targetNode.descendantLeafCount = 1u;
+            targetNode.flagsAndChecksum = DDGI_LIGHT_TREE_NODE_LEAF_BIT |
+                (valid ? 0u : DDGI_LIGHT_TREE_NODE_INVALID_BOUND_BIT);
+        }
+        else
+        {
+            targetLeaf.packedLightIndex = 0u;
+            targetLeaf.stableLightIdentity = 0u;
+            targetLeaf.lightBufferRevision = uvec2(0u);
+            targetLeaf.center = vec3(0.0);
+            targetLeaf.range = 0.0;
+            targetNode.minimum = vec3(0.0);
+            targetNode.flux = 0.0;
+            targetNode.maximum = vec3(0.0);
+            targetNode.maximumRange = 0.0;
+            targetNode.coneAxis = vec3(0.0, 0.0, 1.0);
+            targetNode.coneCosine = -1.0;
+            targetNode.leftOrFirstLeaf = ordinal;
+            targetNode.rightOrLeafCount = 0u;
+            targetNode.descendantLeafCount = 0u;
+            targetNode.flagsAndChecksum = DDGI_LIGHT_TREE_NODE_LEAF_BIT;
+        }
+        DdgiWriteLightTreeLeaf(targetLeafBase + ordinal, targetLeaf);
+        DdgiWriteLightTreeNode(targetLeafNodeBase + ordinal, targetNode);
+    }
+
+    for (int localNode = int(pc.PaddedLeafCount) - 2; localNode >= 0; localNode--)
+    {
+        uint nodeIndex = targetNodeBase + uint(localNode);
+        uint leftIndex = targetNodeBase + uint(localNode) * 2u + 1u;
+        uint rightIndex = leftIndex + 1u;
+        DdgiWriteLightTreeNode(
+            nodeIndex,
+            DdgiRefitCombine(
+                DdgiReadLightTreeNode(leftIndex),
+                DdgiReadLightTreeNode(rightIndex),
+                leftIndex,
+                rightIndex));
+    }
+    WriteStorageWordUniform(scratch, 1u, invalidCount);
+}

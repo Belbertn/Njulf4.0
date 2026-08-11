@@ -38,6 +38,12 @@ public readonly record struct SimpleDdgiTransportCacheRegionRequest(
     /// when the request is embedded in a capture report.
     /// </summary>
     public float? MaximumTraceDistance { get; init; }
+    /// <summary>
+    /// Uses a page-local dense hot-header array followed by a conditional hit
+    /// sidecar. Total capacity stays fixed, while miss/backface solve paths do
+    /// not fetch surface response words.
+    /// </summary>
+    public bool UseHotColdLayout { get; init; }
 }
 
 /// <summary>Authoritative byte and address contract for one volume cache region.</summary>
@@ -60,6 +66,7 @@ public readonly record struct SimpleDdgiTransportCacheRegion(
 {
     public ulong EndWord => checked(BaseWord + ByteCount / sizeof(uint));
     public bool UsesFp16Distance => Format == SimpleDdgiTransportCacheFormat.Compact24;
+    public bool UsesHotColdLayout { get; init; }
 }
 
 /// <summary>
@@ -158,6 +165,12 @@ public sealed record SimpleDdgiStorageDiagnostics(
 {
     public SimpleDdgiStorageValidationCounters ValidationCounters { get; init; } =
         SimpleDdgiStorageValidationCounters.Empty;
+    public int SourceCacheHotColdVolumeCount { get; init; }
+    public ulong SourceCacheHotHeaderCapacityBytes { get; init; }
+    public ulong SourceCacheConditionalPayloadCapacityBytes { get; init; }
+    public ulong SourceCacheEstimatedSolveReadBytes { get; init; }
+    public float SourceCacheMeasuredColdExitFraction { get; init; }
+    public string SourceCacheLayoutAdmissionReason { get; init; } = string.Empty;
 
     public static SimpleDdgiStorageDiagnostics Unavailable { get; } = new(
         false,
@@ -312,6 +325,12 @@ public static class SimpleDdgiStorageLayoutCompiler
             }
             if (request.PackingMode.Sanitize() != mode)
                 throw new ArgumentException("One storage layout cannot mix global packing modes.", nameof(requests));
+            if (request.UseHotColdLayout && !mode.UsesPackedCache())
+            {
+                throw new ArgumentException(
+                    "The hot-header source-cache layout requires packed storage.",
+                    nameof(requests));
+            }
 
             ulong physicalFirst = checked((ulong)request.PhysicalFirstProbe);
             ulong physicalEnd = checked(
@@ -379,7 +398,10 @@ public static class SimpleDdgiStorageLayoutCompiler
                 maximumTraceDistance,
                 halfUlp,
                 maximumDecodedError,
-                distanceDecision);
+                distanceDecision)
+            {
+                UsesHotColdLayout = request.UseHotColdLayout
+            };
             regions.Add(region);
             cursorWords = endWord;
             paddingBytes = checked(paddingBytes + regionPadding);
@@ -422,6 +444,7 @@ public static class SimpleDdgiStorageLayoutCompiler
                 BitConverter.SingleToUInt32Bits(maximumTraceDistance));
             fingerprint = Add(fingerprint, alignedCursor);
             fingerprint = Add(fingerprint, checked((uint)strideWords));
+            fingerprint = Add(fingerprint, request.UseHotColdLayout ? 1u : 0u);
         }
 
         ulong sourceBytes = Math.Max(
@@ -551,7 +574,8 @@ public static class SimpleDdgiStorageLayoutCompiler
         bool irradianceMirrorPresent,
         bool visibilityMirrorPresent,
         SimpleDdgiStorageAbiVersion abiVersion,
-        uint directionCodebookVersion = DirectionCodebookVersion)
+        uint directionCodebookVersion = DirectionCodebookVersion,
+        bool hotColdLayout = false)
     {
         if (format == SimpleDdgiTransportCacheFormat.Invalid)
             throw new ArgumentOutOfRangeException(nameof(format));
@@ -559,12 +583,22 @@ public static class SimpleDdgiStorageLayoutCompiler
             throw new ArgumentOutOfRangeException(nameof(abiVersion));
         if (directionCodebookVersion > 0xffu)
             throw new ArgumentOutOfRangeException(nameof(directionCodebookVersion));
+        if (hotColdLayout &&
+            (abiVersion != SimpleDdgiStorageAbiVersion.Packed ||
+             format is not (SimpleDdgiTransportCacheFormat.Compact24 or
+                 SimpleDdgiTransportCacheFormat.Compact28)))
+        {
+            throw new ArgumentException(
+                "The hot-header source-cache flag requires a packed compact format.",
+                nameof(hotColdLayout));
+        }
 
         return ((uint)format & 0x3u) |
             (irradianceMirrorPresent ? 1u << 2 : 0u) |
             (visibilityMirrorPresent ? 1u << 3 : 0u) |
             (((uint)abiVersion & 0x0fu) << 4) |
-            ((directionCodebookVersion & 0xffu) << 8);
+            ((directionCodebookVersion & 0xffu) << 8) |
+            (hotColdLayout ? SimpleDdgiHotColdCacheLayout.LayoutFlag : 0u);
     }
 
     public static ulong AlignWords(ulong value, int alignmentWords)

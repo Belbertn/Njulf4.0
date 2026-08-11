@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
 using Njulf.Assets;
+using Njulf.Assets.Validation;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Animation;
 using Njulf.Core.Geometry;
@@ -21,6 +22,9 @@ namespace Njulf.Rendering.Resources
     {
         private readonly IModelRenderUploadBackend _backend;
         private readonly RuntimePrimitiveTransportProfileBuilder _runtimePrimitiveProfiles;
+        private readonly OpacityMicromapRuntimeRegistrationStore
+            _opacityMicromapRegistrations;
+        private readonly Action<MeshHandle> _releaseMeshHandle;
         private readonly Action<object> _retainMeshResource;
         private readonly Action<object> _releaseMeshResource;
         private readonly Action<object> _retainMaterialResource;
@@ -42,21 +46,49 @@ namespace Njulf.Rendering.Resources
             MeshManager meshManager,
             TextureManager textureManager,
             MaterialManager materialManager)
+            : this(
+                meshManager,
+                textureManager,
+                materialManager,
+                new OpacityMicromapRuntimeRegistrationStore())
+        {
+        }
+
+        public ModelRenderUploadService(
+            MeshManager meshManager,
+            TextureManager textureManager,
+            MaterialManager materialManager,
+            OpacityMicromapRuntimeRegistrationStore
+                opacityMicromapRegistrations)
             : this(new ModelRenderUploadBackend(
                 meshManager,
                 textureManager,
-                materialManager))
+                materialManager),
+                opacityMicromapRegistrations)
         {
         }
 
         internal ModelRenderUploadService(IModelRenderUploadBackend backend)
+            : this(backend, new OpacityMicromapRuntimeRegistrationStore())
+        {
+        }
+
+        internal ModelRenderUploadService(
+            IModelRenderUploadBackend backend,
+            OpacityMicromapRuntimeRegistrationStore
+                opacityMicromapRegistrations)
         {
             _backend = backend ?? throw new ArgumentNullException(nameof(backend));
+            _opacityMicromapRegistrations =
+                opacityMicromapRegistrations ??
+                throw new ArgumentNullException(
+                    nameof(opacityMicromapRegistrations));
             _runtimePrimitiveProfiles = new RuntimePrimitiveTransportProfileBuilder();
+            _releaseMeshHandle = ReleaseMeshHandle;
             _retainMeshResource = resource =>
-                _backend.RetainMesh(RequireMeshHandle(resource));
+                RetainMeshHandle(RequireMeshHandle(resource));
             _releaseMeshResource = resource =>
-                _backend.ReleaseMesh(RequireMeshHandle(resource));
+                ReleaseMeshHandle(RequireMeshHandle(resource));
             _retainMaterialResource = resource =>
                 _backend.RetainMaterial(
                     RequireMaterialHandle(resource));
@@ -73,6 +105,10 @@ namespace Njulf.Rendering.Resources
                     return _lastUploadDiagnostics;
             }
         }
+
+        internal OpacityMicromapRuntimeRegistrationStore
+            OpacityMicromapRegistrations =>
+            _opacityMicromapRegistrations;
 
         internal int PendingMaterialRollbackResourceCount
         {
@@ -166,7 +202,7 @@ namespace Njulf.Rendering.Resources
                         importedMaterials.Count +
                         subMeshes.Count),
                     subMeshes.Count,
-                    _backend.ReleaseMesh,
+                    _releaseMeshHandle,
                     _backend.ReleaseMaterial,
                     _backend.ReleaseTexture);
 
@@ -189,6 +225,54 @@ namespace Njulf.Rendering.Resources
                     GPUVertex[] vertices = BuildGpuVertices(subMesh);
                     GPUVertexSkinningData[] skinningData = BuildGpuSkinningData(subMesh, model);
                     int materialIndex = ResolveSubMeshMaterialIndex(subMesh, materials.Length);
+                    ModelGiCausticHeroTopologyEvidence causticTopologyEvidence =
+                        default;
+                    ModelMaterial sourceMaterial = importedMaterials.Count == 0
+                        ? ModelMaterial.Default
+                        : importedMaterials[materialIndex];
+                    if (sourceMaterial.GiCausticParticipation !=
+                        ModelGiCausticParticipationMode.None)
+                    {
+                        if (!ModelGiCausticHeroTopologyAnalyzer.TryAnalyze(
+                                subMesh.Vertices,
+                                subMesh.Indices,
+                                isSkinned: subMesh.SkinIndex >= 0,
+                                out causticTopologyEvidence,
+                                out string causticTopologyReason))
+                        {
+                            if (profileAuthenticationDiagnostics.Count < 16)
+                            {
+                                profileAuthenticationDiagnostics.Add(
+                                    $"Submesh {i} ('{subMesh.Name}') C4 hero rejected: " +
+                                    causticTopologyReason);
+                            }
+                        }
+                        else
+                        {
+                            ModelGiCausticHeroValidation causticValidation =
+                                ModelGiCausticHeroValidator.Validate(
+                                    sourceMaterial.GiCausticParticipation,
+                                    sourceMaterial.AlphaMode,
+                                    sourceMaterial.GiTransmissionPolicy,
+                                    sourceMaterial.Roughness,
+                                    sourceMaterial.Ior,
+                                    sourceMaterial.ThicknessFactor,
+                                    sourceMaterial.AttenuationDistance,
+                                    new Vector4(
+                                        sourceMaterial.AttenuationColor.X,
+                                        sourceMaterial.AttenuationColor.Y,
+                                        sourceMaterial.AttenuationColor.Z,
+                                        sourceMaterial.AttenuationColor.W),
+                                    causticTopologyEvidence);
+                            if (!causticValidation.IsEligible &&
+                                profileAuthenticationDiagnostics.Count < 16)
+                            {
+                                profileAuthenticationDiagnostics.Add(
+                                    $"Submesh {i} ('{subMesh.Name}') C4 hero rejected: " +
+                                    causticValidation.Detail);
+                            }
+                        }
+                    }
                     GiPrimitiveTransportProfile primitiveProfile = profileBuild.Profiles[i];
                     if (!TryAuthenticatePrimitiveTextureHashes(
                             materials[materialIndex],
@@ -212,7 +296,8 @@ namespace Njulf.Rendering.Resources
                         subMesh.Indices,
                         generateMeshlets: true,
                         skinningData: skinningData.Length == 0 ? null : skinningData,
-                        primitiveTransportProfile: primitiveProfile);
+                        primitiveTransportProfile: primitiveProfile,
+                        causticTopologyEvidence: causticTopologyEvidence);
                     subMeshMaterials[i] = RegisterPrimitiveProfileMaterial(
                         materials[materialIndex],
                         primitiveProfile,
@@ -354,9 +439,17 @@ namespace Njulf.Rendering.Resources
                             cooked.Materials.Materials.Count) +
                         payload.SubMeshes.Count),
                     payload.SubMeshes.Count,
-                    _backend.ReleaseMesh,
+                    _releaseMeshHandle,
                     _backend.ReleaseMaterial,
                     _backend.ReleaseTexture);
+            int opacityMicromapPayloadAcceptedCount =
+                cooked.OpacityMicromapLoadStatus.Accepted &&
+                cooked.OpacityMicromapPayload is not null
+                    ? 1
+                    : 0;
+            int opacityMicromapRuntimeRegistrationCount = 0;
+            string opacityMicromapRuntimeDetail =
+                cooked.OpacityMicromapLoadStatus.Detail;
             try
             {
                 _backend.InitializeDefaultTextures();
@@ -405,12 +498,20 @@ namespace Njulf.Rendering.Resources
                         lod1.Length,
                         lod2.Length,
                         skinning.Length == 0 ? null : skinning,
-                        primitiveProfiles[i]);
+                        primitiveProfiles[i],
+                        subMesh.CausticTopologyEvidence);
                 }
 
                 MeshHandle[] lifetimeMeshes =
                     _backend.RegisterMeshes(registrations);
                 rollback.TrackMeshes(lifetimeMeshes);
+                opacityMicromapRuntimeRegistrationCount =
+                    RegisterCookedOpacityMicromaps(
+                        cooked,
+                        registrations,
+                        lifetimeMeshes,
+                        subMeshMaterials,
+                        out opacityMicromapRuntimeDetail);
                 UploadPublicationFaultInjector?.Invoke(
                     ModelUploadPublicationStage
                         .AfterMeshRegistration);
@@ -468,7 +569,10 @@ namespace Njulf.Rendering.Resources
                             0)),
                     string.Join(
                         " | ",
-                        profileAuthenticationDiagnostics));
+                        profileAuthenticationDiagnostics),
+                    opacityMicromapPayloadAcceptedCount,
+                    opacityMicromapRuntimeRegistrationCount,
+                    opacityMicromapRuntimeDetail);
                 RegisterModelMaterialLifetime(
                     model,
                     materials);
@@ -1766,6 +1870,16 @@ namespace Njulf.Rendering.Resources
                         // classify a zero-thickness cloth sheet.
                         _ => GiTransmissionPolicy.Unsupported
                     },
+                CausticParticipation = material.GiCausticParticipation switch
+                {
+                    ModelGiCausticParticipationMode.MirrorHero =>
+                        GiCausticParticipationMode.MirrorHero,
+                    ModelGiCausticParticipationMode.ClosedDielectricHero =>
+                        GiCausticParticipationMode.ClosedDielectricHero,
+                    ModelGiCausticParticipationMode.RoughSpecularReference =>
+                        GiCausticParticipationMode.RoughSpecularReference,
+                    _ => GiCausticParticipationMode.None
+                },
                 SpecularFactor = material.SpecularFactor,
                 SpecularColorFactor = new CoreVector3(
                     material.SpecularColor.X,
@@ -2352,6 +2466,263 @@ namespace Njulf.Rendering.Resources
                 releases.ReleaseOutstanding);
         }
 
+        private int RegisterCookedOpacityMicromaps(
+            CookedModelAsset cooked,
+            IReadOnlyList<MeshManager.MeshRegistrationData> meshRegistrations,
+            IReadOnlyList<MeshHandle> meshes,
+            IReadOnlyList<MaterialHandle> materials,
+            out string detail)
+        {
+            CookedOpacityMicromapPayloadLoadStatus loadStatus =
+                cooked.OpacityMicromapLoadStatus;
+            if (!loadStatus.SectionPresent)
+            {
+                detail = "opacity-micromap-section-absent";
+                return 0;
+            }
+            if (!loadStatus.Accepted)
+            {
+                detail = string.IsNullOrWhiteSpace(loadStatus.Detail)
+                    ? "opacity-micromap-section-rejected"
+                    : loadStatus.Detail;
+                return 0;
+            }
+
+            OpacityMicromapCookedPayload? payload =
+                cooked.OpacityMicromapPayload;
+            if (payload is null)
+            {
+                detail =
+                    "opacity-micromap-load-status-accepted-without-payload";
+                return 0;
+            }
+            int subMeshCount = cooked.Mesh.SubMeshes.Count;
+            if (subMeshCount == 0 ||
+                meshRegistrations.Count != subMeshCount ||
+                meshes.Count != subMeshCount ||
+                materials.Count != subMeshCount)
+            {
+                detail =
+                    "opacity-micromap-runtime-submesh-domain-count-mismatch";
+                return 0;
+            }
+            if (!CookedOpacityMicromapModelChunk.TryValidateModelAttachment(
+                    payload,
+                    cooked.Mesh,
+                    cooked.Materials,
+                    out _,
+                    out string attachmentDetail))
+            {
+                detail =
+                    "opacity-micromap-runtime-" + attachmentDetail;
+                return 0;
+            }
+
+            var contractBySubMesh =
+                new OpacityMicromapMaterialContract?[subMeshCount];
+            int mappedContractCount = 0;
+            foreach (OpacityMicromapMaterialContract contract in
+                     payload.MaterialContracts)
+            {
+                int matchingSubMesh = -1;
+                for (int subMeshIndex = 0;
+                     subMeshIndex < subMeshCount;
+                     subMeshIndex++)
+                {
+                    CookedSubMeshRecord candidate =
+                        cooked.Mesh.SubMeshes[subMeshIndex];
+                    if (candidate.IndexOffset < 0 ||
+                        candidate.IndexCount <= 0 ||
+                        candidate.IndexOffset % 3 != 0 ||
+                        candidate.IndexCount % 3 != 0)
+                    {
+                        continue;
+                    }
+
+                    if (contract.FirstPrimitive ==
+                            checked((uint)(candidate.IndexOffset / 3)) &&
+                        contract.PrimitiveCount ==
+                            checked((uint)(candidate.IndexCount / 3)) &&
+                        contract.MaterialSlot ==
+                            checked((uint)candidate.MaterialSlot))
+                    {
+                        if (matchingSubMesh >= 0)
+                        {
+                            detail =
+                                "opacity-micromap-runtime-material-domain-ambiguous";
+                            return 0;
+                        }
+                        matchingSubMesh = subMeshIndex;
+                    }
+                }
+
+                if (matchingSubMesh < 0 ||
+                    contractBySubMesh[matchingSubMesh].HasValue)
+                {
+                    detail =
+                        "opacity-micromap-runtime-material-domain-mismatch";
+                    return 0;
+                }
+                contractBySubMesh[matchingSubMesh] = contract;
+                mappedContractCount++;
+            }
+            if (mappedContractCount != payload.MaterialContracts.Count)
+            {
+                detail =
+                    "opacity-micromap-runtime-material-domain-incomplete";
+                return 0;
+            }
+
+            var pendingRegistrations =
+                new List<OpacityMicromapRuntimeMeshRegistration>(
+                    mappedContractCount);
+            string lastFallbackDetail =
+                "opacity-micromap-runtime-no-eligible-submesh";
+            for (int subMeshIndex = 0;
+                 subMeshIndex < subMeshCount;
+                 subMeshIndex++)
+            {
+                if (contractBySubMesh[subMeshIndex] is not { } contract)
+                    continue;
+
+                CookedSubMeshRecord subMesh =
+                    cooked.Mesh.SubMeshes[subMeshIndex];
+                MeshManager.MeshRegistrationData registration =
+                    meshRegistrations[subMeshIndex];
+                if (subMesh.SkinIndex >= 0 || registration.IsSkinned)
+                {
+                    lastFallbackDetail =
+                        "opacity-micromap-runtime-rejects-deforming-submesh";
+                    continue;
+                }
+                if (registration.Indices.Length == 0 ||
+                    registration.Indices.Length % 3 != 0 ||
+                    contract.PrimitiveCount != checked((uint)(
+                        registration.Indices.Length / 3)))
+                {
+                    detail =
+                        "opacity-micromap-runtime-primitive-domain-mismatch";
+                    return 0;
+                }
+
+                MaterialHandle materialHandle = materials[subMeshIndex];
+                MaterialDefinition material =
+                    _backend.GetMaterialDefinition(materialHandle);
+                if (material.AlphaMode != MaterialAlphaMode.Mask ||
+                    BitConverter.SingleToUInt32Bits(
+                        material.BaseColorFactor.W) !=
+                        contract.MaterialAlphaBits ||
+                    BitConverter.SingleToUInt32Bits(material.AlphaCutoff) !=
+                        contract.AlphaCutoffBits)
+                {
+                    lastFallbackDetail =
+                        "opacity-micromap-runtime-material-state-mismatch";
+                    continue;
+                }
+
+                bool vertexAlphaMatches = true;
+                foreach (GPUVertexUvColorStream vertex in
+                         registration.VertexUvColors)
+                {
+                    if (BitConverter.SingleToUInt32Bits(vertex.Color.W) !=
+                        contract.UniformVertexAlphaBits)
+                    {
+                        vertexAlphaMatches = false;
+                        break;
+                    }
+                }
+                if (!vertexAlphaMatches)
+                {
+                    lastFallbackDetail =
+                        "opacity-micromap-runtime-vertex-alpha-mismatch";
+                    continue;
+                }
+
+                uint firstPrimitive = checked((uint)(
+                    subMesh.IndexOffset / 3));
+                if (!OpacityMicromapRuntimePayloadPartitioner
+                        .TryCreateSubmeshPayload(
+                            payload,
+                            firstPrimitive,
+                            contract.PrimitiveCount,
+                            contract.MaterialSlot,
+                            out OpacityMicromapCookedPayload? localPayload,
+                            out string partitionDetail))
+                {
+                    if (partitionDetail ==
+                        "omm-runtime-partition-submesh-has-only-special-indices")
+                    {
+                        lastFallbackDetail =
+                            "opacity-micromap-runtime-" + partitionDetail;
+                        continue;
+                    }
+
+                    detail =
+                        "opacity-micromap-runtime-" + partitionDetail;
+                    return 0;
+                }
+
+                pendingRegistrations.Add(
+                    new OpacityMicromapRuntimeMeshRegistration(
+                        meshes[subMeshIndex],
+                        materialHandle,
+                        _backend.GetMaterialContentRevision(materialHandle),
+                        OpacityMicromapRuntimeRegistrationStore
+                            .ComputeMeshGeometryKey(
+                                registration.VertexPositions,
+                                registration.Indices),
+                        localPayload!,
+                        material.DoubleSided
+                            ? StaticBlasRayGeometryPolicy
+                                .TwoSidedCandidateConfirmationRequired
+                            : StaticBlasRayGeometryPolicy
+                                .CandidateConfirmationRequired,
+                        AccelerationStructureManager.StaticBlasBuildAbi));
+            }
+
+            if (pendingRegistrations.Count == 0)
+            {
+                detail = lastFallbackDetail;
+                return 0;
+            }
+
+            var registeredMeshes = new List<MeshHandle>(
+                pendingRegistrations.Count);
+            foreach (OpacityMicromapRuntimeMeshRegistration registration in
+                     pendingRegistrations)
+            {
+                if (_opacityMicromapRegistrations.TryRegisterInitialReference(
+                        registration,
+                        out string registrationDetail))
+                {
+                    registeredMeshes.Add(registration.Mesh);
+                    continue;
+                }
+
+                foreach (MeshHandle registeredMesh in registeredMeshes)
+                {
+                    _opacityMicromapRegistrations.ReleaseMeshReference(
+                        registeredMesh);
+                }
+                if (registrationDetail ==
+                    "omm-runtime-registration-mesh-conflict")
+                {
+                    throw new InvalidOperationException(
+                        "A mesh handle was reused while an incompatible " +
+                        "opacity-micromap registration was still live.");
+                }
+
+                detail = "opacity-micromap-runtime-" + registrationDetail;
+                return 0;
+            }
+
+            detail = pendingRegistrations.Count == 1
+                ? "opacity-micromap-runtime-registration-ready"
+                : "opacity-micromap-runtime-submesh-registrations-ready:" +
+                    pendingRegistrations.Count;
+            return pendingRegistrations.Count;
+        }
+
         public void Dispose()
         {
             lock (_lifecycleLock)
@@ -2389,6 +2760,40 @@ namespace Njulf.Rendering.Resources
                 _retainMaterialResource,
                 _releaseMaterialResource,
                 retainCurrentResources: false);
+        }
+
+        private void RetainMeshHandle(MeshHandle handle)
+        {
+            _backend.RetainMesh(handle);
+            try
+            {
+                _opacityMicromapRegistrations.RetainMeshReference(handle);
+            }
+            catch (Exception retainFailure)
+            {
+                try
+                {
+                    _backend.ReleaseMesh(handle);
+                }
+                catch (Exception rollbackFailure)
+                {
+                    throw new AggregateException(
+                        "Mesh retention and OMM-registration rollback both failed.",
+                        retainFailure,
+                        rollbackFailure);
+                }
+
+                throw;
+            }
+        }
+
+        private void ReleaseMeshHandle(MeshHandle handle)
+        {
+            // Remove the association before the backend may recycle the mesh
+            // slot. If backend release is retryable, a second registration
+            // release is intentionally a no-op.
+            _opacityMicromapRegistrations.ReleaseMeshReference(handle);
+            _backend.ReleaseMesh(handle);
         }
 
         private static MeshHandle RequireMeshHandle(object resource)

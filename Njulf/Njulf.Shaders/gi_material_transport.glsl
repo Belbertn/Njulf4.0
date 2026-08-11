@@ -47,6 +47,10 @@ struct GiSurfaceSample
     // directionally-compressed hemispherical response at the sampled NdotV.
     vec3 DirectionalDiffuseBase;
     vec3 DielectricF0;
+    // Complete normal-incidence specular color. Detailed materials include
+    // metallic base color; compact profiles conservatively retain dielectric
+    // F0 until a separately versioned metallic-color statistic is available.
+    vec3 SpecularF0;
     vec3 DiffuseReflectance;
     vec3 TransmittedDiffuseReflectance;
     vec3 EmissiveRadiance;
@@ -244,6 +248,100 @@ vec3 ApplyGiMaterialOcclusion(vec3 incomingIndirect, float materialOcclusion)
     return max(incomingIndirect, vec3(0.0)) * clamp(materialOcclusion, 0.0, 1.0);
 }
 
+// Geometry decals are material overlays, not transport surfaces. Composite
+// every supported lobe into the base sample and leave base geometric
+// orientation/opacity/participation ownership intact so lighting is evaluated
+// exactly once after the final ordered overlay.
+void ApplyGiDecalOverlay(
+    inout GiSurfaceSample baseSurface,
+    GiSurfaceSample decalSurface,
+    bool premultipliedAlpha)
+{
+    float opacity = clamp(decalSurface.Opacity, 0.0, 1.0);
+    if (opacity <= 0.0)
+        return;
+
+    vec3 decalDiffuse = clamp(
+        decalSurface.DiffuseReflectance,
+        vec3(0.0),
+        vec3(1.0));
+    vec3 decalDirectionalBase = clamp(
+        decalSurface.DirectionalDiffuseBase,
+        vec3(0.0),
+        vec3(1.0));
+    vec3 decalEmission = max(decalSurface.EmissiveRadiance, vec3(0.0));
+    if (premultipliedAlpha)
+    {
+        baseSurface.DiffuseReflectance =
+            baseSurface.DiffuseReflectance * (1.0 - opacity) +
+            decalDiffuse * opacity;
+        baseSurface.DirectionalDiffuseBase =
+            baseSurface.DirectionalDiffuseBase * (1.0 - opacity) +
+            decalDirectionalBase * opacity;
+        baseSurface.EmissiveRadiance =
+            baseSurface.EmissiveRadiance * (1.0 - opacity) +
+            decalEmission * opacity;
+    }
+    else
+    {
+        baseSurface.DiffuseReflectance = mix(
+            baseSurface.DiffuseReflectance,
+            decalDiffuse,
+            opacity);
+        baseSurface.DirectionalDiffuseBase = mix(
+            baseSurface.DirectionalDiffuseBase,
+            decalDirectionalBase,
+            opacity);
+        baseSurface.EmissiveRadiance = mix(
+            baseSurface.EmissiveRadiance,
+            decalEmission,
+            opacity);
+    }
+
+    baseSurface.DielectricF0 = mix(
+        baseSurface.DielectricF0,
+        clamp(decalSurface.DielectricF0, vec3(0.0), vec3(1.0)),
+        opacity);
+    baseSurface.SpecularF0 = mix(
+        baseSurface.SpecularF0,
+        clamp(decalSurface.SpecularF0, vec3(0.0), vec3(1.0)),
+        opacity);
+    baseSurface.TransmittedDiffuseReflectance = mix(
+        baseSurface.TransmittedDiffuseReflectance,
+        clamp(decalSurface.TransmittedDiffuseReflectance, vec3(0.0), vec3(1.0)),
+        opacity);
+    baseSurface.ShadingNormal = CorrectGiShadingNormal(
+        baseSurface.GeometricNormal,
+        GiSafeNormal(
+            mix(baseSurface.ShadingNormal, decalSurface.ShadingNormal, opacity),
+            baseSurface.ShadingNormal));
+    baseSurface.MaterialOcclusion = mix(
+        baseSurface.MaterialOcclusion,
+        clamp(decalSurface.MaterialOcclusion, 0.0, 1.0),
+        opacity);
+    baseSurface.Metallic = mix(
+        baseSurface.Metallic,
+        clamp(decalSurface.Metallic, 0.0, 1.0),
+        opacity);
+    baseSurface.Roughness = clamp(
+        mix(baseSurface.Roughness, decalSurface.Roughness, opacity),
+        GI_MATERIAL_MINIMUM_ROUGHNESS,
+        1.0);
+
+    baseSurface.DiffuseReflectance = clamp(
+        baseSurface.DiffuseReflectance,
+        vec3(0.0),
+        vec3(1.0));
+    baseSurface.DirectionalDiffuseBase = clamp(
+        baseSurface.DirectionalDiffuseBase,
+        vec3(0.0),
+        vec3(1.0));
+    baseSurface.EmissiveRadiance = clamp(
+        baseSurface.EmissiveRadiance,
+        vec3(0.0),
+        vec3(GI_MATERIAL_MAXIMUM_FINITE_RADIANCE));
+}
+
 bool EvaluateGiOpacity(float alpha, float alphaMode, float alphaCutoff)
 {
     return MaterialAlphaSurvivesRasterCoverage(alpha, alphaMode, alphaCutoff);
@@ -262,6 +360,7 @@ GiSurfaceSample EmptyGiSurfaceSample(vec3 geometricNormal, vec3 shadingNormal, u
     surface.ShadingNormal = CorrectGiShadingNormal(surface.GeometricNormal, shadingNormal);
     surface.DirectionalDiffuseBase = vec3(0.0);
     surface.DielectricF0 = vec3(0.0);
+    surface.SpecularF0 = vec3(0.0);
     surface.DiffuseReflectance = vec3(0.0);
     surface.TransmittedDiffuseReflectance = vec3(0.0);
     surface.EmissiveRadiance = vec3(0.0);
@@ -321,6 +420,7 @@ GiSurfaceSample EvaluateGiCompactSurface(
                 vec3(diffuseBaseBAndF0R.y, dielectricF0Gb),
                 vec3(0.0),
                 vec3(1.0));
+            surface.SpecularF0 = surface.DielectricF0;
         }
     }
     surface.EmissiveRadiance = emits
@@ -429,6 +529,10 @@ GiSurfaceSample EvaluateGiTexturedSurface(
             ior,
             specularFactor,
             specularColor);
+        surface.SpecularF0 = mix(
+            surface.DielectricF0,
+            clamp(baseColor.rgb, vec3(0.0), vec3(1.0)),
+            surface.Metallic);
         surface.DiffuseReflectance = EvaluateGiHemisphericalDiffuseReflectance(
             baseColor.rgb,
             surface.Metallic,

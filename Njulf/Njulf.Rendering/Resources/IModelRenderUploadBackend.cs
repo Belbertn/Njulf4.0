@@ -56,6 +56,8 @@ internal interface IModelRenderUploadBackend
 
     MaterialDefinition GetMaterialDefinition(MaterialHandle handle);
 
+    uint GetMaterialContentRevision(MaterialHandle handle) => 1U;
+
     IReadOnlyList<TextureHandle> GetMaterialTextures(MaterialHandle handle);
 
     void RetainMaterial(MaterialHandle handle);
@@ -169,6 +171,13 @@ internal sealed class ModelRenderUploadBackend : IModelRenderUploadBackend
     public MaterialDefinition GetMaterialDefinition(MaterialHandle handle)
     {
         return _materialManager.GetMaterialDefinition(handle);
+    }
+
+    public uint GetMaterialContentRevision(MaterialHandle handle)
+    {
+        if (!handle.IsValid)
+            throw new ArgumentOutOfRangeException(nameof(handle));
+        return _materialManager.GetMaterialContentRevision(handle.Index);
     }
 
     public IReadOnlyList<TextureHandle> GetMaterialTextures(MaterialHandle handle)

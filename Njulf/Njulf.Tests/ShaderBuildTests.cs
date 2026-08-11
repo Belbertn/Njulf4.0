@@ -13,6 +13,9 @@ public sealed class ShaderBuildTests
         "forward.frag",
         "ddgi_simple_trace.comp",
         "ddgi_simple_transport.comp",
+        "ddgi_simple_directional_prepare.comp",
+        "ddgi_simple_directional_project.comp",
+        "ddgi_simple_directional_publish.comp",
         "ddgi_simple_blend.comp",
         "ddgi_simple_publish.comp",
         "ddgi_simple_publish_sampled.comp",
@@ -53,6 +56,9 @@ public sealed class ShaderBuildTests
             Assert.That(project, Does.Contain("*.comp"));
             Assert.That(File.Exists(Path.Combine(shaderDirectory, "ddgi_simple_trace.comp")), Is.True);
             Assert.That(File.Exists(Path.Combine(shaderDirectory, "ddgi_simple_transport.comp")), Is.True);
+            Assert.That(File.Exists(Path.Combine(shaderDirectory, "ddgi_simple_directional_prepare.comp")), Is.True);
+            Assert.That(File.Exists(Path.Combine(shaderDirectory, "ddgi_simple_directional_project.comp")), Is.True);
+            Assert.That(File.Exists(Path.Combine(shaderDirectory, "ddgi_simple_directional_publish.comp")), Is.True);
             Assert.That(File.Exists(Path.Combine(shaderDirectory, "ddgi_simple_blend.comp")), Is.True);
             Assert.That(File.Exists(Path.Combine(shaderDirectory, "ddgi_trace.comp")), Is.False);
             Assert.That(File.Exists(Path.Combine(shaderDirectory, "ddgi_schedule_score.comp")), Is.False);

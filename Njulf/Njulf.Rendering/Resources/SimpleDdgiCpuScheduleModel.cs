@@ -33,7 +33,12 @@ public enum SimpleDdgiSchedulerCandidateReason : ushort
     SourceCacheInvalid = 1 << 7,
     RoutineDue = 1 << 8,
     ConvergencePending = 1 << 9,
-    InactiveRetry = 1 << 10
+    InactiveRetry = 1 << 10,
+    Topology = 1 << 11,
+    VisiblePageCohort = 1 << 12,
+    RadiometricRelight = 1 << 13,
+    SegmentSelective = 1 << 14,
+    ResidualPropagation = 1 << 15
 }
 
 /// <summary>
@@ -63,6 +68,17 @@ public static class SimpleDdgiSchedulerAbi
     // set after commit/classification.
     public const int FeedbackActiveSourceMutationOffsetWords = 974;
     public const int FeedbackActiveCanonicalMutationOffsetWords = 975;
+    // The lane-cursor region ends at word 959 and the fixed commit/audit
+    // witnesses occupy 960..975. Keep the liveness evidence in the remaining
+    // bounded feedback tail instead of expanding the readback allocation.
+    public const int FeedbackEligibleClassOffsetWords = 976;
+    public const int FeedbackEligibleRingOffsetWords =
+        FeedbackEligibleClassOffsetWords + (int)SimpleDdgiSchedulerWorkClass.Count;
+    public const int FeedbackResidualPropagationOffsetWords = 986;
+    public const int FeedbackUrgentRelightOffsetWords = 990;
+    public const int FeedbackReceiverContributionOffsetWords = 994;
+    public const int FeedbackLivenessWordCount =
+        (int)SimpleDdgiSchedulerWorkClass.Count + 3;
     public const uint PhysicalGenerationMask = 0x00ff_ffffu;
     public const uint UpdateRayCountShift = 16u;
     public const uint UpdateRayCountMask = 0xffff_0000u;
@@ -98,9 +114,24 @@ public static class SimpleDdgiSchedulerAbi
     // candidate/compaction work while feedback continues to validate the
     // resident participant population.
     public const uint SchedulerFeatureCertifiedQuiesced = 1u << 11;
+    public const uint SchedulerFeatureCostAwarePriority = 1u << 12;
+    /// <summary>
+    /// Enables residual/deadline ordering ahead of the mandatory frozen
+    /// complete-field sweep. It never changes the tail certificate target.
+    /// </summary>
+    public const uint SchedulerFeatureSparseResidualPropagation = 1u << 13;
+    /// <summary>
+    /// A frame carries an immutable B1 V2 summary-bank identity. The shader
+    /// still treats feedback as optional until its complete native header and
+    /// locator/summary records validate.
+    /// </summary>
+    public const uint SchedulerFeatureExactReceiverFeedback = 1u << 14;
+    public const uint ExactReceiverFeedbackBindingValid = 1u << 0;
     public const uint ReasonFresh = (uint)SimpleDdgiSchedulerCandidateReason.Fresh;
     public const uint ReasonScrollExposed = (uint)SimpleDdgiSchedulerCandidateReason.ScrollExposed;
     public const uint ReasonRegionalDirty = (uint)SimpleDdgiSchedulerCandidateReason.RegionalDirty;
+    public const uint ReasonResidualPropagation =
+        (uint)SimpleDdgiSchedulerCandidateReason.ResidualPropagation;
     public const uint ProbeMetadataVisible = 1u << 16;
     public const uint ProbeMetadataPublished = 1u << 17;
     // A rejected resident transaction leaves this private repair marker set so

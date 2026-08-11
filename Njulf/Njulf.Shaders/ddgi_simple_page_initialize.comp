@@ -78,14 +78,25 @@ void main()
             uint ray = cacheEntry - pageProbe * raysPerProbe;
             uint localPhysicalProbe =
                 physicalPage * SIMPLE_DDGI_PROBES_PER_PAGE + pageProbe;
-            uint cacheBase = volume.cacheBaseWord +
-                (localPhysicalProbe * raysPerProbe + ray) *
+            uint cacheProbeBase = volume.cacheBaseWord +
+                localPhysicalProbe * raysPerProbe *
                     volume.cacheStrideWords;
+            uint cacheAddressStride =
+                SimpleDdgiStorageUsesHotColdLayout(volume.cacheLayoutFlags)
+                    ? SimpleDdgiStorageHotHeaderStride(
+                        volume.cacheLayoutFlags &
+                            SIMPLE_DDGI_STORAGE_FORMAT_MASK)
+                    : volume.cacheStrideWords;
+            uint cacheBase = cacheProbeBase + ray * cacheAddressStride;
             // The validity/generation word is the sole publication gate for a
             // cache entry. Remaining payload may retain undefined old bits.
             WriteStorageWordUniform(
                 pc.TransportSourceCacheBufferIndex,
-                cacheBase + volume.cacheStrideWords - 1u,
+                SimpleDdgiStorageGenerationWord(
+                    cacheBase,
+                    volume.cacheLayoutFlags &
+                        SIMPLE_DDGI_STORAGE_FORMAT_MASK,
+                    volume.cacheLayoutFlags),
                 0u);
         }
 

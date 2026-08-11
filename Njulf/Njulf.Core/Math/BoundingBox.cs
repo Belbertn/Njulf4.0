@@ -68,8 +68,12 @@ namespace Njulf.Core.Math
             corners[6] = new Vector3(box.Min.X, box.Max.Y, box.Max.Z);
             corners[7] = box.Max;
 
+            // Engine transforms use the same row-vector convention as
+            // System.Numerics: translation lives in M41..M43 and points are
+            // multiplied on the left. Matrix * point uses the separate
+            // column-vector operator and would silently discard translation.
             for (int i = 0; i < 8; i++)
-                corners[i] = matrix * corners[i];
+                corners[i] = corners[i] * matrix;
 
             return FromPoints(corners);
         }

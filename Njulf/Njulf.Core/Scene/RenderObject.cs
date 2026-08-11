@@ -23,6 +23,18 @@ namespace Njulf.Core.Scene
         private bool _enabled = true;
         private int _updateOrder;
         private bool _disposed;
+        private BoundingBox? _localMeshBounds;
+        private bool _isStatic;
+        private ulong _revision = 1;
+
+        /// <summary>
+        /// Raised only when transport-relevant object state actually changes.
+        /// Scene-level systems subscribe once when the object is added instead
+        /// of comparing every object signature every frame.
+        /// </summary>
+        public event Action<RenderObjectMutation>? Changed;
+
+        public ulong Revision => _revision;
 
         public Matrix4x4 WorldMatrix
         {
@@ -39,8 +51,13 @@ namespace Njulf.Core.Scene
             }
             set
             {
+                object? previous;
+                BoundingBox? bounds = GetWorldBounds();
                 lock (_resourceLock)
                 {
+                    if (Equals(_mesh, value))
+                        return;
+                    previous = _mesh;
                     SetResource(
                         ref _mesh,
                         ref _ownsMesh,
@@ -49,6 +66,12 @@ namespace Njulf.Core.Scene
                         _resourceLifetime?.ReleaseMesh);
                     _dirty = true;
                 }
+                PublishChange(
+                    SceneMutationKind.Geometry,
+                    bounds,
+                    bounds,
+                    previous,
+                    value);
             }
         }
 
@@ -57,7 +80,22 @@ namespace Njulf.Core.Scene
         /// Imported models populate this metadata so systems that do not own the mesh registry
         /// can still derive geometry-aware world bounds. Hand-authored objects may leave it unset.
         /// </summary>
-        public BoundingBox? LocalMeshBounds { get; set; }
+        public BoundingBox? LocalMeshBounds
+        {
+            get => _localMeshBounds;
+            set
+            {
+                if (_localMeshBounds.Equals(value))
+                    return;
+
+                BoundingBox? oldBounds = GetWorldBounds();
+                _localMeshBounds = value;
+                PublishChange(
+                    SceneMutationKind.Geometry,
+                    oldBounds,
+                    GetWorldBounds());
+            }
+        }
 
         public object? Material
         {
@@ -68,6 +106,8 @@ namespace Njulf.Core.Scene
             }
             set
             {
+                object? previous;
+                BoundingBox? bounds = GetWorldBounds();
                 lock (_resourceLock)
                 {
                     if (_materialTransferInProgress)
@@ -75,6 +115,9 @@ namespace Njulf.Core.Scene
                         throw new InvalidOperationException(
                             "The render object's material is already participating in an ownership transfer.");
                     }
+                    if (Equals(_material, value))
+                        return;
+                    previous = _material;
                     SetResource(
                         ref _material,
                         ref _ownsMaterial,
@@ -83,26 +126,63 @@ namespace Njulf.Core.Scene
                         _resourceLifetime?.ReleaseMaterial);
                     _dirty = true;
                 }
+                PublishChange(
+                    SceneMutationKind.Material,
+                    bounds,
+                    bounds,
+                    previous,
+                    value);
             }
         }
 
         public bool Visible
         {
             get => _visible;
-            set => _visible = value;
+            set
+            {
+                if (_visible == value)
+                    return;
+                BoundingBox? bounds = GetWorldBounds();
+                _visible = value;
+                PublishChange(
+                    SceneMutationKind.Visibility,
+                    value ? null : bounds,
+                    value ? bounds : null);
+            }
         }
 
         public bool Enabled
         {
             get => _enabled;
-            set => _enabled = value;
+            set
+            {
+                if (_enabled == value)
+                    return;
+                BoundingBox? bounds = GetWorldBounds();
+                _enabled = value;
+                PublishChange(
+                    SceneMutationKind.Visibility,
+                    value ? null : bounds,
+                    value ? bounds : null);
+            }
         }
 
         /// <summary>
         /// Marks geometry whose mesh and placement are normally stationary. Renderers may use
         /// this hint for bounded spatial residency; moving or skinned objects should leave it off.
         /// </summary>
-        public bool IsStatic { get; set; }
+        public bool IsStatic
+        {
+            get => _isStatic;
+            set
+            {
+                if (_isStatic == value)
+                    return;
+                BoundingBox? bounds = GetWorldBounds();
+                _isStatic = value;
+                PublishChange(SceneMutationKind.Geometry, bounds, bounds);
+            }
+        }
 
         public int UpdateOrder
         {
@@ -278,6 +358,7 @@ namespace Njulf.Core.Scene
         /// </summary>
         public void AdoptTransferredMaterial(object material)
         {
+            object? previous;
             lock (_resourceLock)
             {
                 ArgumentNullException.ThrowIfNull(material);
@@ -295,9 +376,16 @@ namespace Njulf.Core.Scene
                         "A transferred material requires an attached, currently owned material reference.");
                 }
 
+                previous = _material;
                 _material = material;
                 _dirty = true;
             }
+            PublishChange(
+                SceneMutationKind.Material,
+                GetWorldBounds(),
+                GetWorldBounds(),
+                previous,
+                material);
         }
 
         /// <summary>
@@ -314,6 +402,8 @@ namespace Njulf.Core.Scene
             ArgumentNullException.ThrowIfNull(expectedMaterial);
             ArgumentNullException.ThrowIfNull(replacementFactory);
 
+            object? previous = null;
+            object replacement;
             lock (_resourceLock)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
@@ -337,21 +427,32 @@ namespace Njulf.Core.Scene
                 _materialTransferInProgress = true;
                 try
                 {
-                    object replacement = replacementFactory() ??
+                    replacement = replacementFactory() ??
                         throw new InvalidOperationException(
                             "A material ownership transfer cannot publish a null replacement.");
                     if (!Equals(_material, replacement))
                     {
+                        previous = _material;
                         _material = replacement;
                         _dirty = true;
                     }
-                    return replacement;
                 }
                 finally
                 {
                     _materialTransferInProgress = false;
                 }
             }
+
+            if (previous != null)
+            {
+                PublishChange(
+                    SceneMutationKind.Material,
+                    GetWorldBounds(),
+                    GetWorldBounds(),
+                    previous,
+                    replacement);
+            }
+            return replacement;
         }
 
         internal void CopyResourceLifetimeTo(RenderObject target)
@@ -581,15 +682,33 @@ namespace Njulf.Core.Scene
 
         private void SetTransform(Vector3 position, Quaternion rotation, Vector3 scale)
         {
+            if (!_hasNonTrsMatrix &&
+                _position == position &&
+                _rotation.Equals(rotation) &&
+                _scale == scale)
+            {
+                return;
+            }
+
+            BoundingBox? oldBounds = GetWorldBounds();
             _position = position;
             _rotation = rotation;
             _scale = scale;
             _hasNonTrsMatrix = false;
             _dirty = true;
+            PublishChange(
+                SceneMutationKind.Transform,
+                oldBounds,
+                GetWorldBounds());
         }
 
         private void SetWorldMatrix(Matrix4x4 matrix)
         {
+            Matrix4x4 current = GetWorldMatrix();
+            if (current.Equals(matrix))
+                return;
+            BoundingBox? oldBounds = GetWorldBounds(current);
+
             if (TryDecompose(matrix, out Vector3 position, out Quaternion rotation, out Vector3 scale))
             {
                 _position = position;
@@ -607,6 +726,36 @@ namespace Njulf.Core.Scene
             }
 
             _dirty = true;
+            PublishChange(
+                SceneMutationKind.Transform,
+                oldBounds,
+                GetWorldBounds());
+        }
+
+        private BoundingBox? GetWorldBounds() =>
+            GetWorldBounds(GetWorldMatrix());
+
+        private BoundingBox? GetWorldBounds(Matrix4x4 matrix) =>
+            _localMeshBounds is { } local
+                ? BoundingBox.Transform(local, matrix)
+                : null;
+
+        private void PublishChange(
+            SceneMutationKind kind,
+            BoundingBox? oldBounds,
+            BoundingBox? newBounds,
+            object? oldResource = null,
+            object? newResource = null)
+        {
+            _revision = _revision == ulong.MaxValue ? 1UL : _revision + 1UL;
+            Changed?.Invoke(new RenderObjectMutation(
+                this,
+                kind,
+                oldBounds,
+                newBounds,
+                oldResource,
+                newResource,
+                _revision));
         }
 
         private static Quaternion NormalizeRotation(Quaternion rotation)

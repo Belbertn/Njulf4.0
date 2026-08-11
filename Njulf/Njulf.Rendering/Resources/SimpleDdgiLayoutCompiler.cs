@@ -124,6 +124,7 @@ namespace Njulf.Rendering.Resources
         ulong ParamsBytes,
         ulong IrradianceAtlasBytes,
         ulong VisibilityAtlasBytes,
+        ulong NearVisibilitySidecarBytes,
         ulong TransportIrradianceBytes,
         ulong TransportSourceCacheBytes,
         ulong ProbeStateBytes,
@@ -143,7 +144,7 @@ namespace Njulf.Rendering.Resources
         ulong SchedulerValidationReadbackBytes)
     {
         public const int SampledAtlasCapacityQuantum = 256;
-        public const ulong ParamsHeaderBytes = 240;
+        public const ulong ParamsHeaderBytes = 256;
         public const ulong VolumeBytes = 112;
         public const ulong VolumePagingBytes = 32;
         public const ulong IrradianceBytesPerProbe =
@@ -192,6 +193,24 @@ namespace Njulf.Rendering.Resources
         public ulong SampledAtlasIrradianceImageBytes { get; init; }
         public ulong SampledAtlasVisibilityImageBytes { get; init; }
         public ulong SampledAtlasLayoutFingerprint { get; init; }
+        public bool NearVisibilitySidecarRequested { get; init; }
+        public ulong NearVisibilitySidecarRequiredBytes { get; init; }
+        public ulong NearVisibilityPrivateSidecarBytes { get; init; }
+        public string NearVisibilitySidecarFallbackReason { get; init; } =
+            string.Empty;
+        public bool NearVisibilitySidecarAdmitted =>
+            NearVisibilitySidecarBytes > 0UL;
+        public SimpleDdgiDirectionalRadianceMode DirectionalRadianceRequestedMode { get; init; }
+        public SimpleDdgiDirectionalRadianceMode DirectionalRadianceAdmittedMode { get; init; }
+        public SimpleDdgiGlossyTransportMode GlossyTransportMode { get; init; }
+        public uint DirectionalRadianceAbiVersion { get; init; }
+        public ulong DirectionalRadianceRequiredBytes { get; init; }
+        public ulong DirectionalRadianceCanonicalBytes { get; init; }
+        public ulong DirectionalRadianceParityBytes { get; init; }
+        public string DirectionalRadianceFallbackReason { get; init; } = string.Empty;
+        public bool DirectionalRadianceAdmitted =>
+            DirectionalRadianceAdmittedMode != SimpleDdgiDirectionalRadianceMode.Off &&
+            DirectionalRadianceCanonicalBytes > 0UL;
 
         /// <summary>Compatibility alias for virtually indexed consumers.</summary>
         public int ProbeCount => VirtualProbeCount;
@@ -247,6 +266,7 @@ namespace Njulf.Rendering.Resources
             ParamsBytes +
             IrradianceAtlasBytes +
             VisibilityAtlasBytes +
+            NearVisibilitySidecarBytes +
             TransportIrradianceBytes +
             TransportSourceCacheBytes +
             ProbeStateBytes +
@@ -256,14 +276,19 @@ namespace Njulf.Rendering.Resources
             SchedulerBufferBytes +
             SampledAtlasImageBytes +
             ResidencyArenaBytes +
-            ResidencyFeedbackReadbackBytes);
+            ResidencyFeedbackReadbackBytes +
+            DirectionalRadianceCanonicalBytes +
+            DirectionalRadianceParityBytes);
 
         public ulong PhysicalPayloadBytes => checked(
             IrradianceAtlasBytes +
             VisibilityAtlasBytes +
+            NearVisibilitySidecarBytes +
             TransportIrradianceBytes +
             TransportSourceCacheBytes +
-            SampledAtlasImageBytes);
+            SampledAtlasImageBytes +
+            DirectionalRadianceCanonicalBytes +
+            DirectionalRadianceParityBytes);
 
         public ulong WorkBytes => checked(UpdateQueueBytes + RayScratchBytes);
 
@@ -299,7 +324,14 @@ namespace Njulf.Rendering.Resources
             SimpleDdgiSampledAtlasCoverageMode sampledAtlasCoverageMode =
                 SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant,
             SimpleDdgiStorageLayout? storageLayout = null,
-            SimpleDdgiSampledAtlasLayout? sampledAtlasLayout = null)
+            SimpleDdgiSampledAtlasLayout? sampledAtlasLayout = null,
+            bool nearVisibilitySidecarRequested = false,
+            ulong nearVisibilitySidecarBudgetBytes = 0UL,
+            SimpleDdgiDirectionalRadianceMode directionalRadianceMode =
+                SimpleDdgiDirectionalRadianceMode.Off,
+            SimpleDdgiGlossyTransportMode glossyTransportMode =
+                SimpleDdgiGlossyTransportMode.Off,
+            ulong directionalRadianceBudgetBytes = 0UL)
         {
             int probes = Math.Clamp(
                 probeCount,
@@ -399,11 +431,34 @@ namespace Njulf.Rendering.Resources
                 checked(physicalProbeCount64 * IrradianceBytesPerProbe));
             ulong visibilityBytes = AtLeastOneAllocation(
                 checked(physicalProbeCount64 * VisibilityBytesPerProbe));
+            ulong nearVisibilityPublicRequiredBytes = physicalProbeCapacity > 0
+                ? checked(physicalProbeCount64 * VisibilityBytesPerProbe)
+                : 0UL;
+            ulong nearVisibilityPrivateRequiredBytes =
+                residentPrivateTargets
+                    ? nearVisibilityPublicRequiredBytes
+                    : 0UL;
+            ulong nearVisibilityRequiredBytes = checked(
+                nearVisibilityPublicRequiredBytes +
+                nearVisibilityPrivateRequiredBytes);
+            bool nearVisibilitySidecarAdmitted =
+                nearVisibilitySidecarRequested &&
+                nearVisibilityRequiredBytes > 0UL &&
+                nearVisibilityRequiredBytes <=
+                    nearVisibilitySidecarBudgetBytes;
+            ulong nearVisibilitySidecarBytes = nearVisibilitySidecarAdmitted
+                ? nearVisibilityPublicRequiredBytes
+                : 0UL;
+            ulong nearVisibilityPrivateSidecarBytes =
+                nearVisibilitySidecarAdmitted
+                    ? nearVisibilityPrivateRequiredBytes
+                    : 0UL;
             ulong transportIrradianceBytes = concreteTransportBuffers
                 ? AtLeastOneAllocation(checked(
                     physicalProbeCount64 * IrradianceBytesPerProbe +
                     (residentPrivateTargets
-                        ? physicalProbeCount64 * VisibilityBytesPerProbe
+                        ? physicalProbeCount64 * VisibilityBytesPerProbe +
+                            nearVisibilityPrivateSidecarBytes
                         : 0UL)))
                 : AtLeastOneAllocation(0UL);
             ulong defaultTransportStride = resolvedPackingMode.UsesPackedCache()
@@ -512,6 +567,35 @@ namespace Njulf.Rendering.Resources
                     int.MaxValue))
                 : 0;
 
+            SimpleDdgiDirectionalRadianceMode requestedDirectionalMode =
+                Enum.IsDefined(directionalRadianceMode)
+                    ? directionalRadianceMode
+                    : SimpleDdgiDirectionalRadianceMode.Off;
+            SimpleDdgiGlossyTransportMode requestedGlossyMode =
+                Enum.IsDefined(glossyTransportMode)
+                    ? glossyTransportMode
+                    : SimpleDdgiGlossyTransportMode.Off;
+            ulong directionalRecordBytes = requestedDirectionalMode switch
+            {
+                SimpleDdgiDirectionalRadianceMode.L1Reference => 32UL,
+                SimpleDdgiDirectionalRadianceMode.L2 => 64UL,
+                _ => 0UL
+            };
+            ulong directionalCanonicalRequired = checked(
+                physicalProbeCount64 * directionalRecordBytes);
+            bool directionalParityRequested = requestedGlossyMode is
+                SimpleDdgiGlossyTransportMode.OneBounce or
+                SimpleDdgiGlossyTransportMode.RecursiveExperimental;
+            ulong directionalParityRequired = directionalParityRequested
+                ? directionalCanonicalRequired
+                : 0UL;
+            ulong directionalRequired = checked(
+                directionalCanonicalRequired + directionalParityRequired);
+            bool directionalAdmitted = requestedDirectionalMode !=
+                    SimpleDdgiDirectionalRadianceMode.Off &&
+                physicalProbeCapacity > 0 &&
+                directionalRequired <= directionalRadianceBudgetBytes;
+
             return new SimpleDdgiMemoryPlan(
                 probes,
                 densePayloadProbes,
@@ -527,6 +611,7 @@ namespace Njulf.Rendering.Resources
                 paramsBytes,
                 irradianceBytes,
                 visibilityBytes,
+                nearVisibilitySidecarBytes,
                 transportIrradianceBytes,
                 transportSourceCacheBytes,
                 stateBytes,
@@ -588,7 +673,44 @@ namespace Njulf.Rendering.Resources
                     (sampledAtlasRequested ? physicalProbeCapacity : 0),
                 SampledAtlasIrradianceImageBytes = sampledIrradianceBytes,
                 SampledAtlasVisibilityImageBytes = sampledVisibilityBytes,
-                SampledAtlasLayoutFingerprint = sampledAtlasLayout?.Fingerprint ?? 0UL
+                SampledAtlasLayoutFingerprint = sampledAtlasLayout?.Fingerprint ?? 0UL,
+                NearVisibilitySidecarRequested = nearVisibilitySidecarRequested,
+                NearVisibilitySidecarRequiredBytes = nearVisibilityRequiredBytes,
+                NearVisibilityPrivateSidecarBytes =
+                    nearVisibilityPrivateSidecarBytes,
+                NearVisibilitySidecarFallbackReason =
+                    !nearVisibilitySidecarRequested
+                        ? "disabled"
+                        : nearVisibilitySidecarAdmitted
+                            ? string.Empty
+                            : nearVisibilityRequiredBytes == 0UL
+                                ? "no-physical-probes"
+                                : "independent-memory-budget",
+                DirectionalRadianceRequestedMode = requestedDirectionalMode,
+                DirectionalRadianceAdmittedMode = directionalAdmitted
+                    ? requestedDirectionalMode
+                    : SimpleDdgiDirectionalRadianceMode.Off,
+                GlossyTransportMode = directionalAdmitted
+                    ? requestedGlossyMode
+                    : SimpleDdgiGlossyTransportMode.Off,
+                DirectionalRadianceAbiVersion = directionalAdmitted
+                    ? DdgiDirectionalRadianceAbi.ForMode(requestedDirectionalMode)
+                    : DdgiDirectionalRadianceAbi.Off,
+                DirectionalRadianceRequiredBytes = directionalRequired,
+                DirectionalRadianceCanonicalBytes = directionalAdmitted
+                    ? directionalCanonicalRequired
+                    : 0UL,
+                DirectionalRadianceParityBytes = directionalAdmitted
+                    ? directionalParityRequired
+                    : 0UL,
+                DirectionalRadianceFallbackReason =
+                    requestedDirectionalMode == SimpleDdgiDirectionalRadianceMode.Off
+                        ? "disabled"
+                        : physicalProbeCapacity == 0
+                            ? "no-physical-probes"
+                            : directionalAdmitted
+                                ? string.Empty
+                                : "independent-memory-budget"
             };
         }
 
@@ -685,6 +807,18 @@ namespace Njulf.Rendering.Resources
             AcceptedMemoryPlan.SampledAtlasPaddingProbeCount;
         public ulong SampledAtlasPaddingBytes =>
             AcceptedMemoryPlan.SampledAtlasPaddingBytes;
+        public bool NearVisibilitySidecarRequested =>
+            AcceptedMemoryPlan.NearVisibilitySidecarRequested;
+        public bool NearVisibilitySidecarAdmitted =>
+            AcceptedMemoryPlan.NearVisibilitySidecarAdmitted;
+        public ulong NearVisibilitySidecarBytes =>
+            AcceptedMemoryPlan.NearVisibilitySidecarBytes;
+        public ulong NearVisibilityPrivateSidecarBytes =>
+            AcceptedMemoryPlan.NearVisibilityPrivateSidecarBytes;
+        public ulong NearVisibilitySidecarRequiredBytes =>
+            AcceptedMemoryPlan.NearVisibilitySidecarRequiredBytes;
+        public string NearVisibilitySidecarFallbackReason =>
+            AcceptedMemoryPlan.NearVisibilitySidecarFallbackReason;
         public ulong DenseEquivalentBytes => DenseEquivalentMemoryPlan.LiveBytes;
         public ulong AllocatedSparseBytes => AcceptedMemoryPlan.LiveBytes;
         public ulong AvoidedBytes => DenseEquivalentBytes > AllocatedSparseBytes
@@ -710,6 +844,8 @@ namespace Njulf.Rendering.Resources
             $"pages={SparsePhysicalPageCapacity}/{SparseVirtualPageCount} " +
             $"pagePadding={SparsePagePaddingProbeCount} " +
             $"sampledPadding={SampledAtlasPaddingProbeCount}/{SampledAtlasPaddingBytes} " +
+            $"nearVisibility={NearVisibilitySidecarBytes}+{NearVisibilityPrivateSidecarBytes}:" +
+            $"{NearVisibilitySidecarFallbackReason} " +
             $"avoided={AvoidedBytes} " +
             $"rejected={Volumes.Count(static volume => volume.Decision != SimpleDdgiLayoutDecision.Accepted)}";
     }
@@ -755,7 +891,9 @@ namespace Njulf.Rendering.Resources
             int sparseVirtualProbeCount = 0,
             int sparseVirtualPageCount = 0,
             int sparsePhysicalPageCapacity = 0,
-            int maximumPageAdmissionsPerFrame = 0)
+            int maximumPageAdmissionsPerFrame = 0,
+            bool nearVisibilitySidecarRequested = false,
+            ulong nearVisibilitySidecarBudgetBytes = 0UL)
         {
             int updates = SimpleDdgiMemoryPlan.ResolveUpdateRequestCapacity(
                 probeCount,
@@ -777,7 +915,11 @@ namespace Njulf.Rendering.Resources
                 sparseVirtualProbeCount,
                 sparseVirtualPageCount,
                 sparsePhysicalPageCapacity,
-                maximumPageAdmissionsPerFrame).LiveBytes;
+                maximumPageAdmissionsPerFrame,
+                nearVisibilitySidecarRequested:
+                    nearVisibilitySidecarRequested,
+                nearVisibilitySidecarBudgetBytes:
+                    nearVisibilitySidecarBudgetBytes).LiveBytes;
         }
 
         public static SimpleDdgiLayoutReport Compile(
@@ -802,7 +944,15 @@ namespace Njulf.Rendering.Resources
             SimpleDdgiStoragePackingMode storagePackingMode =
                 SimpleDdgiStoragePackingMode.Packed,
             SimpleDdgiSampledAtlasCoverageMode sampledAtlasCoverageMode =
-                SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant)
+                SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant,
+            bool useHotColdSourceCacheLayout = false,
+            bool nearVisibilitySidecarRequested = false,
+            ulong nearVisibilitySidecarBudgetBytes = 0UL,
+            SimpleDdgiDirectionalRadianceMode directionalRadianceMode =
+                SimpleDdgiDirectionalRadianceMode.Off,
+            SimpleDdgiGlossyTransportMode glossyTransportMode =
+                SimpleDdgiGlossyTransportMode.Off,
+            ulong directionalRadianceBudgetBytes = 0UL)
         {
             if (requests == null)
                 throw new ArgumentNullException(nameof(requests));
@@ -864,7 +1014,11 @@ namespace Njulf.Rendering.Resources
                         requestedSelection: true,
                         physicalPageCapacityOverride: null,
                         includeMirror: sampledAtlasRequested,
-                        mirrorBudgetBytes: ulong.MaxValue).Plan;
+                        mirrorBudgetBytes: ulong.MaxValue,
+                        includeNearVisibilitySidecar:
+                            nearVisibilitySidecarRequested,
+                        nearVisibilitySidecarAdmissionBudgetBytes:
+                            ulong.MaxValue).Plan;
                 ulong requestedIncrementalBytes = nextRequestedPlan.LiveBytes >=
                     previousRequestedLiveBytes
                         ? nextRequestedPlan.LiveBytes - previousRequestedLiveBytes
@@ -1030,9 +1184,12 @@ namespace Njulf.Rendering.Resources
                         SimpleDdgiProbeResidencyMode.Dense,
                          sparsePhysicalPageBudget,
                          sparseMinimumPhysicalPageBudget,
-                         maximumPageAdmissionsPerFrame,
-                         resolvedStoragePackingMode,
-                         resolvedSampledCoverageMode);
+                        maximumPageAdmissionsPerFrame,
+                        resolvedStoragePackingMode,
+                        resolvedSampledCoverageMode,
+                        useHotColdSourceCacheLayout,
+                        nearVisibilitySidecarRequested,
+                        nearVisibilitySidecarBudgetBytes);
                     return denseFallback with
                     {
                         ResidencyFallbackReason = fallbackReason
@@ -1040,10 +1197,32 @@ namespace Njulf.Rendering.Resources
                 }
             }
 
-            // Optional images are admitted only after the complete canonical
-            // layout is fixed. This is the central two-stage admission rule:
-            // changing coverage or exhausting image budget cannot alter the
-            // accepted source-ordinal set above.
+            // Optional near visibility and sampled images are admitted only
+            // after the complete canonical layout is fixed. Neither sidecar
+            // can evict a canonical volume. The conservative sidecar has its
+            // own cap as well as the remaining component budget.
+            ulong optionalBudget = budget.PersistentMemoryBudgetBytes >
+                acceptedPlan.LiveBytes
+                    ? budget.PersistentMemoryBudgetBytes - acceptedPlan.LiveBytes
+                    : 0UL;
+            ulong acceptedNearVisibilityBudget = Math.Min(
+                nearVisibilitySidecarBudgetBytes,
+                optionalBudget);
+            var acceptedSidecarCompiled = CreateCompiledMemoryPlan(
+                acceptedProbes,
+                acceptedVolumes,
+                requestedPrefixCount: 0,
+                candidateIndex: -1,
+                requestedSelection: false,
+                physicalPageCapacityOverride:
+                    acceptedPlan.SparsePhysicalPageCapacity,
+                includeMirror: false,
+                mirrorBudgetBytes: 0UL,
+                includeNearVisibilitySidecar:
+                    nearVisibilitySidecarRequested,
+                nearVisibilitySidecarAdmissionBudgetBytes:
+                    acceptedNearVisibilityBudget);
+            acceptedPlan = acceptedSidecarCompiled.Plan;
             ulong acceptedMirrorBudget = budget.PersistentMemoryBudgetBytes >
                 acceptedPlan.LiveBytes
                     ? budget.PersistentMemoryBudgetBytes - acceptedPlan.LiveBytes
@@ -1057,7 +1236,11 @@ namespace Njulf.Rendering.Resources
                 physicalPageCapacityOverride:
                     acceptedPlan.SparsePhysicalPageCapacity,
                 includeMirror: sampledAtlasRequested,
-                mirrorBudgetBytes: acceptedMirrorBudget);
+                mirrorBudgetBytes: acceptedMirrorBudget,
+                includeNearVisibilitySidecar:
+                    nearVisibilitySidecarRequested,
+                nearVisibilitySidecarAdmissionBudgetBytes:
+                    acceptedNearVisibilityBudget);
             acceptedPlan = acceptedCompiled.Plan;
 
             var requestedCompiled = CreateCompiledMemoryPlan(
@@ -1068,7 +1251,11 @@ namespace Njulf.Rendering.Resources
                 requestedSelection: true,
                 physicalPageCapacityOverride: null,
                 includeMirror: sampledAtlasRequested,
-                mirrorBudgetBytes: ulong.MaxValue);
+                mirrorBudgetBytes: ulong.MaxValue,
+                includeNearVisibilitySidecar:
+                    nearVisibilitySidecarRequested,
+                nearVisibilitySidecarAdmissionBudgetBytes:
+                    ulong.MaxValue);
             requestedPlan = requestedCompiled.Plan;
 
             var denseCompiled = CreateCompiledMemoryPlan(
@@ -1080,6 +1267,11 @@ namespace Njulf.Rendering.Resources
                 physicalPageCapacityOverride: 0,
                 includeMirror: sampledAtlasRequested,
                 mirrorBudgetBytes: budget.PersistentMemoryBudgetBytes,
+                includeNearVisibilitySidecar:
+                    nearVisibilitySidecarRequested,
+                nearVisibilitySidecarAdmissionBudgetBytes: Math.Min(
+                    nearVisibilitySidecarBudgetBytes,
+                    budget.PersistentMemoryBudgetBytes),
                 residencyOverride: SimpleDdgiProbeResidencyMode.Dense);
             SimpleDdgiMemoryPlan denseEquivalentPlan = denseCompiled.Plan;
 
@@ -1118,7 +1310,9 @@ namespace Njulf.Rendering.Resources
                     requestedSelection,
                     physicalPageCapacityOverride,
                     includeMirror: false,
-                    mirrorBudgetBytes: 0UL).Plan;
+                    mirrorBudgetBytes: 0UL,
+                    includeNearVisibilitySidecar: false,
+                    nearVisibilitySidecarAdmissionBudgetBytes: 0UL).Plan;
             }
 
             (SimpleDdgiMemoryPlan Plan,
@@ -1133,6 +1327,8 @@ namespace Njulf.Rendering.Resources
                     int? physicalPageCapacityOverride,
                     bool includeMirror,
                     ulong mirrorBudgetBytes,
+                    bool includeNearVisibilitySidecar = false,
+                    ulong nearVisibilitySidecarAdmissionBudgetBytes = 0UL,
                     SimpleDdgiProbeResidencyMode? residencyOverride = null)
             {
                 SimpleDdgiProbeResidencyMode planResidencyMode =
@@ -1234,7 +1430,9 @@ namespace Njulf.Rendering.Resources
                         request.ArchitecturalThickness,
                         resolvedStoragePackingMode)
                     {
-                        MaximumTraceDistance = request.MaximumTraceDistance
+                        MaximumTraceDistance = request.MaximumTraceDistance,
+                        UseHotColdLayout = useHotColdSourceCacheLayout &&
+                            resolvedStoragePackingMode.UsesPackedCache()
                     });
                     mirrorRequests.Add(new SimpleDdgiSampledAtlasRangeRequest(
                         selectedOrder,
@@ -1304,7 +1502,12 @@ namespace Njulf.Rendering.Resources
                         resolvedStoragePackingMode,
                         resolvedSampledCoverageMode,
                         compiledStorage,
-                        sampledLayout);
+                        sampledLayout,
+                        includeNearVisibilitySidecar,
+                        nearVisibilitySidecarAdmissionBudgetBytes,
+                        directionalRadianceMode,
+                        glossyTransportMode,
+                        directionalRadianceBudgetBytes);
             }
         }
     }

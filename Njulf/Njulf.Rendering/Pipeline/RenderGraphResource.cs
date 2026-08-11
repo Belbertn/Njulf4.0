@@ -77,7 +77,79 @@ namespace Njulf.Rendering.Pipeline
         SimpleDdgiReceiverProbes,
         // Virtual-page residency arena. Appended to preserve graph-resource
         // identities used by captures and serialized diagnostics.
-        SimpleDdgiResidency
+        SimpleDdgiResidency,
+        // Double-buffered local-light hierarchy, publication state, and build
+        // scratch. Appended to preserve all prior capture identities.
+        SimpleDdgiLightTree,
+        // Canonical directional incident-radiance SH and optional Jacobi
+        // parity. Appended to retain all existing capture identities.
+        SimpleDdgiDirectionalRadiance,
+        // Compact stable foliage work records written by upload and consumed
+        // by the externally recorded compute-generation prelude.
+        DdgiFoliageProxyPatches,
+        // Frame-slot compute output consumed by procedural foliage BLAS builds.
+        DdgiFoliageProxyGeometry,
+        // Frame-slot current-pose/proxy BLAS storage published into the TLAS.
+        DynamicBlasStorage,
+        // Optional advanced-GI resources are appended and registered only by
+        // an effective experimental graph variant.  This preserves the
+        // shipping graph/capture identities and keeps disabled modes at zero
+        // resource, descriptor, and pass cost.
+        SimpleDdgiReceiverFeedbackRecords,
+        SimpleDdgiReceiverFeedbackSortScratch,
+        SimpleDdgiReceiverFeedbackSummaries,
+        OpacityMicromapResources,
+        SimpleDdgiGuidingDistributions,
+        SimpleDdgiGuidingScratch,
+        GiCausticTasks,
+        GiCausticPhotons,
+        GiCausticCache,
+        GiCausticScratch,
+        NearFieldDirectSource,
+        NearFieldResidualRaw,
+        NearFieldResidualHitMetadata,
+        NearFieldResidualHistory,
+        NearFieldResidualMoments,
+        NearFieldResidualValidity,
+        NearFieldResidualFilterScratch,
+        NearFieldResidualTileBuffers,
+        // C3's generation-time direction/PDF payload is owned by the
+        // source-cache ABI, not by the guiding distribution allocator.  It is
+        // appended here so the graph can prove the sample-to-trace dependency
+        // without making it part of C3's persistent memory category.
+        SimpleDdgiGuidingDirectionPayloadSidecar,
+        // C5 retains a separate, double-buffered hit/receiver identity image
+        // alongside radiance, moments, and validity.  It is appended to retain
+        // all established render-graph resource IDs.
+        NearFieldResidualHistoryMetadata,
+        // C5 input/output resources are appended to preserve pre-existing
+        // capture identities. They are registered only for an effective C5
+        // graph and each has one unambiguous shader ABI role.
+        NearFieldReceiverPayload,
+        // Reserved legacy C5 prototype IDs. They are never registered by the
+        // V5 compact-payload graph, but retaining their numeric positions keeps
+        // older diagnostic captures readable.
+        NearFieldReceiverProjectedRays,
+        NearFieldReceiverIdentity,
+        NearFieldReceiverDiffuseBounceThroughput,
+        NearFieldResidualHistoryNormals,
+        // C1 resident objects and its two transient build ranges have
+        // different ownership/lifetimes.  Keep the original resource ID as
+        // the resident publication and append the scratch identities so
+        // capture IDs remain stable.
+        OpacityMicromapBuildScratch,
+        OpacityMicromapCompactionHeadroom,
+        // Per-frame immutable reconstruction matrices. Appended to preserve
+        // all capture/resource IDs established by prior schemas.
+        NearFieldResidualTraceFrameConstants,
+        // C4 screen integration is append-only for capture compatibility.
+        // The forward payload contains current receiver material/normal data;
+        // the radiance target retains separately-owned C4 energy until its
+        // explicit composite pass. Frame matrices are immutable per dispatch.
+        GiCausticReceiverPayload,
+        GiCausticRadiance,
+        GiCausticMoments,
+        GiCausticScreenFrameConstants
     }
 
     public enum RenderGraphResourceKind
@@ -94,6 +166,8 @@ namespace Njulf.Rendering.Pipeline
         Swapchain,
         SceneResolution,
         HalfResolution,
+        QuarterResolution,
+        EighthResolution,
         BloomMipChain,
         ShadowMap,
         Fixed,
@@ -113,6 +187,28 @@ namespace Njulf.Rendering.Pipeline
         Read,
         Write,
         ReadWrite
+    }
+
+    /// <summary>
+    /// Selects one physical member of an <see cref="RenderGraphResourceKind.ImageChain"/>
+    /// or buffer/image set.  A logical history resource is not safe to declare as
+    /// read/write when a temporal pass needs distinct previous and current banks:
+    /// callers must make the two accesses explicit with <see cref="Previous"/>
+    /// and <see cref="Current"/>.  The current/previous mapping is deterministic
+    /// frame-index parity (current = frameIndex mod 2).
+    /// </summary>
+    public enum RenderGraphHistoryBindingSelection : byte
+    {
+        /// <summary>Use every concrete binding, preserving legacy set semantics.</summary>
+        All = 0,
+        /// <summary>Use the history bank written by the current frame.</summary>
+        Current = 1,
+        /// <summary>Use the other history bank, written by the previous frame.</summary>
+        Previous = 2,
+        /// <summary>Use physical history bank zero.</summary>
+        Bank0 = 3,
+        /// <summary>Use physical history bank one.</summary>
+        Bank1 = 4
     }
 
     public enum RenderGraphQueueIntent
@@ -161,7 +257,13 @@ namespace Njulf.Rendering.Pipeline
         /// <see cref="ImageLayout"/>, which describes the layout required when graph execution
         /// enters the pass. Queue handoffs use this value for their release barrier.
         /// </summary>
-        ImageLayout FinalImageLayout = ImageLayout.Undefined);
+        ImageLayout FinalImageLayout = ImageLayout.Undefined,
+        /// <summary>
+        /// Physical history-bank selection for this usage.  The default preserves
+        /// existing resources that intentionally expose every binding.
+        /// </summary>
+        RenderGraphHistoryBindingSelection HistoryBinding =
+            RenderGraphHistoryBindingSelection.All);
 
     public readonly record struct RenderGraphPlannedBarrier(
         string PassName,
@@ -177,5 +279,6 @@ namespace Njulf.Rendering.Pipeline
         RenderGraphQueueIntent PreviousQueueIntent,
         RenderGraphQueueIntent QueueIntent,
         bool QueueOwnershipTransition,
-        bool Executed);
+        bool Executed,
+        int HistoryIndex = -1);
 }

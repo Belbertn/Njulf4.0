@@ -1,5 +1,6 @@
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
 
@@ -51,7 +52,22 @@ public sealed record SampleSmokeOptions(
     int? SimpleDdgiSparseMaximumReceiverFeedbackOverride = null,
     int? SimpleDdgiSparseInactiveRetryFramesOverride = null,
     SimpleDdgiStoragePackingMode? SimpleDdgiStoragePackingModeOverride = null,
-    SimpleDdgiSampledAtlasCoverageMode? SimpleDdgiSampledAtlasCoverageModeOverride = null)
+    SimpleDdgiSampledAtlasCoverageMode? SimpleDdgiSampledAtlasCoverageModeOverride = null,
+    bool EnableGpuMeshletCounters = false,
+    bool EnableDdgiContentConformance = false,
+    string? AdvancedGiPrerequisiteManifestPath = null,
+    string? AdvancedGiQualificationManifestPath = null,
+    SimpleDdgiReceiverFeedbackMode? SimpleDdgiReceiverFeedbackModeOverride = null,
+    DdgiOpacityMicromapMode? DdgiOpacityMicromapModeOverride = null,
+    SimpleDdgiDirectionalGuidingMode? SimpleDdgiDirectionalGuidingModeOverride = null,
+    GiCausticMode? GiCausticModeOverride = null,
+    SimpleDdgiNearFieldResidualMode? SimpleDdgiNearFieldResidualModeOverride = null,
+    string? SimpleDdgiReceiverFeedbackQualificationId = null,
+    string? DdgiOpacityMicromapQualificationId = null,
+    string? SimpleDdgiDirectionalGuidingQualificationId = null,
+    string? GiCausticQualificationId = null,
+    string? SimpleDdgiNearFieldResidualQualificationId = null,
+    string? AdvancedGiRuntimeEvidenceBundlePath = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
 
@@ -61,6 +77,8 @@ public sealed record SampleSmokeOptions(
         SceneKind != SampleSceneKind.GlobalIlluminationTest ||
         PerformanceScenario != SamplePerformanceScenario.Normal ||
         TransparencyMode != Njulf.Rendering.Data.TransparencyMode.SortedAlphaBlend ||
+        EnableGpuMeshletCounters ||
+        EnableDdgiContentConformance ||
         EnableAsyncCompute ||
         AsyncComputeModeOverride.HasValue ||
         SimpleDdgiSchedulerModeOverride.HasValue ||
@@ -79,6 +97,14 @@ public sealed record SampleSmokeOptions(
         !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory) ||
         !string.IsNullOrWhiteSpace(SponzaGiCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(MaterialGiCaptureDirectory) ||
+        !string.IsNullOrWhiteSpace(AdvancedGiPrerequisiteManifestPath) ||
+        !string.IsNullOrWhiteSpace(AdvancedGiQualificationManifestPath) ||
+        !string.IsNullOrWhiteSpace(AdvancedGiRuntimeEvidenceBundlePath) ||
+        SimpleDdgiReceiverFeedbackModeOverride.HasValue ||
+        DdgiOpacityMicromapModeOverride.HasValue ||
+        SimpleDdgiDirectionalGuidingModeOverride.HasValue ||
+        GiCausticModeOverride.HasValue ||
+        SimpleDdgiNearFieldResidualModeOverride.HasValue ||
         !string.IsNullOrWhiteSpace(LongRunReportPath) ||
         LongRunMinutes > 0.0 ||
         KhronosMaterialGiRenderedGate is not null ||

@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-pinned-build\CMakeFiles\b2ad26a932e85d681f63faad303bbbbf\PACKAGE_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{CBCA5442-26CE-3AD9-ACEE-5C6641DBFB5A}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -165,6 +165,13 @@ public sealed record MaterialExtensionDefinition
     public MaterialTextureBinding Thickness { get; init; } = MaterialTextureBinding.Missing;
     public GiTransmissionPolicy TransmissionPolicy { get; init; } = GiTransmissionPolicy.None;
     /// <summary>
+    /// Explicit C4 authoring intent. This value is ignored by all canonical
+    /// DDGI transport paths; only the separate tagged-caustic system consumes
+    /// it after topology/current-pose admission.
+    /// </summary>
+    public GiCausticParticipationMode CausticParticipation { get; init; } =
+        GiCausticParticipationMode.None;
+    /// <summary>
     /// Renderer-authored diffuse tint for a zero-thickness transmission lobe.
     /// This is independent of raster alpha and volume attenuation.
     /// </summary>
@@ -200,6 +207,13 @@ public sealed record MaterialDefinition
     public Vector4 BaseColorFactor { get; init; } = Vector4.One;
     public Vector3 EmissiveFactor { get; init; } = Vector3.Zero;
     public float EmissiveStrength { get; init; } = 1f;
+    public EmissivePhotometricUnit EmissiveUnit { get; init; } =
+        EmissivePhotometricUnit.SceneLinearRadiance;
+    /// <summary>
+    /// Deliberate non-physical multiplier applied after unit conversion. Its
+    /// energy effect is exposed separately by diagnostics and the editor.
+    /// </summary>
+    public float EmissiveArtisticMultiplier { get; init; } = 1f;
     public float MetallicFactor { get; init; }
     public float RoughnessFactor { get; init; } = 1f;
     public float OcclusionStrength { get; init; } = 1f;
@@ -263,6 +277,17 @@ public sealed record GiMaterialTransportProfile
     public Vector3 MeanTransmittedDiffuseReflectance { get; init; } = Vector3.Zero;
     public Vector3 MeanEmissiveRadiance { get; init; } = Vector3.Zero;
     public float EmissiveImportance { get; init; }
+    public EmissivePhotometricUnit EmissiveUnit { get; init; }
+    public float EffectiveEmissiveScale { get; init; } = 1f;
+    public float EmissiveArtisticMultiplier { get; init; } = 1f;
+    public float AverageEmissiveLuminanceNits { get; init; }
+    /// <summary>
+    /// Source-resolution peak estimate derived from cooked texture luminance
+    /// statistics. <see cref="PeakEmissiveLuminanceValid"/> distinguishes a
+    /// physical zero from unavailable texture statistics.
+    /// </summary>
+    public float PeakEmissiveLuminanceNits { get; init; }
+    public bool PeakEmissiveLuminanceValid { get; init; }
     public float MeanMaterialOcclusion { get; init; } = 1f;
     public float AlphaCoverage { get; init; } = 1f;
     public float MeanMetallic { get; init; }

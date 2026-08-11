@@ -1,0 +1,198 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_directional_guiding.glsl"
+
+// Validation is a qualification/debug dispatch, not a second estimator.  It
+// validates the exactly packed FP16 hierarchy before the CPU lifecycle manager
+// is allowed to flip the bank generation visible to trace/sample work.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) buffer GuidingValidateBankBuffer
+{
+    uint words[];
+} guidingValidateBank;
+
+layout(std430, set = 0, binding = 1) readonly buffer GuidingValidateWorkItemsBuffer
+{
+    SimpleDdgiGuidingBuildWorkItem workItems[];
+} guidingValidateWorkItems;
+
+layout(std430, set = 0, binding = 2) buffer GuidingValidateCountersBuffer
+{
+    uint counters[];
+} guidingValidateCounters;
+
+shared uint invalidHierarchy;
+
+SimpleDdgiGuidingDistributionHeader SimpleDdgiGuidingValidateReadHeader(uint baseWord)
+{
+    SimpleDdgiGuidingDistributionHeader header;
+    header.abiVersion = guidingValidateBank.words[baseWord + 0u];
+    header.virtualProbeId = guidingValidateBank.words[baseWord + 1u];
+    header.pageGeneration = guidingValidateBank.words[baseWord + 2u];
+    header.distributionGeneration = guidingValidateBank.words[baseWord + 3u];
+    header.directionProposalEpoch = guidingValidateBank.words[baseWord + 4u];
+    header.sampleCountAndAge = guidingValidateBank.words[baseWord + 5u];
+    header.totalIncidentEnergy = uintBitsToFloat(guidingValidateBank.words[baseWord + 6u]);
+    header.packedLeafResolutionAndFlags = guidingValidateBank.words[baseWord + 7u];
+    return header;
+}
+
+float SimpleDdgiGuidingValidateWeight(uint baseWord, uint weightIndex)
+{
+    return SimpleDdgiGuidingUnpackWeight(
+        guidingValidateBank.words[baseWord +
+            SimpleDdgiGuidingWeightWordOffset(weightIndex)], weightIndex);
+}
+
+void main()
+{
+    uint workItemIndex = gl_WorkGroupID.x;
+    if (workItemIndex >= guidingPc.dispatchCount)
+        return;
+
+    uint lane = gl_LocalInvocationIndex;
+    if (lane == 0u)
+    {
+        // Extraction, training, and hierarchy construction share this
+        // transaction-local counter block. Any upstream validation failure
+        // invalidates every header in the candidate bank: accepting the
+        // unaffected-looking subset would make publication depend on GPU
+        // workgroup timing and could expose stale training data.
+        invalidHierarchy = uint(guidingValidateCounters.counters.length()) < 4u
+            ? 1u
+            : ((guidingValidateCounters.counters[
+                    SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS] |
+                guidingValidateCounters.counters[
+                    SIMPLE_DDGI_GUIDING_COUNTER_INVALID_HEADERS] |
+                guidingValidateCounters.counters[
+                    SIMPLE_DDGI_GUIDING_COUNTER_INVALID_PDFS]) != 0u
+                ? 1u
+                : 0u);
+    }
+    barrier();
+
+    SimpleDdgiGuidingBuildWorkItem workItem =
+        guidingValidateWorkItems.workItems[workItemIndex];
+    uint leafResolution = guidingPc.leafResolution;
+    bool supportedLeafResolution =
+        SimpleDdgiGuidingSupportedLeafResolution(leafResolution);
+    uint hierarchyWeightCount =
+        supportedLeafResolution
+            ? SimpleDdgiGuidingHierarchyWeightCount(leafResolution)
+            : 0u;
+    bool safePhysical = workItem.physicalProbeIndex < guidingPc.physicalProbeCapacity &&
+        guidingPc.bankStrideWords != 0u &&
+        workItem.physicalProbeIndex <= 0xffffffffu / guidingPc.bankStrideWords;
+    uint baseWord = safePhysical
+        ? SimpleDdgiGuidingBankBaseWord(workItem.physicalProbeIndex)
+        : 0u;
+    bool validLayout = guidingPc.abiVersion == SIMPLE_DDGI_GUIDING_ABI_VERSION &&
+        supportedLeafResolution &&
+        guidingPc.hierarchyWeightCount == hierarchyWeightCount &&
+        safePhysical &&
+        guidingPc.bankStrideWords >= SIMPLE_DDGI_GUIDING_HEADER_WORDS +
+            ((hierarchyWeightCount + 1u) >> 1u) &&
+        baseWord <= uint(guidingValidateBank.words.length()) &&
+        guidingPc.bankStrideWords <=
+            uint(guidingValidateBank.words.length()) - baseWord;
+    if (!validLayout)
+    {
+        if (lane == 0u)
+            atomicAdd(guidingValidateCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_HEADERS], 1u);
+        return;
+    }
+
+    SimpleDdgiGuidingDistributionHeader header =
+        SimpleDdgiGuidingValidateReadHeader(baseWord);
+    uint headerFlags = SimpleDdgiGuidingHeaderFlags(header);
+    bool validHeader = header.abiVersion == SIMPLE_DDGI_GUIDING_ABI_VERSION &&
+        header.virtualProbeId == workItem.virtualProbeId &&
+        header.pageGeneration == workItem.pageGeneration &&
+        header.distributionGeneration == workItem.targetDistributionGeneration &&
+        header.directionProposalEpoch == workItem.targetProposalEpoch &&
+        header.distributionGeneration != 0u && header.directionProposalEpoch != 0u &&
+        SimpleDdgiGuidingLeafResolution(header) == leafResolution &&
+        SimpleDdgiGuidingFinite(header.totalIncidentEnergy) &&
+        header.totalIncidentEnergy >= 0.0 &&
+        (headerFlags & SIMPLE_DDGI_GUIDING_DISTRIBUTION_BUILD_COMPLETE) != 0u &&
+        (headerFlags & SIMPLE_DDGI_GUIDING_DISTRIBUTION_INVALID) == 0u;
+    if (!validHeader)
+        atomicOr(invalidHierarchy, 1u);
+
+    for (uint weightIndex = lane;
+         weightIndex < hierarchyWeightCount;
+         weightIndex += gl_WorkGroupSize.x)
+    {
+        float value = SimpleDdgiGuidingValidateWeight(baseWord, weightIndex);
+        if (!SimpleDdgiGuidingFinite(value) || value < 0.0 || value > 1.0)
+            atomicOr(invalidHierarchy, 1u);
+    }
+    barrier();
+
+    // Validate every parent against the four children in the quantized stored
+    // representation.  FP16 independently rounds parent/child sums, so the
+    // tolerance is intentionally explicit and mirrors the CPU oracle.
+    const float parentAbsoluteTolerance = 0.003;
+    const float parentRelativeTolerance = 0.003;
+    for (uint parentSide = leafResolution >> 1u;; parentSide >>= 1u)
+    {
+        uint parentCount = parentSide * parentSide;
+        uint childSide = parentSide << 1u;
+        for (uint parentLinearIndex = lane;
+             parentLinearIndex < parentCount;
+             parentLinearIndex += gl_WorkGroupSize.x)
+        {
+            uint x = parentLinearIndex % parentSide;
+            uint y = parentLinearIndex / parentSide;
+            uint childX = x << 1u;
+            uint childY = y << 1u;
+            float childSum =
+                SimpleDdgiGuidingValidateWeight(baseWord,
+                    SimpleDdgiGuidingNodeIndex(leafResolution, childSide,
+                        childX, childY)) +
+                SimpleDdgiGuidingValidateWeight(baseWord,
+                    SimpleDdgiGuidingNodeIndex(leafResolution, childSide,
+                        childX + 1u, childY)) +
+                SimpleDdgiGuidingValidateWeight(baseWord,
+                    SimpleDdgiGuidingNodeIndex(leafResolution, childSide,
+                        childX, childY + 1u)) +
+                SimpleDdgiGuidingValidateWeight(baseWord,
+                    SimpleDdgiGuidingNodeIndex(leafResolution, childSide,
+                        childX + 1u, childY + 1u));
+            float parent = SimpleDdgiGuidingValidateWeight(baseWord,
+                SimpleDdgiGuidingNodeIndex(leafResolution, parentSide, x, y));
+            float tolerance = parentAbsoluteTolerance +
+                parentRelativeTolerance * max(abs(parent), abs(childSum));
+            if (!SimpleDdgiGuidingFinite(childSum) ||
+                abs(parent - childSum) > tolerance)
+            {
+                atomicOr(invalidHierarchy, 1u);
+            }
+        }
+        barrier();
+        if (parentSide == 1u)
+            break;
+    }
+
+    if (lane == 0u)
+    {
+        float root = SimpleDdgiGuidingValidateWeight(baseWord,
+            SimpleDdgiGuidingNodeIndex(leafResolution, 1u, 0u, 0u));
+        if (!SimpleDdgiGuidingFinite(root) || abs(root - 1.0) > 0.003)
+            invalidHierarchy = 1u;
+        if (invalidHierarchy != 0u)
+        {
+            memoryBarrierBuffer();
+            guidingValidateBank.words[baseWord + 7u] =
+                SimpleDdgiGuidingPackLeafResolutionAndFlags(leafResolution,
+                    (headerFlags &
+                        ~SIMPLE_DDGI_GUIDING_DISTRIBUTION_BUILD_COMPLETE) |
+                    SIMPLE_DDGI_GUIDING_DISTRIBUTION_INVALID);
+            atomicAdd(guidingValidateCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_PUBLICATION_REJECTIONS], 1u);
+        }
+    }
+}

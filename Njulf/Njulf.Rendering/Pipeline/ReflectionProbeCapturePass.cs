@@ -16,10 +16,22 @@ public interface IReflectionProbeCaptureSceneRenderer
 {
     bool RecordCaptureFace(
         CommandBuffer commandBuffer,
+        int frameIndex,
         SceneRenderingData sceneData,
         in ReflectionCaptureViewContext view,
         ImageView colorView,
         ImageView depthView);
+
+    /// <summary>
+    /// Closes the frame-local capture batch after all acquired faces have been
+    /// recorded. Implementations use this boundary to publish one ordered
+    /// producer-completion witness rather than one global atomic per texel.
+    /// </summary>
+    void CompleteCaptureBatch(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        int recordedFaceCount,
+        bool batchSucceeded);
 }
 
 /// <summary>Adapter over the prepared main forward scene path.</summary>
@@ -34,6 +46,7 @@ public sealed class ForwardPlusReflectionProbeCaptureSceneRenderer : IReflection
 
     public bool RecordCaptureFace(
         CommandBuffer commandBuffer,
+        int frameIndex,
         SceneRenderingData sceneData,
         in ReflectionCaptureViewContext view,
         ImageView colorView,
@@ -41,12 +54,24 @@ public sealed class ForwardPlusReflectionProbeCaptureSceneRenderer : IReflection
     {
         _forwardPass.RecordReflectionCapture(
             commandBuffer,
+            frameIndex,
             sceneData,
             view,
             colorView,
             depthView);
         return true;
     }
+
+    public void CompleteCaptureBatch(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        int recordedFaceCount,
+        bool batchSucceeded) =>
+        _forwardPass.CompleteReflectionReceiverFeedbackBatch(
+            commandBuffer,
+            frameIndex,
+            recordedFaceCount,
+            batchSucceeded);
 }
 
 /// <summary>
@@ -89,37 +114,54 @@ public sealed class ReflectionProbeCapturePass : RenderPassBase
     public override void Execute(CommandBuffer commandBuffer, int frameIndex, SceneRenderingData sceneData)
     {
         int faceLimit = Math.Clamp(_settings.MaxProbeCaptureFacesPerFrame, 0, 6);
-        for (int unit = 0; unit < faceLimit; unit++)
+        int recordedFaceCount = 0;
+        bool batchSucceeded = true;
+        try
         {
-            if (!_manager.TryAcquireCaptureFace(out ReflectionProbeWork work))
-                break;
-
-            try
+            for (int unit = 0; unit < faceLimit; unit++)
             {
-                ReflectionCaptureViewContext view = _manager.CreateCaptureViewContext(
-                    work,
-                    _settings.CaptureIncludesDdgi);
-                _manager.PrepareCaptureFace(commandBuffer, work);
-                bool recorded = _sceneRenderer.RecordCaptureFace(
-                    commandBuffer,
-                    sceneData,
-                    view,
-                    _manager.GetScratchFaceView(work.Face),
-                    _manager.CaptureDepthView);
-                if (!recorded)
-                {
-                    _manager.FailCaptureWork(work, retry: true);
+                if (!_manager.TryAcquireCaptureFace(out ReflectionProbeWork work))
                     break;
-                }
 
-                _manager.CompleteCaptureFaceRecording(commandBuffer, work);
-                _manager.CompleteCaptureWork(work);
+                try
+                {
+                    ReflectionCaptureViewContext view = _manager.CreateCaptureViewContext(
+                        work,
+                        _settings.CaptureIncludesDdgi);
+                    _manager.PrepareCaptureFace(commandBuffer, work);
+                    bool recorded = _sceneRenderer.RecordCaptureFace(
+                        commandBuffer,
+                        frameIndex,
+                        sceneData,
+                        view,
+                        _manager.GetScratchFaceView(work.Face),
+                        _manager.CaptureDepthView);
+                    if (!recorded)
+                    {
+                        batchSucceeded = false;
+                        _manager.FailCaptureWork(work, retry: true);
+                        break;
+                    }
+
+                    _manager.CompleteCaptureFaceRecording(commandBuffer, work);
+                    _manager.CompleteCaptureWork(work);
+                    recordedFaceCount++;
+                }
+                catch
+                {
+                    batchSucceeded = false;
+                    _manager.FailCaptureWork(work, retry: true);
+                    throw;
+                }
             }
-            catch
-            {
-                _manager.FailCaptureWork(work, retry: true);
-                throw;
-            }
+        }
+        finally
+        {
+            _sceneRenderer.CompleteCaptureBatch(
+                commandBuffer,
+                frameIndex,
+                recordedFaceCount,
+                batchSucceeded);
         }
     }
 }

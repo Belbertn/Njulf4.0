@@ -1111,27 +1111,38 @@ internal sealed class SampleStressSceneBuilder
     private SamplePerformanceScenarioSummary BuildGiEmissiveMaterialRoom()
     {
         BuildGiCornellRoom(includePointLight: false);
-        MaterialHandle emissivePanel = RegisterValidationMaterial(
+        MaterialHandle emissivePanel = RegisterPhotometricValidationMaterial(
             new CoreVector3(0.95f, 0.45f, 0.16f),
-            roughness: 0.55f,
-            emissive: new CoreVector3(12.0f, 4.5f, 1.2f));
-        MaterialHandle coolPanel = RegisterValidationMaterial(
+            new CoreVector3(1.0f, 0.38f, 0.1f),
+            luminanceNits: 600f,
+            roughness: 0.55f);
+        MaterialHandle coolPanel = RegisterPhotometricValidationMaterial(
             new CoreVector3(0.2f, 0.42f, 0.95f),
-            roughness: 0.6f,
-            emissive: new CoreVector3(0.8f, 1.6f, 6.5f));
+            new CoreVector3(0.12f, 0.25f, 1.0f),
+            luminanceNits: 200f,
+            roughness: 0.6f);
+        MaterialHandle reference100 = RegisterPhotometricValidationMaterial(
+            new CoreVector3(0.5f, 0.5f, 0.5f),
+            CoreVector3.One,
+            luminanceNits: 100f,
+            roughness: 0.8f);
+        MaterialHandle reference400 = RegisterPhotometricValidationMaterial(
+            new CoreVector3(0.5f, 0.5f, 0.5f),
+            CoreVector3.One,
+            luminanceNits: 400f,
+            roughness: 0.8f);
+        MaterialHandle reference1600 = RegisterPhotometricValidationMaterial(
+            new CoreVector3(0.5f, 0.5f, 0.5f),
+            CoreVector3.One,
+            luminanceNits: 1_600f,
+            roughness: 0.8f);
         AddValidationWall("GI.Emissive.WarmPanel", emissivePanel, new CoreVector3(-1.6f, 1.6f, -8.42f), CoreMatrix4x4.Identity, new CoreVector3(1.2f, 1.2f, 1.0f));
         AddValidationWall("GI.Emissive.CoolPanel", coolPanel, new CoreVector3(1.65f, 1.25f, -8.41f), CoreMatrix4x4.Identity, new CoreVector3(0.95f, 0.95f, 1.0f));
-        _lightManager.AddLight(new Light
-        {
-            Type = LightType.Point,
-            Position = new System.Numerics.Vector3(-1.55f, 1.6f, -7.95f),
-            Color = new System.Numerics.Vector3(1.0f, 0.42f, 0.16f),
-            Intensity = 16f,
-            Range = 4.5f,
-            CastsShadows = false
-        });
+        AddValidationWall("GI.Emissive.Reference100Nits", reference100, new CoreVector3(-1.1f, 0.35f, -8.40f), CoreMatrix4x4.Identity, new CoreVector3(0.45f, 0.35f, 1.0f));
+        AddValidationWall("GI.Emissive.Reference400Nits", reference400, new CoreVector3(0.0f, 0.35f, -8.40f), CoreMatrix4x4.Identity, new CoreVector3(0.45f, 0.35f, 1.0f));
+        AddValidationWall("GI.Emissive.Reference1600Nits", reference1600, new CoreVector3(1.1f, 0.35f, -8.40f), CoreMatrix4x4.Identity, new CoreVector3(0.45f, 0.35f, 1.0f));
 
-        return ValidationSummary(SamplePerformanceScenario.GiEmissiveMaterialRoom, "Cornell room with warm/cool emissive panels");
+        return ValidationSummary(SamplePerformanceScenario.GiEmissiveMaterialRoom, "Calibrated emissive room with 100/400/1600-nit reference swatches and warm/cool photometric panels");
     }
 
     private SamplePerformanceScenarioSummary BuildGiLocalVolumeStreaming()
@@ -1430,6 +1441,27 @@ internal sealed class SampleStressSceneBuilder
             BaseColorFactor = new CoreVector4(albedo, 1.0f),
             EmissiveFactor = emissiveRadiance / emissiveStrength,
             EmissiveStrength = emissiveStrength,
+            MetallicFactor = 0.0f,
+            RoughnessFactor = Math.Clamp(roughness, 0.04f, 1.0f)
+        };
+        return _materialManager.RegisterMaterialDefinition(material);
+    }
+
+    private MaterialHandle RegisterPhotometricValidationMaterial(
+        CoreVector3 albedo,
+        CoreVector3 emissiveChromaticity,
+        float luminanceNits,
+        float roughness,
+        float artisticMultiplier = 1f)
+    {
+        MaterialDefinition material = CreateMaterial(997, alpha: 1.0f) with
+        {
+            Name = $"GiValidation.Emissive.{luminanceNits:0}Nits",
+            BaseColorFactor = new CoreVector4(albedo, 1.0f),
+            EmissiveFactor = emissiveChromaticity,
+            EmissiveStrength = Math.Max(luminanceNits, 0f),
+            EmissiveUnit = EmissivePhotometricUnit.LuminanceNits,
+            EmissiveArtisticMultiplier = Math.Max(artisticMultiplier, 0f),
             MetallicFactor = 0.0f,
             RoughnessFactor = Math.Clamp(roughness, 0.04f, 1.0f)
         };

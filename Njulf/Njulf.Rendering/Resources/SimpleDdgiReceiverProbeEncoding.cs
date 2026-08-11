@@ -22,6 +22,10 @@ public static class SimpleDdgiReceiverProbeEncoding
     public const uint RelocationPendingFlag = 1u << 3;
     public const uint InactiveFlag = 1u << 4;
     public const uint InactiveClassificationFlag = 1u << 5;
+    public const int SlotGenerationShift = 8;
+    public const uint SlotGenerationValueMask = 0x00ff_ffffu;
+    public const uint SlotGenerationMask =
+        SlotGenerationValueMask << SlotGenerationShift;
 
     public const uint StateRejectionMask =
         FreshFlag |
@@ -50,6 +54,22 @@ public static class SimpleDdgiReceiverProbeEncoding
         float activeWeight,
         uint receiverFlags,
         uint atlasProbeAddress,
+        out GPUSimpleDdgiReceiverProbe packed) => TryPack(
+            relocation,
+            probeSpacing,
+            activeWeight,
+            receiverFlags,
+            slotGeneration: 1u,
+            atlasProbeAddress: atlasProbeAddress,
+            packed: out packed);
+
+    public static bool TryPack(
+        Vector3 relocation,
+        float probeSpacing,
+        float activeWeight,
+        uint receiverFlags,
+        uint slotGeneration,
+        uint atlasProbeAddress,
         out GPUSimpleDdgiReceiverProbe packed)
     {
         packed = Invalid;
@@ -60,6 +80,8 @@ public static class SimpleDdgiReceiverProbeEncoding
             !float.IsFinite(activeWeight) ||
             activeWeight < 0.0f || activeWeight > 1.0f ||
             (receiverFlags & ~PublisherInputFlagMask) != 0u ||
+            slotGeneration == 0u ||
+            slotGeneration > SlotGenerationValueMask ||
             atlasProbeAddress == InvalidAtlasProbeAddress)
         {
             return false;
@@ -82,7 +104,9 @@ public static class SimpleDdgiReceiverProbeEncoding
         {
             PackedRelocationXY = x | ((uint)y << 16),
             PackedRelocationZWeight = z | ((uint)weight << 16),
-            Flags = receiverFlags | PublishedCoherentFlag,
+            Flags = receiverFlags |
+                (slotGeneration << SlotGenerationShift) |
+                PublishedCoherentFlag,
             AtlasProbeAddress = atlasProbeAddress
         };
         return true;
@@ -92,12 +116,27 @@ public static class SimpleDdgiReceiverProbeEncoding
         in GPUSimpleDdgiReceiverProbe packed,
         float probeSpacing,
         out Vector3 relocation,
-        out float activeWeight)
+        out float activeWeight) => TryUnpack(
+            packed,
+            probeSpacing,
+            out relocation,
+            out activeWeight,
+            out _);
+
+    public static bool TryUnpack(
+        in GPUSimpleDdgiReceiverProbe packed,
+        float probeSpacing,
+        out Vector3 relocation,
+        out float activeWeight,
+        out uint slotGeneration)
     {
         relocation = Vector3.Zero;
         activeWeight = 0.0f;
+        slotGeneration =
+            (packed.Flags & SlotGenerationMask) >> SlotGenerationShift;
         if (!float.IsFinite(probeSpacing) || probeSpacing <= 0.0f ||
             (packed.Flags & PublishedCoherentFlag) == 0u ||
+            slotGeneration == 0u ||
             packed.AtlasProbeAddress == InvalidAtlasProbeAddress)
         {
             return false;

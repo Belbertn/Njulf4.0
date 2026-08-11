@@ -1,0 +1,139 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "common.glsl"
+#include "ddgi_light_tree.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants
+{
+    uint LightCount;
+    uint LeafCapacity;
+    uint PaddedLeafCount;
+    uint NodeCount;
+    uint TargetStorageIndex;
+    uint PublishedStorageIndex;
+    uint BuildAction;
+    uint MaximumDepth;
+    float UniformMixtureProbability;
+    uint ExactLightThreshold;
+    uint NodeBankStrideWords;
+    uint LeafBankStrideWords;
+    uint ScratchRecordOffsetWords;
+    uint ScratchSortedIndexOffsetWords;
+    uint ScratchIndirectOffsetWords;
+    uint PublicationGeneration;
+    uint LightBufferRevisionLow;
+    uint LightBufferRevisionHigh;
+    uint TopologyRevisionLow;
+    uint TopologyRevisionHigh;
+    uint ContentRevisionLow;
+    uint ContentRevisionHigh;
+    uint Flags;
+    uint Reserved0;
+} pc;
+
+uint DdgiExpandMortonBits(uint value)
+{
+    value &= 0x3ffu;
+    value = (value | (value << 16u)) & 0x030000FFu;
+    value = (value | (value << 8u)) & 0x0300F00Fu;
+    value = (value | (value << 4u)) & 0x030C30C3u;
+    value = (value | (value << 2u)) & 0x09249249u;
+    return value;
+}
+
+uint DdgiMortonKey(vec3 position, vec3 minimum, vec3 maximum)
+{
+    vec3 extent = max(maximum - minimum, vec3(1e-6));
+    uvec3 q = uvec3(clamp((position - minimum) / extent, 0.0, 1.0) * 1023.0);
+    return DdgiExpandMortonBits(q.x) |
+        (DdgiExpandMortonBits(q.y) << 1u) |
+        (DdgiExpandMortonBits(q.z) << 2u);
+}
+
+void main()
+{
+    uint scratch = uint(SIMPLE_DDGI_LIGHT_TREE_SCRATCH_BUFFER_INDEX);
+    for (uint word = 0u; word < DDGI_LIGHT_TREE_SCRATCH_HEADER_WORDS; word++)
+        WriteStorageWordUniform(scratch, word, 0u);
+
+    vec3 rootMinimum = vec3(3.402823466e+38);
+    vec3 rootMaximum = vec3(-3.402823466e+38);
+    uint localCount = 0u;
+    uint invalidCount = 0u;
+    for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)
+    {
+        GPULight light = ReadLight(lightIndex);
+        if (light.Type == 1)
+            continue;
+        float flux = dot(max(light.Color, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) *
+            max(light.Intensity, 0.0);
+        if (!(flux > 1e-20) || !DdgiLightTreeFinite(flux) ||
+            !DdgiLightTreeFinite(light.Position) || localCount >= pc.LeafCapacity)
+        {
+            continue;
+        }
+
+        bool malformedRange = !DdgiLightTreeFinite(light.Range) || light.Range <= 0.0;
+        float extent = malformedRange ? 1000000.0 : light.Range;
+        vec3 minimum = light.Position - vec3(extent);
+        vec3 maximum = light.Position + vec3(extent);
+        uint recordFlags = malformedRange ? 1u : 0u;
+        if (!DdgiLightTreeFinite(minimum) || !DdgiLightTreeFinite(maximum))
+        {
+            minimum = vec3(-1000000.0);
+            maximum = vec3(1000000.0);
+            recordFlags |= DDGI_LIGHT_TREE_NODE_INVALID_BOUND_BIT;
+            invalidCount++;
+        }
+
+        uint baseWord = pc.ScratchRecordOffsetWords +
+            localCount * DDGI_LIGHT_TREE_SCRATCH_RECORD_WORDS;
+        WriteStorageFloatUniform(scratch, baseWord + 0u, minimum.x);
+        WriteStorageFloatUniform(scratch, baseWord + 1u, minimum.y);
+        WriteStorageFloatUniform(scratch, baseWord + 2u, minimum.z);
+        WriteStorageFloatUniform(scratch, baseWord + 3u, flux);
+        WriteStorageFloatUniform(scratch, baseWord + 4u, maximum.x);
+        WriteStorageFloatUniform(scratch, baseWord + 5u, maximum.y);
+        WriteStorageFloatUniform(scratch, baseWord + 6u, maximum.z);
+        WriteStorageFloatUniform(scratch, baseWord + 7u, malformedRange ? -1.0 : light.Range);
+        WriteStorageWordUniform(scratch, baseWord + 8u, lightIndex);
+        WriteStorageWordUniform(scratch, baseWord + 9u,
+            light.StableIdentity != 0u ? light.StableIdentity : lightIndex + 1u);
+        WriteStorageWordUniform(scratch, baseWord + 10u, 0u);
+        WriteStorageWordUniform(scratch, baseWord + 11u, recordFlags);
+        rootMinimum = min(rootMinimum, minimum);
+        rootMaximum = max(rootMaximum, maximum);
+        localCount++;
+    }
+
+    for (uint ordinal = 0u; ordinal < localCount; ordinal++)
+    {
+        uint baseWord = pc.ScratchRecordOffsetWords +
+            ordinal * DDGI_LIGHT_TREE_SCRATCH_RECORD_WORDS;
+        vec3 center = 0.5 * vec3(
+            ReadStorageFloatUniform(scratch, baseWord + 0u) + ReadStorageFloatUniform(scratch, baseWord + 4u),
+            ReadStorageFloatUniform(scratch, baseWord + 1u) + ReadStorageFloatUniform(scratch, baseWord + 5u),
+            ReadStorageFloatUniform(scratch, baseWord + 2u) + ReadStorageFloatUniform(scratch, baseWord + 6u));
+        WriteStorageWordUniform(scratch, baseWord + 10u,
+            DdgiMortonKey(center, rootMinimum, rootMaximum));
+    }
+
+    WriteStorageWordUniform(scratch, 0u, localCount);
+    WriteStorageWordUniform(scratch, 1u, invalidCount);
+    WriteStorageFloatUniform(scratch, 2u, rootMinimum.x);
+    WriteStorageFloatUniform(scratch, 3u, rootMinimum.y);
+    WriteStorageFloatUniform(scratch, 4u, rootMinimum.z);
+    WriteStorageFloatUniform(scratch, 5u, rootMaximum.x);
+    WriteStorageFloatUniform(scratch, 6u, rootMaximum.y);
+    WriteStorageFloatUniform(scratch, 7u, rootMaximum.z);
+    // Finalize also exposes conventional indirect dispatch triples for capture
+    // tools even though the bounded 1024-light build uses direct dispatches.
+    WriteStorageWordUniform(scratch, pc.ScratchIndirectOffsetWords + 0u, 1u);
+    WriteStorageWordUniform(scratch, pc.ScratchIndirectOffsetWords + 1u, 1u);
+    WriteStorageWordUniform(scratch, pc.ScratchIndirectOffsetWords + 2u, 1u);
+}

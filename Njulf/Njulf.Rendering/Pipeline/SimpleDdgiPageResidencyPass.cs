@@ -29,6 +29,7 @@ public sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
 
     private readonly RenderSettings _settings;
     private readonly SimpleDdgiVolumeManager _volumeManager;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private nint _entryPointName;
     private readonly VkPipeline[] _pipelines = new VkPipeline[ShaderNames.Length];
     private PipelineLayout _pipelineLayout;
@@ -39,11 +40,13 @@ public sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
         SwapchainManager swapchain,
         BindlessHeap bindlessHeap,
         RenderSettings settings,
-        SimpleDdgiVolumeManager volumeManager)
+        SimpleDdgiVolumeManager volumeManager,
+        GiPipelineCacheService? pipelineCacheService = null)
         : base("SimpleDdgiPageResidencyPass", context, swapchain, bindlessHeap)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _volumeManager = volumeManager ?? throw new ArgumentNullException(nameof(volumeManager));
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr("main");
     }
 
@@ -57,7 +60,10 @@ public sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
     {
         try
         {
-            CreatePipelineCache();
+            if (_pipelineCacheService != null)
+                _pipelineCache = _pipelineCacheService.Cache;
+            else
+                CreatePipelineCache();
             CreatePipelineLayout();
             for (int index = 0; index < _pipelines.Length; index++)
                 _pipelines[index] = CreatePipeline(ShaderNames[index]);
@@ -180,7 +186,7 @@ public sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
         }
         if (_pipelineLayout.Handle != 0)
             _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService == null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_entryPointName != 0)
         {
@@ -289,13 +295,25 @@ public sealed unsafe class SimpleDdgiPageResidencyPass : RenderPassBase
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device,
-                _pipelineCache,
-                1,
-                &info,
-                null,
-                out VkPipeline pipeline);
+            long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+            Result result;
+            VkPipeline pipeline;
+            try
+            {
+                result = _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &info,
+                    null,
+                    out pipeline);
+            }
+            finally
+            {
+                _pipelineCacheService?.EndPipelineCreation(
+                    $"{Name}:{shaderName}",
+                    pipelineStart);
+            }
             if (result != Result.Success)
                 throw new VulkanException(
                     $"Failed to create Simple-DDGI page pipeline '{shaderName}'",

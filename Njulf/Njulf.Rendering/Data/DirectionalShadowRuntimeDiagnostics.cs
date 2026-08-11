@@ -3,6 +3,52 @@ using System;
 namespace Njulf.Rendering.Data
 {
     /// <summary>
+    /// Logical state of a static directional-shadow cache layer.  A clear-only
+    /// refresh is still <see cref="Valid"/> on a later frame; emptiness is not
+    /// a validity signal.
+    /// </summary>
+    public enum DirectionalShadowCacheLayerState
+    {
+        Invalid = 0,
+        RefreshRecorded = 1,
+        Valid = 2
+    }
+
+    /// <summary>
+    /// Per-cascade provenance for the working directional shadow map.  This is
+    /// capture evidence only; it never feeds delayed diagnostic counts back
+    /// into same-frame shadow sampling.
+    /// </summary>
+    public readonly record struct DirectionalShadowCacheLayerProvenance(
+        int CascadeIndex,
+        int Active,
+        ulong CacheSignature,
+        uint ResourceGeneration,
+        DirectionalShadowCacheLayerState CacheState,
+        int CopiedFromCache,
+        int RefreshedThisFrame,
+        int ExplicitlyCleared,
+        int DynamicWorkAppended,
+        int FoliageWorkAppended,
+        int FinalWorkingLayerValid,
+        ulong SubmissionSerial)
+    {
+        public static DirectionalShadowCacheLayerProvenance Invalid(int cascadeIndex) => new(
+            CascadeIndex: cascadeIndex,
+            Active: 0,
+            CacheSignature: 0UL,
+            ResourceGeneration: 0u,
+            CacheState: DirectionalShadowCacheLayerState.Invalid,
+            CopiedFromCache: 0,
+            RefreshedThisFrame: 0,
+            ExplicitlyCleared: 0,
+            DynamicWorkAppended: 0,
+            FoliageWorkAppended: 0,
+            FinalWorkingLayerValid: 0,
+            SubmissionSerial: 0UL);
+    }
+
+    /// <summary>
     /// Sparse forward-receiver telemetry for directional shadows. Counts are sampled on a
     /// fixed 16x16 screen grid, so they are intended for relative diagnosis rather than
     /// per-pixel totals.
@@ -96,5 +142,13 @@ namespace Njulf.Rendering.Data
             DynamicOverflowCounts: Array.Empty<int>(),
             ConservativeLodFallbackCount: 0,
             ReceiverCounters: DirectionalShadowReceiverCounters.Empty);
+
+        /// <summary>Layer-by-layer source evidence for the final working map.</summary>
+        public IReadOnlyList<DirectionalShadowCacheLayerProvenance> CacheLayerProvenance { get; init; } =
+            Array.Empty<DirectionalShadowCacheLayerProvenance>();
+
+        /// <summary>Bounded GPU caster attribution readback for this completed frame.</summary>
+        public DirectionalShadowCasterDiagnostics CasterDiagnostics { get; init; } =
+            DirectionalShadowCasterDiagnostics.Empty;
     }
 }

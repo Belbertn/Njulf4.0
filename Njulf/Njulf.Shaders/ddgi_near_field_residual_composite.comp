@@ -1,0 +1,88 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_near_field_residual.glsl"
+
+// This is the sole C5 stage allowed to see canonical scene colour.  It first
+// preserves that canonical B3/DDGI/C4 result exactly for invalid C5 data, then
+// adds a signed residual only when the C5 validity contract is present.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D canonicalSceneColorInput;
+layout(set = 0, binding = 1) uniform sampler2D filteredResidualInput;
+layout(std430, set = 0, binding = 2) readonly buffer CompositeMetadataBuffer
+{
+    SimpleDdgiNearFieldResidualHitMetadata values[];
+} compositeMetadata;
+layout(rgba16f, set = 0, binding = 3) uniform writeonly image2D canonicalSceneColorOutput;
+
+layout(push_constant) uniform NearFieldCompositePushBlock
+{
+    SimpleDdgiNearFieldResidualCompositePushConstants pc;
+};
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputExtent = imageSize(canonicalSceneColorOutput);
+    if (pixel.x >= outputExtent.x || pixel.y >= outputExtent.y ||
+        pixel.x >= int(pc.fullWidth) || pixel.y >= int(pc.fullHeight))
+    {
+        return;
+    }
+
+    vec2 fullUv = (vec2(pixel) + vec2(0.5)) / max(vec2(outputExtent), vec2(1.0));
+    vec3 canonical = textureLod(canonicalSceneColorInput, fullUv, 0.0).rgb;
+    canonical = SimpleDdgiNearFieldFinite(canonical) ? max(canonical, vec3(0.0)) : vec3(0.0);
+
+    bool validAbi = pc.abiVersion == SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION &&
+        pc.traceWidth != 0u && pc.traceHeight != 0u &&
+        SimpleDdgiNearFieldHasFlag(pc.flags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_COMPOSITE_VALID_ONLY);
+    if (!validAbi)
+    {
+        imageStore(canonicalSceneColorOutput, pixel, vec4(canonical, 1.0));
+        return;
+    }
+
+    ivec2 residualExtent = textureSize(filteredResidualInput, 0);
+    ivec2 residualPixel = clamp(ivec2(fullUv * vec2(residualExtent)), ivec2(0),
+        max(residualExtent - ivec2(1), ivec2(0)));
+    uint residualIndex = uint(residualPixel.y) * uint(residualExtent.x) +
+        uint(residualPixel.x);
+    if (residualIndex >= uint(compositeMetadata.values.length()))
+    {
+        imageStore(canonicalSceneColorOutput, pixel, vec4(canonical, 1.0));
+        return;
+    }
+
+    vec4 residual = texelFetch(filteredResidualInput, residualPixel, 0);
+    SimpleDdgiNearFieldResidualHitMetadata metadata =
+        compositeMetadata.values[residualIndex];
+    bool validResidual = SimpleDdgiNearFieldIsValidCandidate(residual) &&
+        SimpleDdgiNearFieldHasFlag(metadata.packedFlags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) &&
+        SimpleDdgiNearFieldFinite(metadata.confidence) && metadata.confidence > 0.0;
+    if (!validResidual)
+    {
+        imageStore(canonicalSceneColorOutput, pixel, vec4(canonical, 1.0));
+        return;
+    }
+
+    // Metadata owns the canonical C5 confidence. Residual alpha is carried
+    // through filtering for neighbourhood weighting only; multiplying both
+    // would square one trace confidence and systematically darken the result.
+    float confidence = clamp(metadata.confidence, 0.0, 1.0);
+    if (!SimpleDdgiNearFieldFinite(confidence) || confidence < pc.confidenceFloor)
+    {
+        imageStore(canonicalSceneColorOutput, pixel, vec4(canonical, 1.0));
+        return;
+    }
+
+    float intensity = max(pc.residualIntensity, 0.0);
+    vec3 composed = canonical + residual.rgb * confidence * intensity;
+    imageStore(canonicalSceneColorOutput, pixel,
+        vec4(SimpleDdgiNearFieldFinite(composed)
+            ? max(composed, vec3(0.0))
+            : canonical, 1.0));
+}

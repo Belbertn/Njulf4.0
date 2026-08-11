@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
 
@@ -24,6 +26,19 @@ public static class SampleSmokeOptionsParser
         "--material-gi-capture-dir",
         "--material-gi-qualification-manifest",
         "--material-gi-qualification-candidate",
+        "--advanced-gi-prerequisite-manifest",
+        "--advanced-gi-qualification-manifest",
+        "--advanced-gi-runtime-evidence-bundle",
+        "--simple-ddgi-receiver-feedback-mode",
+        "--ddgi-opacity-micromap-mode",
+        "--simple-ddgi-directional-guiding-mode",
+        "--gi-caustic-mode",
+        "--simple-ddgi-near-field-residual-mode",
+        "--simple-ddgi-receiver-feedback-qualification-id",
+        "--ddgi-opacity-micromap-qualification-id",
+        "--simple-ddgi-directional-guiding-qualification-id",
+        "--gi-caustic-qualification-id",
+        "--simple-ddgi-near-field-residual-qualification-id",
         "--khronos-material-gi-render-manifest",
         "--khronos-material-gi-gate-report",
         "--khronos-material-gi-cooked-root",
@@ -55,6 +70,8 @@ public static class SampleSmokeOptionsParser
         "--force-missing-assets",
         "--fail-on-validation-message",
         "--gpu-timing",
+        "--gpu-meshlet-counters",
+        "--ddgi-content-conformance",
         "--scene-gpu-compaction",
         "--scene-indirect-dispatch",
         "--scene-gpu-lod",
@@ -101,6 +118,63 @@ public static class SampleSmokeOptionsParser
         string? materialGiCaptureDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_MATERIAL_GI_CAPTURE_DIR"));
         string? materialGiQualificationManifestPath = RendererValidationSettings.NormalizeOptionalPath(
             Environment.GetEnvironmentVariable("NJULF_MATERIAL_GI_QUALIFICATION_MANIFEST"));
+        string? advancedGiPrerequisiteManifestPath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_ADVANCED_GI_PREREQUISITE_MANIFEST"));
+        string? advancedGiQualificationManifestPath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_ADVANCED_GI_QUALIFICATION_MANIFEST"));
+        string? advancedGiRuntimeEvidenceBundlePath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_ADVANCED_GI_RUNTIME_EVIDENCE_BUNDLE"));
+        SimpleDdgiReceiverFeedbackMode? receiverFeedbackModeOverride =
+            ParseOptionalEnum<SimpleDdgiReceiverFeedbackMode>(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_SIMPLE_DDGI_RECEIVER_FEEDBACK_MODE"),
+                "NJULF_RENDERER_SIMPLE_DDGI_RECEIVER_FEEDBACK_MODE");
+        DdgiOpacityMicromapMode? opacityMicromapModeOverride =
+            ParseOptionalEnum<DdgiOpacityMicromapMode>(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_DDGI_OPACITY_MICROMAP_MODE"),
+                "NJULF_RENDERER_DDGI_OPACITY_MICROMAP_MODE");
+        SimpleDdgiDirectionalGuidingMode? directionalGuidingModeOverride =
+            ParseOptionalEnum<SimpleDdgiDirectionalGuidingMode>(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_SIMPLE_DDGI_DIRECTIONAL_GUIDING_MODE"),
+                "NJULF_RENDERER_SIMPLE_DDGI_DIRECTIONAL_GUIDING_MODE");
+        GiCausticMode? giCausticModeOverride =
+            ParseOptionalEnum<GiCausticMode>(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_GI_CAUSTIC_MODE"),
+                "NJULF_RENDERER_GI_CAUSTIC_MODE");
+        SimpleDdgiNearFieldResidualMode? nearFieldResidualModeOverride =
+            ParseOptionalEnum<SimpleDdgiNearFieldResidualMode>(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_MODE"),
+                "NJULF_RENDERER_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_MODE");
+        string? receiverFeedbackQualificationId = ParseOptionalStableToken(
+            Environment.GetEnvironmentVariable(
+                "NJULF_SIMPLE_DDGI_RECEIVER_FEEDBACK_QUALIFICATION_ID"),
+            "NJULF_SIMPLE_DDGI_RECEIVER_FEEDBACK_QUALIFICATION_ID");
+        string? opacityMicromapQualificationId = ParseOptionalStableToken(
+            Environment.GetEnvironmentVariable(
+                "NJULF_DDGI_OPACITY_MICROMAP_QUALIFICATION_ID"),
+            "NJULF_DDGI_OPACITY_MICROMAP_QUALIFICATION_ID");
+        string? directionalGuidingQualificationId = ParseOptionalStableToken(
+            Environment.GetEnvironmentVariable(
+                "NJULF_SIMPLE_DDGI_DIRECTIONAL_GUIDING_QUALIFICATION_ID"),
+            "NJULF_SIMPLE_DDGI_DIRECTIONAL_GUIDING_QUALIFICATION_ID");
+        string? giCausticQualificationId = ParseOptionalStableToken(
+            Environment.GetEnvironmentVariable(
+                "NJULF_GI_CAUSTIC_QUALIFICATION_ID"),
+            "NJULF_GI_CAUSTIC_QUALIFICATION_ID");
+        string? nearFieldResidualQualificationId = ParseOptionalStableToken(
+            Environment.GetEnvironmentVariable(
+                "NJULF_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_QUALIFICATION_ID"),
+            "NJULF_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_QUALIFICATION_ID");
         bool materialGiQualificationCandidate = ParseBool(
             Environment.GetEnvironmentVariable(
                 "NJULF_MATERIAL_GI_QUALIFICATION_CANDIDATE"),
@@ -160,6 +234,13 @@ public static class SampleSmokeOptionsParser
             "NJULF_RENDERER_GPU_TIMING");
         bool gpuTimingSpecified = !string.IsNullOrWhiteSpace(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_GPU_TIMING"));
+        bool enableGpuMeshletCounters = ParseBool(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_GPU_MESHLET_COUNTERS"),
+            "NJULF_RENDERER_GPU_MESHLET_COUNTERS");
+        bool enableDdgiContentConformance = ParseBool(
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_DDGI_CONTENT_CONFORMANCE"),
+            "NJULF_RENDERER_DDGI_CONTENT_CONFORMANCE");
         bool enableSceneGpuCompaction = ParseBool(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_SCENE_GPU_COMPACTION"),
             "NJULF_RENDERER_SCENE_GPU_COMPACTION");
@@ -344,6 +425,62 @@ public static class SampleSmokeOptionsParser
                     materialGiQualificationCandidate =
                         ParseBool(value, optionName);
                     break;
+                case "--advanced-gi-prerequisite-manifest":
+                    advancedGiPrerequisiteManifestPath =
+                        RequirePath(value, optionName);
+                    break;
+                case "--advanced-gi-qualification-manifest":
+                    advancedGiQualificationManifestPath =
+                        RequirePath(value, optionName);
+                    break;
+                case "--advanced-gi-runtime-evidence-bundle":
+                    advancedGiRuntimeEvidenceBundlePath =
+                        RequirePath(value, optionName);
+                    break;
+                case "--simple-ddgi-receiver-feedback-mode":
+                    receiverFeedbackModeOverride =
+                        ParseRequiredEnum<SimpleDdgiReceiverFeedbackMode>(
+                            value, optionName);
+                    break;
+                case "--ddgi-opacity-micromap-mode":
+                    opacityMicromapModeOverride =
+                        ParseRequiredEnum<DdgiOpacityMicromapMode>(
+                            value, optionName);
+                    break;
+                case "--simple-ddgi-directional-guiding-mode":
+                    directionalGuidingModeOverride =
+                        ParseRequiredEnum<SimpleDdgiDirectionalGuidingMode>(
+                            value, optionName);
+                    break;
+                case "--gi-caustic-mode":
+                    giCausticModeOverride =
+                        ParseRequiredEnum<GiCausticMode>(value, optionName);
+                    break;
+                case "--simple-ddgi-near-field-residual-mode":
+                    nearFieldResidualModeOverride =
+                        ParseRequiredEnum<SimpleDdgiNearFieldResidualMode>(
+                            value, optionName);
+                    break;
+                case "--simple-ddgi-receiver-feedback-qualification-id":
+                    receiverFeedbackQualificationId =
+                        RequireStableToken(value, optionName);
+                    break;
+                case "--ddgi-opacity-micromap-qualification-id":
+                    opacityMicromapQualificationId =
+                        RequireStableToken(value, optionName);
+                    break;
+                case "--simple-ddgi-directional-guiding-qualification-id":
+                    directionalGuidingQualificationId =
+                        RequireStableToken(value, optionName);
+                    break;
+                case "--gi-caustic-qualification-id":
+                    giCausticQualificationId =
+                        RequireStableToken(value, optionName);
+                    break;
+                case "--simple-ddgi-near-field-residual-qualification-id":
+                    nearFieldResidualQualificationId =
+                        RequireStableToken(value, optionName);
+                    break;
                 case "--khronos-material-gi-render-manifest":
                     khronosRenderManifestPath =
                         RequirePath(value, "--khronos-material-gi-render-manifest");
@@ -471,6 +608,12 @@ public static class SampleSmokeOptionsParser
                 case "--gpu-timing":
                     enableGpuTiming = ParseBool(value, optionName);
                     gpuTimingSpecified = true;
+                    break;
+                case "--gpu-meshlet-counters":
+                    enableGpuMeshletCounters = ParseBool(value, optionName);
+                    break;
+                case "--ddgi-content-conformance":
+                    enableDdgiContentConformance = ParseBool(value, optionName);
                     break;
                 case "--scene-gpu-compaction":
                     enableSceneGpuCompaction = ParseBool(value, optionName);
@@ -709,6 +852,7 @@ public static class SampleSmokeOptionsParser
             }
             if (forceMissingAssets ||
                 transparencyMode != TransparencyMode.SortedAlphaBlend ||
+                enableGpuMeshletCounters ||
                 enableSceneGpuCompaction ||
                 enableSceneIndirectDispatch ||
                 enableSceneGpuLodSelection ||
@@ -821,6 +965,7 @@ public static class SampleSmokeOptionsParser
             if (forceMissingAssets ||
                 transparencyMode != TransparencyMode.SortedAlphaBlend ||
                 asyncComputeModeOverride.HasValue ||
+                enableGpuMeshletCounters ||
                 enableFarFieldClipmap ||
                 enableFarFieldForceAll ||
                 enableSceneGpuCompaction ||
@@ -985,6 +1130,11 @@ public static class SampleSmokeOptionsParser
                     throw new ArgumentException(
                         "--benchmark-require-production requires --validation off.");
                 }
+                if (benchmarkRequireProduction && enableDdgiContentConformance)
+                {
+                    throw new ArgumentException(
+                        "--benchmark-require-production cannot use the non-shipping --ddgi-content-conformance rollout authorization.");
+                }
                 if (benchmarkRequireProduction &&
                     benchmarkMaximumSettlingFrames <
                     SampleBenchmarkOptions.ProductionMinimumAdditionalSettlingFrameCount)
@@ -1038,6 +1188,23 @@ public static class SampleSmokeOptionsParser
                     mode = SampleSmokeMode.Startup;
                 if (mode == SampleSmokeMode.None && performanceScenario != SamplePerformanceScenario.Normal && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
+                if (mode == SampleSmokeMode.None && enableGpuMeshletCounters && !smokeModeSpecified)
+                    mode = SampleSmokeMode.Startup;
+                if (mode == SampleSmokeMode.None && enableDdgiContentConformance && !smokeModeSpecified)
+                    mode = SampleSmokeMode.Startup;
+                if (mode == SampleSmokeMode.None &&
+                    (receiverFeedbackModeOverride.HasValue ||
+                     opacityMicromapModeOverride.HasValue ||
+                     directionalGuidingModeOverride.HasValue ||
+                     giCausticModeOverride.HasValue ||
+                     nearFieldResidualModeOverride.HasValue ||
+                     !string.IsNullOrWhiteSpace(advancedGiPrerequisiteManifestPath) ||
+                     !string.IsNullOrWhiteSpace(advancedGiQualificationManifestPath) ||
+                     !string.IsNullOrWhiteSpace(advancedGiRuntimeEvidenceBundlePath)) &&
+                    !smokeModeSpecified)
+                {
+                    mode = SampleSmokeMode.Startup;
+                }
                 if (mode == SampleSmokeMode.None && transparencyMode != TransparencyMode.SortedAlphaBlend && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
                 if (mode == SampleSmokeMode.None && asyncComputeModeOverride.HasValue && !smokeModeSpecified)
@@ -1179,7 +1346,22 @@ public static class SampleSmokeOptionsParser
             simpleDdgiSparseMaximumReceiverFeedbackOverride,
             simpleDdgiSparseInactiveRetryFramesOverride,
             simpleDdgiStoragePackingModeOverride,
-            simpleDdgiSampledAtlasCoverageModeOverride);
+            simpleDdgiSampledAtlasCoverageModeOverride,
+            enableGpuMeshletCounters,
+            enableDdgiContentConformance,
+            advancedGiPrerequisiteManifestPath,
+            advancedGiQualificationManifestPath,
+            receiverFeedbackModeOverride,
+            opacityMicromapModeOverride,
+            directionalGuidingModeOverride,
+            giCausticModeOverride,
+            nearFieldResidualModeOverride,
+            receiverFeedbackQualificationId,
+            opacityMicromapQualificationId,
+            directionalGuidingQualificationId,
+            giCausticQualificationId,
+            nearFieldResidualQualificationId,
+            advancedGiRuntimeEvidenceBundlePath);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -1319,6 +1501,8 @@ public static class SampleSmokeOptionsParser
             "--material-gi-qualification-candidate" or
             "--tail-ddgi-long-soak" or
             "--gpu-timing" or
+            "--gpu-meshlet-counters" or
+            "--ddgi-content-conformance" or
             "--scene-gpu-compaction" or
             "--scene-indirect-dispatch" or
             "--scene-gpu-lod" or
@@ -1565,5 +1749,55 @@ public static class SampleSmokeOptionsParser
         if (string.IsNullOrWhiteSpace(value))
             throw new ArgumentException($"{name} requires a non-empty value.");
         return value.Trim();
+    }
+
+    private static TEnum? ParseOptionalEnum<TEnum>(
+        string? value,
+        string name)
+        where TEnum : struct, Enum =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : ParseRequiredEnum<TEnum>(value, name);
+
+    private static TEnum ParseRequiredEnum<TEnum>(string value, string name)
+        where TEnum : struct, Enum
+    {
+        string normalized = NormalizeEnumToken(value);
+        foreach (TEnum candidate in Enum.GetValues<TEnum>())
+        {
+            if (string.Equals(
+                    NormalizeEnumToken(candidate.ToString()),
+                    normalized,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return candidate;
+            }
+        }
+
+        throw new ArgumentException(
+            $"{name} has invalid value '{value}'. Valid values: " +
+            string.Join(", ", Enum.GetNames<TEnum>()));
+    }
+
+    private static string NormalizeEnumToken(string? value) =>
+        (value ?? string.Empty).Trim()
+        .Replace("-", string.Empty, StringComparison.Ordinal)
+        .Replace("_", string.Empty, StringComparison.Ordinal);
+
+    private static string? ParseOptionalStableToken(
+        string? value,
+        string name) => string.IsNullOrWhiteSpace(value)
+        ? null
+        : RequireStableToken(value, name);
+
+    private static string RequireStableToken(string value, string name)
+    {
+        string token = RequireNonEmptyValue(value, name);
+        if (token.Length > 256 || token.Any(char.IsControl))
+        {
+            throw new ArgumentException(
+                $"{name} requires a control-free token of at most 256 characters.");
+        }
+        return token;
     }
 }

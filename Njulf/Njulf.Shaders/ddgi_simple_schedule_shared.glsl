@@ -5,6 +5,7 @@
 #include "ddgi_simple_storage_abi.glsl"
 #include "ddgi_simple_receiver_abi.glsl"
 #include "ddgi_simple_scheduler_metadata_abi.glsl"
+#include "ddgi_receiver_feedback_summary_abi.glsl"
 
 // This file is the shader-side mirror of SimpleDdgiGpuSchedulerLayout and
 // GPUSimpleDdgiSchedulePushConstants. Keep all offsets in words and derive
@@ -46,12 +47,28 @@ const uint SIMPLE_DDGI_SCHEDULER_IRRADIANCE_WORDS_PER_PROBE = 128u;
 // Canonical visibility is one RG16F moment pair (one uint word) per 16x16
 // texel. Keep this independent from the RGBA16F irradiance stride.
 const uint SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE = 256u;
+const uint SIMPLE_DDGI_FLAG_NEAR_VISIBILITY_SIDECAR = 1u << 31u;
+const uint SIMPLE_DDGI_SCHEDULER_PARAMS_FLAGS_WORD = 14u;
+const uint SIMPLE_DDGI_SCHEDULER_PARAMS_PHYSICAL_CAPACITY_WORD = 54u;
+const uint SIMPLE_DDGI_SCHEDULER_VOLUME_KIND_RING = 2u;
+const uint SIMPLE_DDGI_SCHEDULER_VOLUME_KIND_REFINEMENT = 3u;
 // Ray-bucket commands and queue metadata are separate regions. The command
 // region is passed directly to vkCmdDispatchIndirect; metadata is never part
 // of a VkDispatchIndirectCommand.
 const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_METADATA_WORDS = 4u;
 const uint SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_COMMAND_WORDS = 4u;
-const uint SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS = 80u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_WORDS = 96u;
+// GPUSimpleDdgiParams word 63 carries a one-based arena offset. Keep the
+// compact two-word/two-bank ABI synchronized with ddgi_simple_shared.glsl and
+// SimpleDdgiGpuSchedulerLayout.
+const uint SIMPLE_DDGI_SCHEDULER_RECEIVER_OFFSET_PARAM_WORD = 63u;
+const uint SIMPLE_DDGI_SCHEDULER_RECEIVER_BANK_COUNT = 2u;
+const uint SIMPLE_DDGI_SCHEDULER_RECEIVER_WORDS_PER_PROBE = 2u;
+const uint SIMPLE_DDGI_SCHEDULER_RECEIVER_COVERAGE_MASK = 0x00ffffffu;
+const uint SIMPLE_DDGI_SCHEDULER_RECEIVER_ROLE_MASK = 0x07000000u;
+const uint SIMPLE_DDGI_SCHEDULER_RECEIVER_FALLBACK_MASK = 0x06000000u;
+const uint SIMPLE_DDGI_SCHEDULER_RECEIVER_REFLECTION = 1u << 31u;
+const float SIMPLE_DDGI_SCHEDULER_RECEIVER_WEIGHT_SCALE = 1.0 / 256.0;
 
 // Per-request producer completion. A request is committable only when every
 // required bit is set and no failure reason was recorded.
@@ -63,10 +80,27 @@ const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_BLEND = 1u << 4u;
 const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_CANONICAL_PUBLISH = 1u << 5u;
 const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_SAMPLED_PUBLISH = 1u << 6u;
 const uint SIMPLE_DDGI_SCHEDULER_SAMPLED_PUBLISH_NOT_REQUIRED = 1u << 7u;
+const uint SIMPLE_DDGI_SCHEDULER_COMPLETE_URGENT_COMMIT = 1u << 31u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_SAMPLED_PUBLICATION = 1u << 8u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_TAIL_CERTIFICATION = 1u << 9u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_PERIODIC_SOURCE_WAVE = 1u << 10u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_CERTIFIED_QUIESCED = 1u << 11u;
+const uint SIMPLE_DDGI_SCHEDULER_FEATURE_COST_AWARE_PRIORITY = 1u << 12u;
+const uint SIMPLE_DDGI_SCHEDULER_FEATURE_SPARSE_RESIDUAL_PROPAGATION = 1u << 13u;
+const uint SIMPLE_DDGI_SCHEDULER_FEATURE_EXACT_RECEIVER_FEEDBACK = 1u << 14u;
+const uint SIMPLE_DDGI_SCHEDULER_EXACT_FEEDBACK_BINDING_VALID = 1u << 0u;
+
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_BUFFER = 44u;
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_BANK_OFFSET = 45u;
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_BANK_STRIDE = 46u;
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_RECORD_CAPACITY = 47u;
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_SUMMARY_CAPACITY = 48u;
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_FALLBACK_CAPACITY = 49u;
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_GENERATION = 50u;
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_VIEWPORT = 51u;
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_FRAME_LOW = 52u;
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_FRAME_HIGH = 53u;
+const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_FLAGS = 54u;
 
 const uint SIMPLE_DDGI_SCHEDULER_FAILURE_INVALID_GENERATION = 1u << 0u;
 const uint SIMPLE_DDGI_SCHEDULER_FAILURE_PRODUCER = 1u << 1u;
@@ -102,6 +136,14 @@ const uint SIMPLE_DDGI_SCHEDULER_REASON_CONVERGENCE = 1u << 9u;
 const uint SIMPLE_DDGI_SCHEDULER_REASON_INACTIVE_RETRY = 1u << 10u;
 const uint SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY = 1u << 11u;
 const uint SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE_PAGE_COHORT = 1u << 12u;
+const uint SIMPLE_DDGI_SCHEDULER_REASON_RADIOMETRIC_RELIGHT = 1u << 13u;
+const uint SIMPLE_DDGI_SCHEDULER_REASON_SEGMENT_SELECTIVE = 1u << 14u;
+const uint SIMPLE_DDGI_SCHEDULER_REASON_RESIDUAL_PROPAGATION = 1u << 15u;
+// Compatibility alias for diagnostics/tests authored with the first
+// radiometric-only mode. The bit now covers environment misses and exact
+// sole-directional cached hits.
+const uint SIMPLE_DDGI_SCHEDULER_REASON_ENVIRONMENT_RELIGHT =
+    SIMPLE_DDGI_SCHEDULER_REASON_RADIOMETRIC_RELIGHT;
 
 // Scheduler-private visibility/publication bits live in the high half of the
 // dirty-reason word. The low reason bits are transient; these two bits survive
@@ -130,6 +172,13 @@ const uint SIMPLE_DDGI_SCHEDULER_UPDATE_INVALIDATE = 1u << 14u;
 const uint SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT = 16u;
 const uint SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_MASK = 0x1ffu <<
     SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT;
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_SHIFT = 30u;
+const uint SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_MASK = 0x3u <<
+    SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_SHIFT;
+const uint SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_FULL_TRACE = 0u;
+const uint SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_ENVIRONMENT_RELIGHT = 1u;
+const uint SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_CACHED_HIT_RELIGHT = 2u;
+const uint SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_SEGMENT_SELECTIVE = 3u;
 const uint SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_VISIBLE = 1u << 25u;
 const uint SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_REGIONAL = 1u << 26u;
 const uint SIMPLE_DDGI_SCHEDULER_PRIVATE_REASON_GLOBAL = 1u << 27u;
@@ -204,6 +253,21 @@ const uint SIMPLE_DDGI_SCHEDULER_COUNTER_CACHE_READ_FAILURE_MASK = 63u;
 // counters are scheduler-private and intentionally sit after the fixed
 // diagnostic counter prefix.
 const uint SIMPLE_DDGI_SCHEDULER_COUNTER_VISIBLE_PAGE_COHORT_BASE = 64u;
+// Exact classifier output. These are incremented only after all candidate
+// eligibility gates succeed, before budget admission may defer the work.
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE_CLASS_BASE = 80u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE_RING_BASE = 87u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_SEEDED = 90u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_DEPENDENT_WAKE = 91u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_THRESHOLD_REJECT = 92u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_FULL_SWEEP_FALLBACK = 93u;
+// Words 94/95 survive the ordinary counter reset. Word 94 carries a
+// frame-stamped accepted/committed urgent summary into the post-forward
+// feedback reduction; word 95 is nonzero only while the pre-forward bounded
+// transaction is being recorded.
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_TELEMETRY = 94u;
+const uint SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_CONTROL = 95u;
+const uint SIMPLE_DDGI_SCHEDULER_TRANSIENT_COUNTER_WORDS = 94u;
 
 // Transaction-predicate witnesses are a bitset rather than counters: every
 // failed request already contributes to the transaction category above, while
@@ -232,6 +296,11 @@ const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_PRODUCER_FAILURE_OFFSET = 972u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_CACHE_READ_FAILURE_OFFSET = 973u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ACTIVE_SOURCE_MUTATION_OFFSET = 974u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ACTIVE_CANONICAL_MUTATION_OFFSET = 975u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ELIGIBLE_CLASS_OFFSET = 976u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ELIGIBLE_RING_OFFSET = 983u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_RESIDUAL_PROPAGATION_OFFSET = 986u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_URGENT_RELIGHT_OFFSET = 990u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_RECEIVER_CONTRIBUTION_OFFSET = 994u;
 
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_RESET = 0u;
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_CLASSIFY = 1u;
@@ -304,6 +373,58 @@ uint SchedulerArenaAtomicOr(uint wordOffset, uint value)
     return atomicOr(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[wordOffset], value);
 }
 
+uint SchedulerActiveProbeCount();
+uint SchedulerFrameIndex();
+
+bool SchedulerReadLegacyReceiverContribution(
+    uint probeIndex,
+    out float contribution,
+    out uint coverageAndFlags)
+{
+    contribution = 0.0;
+    coverageAndFlags = 0u;
+    uint offsetWordsPlusOne = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        SIMPLE_DDGI_SCHEDULER_RECEIVER_OFFSET_PARAM_WORD);
+    uint activeProbeCount = SchedulerActiveProbeCount();
+    if (offsetWordsPlusOne == 0u || probeIndex >= activeProbeCount)
+        return false;
+
+    uint bankWords = activeProbeCount *
+        SIMPLE_DDGI_SCHEDULER_RECEIVER_WORDS_PER_PROBE;
+    uint previousBank = (SchedulerFrameIndex() - 1u) & 1u;
+    uint recordBase = offsetWordsPlusOne - 1u +
+        previousBank * bankWords +
+        probeIndex * SIMPLE_DDGI_SCHEDULER_RECEIVER_WORDS_PER_PROBE;
+    uint accumulatedWeightQ8 = SchedulerArenaRead(recordBase + 0u);
+    coverageAndFlags = SchedulerArenaRead(recordBase + 1u);
+    uint coveredBuckets = uint(bitCount(
+        coverageAndFlags &
+            SIMPLE_DDGI_SCHEDULER_RECEIVER_COVERAGE_MASK));
+    float accumulatedWeight = float(accumulatedWeightQ8) *
+        SIMPLE_DDGI_SCHEDULER_RECEIVER_WEIGHT_SCALE;
+    float coverage = float(coveredBuckets) / 24.0;
+    // Logarithmic mass prevents resolution and transparent overdraw from
+    // dominating the bounded score. Coverage preserves a broad doorway/fog
+    // signal even when each individual interpolation corner is low weight.
+    contribution = clamp(
+        log2(1.0 + max(accumulatedWeight, 0.0)) * 0.75 +
+            coverage * 2.0,
+        0.0,
+        12.0);
+    if ((coverageAndFlags &
+            SIMPLE_DDGI_SCHEDULER_RECEIVER_FALLBACK_MASK) != 0u)
+    {
+        contribution = min(contribution + 0.25, 12.0);
+    }
+    if ((coverageAndFlags &
+            SIMPLE_DDGI_SCHEDULER_RECEIVER_REFLECTION) != 0u)
+    {
+        contribution = min(contribution + 0.5, 12.0);
+    }
+    return true;
+}
+
 uint SchedulerFrame(uint word)
 {
     return SchedulerArenaRead(pc.FrameOffsetWords + word);
@@ -314,7 +435,26 @@ uint SchedulerActiveVolumeCount() { return SchedulerFrame(1u); }
 uint SchedulerCandidateCapacity() { return SchedulerFrame(2u); }
 uint SchedulerCandidateGroupCount() { return (SchedulerCandidateCapacity() + 63u) / 64u; }
 uint SchedulerRequestCapacity() { return SchedulerFrame(3u); }
-uint SchedulerRequestBudget() { return SchedulerFrame(5u); }
+uint SchedulerUrgentRelightBudget()
+{
+    return min(
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_CONTROL),
+        255u);
+}
+bool SchedulerUrgentRelight()
+{
+    return SchedulerUrgentRelightBudget() != 0u;
+}
+uint SchedulerRequestBudget()
+{
+    uint ordinaryBudget = SchedulerFrame(5u);
+    uint urgentBudget = SchedulerUrgentRelightBudget();
+    return urgentBudget == 0u
+        ? ordinaryBudget
+        : min(ordinaryBudget, urgentBudget);
+}
 uint SchedulerPrimaryRayBudget() { return SchedulerFrame(6u); }
 uint SchedulerSourceTargetProbes() { return SchedulerFrame(7u); }
 uint SchedulerFrameIndex() { return SchedulerFrame(10u); }
@@ -328,6 +468,61 @@ uint SchedulerDirtyRegionCount() { return SchedulerFrame(24u); }
 uint SchedulerDirtyReasonFlags() { return SchedulerFrame(26u); }
 uint SchedulerSourceTargetRays() { return SchedulerFrame(8u); }
 uint SchedulerFeatureFlags() { return SchedulerFrame(27u); }
+uint SchedulerSourceRefreshMode()
+{
+    uint mode = SchedulerFrame(31u);
+    return mode <= 3u
+        ? mode
+        : SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_FULL_TRACE;
+}
+
+bool SchedulerSourceModeUsesRadiometricRelight(uint mode)
+{
+    return mode == SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_ENVIRONMENT_RELIGHT ||
+        mode == SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_CACHED_HIT_RELIGHT;
+}
+
+bool SchedulerCandidateUsesRadiometricRelight(uint candidateReasons)
+{
+    return SchedulerSourceModeUsesRadiometricRelight(
+            SchedulerSourceRefreshMode()) &&
+        (candidateReasons &
+            SIMPLE_DDGI_SCHEDULER_REASON_RADIOMETRIC_RELIGHT) != 0u;
+}
+
+bool SchedulerUpdateUsesRadiometricRelight(uint updateFlags)
+{
+    return (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u &&
+        SchedulerSourceModeUsesRadiometricRelight(
+            (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_MASK) >>
+                SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_SHIFT);
+}
+
+bool SchedulerUpdatePreservesSourceEpoch(uint updateFlags)
+{
+    if ((updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) == 0u)
+        return true;
+    uint mode = (updateFlags &
+        SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_MASK) >>
+            SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_SHIFT;
+    return SchedulerSourceModeUsesRadiometricRelight(mode) ||
+        mode == SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_SEGMENT_SELECTIVE;
+}
+
+bool SchedulerCandidateUsesEnvironmentRelight(uint candidateReasons)
+{
+    return SchedulerSourceRefreshMode() ==
+            SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_ENVIRONMENT_RELIGHT &&
+        SchedulerCandidateUsesRadiometricRelight(candidateReasons);
+}
+
+bool SchedulerUpdateUsesEnvironmentRelight(uint updateFlags)
+{
+    return ((updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_MASK) >>
+            SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_SHIFT) ==
+                SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_ENVIRONMENT_RELIGHT &&
+        SchedulerUpdateUsesRadiometricRelight(updateFlags);
+}
 
 uint SchedulerAdvanceSourceEpoch(uint epoch)
 {
@@ -357,7 +552,163 @@ bool SchedulerCertifiedQuiesced() {
     return (SchedulerFeatureFlags() &
         SIMPLE_DDGI_SCHEDULER_FEATURE_CERTIFIED_QUIESCED) != 0u;
 }
+bool SchedulerCostAwarePriority() {
+    return (SchedulerFeatureFlags() &
+        SIMPLE_DDGI_SCHEDULER_FEATURE_COST_AWARE_PRIORITY) != 0u;
+}
+bool SchedulerSparseResidualPropagation() {
+    return (SchedulerFeatureFlags() &
+        SIMPLE_DDGI_SCHEDULER_FEATURE_SPARSE_RESIDUAL_PROPAGATION) != 0u;
+}
+bool SchedulerExactReceiverFeedback() {
+    return (SchedulerFeatureFlags() &
+        SIMPLE_DDGI_SCHEDULER_FEATURE_EXACT_RECEIVER_FEEDBACK) != 0u &&
+        (SchedulerFrame(
+            SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_FLAGS) &
+            SIMPLE_DDGI_SCHEDULER_EXACT_FEEDBACK_BINDING_VALID) != 0u;
+}
+
+shared uint schedulerExactFeedbackHeaderValid;
+shared uint schedulerExactFeedbackSummaryCount;
+
+// Called exactly once near the top of classify main, before any per-probe
+// early return. One lane validates the complete immutable bank header and the
+// workgroup shares the result; no hot path rereads 16 header words per probe.
+void SchedulerPrepareReceiverFeedbackWorkgroup()
+{
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        schedulerExactFeedbackHeaderValid = 0u;
+        schedulerExactFeedbackSummaryCount = 0u;
+        if (SchedulerExactReceiverFeedback())
+        {
+            uint summaryCount;
+            bool valid = SimpleDdgiFeedbackSummaryTryValidateHeader(
+                SchedulerFrame(
+                    SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_BUFFER),
+                SchedulerFrame(
+                    SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_BANK_OFFSET),
+                SchedulerFrame(
+                    SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_BANK_STRIDE),
+                SchedulerFrame(
+                    SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_RECORD_CAPACITY),
+                SchedulerFrame(
+                    SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_SUMMARY_CAPACITY),
+                SchedulerFrame(
+                    SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_FALLBACK_CAPACITY),
+                SchedulerFrame(
+                    SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_GENERATION),
+                SchedulerFrame(
+                    SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_VIEWPORT),
+                SchedulerFrame(
+                    SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_FRAME_LOW),
+                SchedulerFrame(
+                    SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_FRAME_HIGH),
+                summaryCount);
+            schedulerExactFeedbackHeaderValid = valid ? 1u : 0u;
+            schedulerExactFeedbackSummaryCount = valid ? summaryCount : 0u;
+        }
+    }
+    barrier();
+}
+
+bool SchedulerReadExactReceiverContribution(
+    uint probeIndex,
+    out float contribution,
+    out uint coverageAndFlags)
+{
+    contribution = 0.0;
+    coverageAndFlags = 0u;
+    if (schedulerExactFeedbackHeaderValid == 0u)
+        return false;
+
+    return SimpleDdgiFeedbackSummaryTryFindProbe(
+        SchedulerFrame(
+            SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_BUFFER),
+        SchedulerFrame(
+            SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_BANK_OFFSET),
+        SchedulerFrame(
+            SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_SUMMARY_CAPACITY),
+        schedulerExactFeedbackSummaryCount,
+        SchedulerFrame(
+            SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_GENERATION),
+        probeIndex,
+        contribution,
+        coverageAndFlags);
+}
+
+bool SchedulerReadPreviousReceiverContribution(
+    uint probeIndex,
+    out float contribution,
+    out uint coverageAndFlags)
+{
+    // Exact mode never falls through to the rejected packed sketch. A stale or
+    // malformed V2 bank contributes zero and ordinary scheduler priorities
+    // remain authoritative for this frame.
+    if (SchedulerExactReceiverFeedback())
+    {
+        return SchedulerReadExactReceiverContribution(
+            probeIndex,
+            contribution,
+            coverageAndFlags);
+    }
+    return SchedulerReadLegacyReceiverContribution(
+        probeIndex,
+        contribution,
+        coverageAndFlags);
+}
 uint SchedulerSolveEpoch() { return SchedulerFrame(19u); }
+
+float SchedulerDecodeCostFrequency(uint frameWord)
+{
+    return float(min(SchedulerFrame(frameWord), 0xffffu)) / 256.0;
+}
+
+float SchedulerPredictedRelativeCost(
+    uint rayCount,
+    bool primaryTrace,
+    bool cachedOnly)
+{
+    float rays = float(max(rayCount, 1u));
+    if (cachedOnly)
+        return rays * 0.15;
+    if (!primaryTrace)
+        return rays * 0.35;
+    float visibility = SchedulerDecodeCostFrequency(40u);
+    float alphaCandidates = SchedulerDecodeCostFrequency(41u);
+    float materialEvaluations = SchedulerDecodeCostFrequency(42u);
+    float farFieldSteps = SchedulerDecodeCostFrequency(43u);
+    float perRay = 1.0 +
+        visibility * 0.75 +
+        alphaCandidates * 0.50 +
+        materialEvaluations * 0.25 +
+        farFieldSteps * 0.0625;
+    return rays * max(perRay, 0.01);
+}
+
+float SchedulerErrorReductionPerCost(
+    float residual,
+    float receiverContribution,
+    uint age,
+    uint maximumLatency,
+    float predictedCost)
+{
+    float safeResidual = isnan(residual) || isinf(residual)
+        ? 1.0
+        : max(residual, 0.0);
+    float safeContribution = isnan(receiverContribution) ||
+            isinf(receiverContribution)
+        ? 0.0
+        : clamp(receiverContribution, 0.0, 16.0);
+    float normalizedAge = clamp(
+        float(age) / float(max(maximumLatency, 1u)),
+        0.0,
+        4.0);
+    float deadlineDebt = normalizedAge * normalizedAge;
+    float benefit = max(safeResidual, 0.0001) *
+        (1.0 + safeContribution) + deadlineDebt;
+    return benefit / max(predictedCost, 0.0001);
+}
 
 bool SchedulerFrameReached(uint frame, uint target)
 {
@@ -445,7 +796,9 @@ uint SchedulerVolumeWord(uint volumeIndex, uint word)
 
 uint SchedulerVolumeFirstProbe(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 0u); }
 uint SchedulerVolumeProbeCount(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 1u); }
+uint SchedulerVolumeKind(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 2u); }
 uint SchedulerVolumeRing(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 3u); }
+uint SchedulerVolumeSourceOrdinal(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 4u); }
 uint SchedulerVolumeFullRays(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 30u); }
 uint SchedulerVolumeMaintenanceRays(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 31u); }
 uint SchedulerVolumeLayoutGeneration(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 6u); }
@@ -471,6 +824,14 @@ uint SchedulerVolumeCacheWordsPerProbe(uint volumeIndex) { return SchedulerVolum
 uint SchedulerVolumeCachePhysicalFirstProbe(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 42u) & 0xffffu; }
 uint SchedulerVolumeCachePhysicalProbeCount(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 42u) >> 16u; }
 uint SchedulerVolumeCacheLayoutFlags(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 43u); }
+
+bool SchedulerVolumeUsesNearVisibilitySidecar(uint volumeIndex)
+{
+    uint kind = SchedulerVolumeKind(volumeIndex);
+    return kind == SIMPLE_DDGI_SCHEDULER_VOLUME_KIND_REFINEMENT ||
+        (kind == SIMPLE_DDGI_SCHEDULER_VOLUME_KIND_RING &&
+            SchedulerVolumeSourceOrdinal(volumeIndex) == 10000u);
+}
 
 vec3 SchedulerVolumeOrigin(uint volumeIndex)
 {
@@ -544,7 +905,7 @@ bool SchedulerDirtyIntersects(uint volumeIndex, uint localOrdinal, out uint reas
     {
         if (i >= dirtyCount)
             continue;
-        uint base = pc.DirtyRegionOffsetWords + i * 12u;
+        uint base = pc.DirtyRegionOffsetWords + i * 20u;
         vec3 minimum = vec3(
             uintBitsToFloat(SchedulerArenaRead(base + 0u)),
             uintBitsToFloat(SchedulerArenaRead(base + 1u)),
@@ -554,7 +915,7 @@ bool SchedulerDirtyIntersects(uint volumeIndex, uint localOrdinal, out uint reas
             uintBitsToFloat(SchedulerArenaRead(base + 5u)),
             uintBitsToFloat(SchedulerArenaRead(base + 6u))) + vec3(expand);
         if (all(greaterThanEqual(position, minimum)) && all(lessThanEqual(position, maximum)))
-            reasons |= SchedulerArenaRead(base + 8u);
+            reasons |= SchedulerArenaRead(base + 16u);
     }
     return reasons != 0u;
 }
@@ -656,7 +1017,7 @@ bool SchedulerResolvePayloadAddressDetailed(
     out uint pageMappingGeneration,
     out bool published)
 {
-    const uint paramsHeaderWords = 60u;
+    const uint paramsHeaderWords = 64u;
     const uint volumeStrideWords = 28u;
     const uint maxVolumes = 16u;
     const uint pagingStrideWords = 8u;
@@ -841,7 +1202,7 @@ bool SchedulerResolveSparsePageMetadata(
     out uint pageLocalBit,
     out uint validProbeMask)
 {
-    const uint paramsHeaderWords = 60u;
+    const uint paramsHeaderWords = 64u;
     const uint volumeStrideWords = 28u;
     const uint maxVolumes = 16u;
     const uint pagingStrideWords = 8u;
@@ -1002,7 +1363,7 @@ bool SchedulerRetainSparsePage(
     uint pageMappingGeneration)
 {
     const uint sparseMode = 2u;
-    const uint pagingBaseWords = 60u + 16u * 28u;
+    const uint pagingBaseWords = 64u + 16u * 28u;
     uint mode = ReadStorageWordUniform(
         pc.ParamsBufferIndex,
         pagingBaseWords + volumeIndex * 8u + 3u);
@@ -1283,7 +1644,9 @@ void SchedulerCopyUpdateToQueue(uint updateIndex, uint queueIndex)
     uint committedSourceEpoch = SchedulerArenaRead(stateBase + 3u);
     uint transactionSourceEpoch =
         (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u
-            ? SchedulerAdvanceSourceEpoch(committedSourceEpoch)
+            ? (SchedulerUpdatePreservesSourceEpoch(updateFlags)
+                ? committedSourceEpoch
+                : SchedulerAdvanceSourceEpoch(committedSourceEpoch))
             : committedSourceEpoch;
     // The public queue's final word carries the exact per-probe source epoch
     // reserved by the accepted transaction. Derive it from immutable admitted
@@ -1374,7 +1737,12 @@ uint SchedulerRequiredCompletionMask(uint updateFlags)
     required |= SchedulerTransportV2()
         ? SIMPLE_DDGI_SCHEDULER_COMPLETE_TRANSPORT
         : SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED;
-    required |= SchedulerSampledPublicationRequired()
+    // Urgent publication mirrors sampled images only after CommitLocal has
+    // atomically copied the complete private probe payload to canonical
+    // storage. It is therefore an optional post-commit mirror, not a producer
+    // prerequisite for this transaction.
+    required |= SchedulerSampledPublicationRequired() &&
+            !SchedulerUrgentRelight()
         ? SIMPLE_DDGI_SCHEDULER_COMPLETE_SAMPLED_PUBLISH
         : SIMPLE_DDGI_SCHEDULER_SAMPLED_PUBLISH_NOT_REQUIRED;
     return required;

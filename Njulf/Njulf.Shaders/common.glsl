@@ -221,7 +221,40 @@ const int SIMPLE_DDGI_RECEIVER_PROBE_BUFFER_INDEX = 174;
 const int SIMPLE_DDGI_RESIDENCY_ARENA_BUFFER_INDEX = 175;
 const int SIMPLE_DDGI_STORAGE_VALIDATION_BUFFER_BASE_INDEX = 176;
 const int SIMPLE_DDGI_RECEIVER_GATHER_BUFFER_BASE_INDEX = 178;
-const int STATIC_BUFFER_COUNT = 180;
+const int SIMPLE_DDGI_EMISSIVE_SURFACE_BUFFER_INDEX = 180;
+const int SIMPLE_DDGI_LIGHT_TREE_NODE_BUFFER_INDEX = 181;
+const int SIMPLE_DDGI_LIGHT_TREE_LEAF_BUFFER_INDEX = 182;
+const int SIMPLE_DDGI_LIGHT_TREE_STATE_BUFFER_INDEX = 183;
+const int SIMPLE_DDGI_LIGHT_TREE_SCRATCH_BUFFER_INDEX = 184;
+const int SIMPLE_DDGI_DIRECTIONAL_RADIANCE_BUFFER_INDEX = 185;
+const int SIMPLE_DDGI_DIRECTIONAL_RADIANCE_PARITY_BUFFER_INDEX = 186;
+const int DDGI_FOLIAGE_PROXY_VERTEX_BUFFER_INDEX = 187;
+const int DDGI_FOLIAGE_PROXY_INDEX_BUFFER_INDEX = 188;
+const int DDGI_DECAL_CANDIDATE_BUFFER_INDEX = 189;
+const int DDGI_FOLIAGE_PROXY_VERTEX_BUFFER_FRAME1_INDEX = 190;
+const int DDGI_FOLIAGE_PROXY_INDEX_BUFFER_FRAME1_INDEX = 191;
+const int DDGI_FOLIAGE_PROXY_PATCH_BUFFER_INDEX = 192;
+const int DDGI_FOLIAGE_PROXY_PATCH_BUFFER_FRAME1_INDEX = 193;
+// Append-only advanced-GI slots.  Keep these synchronized with
+// BindlessIndexTable; disabled features bind a null buffer and never infer
+// availability from the numeric slot alone.
+const int SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORDS_BUFFER_INDEX = 194;
+const int SIMPLE_DDGI_RECEIVER_FEEDBACK_SORT_SCRATCH_BUFFER_INDEX = 195;
+const int SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_BUFFER_INDEX = 196;
+const int OPACITY_MICROMAP_RESIDENT_BUFFER_INDEX = 197;
+const int OPACITY_MICROMAP_BUILD_SCRATCH_BUFFER_INDEX = 198;
+const int OPACITY_MICROMAP_COMPACTION_BUFFER_INDEX = 199;
+const int SIMPLE_DDGI_GUIDING_DISTRIBUTION_BANK0_BUFFER_INDEX = 200;
+const int SIMPLE_DDGI_GUIDING_DISTRIBUTION_BANK1_BUFFER_INDEX = 201;
+const int SIMPLE_DDGI_GUIDING_TRAINING_SCRATCH_BUFFER_INDEX = 202;
+const int SIMPLE_DDGI_GUIDING_DIRECTION_PDF_SIDECAR_BUFFER_INDEX = 203;
+const int GI_CAUSTIC_TASK_BUFFER_INDEX = 204;
+const int GI_CAUSTIC_PHOTON_BUFFER_INDEX = 205;
+const int GI_CAUSTIC_CACHE_BUFFER_INDEX = 206;
+const int GI_CAUSTIC_SCRATCH_BUFFER_INDEX = 207;
+const int SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_TILE_BUFFER_INDEX = 208;
+const int SIMPLE_DDGI_RECEIVER_FEEDBACK_CANDIDATE_BUFFER_INDEX = 209;
+const int STATIC_BUFFER_COUNT = 210;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -679,7 +712,7 @@ struct GPULight
     int Type;
     int ShadowFlags;
     float ShadowStrength;
-    int Padding0;
+    uint StableIdentity;
 };
 
 struct GPUSceneData
@@ -822,7 +855,34 @@ struct GPUFoliageDispatchArgs
     uint GroupCountX;
     uint GroupCountY;
     uint GroupCountZ;
-    uint Padding0;
+    uint CurrentFrameIndex;
+};
+
+struct GPUDdgiFoliageProxyPatch
+{
+    vec4 BoundsMinimumAndClusterWidth;
+    vec4 BoundsMaximumAndCardHeight;
+    vec4 WindAndCoverage;
+    uint StablePatchKeyLow;
+    uint StablePatchKeyHigh;
+    uint CardOffset;
+    uint CardCount;
+    uint GridColumns;
+    uint GridRows;
+    uint RepresentedInstancesPerCard;
+    uint Flags;
+};
+
+struct GPUDdgiFoliageProxyGenerationPushConstants
+{
+    uint PatchBufferIndex;
+    uint VertexBufferIndex;
+    uint IndexBufferIndex;
+    uint PatchCount;
+    uint CardCount;
+    uint CurrentFrameIndex;
+    float WindTimeSeconds;
+    uint CadenceGenerationLow;
 };
 
 struct GPUSceneSubmissionCounters
@@ -1221,12 +1281,57 @@ struct GPUReflectionProbe
 
 struct GPUDdgiRayQueryInstance
 {
+    uint AbiVersion;
+    uint GeometryClass;
+    uint GeometryFlags;
+    uint StableInstanceIdentity;
+    uint VertexBufferIndex;
     uint VertexOffset;
+    uint VertexStride;
+    uint VertexFormat;
+    uint PositionOffset;
+    uint NormalOffset;
+    uint TangentOffset;
+    uint TexCoord0Offset;
+    uint TexCoord1Offset;
+    uint ColorOffset;
+    uint IndexBufferIndex;
     uint IndexOffset;
+    uint IndexType;
     uint MaterialIndex;
-    uint Padding0;
+    uint MaterialRevision;
+    uint PackedAlpha;
+    uint PackedDecalLayerAndOrder;
+    float DecalDepthTolerance;
+    float DecalDepthBias;
+    uint RepresentationGeneration;
     mat4 WorldMatrixInverseTranspose;
 };
+
+const uint DDGI_RAY_QUERY_INSTANCE_ABI_V2 = 0x44520002u;
+const uint DDGI_RAY_GEOMETRY_INVALID = 0u;
+const uint DDGI_RAY_GEOMETRY_STATIC_OPAQUE = 1u;
+const uint DDGI_RAY_GEOMETRY_RIGID_OPAQUE = 2u;
+const uint DDGI_RAY_GEOMETRY_SKINNED_CURRENT_POSE = 3u;
+const uint DDGI_RAY_GEOMETRY_ALPHA_MASK = 4u;
+const uint DDGI_RAY_GEOMETRY_ALPHA_BLEND = 5u;
+const uint DDGI_RAY_GEOMETRY_THIN_TRANSMISSION = 6u;
+const uint DDGI_RAY_GEOMETRY_DECAL_OVERLAY = 7u;
+const uint DDGI_RAY_GEOMETRY_AUTHORED_FOLIAGE = 8u;
+const uint DDGI_RAY_GEOMETRY_PROCEDURAL_FOLIAGE = 9u;
+const uint DDGI_RAY_GEOMETRY_CONSERVATIVE_PROXY = 10u;
+const uint DDGI_RAY_VERTEX_FORMAT_SPLIT_STATIC = 1u;
+const uint DDGI_RAY_VERTEX_FORMAT_GPU_VERTEX = 2u;
+const uint DDGI_RAY_VERTEX_FORMAT_FOLIAGE_PROXY = 3u;
+const uint DDGI_RAY_GEOMETRY_FLAG_ALPHA_MASK = 1u << 0u;
+const uint DDGI_RAY_GEOMETRY_FLAG_ALPHA_BLEND = 1u << 1u;
+const uint DDGI_RAY_GEOMETRY_FLAG_THIN_TRANSMISSION = 1u << 2u;
+const uint DDGI_RAY_GEOMETRY_FLAG_TWO_SIDED = 1u << 3u;
+const uint DDGI_RAY_GEOMETRY_FLAG_DECAL_OVERLAY = 1u << 4u;
+const uint DDGI_RAY_GEOMETRY_FLAG_FOLIAGE = 1u << 5u;
+const uint DDGI_RAY_GEOMETRY_FLAG_DYNAMIC_VERTEX_SOURCE = 1u << 6u;
+const uint DDGI_RAY_GEOMETRY_FLAG_CONSERVATIVE_PROXY = 1u << 7u;
+const uint DDGI_RAY_GEOMETRY_FLAG_PREMULTIPLIED_ALPHA = 1u << 8u;
 
 struct GPUDdgiEmissiveSource
 {
@@ -1234,6 +1339,14 @@ struct GPUDdgiEmissiveSource
     vec4 Edge1AliasProbability;
     vec4 Edge2AliasFlags;
     vec4 RadianceSelectionProbability;
+};
+
+struct GPUDdgiEmissiveSurface
+{
+    vec4 Uv0Vertex01;
+    vec4 Uv0Vertex2Uv1Vertex0;
+    vec4 Uv1Vertex12;
+    vec4 MaterialAndVertexAlpha;
 };
 
 struct GPUFogPushConstants
@@ -1254,7 +1367,7 @@ struct GPUFogPushConstants
     uint ColorMode;
     uint DebugView;
     uint DirectionalInscatteringEnabled;
-    uint Padding0;
+    uint CurrentFrameIndex;
 };
 
 // Descriptor arrays matching BindlessHeap. Heterogeneous storage buffers are
@@ -1325,6 +1438,8 @@ const int SIZEOF_GPU_FOLIAGE_INSTANCE = 64;
 const int SIZEOF_GPU_FOLIAGE_MESHLET_DRAW_COMMAND = 48;
 const int SIZEOF_GPU_FOLIAGE_COUNTERS = 40;
 const int SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS = 16;
+const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_PATCH = 80;
+const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_GENERATION_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 280;
 const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 168;
 const int SIZEOF_GPU_FORWARD_VISIBILITY_COMPACTION_PUSH_CONSTANTS = 92;
@@ -1350,9 +1465,10 @@ const int SIZEOF_GPU_DDGI_PROBE_VOLUME = 144;
 const int SIZEOF_GPU_DDGI_PROBE_STATE = 96;
 const int SIZEOF_GPU_DDGI_PROBE_UPDATE_REQUEST = 32;
 const int SIZEOF_GPU_DDGI_PROBE_RELOCATION_CLASSIFICATION = 48;
-const int SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE = 80;
+const int SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE = 160;
 const int SIZEOF_GPU_DDGI_RAY_RESULT = 80;
 const int SIZEOF_GPU_DDGI_EMISSIVE_SOURCE = 64;
+const int SIZEOF_GPU_DDGI_EMISSIVE_SURFACE = 64;
 const int SIZEOF_GPU_DDGI_UPDATE_PUSH_CONSTANTS = 148;
 const int SIZEOF_GPU_FOG_PUSH_CONSTANTS = 224;
 const int SIZEOF_GPU_ANTI_ALIASING_PUSH_CONSTANTS = 100;
@@ -1921,14 +2037,104 @@ const uint SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_BASE =
 const uint SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_HISTOGRAM_COUNT = 16u;
 const uint SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_STRIDE =
     23u + SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_HISTOGRAM_COUNT;
-const uint SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_COUNT = 16u;
+const uint SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_VOLUME_COUNT = 16u;
+const uint SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_COUNT =
+    SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_VOLUME_COUNT *
+    SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_STRIDE;
+// Bounded exact caster-attribution bank. Keep this appended ABI synchronized
+// with RendererDiagnosticsBuffer; it is written only by the dedicated
+// directional-shadow diagnostic compaction pipeline.
+const uint DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_COUNTER_BASE =
+    SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_BASE +
+    SIMPLE_DDGI_VOLUME_ENERGY_EVIDENCE_COUNTER_COUNT;
+const uint DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_HEADER_WORD_COUNT = 7u;
+const uint DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_FRAME_METADATA_MAGIC = 0x44534346u;
+const uint DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_RECORD_CAPACITY = 16u;
+const uint DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_RECORD_STRIDE = 28u;
+const uint DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_COUNTER_COUNT =
+    DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_HEADER_WORD_COUNT +
+    DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_RECORD_CAPACITY *
+    DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_RECORD_STRIDE;
+const uint DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE =
+    DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_COUNTER_BASE +
+    DIRECTIONAL_SHADOW_CASTER_DIAGNOSTIC_COUNTER_COUNT;
+const uint DDGI_TRANSPARENT_VISIBILITY_LAYER_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 0u;
+const uint DDGI_TRANSPARENT_VISIBILITY_LIMIT_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 1u;
+const uint DDGI_DECAL_CANDIDATE_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 2u;
+const uint DDGI_DECAL_RETAINED_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 3u;
+const uint DDGI_DECAL_ASSOCIATED_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 4u;
+const uint DDGI_DECAL_DEPTH_REJECT_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 5u;
+const uint DDGI_DECAL_FACING_REJECT_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 6u;
+const uint DDGI_DECAL_CANDIDATE_LIMIT_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 7u;
+const uint DDGI_FOLIAGE_PROXY_HIT_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 8u;
+const uint DDGI_RAY_METADATA_INVALID_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 9u;
+const uint DDGI_STOCHASTIC_ALPHA_ACCEPT_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 10u;
+const uint DDGI_STOCHASTIC_ALPHA_REJECT_COUNTER =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 11u;
+const uint DDGI_MANY_LIGHT_COUNTER_BASE =
+    DDGI_GEOMETRY_PARTICIPATION_COUNTER_BASE + 12u;
+const uint DDGI_MANY_LIGHT_BYPASS_HIT_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 0u;
+const uint DDGI_MANY_LIGHT_EXACT_HIT_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 1u;
+const uint DDGI_MANY_LIGHT_TREE_ATTEMPT_HIT_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 2u;
+const uint DDGI_MANY_LIGHT_TREE_SUCCESS_HIT_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 3u;
+const uint DDGI_MANY_LIGHT_TREE_FALLBACK_HIT_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 4u;
+const uint DDGI_MANY_LIGHT_SAMPLED_LIGHT_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 5u;
+const uint DDGI_MANY_LIGHT_DUPLICATE_DRAW_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 6u;
+const uint DDGI_MANY_LIGHT_VISIBILITY_EVALUATION_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 7u;
+const uint DDGI_MANY_LIGHT_REJECTED_ZERO_TERM_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 8u;
+const uint DDGI_MANY_LIGHT_UNIFORM_REPAIR_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 9u;
+const uint DDGI_MANY_LIGHT_INVALID_SAMPLE_PDF_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 10u;
+const uint DDGI_MANY_LIGHT_PDF_SUM_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 11u;
+const uint DDGI_MANY_LIGHT_NEGATIVE_LOG2_PDF_SUM_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 12u;
+const uint DDGI_MANY_LIGHT_MAX_NEGATIVE_LOG2_PDF_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 13u;
+const uint DDGI_MANY_LIGHT_MAX_ESTIMATOR_WEIGHT_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 14u;
+const uint DDGI_MANY_LIGHT_EXACT_LIGHT_EVALUATION_COUNTER =
+    DDGI_MANY_LIGHT_COUNTER_BASE + 15u;
+const float DDGI_MANY_LIGHT_PDF_SCALE = 1048576.0;
+const float DDGI_MANY_LIGHT_LOG_PDF_SCALE = 1024.0;
+const float DDGI_MANY_LIGHT_ESTIMATOR_WEIGHT_SCALE = 1024.0;
 const float DDGI_THIN_LUMINANCE_SCALE = 4096.0;
 const float DDGI_SHADOW_VISIBILITY_HIT_DISTANCE_SCALE = 256.0;
 const float DIRECTIONAL_SHADOW_RECEIVER_DEPTH_QUANTIZATION_SCALE = 65535.0;
-const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_VERTEX_OFFSET = 0;
-const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_INDEX_OFFSET = 4;
-const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_MATERIAL_INDEX = 8;
-const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_WORLD_MATRIX_INVERSE_TRANSPOSE = 16;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_ABI_VERSION = 0;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_GEOMETRY_CLASS = 4;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_GEOMETRY_FLAGS = 8;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_STABLE_INSTANCE_IDENTITY = 12;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_VERTEX_BUFFER_INDEX = 16;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_VERTEX_OFFSET = 20;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_VERTEX_STRIDE = 24;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_VERTEX_FORMAT = 28;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_INDEX_BUFFER_INDEX = 56;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_INDEX_OFFSET = 60;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_MATERIAL_INDEX = 68;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_REPRESENTATION_GENERATION = 92;
+const int OFFSET_GPU_DDGI_RAY_QUERY_INSTANCE_WORLD_MATRIX_INVERSE_TRANSPOSE = 96;
 
 
 const uint MESHLET_MAX_VERTICES = 64u;
@@ -2870,6 +3076,36 @@ GPUFoliageCluster ReadFoliageCluster(uint clusterIndex)
     return cluster;
 }
 
+GPUDdgiFoliageProxyPatch ReadDdgiFoliageProxyPatch(
+    uint bufferIndex,
+    uint patchIndex)
+{
+    uint baseWord = patchIndex *
+        uint(SIZEOF_GPU_DDGI_FOLIAGE_PROXY_PATCH / 4);
+    GPUDdgiFoliageProxyPatch foliagePatch;
+    foliagePatch.BoundsMinimumAndClusterWidth =
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 0u);
+    foliagePatch.BoundsMaximumAndCardHeight =
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 4u);
+    foliagePatch.WindAndCoverage =
+        ReadStorageAlignedVec4Uniform(bufferIndex, baseWord + 8u);
+    uvec4 range = ReadStorageAlignedUVec4Uniform(
+        bufferIndex,
+        baseWord + 12u);
+    foliagePatch.StablePatchKeyLow = range.x;
+    foliagePatch.StablePatchKeyHigh = range.y;
+    foliagePatch.CardOffset = range.z;
+    foliagePatch.CardCount = range.w;
+    uvec4 grid = ReadStorageAlignedUVec4Uniform(
+        bufferIndex,
+        baseWord + 16u);
+    foliagePatch.GridColumns = grid.x;
+    foliagePatch.GridRows = grid.y;
+    foliagePatch.RepresentedInstancesPerCard = grid.z;
+    foliagePatch.Flags = grid.w;
+    return foliagePatch;
+}
+
 uint ReadFoliageVisibleClusterIndex(uint visibleClusterBufferBaseIndex, uint frameIndex, uint drawIndex)
 {
     return ReadStorageWord(visibleClusterBufferBaseIndex + frameIndex, drawIndex);
@@ -3062,7 +3298,7 @@ GPULight ReadLight(uint lightIndex)
     light.Type = int(typeShadow.x);
     light.ShadowFlags = int(typeShadow.y);
     light.ShadowStrength = uintBitsToFloat(typeShadow.z);
-    light.Padding0 = int(typeShadow.w);
+    light.StableIdentity = typeShadow.w;
     return light;
 }
 
@@ -3175,6 +3411,18 @@ GPUEnvironmentData ReadEnvironmentDataFrom(uint bufferIndex)
     environment.DiffuseIrradianceSh7 = ReadStorageAlignedVec4Uniform(bufferIndex, 112u);
     environment.DiffuseIrradianceSh8 = ReadStorageAlignedVec4Uniform(bufferIndex, 116u);
     return environment;
+}
+
+GPUDdgiEmissiveSurface ReadDdgiEmissiveSurface(uint sourceIndex)
+{
+    uint baseWord = sourceIndex * uint(SIZEOF_GPU_DDGI_EMISSIVE_SURFACE / 4);
+    uint surfaceBufferIndex = uint(SIMPLE_DDGI_EMISSIVE_SURFACE_BUFFER_INDEX);
+    GPUDdgiEmissiveSurface surface;
+    surface.Uv0Vertex01 = ReadStorageAlignedVec4Uniform(surfaceBufferIndex, baseWord + 0u);
+    surface.Uv0Vertex2Uv1Vertex0 = ReadStorageAlignedVec4Uniform(surfaceBufferIndex, baseWord + 4u);
+    surface.Uv1Vertex12 = ReadStorageAlignedVec4Uniform(surfaceBufferIndex, baseWord + 8u);
+    surface.MaterialAndVertexAlpha = ReadStorageAlignedVec4Uniform(surfaceBufferIndex, baseWord + 12u);
+    return surface;
 }
 
 GPUEnvironmentData ReadEnvironmentData()

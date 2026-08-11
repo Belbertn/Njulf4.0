@@ -1,0 +1,616 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "gi_caustic_shared.glsl"
+
+// GPU task generation consumes a frozen emitter/hero/two-level proposal table
+// uploaded after the task-record region. The canonical emission branch always
+// retains support; hero targeting is only an importance proposal and its exact
+// mixture density is written into every generated task.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+const uint GI_CAUSTIC_TASK_PHASE_RESET = 0u;
+const uint GI_CAUSTIC_TASK_PHASE_VALIDATE_METADATA = 1u;
+const uint GI_CAUSTIC_TASK_PHASE_GENERATE = 2u;
+const uint GI_CAUSTIC_TASK_PHASE_VALIDATE = 3u;
+
+const uint GI_CAUSTIC_EMITTER_POINT = 0u;
+const uint GI_CAUSTIC_EMITTER_SPOT = 1u;
+const uint GI_CAUSTIC_EMITTER_DIRECTIONAL_DISK = 2u;
+const uint GI_CAUSTIC_EMITTER_AREA_TRIANGLE = 3u;
+const uint GI_CAUSTIC_EMITTER_EMISSIVE_TRIANGLE = 4u;
+
+const uint GI_CAUSTIC_EMITTER_VALID = 1u << 0u;
+const uint GI_CAUSTIC_EMITTER_TWO_SIDED = 1u << 1u;
+const uint GI_CAUSTIC_EMITTER_DELTA_POSITION = 1u << 2u;
+const uint GI_CAUSTIC_EMITTER_DELTA_DIRECTION = 1u << 3u;
+const uint GI_CAUSTIC_EMITTER_SCENE_LINEAR = 1u << 4u;
+const uint GI_CAUSTIC_EMITTER_INVALID = 1u << 31u;
+
+uint GiCausticEmitterCount()
+{
+    return giCausticPc.Flags & 0xffu;
+}
+
+uint GiCausticHeroCount()
+{
+    return (giCausticPc.Flags >> 8u) & 0xffu;
+}
+
+uint GiCausticProposalPairCount()
+{
+    return (giCausticPc.Flags >> 16u) & 0xffffu;
+}
+
+uint GiCausticEmitterBase(uint emitterIndex)
+{
+    return giCausticPc.CandidateStagingWordOffset +
+        emitterIndex * GI_CAUSTIC_EMITTER_WORDS;
+}
+
+uint GiCausticHeroBase(uint heroIndex)
+{
+    return giCausticPc.CachePhotonBankBaseWord +
+        heroIndex * GI_CAUSTIC_HERO_WORDS;
+}
+
+uint GiCausticPairBase(uint pairIndex)
+{
+    return giCausticPc.CacheBankTableWordOffset +
+        pairIndex * GI_CAUSTIC_PROPOSAL_PAIR_WORDS;
+}
+
+uint GiCausticTaskHash(uint value)
+{
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
+
+float GiCausticTaskRandom(uint taskIndex, uint dimension)
+{
+    uint value = GiCausticTaskHash(taskIndex ^
+        GiCausticTaskHash(dimension + 0x9e3779b9u) ^
+        GiCausticTaskHash(giCausticPc.CacheGeneration) ^
+        GiCausticTaskHash(giCausticPc.RevisionFingerprintLow) ^
+        GiCausticTaskHash(giCausticPc.RevisionFingerprintHigh));
+    return (float(value) + 0.5) * (1.0 / 4294967296.0);
+}
+
+void GiCausticBasis(vec3 axis, out vec3 tangent, out vec3 bitangent)
+{
+    vec3 reference = abs(axis.z) < 0.999
+        ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+    tangent = normalize(cross(reference, axis));
+    bitangent = cross(axis, tangent);
+}
+
+vec3 GiCausticSampleCone(vec3 axis, float minimumCosine, vec2 randomValue)
+{
+    float cosine = mix(minimumCosine, 1.0, randomValue.x);
+    float sine = sqrt(max(0.0, 1.0 - cosine * cosine));
+    float phi = 2.0 * GI_CAUSTIC_PI * randomValue.y;
+    vec3 tangent;
+    vec3 bitangent;
+    GiCausticBasis(axis, tangent, bitangent);
+    return normalize(axis * cosine + sine *
+        (cos(phi) * tangent + sin(phi) * bitangent));
+}
+
+vec3 GiCausticSampleSphere(vec2 randomValue)
+{
+    float z = 1.0 - 2.0 * randomValue.x;
+    float radius = sqrt(max(0.0, 1.0 - z * z));
+    float phi = 2.0 * GI_CAUSTIC_PI * randomValue.y;
+    return vec3(radius * cos(phi), radius * sin(phi), z);
+}
+
+vec3 GiCausticSampleCosineHemisphere(vec3 normal, vec2 randomValue)
+{
+    float radius = sqrt(randomValue.x);
+    float phi = 2.0 * GI_CAUSTIC_PI * randomValue.y;
+    vec3 tangent;
+    vec3 bitangent;
+    GiCausticBasis(normal, tangent, bitangent);
+    return normalize(tangent * (radius * cos(phi)) +
+        bitangent * (radius * sin(phi)) +
+        normal * sqrt(max(0.0, 1.0 - randomValue.x)));
+}
+
+vec3 GiCausticSampleTriangle(vec3 vertex0, vec3 edge1, vec3 edge2,
+    vec2 randomValue)
+{
+    float root = sqrt(randomValue.x);
+    return vertex0 + (1.0 - root) * edge1 +
+        (root * randomValue.y) * edge2;
+}
+
+bool GiCausticEmitterMetadataValid(uint emitterIndex)
+{
+    uint base = GiCausticEmitterBase(emitterIndex);
+    uint type = ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 2u);
+    uint flags = ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 3u);
+    vec4 positionRange = vec4(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 4u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 5u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 6u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 7u));
+    vec4 directionOuter = vec4(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 8u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 9u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 10u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 11u));
+    vec4 radiometryWeight = vec4(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 12u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 13u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 14u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 15u));
+    float area = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        base + 19u);
+    float innerCosine = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        base + 23u);
+    vec4 normalMix = vec4(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 24u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 25u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 26u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 27u));
+    bool commonValid = ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base) ==
+            GI_CAUSTIC_ABI_VERSION &&
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 1u) != 0u &&
+        type <= GI_CAUSTIC_EMITTER_EMISSIVE_TRIANGLE &&
+        (flags & (GI_CAUSTIC_EMITTER_VALID |
+                  GI_CAUSTIC_EMITTER_SCENE_LINEAR)) ==
+            (GI_CAUSTIC_EMITTER_VALID |
+             GI_CAUSTIC_EMITTER_SCENE_LINEAR) &&
+        (flags & GI_CAUSTIC_EMITTER_INVALID) == 0u &&
+        GiCausticFinite(positionRange) && positionRange.w > 0.0 &&
+        GiCausticFinite(directionOuter) &&
+        GiCausticFinite(radiometryWeight) &&
+        all(greaterThanEqual(radiometryWeight.xyz, vec3(0.0))) &&
+        any(greaterThan(radiometryWeight.xyz, vec3(0.0))) &&
+        radiometryWeight.w > 0.0 &&
+        GiCausticFinite(normalMix) && normalMix.w >= 0.0 &&
+        normalMix.w <= 0.95 &&
+        (ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 28u) != 0u ||
+         ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 29u) != 0u) &&
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 30u) == 0u &&
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 31u) == 0u;
+    if (!commonValid)
+        return false;
+    if (type == GI_CAUSTIC_EMITTER_POINT)
+        return (flags & GI_CAUSTIC_EMITTER_DELTA_POSITION) != 0u;
+    if (type == GI_CAUSTIC_EMITTER_SPOT)
+        return (flags & GI_CAUSTIC_EMITTER_DELTA_POSITION) != 0u &&
+            dot(directionOuter.xyz, directionOuter.xyz) > 0.999 &&
+            dot(directionOuter.xyz, directionOuter.xyz) < 1.001 &&
+            directionOuter.w >= -1.0 && directionOuter.w < 1.0 &&
+            innerCosine >= directionOuter.w && innerCosine <= 1.0;
+    if (type == GI_CAUSTIC_EMITTER_DIRECTIONAL_DISK)
+        return (flags & GI_CAUSTIC_EMITTER_DELTA_DIRECTION) != 0u &&
+            dot(directionOuter.xyz, directionOuter.xyz) > 0.999 &&
+            dot(directionOuter.xyz, directionOuter.xyz) < 1.001;
+    return GiCausticFinite(area) && area > 0.0 &&
+        dot(normalMix.xyz, normalMix.xyz) > 0.999 &&
+        dot(normalMix.xyz, normalMix.xyz) < 1.001;
+}
+
+bool GiCausticHeroMetadataValid(uint heroIndex)
+{
+    uint base = GiCausticHeroBase(heroIndex);
+    uint flags = ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 3u);
+    uint mode = flags & (GI_CAUSTIC_TASK_MIRROR_HERO |
+        GI_CAUSTIC_TASK_CLOSED_DIELECTRIC_HERO |
+        GI_CAUSTIC_TASK_ROUGH_SPECULAR_REFERENCE);
+    vec4 centerRadius = vec4(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 4u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 5u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 6u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 7u));
+    vec4 minimumCone = vec4(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 8u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 9u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 10u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 11u));
+    vec4 maximumSpread = vec4(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 12u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 13u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 14u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 15u));
+    vec4 optics = vec4(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 16u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 17u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 18u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 19u));
+    vec4 absorptionDistance = vec4(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 20u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 21u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 22u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 23u));
+    vec4 proposal = vec4(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 24u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 25u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 26u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, base + 27u));
+    return ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base) ==
+            GI_CAUSTIC_ABI_VERSION &&
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 1u) != 0u &&
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 2u) != 0u &&
+        (flags & GI_CAUSTIC_TASK_AUTHORED_HERO) != 0u &&
+        (flags & GI_CAUSTIC_TASK_INVALID) == 0u &&
+        mode != 0u && (mode & (mode - 1u)) == 0u &&
+        GiCausticFinite(centerRadius) && centerRadius.w > 0.0 &&
+        GiCausticFinite(minimumCone) && minimumCone.w > 0.0 &&
+        GiCausticFinite(maximumSpread) && maximumSpread.w >= 0.0 &&
+        all(lessThanEqual(minimumCone.xyz, maximumSpread.xyz)) &&
+        GiCausticFinite(optics) && optics.x > 0.0 && optics.x <= 4.0 &&
+        optics.y >= 0.0 && optics.y <= 1.0 &&
+        GiCausticFinite(absorptionDistance) &&
+        all(greaterThanEqual(absorptionDistance.xyz, vec3(0.0))) &&
+        absorptionDistance.w > 0.0 && GiCausticFinite(proposal) &&
+        proposal.x > 0.0 && all(equal(proposal.yzw, vec3(0.0))) &&
+        (ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 28u) != 0u ||
+         ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 29u) != 0u) &&
+        (ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 30u) != 0u ||
+         ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 31u) != 0u);
+}
+
+bool GiCausticPairMetadataValid(uint pairIndex)
+{
+    uint base = GiCausticPairBase(pairIndex);
+    uint emitterIndex = ReadStorageWordUniform(giCausticPc.TaskBufferIndex,
+        base + 0u);
+    uint heroIndex = ReadStorageWordUniform(giCausticPc.TaskBufferIndex,
+        base + 1u);
+    float emitterPdf = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        base + 4u);
+    float casterPdf = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        base + 5u);
+    float cdfUpper = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        base + 6u);
+    float targetingMix = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        base + 7u);
+    float cdfLower = pairIndex == 0u ? 0.0 : ReadStorageFloatUniform(
+        giCausticPc.TaskBufferIndex, GiCausticPairBase(pairIndex - 1u) + 6u);
+    float expectedMass = emitterPdf * casterPdf;
+    float actualMass = cdfUpper - cdfLower;
+    float tolerance = max(2.0e-6, abs(expectedMass) * 2.0e-4);
+    bool lastValid = pairIndex + 1u != GiCausticProposalPairCount() ||
+        abs(cdfUpper - 1.0) <= 2.0e-6;
+    return emitterIndex < GiCausticEmitterCount() &&
+        heroIndex < GiCausticHeroCount() &&
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 2u) != 0u &&
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, base + 3u) == 0u &&
+        GiCausticFinite(emitterPdf) && emitterPdf > 0.0 && emitterPdf <= 1.0 &&
+        GiCausticFinite(casterPdf) && casterPdf > 0.0 && casterPdf <= 1.0 &&
+        GiCausticFinite(cdfUpper) && cdfUpper > cdfLower && cdfUpper <= 1.0 &&
+        GiCausticFinite(targetingMix) && targetingMix >= 0.0 &&
+        targetingMix <= 0.95 && abs(actualMass - expectedMass) <= tolerance &&
+        lastValid;
+}
+
+uint GiCausticSelectPair(float randomValue)
+{
+    uint low = 0u;
+    uint high = GiCausticProposalPairCount();
+    while (low < high)
+    {
+        uint middle = low + (high - low) / 2u;
+        float cdfUpper = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+            GiCausticPairBase(middle) + 6u);
+        if (randomValue < cdfUpper)
+            high = middle;
+        else
+            low = middle + 1u;
+    }
+    return min(low, GiCausticProposalPairCount() - 1u);
+}
+
+void GiCausticWriteInvalidTask(uint taskIndex)
+{
+    uint base = GiCausticTaskBaseWord(taskIndex);
+    for (uint word = 0u; word < GI_CAUSTIC_TASK_WORDS; ++word)
+        WriteStorageWordUniform(giCausticPc.TaskBufferIndex, base + word, 0u);
+    WriteStorageWordUniform(giCausticPc.TaskBufferIndex, base + 7u,
+        GI_CAUSTIC_TASK_INVALID);
+}
+
+void GiCausticWriteTaskFloat(uint base, uint word, float value)
+{
+    WriteStorageFloatUniform(giCausticPc.TaskBufferIndex, base + word, value);
+}
+
+bool GiCausticGenerateTask(uint taskIndex)
+{
+    if (GiCausticScratchRead(GI_CAUSTIC_SCRATCH_METADATA_REJECTED_COUNT) != 0u)
+        return false;
+
+    uint pairIndex = GiCausticSelectPair(GiCausticTaskRandom(taskIndex, 0u));
+    uint pairBase = GiCausticPairBase(pairIndex);
+    uint emitterIndex = ReadStorageWordUniform(giCausticPc.TaskBufferIndex,
+        pairBase + 0u);
+    uint heroIndex = ReadStorageWordUniform(giCausticPc.TaskBufferIndex,
+        pairBase + 1u);
+    float emitterPdf = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        pairBase + 4u);
+    float casterPdf = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        pairBase + 5u);
+    float targetingMix = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        pairBase + 7u);
+    uint emitterBase = GiCausticEmitterBase(emitterIndex);
+    uint heroBase = GiCausticHeroBase(heroIndex);
+    uint emitterType = ReadStorageWordUniform(giCausticPc.TaskBufferIndex,
+        emitterBase + 2u);
+    uint emitterFlags = ReadStorageWordUniform(giCausticPc.TaskBufferIndex,
+        emitterBase + 3u);
+    vec3 sourcePosition = vec3(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 4u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 5u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 6u));
+    float sourceRange = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        emitterBase + 7u);
+    vec3 sourceDirectionRaw = vec3(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 8u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 9u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 10u));
+    float sourceDirectionLengthSquared = dot(sourceDirectionRaw,
+        sourceDirectionRaw);
+    vec3 sourceDirection = sourceDirectionLengthSquared > 1.0e-12
+        ? sourceDirectionRaw * inversesqrt(sourceDirectionLengthSquared)
+        : vec3(0.0, 0.0, 1.0);
+    float outerCosine = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        emitterBase + 11u);
+    vec3 radiometricValue = vec3(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 12u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 13u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 14u));
+    vec3 edge1 = vec3(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 16u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 17u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 18u));
+    float area = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        emitterBase + 19u);
+    vec3 edge2 = vec3(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 20u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 21u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 22u));
+    float innerCosine = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        emitterBase + 23u);
+    vec3 emissionNormal = normalize(vec3(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 24u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 25u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, emitterBase + 26u)));
+
+    vec3 heroCenter = vec3(
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, heroBase + 4u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, heroBase + 5u),
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, heroBase + 6u));
+    float heroRadius = ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+        heroBase + 7u);
+
+    float positionPdf = 1.0;
+    if (emitterType == GI_CAUSTIC_EMITTER_AREA_TRIANGLE ||
+        emitterType == GI_CAUSTIC_EMITTER_EMISSIVE_TRIANGLE)
+    {
+        sourcePosition = GiCausticSampleTriangle(sourcePosition, edge1, edge2,
+            vec2(GiCausticTaskRandom(taskIndex, 1u),
+                 GiCausticTaskRandom(taskIndex, 2u)));
+        positionPdf = 1.0 / area;
+    }
+    else if (emitterType == GI_CAUSTIC_EMITTER_DIRECTIONAL_DISK)
+    {
+        vec3 tangent;
+        vec3 bitangent;
+        GiCausticBasis(sourceDirection, tangent, bitangent);
+        float radius = sourceRange * sqrt(GiCausticTaskRandom(taskIndex, 1u));
+        float phi = 2.0 * GI_CAUSTIC_PI * GiCausticTaskRandom(taskIndex, 2u);
+        sourcePosition = heroCenter - sourceDirection * sourceRange +
+            radius * (cos(phi) * tangent + sin(phi) * bitangent);
+        positionPdf = 1.0 / (GI_CAUSTIC_PI * sourceRange * sourceRange);
+        targetingMix = 0.0;
+    }
+
+    vec3 toHero = heroCenter - sourcePosition;
+    float heroDistance = length(toHero);
+    vec3 heroAxis = heroDistance > 1.0e-8 ? toHero / heroDistance : sourceDirection;
+    float targetMinimumCosine = heroDistance <= heroRadius
+        ? -1.0 : sqrt(max(0.0, 1.0 -
+            (heroRadius * heroRadius) / (heroDistance * heroDistance)));
+    float targetSolidAngle = 2.0 * GI_CAUSTIC_PI *
+        max(1.0e-7, 1.0 - targetMinimumCosine);
+
+    bool targetBranch = GiCausticTaskRandom(taskIndex, 3u) < targetingMix;
+    vec2 directionRandom = vec2(GiCausticTaskRandom(taskIndex, 4u),
+        GiCausticTaskRandom(taskIndex, 5u));
+    vec3 direction;
+    if (emitterType == GI_CAUSTIC_EMITTER_DIRECTIONAL_DISK)
+    {
+        direction = sourceDirection;
+    }
+    else if (targetBranch)
+    {
+        direction = GiCausticSampleCone(heroAxis, targetMinimumCosine,
+            directionRandom);
+    }
+    else if (emitterType == GI_CAUSTIC_EMITTER_POINT)
+    {
+        direction = GiCausticSampleSphere(directionRandom);
+    }
+    else if (emitterType == GI_CAUSTIC_EMITTER_SPOT)
+    {
+        direction = GiCausticSampleCone(sourceDirection, outerCosine,
+            directionRandom);
+    }
+    else
+    {
+        bool reverse = (emitterFlags & GI_CAUSTIC_EMITTER_TWO_SIDED) != 0u &&
+            GiCausticTaskRandom(taskIndex, 6u) < 0.5;
+        direction = GiCausticSampleCosineHemisphere(
+            reverse ? -emissionNormal : emissionNormal, directionRandom);
+    }
+
+    float canonicalPdf = 0.0;
+    vec3 emittedContribution = vec3(0.0);
+    if (emitterType == GI_CAUSTIC_EMITTER_POINT)
+    {
+        canonicalPdf = 1.0 / (4.0 * GI_CAUSTIC_PI);
+        emittedContribution = radiometricValue;
+    }
+    else if (emitterType == GI_CAUSTIC_EMITTER_SPOT)
+    {
+        float cosine = dot(direction, sourceDirection);
+        canonicalPdf = cosine >= outerCosine
+            ? 1.0 / (2.0 * GI_CAUSTIC_PI * (1.0 - outerCosine)) : 0.0;
+        float falloff = innerCosine <= outerCosine
+            ? float(cosine >= outerCosine)
+            : smoothstep(outerCosine, innerCosine, cosine);
+        emittedContribution = radiometricValue * falloff;
+    }
+    else if (emitterType == GI_CAUSTIC_EMITTER_DIRECTIONAL_DISK)
+    {
+        canonicalPdf = 1.0;
+        emittedContribution = radiometricValue;
+    }
+    else
+    {
+        float cosine = dot(direction, emissionNormal);
+        float absoluteCosine = (emitterFlags & GI_CAUSTIC_EMITTER_TWO_SIDED) != 0u
+            ? abs(cosine) : max(cosine, 0.0);
+        canonicalPdf = (emitterFlags & GI_CAUSTIC_EMITTER_TWO_SIDED) != 0u
+            ? absoluteCosine / (2.0 * GI_CAUSTIC_PI)
+            : absoluteCosine / GI_CAUSTIC_PI;
+        emittedContribution = radiometricValue * absoluteCosine;
+    }
+    float targetPdf = dot(direction, heroAxis) >= targetMinimumCosine
+        ? 1.0 / targetSolidAngle : 0.0;
+    float directionPdf = emitterType == GI_CAUSTIC_EMITTER_DIRECTIONAL_DISK
+        ? 1.0 : (1.0 - targetingMix) * canonicalPdf +
+            targetingMix * targetPdf;
+    if (!GiCausticFinite(directionPdf) || directionPdf <= 0.0 ||
+        !GiCausticFinite(positionPdf) || positionPdf <= 0.0)
+    {
+        return false;
+    }
+
+    float denominator = float(giCausticPc.TaskCount) * emitterPdf * casterPdf *
+        positionPdf * directionPdf;
+    vec3 initialFlux = emittedContribution / denominator;
+    if (!GiCausticFinite(initialFlux) ||
+        any(lessThan(initialFlux, vec3(0.0))))
+    {
+        return false;
+    }
+
+    uint taskBase = GiCausticTaskBaseWord(taskIndex);
+    uint stableLow = GiCausticTaskHash(taskIndex ^
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, pairBase + 2u) ^
+        giCausticPc.CacheGeneration);
+    uint stableHigh = GiCausticTaskHash(stableLow ^
+        giCausticPc.RevisionFingerprintHigh ^ 0xa511e9b3u);
+    if (stableLow == 0u && stableHigh == 0u)
+        stableHigh = 1u;
+    WriteStorageWordUniform(giCausticPc.TaskBufferIndex, taskBase + 0u,
+        GI_CAUSTIC_ABI_VERSION);
+    WriteStorageWordUniform(giCausticPc.TaskBufferIndex, taskBase + 1u,
+        giCausticPc.CacheGeneration);
+    WriteStorageWordUniform(giCausticPc.TaskBufferIndex, taskBase + 2u, stableLow);
+    WriteStorageWordUniform(giCausticPc.TaskBufferIndex, taskBase + 3u, stableHigh);
+    WriteStorageWordUniform(giCausticPc.TaskBufferIndex, taskBase + 4u,
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, heroBase + 1u));
+    WriteStorageWordUniform(giCausticPc.TaskBufferIndex, taskBase + 5u,
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, heroBase + 2u));
+    WriteStorageWordUniform(giCausticPc.TaskBufferIndex, taskBase + 6u,
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, emitterBase + 1u));
+    WriteStorageWordUniform(giCausticPc.TaskBufferIndex, taskBase + 7u,
+        ReadStorageWordUniform(giCausticPc.TaskBufferIndex, heroBase + 3u) &
+            ~GI_CAUSTIC_TASK_VALIDATED);
+    for (uint component = 0u; component < 3u; ++component)
+    {
+        GiCausticWriteTaskFloat(taskBase, 8u + component,
+            sourcePosition[component]);
+        GiCausticWriteTaskFloat(taskBase, 12u + component,
+            direction[component]);
+        GiCausticWriteTaskFloat(taskBase, 16u + component,
+            emittedContribution[component]);
+        GiCausticWriteTaskFloat(taskBase, 20u + component,
+            initialFlux[component]);
+    }
+    GiCausticWriteTaskFloat(taskBase, 11u, emitterPdf);
+    GiCausticWriteTaskFloat(taskBase, 15u, casterPdf);
+    GiCausticWriteTaskFloat(taskBase, 19u, positionPdf);
+    GiCausticWriteTaskFloat(taskBase, 23u, directionPdf);
+    for (uint component = 0u; component < 4u; ++component)
+    {
+        GiCausticWriteTaskFloat(taskBase, 24u + component,
+            ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+                heroBase + 16u + component));
+        GiCausticWriteTaskFloat(taskBase, 28u + component,
+            ReadStorageFloatUniform(giCausticPc.TaskBufferIndex,
+                heroBase + 20u + component));
+    }
+    // Task optics z/w come from the authored cone profile, not reserved hero values.
+    GiCausticWriteTaskFloat(taskBase, 26u,
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, heroBase + 11u));
+    GiCausticWriteTaskFloat(taskBase, 27u,
+        ReadStorageFloatUniform(giCausticPc.TaskBufferIndex, heroBase + 15u));
+    return true;
+}
+
+void main()
+{
+    if (!GiCausticPushConstantsValid())
+        return;
+
+    uint index = gl_GlobalInvocationID.x;
+    if (giCausticPc.BuildPhase == GI_CAUSTIC_TASK_PHASE_RESET)
+    {
+        if (index == 0u)
+        {
+            GiCausticWriteTaskHeader();
+            GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_CANDIDATE_COUNT, 0u);
+            GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_TASK_REJECTED_COUNT, 0u);
+            GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_CANDIDATE_OVERFLOW_COUNT, 0u);
+            GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_CELL_OVERFLOW_COUNT, 0u);
+            GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_BUILD_REJECTED_COUNT, 0u);
+            GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_RETAINED_COUNT, 0u);
+            GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_OCCUPIED_CELL_COUNT, 0u);
+            GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_METADATA_REJECTED_COUNT, 0u);
+        }
+        return;
+    }
+    if (giCausticPc.BuildPhase == GI_CAUSTIC_TASK_PHASE_VALIDATE_METADATA)
+    {
+        bool invalid = index < GiCausticEmitterCount() &&
+            !GiCausticEmitterMetadataValid(index);
+        invalid = invalid || (index < GiCausticHeroCount() &&
+            !GiCausticHeroMetadataValid(index));
+        invalid = invalid || (index < GiCausticProposalPairCount() &&
+            !GiCausticPairMetadataValid(index));
+        if (invalid)
+        {
+            atomicAdd(BindlessStorageBuffers[giCausticPc.ScratchBufferIndex].Words[
+                GI_CAUSTIC_SCRATCH_METADATA_REJECTED_COUNT], 1u);
+        }
+        return;
+    }
+    if (index >= giCausticPc.TaskCount)
+        return;
+    if (giCausticPc.BuildPhase == GI_CAUSTIC_TASK_PHASE_GENERATE)
+    {
+        if (!GiCausticGenerateTask(index))
+            GiCausticWriteInvalidTask(index);
+        return;
+    }
+    if (giCausticPc.BuildPhase != GI_CAUSTIC_TASK_PHASE_VALIDATE)
+        return;
+
+    bool valid = GiCausticTaskInputValid(index);
+    GiCausticSetTaskValidated(index, valid);
+    if (!valid)
+    {
+        atomicAdd(BindlessStorageBuffers[giCausticPc.ScratchBufferIndex].Words[
+            GI_CAUSTIC_SCRATCH_TASK_REJECTED_COUNT], 1u);
+    }
+}

@@ -25,7 +25,9 @@ internal sealed class ProductionRenderPipelineDeclaration
         "AmbientOcclusionPass",
         "AmbientOcclusionBlurPass",
         "TiledLightCullingPass",
+        "SimpleDdgiLightTreePass",
         "EnvironmentPrefilterPass",
+        "SimpleDdgiUrgentRelightPass",
         "ForwardPlusPass",
         "SimpleDdgiPageDemandPass",
         "SimpleDdgiPageResidencyPass",
@@ -36,6 +38,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         "SimpleDdgiAcceleratedSolvePass",
         "SimpleDdgiTransportPass",
         "SimpleDdgiBlendPass",
+        "SimpleDdgiDirectionalRadiancePass",
         "SimpleDdgiPublishPass",
         "SimpleDdgiTransportAuditPass",
         "SimpleDdgiSchedulerCommitPass",
@@ -63,10 +66,149 @@ internal sealed class ProductionRenderPipelineDeclaration
 
     public IReadOnlyList<string> PassOrder => _passOrder;
 
+    /// <summary>
+    /// Builds the concrete pass order for a transactionally admitted advanced
+    /// GI mode set.  The default production declaration remains byte-for-byte
+    /// free of experimental work; callers must pass effective, rather than
+    /// requested, modes to opt into this variant.
+    /// </summary>
+    public IReadOnlyList<string> CreatePassOrder(in AdvancedGiRenderGraphModes modes)
+    {
+        if (!modes.HasGpuFeature)
+            return PassOrder;
+
+        var order = new List<string>(_passOrder);
+        // C1 is recorded in the acceleration-structure prelude because Vulkan
+        // micromap/BLAS commands cannot be emitted by a secondary graph pass.
+        // Its logical position is exposed by the mode-aware externally
+        // recorded declaration below, never by a no-op graph placeholder.
+        // B1 is not a graph variant. Its candidate writes are part of the
+        // concrete opaque/alpha/transparent/particle/fog/reflection receiver
+        // passes and VulkanRenderer records the bounded sort/reduce transaction
+        // only after every required producer has closed. Do not advertise
+        // synthetic pass names that have no RenderPassBase implementation.
+        if (modes.UsesDirectionalGuiding)
+        {
+            InsertAfter(order, "SimpleDdgiSchedulePass",
+                SimpleDdgiGuidingGpuPassNames.Sample);
+            InsertAfter(order, "SimpleDdgiTracePass",
+                SimpleDdgiGuidingGpuPassNames.Train,
+                SimpleDdgiGuidingGpuPassNames.Build,
+                SimpleDdgiGuidingGpuPassNames.Validate);
+        }
+
+        var latePasses = new List<string>();
+        if (modes.UsesCausticWorldCache)
+        {
+            latePasses.Add("GiCausticTaskPass");
+            latePasses.Add("GiCausticTracePass");
+            latePasses.Add("GiCausticCacheBuildPass");
+            latePasses.Add("GiCausticResolvePass");
+            latePasses.Add("GiCausticCompositePass");
+        }
+        if (modes.UsesNearFieldHiZResidual)
+        {
+            latePasses.Add("SimpleDdgiNearFieldResidualResetPass");
+            latePasses.Add("SimpleDdgiNearFieldResidualTracePass");
+            latePasses.Add("SimpleDdgiNearFieldResidualTemporalPass");
+            for (int iteration = 0;
+                 iteration < modes.NearFieldProfile.FilterIterationCount;
+                 iteration++)
+            {
+                latePasses.Add(GetNearFieldFilterPassName(iteration));
+            }
+            latePasses.Add("SimpleDdgiNearFieldResidualCompositePass");
+        }
+        if (latePasses.Count != 0)
+            InsertAfter(order, "SimpleDdgiPageFeedbackPass", latePasses.ToArray());
+
+        return order;
+    }
+
     public string Name => PipelineName;
 
     public IReadOnlyList<RenderGraphPassResourceDeclaration> PassResourceDeclarations =>
         CreatePassResourceDeclarations();
+
+    /// <summary>
+    /// Prelude work recorded before graph execution. Keeping these contracts in
+    /// the authoritative production declaration makes their compute-to-AS and
+    /// AS-to-ray-query dependencies auditable even though Vulkan AS commands
+    /// cannot be emitted from secondary graph command buffers.
+    /// </summary>
+    public IReadOnlyList<RenderGraphPassResourceDeclaration>
+        ExternallyRecordedPassResourceDeclarations =>
+        CreateExternallyRecordedPassResourceDeclarations();
+
+    public IReadOnlyList<RenderGraphPassResourceDeclaration>
+        CreateExternallyRecordedPassResourceDeclarations() =>
+    [
+        Pass("SkinningPass",
+            ReadComputeBuffer(RenderGraphResourceId.MeshGeometryBuffers),
+            ReadWriteComputeBuffer(RenderGraphResourceId.SkinningBuffers)),
+        Pass("DdgiFoliageProxyGenerationPass",
+            ReadComputeBuffer(RenderGraphResourceId.FoliageBuffers),
+            ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
+            ReadComputeBuffer(RenderGraphResourceId.DdgiFoliageProxyPatches),
+            WriteComputeBuffer(RenderGraphResourceId.DdgiFoliageProxyGeometry)),
+        Pass("AccelerationStructureBlasPass",
+            ReadAccelerationStructureBuildInput(
+                RenderGraphResourceId.SkinningBuffers),
+            ReadAccelerationStructureBuildInput(
+                RenderGraphResourceId.DdgiFoliageProxyGeometry),
+            WriteAccelerationStructureBuild(
+                RenderGraphResourceId.DynamicBlasStorage)),
+        Pass("AccelerationStructureTlasPass",
+            ReadAccelerationStructureBuildInput(
+                RenderGraphResourceId.MeshGeometryBuffers),
+            ReadAccelerationStructureBuildInput(
+                RenderGraphResourceId.DynamicBlasStorage),
+            WriteAccelerationStructureBuild(
+                RenderGraphResourceId.TlasStorage),
+            WriteComputeBuffer(
+                RenderGraphResourceId.RayQueryInstanceMetadata))
+    ];
+
+    public IReadOnlyList<RenderGraphPassResourceDeclaration>
+        CreateExternallyRecordedPassResourceDeclarations(
+            in AdvancedGiRenderGraphModes modes)
+    {
+        var declarations = new List<RenderGraphPassResourceDeclaration>(
+            CreateExternallyRecordedPassResourceDeclarations());
+        if (!modes.UsesOpacityMicromaps)
+            return declarations;
+
+        int tlasIndex = declarations.FindIndex(static declaration =>
+            declaration.PassName == "AccelerationStructureTlasPass");
+        if (tlasIndex < 0)
+        {
+            throw new InvalidOperationException(
+                "The TLAS prelude declaration is required for C1.");
+        }
+        declarations.Insert(
+            tlasIndex,
+            Pass("OpacityMicromapBuildPass",
+                ReadAccelerationStructureBuildInput(
+                    RenderGraphResourceId.MeshGeometryBuffers),
+                ReadWriteMicromapAndAccelerationStructureBuild(
+                    RenderGraphResourceId.OpacityMicromapResources),
+                ReadWriteMicromapAndAccelerationStructureBuild(
+                    RenderGraphResourceId.OpacityMicromapBuildScratch),
+                ReadWriteMicromapAndAccelerationStructureBuild(
+                    RenderGraphResourceId.OpacityMicromapCompactionHeadroom)));
+
+        RenderGraphPassResourceDeclaration tlas = declarations[tlasIndex + 1];
+        var tlasUsages = new List<RenderGraphResourceUsage>(tlas.Usages)
+        {
+            ReadAccelerationStructureBuildInput(
+                RenderGraphResourceId.OpacityMicromapResources)
+        };
+        declarations[tlasIndex + 1] = tlas with
+        {
+            Usages = tlasUsages.ToArray()
+        };
+        return declarations;
+    }
 
     public IReadOnlyList<RenderGraphPassResourceDeclaration> CreatePassResourceDeclarations()
     {
@@ -124,6 +266,32 @@ internal sealed class ProductionRenderPipelineDeclaration
         ]);
 
         declarations.Add(
+            Pass("SimpleDdgiLightTreePass",
+                ReadComputeBuffer(RenderGraphResourceId.LightBuffers),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiLightTree)));
+
+        declarations.Add(
+            Pass("SimpleDdgiUrgentRelightPass",
+                ReadComputeBuffer(RenderGraphResourceId.LightBuffers),
+                ReadComputeBuffer(RenderGraphResourceId.EnvironmentData),
+                ReadComputeSampled(RenderGraphResourceId.EnvironmentMaps),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiTransportAtlas),
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiTransportSourceCache),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
+                WriteComputeBuffer(RenderGraphResourceId.SimpleDdgiReceiverProbes),
+                ReadWriteComputeBuffer(
+                    RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
+                ReadWriteComputeIndirectBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
+                ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)));
+
+        declarations.Add(
             Pass("ForwardPlusPass",
                 ReadDepthAttachmentAndCompute(RenderGraphResourceId.SceneDepth),
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
@@ -145,7 +313,10 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
                 ReadGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
                 ReadGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiReceiverProbes),
+                ReadGraphicsStorage(
+                    RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
                 ReadWriteGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiResidency),
+                ReadWriteGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiScheduler),
 #if DEBUG || NJULF_DETAILED_INVESTIGATION
                 // Detailed receiver views inspect the update-side probe state.
                 // Raw source-cache decoding is deliberately compute-only.
@@ -154,7 +325,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
                 WriteColorAttachment(RenderGraphResourceId.SceneColor)));
 
-        // DDGI update runs after ForwardPlusPass and publishes cache data for subsequent frames.
+        // The bounded cache-only urgent lane above can publish radiometric edits
+        // for this forward draw. The complete DDGI update remains after
+        // ForwardPlusPass and publishes cache ownership for subsequent frames.
         // DDGI paths deliberately declare every concrete storage family they touch. A scheduler
         // rejects the path if even one binding is unavailable rather than treating BufferSet or
         // External as an opaque unit and risking an unpaired queue-family handoff.
@@ -194,6 +367,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
                 ReadComputeSampled(RenderGraphResourceId.MaterialTextures),
                 ReadComputeBuffer(RenderGraphResourceId.LightBuffers),
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiLightTree),
                 ReadComputeBuffer(RenderGraphResourceId.DdgiEmissiveSources),
                 ReadComputeBuffer(RenderGraphResourceId.EnvironmentData),
                 ReadComputeSampled(RenderGraphResourceId.EnvironmentMaps),
@@ -210,6 +384,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
                 ReadWriteComputeIndirectBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
                 ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
             Pass("SimpleDdgiRelocateClassifyPass",
@@ -256,6 +432,18 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRelocationData),
                 ReadWriteComputeIndirectBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
                 ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)),
+            Pass("SimpleDdgiDirectionalRadiancePass",
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.SimpleDdgiTransportSourceCache),
+                ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                ReadWriteComputeBuffer(
+                    RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
+                ReadWriteComputeIndirectBuffer(
+                    RenderGraphResourceId.SimpleDdgiScheduler)),
             Pass("SimpleDdgiPublishPass",
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
@@ -264,6 +452,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiProbeState),
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
                 WriteComputeBuffer(RenderGraphResourceId.SimpleDdgiReceiverProbes),
                 ReadWriteComputeIndirectBuffer(RenderGraphResourceId.SimpleDdgiScheduler)),
             Pass("SimpleDdgiTransportAuditPass",
@@ -283,6 +473,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiTransportAtlas),
                 ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiTransportSourceCache),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
                 WriteComputeBuffer(RenderGraphResourceId.SimpleDdgiReceiverProbes)),
             Pass("SimpleDdgiPageFeedbackPass",
                 ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
@@ -307,7 +499,10 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiReceiverProbes),
+            ReadGraphicsStorage(
+                RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
             ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiResidency),
+            ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiScheduler),
 #if DEBUG || NJULF_DETAILED_INVESTIGATION
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
 #endif
@@ -328,7 +523,10 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiReceiverProbes),
+            ReadGraphicsStorage(
+                RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
             ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiResidency),
+            ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiScheduler),
 #if DEBUG || NJULF_DETAILED_INVESTIGATION
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
 #endif
@@ -374,6 +572,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
             ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiReceiverProbes),
             ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiResidency),
+            ReadWriteGraphicsStorage(RenderGraphResourceId.SimpleDdgiScheduler),
             ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
             ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
             Pass("DebugDrawPass",
@@ -387,6 +586,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
             ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiReceiverProbes),
             ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
+            ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
             ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer),
             WriteComputeStorage(RenderGraphResourceId.FogOutput, ImageLayout.ShaderReadOnlyOptimal)),
             Pass("AutoExposurePass",
@@ -412,6 +612,245 @@ internal sealed class ProductionRenderPipelineDeclaration
             WriteColorAttachment(RenderGraphResourceId.SwapchainColor)),
             Pass("ImGuiRenderPass", ReadWriteColorAttachment(RenderGraphResourceId.SwapchainColor))
         ]);
+
+        return declarations;
+    }
+
+    /// <summary>
+    /// Declares only the resources touched by the concrete advanced-GI graph
+    /// variant.  This deliberately does not add optional usages to the base
+    /// declaration: a disabled mode must not create hidden descriptor or
+    /// synchronization pressure.
+    /// </summary>
+    public IReadOnlyList<RenderGraphPassResourceDeclaration>
+        CreatePassResourceDeclarations(in AdvancedGiRenderGraphModes modes)
+    {
+        if (!modes.HasGpuFeature)
+            return CreatePassResourceDeclarations();
+
+        var declarations = new List<RenderGraphPassResourceDeclaration>(
+            CreatePassResourceDeclarations());
+
+        if (modes.UsesCausticWorldCache)
+        {
+            int forwardIndex = declarations.FindIndex(static declaration =>
+                declaration.PassName == "ForwardPlusPass");
+            if (forwardIndex < 0)
+                throw new InvalidOperationException("ForwardPlusPass declaration is required for C4.");
+
+            RenderGraphPassResourceDeclaration forward = declarations[forwardIndex];
+            var usages = new List<RenderGraphResourceUsage>(forward.Usages)
+            {
+                WriteColorAttachment(RenderGraphResourceId.GiCausticReceiverPayload)
+            };
+            declarations[forwardIndex] = forward with { Usages = usages.ToArray() };
+        }
+
+        if (modes.UsesNearFieldHiZResidual)
+        {
+            int forwardIndex = declarations.FindIndex(static declaration =>
+                declaration.PassName == "ForwardPlusPass");
+            if (forwardIndex < 0)
+                throw new InvalidOperationException("ForwardPlusPass declaration is required for C5.");
+
+            RenderGraphPassResourceDeclaration forward = declarations[forwardIndex];
+            var usages = new List<RenderGraphResourceUsage>(forward.Usages)
+            {
+                // These attachments are emitted only by the dedicated C5
+                // forward variant. The normal shipping ForwardPlus pipeline
+                // never declares or binds them.
+                WriteColorAttachment(RenderGraphResourceId.NearFieldDirectSource),
+                WriteColorAttachment(RenderGraphResourceId.NearFieldReceiverPayload)
+            };
+            declarations[forwardIndex] = forward with { Usages = usages.ToArray() };
+        }
+
+        if (modes.UsesDirectionalGuiding)
+        {
+            int traceIndex = declarations.FindIndex(static declaration =>
+                declaration.PassName == "SimpleDdgiTracePass");
+            if (traceIndex < 0)
+                throw new InvalidOperationException("SimpleDdgiTracePass declaration is required for C3.");
+
+            RenderGraphPassResourceDeclaration trace = declarations[traceIndex];
+            var traceUsages = new List<RenderGraphResourceUsage>(trace.Usages)
+            {
+                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingDirectionPayloadSidecar)
+            };
+            declarations[traceIndex] = trace with { Usages = traceUsages.ToArray() };
+        }
+
+        if (modes.UsesDirectionalGuiding)
+        {
+            declarations.AddRange([
+                Pass(SimpleDdgiGuidingGpuPassNames.Sample,
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingDistributions),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
+                    WriteComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingDirectionPayloadSidecar)),
+                Pass(SimpleDdgiGuidingGpuPassNames.Train,
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingDistributions),
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingDirectionPayloadSidecar),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingScratch)),
+                Pass(SimpleDdgiGuidingGpuPassNames.Build,
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingDistributions),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingScratch)),
+                Pass(SimpleDdgiGuidingGpuPassNames.Validate,
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingDistributions),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingScratch),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer))
+            ]);
+        }
+
+        if (modes.UsesCausticWorldCache)
+        {
+            declarations.AddRange([
+                Pass("GiCausticTaskPass",
+                    ReadComputeBuffer(RenderGraphResourceId.LightBuffers),
+                    ReadComputeBuffer(RenderGraphResourceId.DdgiEmissiveSources),
+                    ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.GiCausticTasks)),
+                Pass("GiCausticTracePass",
+                    ReadComputeBuffer(RenderGraphResourceId.GiCausticTasks),
+                    ReadComputeAccelerationStructure(RenderGraphResourceId.TlasStorage),
+                    ReadComputeBuffer(RenderGraphResourceId.RayQueryInstanceMetadata),
+                    ReadComputeBuffer(RenderGraphResourceId.MeshGeometryBuffers),
+                    ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
+                    ReadComputeSampled(RenderGraphResourceId.MaterialTextures),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.GiCausticPhotons)),
+                Pass("GiCausticCacheBuildPass",
+                    ReadComputeBuffer(RenderGraphResourceId.GiCausticPhotons),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.GiCausticCache),
+                    ReadWriteComputeBuffer(RenderGraphResourceId.GiCausticScratch)),
+                Pass("GiCausticResolvePass",
+                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+                    ReadComputeSampled(RenderGraphResourceId.GiCausticReceiverPayload),
+                    ReadComputeBuffer(RenderGraphResourceId.GiCausticCache),
+                    ReadComputeBuffer(RenderGraphResourceId.GiCausticPhotons),
+                    ReadComputeBuffer(RenderGraphResourceId.GiCausticScreenFrameConstants),
+                    ReadWriteComputeIndirectBuffer(RenderGraphResourceId.GiCausticScratch),
+                    WriteComputeStorage(RenderGraphResourceId.GiCausticRadiance,
+                        ImageLayout.ShaderReadOnlyOptimal),
+                    WriteComputeStorage(RenderGraphResourceId.GiCausticMoments,
+                        ImageLayout.ShaderReadOnlyOptimal)),
+                Pass("GiCausticCompositePass",
+                    ReadComputeSampled(RenderGraphResourceId.GiCausticRadiance),
+                    ReadComputeSampled(RenderGraphResourceId.GiCausticMoments),
+                    ReadComputeBuffer(RenderGraphResourceId.GiCausticScratch),
+                    ReadWriteComputeStorage(RenderGraphResourceId.SceneColor,
+                        ImageLayout.ShaderReadOnlyOptimal))
+            ]);
+        }
+
+        if (modes.UsesNearFieldHiZResidual)
+        {
+            declarations.AddRange([
+                Pass("SimpleDdgiNearFieldResidualResetPass",
+                    WriteComputeBuffer(RenderGraphResourceId.NearFieldResidualHitMetadata),
+                    WriteComputeBuffer(RenderGraphResourceId.NearFieldResidualTileBuffers)),
+                Pass("SimpleDdgiNearFieldResidualTracePass",
+                    ReadComputeSampled(RenderGraphResourceId.NearFieldDirectSource),
+                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+                    ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
+                    ReadComputeSampled(RenderGraphResourceId.NearFieldReceiverPayload),
+                    ReadComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualTraceFrameConstants),
+                    WriteComputeStorage(RenderGraphResourceId.NearFieldResidualRaw),
+                    WriteComputeBuffer(RenderGraphResourceId.NearFieldResidualHitMetadata),
+                    WriteComputeBuffer(RenderGraphResourceId.NearFieldResidualTileBuffers)),
+                Pass("SimpleDdgiNearFieldResidualTemporalPass",
+                    ReadComputeSampled(RenderGraphResourceId.NearFieldResidualRaw),
+                    ReadComputeBuffer(RenderGraphResourceId.NearFieldResidualHitMetadata),
+                    ReadComputeSampled(RenderGraphResourceId.MotionVectors),
+                    ReadComputeSampled(RenderGraphResourceId.NearFieldReceiverPayload),
+                    ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldResidualHistory,
+                        RenderGraphHistoryBindingSelection.Previous),
+                    ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldResidualMoments,
+                        RenderGraphHistoryBindingSelection.Previous),
+                    ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldResidualValidity,
+                        RenderGraphHistoryBindingSelection.Previous),
+                    ReadComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                        RenderGraphHistoryBindingSelection.Previous),
+                    ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                        RenderGraphHistoryBindingSelection.Previous),
+                    WriteComputeStorage(
+                        RenderGraphResourceId.NearFieldResidualHistory,
+                        historyBinding: RenderGraphHistoryBindingSelection.Current),
+                    WriteComputeStorage(
+                        RenderGraphResourceId.NearFieldResidualMoments,
+                        historyBinding: RenderGraphHistoryBindingSelection.Current),
+                    WriteComputeStorage(
+                        RenderGraphResourceId.NearFieldResidualValidity,
+                        historyBinding: RenderGraphHistoryBindingSelection.Current),
+                    WriteComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                        RenderGraphHistoryBindingSelection.Current),
+                    WriteComputeStorage(
+                        RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                        historyBinding: RenderGraphHistoryBindingSelection.Current),
+                    WriteComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualTileBuffers))
+            ]);
+
+            for (int iteration = 0;
+                 iteration < modes.NearFieldProfile.FilterIterationCount;
+                 iteration++)
+            {
+                RenderGraphHistoryBindingSelection destinationBank =
+                    GetNearFieldScratchBank(iteration);
+                var filterUsages = new List<RenderGraphResourceUsage>();
+                if (iteration == 0)
+                {
+                    filterUsages.Add(ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldResidualHistory,
+                        RenderGraphHistoryBindingSelection.Current));
+                }
+                else
+                {
+                    filterUsages.Add(ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldResidualFilterScratch,
+                        GetNearFieldScratchBank(iteration - 1)));
+                }
+                filterUsages.Add(ReadComputeBuffer(
+                    RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                    RenderGraphHistoryBindingSelection.Current));
+                filterUsages.Add(ReadComputeSampled(
+                    RenderGraphResourceId.NearFieldReceiverPayload));
+                filterUsages.Add(WriteComputeStorage(
+                    RenderGraphResourceId.NearFieldResidualFilterScratch,
+                    historyBinding: destinationBank));
+                declarations.Add(Pass(
+                    GetNearFieldFilterPassName(iteration),
+                    filterUsages.ToArray()));
+            }
+
+            RenderGraphResourceUsage compositeInput = modes.UsesNearFieldFiltering
+                ? ReadComputeSampled(
+                    RenderGraphResourceId.NearFieldResidualFilterScratch,
+                    GetNearFieldScratchBank(
+                        modes.NearFieldProfile.FilterIterationCount - 1))
+                : ReadComputeSampled(
+                    RenderGraphResourceId.NearFieldResidualHistory,
+                    RenderGraphHistoryBindingSelection.Current);
+            declarations.Add(Pass("SimpleDdgiNearFieldResidualCompositePass",
+                compositeInput,
+                ReadComputeBuffer(
+                    RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                    RenderGraphHistoryBindingSelection.Current),
+                ReadWriteComputeStorage(RenderGraphResourceId.SceneColor,
+                    ImageLayout.ShaderReadOnlyOptimal)));
+        }
 
         return declarations;
     }
@@ -457,6 +896,11 @@ internal sealed class ProductionRenderPipelineDeclaration
             BufferSetResource(RenderGraphResourceId.SimpleDdgiScheduler, "Simple DDGI GPU scheduler arena"),
             BufferSetResource(RenderGraphResourceId.SimpleDdgiReceiverProbes, "Simple DDGI compact receiver probes"),
             BufferSetResource(RenderGraphResourceId.SimpleDdgiResidency, "Simple DDGI probe residency arena"),
+            BufferSetResource(RenderGraphResourceId.SimpleDdgiLightTree, "Simple DDGI local-light hierarchy"),
+            BufferSetResource(RenderGraphResourceId.SimpleDdgiDirectionalRadiance, "Simple DDGI directional-radiance SH"),
+            BufferSetResource(RenderGraphResourceId.DdgiFoliageProxyPatches, "DDGI foliage proxy generation patches"),
+            BufferSetResource(RenderGraphResourceId.DdgiFoliageProxyGeometry, "DDGI foliage proxy AS geometry"),
+            BufferSetResource(RenderGraphResourceId.DynamicBlasStorage, "Dynamic DDGI BLAS storage"),
             OwnedImageResource(RenderGraphResourceId.FogOutput, "Fog output", RenderTargetManager.FoggedSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
             ImageResource(RenderGraphResourceId.DirectionalShadowMap, "Directional shadow map", depthFormat, RenderGraphResourceSizePolicy.ShadowMap),
             ImageResource(RenderGraphResourceId.SpotShadowAtlas, "Spot shadow atlas", depthFormat, RenderGraphResourceSizePolicy.ShadowMap),
@@ -497,12 +941,167 @@ internal sealed class ProductionRenderPipelineDeclaration
         ];
     }
 
+    /// <summary>
+    /// Optional resource inventory for an already-admitted graph variant.  No
+    /// descriptor is registered for a disabled mode, which makes disabled
+    /// allocations observable rather than relying on lazy allocation.
+    /// </summary>
+    public IReadOnlyList<RenderGraphResourceDescriptor> CreateResourceDescriptors(
+        Format depthFormat,
+        Format swapchainColorFormat,
+        in AdvancedGiRenderGraphModes modes)
+    {
+        if (!modes.HasGpuFeature)
+            return CreateResourceDescriptors(depthFormat, swapchainColorFormat);
+
+        var descriptors = new List<RenderGraphResourceDescriptor>(
+            CreateResourceDescriptors(depthFormat, swapchainColorFormat));
+        // B1 buffers are allocated and fence-retired by
+        // SimpleDdgiReceiverFeedbackVulkanRuntime. Registering parallel graph
+        // descriptors here would suggest a second owner and violate the exact
+        // central-memory accounting contract.
+        if (modes.UsesOpacityMicromaps)
+        {
+            descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.OpacityMicromapResources,
+                "EXT opacity-micromap resources"));
+            descriptors.Add(TransientBufferSetResource(
+                RenderGraphResourceId.OpacityMicromapBuildScratch,
+                "EXT opacity-micromap build scratch"));
+            descriptors.Add(TransientBufferSetResource(
+                RenderGraphResourceId.OpacityMicromapCompactionHeadroom,
+                "EXT opacity-micromap compaction headroom"));
+        }
+        if (modes.UsesDirectionalGuiding)
+        {
+            descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.SimpleDdgiGuidingDistributions,
+                "Simple-DDGI directional guiding distribution banks"));
+            descriptors.Add(TransientBufferSetResource(
+                RenderGraphResourceId.SimpleDdgiGuidingScratch,
+                "Simple-DDGI directional guiding training scratch"));
+            descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.SimpleDdgiGuidingDirectionPayloadSidecar,
+                "Simple-DDGI source-cache direction/PDF sidecar"));
+        }
+        if (modes.UsesCausticWorldCache)
+        {
+            descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.GiCausticTasks,
+                "Tagged caustic photon tasks"));
+            descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.GiCausticPhotons,
+                "Tagged caustic photon append banks"));
+            descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.GiCausticCache,
+                "Tagged caustic world-cache banks"));
+            descriptors.Add(TransientBufferSetResource(
+                RenderGraphResourceId.GiCausticScratch,
+                "Tagged caustic sort/cache scratch"));
+            descriptors.Add(TransientImageResource(
+                RenderGraphResourceId.GiCausticReceiverPayload,
+                "C4 visible receiver material payload",
+                GiCausticScreenGpuAbi.ReceiverPayloadFormat,
+                RenderGraphResourceSizePolicy.SceneResolution));
+            descriptors.Add(TransientImageResource(
+                RenderGraphResourceId.GiCausticRadiance,
+                "C4 separately owned tagged radiance",
+                GiCausticScreenGpuAbi.RadianceFormat,
+                RenderGraphResourceSizePolicy.SceneResolution));
+            descriptors.Add(TransientImageResource(
+                RenderGraphResourceId.GiCausticMoments,
+                "C4 resolve confidence and luminance moments",
+                GiCausticScreenGpuAbi.MomentsFormat,
+                RenderGraphResourceSizePolicy.SceneResolution));
+            descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.GiCausticScreenFrameConstants,
+                "C4 immutable screen reconstruction constants"));
+        }
+        if (modes.UsesNearFieldHiZResidual)
+        {
+            RenderGraphResourceSizePolicy traceSizePolicy =
+                modes.NearFieldProfile.TraceSizePolicy;
+            descriptors.Add(TransientImageResource(
+                RenderGraphResourceId.NearFieldDirectSource,
+                "Near-field direct-diffuse plus emissive source",
+                Format.R16G16B16A16Sfloat,
+                RenderGraphResourceSizePolicy.SceneResolution));
+            descriptors.Add(TransientImageResource(
+                RenderGraphResourceId.NearFieldResidualRaw,
+                "Near-field residual raw candidates",
+                Format.R16G16B16A16Sfloat,
+                traceSizePolicy));
+            descriptors.Add(TransientBufferSetResource(
+                RenderGraphResourceId.NearFieldResidualHitMetadata,
+                "Near-field residual hit metadata SSBO"));
+            descriptors.Add(OwnedImageChainResource(
+                RenderGraphResourceId.NearFieldResidualHistory,
+                "Near-field residual double-buffered history",
+                Format.R16G16B16A16Sfloat,
+                traceSizePolicy));
+            descriptors.Add(OwnedImageChainResource(
+                RenderGraphResourceId.NearFieldResidualMoments,
+                "Near-field residual double-buffered moments",
+                Format.R16G16Sfloat,
+                traceSizePolicy));
+            descriptors.Add(OwnedImageChainResource(
+                RenderGraphResourceId.NearFieldResidualValidity,
+                "Near-field residual double-buffered validity",
+                Format.R32Uint,
+                traceSizePolicy));
+            descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                "Near-field residual double-buffered hit identity SSBO"));
+            descriptors.Add(OwnedImageChainResource(
+                RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                "Near-field residual double-buffered geometric normals",
+                Format.R16G16B16A16Sfloat,
+                traceSizePolicy));
+            if (modes.UsesNearFieldFiltering)
+            {
+                descriptors.Add(TransientImageChainResource(
+                    RenderGraphResourceId.NearFieldResidualFilterScratch,
+                    "Near-field residual filter ping-pong scratch",
+                    Format.R16G16B16A16Sfloat,
+                    traceSizePolicy));
+            }
+            descriptors.Add(TransientBufferSetResource(
+                RenderGraphResourceId.NearFieldResidualTileBuffers,
+                "Near-field residual compact tiles"));
+            descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.NearFieldResidualTraceFrameConstants,
+                "Near-field residual per-frame reconstruction constants"));
+            descriptors.Add(TransientImageResource(
+                RenderGraphResourceId.NearFieldReceiverPayload,
+                "Near-field C5 compact receiver payload",
+                Format.R32G32B32A32Uint,
+                RenderGraphResourceSizePolicy.SceneResolution));
+        }
+
+        return descriptors;
+    }
+
     public void RegisterResources(RenderGraph graph, Format depthFormat, Format swapchainColorFormat)
     {
         if (graph == null)
             throw new ArgumentNullException(nameof(graph));
 
         graph.RegisterResources(CreateResourceDescriptors(depthFormat, swapchainColorFormat));
+    }
+
+    public void RegisterResources(
+        RenderGraph graph,
+        Format depthFormat,
+        Format swapchainColorFormat,
+        in AdvancedGiRenderGraphModes modes)
+    {
+        if (graph == null)
+            throw new ArgumentNullException(nameof(graph));
+
+        graph.RegisterResources(CreateResourceDescriptors(
+            depthFormat,
+            swapchainColorFormat,
+            modes));
     }
 
     public void DeclarePassResources(RenderGraph graph)
@@ -512,6 +1111,20 @@ internal sealed class ProductionRenderPipelineDeclaration
 
         foreach (RenderGraphPassResourceDeclaration declaration in CreatePassResourceDeclarations())
             graph.DeclarePassResources(declaration.PassName, declaration.Usages);
+    }
+
+    public void DeclarePassResources(
+        RenderGraph graph,
+        in AdvancedGiRenderGraphModes modes)
+    {
+        if (graph == null)
+            throw new ArgumentNullException(nameof(graph));
+
+        foreach (RenderGraphPassResourceDeclaration declaration in
+                 CreatePassResourceDeclarations(modes))
+        {
+            graph.DeclarePassResources(declaration.PassName, declaration.Usages);
+        }
     }
 
     public IReadOnlyList<string> GetActivePasses(RenderFeatureIsolationMode featureIsolation)
@@ -552,6 +1165,28 @@ internal sealed class ProductionRenderPipelineDeclaration
         }
     }
 
+    /// <summary>Registers the exact pass set selected during graph creation.</summary>
+    public void RegisterPasses(
+        RenderGraph graph,
+        IReadOnlyDictionary<string, RenderPassBase> passes,
+        in AdvancedGiRenderGraphModes modes)
+    {
+        if (graph == null)
+            throw new ArgumentNullException(nameof(graph));
+        if (passes == null)
+            throw new ArgumentNullException(nameof(passes));
+
+        foreach (string passName in CreatePassOrder(modes))
+        {
+            if (!passes.TryGetValue(passName, out RenderPassBase? pass))
+            {
+                throw new InvalidOperationException(
+                    $"Production pipeline pass '{passName}' was not provided by the renderer.");
+            }
+            graph.AddPass(pass);
+        }
+    }
+
     public void ValidatePassOrder(IReadOnlyList<string> actualPassOrder)
     {
         if (actualPassOrder == null)
@@ -572,9 +1207,68 @@ internal sealed class ProductionRenderPipelineDeclaration
         }
     }
 
+    public void ValidatePassOrder(
+        IReadOnlyList<string> actualPassOrder,
+        in AdvancedGiRenderGraphModes modes)
+    {
+        if (actualPassOrder == null)
+            throw new ArgumentNullException(nameof(actualPassOrder));
+
+        IReadOnlyList<string> expectedPassOrder = CreatePassOrder(modes);
+        if (actualPassOrder.Count != expectedPassOrder.Count)
+        {
+            throw new InvalidOperationException(
+                $"Render graph pass count changed. Expected {string.Join(", ", expectedPassOrder)}; actual {string.Join(", ", actualPassOrder)}.");
+        }
+        for (int i = 0; i < expectedPassOrder.Count; i++)
+        {
+            if (!string.Equals(actualPassOrder[i], expectedPassOrder[i], StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Render graph pass order changed. Expected {string.Join(", ", expectedPassOrder)}; actual {string.Join(", ", actualPassOrder)}.");
+            }
+        }
+    }
+
     private static RenderGraphPassResourceDeclaration Pass(string passName, params RenderGraphResourceUsage[] usages)
     {
         return new RenderGraphPassResourceDeclaration(passName, usages);
+    }
+
+    private static void InsertAfter(
+        List<string> order,
+        string anchor,
+        params string[] inserted)
+    {
+        if (inserted.Length == 0)
+            return;
+
+        int index = order.IndexOf(anchor);
+        if (index < 0)
+            throw new InvalidOperationException(
+                $"Cannot insert advanced-GI passes: anchor '{anchor}' is absent.");
+        order.InsertRange(index + 1, inserted);
+    }
+
+    private static string GetNearFieldFilterPassName(int iteration)
+    {
+        if (iteration < 0)
+            throw new ArgumentOutOfRangeException(nameof(iteration));
+
+        return iteration == 0
+            ? "SimpleDdgiNearFieldResidualFilterPass"
+            : "SimpleDdgiNearFieldResidualFilterPass" + iteration;
+    }
+
+    private static RenderGraphHistoryBindingSelection GetNearFieldScratchBank(
+        int iteration)
+    {
+        if (iteration < 0)
+            throw new ArgumentOutOfRangeException(nameof(iteration));
+
+        return (iteration & 1) == 0
+            ? RenderGraphHistoryBindingSelection.Bank0
+            : RenderGraphHistoryBindingSelection.Bank1;
     }
 
     private static RenderGraphResourceDescriptor ImageResource(
@@ -625,6 +1319,38 @@ internal sealed class ProductionRenderPipelineDeclaration
             Persistent: true);
     }
 
+    private static RenderGraphResourceDescriptor TransientImageResource(
+        RenderGraphResourceId id,
+        string debugName,
+        Format format,
+        RenderGraphResourceSizePolicy sizePolicy)
+    {
+        return new RenderGraphResourceDescriptor(
+            id,
+            debugName,
+            RenderGraphResourceKind.Image,
+            format,
+            sizePolicy,
+            RenderGraphResourceLifetime.Transient,
+            Persistent: false);
+    }
+
+    private static RenderGraphResourceDescriptor TransientImageChainResource(
+        RenderGraphResourceId id,
+        string debugName,
+        Format format,
+        RenderGraphResourceSizePolicy sizePolicy)
+    {
+        return new RenderGraphResourceDescriptor(
+            id,
+            debugName,
+            RenderGraphResourceKind.ImageChain,
+            format,
+            sizePolicy,
+            RenderGraphResourceLifetime.Transient,
+            Persistent: false);
+    }
+
     private static RenderGraphResourceDescriptor OwnedImageChainResource(
         RenderGraphResourceId id,
         string debugName,
@@ -669,7 +1395,10 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphQueueIntent.Graphics);
     }
 
-    private static RenderGraphResourceUsage ReadComputeSampled(RenderGraphResourceId resource)
+    private static RenderGraphResourceUsage ReadComputeSampled(
+        RenderGraphResourceId resource,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
     {
         return new RenderGraphResourceUsage(
             resource,
@@ -677,7 +1406,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderSampledReadBit,
             ImageLayout.ShaderReadOnlyOptimal,
-            RenderGraphQueueIntent.Compute);
+            RenderGraphQueueIntent.Compute,
+            HistoryBinding: historyBinding);
     }
 
     private static RenderGraphResourceUsage ReadDepth(RenderGraphResourceId resource)
@@ -707,7 +1437,10 @@ internal sealed class ProductionRenderPipelineDeclaration
         return new RenderGraphResourceUsage(resource, RenderGraphResourceAccess.Write);
     }
 
-    private static RenderGraphResourceUsage ReadComputeBuffer(RenderGraphResourceId resource)
+    private static RenderGraphResourceUsage ReadComputeBuffer(
+        RenderGraphResourceId resource,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
     {
         return new RenderGraphResourceUsage(
             resource,
@@ -715,7 +1448,22 @@ internal sealed class ProductionRenderPipelineDeclaration
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit,
             ImageLayout.Undefined,
-            RenderGraphQueueIntent.Compute);
+            RenderGraphQueueIntent.Compute,
+            HistoryBinding: historyBinding);
+    }
+
+    private static RenderGraphResourceDescriptor TransientBufferSetResource(
+        RenderGraphResourceId id,
+        string debugName)
+    {
+        return new RenderGraphResourceDescriptor(
+            id,
+            debugName,
+            RenderGraphResourceKind.BufferSet,
+            null,
+            RenderGraphResourceSizePolicy.Dynamic,
+            RenderGraphResourceLifetime.Transient,
+            Persistent: false);
     }
 
     // Compute indirect dispatch parameters are consumed at DRAW_INDIRECT even
@@ -773,6 +1521,43 @@ internal sealed class ProductionRenderPipelineDeclaration
             ImageLayout.Undefined,
             RenderGraphQueueIntent.Graphics);
     }
+
+    private static RenderGraphResourceUsage ReadAccelerationStructureBuildInput(
+        RenderGraphResourceId resource) =>
+        new(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.AccelerationStructureBuildBitKhr,
+            AccessFlags2.AccelerationStructureReadBitKhr,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics);
+
+    private static RenderGraphResourceUsage WriteAccelerationStructureBuild(
+        RenderGraphResourceId resource) =>
+        new(
+            resource,
+            RenderGraphResourceAccess.Write,
+            PipelineStageFlags2.AccelerationStructureBuildBitKhr,
+            AccessFlags2.AccelerationStructureWriteBitKhr,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics);
+
+    private static RenderGraphResourceUsage
+        ReadWriteMicromapAndAccelerationStructureBuild(
+            RenderGraphResourceId resource) =>
+        new(
+            resource,
+            RenderGraphResourceAccess.ReadWrite,
+            PipelineStageFlags2.TransferBit |
+            PipelineStageFlags2.MicromapBuildBitExt |
+            PipelineStageFlags2.AccelerationStructureBuildBitKhr,
+            AccessFlags2.TransferWriteBit |
+            AccessFlags2.MicromapReadBitExt |
+            AccessFlags2.MicromapWriteBitExt |
+            AccessFlags2.AccelerationStructureReadBitKhr |
+            AccessFlags2.AccelerationStructureWriteBitKhr,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics);
 
     private static RenderGraphResourceUsage ReadGraphicsAndComputeStorage(
         RenderGraphResourceId resource)
@@ -874,7 +1659,9 @@ internal sealed class ProductionRenderPipelineDeclaration
 
     private static RenderGraphResourceUsage WriteComputeStorage(
         RenderGraphResourceId resource,
-        ImageLayout finalImageLayout = ImageLayout.Undefined)
+        ImageLayout finalImageLayout = ImageLayout.Undefined,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
     {
         return new RenderGraphResourceUsage(
             resource,
@@ -883,10 +1670,14 @@ internal sealed class ProductionRenderPipelineDeclaration
             AccessFlags2.ShaderStorageWriteBit,
             ImageLayout.General,
             RenderGraphQueueIntent.Compute,
-            finalImageLayout);
+            finalImageLayout,
+            historyBinding);
     }
 
-    private static RenderGraphResourceUsage WriteComputeBuffer(RenderGraphResourceId resource)
+    private static RenderGraphResourceUsage WriteComputeBuffer(
+        RenderGraphResourceId resource,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
     {
         return new RenderGraphResourceUsage(
             resource,
@@ -894,7 +1685,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageWriteBit,
             ImageLayout.Undefined,
-            RenderGraphQueueIntent.Compute);
+            RenderGraphQueueIntent.Compute,
+            HistoryBinding: historyBinding);
     }
 
     private static RenderGraphResourceUsage ReadWriteComputeBuffer(RenderGraphResourceId resource)

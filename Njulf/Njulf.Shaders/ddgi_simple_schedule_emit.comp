@@ -20,6 +20,17 @@ void main()
     uint accepted = min(
         SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ACCEPTED),
         SchedulerRequestCapacity());
+    if (SchedulerUrgentRelight())
+    {
+        // Low byte is incremented only by successful CommitLocal invocations.
+        // The cap is 255, so that atomic cannot carry into the accepted byte.
+        uint telemetry = ((SchedulerFrame(12u) & 0xffffu) << 16u) |
+            (min(accepted, 255u) << 8u);
+        SchedulerArenaWrite(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_TELEMETRY,
+            telemetry);
+    }
     // Count the six fixed ray buckets in admission order.  This bounded linear
     // pass keeps the queue order deterministic; atomic append order is never a
     // scheduling tie-break.
@@ -57,7 +68,8 @@ void main()
             SchedulerMarkOutcomeComplete(
                 updateIndex,
                 SIMPLE_DDGI_SCHEDULER_TRANSPORT_NOT_REQUIRED);
-        if (!SchedulerSampledPublicationRequired())
+        if (!SchedulerSampledPublicationRequired() ||
+            SchedulerUrgentRelight())
             SchedulerMarkOutcomeComplete(
                 updateIndex,
                 SIMPLE_DDGI_SCHEDULER_SAMPLED_PUBLISH_NOT_REQUIRED);

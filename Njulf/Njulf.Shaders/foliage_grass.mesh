@@ -3,7 +3,11 @@
 #extension GL_EXT_mesh_shader : require
 
 #include "common.glsl"
+#include "directional_shadow_caster_diagnostics.glsl"
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (gl_LocalInvocationIndex == 0u)
+#define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE (gl_LocalInvocationIndex == 0u)
+#define SIMPLE_DDGI_RECEIVER_COVERAGE_HASH ((gl_WorkGroupID.x * 73856093u) ^ (gl_WorkGroupID.y * 19349663u) ^ (gl_WorkGroupID.z * 83492791u))
+#define SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS SIMPLE_DDGI_RECEIVER_CONSUMER_OPAQUE
 #define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 1
 #define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 0u
 #define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 1
@@ -11,6 +15,9 @@
 #undef SIMPLE_DDGI_OPAQUE_GATHER_ORACLE
 #undef SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET
 #undef SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT
+#undef SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS
+#undef SIMPLE_DDGI_RECEIVER_COVERAGE_HASH
+#undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
 #undef SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
@@ -135,6 +142,67 @@ void main()
     GPUFoliageCluster cluster = ReadFoliageCluster(foliagePayload.ClusterIndex);
     GPUFoliagePatch foliagePatch = ReadFoliagePatch(cluster.PatchIndex);
     GPUFoliagePrototype prototype = ReadFoliagePrototype(foliagePatch.PrototypeIndex);
+#if NJULF_GPU_DIAGNOSTIC_COUNTERS
+    // Procedural grass and card foliage do not enter scene_opaque_compact.
+    // Capture their exact shadow-raster candidate independently, using the
+    // cluster's conservative world sphere and the same pushed cascade matrix.
+    if (gl_LocalInvocationIndex == 0u &&
+        (pc.Push.Flags & FOLIAGE_DRAW_FLAG_SHADOW) != 0u)
+    {
+        float shadowDistance = prototype.LightingParams.w;
+        float distanceToCluster = max(
+            0.0,
+            length(cluster.WorldCenterRadius.xyz - pc.Push.CameraPositionTime.xyz) -
+                cluster.WorldCenterRadius.w);
+        uint diagnosticLod = SelectLod(
+            pc.Push.CameraPositionTime.xyz,
+            cluster,
+            prototype);
+        bool drawAuthoredFarImpostor = prototype.GeometryMode == 1u &&
+            diagnosticLod == 2u &&
+            (prototype.Flags & FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR) != 0u;
+        bool eligibleForShadowRaster = cluster.InstanceCount > 0u &&
+            shadowDistance > 0.0 &&
+            distanceToCluster <= shadowDistance &&
+            pc.Push.ShadowDensityScale > 0.0 &&
+            (prototype.GeometryMode == 0u ||
+                prototype.GeometryMode == 2u ||
+                drawAuthoredFarImpostor);
+        if (eligibleForShadowRaster)
+        {
+            // The cluster sphere is conservative for the authored static
+            // foliage bounds. Account for the largest procedural wind bend so
+            // the diagnostic clip test never creates a false rejection at an
+            // animated blade/card boundary.
+            float bladeHeight = max(0.05, prototype.BladeHeight);
+            float bladeWidth = max(0.01, prototype.BladeWidth);
+            float grassWindExpansion = abs(prototype.WindParams.x) * max(
+                bladeHeight * 1.25 * bladeWidth * 1.35,
+                bladeHeight * 1.25 * 0.08);
+            vec4 diagnosticSphere = cluster.WorldCenterRadius;
+            diagnosticSphere.w += grassWindExpansion;
+            bool accepted = SphereIntersectsRowMajorFrustum(
+                diagnosticSphere.xyz,
+                diagnosticSphere.w,
+                pc.Push.ViewProjectionMatrix);
+            RecordDirectionalShadowCasterAttribution(
+                pc.Push.CurrentFrameIndex,
+                cluster.PatchIndex,
+                cluster.FirstInstance,
+                foliagePayload.ClusterIndex,
+                diagnosticLod,
+                DIRECTIONAL_SHADOW_CASTER_CLASS_FOLIAGE,
+                pc.Push.Padding1,
+                foliagePayload.ClusterIndex,
+                DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_INPUT |
+                    DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_FOLIAGE |
+                    DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_CONSERVATIVE_LOD,
+                diagnosticSphere,
+                pc.Push.ViewProjectionMatrix,
+                accepted);
+        }
+    }
+#endif
 
     uint requestedBlades = min(cluster.InstanceCount, 16u);
     if ((pc.Push.Flags & FOLIAGE_DRAW_FLAG_SHADOW) != 0u)
@@ -192,10 +260,16 @@ void main()
     vec3 clusterViewDirection = SafeNormalize(
         pc.Push.CameraPositionTime.xyz - cluster.WorldCenterRadius.xyz,
         vec3(0.0, 0.0, 1.0));
+#if NJULF_SIMPLE_DDGI_FOLIAGE_FRAGMENT_FEEDBACK
+    // The exact B1 fragment variant gathers only after shipping foliage
+    // coverage survives, so this mesh-stage estimate must not duplicate work.
+    vec4 clusterDdgiIrradianceCoverage = vec4(0.0);
+#else
     vec4 clusterDdgiIrradianceCoverage = SampleSimpleDdgiIrradianceCoverage(
         cluster.WorldCenterRadius.xyz,
         clumpNormal,
         clusterViewDirection);
+#endif
 
     if (prototype.GeometryMode == 2u || drawAuthoredFarImpostor)
     {

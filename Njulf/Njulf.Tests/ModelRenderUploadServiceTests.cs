@@ -1,11 +1,14 @@
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
+using Njulf.Core.Geometry;
 using Njulf.Core.Math;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using System.Buffers.Binary;
 using System.Reflection;
+using System.Security.Cryptography;
 
 namespace Njulf.Tests
 {
@@ -1133,6 +1136,53 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void UploadCookedModel_RegistersEveryEligibleSubmeshWithLocalOmmPayload()
+        {
+            var backend = new RecordingModelRenderUploadBackend();
+            var registrationStore =
+                new OpacityMicromapRuntimeRegistrationStore();
+            using var service = new ModelRenderUploadService(
+                backend,
+                registrationStore);
+            CookedModelAsset cooked = CreateTwoSubmeshOpacityMicromapModel();
+
+            using var model = service.UploadCookedModel(cooked);
+            OpacityMicromapRuntimeMeshRegistration[] registrations =
+                registrationStore.GetRegistrationsSnapshot(out _);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(model.RenderObjects, Has.Count.EqualTo(2));
+                Assert.That(
+                    service.LastUploadDiagnostics
+                        .OpacityMicromapPayloadAcceptedCount,
+                    Is.EqualTo(1));
+                Assert.That(
+                    service.LastUploadDiagnostics
+                        .OpacityMicromapRuntimeRegistrationCount,
+                    Is.EqualTo(2));
+                Assert.That(registrations, Has.Length.EqualTo(2));
+                Assert.That(
+                    registrations.Select(
+                        static item => item.Payload.PrimitiveCount),
+                    Is.EqualTo(new uint[] { 1U, 1U }));
+                Assert.That(
+                    registrations.Select(
+                            static item => item.Payload.SourceContentHash)
+                        .Distinct()
+                        .Count(),
+                    Is.EqualTo(2));
+                Assert.That(
+                    registrations.All(
+                        static item =>
+                            item.Payload.MaterialContracts.Count == 1 &&
+                            item.Payload.MaterialContracts[0].FirstPrimitive ==
+                                0U),
+                    Is.True);
+            });
+        }
+
         private static ModelMesh CreateRollbackTestModel()
         {
             var model = new ModelMesh
@@ -1162,6 +1212,193 @@ namespace Njulf.Tests
             model.Materials.Add(CreateInvalidTexturedMaterial("Second", 5));
             return model;
         }
+
+        private static CookedModelAsset
+            CreateTwoSubmeshOpacityMicromapModel()
+        {
+            var bounds = new BoundingBox(Vector3.Zero, Vector3.One);
+            CookedSubMeshRecord SubMesh(
+                string name,
+                int vertexOffset,
+                int indexOffset,
+                int meshletOffset) => new(
+                    name,
+                    MaterialSlot: 0,
+                    NodeIndex: -1,
+                    SkinIndex: -1,
+                    Matrix4x4.Identity,
+                    vertexOffset,
+                    VertexCount: 3,
+                    indexOffset,
+                    IndexCount: 3,
+                    SkinningOffset: 0,
+                    SkinningCount: 0,
+                    meshletOffset,
+                    MeshletCount: 1,
+                    MeshletVertexOffset: meshletOffset * 3,
+                    MeshletVertexCount: 3,
+                    MeshletTriangleOffset: meshletOffset * 3,
+                    MeshletTriangleCount: 3,
+                    LodRanges:
+                    [
+                        new ProcessedMeshLodRange(0, 0, 1, 1f),
+                        new ProcessedMeshLodRange(1, 0, 1, 1f),
+                        new ProcessedMeshLodRange(2, 0, 1, 1f)
+                    ],
+                    DrawRanges: Array.Empty<ProcessedMeshDrawRange>(),
+                    bounds,
+                    BoundingSphere.FromBox(bounds),
+                    VertexAttributes: (uint)ProcessedVertexAttribute.Position)
+                {
+                    MeshletLod1Offset = meshletOffset,
+                    MeshletLod1Count = 1,
+                    MeshletLod2Offset = meshletOffset,
+                    MeshletLod2Count = 1
+                };
+
+            CookedVertexPositionStream[] positions =
+            [
+                new() { Position = new Vector4(0f, 0f, 0f, 1f) },
+                new() { Position = new Vector4(1f, 0f, 0f, 1f) },
+                new() { Position = new Vector4(0f, 1f, 0f, 1f) },
+                new() { Position = new Vector4(2f, 0f, 0f, 1f) },
+                new() { Position = new Vector4(3f, 0f, 0f, 1f) },
+                new() { Position = new Vector4(2f, 1f, 0f, 1f) }
+            ];
+            CookedVertexNormalTangentStream[] normals =
+                new CookedVertexNormalTangentStream[positions.Length];
+            CookedVertexUvColorStream[] uvColors =
+                Enumerable.Range(0, positions.Length)
+                    .Select(static _ => new CookedVertexUvColorStream
+                    {
+                        Color = Vector4.One
+                    })
+                    .ToArray();
+            var mesh = new CookedMeshPayload(
+                [SubMesh("Mask A", 0, 0, 0), SubMesh("Mask B", 3, 3, 1)],
+                positions,
+                normals,
+                uvColors,
+                Array.Empty<CookedVertexSkinningData>(),
+                [0U, 1U, 2U, 0U, 1U, 2U],
+                [
+                    new Meshlet(Vector3.Zero, 1f, 0, 3, 0, 3, 0, 3, 0, 1),
+                    new Meshlet(Vector3.Zero, 1f, 0, 3, 0, 3, 0, 3, 0, 1)
+                ],
+                [
+                    new Meshlet(Vector3.Zero, 1f, 0, 3, 0, 3, 0, 3, 0, 1),
+                    new Meshlet(Vector3.Zero, 1f, 0, 3, 0, 3, 0, 3, 0, 1)
+                ],
+                [
+                    new Meshlet(Vector3.Zero, 1f, 0, 3, 0, 3, 0, 3, 0, 1),
+                    new Meshlet(Vector3.Zero, 1f, 0, 3, 0, 3, 0, 3, 0, 1)
+                ],
+                [0U, 1U, 2U, 0U, 1U, 2U],
+                [0U, 1U, 2U, 0U, 1U, 2U]);
+            var material = new ModelMaterial
+            {
+                Name = "Exact static mask",
+                Albedo = Vector4.One,
+                AlphaMode = ModelAlphaMode.Mask,
+                AlphaCutoff = 0.5f
+            };
+            var materials = new CookedMaterialTable([material])
+            {
+                Pipelines = [CookedMaterialPipeline.Masked]
+            };
+
+            byte[] descriptors = new byte[2 * 8];
+            WriteOmmDescriptor(descriptors, 0, 0U);
+            WriteOmmDescriptor(descriptors, 8, 8U);
+            byte[] ommIndices = new byte[2 * sizeof(uint)];
+            BinaryPrimitives.WriteUInt32LittleEndian(ommIndices, 0U);
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                ommIndices.AsSpan(sizeof(uint)),
+                1U);
+            OpacityMicromapMaterialContract Contract(
+                uint firstPrimitive) => new(
+                    MaterialSlot: 0U,
+                    firstPrimitive,
+                    PrimitiveCount: 1U,
+                    TexCoordSet: 0,
+                    OpacityMicromapUvTransformBits.Identity,
+                    OpacityKey(93),
+                    OpacityKey(94),
+                    OpacityMicromapEligibilityInput.ExactStaticMask.Sampler,
+                    BitConverter.SingleToUInt32Bits(1f),
+                    BitConverter.SingleToUInt32Bits(1f),
+                    BitConverter.SingleToUInt32Bits(0.5f),
+                    BitConverter.SingleToUInt32Bits(0f),
+                    AlphaContractRevision: 1U,
+                    ShaderAbiRevision: 1U);
+            OpacityMicromapCookedPayload opacityPayload =
+                OpacityMicromapCookedPayload.Create(
+                    cookAbi: 7U,
+                    sourceContentHash: OpacityKey(90),
+                    sdkProvenanceHash: OpacityKey(91),
+                    maximumSubdivisionLevel: 1U,
+                    primitiveCount: 2U,
+                    descriptorCount: 2U,
+                    materialContracts: [Contract(0U), Contract(1U)],
+                    usageHistogram:
+                    [
+                        new OpacityMicromapUsage(
+                            OpacityMicromapFormat.FourState,
+                            1U,
+                            2UL)
+                    ],
+                    ommData: new byte[9],
+                    indexData: ommIndices,
+                    descriptorData: descriptors);
+            var manifest = new CookedModelManifest(
+                Guid.NewGuid(),
+                "Two masked submeshes",
+                "two-masks.gltf",
+                SourceHash: 1UL,
+                ImportSettingsHash: 2UL,
+                DependencyListHash: 3UL,
+                new CookedAssetReference("two-masks.meshes.njmesh", 4UL),
+                new CookedAssetReference(
+                    "../materials/two-masks.materials.njmat",
+                    5UL),
+                Animation: null,
+                SubObjects: Array.Empty<CookedModelSubObject>(),
+                bounds,
+                BoundingSphere.FromBox(bounds));
+            return new CookedModelAsset(
+                manifest,
+                mesh,
+                materials,
+                new CookedAnimationPayload([], [], []),
+                "two-masks.njmodel",
+                BytesRead: 1L)
+            {
+                OpacityMicromapPayload = opacityPayload,
+                OpacityMicromapLoadStatus =
+                    CookedOpacityMicromapPayloadLoadStatus.Valid
+            };
+        }
+
+        private static void WriteOmmDescriptor(
+            Span<byte> destination,
+            int offset,
+            uint dataOffset)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                destination[offset..],
+                dataOffset);
+            BinaryPrimitives.WriteUInt16LittleEndian(
+                destination[(offset + sizeof(uint))..],
+                1);
+            BinaryPrimitives.WriteUInt16LittleEndian(
+                destination[(offset + sizeof(uint) + sizeof(ushort))..],
+                (ushort)Silk.NET.Vulkan.OpacityMicromapFormatEXT
+                    .Format4StateExt);
+        }
+
+        private static OpacityMicromapContentKey OpacityKey(byte value) =>
+            OpacityMicromapContentKey.FromSha256(
+                SHA256.HashData([value]));
 
         private static ModelMesh CreateValidTexturedRollbackTestModel()
         {

@@ -1,0 +1,91 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_scalar_block_layout : require
+
+#include "common.glsl"
+#include "ddgi_light_tree.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants
+{
+    uint LightCount; uint LeafCapacity; uint PaddedLeafCount; uint NodeCount;
+    uint TargetStorageIndex; uint PublishedStorageIndex; uint BuildAction; uint MaximumDepth;
+    float UniformMixtureProbability; uint ExactLightThreshold; uint NodeBankStrideWords; uint LeafBankStrideWords;
+    uint ScratchRecordOffsetWords; uint ScratchSortedIndexOffsetWords; uint ScratchIndirectOffsetWords; uint PublicationGeneration;
+    uint LightBufferRevisionLow; uint LightBufferRevisionHigh; uint TopologyRevisionLow; uint TopologyRevisionHigh;
+    uint ContentRevisionLow; uint ContentRevisionHigh; uint Flags; uint Reserved0;
+} pc;
+
+shared uvec2 SharedKeys[1024];
+shared uint SharedSources[1024];
+
+bool DdgiKeyGreater(uvec2 left, uvec2 right)
+{
+    return left.x > right.x || (left.x == right.x && left.y > right.y);
+}
+
+void main()
+{
+    uint scratch = uint(SIMPLE_DDGI_LIGHT_TREE_SCRATCH_BUFFER_INDEX);
+    uint count = ReadStorageWordUniform(scratch, 0u);
+    for (uint index = gl_LocalInvocationID.x;
+         index < pc.PaddedLeafCount;
+         index += gl_WorkGroupSize.x)
+    {
+        if (index < count)
+        {
+            uint baseWord = pc.ScratchRecordOffsetWords +
+                index * DDGI_LIGHT_TREE_SCRATCH_RECORD_WORDS;
+            SharedKeys[index] = uvec2(
+                ReadStorageWordUniform(scratch, baseWord + 10u),
+                ReadStorageWordUniform(scratch, baseWord + 9u));
+            SharedSources[index] = index;
+        }
+        else
+        {
+            SharedKeys[index] = uvec2(0xffffffffu);
+            SharedSources[index] = index;
+        }
+    }
+    barrier();
+
+    for (uint sequence = 2u; sequence <= pc.PaddedLeafCount; sequence <<= 1u)
+    {
+        for (uint stride = sequence >> 1u; stride > 0u; stride >>= 1u)
+        {
+            for (uint index = gl_LocalInvocationID.x;
+                 index < pc.PaddedLeafCount;
+                 index += gl_WorkGroupSize.x)
+            {
+                uint partner = index ^ stride;
+                if (partner > index)
+                {
+                    bool ascending = (index & sequence) == 0u;
+                    bool greater = DdgiKeyGreater(SharedKeys[index], SharedKeys[partner]);
+                    if (greater == ascending)
+                    {
+                        uvec2 key = SharedKeys[index];
+                        SharedKeys[index] = SharedKeys[partner];
+                        SharedKeys[partner] = key;
+                        uint source = SharedSources[index];
+                        SharedSources[index] = SharedSources[partner];
+                        SharedSources[partner] = source;
+                    }
+                }
+            }
+            barrier();
+        }
+    }
+
+    for (uint index = gl_LocalInvocationID.x;
+         index < pc.PaddedLeafCount;
+         index += gl_WorkGroupSize.x)
+    {
+        WriteStorageWordUniform(
+            scratch,
+            pc.ScratchSortedIndexOffsetWords + index,
+            SharedSources[index]);
+    }
+}

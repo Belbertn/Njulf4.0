@@ -1,0 +1,227 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_content_stochastic.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform DdgiFoliageProxyGenerationPushConstantBlock
+{
+    GPUDdgiFoliageProxyGenerationPushConstants Push;
+} pc;
+
+const uint DDGI_FOLIAGE_VERTICES_PER_CARD = 8u;
+const uint DDGI_FOLIAGE_INDICES_PER_CARD = 12u;
+const float DDGI_TWO_PI = 6.28318530717958647692;
+
+float StableCardUnit(
+    GPUDdgiFoliageProxyPatch record,
+    uint localCardIndex,
+    uint salt)
+{
+    return DdgiStableDecisionUnitFloat(
+        uvec2(record.StablePatchKeyLow, record.StablePatchKeyHigh),
+        localCardIndex,
+        1u,
+        1u,
+        DDGI_STOCHASTIC_DOMAIN_FOLIAGE_PROXY,
+        record.StablePatchKeyLow,
+        localCardIndex ^ salt);
+}
+
+bool FindPatchForCard(
+    uint globalCardIndex,
+    out GPUDdgiFoliageProxyPatch record)
+{
+    uint low = 0u;
+    uint high = pc.Push.PatchCount;
+    while (low < high)
+    {
+        uint middle = low + ((high - low) >> 1u);
+        GPUDdgiFoliageProxyPatch candidate =
+            ReadDdgiFoliageProxyPatch(pc.Push.PatchBufferIndex, middle);
+        if (globalCardIndex < candidate.CardOffset)
+        {
+            high = middle;
+        }
+        else if (globalCardIndex - candidate.CardOffset >= candidate.CardCount)
+        {
+            low = middle + 1u;
+        }
+        else
+        {
+            record = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
+GPUVertex CreateFoliageProxyVertex(
+    vec3 position,
+    vec3 normal,
+    vec3 tangent,
+    vec2 texCoord,
+    float coverage)
+{
+    GPUVertex vertex;
+    vertex.Position = position;
+    vertex.Padding0 = 0.0;
+    vertex.Normal = normal;
+    vertex.Padding1 = 0.0;
+    vertex.TexCoord = texCoord;
+    vertex.TexCoord2 = texCoord;
+    vertex.Tangent = vec4(tangent, 1.0);
+    vertex.Color = vec4(1.0, 1.0, 1.0, coverage);
+    return vertex;
+}
+
+void WriteCrossedQuad(
+    uint globalVertexBase,
+    uint globalIndexBase,
+    uint localVertexBase,
+    vec3 bottomCenter,
+    float yaw,
+    float halfWidth,
+    float height,
+    vec3 topBend,
+    float coverage)
+{
+    vec3 right = vec3(cos(yaw), 0.0, sin(yaw));
+    vec3 normal = vec3(-right.z, 0.0, right.x);
+    vec3 topCenter = bottomCenter + vec3(0.0, height, 0.0) + topBend;
+
+    WriteVertexToBuffer(
+        pc.Push.VertexBufferIndex,
+        globalVertexBase + 0u,
+        CreateFoliageProxyVertex(
+            bottomCenter - right * halfWidth,
+            normal,
+            right,
+            vec2(0.0, 0.0),
+            coverage));
+    WriteVertexToBuffer(
+        pc.Push.VertexBufferIndex,
+        globalVertexBase + 1u,
+        CreateFoliageProxyVertex(
+            bottomCenter + right * halfWidth,
+            normal,
+            right,
+            vec2(1.0, 0.0),
+            coverage));
+    WriteVertexToBuffer(
+        pc.Push.VertexBufferIndex,
+        globalVertexBase + 2u,
+        CreateFoliageProxyVertex(
+            topCenter + right * halfWidth,
+            normal,
+            right,
+            vec2(1.0, 1.0),
+            coverage));
+    WriteVertexToBuffer(
+        pc.Push.VertexBufferIndex,
+        globalVertexBase + 3u,
+        CreateFoliageProxyVertex(
+            topCenter - right * halfWidth,
+            normal,
+            right,
+            vec2(0.0, 1.0),
+            coverage));
+
+    WriteStorageWordUniform(
+        pc.Push.IndexBufferIndex,
+        globalIndexBase + 0u,
+        localVertexBase + 0u);
+    WriteStorageWordUniform(
+        pc.Push.IndexBufferIndex,
+        globalIndexBase + 1u,
+        localVertexBase + 1u);
+    WriteStorageWordUniform(
+        pc.Push.IndexBufferIndex,
+        globalIndexBase + 2u,
+        localVertexBase + 2u);
+    WriteStorageWordUniform(
+        pc.Push.IndexBufferIndex,
+        globalIndexBase + 3u,
+        localVertexBase + 0u);
+    WriteStorageWordUniform(
+        pc.Push.IndexBufferIndex,
+        globalIndexBase + 4u,
+        localVertexBase + 2u);
+    WriteStorageWordUniform(
+        pc.Push.IndexBufferIndex,
+        globalIndexBase + 5u,
+        localVertexBase + 3u);
+}
+
+void main()
+{
+    uint globalCardIndex = gl_GlobalInvocationID.x;
+    if (globalCardIndex >= pc.Push.CardCount)
+        return;
+
+    GPUDdgiFoliageProxyPatch record;
+    if (!FindPatchForCard(globalCardIndex, record))
+        return;
+
+    uint localCardIndex = globalCardIndex - record.CardOffset;
+    uint columns = max(1u, record.GridColumns);
+    uint rows = max(1u, record.GridRows);
+    uint x = localCardIndex % columns;
+    uint z = localCardIndex / columns;
+    vec3 patchMinimum = record.BoundsMinimumAndClusterWidth.xyz;
+    vec3 patchMaximum = record.BoundsMaximumAndCardHeight.xyz;
+    vec3 patchSize = patchMaximum - patchMinimum;
+    float cellX = patchSize.x / float(columns);
+    float cellZ = patchSize.z / float(rows);
+
+    float randomX = StableCardUnit(record, localCardIndex, 0x11u);
+    float randomZ = StableCardUnit(record, localCardIndex, 0x23u);
+    float randomYaw = StableCardUnit(record, localCardIndex, 0x37u);
+    float randomScale = 0.85 +
+        StableCardUnit(record, localCardIndex, 0x41u) * 0.3;
+    vec3 bottomCenter = vec3(
+        patchMinimum.x + (float(x) + 0.15 + randomX * 0.7) * cellX,
+        patchMinimum.y,
+        patchMinimum.z + (float(z) + 0.15 + randomZ * 0.7) * cellZ);
+    float yaw = randomYaw * DDGI_TWO_PI;
+    float cardHeight = record.BoundsMaximumAndCardHeight.w * randomScale;
+    float halfWidth =
+        record.BoundsMinimumAndClusterWidth.w * randomScale * 0.5;
+
+    float windPhase = bottomCenter.x * 0.113 + bottomCenter.z * 0.173 +
+        pc.Push.WindTimeSeconds * record.WindAndCoverage.y * DDGI_TWO_PI;
+    float bendMagnitude = record.WindAndCoverage.x * cardHeight * 0.25;
+    float flutter = record.WindAndCoverage.z * cardHeight * 0.05 *
+        sin(windPhase * 2.37 + randomYaw * DDGI_TWO_PI);
+    vec3 bend = vec3(
+        sin(windPhase) * bendMagnitude + flutter,
+        0.0,
+        cos(windPhase * 0.83) * bendMagnitude - flutter);
+
+    uint globalVertexBase = globalCardIndex * DDGI_FOLIAGE_VERTICES_PER_CARD;
+    uint globalIndexBase = globalCardIndex * DDGI_FOLIAGE_INDICES_PER_CARD;
+    uint localVertexBase = localCardIndex * DDGI_FOLIAGE_VERTICES_PER_CARD;
+    WriteCrossedQuad(
+        globalVertexBase,
+        globalIndexBase,
+        localVertexBase,
+        bottomCenter,
+        yaw,
+        halfWidth,
+        cardHeight,
+        bend,
+        record.WindAndCoverage.w);
+    WriteCrossedQuad(
+        globalVertexBase + 4u,
+        globalIndexBase + 6u,
+        localVertexBase + 4u,
+        bottomCenter,
+        yaw + 0.5 * 3.14159265358979323846,
+        halfWidth,
+        cardHeight,
+        bend,
+        record.WindAndCoverage.w);
+}

@@ -304,6 +304,12 @@ public sealed class SimpleDdgiTransportSolveController
             return false;
         }
 
+        // Render-pass predicates may poll this method every frame. A current
+        // accepted certificate is an idle terminal state, not an incomplete
+        // solve, so an idempotent poll must not corrupt its diagnostic reason.
+        if (IsCertified)
+            return false;
+
         if (Phase != SimpleDdgiTransportPhase.AcceleratedSolve ||
             !IsSolveEpochComplete)
         {

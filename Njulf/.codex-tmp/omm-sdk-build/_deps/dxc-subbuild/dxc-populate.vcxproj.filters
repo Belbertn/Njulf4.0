@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\54b709e5afa2b560320c3016e135cd93\dxc-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\54b709e5afa2b560320c3016e135cd93\dxc-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\54b709e5afa2b560320c3016e135cd93\dxc-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\54b709e5afa2b560320c3016e135cd93\dxc-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\54b709e5afa2b560320c3016e135cd93\dxc-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\54b709e5afa2b560320c3016e135cd93\dxc-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\54b709e5afa2b560320c3016e135cd93\dxc-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\54b709e5afa2b560320c3016e135cd93\dxc-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\dd0ff07eed81612cd90d81d79147007c\dxc-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\dd56791b70f43a0bf2d8388703ca3e6b\dxc-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-build\_deps\dxc-subbuild\CMakeFiles\dxc-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{9A515288-B0B2-3523-9357-055EEE332BCD}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

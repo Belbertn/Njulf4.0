@@ -158,15 +158,15 @@ public static class AsyncComputeCertificationEvidence
 
         new(
             AsyncComputePath.SimpleDdgiUpdate,
-            "async-cert-simple-ddgi-20260804-pending-r2",
-            "ProductionRenderPipelineDeclaration.v10; compact SimpleDdgiReceiverProbes publication; SimpleDdgiSchedulePass; SimpleDdgiPasses; SimpleDdgiAcceleratedSolvePass; SimpleDdgiSchedulerCommitPass; ddgi_simple_schedule_*.comp; ddgi_simple_trace.comp; ddgi_simple_relocate_classify.comp; ddgi_simple_transport.comp; ddgi_simple_blend.comp; ddgi_simple_transport_intermediate_publish.comp; ddgi_simple_publish.comp; ddgi_simple_transport_audit.comp",
-            ["SimpleDdgiSchedulePass", "SimpleDdgiTracePass", "SimpleDdgiRelocateClassifyPass", "SimpleDdgiAcceleratedSolvePass", "SimpleDdgiTransportPass", "SimpleDdgiBlendPass", "SimpleDdgiPublishPass", "SimpleDdgiTransportAuditPass", "SimpleDdgiSchedulerCommitPass"],
+            "async-cert-simple-ddgi-20260810-pending-r4",
+            "ProductionRenderPipelineDeclaration.v12; compact SimpleDdgiReceiverProbes publication; SimpleDdgiSchedulePass; SimpleDdgiPasses; SimpleDdgiDirectionalRadiancePass; SimpleDdgiAcceleratedSolvePass; SimpleDdgiSchedulerCommitPass; ddgi_simple_schedule_*.comp; ddgi_simple_trace.comp; ddgi_simple_relocate_classify.comp; ddgi_simple_transport.comp; ddgi_simple_blend.comp; ddgi_simple_directional_prepare.comp; ddgi_simple_directional_project.comp; ddgi_simple_directional_publish.comp; ddgi_simple_transport_intermediate_publish.comp; ddgi_simple_publish.comp; ddgi_simple_transport_audit.comp",
+            ["SimpleDdgiSchedulePass", "SimpleDdgiTracePass", "SimpleDdgiRelocateClassifyPass", "SimpleDdgiAcceleratedSolvePass", "SimpleDdgiTransportPass", "SimpleDdgiBlendPass", "SimpleDdgiDirectionalRadiancePass", "SimpleDdgiPublishPass", "SimpleDdgiTransportAuditPass", "SimpleDdgiSchedulerCommitPass"],
             [
                 "TLAS/RayQueryInstanceMetadata/MeshGeometryBuffers/MaterialBuffers/MaterialTextures/LightBuffers/EnvironmentData/EnvironmentMaps: complete ray-query input ranges",
                 "FarFieldParameters/FarFieldVoxels/FarFieldInstances/FarFieldJumpFlood/FarFieldPageTable: complete far-field input ranges",
             "SimpleDdgiParameters/IrradianceAtlas/TransportSourceCache/VisibilityAtlas/RayScratch/ProbeState/ReceiverProbes/UpdateQueue/RelocationData/SchedulerArena: complete update and compact-publication buffer-set ranges"
             ],
-            "Scene/lighting/AS inputs -> SimpleDdgiSchedulePass -> SimpleDdgiTracePass -> relocate -> cached transport/blend sweeps -> SimpleDdgiPublishPass -> frozen cached audit -> SimpleDdgiSchedulerCommitPass -> next-frame GI sampling.",
+            "Scene/lighting/AS inputs -> SimpleDdgiSchedulePass -> SimpleDdgiTracePass -> relocate -> cached transport/blend sweeps -> FP32 directional SH projection -> checked SH publication -> SimpleDdgiPublishPass -> frozen cached audit -> SimpleDdgiSchedulerCommitPass -> next-frame GI sampling.",
             "Buffer-only contract; no image layouts. Compute owns private update state until publication; canonical atlases and the distinct compact ReceiverProbes range transfer to the first graphics or next-frame GI consumer.",
             "No active certifying topology: the tested Sponza run was rejected because sampled-simple-DDGI atlas ownership remained graphics-visible, so the atomic path did not execute as an eligible isolated workload.",
             ["async-cert-simple-ddgi-debug.json"],

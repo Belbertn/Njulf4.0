@@ -2,6 +2,16 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
+#ifndef NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#define NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION 0
+#endif
+
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#endif
+
 // Every forward variant consumes the current frame's depth prepass and keeps
 // depth writes disabled.  Make that contract explicit so helper functions with
 // diagnostic atomics cannot force late depth testing and shade hidden Sponza
@@ -12,7 +22,62 @@ layout(early_fragment_tests) in;
 #define NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT 0
 #endif
 
+// C5 owns a dedicated opaque/alpha-mask MRT variant.  It is never inferred
+// from SceneColor: output location one contains only shadowed direct diffuse
+// plus material emissive in scene-linear radiance.
+#ifndef NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+#define NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT 0
+#endif
+
+#ifndef NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION
+#define NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION 0
+#endif
+
+#ifndef NJULF_C4_RECEIVER_OUTPUT
+#define NJULF_C4_RECEIVER_OUTPUT 0
+#endif
+
+#ifndef NJULF_C4_RECEIVER_SEMANTICS_VERSION
+#define NJULF_C4_RECEIVER_SEMANTICS_VERSION 0
+#endif
+
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+#if defined(FORWARD_WEIGHTED_OIT) || \
+    (!defined(FORWARD_OPAQUE) && !defined(FORWARD_SIMPLE_OPAQUE))
+#error "C5 direct source is valid only for opaque or alpha-mask forward variants."
+#endif
+#if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+#error "C5 direct source cannot share the forward MRT variant with material provenance."
+#endif
+#if NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 3
+#error "C5 direct source shader semantics version mismatch."
+#endif
+#elif NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 0
+#error "C5 direct source semantics version requires the dedicated output variant."
+#endif
+
+#if NJULF_C4_RECEIVER_OUTPUT
+#if defined(FORWARD_WEIGHTED_OIT) || \
+    (!defined(FORWARD_OPAQUE) && !defined(FORWARD_SIMPLE_OPAQUE))
+#error "C4 receiver payload is valid only for opaque or alpha-mask forward variants."
+#endif
+#if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+#error "C4 receiver payload cannot share the forward MRT variant with material provenance."
+#endif
+#if NJULF_C4_RECEIVER_SEMANTICS_VERSION != 1
+#error "C4 receiver payload shader semantics version mismatch."
+#endif
+#elif NJULF_C4_RECEIVER_SEMANTICS_VERSION != 0
+#error "C4 receiver semantics version requires the dedicated output variant."
+#endif
+
 #include "common.glsl"
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+#include "c5_receiver_payload.glsl"
+#endif
+#if NJULF_C4_RECEIVER_OUTPUT
+#include "c4_receiver_payload.glsl"
+#endif
 #if FORWARD_DDGI_RECEIVER_CACHE
 #include "forward_ddgi_receiver_cache.glsl"
 #endif
@@ -22,11 +87,15 @@ layout(early_fragment_tests) in;
 // contended atomic per shaded fragment.  Preserve an estimated full-resolution
 // count while sampling one pixel from each 16x16 screen tile.
 #define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT ((((uint(gl_FragCoord.x) & 15u) == 0u) && ((uint(gl_FragCoord.y) & 15u) == 0u)) ? 256u : 0u)
+#define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE (((uint(gl_FragCoord.x) & 7u) == 0u) && ((uint(gl_FragCoord.y) & 7u) == 0u))
+#define SIMPLE_DDGI_RECEIVER_COVERAGE_HASH (((uint(gl_FragCoord.x) >> 3u) * 73856093u) ^ ((uint(gl_FragCoord.y) >> 3u) * 19349663u))
+#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
 #if defined(FORWARD_WEIGHTED_OIT)
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (((uint(gl_FragCoord.x) & 1u) == 0u) && ((uint(gl_FragCoord.y) & 1u) == 0u))
 #define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 1
 #define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 1u
 #define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
+#define SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS SIMPLE_DDGI_RECEIVER_CONSUMER_TRANSPARENT
 #elif defined(FORWARD_OPAQUE) || defined(FORWARD_SIMPLE_OPAQUE)
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (((uint(gl_FragCoord.x) & 7u) == 0u) && ((uint(gl_FragCoord.y) & 7u) == 0u))
 // Current opaque depth owns proactive resident-page retention. Opaque forward
@@ -35,19 +104,30 @@ layout(early_fragment_tests) in;
 #define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 0
 #define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 0u
 #define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 1
+#define SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS SIMPLE_DDGI_RECEIVER_CONSUMER_OPAQUE
 #else
 // The generic forward artifact is the sorted-transparent pipeline.
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (((uint(gl_FragCoord.x) & 1u) == 0u) && ((uint(gl_FragCoord.y) & 1u) == 0u))
 #define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 1
 #define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 1u
 #define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
+#define SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS SIMPLE_DDGI_RECEIVER_CONSUMER_TRANSPARENT
 #endif
 #include "ddgi_simple_shared.glsl"
+#undef SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS
 #undef SIMPLE_DDGI_OPAQUE_GATHER_ORACLE
 #undef SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET
 #undef SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT
 #undef SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE
+#undef SIMPLE_DDGI_RECEIVER_COVERAGE_HASH
+#undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
 #undef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
+#undef SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#include "ddgi_receiver_feedback_source_abi.glsl"
+#include "ddgi_receiver_feedback_producer.glsl"
+#include "ddgi_receiver_feedback_surface_producer.glsl"
+#endif
 #include "farfield_clipmap.glsl"
 
 #ifndef FORWARD_SIMPLE_VERTEX_INPUT
@@ -81,7 +161,19 @@ layout(location = 0) out vec4 outOitAccumulation;
 layout(location = 1) out vec4 outOitRevealage;
 #else
 layout(location = 0) out vec4 outColor;
-#if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+#if NJULF_C4_RECEIVER_OUTPUT && NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+// Combined advanced-GI ABI. Keep the C4 payload at location one so the
+// standalone C4 and combined variants share an identical producer binding;
+// C5 shifts its two outputs to the following contiguous locations.
+layout(location = 1) out uvec4 outGiCausticReceiverPayload;
+layout(location = 2) out vec4 outDirectDiffuseAndEmissive;
+layout(location = 3) out uvec4 outNearFieldReceiverPayload;
+#elif NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+layout(location = 1) out vec4 outDirectDiffuseAndEmissive;
+layout(location = 2) out uvec4 outNearFieldReceiverPayload;
+#elif NJULF_C4_RECEIVER_OUTPUT
+layout(location = 1) out uvec4 outGiCausticReceiverPayload;
+#elif NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 layout(location = 1) out float outMaterialTransportProvenance;
 #endif
 #endif
@@ -222,6 +314,8 @@ const uint REFLECTION_DEBUG_PROBE_PREFILTER_MIP = 5u;
 const uint REFLECTION_DEBUG_BOX_PROJECTION_DIRECTION = 6u;
 const uint REFLECTION_DEBUG_LOCAL_REFLECTION_ONLY = 9u;
 const uint REFLECTION_DEBUG_GLOBAL_FALLBACK_ONLY = 10u;
+const uint REFLECTION_DEBUG_DDGI_DIRECTIONAL_RADIANCE_LOBE = 11u;
+const uint REFLECTION_DEBUG_SOURCE_OWNERSHIP = 12u;
 const uint REFLECTION_ENABLED_FLAG = 1u << 0u;
 const uint REFLECTION_BOX_PROJECTION_ENABLED_FLAG = 1u << 1u;
 const uint REFLECTION_PROBE_BLENDING_ENABLED_FLAG = 1u << 2u;
@@ -322,6 +416,11 @@ bool ForwardReflectionCaptureEnabled()
     // Bit 31 is reserved in DiagnosticFlags so adding the capture mode does
     // not change the established 256-byte forward push-constant ABI.
     return (pc.Push.DiagnosticFlags & (1u << 31u)) != 0u;
+}
+
+uint ForwardReflectionCaptureLayer()
+{
+    return (pc.Push.DiagnosticFlags >> 16u) & 0x1fffu;
 }
 
 bool ForwardDdgiReceiverCacheEnabled()
@@ -958,7 +1057,14 @@ void AccumulateDdgiInvestigationForwardDiagnostics(
         SimpleDdgiVolume diagnosticVolume;
         float diagnosticEdgeWeight;
         vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
-        bool diagnosticInVolume = SelectSimpleDdgiVolume(simpleParams, worldPosition, diagnosticVolumeIndex, diagnosticVolume, diagnosticEdgeWeight);
+        bool ignoredRefinementOrBaseFallback;
+        bool diagnosticInVolume = SelectSimpleDdgiVolume(
+            simpleParams,
+            worldPosition,
+            diagnosticVolumeIndex,
+            diagnosticVolume,
+            diagnosticEdgeWeight,
+            ignoredRefinementOrBaseFallback);
         bool diagnosticBiasOutsideSelectionDomain;
         vec3 diagnosticWorldPosition = SimpleDdgiResolveInterpolationPosition(
             diagnosticVolume,
@@ -1948,6 +2054,8 @@ vec3 EvaluateReflectionSpecular(
     vec2 brdf,
     vec3 fresnel,
     float specularOcclusion,
+    vec3 ddgiDirectionalRadiance,
+    float ddgiDirectionalConfidence,
     out bool debugActive,
     out vec3 debugColor)
 {
@@ -2020,7 +2128,20 @@ vec3 EvaluateReflectionSpecular(
     if (totalWeight > 0.0001)
         localReflection /= totalWeight;
 
-    vec3 reflectedRadiance = mix(globalReflection, localReflection, localWeight) * header.Intensity;
+    // Explicit source ownership: local geometric captures consume the first
+    // share, qualified DDGI consumes the represented remainder, and the global
+    // environment is the canonical fallback. The weights sum to one before a
+    // single split-sum BRDF application.
+    float remainingWeight = 1.0 - localWeight;
+    float ddgiWeight = remainingWeight * clamp(
+        ddgiDirectionalConfidence,
+        0.0,
+        1.0);
+    float globalWeight = max(remainingWeight - ddgiWeight, 0.0);
+    vec3 reflectedRadiance = (
+        localReflection * localWeight +
+        ddgiDirectionalRadiance * ddgiWeight +
+        globalReflection * globalWeight) * header.Intensity;
     vec3 specular = reflectedRadiance * (fresnel * brdf.x + brdf.y) * environment.SpecularIntensity * specularOcclusion;
 
     if (header.DebugView != 0u)
@@ -2042,6 +2163,11 @@ vec3 EvaluateReflectionSpecular(
             debugColor = localReflection * header.Intensity;
         else if (header.DebugView == REFLECTION_DEBUG_GLOBAL_FALLBACK_ONLY)
             debugColor = globalReflection * header.Intensity;
+        else if (header.DebugView ==
+                REFLECTION_DEBUG_DDGI_DIRECTIONAL_RADIANCE_LOBE)
+            debugColor = ddgiDirectionalRadiance * header.Intensity;
+        else if (header.DebugView == REFLECTION_DEBUG_SOURCE_OWNERSHIP)
+            debugColor = vec3(localWeight, ddgiWeight, globalWeight);
         else
             debugColor = specular;
     }
@@ -2055,8 +2181,14 @@ vec3 EvaluateGlobalReflectionSpecular(
     float lod,
     vec2 brdf,
     vec3 fresnel,
-    float specularOcclusion)
+    float specularOcclusion,
+    vec3 ddgiDirectionalRadiance,
+    float ddgiDirectionalConfidence,
+    out bool debugActive,
+    out vec3 debugColor)
 {
+    debugActive = false;
+    debugColor = vec3(0.0);
     GPUReflectionProbeHeader header = ReadReflectionProbeHeader();
     bool reflectionsEnabled = (header.Flags & REFLECTION_ENABLED_FLAG) != 0u;
     if (!reflectionsEnabled)
@@ -2065,9 +2197,30 @@ vec3 EvaluateGlobalReflectionSpecular(
     vec3 globalReflection = SampleEnvironmentPrefilteredRadiance(
         environment,
         reflectionDirection,
-        lod) * header.GlobalFallbackIntensity * header.Intensity;
+        lod) * header.GlobalFallbackIntensity;
+    float ddgiWeight = clamp(ddgiDirectionalConfidence, 0.0, 1.0);
+    vec3 reflectedRadiance = mix(
+        globalReflection,
+        ddgiDirectionalRadiance,
+        ddgiWeight) * header.Intensity;
+    vec3 specular = reflectedRadiance * (fresnel * brdf.x + brdf.y) *
+        environment.SpecularIntensity * specularOcclusion;
 
-    return globalReflection * (fresnel * brdf.x + brdf.y) * environment.SpecularIntensity * specularOcclusion;
+    if (header.DebugView != 0u)
+    {
+        debugActive = true;
+        if (header.DebugView == REFLECTION_DEBUG_GLOBAL_FALLBACK_ONLY)
+            debugColor = globalReflection * header.Intensity;
+        else if (header.DebugView ==
+                REFLECTION_DEBUG_DDGI_DIRECTIONAL_RADIANCE_LOBE)
+            debugColor = ddgiDirectionalRadiance * header.Intensity;
+        else if (header.DebugView == REFLECTION_DEBUG_SOURCE_OWNERSHIP)
+            debugColor = vec3(0.0, ddgiWeight, 1.0 - ddgiWeight);
+        else
+            debugColor = specular;
+    }
+
+    return specular;
 }
 
 void EvaluateIbl(
@@ -2079,6 +2232,8 @@ void EvaluateIbl(
     vec3 normal,
     vec3 viewDirection,
     float ambientOcclusion,
+    vec3 ddgiDirectionalRadiance,
+    float ddgiDirectionalConfidence,
     out vec3 diffuseIbl,
     out vec3 specularIbl,
     out bool reflectionDebugActive,
@@ -2127,7 +2282,11 @@ void EvaluateIbl(
         lod,
         brdf,
         fresnel,
-        specularOcclusion);
+        specularOcclusion,
+        ddgiDirectionalRadiance,
+        ddgiDirectionalConfidence,
+        reflectionDebugActive,
+        reflectionDebugColor);
 #else
     specularIbl = EvaluateReflectionSpecular(
         environment,
@@ -2137,13 +2296,14 @@ void EvaluateIbl(
         brdf,
         fresnel,
         specularOcclusion,
+        ddgiDirectionalRadiance,
+        ddgiDirectionalConfidence,
         reflectionDebugActive,
         reflectionDebugColor);
 #endif
 
-    // Simple DDGI stores diffuse hemispherical irradiance only.  It is not a
-    // directional radiance representation, so indirect specular remains owned by
-    // SSR/reflection probes/prefiltered environment lighting.
+    // The directional DDGI sidecar participates as one normalized reflection
+    // source. Diffuse irradiance remains a separate certified field.
 }
 
 vec3 EvaluatePbrLight(
@@ -2457,8 +2617,247 @@ uint ResolveSimpleDdgiMaterialTransportProvenance(
 #endif
 }
 
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+float SimpleDdgiTransparentCompositeWeight(float outputAlpha)
+{
+    float alpha = clamp(outputAlpha, 0.0, 1.0);
+#if FORWARD_WEIGHTED_OIT
+    float depthWeight = clamp(
+        pow(max(1.0 - gl_FragCoord.z * 0.95, 0.01), 3.0),
+        0.01,
+        1.0);
+    float alphaWeight = max(alpha * 8.0 + 0.01, 0.01);
+    float oitWeight = clamp(
+        alphaWeight * alphaWeight * alphaWeight * 64.0 * depthWeight,
+        0.01,
+        3000.0);
+    // This is the exact coefficient submitted to the weighted accumulation
+    // target. The later normalization is shared by all fragments and cannot be
+    // attributed without retaining a full per-pixel fragment list.
+    return alpha * oitWeight;
+#else
+    // Sorted source-over uses opacity as this fragment's compositing
+    // coefficient. Draw order supplies the accumulated destination
+    // transmittance; feedback deliberately never substitutes fragment count.
+    return alpha;
+#endif
+}
+
+void EmitSimpleDdgiSurfaceReceiverFeedback(
+    SimpleDdgiGatherResult gather,
+    bool gatherContributed,
+    float radiometricOwnership,
+    float leakAttenuation,
+    float physicalSurfaceWeight,
+    bool eligible,
+    uint producer,
+    bool tileNamespaceValid,
+    uint tileNamespaceBase)
+{
+    EmitSimpleDdgiSurfaceReceiverFeedbackCore(
+        gather,
+        gatherContributed,
+        radiometricOwnership,
+        leakAttenuation,
+        physicalSurfaceWeight,
+        eligible,
+        producer,
+        pc.Push.CurrentFrameIndex,
+        pc.Push.ScreenDimensions,
+        tileNamespaceValid,
+        tileNamespaceBase,
+        uvec3(fragObjectIndex, fragMaterialIndex, fragMeshletIndex));
+}
+
+void EmitSimpleDdgiTransparentReceiverFeedback(
+    SimpleDdgiGatherResult gather,
+    bool gatherContributed,
+    float radiometricOwnership,
+    float leakAttenuation,
+    float outputAlpha)
+{
+    EmitSimpleDdgiSurfaceReceiverFeedback(
+        gather,
+        gatherContributed,
+        radiometricOwnership,
+        leakAttenuation,
+        SimpleDdgiTransparentCompositeWeight(outputAlpha),
+        true,
+        2u,
+        true,
+        0u);
+}
+
+void EmitSimpleDdgiAlphaMaskReceiverFeedback(
+    SimpleDdgiGatherResult gather,
+    bool gatherContributed,
+    float radiometricOwnership,
+    float leakAttenuation,
+    float survivingCoverage,
+    bool alphaMask,
+    float roughDdgiOwnership)
+{
+    // The fragment has already passed the shipping alpha expression. Its
+    // projected raster-sample area is one pixel; sampled alpha supplies the
+    // sub-pixel coverage estimate without counting rejected fragments.
+    bool reflectionFeedback = ForwardReflectionCaptureEnabled();
+    uint tileNamespaceBase = 0u;
+    bool tileNamespaceValid = !reflectionFeedback ||
+        SimpleDdgiTryComputeCubemapTileNamespace(
+            ForwardReflectionCaptureLayer(),
+            pc.Push.ScreenDimensions,
+            tileNamespaceBase);
+    float physicalSurfaceWeight = reflectionFeedback
+        ? SimpleDdgiCubemapTexelSolidAngle(
+              gl_FragCoord.xy,
+              pc.Push.ScreenDimensions) *
+          clamp(roughDdgiOwnership, 0.0, 1.0)
+        : clamp(survivingCoverage, 0.0, 1.0);
+    EmitSimpleDdgiSurfaceReceiverFeedback(
+        gather,
+        gatherContributed,
+        radiometricOwnership,
+        leakAttenuation,
+        physicalSurfaceWeight,
+        reflectionFeedback || alphaMask,
+        reflectionFeedback ? 5u : 1u,
+        tileNamespaceValid,
+        tileNamespaceBase);
+}
+#endif
+
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+const float C5_MAXIMUM_FINITE_FP16 = 65504.0;
+
+vec2 C5OctEncodeNormal(vec3 value)
+{
+    float lengthSquared = dot(value, value);
+    if (lengthSquared <= 1.0e-12 || any(isnan(value)) || any(isinf(value)))
+        return vec2(0.0);
+    vec3 normal = value * inversesqrt(lengthSquared);
+    normal /= abs(normal.x) + abs(normal.y) + abs(normal.z);
+    if (normal.z < 0.0)
+    {
+        normal.xy = (vec2(1.0) - abs(normal.yx)) *
+            vec2(normal.x >= 0.0 ? 1.0 : -1.0,
+                 normal.y >= 0.0 ? 1.0 : -1.0);
+    }
+    return clamp(normal.xy, vec2(-1.0), vec2(1.0));
+}
+
+bool C5CreateReceiverPayload(
+    vec3 geometricNormal,
+    vec3 shadingNormal,
+    vec3 diffuseBase,
+    vec3 dielectricF0,
+    vec3 viewDirection,
+    out uvec4 payload)
+{
+    payload = uvec4(0u);
+
+    vec2 encodedGeometric = C5OctEncodeNormal(geometricNormal);
+    vec2 encodedShading = C5OctEncodeNormal(shadingNormal);
+    if (dot(encodedGeometric, encodedGeometric) == 0.0 &&
+            abs(geometricNormal.z) < 0.5 ||
+        dot(encodedShading, encodedShading) == 0.0 &&
+            abs(shadingNormal.z) < 0.5)
+    {
+        return false;
+    }
+
+    if (fragObjectIndex > 0xffffu || fragMaterialIndex > 0xffffu ||
+        any(isnan(diffuseBase)) || any(isinf(diffuseBase)) ||
+        any(isnan(dielectricF0)) || any(isinf(dielectricF0)) ||
+        any(isnan(viewDirection)) || any(isinf(viewDirection)))
+    {
+        return false;
+    }
+
+    vec3 generationDirection;
+    float generationPdf;
+    if (!NjulfC5CreateStableCosineDirection(
+            uvec2(gl_FragCoord.xy),
+            uvec2(fragObjectIndex, fragMaterialIndex),
+            floatBitsToUint(pc.Push.Time),
+            shadingNormal,
+            generationDirection,
+            generationPdf))
+    {
+        return false;
+    }
+    float receiverCosine = max(dot(shadingNormal, generationDirection), 0.0);
+    float receiverViewCosine = max(dot(shadingNormal, viewDirection), 0.0);
+    vec3 diffuseBrdf = EvaluateGiDiffuseBrdf(
+        diffuseBase,
+        dielectricF0,
+        receiverCosine,
+        receiverViewCosine);
+    vec3 exactThroughput = diffuseBrdf * receiverCosine / generationPdf;
+    if (any(isnan(exactThroughput)) || any(isinf(exactThroughput)) ||
+        any(lessThan(exactThroughput, vec3(0.0))))
+    {
+        return false;
+    }
+
+    // The generation-time direction and PDF are reproduced bit-for-bit by
+    // trace from semantic identity; this payload stores their matching
+    // non-negative f*cos/pdf throughput. RGB9E5 is the frozen V6 transport
+    // encoding and is covered by qualification error bounds.
+    payload = uvec4(
+        packSnorm2x16(encodedGeometric),
+        packSnorm2x16(encodedShading),
+        (fragObjectIndex & 0xffffu) |
+            ((fragMaterialIndex & 0xffffu) << 16u),
+        NjulfC5PackRgb9E5(exactThroughput));
+    return true;
+}
+#endif
+
+#if NJULF_C4_RECEIVER_OUTPUT
+bool C4CreateReceiverPayload(
+    vec3 geometricNormal,
+    vec3 shadingNormal,
+    vec3 directionalDiffuseBase,
+    vec3 dielectricF0,
+    out uvec4 payload)
+{
+    payload = uvec4(0u);
+    float geometricLengthSquared = dot(geometricNormal, geometricNormal);
+    float shadingLengthSquared = dot(shadingNormal, shadingNormal);
+    if (geometricLengthSquared <= 1.0e-12 ||
+        shadingLengthSquared <= 1.0e-12 ||
+        any(isnan(geometricNormal)) || any(isinf(geometricNormal)) ||
+        any(isnan(shadingNormal)) || any(isinf(shadingNormal)) ||
+        any(isnan(directionalDiffuseBase)) ||
+        any(isinf(directionalDiffuseBase)) ||
+        any(isnan(dielectricF0)) || any(isinf(dielectricF0)) ||
+        any(lessThan(directionalDiffuseBase, vec3(0.0))) ||
+        any(lessThan(dielectricF0, vec3(0.0))))
+    {
+        return false;
+    }
+
+    payload = uvec4(
+        packSnorm2x16(NjulfC4OctEncodeNormal(geometricNormal)),
+        packSnorm2x16(NjulfC4OctEncodeNormal(shadingNormal)),
+        NjulfC4PackRgb9E5(directionalDiffuseBase),
+        NjulfC4PackDielectricF0AndFlags(dielectricF0));
+    return NjulfC4ReceiverPayloadValid(payload);
+}
+#endif
+
 void main()
 {
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+    // Every non-discard path, including diagnostic early returns, has a
+    // defined source attachment value. The C5-capability gate excludes debug
+    // views; this initialization is the final shader-side safety net.
+    outDirectDiffuseAndEmissive = vec4(0.0);
+    outNearFieldReceiverPayload = uvec4(0u);
+#endif
+#if NJULF_C4_RECEIVER_OUTPUT
+    outGiCausticReceiverPayload = uvec4(0u);
+#endif
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     WriteMaterialTransportProvenance(MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN);
@@ -3012,6 +3411,78 @@ void main()
         specularFactor,
         specularColor);
 
+    SimpleDdgiGatherResult precomputedSimpleDdgiGather =
+        EmptySimpleDdgiGatherResult();
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+    bool exactFeedbackGatherContributed = false;
+    float exactFeedbackRadiometricOwnership = 0.0;
+    float exactFeedbackLeakAttenuation = 0.0;
+    float exactFeedbackRoughDdgiOwnership = 0.0;
+#endif
+    vec3 ddgiDirectionalRadiance = vec3(0.0);
+    float ddgiDirectionalConfidence = 0.0;
+#if !FORWARD_GLOBAL_ILLUMINATION_DISABLED && !FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+    bool directionalGlobalIlluminationEnabled = geometryDecal
+        ? ForwardDecalGlobalIlluminationEnabled()
+        : ForwardGlobalIlluminationEnabled() != 0u;
+    if (directionalGlobalIlluminationEnabled)
+    {
+        SimpleDdgiParams directionalParams = ReadSimpleDdgiParams(
+            uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+        uint directionalMode = SimpleDdgiDirectionalRadianceMode(
+            directionalParams.residencyFlags);
+        uint glossyMode = SimpleDdgiGlossyTransportMode(
+            directionalParams.residencyFlags);
+        float roughnessWeight = SimpleDdgiRoughSpecularWeight(
+            directionalParams.residencyFlags,
+            roughness);
+        bool directionalConfigured =
+            (directionalParams.flags &
+                (SIMPLE_DDGI_FLAG_ENABLED |
+                 SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) ==
+                (SIMPLE_DDGI_FLAG_ENABLED |
+                 SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) &&
+            directionalParams.probeCount > 0u &&
+            directionalMode !=
+                SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF &&
+            glossyMode != SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_OFF &&
+            roughnessWeight > 0.0;
+        bool diffuseGatherRequired =
+            (directionalParams.flags &
+                (SIMPLE_DDGI_FLAG_ENABLED |
+                 SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) ==
+                (SIMPLE_DDGI_FLAG_ENABLED |
+                 SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) &&
+            directionalParams.probeCount > 0u;
+        if (diffuseGatherRequired)
+        {
+            if (directionalConfigured)
+            {
+                SetSimpleDdgiDirectionalRadianceQuery(
+                    reflect(-viewDirection, normal),
+                    roughness);
+            }
+            precomputedSimpleDdgiGather = SampleSimpleDdgiGather(
+                directionalParams,
+                fragWorldPosition,
+                ddgiNormal,
+                viewDirection);
+            if (directionalConfigured)
+            {
+                ddgiDirectionalRadiance =
+                    precomputedSimpleDdgiGather.directionalRadiance *
+                    max(directionalParams.indirectIntensity, 0.0);
+                ddgiDirectionalConfidence = clamp(
+                    precomputedSimpleDdgiGather.directionalRadianceSupport *
+                    SimpleDdgiRadiometricOwnership(
+                        precomputedSimpleDdgiGather),
+                    0.0,
+                    1.0);
+            }
+        }
+    }
+#endif
+
     EvaluateIbl(
         albedo,
         metallic,
@@ -3021,6 +3492,8 @@ void main()
         normal,
         viewDirection,
         indirectAo,
+        ddgiDirectionalRadiance,
+        ddgiDirectionalConfidence,
         diffuseIbl,
         specularIbl,
         reflectionDebugActive,
@@ -3298,11 +3771,11 @@ void main()
         // Reflection captures, detailed/provenance artifacts, and any frame
         // where cache creation or dispatch is unavailable bind this exact
         // fallback artifact.
-        simpleGather = SampleSimpleDdgiGather(
-            simpleDdgiParams,
-            fragWorldPosition,
-            ddgiNormal,
-            viewDirection);
+        // Non-cache native programs perform exactly one structured gather per
+        // fragment. It feeds both directional specular and diffuse ownership;
+        // retaining a second syntactic call site duplicates the optimized
+        // residency atomics even when the branches are mutually exclusive.
+        simpleGather = precomputedSimpleDdgiGather;
         simpleSupport = clamp(simpleGather.validSupport, 0.0, 1.0);
         simpleDirectionalSupport = clamp(
             simpleGather.directionalSupport,
@@ -3314,6 +3787,14 @@ void main()
             simpleGather,
             simpleDdgiParams);
         simpleIrradiance = simpleGather.irradiance;
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+        exactFeedbackGatherContributed = true;
+        exactFeedbackRadiometricOwnership = simpleRadiometricOwnership;
+        exactFeedbackLeakAttenuation = simpleLeakAttenuation;
+        exactFeedbackRoughDdgiOwnership = SimpleDdgiRoughSpecularWeight(
+            simpleDdgiParams.residencyFlags,
+            roughness);
+#endif
         float simpleOwnership = simpleRadiometricOwnership * simpleLeakAttenuation;
         // Leak attenuation represents blocked transport, not missing field
         // coverage, so it must not be refilled with the environment complement.
@@ -4010,6 +4491,37 @@ void main()
 #endif
 #endif // !FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE
 
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+    // This must remain independent of final scene colour and every indirect
+    // owner. AccumulateLight has already applied the exact shadow factor to
+    // directDiffuseSource, while emissive follows the frozen material
+    // photometric convention.
+    bool c5ReceiverPayloadValid = C5CreateReceiverPayload(
+        geometricNormal,
+        normal,
+        directionalDiffuseBase,
+        dielectricF0,
+        viewDirection,
+        outNearFieldReceiverPayload);
+    outDirectDiffuseAndEmissive = vec4(
+        clamp(directDiffuseSource + emissive,
+            vec3(0.0), vec3(C5_MAXIMUM_FINITE_FP16)),
+        c5ReceiverPayloadValid ? 1.0 : 0.0);
+#endif
+
+#if NJULF_C4_RECEIVER_OUTPUT
+    // C4 stores incident photon flux independently. This MRT publishes only
+    // current receiver normals and BRDF parameters; the resolve applies them
+    // once for each photon direction and the composite adds separate C4
+    // radiance exactly once.
+    C4CreateReceiverPayload(
+        geometricNormal,
+        normal,
+        directionalDiffuseBase,
+        dielectricF0,
+        outGiCausticReceiverPayload);
+#endif
+
     vec3 color = finalDiffuseIndirect + specularIbl + directLighting + emissive;
 
     if (hasMaterialExtension)
@@ -4086,5 +4598,26 @@ void main()
         }
     }
 
-    WriteForwardColor(vec4(color, alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha));
+    float finalOutputAlpha =
+        alphaMode > 0.5 && alphaMode < 1.5 ? 1.0 : outputAlpha;
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#if defined(FORWARD_OPAQUE) || defined(FORWARD_SIMPLE_OPAQUE)
+    EmitSimpleDdgiAlphaMaskReceiverFeedback(
+        precomputedSimpleDdgiGather,
+        exactFeedbackGatherContributed,
+        exactFeedbackRadiometricOwnership,
+        exactFeedbackLeakAttenuation,
+        materialCoverage.Alpha,
+        alphaMode > 0.5 && alphaMode < 1.5,
+        exactFeedbackRoughDdgiOwnership);
+#else
+    EmitSimpleDdgiTransparentReceiverFeedback(
+        precomputedSimpleDdgiGather,
+        exactFeedbackGatherContributed,
+        exactFeedbackRadiometricOwnership,
+        exactFeedbackLeakAttenuation,
+        finalOutputAlpha);
+#endif
+#endif
+    WriteForwardColor(vec4(color, finalOutputAlpha));
 }

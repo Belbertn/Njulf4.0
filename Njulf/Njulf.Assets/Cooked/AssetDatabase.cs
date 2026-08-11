@@ -189,4 +189,10 @@ public sealed record ModelCookOptions
     public string Platform { get; init; } = CookedPlatform.Current;
     public bool UsePlatformSubdirectory { get; init; } = true;
     public string? SigningPrivateKey { get; init; }
+
+    /// <summary>
+    /// Offline-only C1 hook. When absent (the default), no OMM payload is
+    /// cooked, stored, allocated, or loaded as an active renderer feature.
+    /// </summary>
+    public IOpacityMicromapModelPayloadProducer? OpacityMicromapPayloadProducer { get; init; }
 }

@@ -47,6 +47,25 @@ public readonly record struct SimpleDdgiSchedulerCommitFailureBreakdown(
         $"cacheReadFailureMask=0x{CacheReadFailureMask:x}";
 }
 
+public readonly record struct SimpleDdgiResidualPropagationEvidence(
+    uint SeededCount,
+    uint DependentWakeCount,
+    uint ThresholdRejectedCount,
+    uint CompleteSweepFallbackCount);
+
+public readonly record struct SimpleDdgiReceiverContributionEvidence(
+    uint ContributingProbeCount,
+    uint CoverageBucketCount,
+    uint FallbackProbeCount,
+    uint ConsumerMask)
+{
+    public bool HasOpaque => (ConsumerMask & (1u << 27)) != 0u;
+    public bool HasTransparent => (ConsumerMask & (1u << 28)) != 0u;
+    public bool HasParticles => (ConsumerMask & (1u << 29)) != 0u;
+    public bool HasFog => (ConsumerMask & (1u << 30)) != 0u;
+    public bool HasReflections => (ConsumerMask & (1u << 31)) != 0u;
+}
+
 /// <summary>
 /// Owns the resident Simple-DDGI scheduler arena and its delayed, bounded
 /// feedback channel.  The class intentionally contains no CPU queue or
@@ -99,8 +118,14 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     private bool _hasLastFeedbackLaneCursors;
     private SimpleDdgiSchedulerCommitFailureBreakdown
         _lastCommitFailureBreakdown;
+    private SimpleDdgiSchedulerEligibilityEvidence _lastEligibilityEvidence;
     private uint _lastActiveSourceMutationCount;
     private uint _lastActiveCanonicalMutationCount;
+    private SimpleDdgiResidualPropagationEvidence
+        _lastResidualPropagationEvidence;
+    private SimpleDdgiReceiverContributionEvidence
+        _lastReceiverContributionEvidence;
+    private SimpleDdgiUrgentRelightEvidence _lastUrgentRelightEvidence;
     private ulong _currentPolicyHash;
     private ulong _previousPolicyHash;
     private bool _policiesInitialized;
@@ -143,6 +168,19 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 return _lastCommitFailureBreakdown;
         }
     }
+    /// <summary>
+    /// Exact classifier eligibility split from the same validated feedback
+    /// copy as <see cref="LastCommitFailureBreakdown"/>. It is deliberately
+    /// separate from admitted class usage, which may be lower under budget.
+    /// </summary>
+    public SimpleDdgiSchedulerEligibilityEvidence LastEligibilityEvidence
+    {
+        get
+        {
+            lock (_lock)
+                return _lastEligibilityEvidence;
+        }
+    }
     public uint LastActiveSourceMutationCount
     {
         get
@@ -157,6 +195,31 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         {
             lock (_lock)
                 return _lastActiveCanonicalMutationCount;
+        }
+    }
+    public SimpleDdgiResidualPropagationEvidence LastResidualPropagationEvidence
+    {
+        get
+        {
+            lock (_lock)
+                return _lastResidualPropagationEvidence;
+        }
+    }
+    public SimpleDdgiUrgentRelightEvidence LastUrgentRelightEvidence
+    {
+        get
+        {
+            lock (_lock)
+                return _lastUrgentRelightEvidence;
+        }
+    }
+    public SimpleDdgiReceiverContributionEvidence
+        LastReceiverContributionEvidence
+    {
+        get
+        {
+            lock (_lock)
+                return _lastReceiverContributionEvidence;
         }
     }
 
@@ -374,6 +437,27 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
 
             UploadSpan(stagingRing, commandBuffer, probeStates, _layout.ProbeState.Offset);
             UploadSpan(stagingRing, commandBuffer, laneCursors, _layout.LaneCursors.Offset);
+            // A replacement arena has undefined device-local contents. Clear
+            // both receiver-contribution banks exactly once at bootstrap so a
+            // first classifier pass can never interpret allocation residue as
+            // prior-frame screen coverage.
+            Silk.NET.Vulkan.Buffer arena = _bufferManager.GetBuffer(_arenaBuffer);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                arena,
+                _layout.ReceiverContribution.Offset,
+                _layout.ReceiverContribution.ByteSize,
+                0u);
+            BufferMemoryBarrier2 contributionBarrier = BarrierBuilder.BufferBarrier(
+                arena,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                ReceiverContributionConsumerStages,
+                AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+                _layout.ReceiverContribution.Offset,
+                _layout.ReceiverContribution.ByteSize);
+            ExecuteBufferBarrier(commandBuffer, contributionBarrier);
             return true;
         }
     }
@@ -930,6 +1014,42 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 SimpleDdgiSchedulerAbi.FeedbackActiveSourceMutationOffsetWords];
             _lastActiveCanonicalMutationCount = feedbackWords[
                 SimpleDdgiSchedulerAbi.FeedbackActiveCanonicalMutationOffsetWords];
+            int residualBase =
+                SimpleDdgiSchedulerAbi.FeedbackResidualPropagationOffsetWords;
+            _lastResidualPropagationEvidence = new(
+                feedbackWords[residualBase + 0],
+                feedbackWords[residualBase + 1],
+                feedbackWords[residualBase + 2],
+                feedbackWords[residualBase + 3]);
+            _lastUrgentRelightEvidence =
+                SimpleDdgiUrgentRelightPolicy.UnpackTelemetry(
+                    feedbackWords[
+                        SimpleDdgiSchedulerAbi.FeedbackUrgentRelightOffsetWords],
+                    feedback.FrameSerialLow);
+            int receiverContributionBase =
+                SimpleDdgiSchedulerAbi.FeedbackReceiverContributionOffsetWords;
+            _lastReceiverContributionEvidence = new(
+                feedbackWords[receiverContributionBase + 0],
+                feedbackWords[receiverContributionBase + 1],
+                feedbackWords[receiverContributionBase + 2],
+                feedbackWords[receiverContributionBase + 3]);
+            int eligibleClassBase =
+                SimpleDdgiSchedulerAbi.FeedbackEligibleClassOffsetWords;
+            int eligibleRingBase =
+                SimpleDdgiSchedulerAbi.FeedbackEligibleRingOffsetWords;
+            _lastEligibilityEvidence = new(
+                new SimpleDdgiSchedulerClassCounts(
+                    feedbackWords[eligibleClassBase + 0],
+                    feedbackWords[eligibleClassBase + 1],
+                    feedbackWords[eligibleClassBase + 2],
+                    feedbackWords[eligibleClassBase + 3],
+                    feedbackWords[eligibleClassBase + 4],
+                    feedbackWords[eligibleClassBase + 5],
+                    feedbackWords[eligibleClassBase + 6]),
+                new SimpleDdgiRingCounts(
+                    feedbackWords[eligibleRingBase + 0],
+                    feedbackWords[eligibleRingBase + 1],
+                    feedbackWords[eligibleRingBase + 2]));
 
             // The fixed feedback header remains the CPU control-plane ABI.
             // The following 896 words carry the persistent lane cursors so an
@@ -1076,6 +1196,13 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
         new(
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
+
+    private const PipelineStageFlags2 ReceiverContributionConsumerStages =
+        PipelineStageFlags2.ComputeShaderBit |
+        PipelineStageFlags2.VertexShaderBit |
+        PipelineStageFlags2.TaskShaderBitExt |
+        PipelineStageFlags2.MeshShaderBitExt |
+        PipelineStageFlags2.FragmentShaderBit;
 
     private static ulong HashSpan<T>(ReadOnlySpan<T> values)
         where T : unmanaged

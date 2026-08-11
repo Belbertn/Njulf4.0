@@ -3,6 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "directional_shadow_caster_diagnostics.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -420,12 +421,8 @@ bool CanHiZTestMeshletDrawCommand(GPUMeshletDrawCommand command)
 
 bool IsMeshletVisibleToMatrix(GPUMeshletDrawCommand command, mat4 viewProjection)
 {
-    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
-    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
-    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
-    float worldRadius = meshlet.BoundingSphereRadius * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
-    return SphereIntersectsRowMajorFrustum(worldCenter.xyz, worldRadius, viewProjection);
+    vec4 sphere = ResolveMeshletWorldCenterRadius(command);
+    return SphereIntersectsRowMajorFrustum(sphere.xyz, sphere.w, viewProjection);
 }
 
 uint SelectLodLevel(vec3 cameraPosition, vec3 worldCenter, float worldRadius)
@@ -734,7 +731,35 @@ void ProcessDirectionalShadowCandidate(
                 cascadeCounterBase + SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_CANDIDATE_OFFSET],
             1u);
 
-        if (!IsMeshletVisibleToMatrix(command, ReadShadowMatrix(cascade)))
+        mat4 shadowMatrix = ReadShadowMatrix(cascade);
+        vec4 worldSphere = ResolveMeshletWorldCenterRadius(command);
+        bool visible = SphereIntersectsRowMajorFrustum(
+            worldSphere.xyz,
+            worldSphere.w,
+            shadowMatrix);
+#if NJULF_GPU_DIAGNOSTIC_COUNTERS
+        RecordDirectionalShadowCasterAttribution(
+            pc.Push.CurrentFrameIndex,
+            command.InstanceId,
+            command.InstanceId,
+            command.MeshletIndex,
+            effectiveLod,
+            dynamicShadow
+                ? DIRECTIONAL_SHADOW_CASTER_CLASS_DYNAMIC
+                : DIRECTIONAL_SHADOW_CASTER_CLASS_STATIC,
+            cascade,
+            candidateIndex,
+            DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_INPUT |
+                DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_COMPACTION |
+                DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_CONSERVATIVE_LOD |
+                (dynamicShadow
+                    ? DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_DYNAMIC
+                    : DIRECTIONAL_SHADOW_CASTER_ELIGIBILITY_STATIC),
+            worldSphere,
+            shadowMatrix,
+            visible);
+#endif
+        if (!visible)
         {
             atomicAdd(
                 BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[

@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
+using Njulf.Assets.Validation;
 using Njulf.Core.Geometry;
+using NumericsVector3 = System.Numerics.Vector3;
 
 namespace Njulf.Assets.Cooked;
 
@@ -38,15 +40,54 @@ public static class CookedPackage
     private const int MaximumSignedCookedAssetBytes =
         MaximumModelPackageSnapshotBytes;
 
-    public static void WriteModel(string path, CookedModelManifest manifest, uint toolVersion = 1)
+    public static void WriteModel(
+        string path,
+        CookedModelManifest manifest,
+        uint toolVersion = 1,
+        CookedOpacityMicromapModelChunk? opacityMicromapChunk = null)
     {
         using var writer = new CookedAssetWriter(path, CookedAssetKind.Model, manifest.SourceHash, manifest.ImportSettingsHash, manifest.DependencyListHash, toolVersion);
         writer.WriteSection(CookedSectionIds.Manifest, Required | CookedSectionFlags.Zstd, CookedJson.Serialize(manifest));
+        if (opacityMicromapChunk is not null)
+        {
+            writer.WriteSection(
+                CookedSectionIds.OpacityMicromap,
+                CookedSectionFlags.None,
+                opacityMicromapChunk.EncodedBytes.Span);
+        }
         writer.Complete();
+    }
+
+    public static void WriteModel(
+        string path,
+        CookedModelManifest manifest,
+        OpacityMicromapCookedPayload opacityMicromapPayload,
+        uint toolVersion = 1)
+    {
+        ArgumentNullException.ThrowIfNull(opacityMicromapPayload);
+        if (!CookedOpacityMicromapModelChunk.TryCreate(
+                opacityMicromapPayload,
+                out CookedOpacityMicromapModelChunk? chunk,
+                out string detail))
+        {
+            throw new ArgumentException(
+                $"The optional opacity-micromap payload cannot be serialized: {detail}.",
+                nameof(opacityMicromapPayload));
+        }
+
+        WriteModel(path, manifest, toolVersion, chunk);
     }
 
     public static void WriteMesh(string path, CookedMeshPayload mesh, ulong sourceHash, ulong settingsHash, ulong dependencyHash, uint toolVersion = 1, bool useMeshOptimizer = true)
     {
+        ArgumentNullException.ThrowIfNull(mesh);
+        ValidateMeshRanges(path, mesh.SubMeshes, mesh.VertexPositions.Length,
+            mesh.Indices.Length, mesh.VertexSkinning.Length,
+            mesh.MeshletsLod0.Length, mesh.MeshletsLod1.Length,
+            mesh.MeshletsLod2.Length, mesh.MeshletVertices.Length,
+            mesh.MeshletTriangles.Length);
+        ValidateCausticTopologyEvidence(
+            path, mesh.SubMeshes, mesh.VertexPositions, mesh.Indices);
         using var writer = new CookedAssetWriter(path, CookedAssetKind.Mesh, sourceHash, settingsHash, dependencyHash, toolVersion);
         writer.WriteSection(CookedSectionIds.SubMeshes, Required | CookedSectionFlags.Zstd, CookedJson.Serialize(mesh.SubMeshes));
         WriteVertexSection(writer, CookedSectionIds.VertexPositions, Required, mesh.VertexPositions, useMeshOptimizer);
@@ -191,6 +232,9 @@ public static class CookedPackage
             reader.GetRequiredSection(CookedSectionIds.Manifest).Span,
             modelPath,
             "manifest");
+        (OpacityMicromapCookedPayload? opacityMicromapPayload,
+            CookedOpacityMicromapPayloadLoadStatus opacityMicromapLoadStatus) =
+            LoadOptionalOpacityMicromapPayload(reader);
         long bytesRead = reader.BytesRead;
 
         string directory = Path.GetDirectoryName(modelPath)!;
@@ -215,6 +259,20 @@ public static class CookedPackage
             verifyWholeFileHashes ? manifest.Material.ContentHash : null,
             out long materialBytes);
         RebaseMaterialTexturePaths(materials, Path.GetDirectoryName(materialPath)!);
+        if (opacityMicromapPayload is not null &&
+            !CookedOpacityMicromapModelChunk.TryValidateModelAttachment(
+                opacityMicromapPayload,
+                mesh,
+                materials,
+                out OpacityMicromapPayloadValidationFailure attachmentFailure,
+                out string attachmentDetail))
+        {
+            opacityMicromapPayload = null;
+            opacityMicromapLoadStatus =
+                CookedOpacityMicromapPayloadLoadStatus.Rejected(
+                    attachmentFailure,
+                    attachmentDetail);
+        }
         CookedAnimationPayload animation = new(Array.Empty<Core.Animation.Skeleton>(), Array.Empty<Core.Animation.Skin>(), Array.Empty<Core.Animation.AnimationClip>());
         long animationBytes = 0;
         if (manifest.Animation is not null)
@@ -231,7 +289,62 @@ public static class CookedPackage
                     : null,
                 out animationBytes);
         }
-        return new CookedModelAsset(manifest, mesh, materials, animation, modelPath, bytesRead + meshBytes + materialBytes + animationBytes);
+        return new CookedModelAsset(
+            manifest,
+            mesh,
+            materials,
+            animation,
+            modelPath,
+            bytesRead + meshBytes + materialBytes + animationBytes)
+        {
+            OpacityMicromapPayload = opacityMicromapPayload,
+            OpacityMicromapLoadStatus = opacityMicromapLoadStatus
+        };
+    }
+
+    private static (
+        OpacityMicromapCookedPayload? Payload,
+        CookedOpacityMicromapPayloadLoadStatus Status)
+        LoadOptionalOpacityMicromapPayload(CookedAssetReader reader)
+    {
+        try
+        {
+            if (!reader.TryGetSection(
+                    CookedSectionIds.OpacityMicromap,
+                    out ReadOnlyMemory<byte> bytes))
+            {
+                return (null, CookedOpacityMicromapPayloadLoadStatus.Missing);
+            }
+
+            OpacityMicromapPayloadReadResult parsed =
+                OpacityMicromapCookedPayloadCodec.TryRead(bytes.Span);
+            if (!parsed.Success || parsed.Payload is null)
+            {
+                return (
+                    null,
+                    CookedOpacityMicromapPayloadLoadStatus.Rejected(
+                        parsed.Failure,
+                        "opacity-micromap-section-schema-validation-failed"));
+            }
+
+            return (parsed.Payload, CookedOpacityMicromapPayloadLoadStatus.Valid);
+        }
+        catch (CookedAssetFormatException)
+        {
+            return (
+                null,
+                CookedOpacityMicromapPayloadLoadStatus.Rejected(
+                    OpacityMicromapPayloadValidationFailure.SpanOutOfRange,
+                    "opacity-micromap-section-container-validation-failed"));
+        }
+        catch (CookedAssetHashException)
+        {
+            return (
+                null,
+                CookedOpacityMicromapPayloadLoadStatus.Rejected(
+                    OpacityMicromapPayloadValidationFailure.SpanChecksumMismatch,
+                    "opacity-micromap-section-container-checksum-failed"));
+        }
     }
 
     public static CookedMeshPayload LoadMesh(string path, CookedAssetReaderFlags flags, out long bytesRead)
@@ -265,6 +378,7 @@ public static class CookedPackage
         var meshletTriangles = reader.ReadSection<uint>(CookedSectionIds.MeshletTriangles);
         bytesRead = reader.BytesRead;
         ValidateMeshRanges(path, subMeshes, positions.Length, indices.Length, skinning.Length, lod0.Length, lod1.Length, lod2.Length, meshletVertices.Length, meshletTriangles.Length);
+        ValidateCausticTopologyEvidence(path, subMeshes, positions, indices);
         return new CookedMeshPayload(subMeshes, positions, normals, uvColors, skinning, indices, lod0, lod1, lod2, meshletVertices, meshletTriangles);
     }
 
@@ -668,6 +782,50 @@ public static class CookedPackage
     {
         if (offset < 0 || count < 0 || offset > total || count > total - offset)
             throw new CookedAssetFormatException(path, $"submesh '{name}' has an out-of-range {rangeName} slice ({offset}, {count}, total {total})");
+    }
+
+    private static void ValidateCausticTopologyEvidence(
+        string path,
+        IReadOnlyList<CookedSubMeshRecord> meshes,
+        IReadOnlyList<CookedVertexPositionStream> positions,
+        IReadOnlyList<uint> indices)
+    {
+        foreach (CookedSubMeshRecord mesh in meshes)
+        {
+            ModelGiCausticHeroTopologyEvidence evidence =
+                mesh.CausticTopologyEvidence;
+            if (evidence == default)
+                continue;
+            if (!evidence.IsStructurallyValid)
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"submesh '{mesh.Name}' contains malformed C4 topology evidence");
+            }
+
+            var localPositions = new NumericsVector3[mesh.VertexCount];
+            for (int index = 0; index < localPositions.Length; index++)
+            {
+                Njulf.Core.Math.Vector4 source =
+                    positions[mesh.VertexOffset + index].Position;
+                localPositions[index] = new NumericsVector3(
+                    source.X, source.Y, source.Z);
+            }
+            var localIndices = new uint[mesh.IndexCount];
+            for (int index = 0; index < localIndices.Length; index++)
+                localIndices[index] = indices[mesh.IndexOffset + index];
+            if (!ModelGiCausticHeroTopologyAnalyzer.Matches(
+                    localPositions,
+                    localIndices,
+                    isSkinned: mesh.SkinIndex >= 0 || mesh.SkinningCount > 0,
+                    evidence,
+                    out string reason))
+            {
+                throw new CookedAssetFormatException(
+                    path,
+                    $"submesh '{mesh.Name}' C4 topology evidence failed exact revalidation ({reason})");
+            }
+        }
     }
 
     private static void RebaseMaterialTexturePaths(CookedMaterialTable table, string materialDirectory)

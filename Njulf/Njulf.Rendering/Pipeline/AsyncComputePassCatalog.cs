@@ -38,6 +38,7 @@ public static class AsyncComputePassCatalog
         Candidate("SimpleDdgiSchedulePass", "Simple DDGI frame/policy/delta uploads", "Simple DDGI trace/relocate consumers", "The resident arena is the producer of all fixed indirect commands."),
         Candidate("SimpleDdgiTracePass", "TLAS, scene material/light/environment state", "Simple DDGI relocate/blend", "All ray-query inputs and writable DDGI allocations have concrete contracts."),
         Candidate("SimpleDdgiRelocateClassifyPass", "Simple DDGI trace/state", "Simple DDGI transport/blend", "Part of the indivisible simple-DDGI update segment."),
+        Candidate("SimpleDdgiDirectionalRadiancePass", "Simple DDGI completed blend/source cache", "Directional SH sidecar and compact publication", "The optional FP32 reduction and checked publication are split internally but remain inside the indivisible update segment."),
         Candidate("SimpleDdgiAcceleratedSolvePass", "Simple DDGI cached source and relocation state", "Simple DDGI publication", "Transport, blend, and intermediate canonical publication are serialized within each cached sweep."),
         Candidate("SimpleDdgiTransportPass", "Simple DDGI cached source and published irradiance", "Simple DDGI blend/publication", "Explicit Jacobi transport remains in the indivisible simple-DDGI update segment."),
         Candidate("SimpleDdgiBlendPass", "Simple DDGI trace/state", "Simple DDGI publication", "Private transport remains unobservable until the following publication pass."),
@@ -53,13 +54,18 @@ public static class AsyncComputePassCatalog
         Graphics("SceneOpaqueCompactionPass", "Previous Hi-Z and scene uploads", "Shadow/depth/forward mesh dispatch", "Early graphics command stream producer; broad scene-submission aliases are intentionally not async-modeled."),
         Graphics("ForwardVisibilityCompactionPass", "Hi-Z and scene submissions", "Forward+ mesh dispatch", "Immediate forward consumer leaves no useful overlap window."),
         Graphics("TiledLightCullingPass", "Depth", "Forward+", "Immediate consumer and shared light-tile buffer retain graphics-queue execution."),
+        Graphics("SimpleDdgiLightTreePass", "Canonical light buffer and revisions", "Simple DDGI ray-hit shading", "Inactive-bank publication, state verification readback, and the immediate trace consumer share the graphics-queue descriptor transaction."),
         Graphics("AmbientOcclusionPass", "Depth", "AO blur/forward", "Producer is retained with graphics; only the blur chain is independently profitable."),
         Graphics("SimpleDdgiPageDemandPass", "Depth and receiver feedback", "Simple DDGI page reconciliation", "Demand collection opens the serial sparse-residency transaction immediately before mutation."),
         Graphics("SimpleDdgiPageResidencyPass", "Simple DDGI page demand and retained mappings", "Simple DDGI scheduler and physical payload consumers", "Page-table mutation and every same-frame payload consumer remain in one graphics-queue ownership segment."),
         Graphics("SimpleDdgiPageFeedbackPass", "Simple DDGI scheduler commit and page publication", "Delayed residency feedback readback", "Feedback closes the serial sparse-residency transaction after all publication writes."),
         Graphics("AutoExposurePass", "Scene/fog color", "Bloom/tone-map", "Current exposure state and immediate post-processing consumers retain graphics-queue execution."),
         Graphics("FoliageCullPass", "Foliage/scene uploads", "Shadow/depth/forward", "Recorded before graph segments and shares graphics submission resources."),
-        Graphics("SkinningPass", "Animation uploads", "Mesh/shadow/depth/forward", "Current skinning buffers are consumed across early graphics passes with no modeled ownership split.")
+        Graphics("SkinningPass", "Animation uploads", "Dynamic BLAS and raster geometry", "Current-pose output is consumed by graphics-queue AS builds before any ray query and by raster passes later in the frame."),
+        Graphics("DdgiFoliageProxyGenerationPass", "Stable foliage patch records and wind clock", "Procedural foliage BLAS", "Compute output is consumed immediately by graphics-queue acceleration-structure build commands with an explicit compute-to-AS barrier."),
+        Graphics("AccelerationStructureBlasPass", "Static, current-pose, and foliage geometry", "TLAS publication", "Vulkan AS build capability and frame-slot ownership remain on the graphics queue."),
+        Graphics("OpacityMicromapBuildPass", "Validated cooked OMM streams and ordinary candidate BLAS", "OMM-attached BLAS publication and TLAS", "Micromap build, compaction, attached BLAS construction, and fence-gated publication share the graphics AS submission domain."),
+        Graphics("AccelerationStructureTlasPass", "Admitted complete BLAS objects and instance metadata", "Simple DDGI ray queries", "TLAS and metadata publication is the graphics-queue transaction boundary before graph consumers.")
     ];
 
     public static IReadOnlyList<AsyncComputePassAuditEntry> All => Entries;

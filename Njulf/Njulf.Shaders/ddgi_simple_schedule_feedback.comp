@@ -39,7 +39,11 @@ const uint SIMPLE_DDGI_FEEDBACK_PARTICIPANTS = 18u;
 const uint SIMPLE_DDGI_FEEDBACK_SOLVE_VISITED = 19u;
 const uint SIMPLE_DDGI_FEEDBACK_ACTIVE_SOURCE_MUTATION = 20u;
 const uint SIMPLE_DDGI_FEEDBACK_ACTIVE_CANONICAL_MUTATION = 21u;
-const uint SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 22u;
+const uint SIMPLE_DDGI_FEEDBACK_RECEIVER_PROBES = 22u;
+const uint SIMPLE_DDGI_FEEDBACK_RECEIVER_COVERAGE_BUCKETS = 23u;
+const uint SIMPLE_DDGI_FEEDBACK_RECEIVER_FALLBACK_PROBES = 24u;
+const uint SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK = 25u;
+const uint SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS = 26u;
 
 shared uint feedbackReduction[SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS];
 
@@ -74,11 +78,55 @@ void main()
     uint solveEpochVisitedCount = 0u;
     uint activeSourceMutationCount = 0u;
     uint activeCanonicalMutationCount = 0u;
+    uint receiverContributingProbeCount = 0u;
+    uint receiverCoverageBucketCount = 0u;
+    uint receiverFallbackProbeCount = 0u;
+    uint receiverConsumerMask = 0u;
     uint activeProbeCount = min(SchedulerActiveProbeCount(), 32768u);
+    uint receiverOffsetWordsPlusOne = ReadStorageWordUniform(
+        pc.ParamsBufferIndex,
+        SIMPLE_DDGI_SCHEDULER_RECEIVER_OFFSET_PARAM_WORD);
+    uint receiverPreviousBankBase = receiverOffsetWordsPlusOne == 0u
+        ? 0u
+        : receiverOffsetWordsPlusOne - 1u +
+            ((SchedulerFrameIndex() - 1u) & 1u) * activeProbeCount *
+                SIMPLE_DDGI_SCHEDULER_RECEIVER_WORDS_PER_PROBE;
     for (uint probeIndex = localIndex;
          probeIndex < activeProbeCount;
          probeIndex += gl_WorkGroupSize.x)
     {
+        // Classification has consumed frame N-1. Clear that bank before it is
+        // reused by receivers at N+1. This runs for every virtual probe,
+        // including currently nonresident sparse slots, so a later admission
+        // can never inherit stale screen ownership.
+        if (receiverOffsetWordsPlusOne != 0u)
+        {
+            uint receiverRecordBase = receiverPreviousBankBase +
+                probeIndex *
+                    SIMPLE_DDGI_SCHEDULER_RECEIVER_WORDS_PER_PROBE;
+            uint receiverWeightQ8 = SchedulerArenaRead(
+                receiverRecordBase + 0u);
+            uint receiverCoverageAndFlags = SchedulerArenaRead(
+                receiverRecordBase + 1u);
+            bool receiverContributed = receiverWeightQ8 != 0u &&
+                (receiverCoverageAndFlags &
+                    SIMPLE_DDGI_SCHEDULER_RECEIVER_ROLE_MASK) != 0u;
+            receiverContributingProbeCount += receiverContributed ? 1u : 0u;
+            receiverCoverageBucketCount += receiverContributed
+                ? uint(bitCount(
+                    receiverCoverageAndFlags &
+                        SIMPLE_DDGI_SCHEDULER_RECEIVER_COVERAGE_MASK))
+                : 0u;
+            receiverFallbackProbeCount += receiverContributed &&
+                (receiverCoverageAndFlags &
+                    SIMPLE_DDGI_SCHEDULER_RECEIVER_FALLBACK_MASK) != 0u
+                ? 1u
+                : 0u;
+            if (receiverContributed)
+                receiverConsumerMask |= receiverCoverageAndFlags & 0xf8000000u;
+            SchedulerArenaWrite(receiverRecordBase + 0u, 0u);
+            SchedulerArenaWrite(receiverRecordBase + 1u, 0u);
+        }
         uint sourceVolumeIndex = 0u;
         bool sourceVolumeValid = SchedulerFindVolume(
             probeIndex,
@@ -277,6 +325,18 @@ void main()
     atomicAdd(
         feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_CANONICAL_MUTATION],
         activeCanonicalMutationCount);
+    atomicAdd(
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_PROBES],
+        receiverContributingProbeCount);
+    atomicAdd(
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_COVERAGE_BUCKETS],
+        receiverCoverageBucketCount);
+    atomicAdd(
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_FALLBACK_PROBES],
+        receiverFallbackProbeCount);
+    atomicOr(
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK],
+        receiverConsumerMask);
     barrier();
 
     if (localIndex != 0u)
@@ -307,6 +367,14 @@ void main()
         feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_SOURCE_MUTATION];
     activeCanonicalMutationCount =
         feedbackReduction[SIMPLE_DDGI_FEEDBACK_ACTIVE_CANONICAL_MUTATION];
+    receiverContributingProbeCount =
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_PROBES];
+    receiverCoverageBucketCount =
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_COVERAGE_BUCKETS];
+    receiverFallbackProbeCount =
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_FALLBACK_PROBES];
+    receiverConsumerMask =
+        feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK];
 
     uint considered = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_CONSIDERED);
     uint eligible = SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE);
@@ -444,6 +512,24 @@ void main()
     SchedulerArenaWrite(base + 61u, SchedulerSolveEpoch());
     SchedulerArenaWrite(base + 62u, sourceProbeUsed);
     SchedulerArenaWrite(base + 63u, published);
+    for (uint workClass = 0u;
+         workClass < SIMPLE_DDGI_SCHEDULER_WORK_CLASSES;
+         workClass++)
+    {
+        SchedulerArenaWrite(
+            base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_ELIGIBLE_CLASS_OFFSET + workClass,
+            SchedulerArenaRead(
+                pc.CountersOffsetWords +
+                    SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE_CLASS_BASE + workClass));
+    }
+    for (uint ring = 0u; ring < 3u; ring++)
+    {
+        SchedulerArenaWrite(
+            base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_ELIGIBLE_RING_OFFSET + ring,
+            SchedulerArenaRead(
+                pc.CountersOffsetWords +
+                    SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE_RING_BASE + ring));
+    }
     // Feedback reserves the words after the fixed 64-word summary for the
     // persistent rotating lane cursors. They are copied only after the
     // summary generation/serial has been validated by the host.
@@ -496,4 +582,38 @@ void main()
     SchedulerArenaWrite(
         base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_ACTIVE_CANONICAL_MUTATION_OFFSET,
         activeCanonicalMutationCount);
+    for (uint residualCounter = 0u; residualCounter < 4u; residualCounter++)
+    {
+        SchedulerArenaWrite(
+            base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_RESIDUAL_PROPAGATION_OFFSET +
+                residualCounter,
+            SchedulerArenaRead(
+                pc.CountersOffsetWords +
+                    SIMPLE_DDGI_SCHEDULER_COUNTER_RESIDUAL_SEEDED +
+                    residualCounter));
+    }
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_URGENT_RELIGHT_OFFSET,
+        SchedulerArenaRead(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_TELEMETRY));
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_RECEIVER_CONTRIBUTION_OFFSET + 0u,
+        receiverContributingProbeCount);
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_RECEIVER_CONTRIBUTION_OFFSET + 1u,
+        receiverCoverageBucketCount);
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_RECEIVER_CONTRIBUTION_OFFSET + 2u,
+        receiverFallbackProbeCount);
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_RECEIVER_CONTRIBUTION_OFFSET + 3u,
+        receiverConsumerMask);
+    // Consume the mailbox after copying it into this frame-stamped feedback
+    // record. Without this clear, an idle lane could reappear as current when
+    // the compact 16-bit telemetry stamp wraps after 65,536 frames.
+    SchedulerArenaWrite(
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_TELEMETRY,
+        0u);
 }

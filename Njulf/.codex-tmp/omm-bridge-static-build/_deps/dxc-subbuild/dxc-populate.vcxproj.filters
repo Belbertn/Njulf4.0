@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\adb7dc3c8210e51cd3f57efa77527a09\dxc-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\adb7dc3c8210e51cd3f57efa77527a09\dxc-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\adb7dc3c8210e51cd3f57efa77527a09\dxc-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\adb7dc3c8210e51cd3f57efa77527a09\dxc-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\adb7dc3c8210e51cd3f57efa77527a09\dxc-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\adb7dc3c8210e51cd3f57efa77527a09\dxc-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\adb7dc3c8210e51cd3f57efa77527a09\dxc-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\adb7dc3c8210e51cd3f57efa77527a09\dxc-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\e2825e31350789286b2ef71fdf553483\dxc-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\0b59e47e0994045a2acc780e8cb6270e\dxc-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-bridge-static-build\_deps\dxc-subbuild\CMakeFiles\dxc-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{45B06212-9EE0-39C6-84FC-9D2F8CB85BE6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

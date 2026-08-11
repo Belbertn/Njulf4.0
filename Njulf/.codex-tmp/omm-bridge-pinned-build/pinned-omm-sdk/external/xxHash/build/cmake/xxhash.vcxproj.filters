@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash\xxhash.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\xxHash\build\cmake\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{36DAFB88-13DE-381E-9959-7361915739B6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

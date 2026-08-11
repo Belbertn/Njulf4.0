@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
@@ -17,6 +18,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
+        private readonly bool _receiverFeedbackPipelinesEnabled;
         private readonly nint _entryPointName;
         private PipelineLayout _computeLayout;
         private PipelineLayout _graphicsLayout;
@@ -24,8 +26,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _cullPipeline;
         private VkPipeline _depthPipeline;
         private VkPipeline _forwardPipeline;
+        private VkPipeline _forwardReceiverFeedbackPipeline;
         private VkPipeline _authoredDepthPipeline;
         private VkPipeline _authoredForwardPipeline;
+        private VkPipeline _authoredForwardReceiverFeedbackPipeline;
         private VkPipeline _shadowPipeline;
         private VkPipeline _authoredShadowPipeline;
         private VkPipeline _authoredMotionVectorPipeline;
@@ -37,11 +41,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format colorFormat,
             Format motionVectorFormat,
             Format depthFormat,
-            RenderSettings settings)
+            RenderSettings settings,
+            bool receiverFeedbackPipelinesEnabled = false)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
             Settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _receiverFeedbackPipelinesEnabled =
+                receiverFeedbackPipelinesEnabled;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Math.Max(
@@ -59,12 +66,27 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline CullPipeline => _cullPipeline;
         public VkPipeline DepthPipeline => _depthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
+        public VkPipeline ForwardReceiverFeedbackPipeline =>
+            _forwardReceiverFeedbackPipeline;
         public VkPipeline AuthoredDepthPipeline => _authoredDepthPipeline;
         public VkPipeline AuthoredForwardPipeline => _authoredForwardPipeline;
+        public VkPipeline AuthoredForwardReceiverFeedbackPipeline =>
+            _authoredForwardReceiverFeedbackPipeline;
+        public bool ReceiverFeedbackPipelinesAvailable =>
+            _forwardReceiverFeedbackPipeline.Handle != 0 &&
+            _authoredForwardReceiverFeedbackPipeline.Handle != 0;
+        public string ReceiverFeedbackPipelineFailureReason { get; private set; } =
+            "receiver-feedback-pipelines-not-admitted-at-startup";
         public VkPipeline ShadowPipeline => _shadowPipeline;
         public VkPipeline AuthoredShadowPipeline => _authoredShadowPipeline;
         public VkPipeline AuthoredMotionVectorPipeline => _authoredMotionVectorPipeline;
         public RenderSettings Settings { get; }
+        /// <summary>
+        /// Uses a separate foliage shadow mesh shader with bounded caster
+        /// attribution. The normal depth/forward foliage shaders remain free
+        /// of those atomics.
+        /// </summary>
+        public bool GpuMeshletCountersEnabled { get; private set; }
         public bool MaterialTransportProvenanceAttachmentEnabled { get; private set; }
 
         public void Recreate(Format colorFormat, Format motionVectorFormat, Format depthFormat)
@@ -146,6 +168,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipelines(Format colorFormat, Format motionVectorFormat, Format depthFormat)
         {
+            GpuMeshletCountersEnabled = Settings.Diagnostics.GpuMeshletCountersEnabled;
+            string foliageGrassShadowMeshShader = GpuMeshletCountersEnabled
+                ? "foliage_grass_diagnostics.mesh.spv"
+                : "foliage_grass.mesh.spv";
+            string foliageMeshShadowMeshShader = GpuMeshletCountersEnabled
+                ? "foliage_mesh_diagnostics.mesh.spv"
+                : "foliage_mesh.mesh.spv";
             bool materialTransportProvenanceEnabled =
                 Settings.GlobalIllumination.DebugView ==
                 GlobalIlluminationDebugView.MaterialTransportHitProvenance;
@@ -175,7 +204,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             _shadowPipeline = CreateGraphicsPipeline(
                 "foliage_grass.task.spv",
-                "foliage_grass.mesh.spv",
+                foliageGrassShadowMeshShader,
                 "foliage_depth.frag.spv",
                 colorFormat,
                 depthFormat,
@@ -208,7 +237,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             _authoredShadowPipeline = CreateGraphicsPipeline(
                 "foliage_mesh.task.spv",
-                "foliage_mesh.mesh.spv",
+                foliageMeshShadowMeshShader,
                 "foliage_depth.frag.spv",
                 colorFormat,
                 depthFormat,
@@ -228,6 +257,64 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 secondaryColorFormat: null,
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_authoredForwardPipeline.Handle, ObjectType.Pipeline, "Foliage Authored Meshlet Forward Pipeline");
+
+            if (_receiverFeedbackPipelinesEnabled)
+            {
+                try
+                {
+                    string receiverFeedbackFragmentShader =
+                        $"foliage_forward_ddgi_b1{provenanceSuffix}.frag.spv";
+                    _forwardReceiverFeedbackPipeline = CreateGraphicsPipeline(
+                        "foliage_grass.task.spv",
+                        "foliage_grass_b1.mesh.spv",
+                        receiverFeedbackFragmentShader,
+                        colorFormat,
+                        depthFormat,
+                        hasColorAttachment: true,
+                        depthWriteEnable: false,
+                        secondaryColorFormat: null,
+                        materialTransportProvenanceFormat:
+                            materialTransportProvenanceFormat);
+                    _context.SetDebugName(
+                        _forwardReceiverFeedbackPipeline.Handle,
+                        ObjectType.Pipeline,
+                        "Foliage Grass B1 Exact Receiver Feedback Pipeline");
+
+                    _authoredForwardReceiverFeedbackPipeline =
+                        CreateGraphicsPipeline(
+                            "foliage_mesh.task.spv",
+                            "foliage_mesh_b1.mesh.spv",
+                            receiverFeedbackFragmentShader,
+                            colorFormat,
+                            depthFormat,
+                            hasColorAttachment: true,
+                            depthWriteEnable: false,
+                            secondaryColorFormat: null,
+                            materialTransportProvenanceFormat:
+                                materialTransportProvenanceFormat);
+                    _context.SetDebugName(
+                        _authoredForwardReceiverFeedbackPipeline.Handle,
+                        ObjectType.Pipeline,
+                        "Foliage Authored B1 Exact Receiver Feedback Pipeline");
+                    ReceiverFeedbackPipelineFailureReason =
+                        "receiver-feedback-pipelines-ready";
+                }
+                catch (Exception exception) when (
+                    exception is VulkanException or IOException or
+                    ArgumentException or InvalidOperationException)
+                {
+                    DestroyPipeline(ref _forwardReceiverFeedbackPipeline);
+                    DestroyPipeline(
+                        ref _authoredForwardReceiverFeedbackPipeline);
+                    ReceiverFeedbackPipelineFailureReason =
+                        "receiver-feedback-foliage-pipeline-creation-failed:" +
+                        exception.GetType().Name + ":" + exception.Message;
+                    System.Diagnostics.Debug.WriteLine(
+                        "B1 foliage pipelines unavailable; ordinary foliage " +
+                        "rendering retained. " +
+                        ReceiverFeedbackPipelineFailureReason);
+                }
+            }
 
             _authoredMotionVectorPipeline = CreateGraphicsPipeline(
                 "foliage_motion.task.spv",
@@ -461,8 +548,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline(ref _cullPipeline);
             DestroyPipeline(ref _depthPipeline);
             DestroyPipeline(ref _forwardPipeline);
+            DestroyPipeline(ref _forwardReceiverFeedbackPipeline);
             DestroyPipeline(ref _authoredDepthPipeline);
             DestroyPipeline(ref _authoredForwardPipeline);
+            DestroyPipeline(ref _authoredForwardReceiverFeedbackPipeline);
             DestroyPipeline(ref _shadowPipeline);
             DestroyPipeline(ref _authoredShadowPipeline);
             DestroyPipeline(ref _authoredMotionVectorPipeline);

@@ -26,9 +26,13 @@ namespace Njulf.Rendering.Pipeline
         private readonly FoliageManager? _foliageManager;
         private readonly DirectionalShadowResources _shadowResources;
         private readonly ShadowSettings _settings;
-        private ulong _lastStaticCacheSignature;
-        private bool _hasStaticCacheSignature;
-        private uint _staticCacheValidCascadeMask;
+        private readonly DirectionalShadowCacheStateTracker _staticCacheState = new();
+        // This is renderer-thread-owned and copied into the immutable runtime
+        // snapshot. Reusing it avoids an otherwise steady per-frame allocation
+        // while retaining one provenance item for every supported cascade.
+        private readonly DirectionalShadowCacheLayerProvenance[] _cacheLayerProvenance =
+            new DirectionalShadowCacheLayerProvenance[ShadowSettings.MaxDirectionalCascades];
+        private ulong _shadowSubmissionSerial;
 
         public DirectionalShadowPass(
             VulkanContext context,
@@ -62,6 +66,17 @@ namespace Njulf.Rendering.Pipeline
                    IsStaticCacheDirty(sceneData);
         }
 
+        /// <summary>
+        /// Makes a static-cache refresh eligible for reuse by a later graphics
+        /// submission. The renderer calls this only after the command buffer
+        /// containing the refresh has been accepted by the graphics queue.
+        /// Queue ordering then establishes the dependency for the next frame.
+        /// </summary>
+        public void ConfirmCurrentFrameSubmission()
+        {
+            _staticCacheState.ConfirmRecordedRefreshSubmission();
+        }
+
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
             if (!sceneData.DirectionalShadowPassEnabled || !_shadowResources.HasImage)
@@ -72,11 +87,7 @@ namespace Njulf.Rendering.Pipeline
 
             uint activeMask = GetStaticCacheActiveMask(sceneData);
             bool staticDirty = IsStaticCacheDirty(sceneData);
-            uint reuseMask = !staticDirty &&
-                activeMask != 0u &&
-                (_staticCacheValidCascadeMask & activeMask) == activeMask
-                ? activeMask
-                : 0u;
+            uint reuseMask = !staticDirty ? _staticCacheState.GetReusableMask(activeMask) : 0u;
             UpdateStaticCacheDiagnostics(sceneData, activeMask, 0u, reuseMask);
 
             return staticDirty ||
@@ -91,26 +102,31 @@ namespace Njulf.Rendering.Pipeline
 
             uint activeMask = GetStaticCacheActiveMask(sceneData);
             bool staticDirty = IsStaticCacheDirty(sceneData);
+            ulong requiredSignature = CreateStaticCacheSignature(sceneData, _settings);
             uint refreshMask = 0u;
             uint reuseMask = 0u;
             if (staticDirty && activeMask != 0u)
             {
                 // Do not treat the previous contents as usable while a refresh is in
                 // progress. Every requested layer is cleared and rendered independently.
-                _staticCacheValidCascadeMask &= ~activeMask;
+                _staticCacheState.BeginRefresh(activeMask);
                 refreshMask = RenderStaticCache(cmd, sceneData);
-                _staticCacheValidCascadeMask |= refreshMask;
-                _lastStaticCacheSignature = CreateStaticCacheSignature(sceneData, _settings);
-                _hasStaticCacheSignature = true;
+                _staticCacheState.RecordRefresh(
+                    refreshMask,
+                    requiredSignature,
+                    _shadowResources.ResourceGeneration);
             }
-            else if (activeMask != 0u &&
-                     (_staticCacheValidCascadeMask & activeMask) == activeMask)
+            else if (_staticCacheState.GetReusableMask(activeMask) != 0u)
             {
                 reuseMask = activeMask;
             }
 
-            if (activeMask != 0u &&
-                (_staticCacheValidCascadeMask & activeMask) == activeMask)
+            // A layer refreshed earlier in this command buffer can safely be
+            // copied into its working counterpart, but is deliberately not
+            // reusable by a later frame until the graphics submission has
+            // been accepted.
+            uint currentSubmissionCopyMask = _staticCacheState.GetCurrentSubmissionCopyMask(activeMask);
+            if (currentSubmissionCopyMask != 0u)
             {
                 CopyStaticCacheToWorking(cmd, sceneData);
             }
@@ -126,14 +142,19 @@ namespace Njulf.Rendering.Pipeline
                 RenderWorkingFoliage(cmd, sceneData);
 
             TransitionWorkingMap(cmd, ImageLayout.DepthStencilReadOnlyOptimal);
-            UpdateStaticCacheDiagnostics(sceneData, activeMask, refreshMask, reuseMask);
+            UpdateStaticCacheDiagnostics(
+                sceneData,
+                activeMask,
+                refreshMask,
+                reuseMask,
+                workingMapExplicitlyCleared: currentSubmissionCopyMask == 0u,
+                dynamicWorkAppended: sceneData.DirectionalDynamicShadowMeshletCount > 0,
+                foliageWorkAppended: HasFoliageShadowWork(sceneData),
+                commandsRecorded: true);
         }
 
         private uint RenderStaticCache(CommandBuffer cmd, SceneRenderingData sceneData)
         {
-            if (sceneData.DirectionalStaticShadowMeshletCount <= 0)
-                return 0u;
-
             TransitionStaticMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             BindShadowPipeline(cmd);
             int cascadeCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
@@ -493,7 +514,11 @@ namespace Njulf.Rendering.Pipeline
                 VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
                 Flags = 3u,
                 DebugView = sceneData.FoliageDebugView,
-                ShadowDensityScale = shadowDensityScale
+                ShadowDensityScale = shadowDensityScale,
+                // Padding1 carries the directional cascade only for the
+                // diagnostic foliage shader variant. It remains ignored by
+                // the production foliage shaders and preserves the ABI.
+                Padding1 = checked((uint)cascade)
             };
 
             _context.Api.CmdPushConstants(
@@ -691,9 +716,9 @@ namespace Njulf.Rendering.Pipeline
 
         private uint GetStaticCacheActiveMask(SceneRenderingData sceneData)
         {
-            if (sceneData.DirectionalStaticShadowMeshletCount <= 0)
-                return 0u;
-
+            // Every allocated cascade has a cache layer even when the current
+            // static stream is empty.  A reverse-Z clear recorded under the
+            // current signature is valid cache content and must be reusable.
             int cascadeCount = Math.Min(
                 Math.Max(sceneData.DirectionalShadowCascadeCount, 0),
                 _shadowResources.CascadeCount);
@@ -710,44 +735,62 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData,
             uint activeMask,
             uint refreshMask,
-            uint reuseMask)
+            uint reuseMask,
+            bool workingMapExplicitlyCleared = false,
+            bool dynamicWorkAppended = false,
+            bool foliageWorkAppended = false,
+            bool commandsRecorded = false)
         {
-            uint validMask = _staticCacheValidCascadeMask & activeMask;
+            uint validMask = _staticCacheState.ValidMask & activeMask;
             sceneData.DirectionalShadowStaticCacheActiveMask = unchecked((int)activeMask);
             sceneData.DirectionalShadowStaticCacheValidMask = unchecked((int)validMask);
             sceneData.DirectionalShadowStaticCacheRefreshMask = unchecked((int)refreshMask);
             sceneData.DirectionalShadowStaticCacheReuseMask = unchecked((int)reuseMask);
+            ulong submissionSerial = commandsRecorded && activeMask != 0u
+                ? unchecked(++_shadowSubmissionSerial)
+                : _shadowSubmissionSerial;
+            DirectionalShadowCacheLayerProvenance[] provenance = _cacheLayerProvenance;
+            for (int cascade = 0; cascade < provenance.Length; cascade++)
+            {
+                uint bit = 1u << cascade;
+                bool active = (activeMask & bit) != 0u;
+                bool refreshed = (refreshMask & bit) != 0u;
+                bool copied = (refreshMask & bit) != 0u ||
+                    (reuseMask & bit) != 0u ||
+                    (!workingMapExplicitlyCleared && (validMask & bit) != 0u);
+                provenance[cascade] = active
+                    ? new DirectionalShadowCacheLayerProvenance(
+                        CascadeIndex: cascade,
+                        Active: 1,
+                        CacheSignature: _staticCacheState.Signature,
+                        ResourceGeneration: _shadowResources.ResourceGeneration,
+                        CacheState: _staticCacheState.GetLayerState(cascade, activeMask, refreshMask),
+                        CopiedFromCache: copied ? 1 : 0,
+                        RefreshedThisFrame: refreshed ? 1 : 0,
+                        ExplicitlyCleared: refreshed || workingMapExplicitlyCleared ? 1 : 0,
+                        DynamicWorkAppended: dynamicWorkAppended ? 1 : 0,
+                        FoliageWorkAppended: foliageWorkAppended ? 1 : 0,
+                        FinalWorkingLayerValid: commandsRecorded
+                            ? 1
+                            : ((validMask & bit) != 0u ? 1 : 0),
+                        SubmissionSerial: submissionSerial)
+                    : DirectionalShadowCacheLayerProvenance.Invalid(cascade);
+            }
+
+            sceneData.DirectionalShadowCacheLayerProvenance = provenance;
         }
 
         private bool IsStaticCacheDirty(SceneRenderingData sceneData)
         {
             uint requiredMask = GetStaticCacheActiveMask(sceneData);
-            if (requiredMask == 0u)
-            {
-                // A frame with no static casters must still clear a previously
-                // composed working map. Otherwise the last static cache contents
-                // survive after the scene (or its submission classification)
-                // becomes dynamic-only.
-                bool hadValidStaticCache = _staticCacheValidCascadeMask != 0u;
-                _staticCacheValidCascadeMask = 0u;
-                return hadValidStaticCache;
-            }
-
-            if (_settings.ForceStaticCascadeCacheRefresh)
-                return true;
-
-            if (_shadowResources.StaticLayout == ImageLayout.Undefined ||
-                _shadowResources.Layout == ImageLayout.Undefined)
-            {
-                _staticCacheValidCascadeMask = 0u;
-                return true;
-            }
-
-            if ((_staticCacheValidCascadeMask & requiredMask) != requiredMask)
-                return true;
-
             ulong signature = CreateStaticCacheSignature(sceneData, _settings);
-            return !_hasStaticCacheSignature || _lastStaticCacheSignature != signature;
+            return _staticCacheState.IsDirty(
+                requiredMask,
+                signature,
+                _shadowResources.ResourceGeneration,
+                _shadowResources.StaticLayout != ImageLayout.Undefined &&
+                _shadowResources.Layout != ImageLayout.Undefined,
+                _settings.ForceStaticCascadeCacheRefresh);
         }
 
         internal static ulong CreateStaticCacheSignature(SceneRenderingData sceneData, ShadowSettings settings)

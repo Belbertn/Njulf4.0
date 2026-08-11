@@ -15,6 +15,9 @@ const uint SIMPLE_DDGI_RECEIVER_FLAG_SCROLL_EXPOSED = 1u << 2u;
 const uint SIMPLE_DDGI_RECEIVER_FLAG_RELOCATION_PENDING = 1u << 3u;
 const uint SIMPLE_DDGI_RECEIVER_FLAG_INACTIVE = 1u << 4u;
 const uint SIMPLE_DDGI_RECEIVER_FLAG_INACTIVE_CLASSIFICATION = 1u << 5u;
+const uint SIMPLE_DDGI_RECEIVER_GENERATION_SHIFT = 8u;
+const uint SIMPLE_DDGI_RECEIVER_GENERATION_MASK = 0xffffff00u;
+const uint SIMPLE_DDGI_RECEIVER_GENERATION_VALUE_MASK = 0x00ffffffu;
 const uint SIMPLE_DDGI_RECEIVER_STATE_REJECTION_FLAGS =
     SIMPLE_DDGI_RECEIVER_FLAG_FRESH |
     SIMPLE_DDGI_RECEIVER_FLAG_SCROLL_EXPOSED |
@@ -30,6 +33,7 @@ struct SimpleDdgiReceiverProbe
     float activeWeight;
     uint flags;
     uint atlasProbeAddress;
+    uint slotGeneration;
 };
 
 uint SimpleDdgiPackReceiverSnorm16(float value)
@@ -59,6 +63,7 @@ bool TryPackSimpleDdgiReceiverProbe(
     float probeSpacing,
     float activeWeight,
     uint normalizedReceiverFlags,
+    uint slotGeneration,
     uint atlasProbeAddress,
     out uvec4 packed)
 {
@@ -69,6 +74,8 @@ bool TryPackSimpleDdgiReceiverProbe(
         activeWeight < 0.0 || activeWeight > 1.0 ||
         (normalizedReceiverFlags &
             ~SIMPLE_DDGI_RECEIVER_PUBLISHER_INPUT_FLAGS) != 0u ||
+        slotGeneration == 0u ||
+        slotGeneration > SIMPLE_DDGI_RECEIVER_GENERATION_VALUE_MASK ||
         atlasProbeAddress == SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS)
     {
         return false;
@@ -92,6 +99,7 @@ bool TryPackSimpleDdgiReceiverProbe(
         x | (y << 16u),
         z | (weight << 16u),
         normalizedReceiverFlags |
+            (slotGeneration << SIMPLE_DDGI_RECEIVER_GENERATION_SHIFT) |
             SIMPLE_DDGI_RECEIVER_FLAG_PUBLISHED_COHERENT,
         atlasProbeAddress);
     return true;
@@ -116,6 +124,9 @@ SimpleDdgiReceiverProbe ReadSimpleDdgiReceiverProbe(
     result.activeWeight = float(packed.y >> 16u) / 65535.0;
     result.flags = packed.z;
     result.atlasProbeAddress = packed.w;
+    result.slotGeneration =
+        (packed.z & SIMPLE_DDGI_RECEIVER_GENERATION_MASK) >>
+            SIMPLE_DDGI_RECEIVER_GENERATION_SHIFT;
     return result;
 }
 
@@ -160,6 +171,7 @@ bool PublishSimpleDdgiReceiverProbe(
     float probeSpacing,
     float activeWeight,
     uint normalizedReceiverFlags,
+    uint slotGeneration,
     uint atlasProbeAddress)
 {
     uvec4 packed;
@@ -168,6 +180,7 @@ bool PublishSimpleDdgiReceiverProbe(
             probeSpacing,
             activeWeight,
             normalizedReceiverFlags,
+            slotGeneration,
             atlasProbeAddress,
             packed))
     {

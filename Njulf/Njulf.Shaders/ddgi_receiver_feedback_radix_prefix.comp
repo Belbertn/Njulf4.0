@@ -1,0 +1,71 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+#include "ddgi_receiver_feedback_abi.glsl"
+
+// Bounded prefix over the histogram matrix. One lane performs the fixed-order
+// scan so integer order is reproducible across devices; the sort itself stays
+// workgroup-parallel in histogram/scatter.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    if (receiverFeedbackPc.operation !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_OPERATION_RADIX_PREFIX ||
+        !SimpleDdgiReceiverFeedbackRadixConfigurationIsValid() ||
+        gl_GlobalInvocationID.x != 0u)
+    {
+        return;
+    }
+
+    uint inputCount = SimpleDdgiReceiverFeedbackInputCount();
+    if (inputCount > SimpleDdgiReceiverFeedbackInputCapacity())
+    {
+        SimpleDdgiReceiverFeedbackMarkBankFailure(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    uint groupCount = SimpleDdgiReceiverFeedbackDivideRoundUp(inputCount,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE);
+    uint globalBase = 0u;
+    for (uint digit = 0u;
+         digit < SIMPLE_DDGI_RECEIVER_FEEDBACK_RADIX_BIN_COUNT;
+         ++digit)
+    {
+        uint localBase = 0u;
+        for (uint group = 0u; group < groupCount; ++group)
+        {
+            uint offset = SimpleDdgiReceiverFeedbackRadixPrefixOffsetWords() +
+                group * SIMPLE_DDGI_RECEIVER_FEEDBACK_RADIX_BIN_COUNT + digit;
+            uint count = ReadStorageWordUniform(
+                SimpleDdgiReceiverFeedbackScratchBuffer(), offset);
+            WriteStorageWordUniform(SimpleDdgiReceiverFeedbackScratchBuffer(),
+                offset, localBase);
+            if (count > inputCount - localBase)
+            {
+                SimpleDdgiReceiverFeedbackMarkBankFailure(
+                    SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+                return;
+            }
+            localBase += count;
+        }
+        WriteStorageWordUniform(SimpleDdgiReceiverFeedbackScratchBuffer(),
+            SimpleDdgiReceiverFeedbackRadixBaseOffsetWords() + digit,
+            globalBase);
+        if (localBase > inputCount - globalBase)
+        {
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+            return;
+        }
+        globalBase += localBase;
+    }
+
+    if (globalBase != inputCount)
+    {
+        SimpleDdgiReceiverFeedbackMarkBankFailure(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+    }
+}

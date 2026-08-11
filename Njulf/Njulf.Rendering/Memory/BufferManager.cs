@@ -100,7 +100,41 @@ namespace Njulf.Rendering.Memory
                     &allocationInfo);
                 
                 if (result != Result.Success)
-                    throw new VulkanException("Failed to create buffer", result);
+                {
+                    if (index < _buffers.Count)
+                        _freeIndices.Push(index);
+
+                    string failureMessage;
+                    try
+                    {
+                        failureMessage =
+                            BufferAllocationDiagnostics.BuildFailureMessage(
+                                size,
+                                usage,
+                                memoryUsage,
+                                allocFlags,
+                                debugName,
+                                category,
+                                _context.GetMemoryHeapBudgetSnapshot());
+                    }
+                    catch (Exception diagnosticFailure)
+                    {
+                        failureMessage =
+                            BufferAllocationDiagnostics.BuildFailureMessage(
+                                size,
+                                usage,
+                                memoryUsage,
+                                allocFlags,
+                                debugName,
+                                category,
+                                MemoryHeapBudgetSnapshot.Unavailable) +
+                            $"; allocation diagnostics failed with {diagnosticFailure.GetType().Name}";
+                    }
+
+                    throw new BufferAllocationException(
+                        failureMessage,
+                        result);
+                }
 
                 bufferInfo.Buffer = buffer;
                 bufferInfo.Allocation = allocation;
@@ -174,6 +208,30 @@ namespace Njulf.Rendering.Memory
             }
         }
 
+        /// <summary>
+        /// Returns the immutable Vulkan usage mask assigned when the live
+        /// buffer was created.  Resource owners use this to prove that a
+        /// device address is legal for a particular native command before
+        /// recording it; callers cannot infer the mask from a handle alone.
+        /// </summary>
+        public BufferUsageFlags GetBufferUsage(BufferHandle handle)
+        {
+            lock (_lock)
+            {
+                if (!handle.IsValid || handle.Index >= _buffers.Count)
+                    throw new InvalidOperationException("Invalid buffer handle");
+
+                BufferInfo bufferInfo = _buffers[handle.Index];
+                if (bufferInfo.Generation != handle.Generation)
+                {
+                    throw new InvalidOperationException(
+                        "Buffer handle generation mismatch - use after free detected");
+                }
+
+                return bufferInfo.Usage;
+            }
+        }
+
         public ulong GetBufferDeviceAddress(BufferHandle handle)
         {
             Buffer buffer = GetBuffer(handle);
@@ -191,6 +249,20 @@ namespace Njulf.Rendering.Memory
             lock (_lock)
             {
                 return GetBufferAndAllocation(handle).AllocationInfo.PMappedData;
+            }
+        }
+
+        /// <summary>
+        /// Returns the allocator-reported physical allocation size. This may
+        /// exceed the logical buffer range because of device alignment and is
+        /// the authoritative value for post-allocation budget validation.
+        /// </summary>
+        public ulong GetBufferAllocationSize(BufferHandle handle)
+        {
+            lock (_lock)
+            {
+                return checked((ulong)GetBufferAndAllocation(handle)
+                    .AllocationInfo.Size);
             }
         }
         

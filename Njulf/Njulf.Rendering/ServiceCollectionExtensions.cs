@@ -17,6 +17,23 @@ namespace Microsoft.Extensions.DependencyInjection
     public sealed class RenderingOptions
     {
         private RendererValidationSettings _validationSettings = RendererValidationSettings.FromEnvironment();
+        private VulkanOptionalDeviceFeatures _optionalDeviceFeatures =
+            VulkanOptionalDeviceFeatures.FromEnvironment();
+        private bool _optionalDeviceFeaturesExplicitlyConfigured =
+            Environment.GetEnvironmentVariable(
+                "NJULF_ENABLE_EXT_OPACITY_MICROMAP") is not null;
+        private string? _advancedGiPrerequisiteManifestPath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_ADVANCED_GI_PREREQUISITE_MANIFEST"));
+        private string? _advancedGiQualificationManifestPath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_ADVANCED_GI_QUALIFICATION_MANIFEST"));
+        private string? _advancedGiRuntimeEvidenceBundlePath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_ADVANCED_GI_RUNTIME_EVIDENCE_BUNDLE"));
 
         public bool EnableValidation
         {
@@ -32,6 +49,100 @@ namespace Microsoft.Extensions.DependencyInjection
             get => _validationSettings;
             set => _validationSettings = value ?? throw new ArgumentNullException(nameof(value));
         }
+
+        /// <summary>
+        /// Logical-device feature requests. Unless explicitly overridden, C1's
+        /// device chain follows the pre-initialization opacity-micromap mode.
+        /// Physical-device advertisement alone never enables an extension.
+        /// </summary>
+        public VulkanOptionalDeviceFeatures OptionalDeviceFeatures
+        {
+            get => _optionalDeviceFeaturesExplicitlyConfigured
+                ? _optionalDeviceFeatures
+                : _optionalDeviceFeatures with
+                {
+                    EnableExtOpacityMicromap = ShouldRequestExtOpacityMicromap(
+                        InitialSettings.GlobalIllumination)
+                };
+            set
+            {
+                _optionalDeviceFeatures = value;
+                _optionalDeviceFeaturesExplicitlyConfigured = true;
+            }
+        }
+
+        public bool EnableExtOpacityMicromap
+        {
+            get => OptionalDeviceFeatures.EnableExtOpacityMicromap;
+            set
+            {
+                _optionalDeviceFeatures = _optionalDeviceFeatures with
+                {
+                    EnableExtOpacityMicromap = value
+                };
+                _optionalDeviceFeaturesExplicitlyConfigured = true;
+            }
+        }
+
+        internal static bool ShouldRequestExtOpacityMicromap(
+            GlobalIlluminationSettings settings)
+        {
+            ArgumentNullException.ThrowIfNull(settings);
+            return settings.DdgiOpacityMicromapMode is
+                DdgiOpacityMicromapMode.ExtFourStateExperiment or
+                DdgiOpacityMicromapMode.AutoQualified;
+        }
+
+        /// <summary>
+        /// Settings consumed while the renderer is constructed, before its
+        /// immutable render-graph and optional-device inventory are selected.
+        /// Applications must place startup-only advanced-GI mode changes here;
+        /// mutating the live renderer after <c>Initialize</c> cannot retroactively
+        /// create an omitted graph branch.
+        /// </summary>
+        public RenderSettings InitialSettings { get; } = new();
+
+        /// <summary>
+        /// Optional Phase-0 frozen-contract manifest. Invalid input is rejected
+        /// fail-closed and canonical GI remains available.
+        /// </summary>
+        public string? AdvancedGiPrerequisiteManifestPath
+        {
+            get => _advancedGiPrerequisiteManifestPath;
+            set => _advancedGiPrerequisiteManifestPath =
+                RendererValidationSettings.NormalizeOptionalPath(value);
+        }
+
+        /// <summary>
+        /// Optional authenticated per-device promotion manifest. Invalid,
+        /// incomplete, stale, or tampered input is rejected fail-closed.
+        /// </summary>
+        public string? AdvancedGiQualificationManifestPath
+        {
+            get => _advancedGiQualificationManifestPath;
+            set => _advancedGiQualificationManifestPath =
+                RendererValidationSettings.NormalizeOptionalPath(value);
+        }
+
+        /// <summary>
+        /// Optional exact C4/C5 scene/layout evidence bundle. The common
+        /// qualification manifest still gates AutoQualified; this file adds
+        /// the feature-specific configuration and source identity required to
+        /// create those immutable graph variants.
+        /// </summary>
+        public string? AdvancedGiRuntimeEvidenceBundlePath
+        {
+            get => _advancedGiRuntimeEvidenceBundlePath;
+            set => _advancedGiRuntimeEvidenceBundlePath =
+                RendererValidationSettings.NormalizeOptionalPath(value);
+        }
+
+        /// <summary>
+        /// Optional strongly typed configuration hook for C4/C5 evidence whose
+        /// exact scene/layout binding is application-owned. It runs after the
+        /// common manifests are loaded and before renderer initialization.
+        /// </summary>
+        public Action<VulkanRenderer>? ConfigureAdvancedGiEvidence { get; set; }
 
         public static bool DefaultEnableValidation { get; } =
 #if DEBUG
@@ -133,7 +244,8 @@ namespace Microsoft.Extensions.DependencyInjection
                     registeredWindow,
                     renderingOptions.ValidationSettings,
                     provider.GetService<RendererStartupLog>(),
-                    DeviceRequirementOverride.FromEnvironment());
+                    DeviceRequirementOverride.FromEnvironment(),
+                    renderingOptions.OptionalDeviceFeatures);
             });
 
             services.TryAddSingleton<SwapchainManager>();
@@ -165,33 +277,107 @@ namespace Microsoft.Extensions.DependencyInjection
             });
             services.TryAddSingleton<MeshManager>();
             services.TryAddSingleton<MaterialManager>();
+            services.TryAddSingleton<OpacityMicromapRuntimeRegistrationStore>();
             services.TryAddSingleton<IModelRenderUploadService, ModelRenderUploadService>();
             services.TryAddSingleton<LightManager>();
             services.TryAddSingleton<SceneDataBuilder>();
             services.TryAddSingleton<RenderGraph>();
 
-            services.TryAddSingleton(provider => new VulkanRenderer(
-                provider.GetRequiredService<IWindow>(),
-                provider.GetRequiredService<VulkanContext>(),
-                provider.GetRequiredService<SwapchainManager>(),
-                provider.GetRequiredService<SynchronizationManager>(),
-                provider.GetRequiredService<CommandBufferManager>(),
-                provider.GetRequiredService<BufferManager>(),
-                provider.GetRequiredService<TextureManager>(),
-                provider.GetRequiredService<MeshManager>(),
-                provider.GetRequiredService<MaterialManager>(),
-                provider.GetRequiredService<LightManager>(),
-                provider.GetRequiredService<BindlessHeap>(),
-                provider.GetRequiredService<RenderGraph>(),
-                provider.GetRequiredService<SceneDataBuilder>(),
-                provider.GetRequiredService<StagingRing>(),
-                provider.GetRequiredService<FenceBasedDeleter>(),
-                provider.GetRequiredService<IModelRenderUploadService>(),
-                ownsDependencies: false));
+            services.TryAddSingleton(provider =>
+            {
+                RenderingOptions renderingOptions =
+                    provider.GetRequiredService<RenderingOptions>();
+                RendererStartupLog? startupLog =
+                    provider.GetService<RendererStartupLog>();
+                var renderer = new VulkanRenderer(
+                    provider.GetRequiredService<IWindow>(),
+                    provider.GetRequiredService<VulkanContext>(),
+                    provider.GetRequiredService<SwapchainManager>(),
+                    provider.GetRequiredService<SynchronizationManager>(),
+                    provider.GetRequiredService<CommandBufferManager>(),
+                    provider.GetRequiredService<BufferManager>(),
+                    provider.GetRequiredService<TextureManager>(),
+                    provider.GetRequiredService<MeshManager>(),
+                    provider.GetRequiredService<MaterialManager>(),
+                    provider.GetRequiredService<LightManager>(),
+                    provider.GetRequiredService<BindlessHeap>(),
+                    provider.GetRequiredService<RenderGraph>(),
+                    provider.GetRequiredService<SceneDataBuilder>(),
+                    provider.GetRequiredService<StagingRing>(),
+                    provider.GetRequiredService<FenceBasedDeleter>(),
+                    provider.GetRequiredService<IModelRenderUploadService>(),
+                    ownsDependencies: false,
+                    initialSettings: renderingOptions.InitialSettings);
+
+                ConfigureAdvancedGiStartup(
+                    renderer,
+                    renderingOptions,
+                    startupLog);
+                return renderer;
+            });
 
             services.TryAddSingleton<IRenderer>(provider => provider.GetRequiredService<VulkanRenderer>());
 
             return services;
+        }
+
+        private static void ConfigureAdvancedGiStartup(
+            VulkanRenderer renderer,
+            RenderingOptions options,
+            RendererStartupLog? startupLog)
+        {
+            const string prerequisiteStep =
+                "AdvancedGI.PrerequisiteManifest";
+            if (options.AdvancedGiPrerequisiteManifestPath is { } prerequisitePath)
+            {
+                startupLog?.StepStarted(prerequisiteStep, prerequisitePath);
+                bool accepted = renderer
+                    .TryConfigureAdvancedGiPrerequisiteManifestFile(
+                        prerequisitePath,
+                        out string detail);
+                startupLog?.StepSucceeded(
+                    prerequisiteStep,
+                    accepted
+                        ? $"accepted:{detail}"
+                        : $"rejected:{detail};canonical-gi-retained");
+            }
+
+            const string qualificationStep =
+                "AdvancedGI.QualificationManifest";
+            if (options.AdvancedGiQualificationManifestPath is { } qualificationPath)
+            {
+                startupLog?.StepStarted(qualificationStep, qualificationPath);
+                bool accepted = renderer
+                    .TryConfigureAdvancedGiQualificationManifestFile(
+                        qualificationPath,
+                        out string detail);
+                startupLog?.StepSucceeded(
+                    qualificationStep,
+                    accepted
+                        ? $"accepted:{detail}"
+                        : $"rejected:{detail};canonical-gi-retained");
+            }
+
+            const string runtimeEvidenceStep =
+                "AdvancedGI.RuntimeEvidenceBundle";
+            if (options.AdvancedGiRuntimeEvidenceBundlePath is
+                { } runtimeEvidencePath)
+            {
+                startupLog?.StepStarted(
+                    runtimeEvidenceStep,
+                    runtimeEvidencePath);
+                bool accepted = renderer
+                    .TryConfigureAdvancedGiRuntimeEvidenceBundleFile(
+                        runtimeEvidencePath,
+                        out string detail);
+                startupLog?.StepSucceeded(
+                    runtimeEvidenceStep,
+                    accepted
+                        ? $"accepted:{detail}"
+                        : $"rejected:{detail};C4-C5-canonical-fallback-retained");
+            }
+
+            options.ConfigureAdvancedGiEvidence?.Invoke(renderer);
         }
     }
 }

@@ -17,9 +17,11 @@
 #include "common.glsl"
 #define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
 #define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
+#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
 #include "ddgi_simple_shared.glsl"
 #if SIMPLE_DDGI_TRACE_SHADER_ROLE != SIMPLE_DDGI_TRACE_SHADER_ROLE_REUSE
 #include "farfield_clipmap.glsl"
+#include "ddgi_light_tree.glsl"
 #endif
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
@@ -62,8 +64,10 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint SchedulerRayBucketCommandsOffsetWords;
     uint SchedulerRayBucketMetadataOffsetWords;
     uint SchedulerOutcomesOffsetWords;
-    uint SchedulerCountersOffsetWords;
-    uint SchedulerUpdateRecordsOffsetWords;
+    // Trace-only aliases for the two generic trailing push words. Other DDGI
+    // consumers retain counter/update-record semantics at these byte offsets.
+    uint SchedulerFrameOffsetWords;
+    uint SchedulerDirtyRegionOffsetWords;
 } pc;
 
 const float PI = SIMPLE_DDGI_PI;
@@ -80,12 +84,31 @@ const float DDGI_PROBE_TRACE_EPSILON = 0.02;
 const uint SIMPLE_DDGI_TRACE_FLAG_COMPLETE_RAY_SCENE = 1u << 6;
 const uint SIMPLE_DDGI_TRACE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED = 1u << 7;
 const uint SIMPLE_DDGI_TRACE_FLAG_THIN_SURFACE_TRANSMISSION_ENABLED = 1u << 8;
+// The urgent lane consumes relit radiance from ray scratch but leaves the
+// canonical source cache and its generation ownership untouched. The ordinary
+// post-forward transaction subsequently performs the authoritative cache write.
+const uint SIMPLE_DDGI_TRACE_FLAG_PRIVATE_URGENT_RELIGHT = 1u << 9;
 // Word 11 reserves bit 31 as a transaction-private handshake between the
 // ordered reuse/source/final kernels. The compiled cache plan guarantees that
 // every real one-based probe address fits in the remaining 31 bits.
 const uint SIMPLE_DDGI_TRACE_CACHE_FALLBACK_FLAG = 1u << 31u;
 const uint SIMPLE_DDGI_TRACE_CACHE_BASE_MASK =
     ~SIMPLE_DDGI_TRACE_CACHE_FALLBACK_FLAG;
+const uint SIMPLE_DDGI_TRACE_DIRTY_REGION_WORDS = 20u;
+const uint SIMPLE_DDGI_TRACE_MAX_DIRTY_REGIONS = 1024u;
+const uint SIMPLE_DDGI_DIRTY_GEOMETRY_ADDED = 1u << 1u;
+const uint SIMPLE_DDGI_DIRTY_GEOMETRY_REMOVED = 1u << 2u;
+const uint SIMPLE_DDGI_DIRTY_TRANSFORM_CHANGED = 1u << 3u;
+const uint SIMPLE_DDGI_DIRTY_MATERIAL_CHANGED = 1u << 4u;
+const uint SIMPLE_DDGI_DIRTY_SEGMENT_SAFE_MASK =
+    SIMPLE_DDGI_DIRTY_GEOMETRY_ADDED |
+    SIMPLE_DDGI_DIRTY_GEOMETRY_REMOVED |
+    SIMPLE_DDGI_DIRTY_TRANSFORM_CHANGED |
+    SIMPLE_DDGI_DIRTY_MATERIAL_CHANGED;
+const uint SIMPLE_DDGI_DIRTY_STRUCTURAL_MASK =
+    SIMPLE_DDGI_DIRTY_GEOMETRY_ADDED |
+    SIMPLE_DDGI_DIRTY_GEOMETRY_REMOVED |
+    SIMPLE_DDGI_DIRTY_TRANSFORM_CHANGED;
 
 #define DDGI_HIT_USE_SELECTED_LIGHTS 0
 #define DDGI_HIT_ENABLE_ENVIRONMENT_WRAPPER 0
@@ -99,13 +122,74 @@ bool simpleDdgiCurrentDetailedDiagnostics;
 uint simpleDdgiCurrentVolumeIndex;
 uint simpleDdgiCurrentReceiverInstanceIndex;
 uint simpleDdgiCurrentReceiverPrimitiveIndex;
+
+uint SimpleDdgiTransparencyCandidateLimit()
+{
+    uint encoded = (pc.MaterialTextureMaxCascade >> 4u) & 0xffu;
+    return encoded == 0u ? 256u : encoded;
+}
+
+uint SimpleDdgiTransparencyLayerLimit()
+{
+    uint encoded = (pc.MaterialTextureMaxCascade >> 12u) & 0x3fu;
+    return encoded == 0u ? 64u : encoded;
+}
+
+uint SimpleDdgiDecalCandidateLimit()
+{
+    return min(
+        (pc.MaterialTextureMaxCascade >> 18u) & 0x0fu,
+        8u);
+}
+uvec2 simpleDdgiCurrentWorldProbeStableKey;
+uint simpleDdgiCurrentDirectionRayOrdinal;
+uint simpleDdgiCurrentSourceLightingEpoch;
 #define DDGI_HIT_DIRECT_LIGHT_CAP simpleDdgiCurrentMaxShadedLights
 #define DDGI_HIT_MAX_SHADED_LIGHTS simpleDdgiCurrentMaxShadedLights
 #define DDGI_HIT_MATERIAL_TEXTURE_MAX_CASCADE simpleDdgiCurrentMaterialTextureMaxCascade
+#define DDGI_HIT_ALPHA_CANDIDATE_LIMIT SimpleDdgiTransparencyCandidateLimit()
+#define DDGI_HIT_TRANSPARENCY_LAYER_LIMIT SimpleDdgiTransparencyLayerLimit()
+#define DDGI_HIT_CONTENT_DEPENDENT_LOCAL_LIGHTS 1
+#define DDGI_HIT_LOCAL_SAMPLING_ENABLED ((pc.Flags & (1u << 31u)) != 0u)
+#define DDGI_HIT_LOCAL_SAMPLING_MODE ((pc.Flags >> 10u) & 0x3u)
+#define DDGI_HIT_EXACT_LOCAL_LIGHT_THRESHOLD ((pc.Flags >> 12u) & 0x7ffu)
+#define DDGI_HIT_UNIFORM_LIGHT_MIXTURE float((pc.Flags >> 23u) & 0xffu) * (1.0 / 1020.0)
+#define DDGI_HIT_WORLD_PROBE_STABLE_KEY simpleDdgiCurrentWorldProbeStableKey
+#define DDGI_HIT_DIRECTION_RAY_ORDINAL simpleDdgiCurrentDirectionRayOrdinal
+#define DDGI_HIT_SOURCE_LIGHTING_EPOCH simpleDdgiCurrentSourceLightingEpoch
+#define DDGI_HIT_SAMPLING_SEQUENCE_EPOCH 1u
+#if defined(SIMPLE_DDGI_TRACE_OPAQUE_ONLY) && SIMPLE_DDGI_TRACE_OPAQUE_ONLY
+#define DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED false
+#define DDGI_HIT_CANDIDATE_MATERIAL_TEXTURES_ALLOWED false
+#define DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED false
+#define DDGI_HIT_BINARY_OPAQUE_SHADOW_FAST_PATH 1
+#else
 #define DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED ((pc.Flags & SIMPLE_DDGI_TRACE_FLAG_ALPHA_MASK_TRANSPORT_ENABLED) != 0u)
 #define DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED ((pc.Flags & SIMPLE_DDGI_TRACE_FLAG_THIN_SURFACE_TRANSMISSION_ENABLED) != 0u)
+#define DDGI_HIT_BINARY_OPAQUE_SHADOW_FAST_PATH 0
+#endif
+#if defined(SIMPLE_DDGI_TRACE_NO_LOCAL_LIGHTS) && SIMPLE_DDGI_TRACE_NO_LOCAL_LIGHTS
+#define DDGI_HIT_LOCAL_LIGHTS_ENABLED 0
+#else
+#define DDGI_HIT_LOCAL_LIGHTS_ENABLED 1
+#endif
+#if defined(SIMPLE_DDGI_TRACE_NO_EMISSIVE_SOURCES) && SIMPLE_DDGI_TRACE_NO_EMISSIVE_SOURCES
+#define DDGI_HIT_EMISSIVE_SOURCES_ENABLED 0
+#else
+#define DDGI_HIT_EMISSIVE_SOURCES_ENABLED 1
+#endif
+#if defined(SIMPLE_DDGI_TRACE_ONE_DIRECTIONAL_LIGHT) && SIMPLE_DDGI_TRACE_ONE_DIRECTIONAL_LIGHT
+#define DDGI_HIT_ONE_DIRECTIONAL_LIGHT_ONLY 1
+#else
+#define DDGI_HIT_ONE_DIRECTIONAL_LIGHT_ONLY 0
+#endif
+#if defined(SIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS) && SIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS
+#define DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED false
+#define DDGI_HIT_VOLUME_DIAGNOSTICS_ENABLED 0
+#else
 #define DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED simpleDdgiCurrentDetailedDiagnostics
 #define DDGI_HIT_VOLUME_DIAGNOSTICS_ENABLED 1
+#endif
 #define DDGI_HIT_VOLUME_ENERGY_COUNTER_BASE SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE
 #define DDGI_HIT_VOLUME_ENERGY_COUNTER_STRIDE SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_STRIDE
 #define DDGI_HIT_VOLUME_INDEX simpleDdgiCurrentVolumeIndex
@@ -113,6 +197,150 @@ uint simpleDdgiCurrentReceiverPrimitiveIndex;
 #define DDGI_HIT_RECEIVER_PRIMITIVE_INDEX simpleDdgiCurrentReceiverPrimitiveIndex
 #if SIMPLE_DDGI_TRACE_SHADER_ROLE != SIMPLE_DDGI_TRACE_SHADER_ROLE_REUSE
 #include "ddgi_hit_shading.glsl"
+
+// Kept deliberately small: these are invocation-local records and therefore
+// consume registers. Overflow retains the nearest deterministic set and is a
+// qualification failure through DDGI_DECAL_CANDIDATE_LIMIT_COUNTER.
+const uint SIMPLE_DDGI_DECAL_CANDIDATE_LIMIT = 8u;
+struct SimpleDdgiDecalCandidate
+{
+    uint InstanceIndex;
+    uint PrimitiveIndex;
+    vec2 Barycentrics;
+    float Distance;
+    bool FrontFacing;
+};
+
+int SimpleDdgiDecalLayer(GPUDdgiRayQueryInstance instance)
+{
+    return int(instance.PackedDecalLayerAndOrder << 16u) >> 16;
+}
+
+uint SimpleDdgiDecalStableOrder(GPUDdgiRayQueryInstance instance)
+{
+    return instance.PackedDecalLayerAndOrder >> 16u;
+}
+
+bool SimpleDdgiDecalComesBefore(
+    SimpleDdgiDecalCandidate left,
+    SimpleDdgiDecalCandidate right)
+{
+    GPUDdgiRayQueryInstance leftInstance =
+        ReadDdgiRayQueryInstance(left.InstanceIndex);
+    GPUDdgiRayQueryInstance rightInstance =
+        ReadDdgiRayQueryInstance(right.InstanceIndex);
+    int leftLayer = SimpleDdgiDecalLayer(leftInstance);
+    int rightLayer = SimpleDdgiDecalLayer(rightInstance);
+    if (leftLayer != rightLayer)
+        return leftLayer < rightLayer;
+    uint leftOrder = SimpleDdgiDecalStableOrder(leftInstance);
+    uint rightOrder = SimpleDdgiDecalStableOrder(rightInstance);
+    if (leftOrder != rightOrder)
+        return leftOrder < rightOrder;
+    if (leftInstance.StableInstanceIdentity !=
+        rightInstance.StableInstanceIdentity)
+    {
+        return leftInstance.StableInstanceIdentity <
+            rightInstance.StableInstanceIdentity;
+    }
+    if (left.PrimitiveIndex != right.PrimitiveIndex)
+        return left.PrimitiveIndex < right.PrimitiveIndex;
+    return left.Distance < right.Distance;
+}
+
+bool SimpleDdgiDecalIsFarther(
+    SimpleDdgiDecalCandidate left,
+    SimpleDdgiDecalCandidate right)
+{
+    if (left.Distance != right.Distance)
+        return left.Distance > right.Distance;
+    GPUDdgiRayQueryInstance leftInstance =
+        ReadDdgiRayQueryInstance(left.InstanceIndex);
+    GPUDdgiRayQueryInstance rightInstance =
+        ReadDdgiRayQueryInstance(right.InstanceIndex);
+    if (leftInstance.StableInstanceIdentity !=
+        rightInstance.StableInstanceIdentity)
+    {
+        return leftInstance.StableInstanceIdentity >
+            rightInstance.StableInstanceIdentity;
+    }
+    return left.PrimitiveIndex > right.PrimitiveIndex;
+}
+#endif
+
+#if SIMPLE_DDGI_TRACE_SHADER_ROLE != SIMPLE_DDGI_TRACE_SHADER_ROLE_REUSE
+vec3 EvaluateSimpleDdgiOneBounceGlossyRadiance(
+    SimpleDdgiParams params,
+    vec3 worldPosition,
+    GiSurfaceSample surface,
+    vec3 viewDirection,
+    float probeSpacing)
+{
+    if (SimpleDdgiGlossyTransportMode(params.residencyFlags) !=
+            SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_ONE_BOUNCE ||
+        SimpleDdgiDirectionalRadianceMode(params.residencyFlags) ==
+            SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF)
+    {
+        return vec3(0.0);
+    }
+
+    float roughnessWeight = SimpleDdgiRoughSpecularWeight(
+        params.residencyFlags,
+        surface.Roughness);
+    float nDotV = max(dot(
+        surface.ShadingNormal,
+        GiSafeNormal(viewDirection, surface.ShadingNormal)), 0.0);
+    if (roughnessWeight <= 0.0 || nDotV <= 0.0 ||
+        max(max(surface.SpecularF0.r, surface.SpecularF0.g),
+            surface.SpecularF0.b) <= 0.0)
+    {
+        return vec3(0.0);
+    }
+
+    vec3 reflectionDirection = reflect(
+        -GiSafeNormal(viewDirection, surface.ShadingNormal),
+        surface.ShadingNormal);
+    SetSimpleDdgiDirectionalRadianceQuery(
+        reflectionDirection,
+        surface.Roughness);
+    // Trace executes before this frame's blend. The separately charged parity
+    // buffer is therefore the immutable previous-generation Jacobi input.
+    SetSimpleDdgiDirectionalRadianceQueryBuffer(
+        uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_PARITY_BUFFER_INDEX));
+    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(
+        params,
+        worldPosition + surface.GeometricNormal * max(
+            0.03,
+            probeSpacing * 0.02),
+        surface.ShadingNormal,
+        viewDirection);
+    float confidence = clamp(
+        gather.directionalRadianceSupport *
+        SimpleDdgiRadiometricOwnership(gather) *
+        SimpleDdgiLeakAttenuation(gather, params),
+        0.0,
+        1.0);
+    if (confidence <= 0.0)
+        return vec3(0.0);
+
+    GPUEnvironmentData environment = ReadGiEnvironmentData();
+    if (environment.BrdfLutTextureIndex < 0)
+        return vec3(0.0);
+    vec2 brdf = texture(
+        BindlessTextures[nonuniformEXT(environment.BrdfLutTextureIndex)],
+        vec2(nDotV, surface.Roughness)).rg;
+    vec3 f0 = clamp(surface.SpecularF0, vec3(0.0), vec3(1.0));
+    vec3 fresnel = f0 +
+        (max(vec3(1.0 - surface.Roughness), f0) - f0) *
+        pow(clamp(1.0 - nDotV, 0.0, 1.0), 5.0);
+    vec3 glossy = gather.directionalRadiance *
+        (fresnel * brdf.x + brdf.y) *
+        max(environment.SpecularIntensity, 0.0) *
+        confidence;
+    return ApplyGiMaterialOcclusion(
+        max(glossy, vec3(0.0)),
+        surface.MaterialOcclusion);
+}
 #endif
 
 void WriteSimpleRayResult(
@@ -176,6 +404,28 @@ bool TraceSimpleDdgiBackfaceVisibilityDistance(
         if (rayQueryGetIntersectionTypeEXT(query, false) != gl_RayQueryCandidateIntersectionTriangleEXT)
             continue;
 
+        uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, false);
+        uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
+        vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, false);
+        bool frontFacing = rayQueryGetIntersectionFrontFaceEXT(query, false);
+        GPUDdgiRayQueryInstance instance =
+            ReadDdgiRayQueryInstance(instanceIndex);
+        if (DdgiRayQueryInstanceIsValid(instance) &&
+            DdgiRayGeometryIsDecal(instance))
+        {
+            continue;
+        }
+        if (!DdgiRayQueryInstanceIsValid(instance))
+        {
+            AddRendererDiagnostic(
+                pc.CurrentFrameIndex,
+                DDGI_RAY_METADATA_INVALID_COUNTER,
+                1u);
+            rayQueryConfirmIntersectionEXT(query);
+            rayQueryTerminateEXT(query);
+            break;
+        }
+
         alphaCandidateCount++;
         if (alphaCandidateCount > DDGI_HIT_ALPHA_CANDIDATE_LIMIT)
         {
@@ -185,10 +435,6 @@ bool TraceSimpleDdgiBackfaceVisibilityDistance(
             break;
         }
 
-        uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, false);
-        uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
-        vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, false);
-        bool frontFacing = rayQueryGetIntersectionFrontFaceEXT(query, false);
         if (DdgiCandidatePassesTwoSidedOpacity(
                 instanceIndex,
                 primitiveIndex,
@@ -206,6 +452,156 @@ bool TraceSimpleDdgiBackfaceVisibilityDistance(
     return true;
 }
 #endif
+
+bool SimpleDdgiRaySegmentIntersectsAabb(
+    vec3 origin,
+    vec3 direction,
+    float segmentLength,
+    vec3 minimum,
+    vec3 maximum,
+    float padding)
+{
+    if (any(isnan(origin)) || any(isinf(origin)) ||
+        any(isnan(direction)) || any(isinf(direction)) ||
+        isnan(segmentLength) || isinf(segmentLength) ||
+        segmentLength < 0.0 || any(isnan(minimum)) || any(isinf(minimum)) ||
+        any(isnan(maximum)) || any(isinf(maximum)))
+    {
+        return true;
+    }
+
+    vec3 boxMinimum = min(minimum, maximum) - vec3(max(padding, 0.0));
+    vec3 boxMaximum = max(minimum, maximum) + vec3(max(padding, 0.0));
+    float intervalMinimum = 0.0;
+    float intervalMaximum = segmentLength;
+    for (uint axis = 0u; axis < 3u; axis++)
+    {
+        float axisDirection = direction[axis];
+        if (abs(axisDirection) <= 1.0e-8)
+        {
+            if (origin[axis] < boxMinimum[axis] ||
+                origin[axis] > boxMaximum[axis])
+                return false;
+            continue;
+        }
+
+        float inverseDirection = 1.0 / axisDirection;
+        float first = (boxMinimum[axis] - origin[axis]) * inverseDirection;
+        float second = (boxMaximum[axis] - origin[axis]) * inverseDirection;
+        intervalMinimum = max(intervalMinimum, min(first, second));
+        intervalMaximum = min(intervalMaximum, max(first, second));
+        if (intervalMaximum < intervalMinimum)
+            return false;
+    }
+    return intervalMaximum >= intervalMinimum;
+}
+
+// Returns true when this cached ray must be replaced. Structural changes can
+// alter a direct-light visibility path from any cached surface hit, so hits are
+// conservatively re-traced for every influencing structural region. Misses and
+// material-only edits use the exact cached primary segment.
+bool SimpleDdgiSegmentSelectiveTouchesRay(
+    vec3 probePosition,
+    vec3 direction,
+    float cachedDistance,
+    float cachedHitKind,
+    float probeSpacing)
+{
+    if (pc.SchedulerArenaBufferIndex == 0xffffffffu)
+        return true;
+    uint dirtyCount = min(
+        ReadStorageWordUniform(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerFrameOffsetWords + 24u),
+        ReadStorageWordUniform(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerFrameOffsetWords + 25u));
+    dirtyCount = min(dirtyCount, SIMPLE_DDGI_TRACE_MAX_DIRTY_REGIONS);
+    if (dirtyCount == 0u)
+        return true;
+
+    bool sawInfluencingRegion = false;
+    float segmentPadding = max(0.02, probeSpacing * 0.005);
+    // dirtyCount is already clamped to the frozen upper bound above. Looping
+    // over that value preserves the same safety proof while avoiding a
+    // 1,024-iteration static loop with an internal continue for every cached
+    // ray. Some native compilers aggressively expand that shape, and the
+    // resulting program is both slower and needlessly difficult to compile.
+    for (uint regionIndex = 0u; regionIndex < dirtyCount; regionIndex++)
+    {
+        uint base = pc.SchedulerDirtyRegionOffsetWords +
+            regionIndex * SIMPLE_DDGI_TRACE_DIRTY_REGION_WORDS;
+        uint reasonFlags = ReadStorageWordUniform(
+            pc.SchedulerArenaBufferIndex,
+            base + 16u);
+        if (reasonFlags == 0u ||
+            (reasonFlags & ~SIMPLE_DDGI_DIRTY_SEGMENT_SAFE_MASK) != 0u)
+        {
+            return true;
+        }
+
+        vec3 influenceMinimum = vec3(
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 0u)),
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 1u)),
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 2u))) - vec3(probeSpacing);
+        vec3 influenceMaximum = vec3(
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 4u)),
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 5u)),
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 6u))) + vec3(probeSpacing);
+        bool influencesProbe = all(greaterThanEqual(
+                probePosition,
+                min(influenceMinimum, influenceMaximum))) &&
+            all(lessThanEqual(
+                probePosition,
+                max(influenceMinimum, influenceMaximum)));
+        if (!influencesProbe)
+            continue;
+        sawInfluencingRegion = true;
+
+        bool cachedSurfaceHit = cachedHitKind !=
+            SIMPLE_DDGI_RAY_HIT_KIND_MISS;
+        if (cachedSurfaceHit &&
+            (reasonFlags & SIMPLE_DDGI_DIRTY_STRUCTURAL_MASK) != 0u)
+        {
+            return true;
+        }
+
+        vec3 segmentMinimum = vec3(
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 8u)),
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 9u)),
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 10u)));
+        vec3 segmentMaximum = vec3(
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 12u)),
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 13u)),
+            uintBitsToFloat(ReadStorageWordUniform(
+                pc.SchedulerArenaBufferIndex, base + 14u)));
+        if (SimpleDdgiRaySegmentIntersectsAabb(
+                probePosition,
+                direction,
+                cachedDistance,
+                segmentMinimum,
+                segmentMaximum,
+                segmentPadding))
+        {
+            return true;
+        }
+    }
+
+    // A scheduler/trace influence disagreement is uncertain provenance. It is
+    // cheaper to re-trace than to risk a false-negative segment copy.
+    return !sawInfluencingRegion;
+}
 
 // All calls below are in main(), where params is the authoritative uploaded
 // simple-DDGI state. Remapping the counter helper here keeps disabled captures
@@ -342,6 +738,14 @@ void main()
         activeRayCount,
         sourceRayCount,
         params);
+    // The physical slot plus its non-zero ownership generation is stable for
+    // the lifetime of a cached source sequence and changes on reassignment.
+    // Frame number is intentionally absent from every sampling decision.
+    simpleDdgiCurrentWorldProbeStableKey = uvec2(
+        probeIndex,
+        SimpleDdgiProbeGeneration(probeState));
+    simpleDdgiCurrentDirectionRayOrdinal = directionRayIndex;
+    simpleDdgiCurrentSourceLightingEpoch = update.sourceEpoch;
 #if SIMPLE_DDGI_STORAGE_SHADER_MODE == SIMPLE_DDGI_STORAGE_SHADER_MODE_PACKED
     vec3 direction = SimpleDdgiReconstructRayDirection(
         probeIndex,
@@ -360,8 +764,58 @@ void main()
             params.raysPerProbe,
             SimpleDdgiPerProbeRayRotation(probeIndex, params.rayRotation));
 #endif
+    // C3 payloads are source-cache records, not transient guide lookups.  The
+    // packed direction and generation-time PDF therefore remain authoritative
+    // even if a newer distribution bank is built before this source sequence
+    // is consumed.  A backed-but-invalid payload aborts the probe transaction:
+    // falling back only that ray would mix proposal families without a valid
+    // balance denominator and bias the published irradiance.
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+    uvec2 guidingExpectedStableProbeId = uvec2(
+        probeIndex,
+        update.expectedGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK);
+    bool guidingProbeBacked =
+        SimpleDdgiGuidingTransportProbeHasCompleteBacking(
+            update.physicalProbeIndex,
+            probeIndex,
+            update.pageMappingGeneration,
+            guidingExpectedStableProbeId,
+            params.raysPerProbe);
+    SimpleDdgiGuidingTransportPayload guidingPayload;
+    bool guidingPayloadValid = TryReadSimpleDdgiGuidingTransportPayload(
+        update.physicalProbeIndex,
+        probeIndex,
+        update.pageMappingGeneration,
+        guidingExpectedStableProbeId,
+        directionRayIndex,
+        params.raysPerProbe,
+        guidingPayload);
+    if (guidingProbeBacked && !guidingPayloadValid)
+    {
+        SimpleDdgiSchedulerFailOutcome(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 2u);
+        return;
+    }
+    if (guidingPayloadValid)
+        direction = guidingPayload.direction;
+#endif
     bool transportV2 = (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u;
     bool sourceRefresh = SimpleDdgiUpdateRequiresSourceRefresh(update);
+    bool environmentMissRelight =
+        SimpleDdgiUpdateRelightsEnvironmentMisses(update);
+    bool cachedHitRelight =
+        SimpleDdgiUpdateRelightsCachedHits(update);
+    bool cachedGeometryReuse =
+        SimpleDdgiUpdateReusesCachedGeometry(update);
+    bool privateUrgentRelight =
+        (pc.Flags & SIMPLE_DDGI_TRACE_FLAG_PRIVATE_URGENT_RELIGHT) != 0u;
+    bool segmentSelective = sourceRefresh &&
+        SimpleDdgiUpdateSourceRefreshMode(update) ==
+            SIMPLE_DDGI_SOURCE_MODE_SEGMENT_SELECTIVE;
+    bool intentionalSegmentRetrace = false;
     // Invalidating source work commits the next physical generation only
     // after every producer completes. Stamp cache entries with that future
     // generation now so the committed public state and complete source
@@ -385,8 +839,16 @@ void main()
 #endif
     float maxDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
     bool farFieldOnlyRing = volume.spacing >= 15.999;
+#if defined(SIMPLE_DDGI_TRACE_FAR_FIELD_MODE) && SIMPLE_DDGI_TRACE_FAR_FIELD_MODE == 1
+    const bool farFieldEnabled = false;
+    const bool completeRayScene = true;
+#elif defined(SIMPLE_DDGI_TRACE_FAR_FIELD_MODE) && SIMPLE_DDGI_TRACE_FAR_FIELD_MODE == 2
+    const bool farFieldEnabled = true;
+    const bool completeRayScene = false;
+#else
     bool farFieldEnabled = (pc.Flags & SIMPLE_DDGI_FLAG_FAR_FIELD_ENABLED) != 0u;
     bool completeRayScene = (pc.Flags & SIMPLE_DDGI_TRACE_FLAG_COMPLETE_RAY_SCENE) != 0u;
+#endif
     float nearTlasMaxDistance = farFieldEnabled && !completeRayScene
         ? min(maxDistance, max(params.farFieldStartDistance, volume.spacing))
         : maxDistance;
@@ -408,7 +870,8 @@ void main()
     // stale cache can never be published at the relocated location.
 #if SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_SINGLE || \
     SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_REUSE
-    if (transportV2 && !sourceRefresh && !relocationRetryPending)
+    if (transportV2 && cachedGeometryReuse &&
+        !relocationRetryPending)
     {
 #if SIMPLE_DDGI_STORAGE_SHADER_MODE == SIMPLE_DDGI_STORAGE_SHADER_MODE_PACKED
         vec4 cachedSourceRadianceDistance;
@@ -426,6 +889,50 @@ void main()
             sourceRayCount,
             cachedSourceRadianceDistance,
             cachedSourceHitKind);
+        if (cacheRead && environmentMissRelight &&
+            cachedSourceHitKind == SIMPLE_DDGI_RAY_HIT_KIND_MISS)
+        {
+            cachedSourceRadianceDistance.rgb =
+                SampleSimpleDdgiEnvironmentMissRadiance(direction, params);
+            if (!privateUrgentRelight)
+                cacheRead = UpdateSimpleDdgiTransportRayCacheRadiance(
+                pc.TransportSourceCacheBufferIndex,
+                update.cacheProbeBaseWordPlusOne &
+                    SIMPLE_DDGI_TRACE_CACHE_BASE_MASK,
+                directionRayIndex,
+                volume,
+                params,
+                SimpleDdgiProbeGeneration(probeState),
+                update.sourceEpoch,
+                cachedSourceRadianceDistance.rgb);
+        }
+        else if (cacheRead && cachedHitRelight &&
+            cachedSourceHitKind != SIMPLE_DDGI_RAY_HIT_KIND_MISS)
+        {
+            cachedSourceRadianceDistance.rgb *= params.sourceRelightScale;
+            if (!privateUrgentRelight)
+                cacheRead = UpdateSimpleDdgiTransportRayCacheRadiance(
+                pc.TransportSourceCacheBufferIndex,
+                update.cacheProbeBaseWordPlusOne &
+                    SIMPLE_DDGI_TRACE_CACHE_BASE_MASK,
+                directionRayIndex,
+                volume,
+                params,
+                SimpleDdgiProbeGeneration(probeState),
+                update.sourceEpoch,
+                cachedSourceRadianceDistance.rgb);
+        }
+        if (cacheRead && segmentSelective &&
+            SimpleDdgiSegmentSelectiveTouchesRay(
+                probePosition,
+                direction,
+                cachedSourceRadianceDistance.w,
+                cachedSourceHitKind,
+                volume.spacing))
+        {
+            intentionalSegmentRetrace = true;
+            cacheRead = false;
+        }
         if (cacheRead)
         {
             WriteSimpleRayResult(
@@ -458,6 +965,56 @@ void main()
             cachedSourceRadianceDistance,
             cachedSourceDirection,
             cachedSourceHitKind);
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+        if (cacheRead && guidingPayloadValid)
+            cachedSourceDirection = guidingPayload.direction;
+#endif
+        if (cacheRead && environmentMissRelight &&
+            cachedSourceHitKind == SIMPLE_DDGI_RAY_HIT_KIND_MISS)
+        {
+            cachedSourceRadianceDistance.rgb =
+                SampleSimpleDdgiEnvironmentMissRadiance(
+                    cachedSourceDirection,
+                    params);
+            if (!privateUrgentRelight)
+                cacheRead = UpdateSimpleDdgiTransportRayCacheRadiance(
+                pc.TransportSourceCacheBufferIndex,
+                update.cacheProbeBaseWordPlusOne &
+                    SIMPLE_DDGI_TRACE_CACHE_BASE_MASK,
+                directionRayIndex,
+                volume,
+                params,
+                SimpleDdgiProbeGeneration(probeState),
+                update.sourceEpoch,
+                cachedSourceRadianceDistance.rgb);
+        }
+        else if (cacheRead && cachedHitRelight &&
+            cachedSourceHitKind != SIMPLE_DDGI_RAY_HIT_KIND_MISS)
+        {
+            cachedSourceRadianceDistance.rgb *= params.sourceRelightScale;
+            if (!privateUrgentRelight)
+                cacheRead = UpdateSimpleDdgiTransportRayCacheRadiance(
+                pc.TransportSourceCacheBufferIndex,
+                update.cacheProbeBaseWordPlusOne &
+                    SIMPLE_DDGI_TRACE_CACHE_BASE_MASK,
+                directionRayIndex,
+                volume,
+                params,
+                SimpleDdgiProbeGeneration(probeState),
+                update.sourceEpoch,
+                cachedSourceRadianceDistance.rgb);
+        }
+        if (cacheRead && segmentSelective &&
+            SimpleDdgiSegmentSelectiveTouchesRay(
+                probePosition,
+                cachedSourceDirection,
+                cachedSourceRadianceDistance.w,
+                cachedSourceHitKind,
+                volume.spacing))
+        {
+            intentionalSegmentRetrace = true;
+            cacheRead = false;
+        }
         if (cacheRead)
         {
 #if SIMPLE_DDGI_DIRECTION_VALIDATION
@@ -504,6 +1061,56 @@ void main()
                 update.sourceEpoch,
                 sourceRayCount,
                 cachedSource);
+#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+        if (cacheRead && guidingPayloadValid)
+            cachedSource.direction = guidingPayload.direction;
+#endif
+        if (cacheRead && environmentMissRelight &&
+            !SimpleDdgiTransportRayCacheIsHit(cachedSource))
+        {
+            cachedSource.sourceRadiance =
+                SampleSimpleDdgiEnvironmentMissRadiance(
+                    cachedSource.direction,
+                    params);
+            if (!privateUrgentRelight)
+                cacheRead = UpdateSimpleDdgiTransportRayCacheRadiance(
+                pc.TransportSourceCacheBufferIndex,
+                update.cacheProbeBaseWordPlusOne &
+                    SIMPLE_DDGI_TRACE_CACHE_BASE_MASK,
+                directionRayIndex,
+                volume,
+                params,
+                SimpleDdgiProbeGeneration(probeState),
+                update.sourceEpoch,
+                cachedSource.sourceRadiance);
+        }
+        else if (cacheRead && cachedHitRelight &&
+            SimpleDdgiTransportRayCacheIsHit(cachedSource))
+        {
+            cachedSource.sourceRadiance *= params.sourceRelightScale;
+            if (!privateUrgentRelight)
+                cacheRead = UpdateSimpleDdgiTransportRayCacheRadiance(
+                pc.TransportSourceCacheBufferIndex,
+                update.cacheProbeBaseWordPlusOne &
+                    SIMPLE_DDGI_TRACE_CACHE_BASE_MASK,
+                directionRayIndex,
+                volume,
+                params,
+                SimpleDdgiProbeGeneration(probeState),
+                update.sourceEpoch,
+                cachedSource.sourceRadiance);
+        }
+        if (cacheRead && segmentSelective &&
+            SimpleDdgiSegmentSelectiveTouchesRay(
+                probePosition,
+                cachedSource.direction,
+                cachedSource.distance,
+                SimpleDdgiTransportRayCacheHitKind(cachedSource),
+                volume.spacing))
+        {
+            intentionalSegmentRetrace = true;
+            cacheRead = false;
+        }
         if (cacheRead)
         {
             WriteSimpleRayResult(
@@ -533,23 +1140,26 @@ void main()
         // example after a live allocation transition), trace this ray now for
         // a safe frame and request a full source-cache repair through the
         // bounded probe-state readback path.
-        atomicOr(
-            BindlessStorageBuffers[nonuniformEXT(
-                pc.ProbeUpdateQueueBufferIndex)].Words[
-                    updateProbeOffset *
-                        SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS +
-                    11u],
-            SIMPLE_DDGI_TRACE_CACHE_FALLBACK_FLAG);
-        MarkSimpleDdgiProbeSourceCacheInvalid(
-            pc.ProbeStateBufferIndex,
-            probeIndex);
-        if (gpuScheduler)
+        if (!intentionalSegmentRetrace)
         {
-            SimpleDdgiSchedulerFailOutcome(
-                pc.SchedulerArenaBufferIndex,
-                pc.SchedulerOutcomesOffsetWords,
-                update.outcomeIndex,
-                1u << 1u);
+            atomicOr(
+                BindlessStorageBuffers[nonuniformEXT(
+                    pc.ProbeUpdateQueueBufferIndex)].Words[
+                        updateProbeOffset *
+                            SIMPLE_DDGI_PROBE_UPDATE_STRIDE_WORDS +
+                        11u],
+                SIMPLE_DDGI_TRACE_CACHE_FALLBACK_FLAG);
+            MarkSimpleDdgiProbeSourceCacheInvalid(
+                pc.ProbeStateBufferIndex,
+                probeIndex);
+            if (gpuScheduler)
+            {
+                SimpleDdgiSchedulerFailOutcome(
+                    pc.SchedulerArenaBufferIndex,
+                    pc.SchedulerOutcomesOffsetWords,
+                    update.outcomeIndex,
+                    1u << 1u);
+            }
         }
     }
 #endif
@@ -560,7 +1170,8 @@ void main()
     // fallback while the existing failure/repair path prevents bad commit.
     return;
 #elif SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_SOURCE
-    if (transportV2 && !sourceRefresh && !relocationRetryPending &&
+    if (transportV2 && cachedGeometryReuse &&
+        !relocationRetryPending &&
         SimpleDdgiRayResultStorageIsPopulatedForEpoch(
             pc.RayResultScratchBufferIndex,
             globalRay,
@@ -570,7 +1181,9 @@ void main()
         return;
     }
 #elif SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_FINAL
-    bool splitSourceWork = !transportV2 || sourceRefresh ||
+    bool splitSourceWork = !transportV2 ||
+        !cachedGeometryReuse ||
+        segmentSelective ||
         relocationRetryPending ||
         (update.cacheProbeBaseWordPlusOne &
             SIMPLE_DDGI_TRACE_CACHE_FALLBACK_FLAG) != 0u;
@@ -614,10 +1227,9 @@ void main()
 #if SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_FINAL
     vec3 radiance = splitNearRadianceDistance.rgb;
 #else
-    vec3 radiance = SampleDdgiEnvironmentMissRadianceWithFallback(
+    vec3 radiance = SampleSimpleDdgiEnvironmentMissRadiance(
         direction,
-        params.environmentRadiance,
-        params.environmentIntensity);
+        params);
 #endif
     vec3 traceDirectDiffuse = vec3(0.0);
     vec3 traceDirectNoShadowDiffuse = vec3(0.0);
@@ -657,10 +1269,86 @@ void main()
             direction,
             nearTlasMaxDistance);
         uint alphaCandidateCount = 0u;
+        uint decalCandidateCount = 0u;
+        SimpleDdgiDecalCandidate decalCandidates[
+            SIMPLE_DDGI_DECAL_CANDIDATE_LIMIT];
         while (rayQueryProceedEXT(query))
         {
             if (rayQueryGetIntersectionTypeEXT(query, false) == gl_RayQueryCandidateIntersectionTriangleEXT)
             {
+                uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, false);
+                uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
+                vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, false);
+                bool candidateFrontFace = rayQueryGetIntersectionFrontFaceEXT(query, false);
+                GPUDdgiRayQueryInstance candidateInstance =
+                    ReadDdgiRayQueryInstance(instanceIndex);
+                if (DdgiRayQueryInstanceIsValid(candidateInstance) &&
+                    DdgiRayGeometryIsDecal(candidateInstance))
+                {
+                    SimpleDdgiDecalCandidate candidate;
+                    candidate.InstanceIndex = instanceIndex;
+                    candidate.PrimitiveIndex = primitiveIndex;
+                    candidate.Barycentrics = barycentrics;
+                    candidate.Distance =
+                        rayQueryGetIntersectionTEXT(query, false);
+                    candidate.FrontFacing = candidateFrontFace;
+                    AddRendererDiagnostic(
+                        pc.CurrentFrameIndex,
+                        DDGI_DECAL_CANDIDATE_COUNTER,
+                        1u);
+
+                    uint effectiveDecalCandidateLimit =
+                        SimpleDdgiDecalCandidateLimit();
+                    if (effectiveDecalCandidateLimit == 0u)
+                    {
+                        AddRendererDiagnostic(
+                            pc.CurrentFrameIndex,
+                            DDGI_DECAL_CANDIDATE_LIMIT_COUNTER,
+                            1u);
+                        continue;
+                    }
+
+                    if (decalCandidateCount <
+                        effectiveDecalCandidateLimit)
+                    {
+                        decalCandidates[decalCandidateCount++] = candidate;
+                        AddRendererDiagnostic(
+                            pc.CurrentFrameIndex,
+                            DDGI_DECAL_RETAINED_COUNTER,
+                            1u);
+                    }
+                    else
+                    {
+                        uint farthest = 0u;
+                        for (uint decalIndex = 1u;
+                             decalIndex < effectiveDecalCandidateLimit;
+                             decalIndex++)
+                        {
+                            SimpleDdgiDecalCandidate retained =
+                                decalCandidates[decalIndex];
+                            SimpleDdgiDecalCandidate currentFarthest =
+                                decalCandidates[farthest];
+                            if (SimpleDdgiDecalIsFarther(
+                                    retained,
+                                    currentFarthest))
+                                farthest = decalIndex;
+                        }
+
+                        SimpleDdgiDecalCandidate currentFarthest =
+                            decalCandidates[farthest];
+                        bool replace = SimpleDdgiDecalIsFarther(
+                            currentFarthest,
+                            candidate);
+                        if (replace)
+                            decalCandidates[farthest] = candidate;
+                        AddRendererDiagnostic(
+                            pc.CurrentFrameIndex,
+                            DDGI_DECAL_CANDIDATE_LIMIT_COUNTER,
+                            1u);
+                    }
+                    continue;
+                }
+
                 alphaCandidateCount++;
                 if (alphaCandidateCount > DDGI_HIT_ALPHA_CANDIDATE_LIMIT)
                 {
@@ -669,10 +1357,6 @@ void main()
                     rayQueryTerminateEXT(query);
                     break;
                 }
-                uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(query, false);
-                uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
-                vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, false);
-                bool candidateFrontFace = rayQueryGetIntersectionFrontFaceEXT(query, false);
                 if (DdgiCandidatePassesOpacityPolicy(
                     instanceIndex,
                     primitiveIndex,
@@ -726,6 +1410,94 @@ void main()
                 sqrt(4.0 / max(float(params.raysPerProbe), 1.0)),
                 surface))
             {
+                // Candidate traversal order is implementation-defined. Sort the
+                // retained bounded set by the authored overlay order before
+                // composition so capture/replay and vendors agree exactly.
+                for (uint sortIndex = 0u;
+                     sortIndex < decalCandidateCount;
+                     sortIndex++)
+                {
+                    uint selected = sortIndex;
+                    for (uint candidateIndex = sortIndex + 1u;
+                         candidateIndex < decalCandidateCount;
+                         candidateIndex++)
+                    {
+                        if (SimpleDdgiDecalComesBefore(
+                                decalCandidates[candidateIndex],
+                                decalCandidates[selected]))
+                        {
+                            selected = candidateIndex;
+                        }
+                    }
+                    if (selected != sortIndex)
+                    {
+                        SimpleDdgiDecalCandidate temporary =
+                            decalCandidates[sortIndex];
+                        decalCandidates[sortIndex] =
+                            decalCandidates[selected];
+                        decalCandidates[selected] = temporary;
+                    }
+                }
+
+                for (uint decalIndex = 0u;
+                     decalIndex < decalCandidateCount;
+                     decalIndex++)
+                {
+                    SimpleDdgiDecalCandidate decalCandidate =
+                        decalCandidates[decalIndex];
+                    GPUDdgiRayQueryInstance decalInstance =
+                        ReadDdgiRayQueryInstance(
+                            decalCandidate.InstanceIndex);
+                    float associatedDistance =
+                        decalCandidate.Distance + decalInstance.DecalDepthBias;
+                    if (abs(associatedDistance - hitDistance) >
+                        max(decalInstance.DecalDepthTolerance, 0.0))
+                    {
+                        AddRendererDiagnostic(
+                            pc.CurrentFrameIndex,
+                            DDGI_DECAL_DEPTH_REJECT_COUNTER,
+                            1u);
+                        continue;
+                    }
+
+                    GiSurfaceSample decalSurface;
+                    if (!ResolveCommittedHitSurface(
+                            decalCandidate.InstanceIndex,
+                            decalCandidate.PrimitiveIndex,
+                            decalCandidate.Barycentrics,
+                            direction,
+                            decalCandidate.FrontFacing,
+                            volumeCascade,
+                            sampleMaterialTextures,
+                            decalCandidate.Distance,
+                            max(volume.spacing, 0.001),
+                            sqrt(4.0 / max(
+                                float(params.raysPerProbe),
+                                1.0)),
+                            decalSurface) ||
+                        dot(
+                            surface.CanonicalGeometricNormal,
+                            decalSurface.CanonicalGeometricNormal) <= 0.1)
+                    {
+                        AddRendererDiagnostic(
+                            pc.CurrentFrameIndex,
+                            DDGI_DECAL_FACING_REJECT_COUNTER,
+                            1u);
+                        continue;
+                    }
+
+                    ApplyGiDecalOverlay(
+                        surface,
+                        decalSurface,
+                        DdgiRayGeometryHasFlag(
+                            decalInstance,
+                            DDGI_RAY_GEOMETRY_FLAG_PREMULTIPLIED_ALPHA));
+                    AddRendererDiagnostic(
+                        pc.CurrentFrameIndex,
+                        DDGI_DECAL_ASSOCIATED_COUNTER,
+                        1u);
+                }
+
                 if ((params.flags & SIMPLE_DDGI_FLAG_THIN_SURFACE_TRANSMISSION) == 0u)
                 {
                     surface.TransmittedDiffuseReflectance = vec3(0.0);
@@ -765,11 +1537,18 @@ void main()
                 // recursive irradiance term; applying it here biases the emitter
                 // estimator and makes energy depend on cache residency.
                 vec3 emissiveDiffuse = surface.EmissiveRadiance + emissiveProxyDiffuse;
-                radiance = emissiveDiffuse + directDiffuse + bounce;
+                vec3 glossyBounce = EvaluateSimpleDdgiOneBounceGlossyRadiance(
+                    params,
+                    hitPosition,
+                    surface,
+                    -direction,
+                    max(volume.spacing, 0.001));
+                radiance = emissiveDiffuse + directDiffuse + bounce +
+                    glossyBounce;
                 traceDirectDiffuse = directDiffuse;
                 traceDirectNoShadowDiffuse = directNoShadowDiffuse;
                 traceEmissiveDiffuse = emissiveDiffuse;
-                traceBounceDiffuse = bounce;
+                traceBounceDiffuse = bounce + glossyBounce;
                 traceSkyDiffuse = vec3(0.0);
                 cacheNormal = surface.CanonicalGeometricNormal;
                 cacheAlbedo = surface.DiffuseReflectance;
@@ -890,11 +1669,18 @@ void main()
                 -direction,
                 max(volume.spacing, 0.001));
             vec3 farEmissiveDiffuse = farSurface.EmissiveRadiance + emissiveProxyDiffuse;
-            radiance = directDiffuse + farEmissiveDiffuse + bounce;
+            vec3 glossyBounce = EvaluateSimpleDdgiOneBounceGlossyRadiance(
+                params,
+                hitPosition,
+                farSurface,
+                -direction,
+                max(volume.spacing, 0.001));
+            radiance = directDiffuse + farEmissiveDiffuse + bounce +
+                glossyBounce;
             traceDirectDiffuse = directDiffuse;
             traceDirectNoShadowDiffuse = directNoShadowDiffuse;
             traceEmissiveDiffuse = farEmissiveDiffuse;
-            traceBounceDiffuse = bounce;
+            traceBounceDiffuse = bounce + glossyBounce;
             traceSkyDiffuse = vec3(0.0);
             cacheNormal = safeFarNormal;
             cacheAlbedo = farSurface.DiffuseReflectance;

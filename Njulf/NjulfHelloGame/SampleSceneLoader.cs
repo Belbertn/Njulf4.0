@@ -83,7 +83,13 @@ internal sealed class SampleSceneLoader
             foreach (RenderObject renderObject in scene.RenderObjects)
                 IncludeRenderObjectBounds(renderObject);
             AddStressSceneIfRequested(scene);
-            return LoadModelInstance(_manifest.ModelPath);
+
+            // SceneDocumentLoader already loaded the authoritative model and
+            // transferred instance render objects into the scene. Returning a
+            // second instance here would leave its resource leases without an
+            // owner after this method returns. The cached asset is sufficient
+            // for the read-only scene summary and remains owned by ContentManager.
+            return LoadModelAsset(_manifest.ModelPath);
         }
 
         Model model = LoadModelInstance(_manifest.ModelPath);
@@ -192,13 +198,20 @@ internal sealed class SampleSceneLoader
 
     private Model LoadModelInstance(string modelPath)
     {
-        Model modelAsset = _content.Load<Model>(modelPath)
-            ?? throw new InvalidOperationException($"Content manager returned null for sample model '{modelPath}'.");
+        Model modelAsset = LoadModelAsset(modelPath);
         Model model = modelAsset.CreateInstance()
             ?? throw new InvalidOperationException($"Sample model '{modelPath}' did not create an instance.");
         ValidateUploadedModel(model, modelPath);
 
         return model;
+    }
+
+    private Model LoadModelAsset(string modelPath)
+    {
+        Model modelAsset = _content.Load<Model>(modelPath)
+            ?? throw new InvalidOperationException($"Content manager returned null for sample model '{modelPath}'.");
+        ValidateUploadedModel(modelAsset, modelPath);
+        return modelAsset;
     }
 
     private void AddModelToScene(Scene scene, Model model, string modelPath, CoreMatrix4x4 modelWorld)

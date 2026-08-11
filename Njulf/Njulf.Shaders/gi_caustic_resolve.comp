@@ -1,0 +1,305 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "gi_caustic_shared.glsl"
+
+// C4 resolve is deliberately isolated from DDGI. It converts cached incident
+// photon flux density to scene-linear radiance with the receiver's current,
+// already energy-conserving diffuse BRDF. Deposited flux is an irradiance
+// estimator, so no second incident cosine is applied here.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void GiCausticWriteResolveResult(uint base, vec3 radiance, float confidence,
+    uint flags, uint photonCount, uint rejectedPhotonCount,
+    vec2 luminanceMoments, float maximumKernelWeight)
+{
+    WriteStorageFloatUniform(giCausticPc.ScratchBufferIndex, base + 0u,
+        radiance.x);
+    WriteStorageFloatUniform(giCausticPc.ScratchBufferIndex, base + 1u,
+        radiance.y);
+    WriteStorageFloatUniform(giCausticPc.ScratchBufferIndex, base + 2u,
+        radiance.z);
+    WriteStorageFloatUniform(giCausticPc.ScratchBufferIndex, base + 3u,
+        confidence);
+    WriteStorageWordUniform(giCausticPc.ScratchBufferIndex, base + 4u,
+        giCausticPc.CacheGeneration);
+    WriteStorageWordUniform(giCausticPc.ScratchBufferIndex, base + 5u, flags);
+    WriteStorageWordUniform(giCausticPc.ScratchBufferIndex, base + 6u,
+        photonCount);
+    WriteStorageWordUniform(giCausticPc.ScratchBufferIndex, base + 7u,
+        rejectedPhotonCount);
+    WriteStorageFloatUniform(giCausticPc.ScratchBufferIndex, base + 8u,
+        luminanceMoments.x);
+    WriteStorageFloatUniform(giCausticPc.ScratchBufferIndex, base + 9u,
+        luminanceMoments.y);
+    WriteStorageFloatUniform(giCausticPc.ScratchBufferIndex, base + 10u,
+        maximumKernelWeight);
+    WriteStorageWordUniform(giCausticPc.ScratchBufferIndex, base + 11u, 0u);
+}
+
+bool GiCausticResolveRangesValid()
+{
+    if (giCausticPc.ResolveRequestWordOffset > giCausticPc.ScratchWordCapacity)
+        return false;
+    uint remaining = giCausticPc.ScratchWordCapacity -
+        giCausticPc.ResolveRequestWordOffset;
+    return giCausticPc.ResolveRequestCount <= remaining /
+        (GI_CAUSTIC_RESOLVE_REQUEST_WORDS +
+         GI_CAUSTIC_RESOLVE_RESULT_WORDS);
+}
+
+bool GiCausticResolveRequestValid(uint requestBase, uint requestIndex,
+    out vec3 receiverPosition, out float maximumDistance,
+    out vec3 receiverNormal, out vec3 diffuseBrdf,
+    out float minimumNormalCosine)
+{
+    receiverPosition = vec3(
+        ReadStorageFloatUniform(giCausticPc.ScratchBufferIndex,
+            requestBase + 0u),
+        ReadStorageFloatUniform(giCausticPc.ScratchBufferIndex,
+            requestBase + 1u),
+        ReadStorageFloatUniform(giCausticPc.ScratchBufferIndex,
+            requestBase + 2u));
+    maximumDistance = ReadStorageFloatUniform(giCausticPc.ScratchBufferIndex,
+        requestBase + 3u);
+    receiverNormal = GiCausticDecodeOctahedral(ReadStorageWordUniform(
+        giCausticPc.ScratchBufferIndex, requestBase + 4u));
+    uint expectedGeneration = ReadStorageWordUniform(
+        giCausticPc.ScratchBufferIndex, requestBase + 5u);
+    uint outputIndex = ReadStorageWordUniform(giCausticPc.ScratchBufferIndex,
+        requestBase + 6u);
+    uint requestFlags = ReadStorageWordUniform(giCausticPc.ScratchBufferIndex,
+        requestBase + 7u);
+    diffuseBrdf = vec3(
+        ReadStorageFloatUniform(giCausticPc.ScratchBufferIndex,
+            requestBase + 8u),
+        ReadStorageFloatUniform(giCausticPc.ScratchBufferIndex,
+            requestBase + 9u),
+        ReadStorageFloatUniform(giCausticPc.ScratchBufferIndex,
+            requestBase + 10u));
+    minimumNormalCosine = ReadStorageFloatUniform(
+        giCausticPc.ScratchBufferIndex, requestBase + 11u);
+    uint stableReceiverId = ReadStorageWordUniform(
+        giCausticPc.ScratchBufferIndex, requestBase + 12u);
+    uint materialRevision = ReadStorageWordUniform(
+        giCausticPc.ScratchBufferIndex, requestBase + 13u);
+    uint transportRevision = ReadStorageWordUniform(
+        giCausticPc.ScratchBufferIndex, requestBase + 14u);
+    uint reserved = ReadStorageWordUniform(giCausticPc.ScratchBufferIndex,
+        requestBase + 15u);
+
+    // The identity mapping prevents two invocations from racing on one result.
+    return outputIndex == requestIndex &&
+        expectedGeneration == giCausticPc.CacheGeneration &&
+        (requestFlags & GI_CAUSTIC_RESOLVE_REQUEST_REQUIRED) ==
+            GI_CAUSTIC_RESOLVE_REQUEST_REQUIRED &&
+        (requestFlags & GI_CAUSTIC_RESOLVE_REQUEST_INVALID) == 0u &&
+        GiCausticFinite(receiverPosition) &&
+        GiCausticFinite(maximumDistance) && maximumDistance > 0.0 &&
+        GiCausticFinite(receiverNormal) &&
+        dot(receiverNormal, receiverNormal) > 0.999 &&
+        GiCausticFinite(diffuseBrdf) && all(greaterThanEqual(diffuseBrdf,
+            vec3(0.0))) &&
+        GiCausticFinite(minimumNormalCosine) &&
+        minimumNormalCosine >= 0.0 && minimumNormalCosine <= 1.0 &&
+        stableReceiverId != 0u && materialRevision != 0u &&
+        transportRevision == giCausticPc.TransportAbiVersion &&
+        reserved == 0u;
+}
+
+float GiCausticLuminance(vec3 value)
+{
+    return dot(value, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main()
+{
+    if (!GiCausticPushConstantsValid() || !GiCausticResolveRangesValid())
+        return;
+    uint requestIndex = gl_GlobalInvocationID.x;
+    if (requestIndex >= giCausticPc.ResolveRequestCount)
+        return;
+
+    uint requestBase = giCausticPc.ResolveRequestWordOffset +
+        requestIndex * GI_CAUSTIC_RESOLVE_REQUEST_WORDS;
+    uint resultBase = giCausticPc.ResolveRequestWordOffset +
+        giCausticPc.ResolveRequestCount * GI_CAUSTIC_RESOLVE_REQUEST_WORDS +
+        requestIndex * GI_CAUSTIC_RESOLVE_RESULT_WORDS;
+    GiCausticWriteResolveResult(resultBase, vec3(0.0), 0.0,
+        GI_CAUSTIC_RESULT_CACHE_REJECTED, 0u, 0u, vec2(0.0), 0.0);
+
+    vec3 receiverPosition;
+    float maximumDistance;
+    vec3 receiverNormal;
+    vec3 diffuseBrdf;
+    float minimumNormalCosine;
+    if (!GiCausticResolveRequestValid(requestBase, requestIndex,
+            receiverPosition, maximumDistance, receiverNormal, diffuseBrdf,
+            minimumNormalCosine))
+    {
+        GiCausticWriteResolveResult(resultBase, vec3(0.0), 0.0,
+            GI_CAUSTIC_RESULT_REQUEST_REJECTED, 0u, 0u, vec2(0.0), 0.0);
+        return;
+    }
+    if (!GiCausticCacheHeaderReadable(giCausticPc.CacheBankHeaderWordOffset))
+        return;
+
+    ivec4 centerCell;
+    if (!GiCausticCellFromPosition(receiverPosition, centerCell))
+        return;
+
+    vec3 radiance = vec3(0.0);
+    float luminanceSum = 0.0;
+    float luminanceSquaredSum = 0.0;
+    float maximumKernelWeight = 0.0;
+    uint contributingPhotons = 0u;
+    uint rejectedPhotons = 0u;
+    uint resultFlags = GI_CAUSTIC_RESULT_CACHE_READABLE;
+    bool cellFound = false;
+
+    // Candidate support radii are constrained to one cell size, so 3x3x3
+    // full-key lookup covers every possible footprint overlap.
+    for (int z = -1; z <= 1; ++z)
+    {
+        for (int y = -1; y <= 1; ++y)
+        {
+            for (int x = -1; x <= 1; ++x)
+            {
+                ivec4 cell = centerCell + ivec4(x, y, z, 0);
+                uint photonOffset;
+                uint photonCount;
+                if (!GiCausticFindCell(cell,
+                        giCausticPc.CacheBankTableWordOffset,
+                        photonOffset, photonCount))
+                {
+                    continue;
+                }
+                cellFound = true;
+                for (uint photon = 0u; photon < photonCount; ++photon)
+                {
+                    uint photonBase = GiCausticCachedPhotonBaseWord(
+                        giCausticPc.PhotonReadBankIndex,
+                        photonOffset + photon);
+                    uint photonGeneration = ReadStorageWordUniform(
+                        giCausticPc.PhotonBufferIndex, photonBase + 19u);
+                    uint transportRevision = ReadStorageWordUniform(
+                        giCausticPc.PhotonBufferIndex, photonBase + 18u);
+                    if (photonGeneration != giCausticPc.CacheGeneration ||
+                        transportRevision != giCausticPc.TransportAbiVersion)
+                    {
+                        ++rejectedPhotons;
+                        resultFlags |= GI_CAUSTIC_RESULT_REVISION_REJECTED;
+                        continue;
+                    }
+
+                    uint pathFlags = ReadStorageWordUniform(
+                        giCausticPc.PhotonBufferIndex, photonBase + 10u);
+                    if ((pathFlags & (GI_CAUSTIC_PHOTON_VALID |
+                            GI_CAUSTIC_PHOTON_FIRST_DIFFUSE_ENDPOINT)) !=
+                            (GI_CAUSTIC_PHOTON_VALID |
+                             GI_CAUSTIC_PHOTON_FIRST_DIFFUSE_ENDPOINT) ||
+                        (pathFlags & GI_CAUSTIC_PHOTON_INVALID) != 0u)
+                    {
+                        ++rejectedPhotons;
+                        continue;
+                    }
+
+                    vec3 photonPosition = vec3(
+                        ReadStorageFloatUniform(giCausticPc.PhotonBufferIndex,
+                            photonBase + 0u),
+                        ReadStorageFloatUniform(giCausticPc.PhotonBufferIndex,
+                            photonBase + 1u),
+                        ReadStorageFloatUniform(giCausticPc.PhotonBufferIndex,
+                            photonBase + 2u));
+                    vec3 delta = receiverPosition - photonPosition;
+                    if (!GiCausticFinite(photonPosition) ||
+                        dot(delta, delta) > maximumDistance * maximumDistance)
+                    {
+                        ++rejectedPhotons;
+                        continue;
+                    }
+
+                    vec3 photonNormal = GiCausticDecodeOctahedral(
+                        ReadStorageWordUniform(giCausticPc.PhotonBufferIndex,
+                            photonBase + 9u));
+                    if (dot(photonNormal, receiverNormal) < minimumNormalCosine)
+                    {
+                        ++rejectedPhotons;
+                        resultFlags |= GI_CAUSTIC_RESULT_NORMAL_REJECTED;
+                        continue;
+                    }
+                    float axisU = ReadStorageFloatUniform(
+                        giCausticPc.PhotonBufferIndex, photonBase + 12u);
+                    float axisV = ReadStorageFloatUniform(
+                        giCausticPc.PhotonBufferIndex, photonBase + 13u);
+                    float planeTolerance = min(maximumDistance,
+                        0.25 * max(axisU, axisV));
+                    if (!GiCausticFinite(planeTolerance) ||
+                        planeTolerance <= 0.0 ||
+                        abs(dot(delta, photonNormal)) > planeTolerance)
+                    {
+                        ++rejectedPhotons;
+                        resultFlags |= GI_CAUSTIC_RESULT_NORMAL_REJECTED;
+                        continue;
+                    }
+
+                    float kernelWeight = GiCausticFootprintWeight(photonBase,
+                        receiverPosition);
+                    if (!GiCausticFinite(kernelWeight) || kernelWeight <= 0.0)
+                        continue;
+                    vec3 flux = vec3(
+                        ReadStorageFloatUniform(giCausticPc.PhotonBufferIndex,
+                            photonBase + 4u),
+                        ReadStorageFloatUniform(giCausticPc.PhotonBufferIndex,
+                            photonBase + 5u),
+                        ReadStorageFloatUniform(giCausticPc.PhotonBufferIndex,
+                            photonBase + 6u));
+                    if (!GiCausticFinite(flux) ||
+                        any(lessThan(flux, vec3(0.0))))
+                    {
+                        ++rejectedPhotons;
+                        continue;
+                    }
+
+                    vec3 contribution = flux * kernelWeight * diffuseBrdf;
+                    if (!GiCausticFinite(contribution) ||
+                        any(lessThan(contribution, vec3(0.0))))
+                    {
+                        ++rejectedPhotons;
+                        continue;
+                    }
+                    radiance += contribution;
+                    float luminance = GiCausticLuminance(contribution);
+                    luminanceSum += luminance;
+                    luminanceSquaredSum += luminance * luminance;
+                    maximumKernelWeight = max(maximumKernelWeight, kernelWeight);
+                    ++contributingPhotons;
+                }
+            }
+        }
+    }
+
+    if (cellFound)
+        resultFlags |= GI_CAUSTIC_RESULT_CELL_FOUND;
+    if (contributingPhotons != 0u && GiCausticFinite(radiance) &&
+        GiCausticFinite(luminanceSum) && GiCausticFinite(luminanceSquaredSum))
+    {
+        resultFlags |= GI_CAUSTIC_RESULT_CONTRIBUTION_VALID;
+    }
+    else
+    {
+        radiance = vec3(0.0);
+        luminanceSum = 0.0;
+        luminanceSquaredSum = 0.0;
+        contributingPhotons = 0u;
+    }
+
+    float confidence = contributingPhotons == 0u ? 0.0 :
+        float(contributingPhotons) / (float(contributingPhotons) + 4.0);
+    float inverseCount = contributingPhotons == 0u ? 0.0 :
+        1.0 / float(contributingPhotons);
+    vec2 moments = vec2(luminanceSum, luminanceSquaredSum) * inverseCount;
+    GiCausticWriteResolveResult(resultBase, radiance, confidence, resultFlags,
+        contributingPhotons, rejectedPhotons, moments, maximumKernelWeight);
+}

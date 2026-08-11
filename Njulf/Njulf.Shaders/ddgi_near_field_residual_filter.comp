@@ -1,0 +1,169 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_near_field_residual.glsl"
+
+// Edge-aware filtering works solely on C5's already-valid signed residual.
+// It has no radiance-source descriptors and cannot introduce DDGI/C4/final
+// scene colour into the residual estimator.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D temporalResidualInput;
+layout(std430, set = 0, binding = 1) readonly buffer FilterMetadataBuffer
+{
+    SimpleDdgiNearFieldResidualHitMetadata values[];
+} filterMetadata;
+layout(rgba16f, set = 0, binding = 2) uniform writeonly image2D filteredResidualOutput;
+layout(set = 0, binding = 3) uniform usampler2D receiverPayload;
+
+layout(push_constant) uniform NearFieldFilterPushBlock
+{
+    SimpleDdgiNearFieldResidualFilterPushConstants pc;
+};
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(filteredResidualOutput);
+    if (pixel.x >= extent.x || pixel.y >= extent.y ||
+        pixel.x >= int(pc.traceWidth) || pixel.y >= int(pc.traceHeight))
+    {
+        return;
+    }
+
+    uint pixelIndex = uint(pixel.y) * uint(extent.x) + uint(pixel.x);
+    if (pc.abiVersion != SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION ||
+        pc.iterationCount > SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_ITERATIONS ||
+        pc.iterationIndex >= pc.iterationCount ||
+        pc.filterRadius == 0u ||
+        pc.filterRadius > SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS ||
+        pc.historyEpoch == 0u ||
+        pixelIndex >= uint(filterMetadata.values.length()))
+    {
+        imageStore(filteredResidualOutput, pixel, vec4(0.0));
+        return;
+    }
+
+    vec4 centreResidual = texelFetch(temporalResidualInput, pixel, 0);
+    SimpleDdgiNearFieldResidualHitMetadata centre = filterMetadata.values[pixelIndex];
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / max(vec2(extent), vec2(1.0));
+    ivec2 receiverExtent = textureSize(receiverPayload, 0);
+    ivec2 centreReceiverPixel = clamp(ivec2(uv * vec2(receiverExtent)),
+        ivec2(0), max(receiverExtent - ivec2(1), ivec2(0)));
+    vec4 centrePackedNormals;
+    uvec2 ignoredCentreIdentity;
+    vec3 ignoredCentreThroughput;
+    SimpleDdgiNearFieldDecodeReceiverPayload(
+        texelFetch(receiverPayload, centreReceiverPixel, 0),
+        centrePackedNormals,
+        ignoredCentreIdentity,
+        ignoredCentreThroughput);
+    vec3 centreGeometric = SimpleDdgiNearFieldDecodeOctNormal(
+        centrePackedNormals.xy);
+    vec3 centreShading = SimpleDdgiNearFieldDecodeOctNormal(
+        centrePackedNormals.zw);
+    if (!SimpleDdgiNearFieldIsValidCandidate(centreResidual) ||
+        !SimpleDdgiNearFieldHasFlag(centre.packedFlags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) ||
+        dot(centreGeometric, centreGeometric) <= 0.0 ||
+        dot(centreShading, centreShading) <= 0.0)
+    {
+        imageStore(filteredResidualOutput, pixel, vec4(0.0));
+        return;
+    }
+
+    vec3 weightedResidual = vec3(0.0);
+    float weightedConfidence = 0.0;
+    float weightSum = 0.0;
+    int radius = int(pc.filterRadius);
+    for (int y = -int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS);
+         y <= int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS); ++y)
+    {
+        if (abs(y) > radius)
+            continue;
+        for (int x = -int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS);
+             x <= int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS); ++x)
+        {
+            if (abs(x) > radius)
+                continue;
+            ivec2 neighbourPixel = pixel + ivec2(x, y);
+            if (any(lessThan(neighbourPixel, ivec2(0))) ||
+                any(greaterThanEqual(neighbourPixel, extent)))
+            {
+                continue;
+            }
+            uint neighbourIndex = uint(neighbourPixel.y) * uint(extent.x) +
+                uint(neighbourPixel.x);
+            if (neighbourIndex >= uint(filterMetadata.values.length()))
+                continue;
+
+            vec4 neighbourResidual = texelFetch(temporalResidualInput,
+                neighbourPixel, 0);
+            SimpleDdgiNearFieldResidualHitMetadata neighbour =
+                filterMetadata.values[neighbourIndex];
+            if (!SimpleDdgiNearFieldIsValidCandidate(neighbourResidual) ||
+                !SimpleDdgiNearFieldHasFlag(neighbour.packedFlags,
+                    SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) ||
+                any(notEqual(neighbour.identity, centre.identity)))
+            {
+                continue;
+            }
+
+            vec2 neighbourUv = (vec2(neighbourPixel) + vec2(0.5)) /
+                max(vec2(extent), vec2(1.0));
+            ivec2 neighbourReceiverPixel = clamp(
+                ivec2(neighbourUv * vec2(receiverExtent)),
+                ivec2(0), max(receiverExtent - ivec2(1), ivec2(0)));
+            vec4 neighbourPackedNormals;
+            uvec2 ignoredNeighbourIdentity;
+            vec3 ignoredNeighbourThroughput;
+            SimpleDdgiNearFieldDecodeReceiverPayload(
+                texelFetch(receiverPayload, neighbourReceiverPixel, 0),
+                neighbourPackedNormals,
+                ignoredNeighbourIdentity,
+                ignoredNeighbourThroughput);
+            vec3 neighbourGeometric = SimpleDdgiNearFieldDecodeOctNormal(
+                neighbourPackedNormals.xy);
+            vec3 neighbourShading = SimpleDdgiNearFieldDecodeOctNormal(
+                neighbourPackedNormals.zw);
+            if (dot(neighbourGeometric, neighbourGeometric) <= 0.0 ||
+                dot(neighbourShading, neighbourShading) <= 0.0)
+            {
+                continue;
+            }
+            float normalDot = min(dot(centreGeometric, neighbourGeometric),
+                dot(centreShading, neighbourShading));
+            if (!SimpleDdgiNearFieldFinite(normalDot) ||
+                normalDot < pc.minimumNormalDot)
+            {
+                continue;
+            }
+
+            float depthWeight = SimpleDdgiNearFieldDepthWeight(
+                centre.hitDepth, neighbour.hitDepth, pc.depthTolerance);
+            float normalWeight = pow(clamp(normalDot, 0.0, 1.0),
+                max(pc.normalPower, 0.0));
+            float spatialWeight = 1.0 / (1.0 + float(x * x + y * y));
+            float weight = depthWeight * normalWeight * spatialWeight *
+                clamp(neighbourResidual.a, 0.0, 1.0);
+            if (!SimpleDdgiNearFieldFinite(weight) || weight <= 0.0)
+                continue;
+
+            weightedResidual += neighbourResidual.rgb * weight;
+            weightedConfidence += neighbourResidual.a * weight;
+            weightSum += weight;
+        }
+    }
+
+    if (!SimpleDdgiNearFieldFinite(weightSum) || weightSum <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(weightedResidual) ||
+        !SimpleDdgiNearFieldFinite(weightedConfidence))
+    {
+        imageStore(filteredResidualOutput, pixel, vec4(0.0));
+        return;
+    }
+
+    imageStore(filteredResidualOutput, pixel, vec4(
+        weightedResidual / weightSum,
+        clamp(weightedConfidence / weightSum, 0.0, 1.0)));
+}

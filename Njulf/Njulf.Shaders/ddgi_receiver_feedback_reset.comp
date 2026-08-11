@@ -1,0 +1,67 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+#include "ddgi_receiver_feedback_abi.glsl"
+
+// Reset only the selected write summary bank. The previous bank is never
+// touched here: scheduler consumption remains immutable and one frame late.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    if (receiverFeedbackPc.operation !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_OPERATION_RESET ||
+        !SimpleDdgiReceiverFeedbackLayoutIsSane() ||
+        receiverFeedbackPc.feedbackGeneration == 0u ||
+        receiverFeedbackPc.viewportGeneration == 0u)
+    {
+        return;
+    }
+
+    if (gl_LocalInvocationIndex != 0u)
+        return;
+
+    // Invalidate first so stale output cannot be accepted if a reset/build is
+    // interrupted. Validated is written only by the later finalize dispatch.
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FLAGS, 0u);
+    memoryBarrierBuffer();
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_LAYOUT_REVISION,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LAYOUT_REVISION);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_ENDIAN_SENTINEL,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_ENDIAN_SENTINEL);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FEEDBACK_GENERATION,
+        receiverFeedbackPc.feedbackGeneration);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_VIEWPORT_GENERATION,
+        receiverFeedbackPc.viewportGeneration);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FRAME_SERIAL_LOW,
+        receiverFeedbackPc.frameSerialLow);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FRAME_SERIAL_HIGH,
+        receiverFeedbackPc.frameSerialHigh);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_APPEND_COUNT, 0u);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_DROPPED_COUNT, 0u);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_PRODUCER_OVERFLOW_MASK, 0u);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_RECORD_CAPACITY,
+        receiverFeedbackPc.recordCapacity);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_PROBE_PARTIAL_COUNT, 0u);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FALLBACK_PARTIAL_COUNT, 0u);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_SUMMARY_COUNT, 0u);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FALLBACK_SUMMARY_COUNT, 0u);
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_INVALID_RECORD_COUNT, 0u);
+}

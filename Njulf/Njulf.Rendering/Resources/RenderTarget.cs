@@ -37,6 +37,12 @@ namespace Njulf.Rendering.Resources
         public Extent2D Extent { get; private set; }
         public ImageLayout Layout { get; private set; } = ImageLayout.Undefined;
         public ulong EstimatedByteSize => CalculateByteSize(Extent.Width, Extent.Height, Format);
+        /// <summary>
+        /// Exact VMA allocation size for this image, including driver-required
+        /// row/placement alignment. Budget admission must use this value after
+        /// creation rather than assuming width * height * texel size.
+        /// </summary>
+        public ulong AllocationByteSize { get; private set; }
         private ImageAspectFlags AspectMask => Descriptor.DepthAttachment
             ? ImageAspectFlags.DepthBit
             : ImageAspectFlags.ColorBit;
@@ -107,6 +113,7 @@ namespace Njulf.Rendering.Resources
 
             _image = image;
             _allocation = allocation;
+            AllocationByteSize = checked((ulong)allocationInfo.Size);
             try
             {
                 _context.SetDebugName(_image.Handle, ObjectType.Image, $"{Name} {extent.Width}x{extent.Height} {Format}");
@@ -118,6 +125,7 @@ namespace Njulf.Rendering.Resources
                 GpuAllocator.Apis.DestroyImage(_context.Allocator, _image, _allocation);
                 _allocation = null;
                 _image = default;
+                AllocationByteSize = 0UL;
                 throw;
             }
 
@@ -489,6 +497,8 @@ namespace Njulf.Rendering.Resources
                 _image = default;
             }
 
+            AllocationByteSize = 0UL;
+
             Layout = ImageLayout.Undefined;
         }
 
@@ -509,7 +519,7 @@ namespace Njulf.Rendering.Resources
                 Format.D32Sfloat => 4,
                 Format.D32SfloatS8Uint => 5,
                 Format.R32Sfloat => 4,
-                Format.R32G32B32A32Sfloat => 16,
+                Format.R32G32B32A32Sfloat or Format.R32G32B32A32Uint => 16,
                 Format.R8Unorm => 1,
                 Format.R8G8Unorm => 2,
                 Format.R8G8B8A8Unorm or Format.R8G8B8A8Srgb => 4,

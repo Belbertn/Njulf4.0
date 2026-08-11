@@ -266,6 +266,84 @@ public sealed class DdgiEmissiveTransportCacheTests
     }
 
     [Test]
+    public void DynamicSurfaceSidecars_FollowSelectionSpatialOrderingAndCacheCopies()
+    {
+        DdgiEmissiveTriangleCandidate[] candidates =
+        [
+            CreateCandidateWithSurface(new Vector3(20.0f, 0.0f, 0.0f), 1.0f, 10, 101),
+            CreateCandidateWithSurface(new Vector3(-20.0f, 0.0f, 0.0f), 4.0f, 20, 202),
+            CreateCandidateWithSurface(new Vector3(0.0f, 0.0f, 0.0f), 2.0f, 30, 303)
+        ];
+        var sources = new GPUDdgiEmissiveSource[3];
+        var surfaces = new GPUDdgiEmissiveSurface[3];
+        DdgiEmissiveTriangleTableStats stats = DdgiEmissiveTriangleTable.Build(
+            candidates,
+            sources,
+            surfaces);
+
+        // The table starts in importance order. Give the spatial builder the
+        // same positive weights used by its rebuilt global alias proposal.
+        double[] importance = sources
+            .Select(source => (double)source.RadianceSelectionProbability.X)
+            .ToArray();
+        var sourceSetBuilder = new DdgiEmissiveSourceSetBuilder(3);
+        sourceSetBuilder.OrderAndRebuildAlias(sources, surfaces, importance);
+
+        for (int index = 0; index < sources.Length; index++)
+        {
+            uint materialIndex = BitConverter.SingleToUInt32Bits(
+                surfaces[index].MaterialAndVertexAlpha.X);
+            float encodedMaterial = sources[index].RadianceSelectionProbability.Y;
+            Assert.That(materialIndex, Is.EqualTo((uint)encodedMaterial));
+        }
+
+        var cache = new DdgiEmissiveTableCache(3);
+        var key = new DdgiEmissiveTableCacheKey(Guid.NewGuid(), 1, 2, true, 3);
+        var result = new DdgiEmissiveTableBuildResult(
+            stats.SelectedCount,
+            99,
+            stats,
+            0,
+            0.0);
+        cache.Store(key, sources, surfaces, result);
+        Array.Clear(surfaces);
+        cache.CopySurfacePayloadTo(surfaces);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                surfaces.Select(surface => BitConverter.SingleToUInt32Bits(
+                    surface.MaterialAndVertexAlpha.X)),
+                Is.EquivalentTo(new uint[] { 101, 202, 303 }));
+            Assert.That(
+                sources.Sum(source => source.RadianceSelectionProbability.W),
+                Is.EqualTo(1.0f).Within(1e-6f));
+            Assert.That(
+                sources.All(source =>
+                    DdgiEmissiveTriangleTable.DecodeAliasIndex(source) < sources.Length),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void DynamicEmissiveShader_UsesLiveTextureAndMatchingAlphaCoveragePolicy()
+    {
+        string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
+        string common = ReadRepoText("Njulf.Shaders", "common.glsl");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hitShading, Does.Contain("EvaluateDdgiDynamicEmissiveSurfaceRadiance"));
+            Assert.That(hitShading, Does.Contain("ReadDdgiEmissiveSurface(sourceIndex)"));
+            Assert.That(hitShading, Does.Contain("DdgiAlphaCandidateOccupiesOpaqueTransport"));
+            Assert.That(hitShading, Does.Contain("material.EmissiveTextureIndex"));
+            Assert.That(hitShading, Does.Contain("EmissiveSourceDynamicTextureFlag"));
+            Assert.That(common, Does.Contain("SIMPLE_DDGI_EMISSIVE_SURFACE_BUFFER_INDEX"));
+            Assert.That(common, Does.Contain("struct GPUDdgiEmissiveSurface"));
+        });
+    }
+
+    [Test]
     public void ShaderContract_SeparatesDirectHitNextEventAndCachedBounceOwnership()
     {
         string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
@@ -281,7 +359,10 @@ public sealed class DdgiEmissiveTransportCacheTests
         {
             Assert.That(hitShading, Does.Contain("this function is next-event estimation at the"));
             Assert.That(hitShading, Does.Contain("if ((firstFlags & EmissiveSourceProxyRollbackFlag) != 0u)"));
-            Assert.That(hitShading, Does.Contain("if ((firstFlags & EmissiveSourceTriangleFlag) == 0u)"));
+            Assert.That(
+                hitShading,
+                Does.Contain(
+                    "if ((firstFlags & (EmissiveSourceTriangleFlag | EmissiveSourceMacroEmitterFlag)) == 0u)"));
             Assert.That(simpleTrace, Does.Contain("different paths. Transport-atlas ownership only gates the"));
             Assert.That(simpleTrace, Does.Contain("vec3 emissiveDiffuse = surface.EmissiveRadiance + emissiveProxyDiffuse;"));
             Assert.That(simpleTrace, Does.Not.Contain("emissiveProxyDiffuse * (1.0 - bounceOwnership)"));
@@ -316,6 +397,33 @@ public sealed class DdgiEmissiveTransportCacheTests
             CoveredMeanRadiance: new Vector3(radiance),
             Flags: DdgiEmissiveSourceFlags.Triangle,
             StableKey: stableKey);
+
+    private static DdgiEmissiveTriangleCandidate CreateCandidateWithSurface(
+        Vector3 origin,
+        float radiance,
+        ulong stableKey,
+        uint materialIndex)
+    {
+        GPUDdgiEmissiveSurface surface = new()
+        {
+            MaterialAndVertexAlpha = new Vector4(
+                BitConverter.UInt32BitsToSingle(materialIndex),
+                1.0f,
+                1.0f,
+                1.0f)
+        };
+        // The green channel is an independent alignment sentinel retained in
+        // the source while the material index travels in the sidecar.
+        return new DdgiEmissiveTriangleCandidate(
+            origin,
+            origin + Vector3.UnitX,
+            origin + Vector3.UnitY,
+            new Vector3(radiance, materialIndex, radiance),
+            DdgiEmissiveSourceFlags.Triangle |
+                DdgiEmissiveSourceFlags.DynamicEmissiveTexture,
+            stableKey,
+            surface);
+    }
 
     private static string ReadRepoText(params string[] pathParts)
     {

@@ -1,0 +1,14 @@
+[2026-08-09 07:47:26.803] [00003CD0] === Logging started ===
+[2026-08-09 07:47:26.810] [00003CD0] Executing: "C:\Program Files\dotnet\dotnet.exe" test Njulf.Tests/Njulf.Tests.csproj -c Release --no-build --no-restore --disable-build-servers -m:1 --nologo --filter FullyQualifiedName=Njulf.Tests.ContentRendererIntegrationTests.ImportGltf_PreservesMaterialsTexturesAndSubmeshAssignments --logger console;verbosity=minimal, PID: 15568, PPID: 2684
+[2026-08-09 07:47:26.811] [00003CD0] IsElevated: False
+[2026-08-09 07:47:26.811] [00003CD0] Is64BitProcess: True
+[2026-08-09 07:47:26.811] [00003CD0] RebootPending: False
+[2026-08-09 07:47:26.811] [00003CD0] ProcessorArchitecture: amd64
+[2026-08-09 07:47:26.811] [00003CD0] HostArchitecture: x64
+[2026-08-09 07:47:26.811] [00003CD0] SdkDirectory: 10.0.203
+[2026-08-09 07:47:26.811] [00003CD0] VerifySignatures: False
+[2026-08-09 07:47:26.811] [00003CD0] SDK feature band: 10.0.200
+[2026-08-09 07:47:30.885] [00003CD0] Shutting down
+[2026-08-09 07:47:30.885] [00003CD0] Shutdown completed.
+[2026-08-09 07:47:30.885] [00003CD0] Restart required: False
+[2026-08-09 07:47:30.885] [00003CD0] === Logging ended ===

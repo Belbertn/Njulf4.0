@@ -1,0 +1,106 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+#include "ddgi_receiver_feedback_abi.glsl"
+
+// Stable LSD scatter. Atomic cursor increments do not define lane order, so a
+// bounded single-lane rank assigns each workgroup's 256 destinations in exact
+// local-index order. Global prefix ranges then make the whole scatter stable
+// across workgroups without hashing any identity field.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+shared uint radixCursor[SIMPLE_DDGI_RECEIVER_FEEDBACK_RADIX_BIN_COUNT];
+shared uint radixDigit[SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE];
+shared uint radixDestination[SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE];
+
+void main()
+{
+    if (receiverFeedbackPc.operation !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_OPERATION_RADIX_SCATTER ||
+        !SimpleDdgiReceiverFeedbackRadixConfigurationIsValid())
+    {
+        return;
+    }
+    if (receiverFeedbackPc.inputLocation == receiverFeedbackPc.outputLocation)
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+        {
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        }
+        return;
+    }
+
+    uint inputCount = SimpleDdgiReceiverFeedbackInputCount();
+    if (inputCount > SimpleDdgiReceiverFeedbackInputCapacity())
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    uint groupIndex = gl_WorkGroupID.x;
+    uint maximumGroups = SimpleDdgiReceiverFeedbackDivideRoundUp(
+        receiverFeedbackPc.recordCapacity,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE);
+    if (groupIndex >= maximumGroups)
+        return;
+
+    uint lane = gl_LocalInvocationIndex;
+    radixCursor[lane] = ReadStorageWordUniform(
+        SimpleDdgiReceiverFeedbackScratchBuffer(),
+        SimpleDdgiReceiverFeedbackRadixBaseOffsetWords() + lane) +
+        ReadStorageWordUniform(SimpleDdgiReceiverFeedbackScratchBuffer(),
+            SimpleDdgiReceiverFeedbackRadixPrefixOffsetWords() +
+                groupIndex * SIMPLE_DDGI_RECEIVER_FEEDBACK_RADIX_BIN_COUNT + lane);
+    uint itemIndex = groupIndex *
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE + lane;
+    radixDigit[lane] = itemIndex < inputCount
+        ? SimpleDdgiReceiverFeedbackRadixKey(itemIndex)
+        : 0u;
+    barrier();
+
+    if (lane == 0u)
+    {
+        for (uint localIndex = 0u;
+             localIndex < SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE;
+             ++localIndex)
+        {
+            uint orderedItemIndex = groupIndex *
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE + localIndex;
+            if (orderedItemIndex >= inputCount)
+                break;
+            uint orderedDigit = radixDigit[localIndex];
+            radixDestination[localIndex] = radixCursor[orderedDigit];
+            ++radixCursor[orderedDigit];
+        }
+    }
+    barrier();
+
+    if (itemIndex >= inputCount)
+        return;
+
+    uint destination = radixDestination[lane];
+    if (destination >= inputCount)
+    {
+        SimpleDdgiReceiverFeedbackMarkBankFailure(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    uint wordCount = SimpleDdgiReceiverFeedbackInputWordCount();
+    for (uint word = 0u; word < wordCount; ++word)
+    {
+        SimpleDdgiReceiverFeedbackWriteOutputWord(destination, word,
+            SimpleDdgiReceiverFeedbackReadInputWord(itemIndex, word));
+    }
+    if (receiverFeedbackPc.inputKind ==
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_INPUT_RAW_RECORDS)
+    {
+        SimpleDdgiReceiverFeedbackWriteOutputRawAuxiliary(destination,
+            SimpleDdgiReceiverFeedbackReadInputRawMass(itemIndex),
+            SimpleDdgiReceiverFeedbackReadInputRequestedPage(itemIndex));
+    }
+}

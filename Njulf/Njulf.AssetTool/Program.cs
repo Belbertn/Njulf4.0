@@ -177,6 +177,12 @@ internal static class Program
         string platform = CookedPlatform.Current;
         string? signingKey = null;
         TextureTargetFormatPolicy textureFormat = TextureTargetFormatPolicy.AutoBc;
+        string? opacityMicromapBridgePath = null;
+        string? opacityMicromapProvenancePath = null;
+        uint opacityMicromapSubdivision = 4U;
+        uint opacityMicromapMaximumSubdivision = 8U;
+        ulong opacityMicromapMaximumWorkload = 1UL << 28;
+        uint opacityMicromapMaximumArrayBytes = 256U * 1024U * 1024U;
         for (int i = 2; i < args.Length; i++)
         {
             switch (args[i])
@@ -204,6 +210,32 @@ internal static class Program
                 case "--texture-format":
                     textureFormat = Enum.Parse<TextureTargetFormatPolicy>(RequireValue(args, ref i, "--texture-format"), ignoreCase: true);
                     break;
+                case "--omm-bridge":
+                    opacityMicromapBridgePath = RequireValue(args, ref i, "--omm-bridge");
+                    break;
+                case "--omm-provenance":
+                    opacityMicromapProvenancePath = RequireValue(args, ref i, "--omm-provenance");
+                    break;
+                case "--omm-subdivision":
+                    opacityMicromapSubdivision = uint.Parse(
+                        RequireValue(args, ref i, "--omm-subdivision"),
+                        CultureInfo.InvariantCulture);
+                    break;
+                case "--omm-max-subdivision":
+                    opacityMicromapMaximumSubdivision = uint.Parse(
+                        RequireValue(args, ref i, "--omm-max-subdivision"),
+                        CultureInfo.InvariantCulture);
+                    break;
+                case "--omm-max-workload":
+                    opacityMicromapMaximumWorkload = ulong.Parse(
+                        RequireValue(args, ref i, "--omm-max-workload"),
+                        CultureInfo.InvariantCulture);
+                    break;
+                case "--omm-max-array-bytes":
+                    opacityMicromapMaximumArrayBytes = uint.Parse(
+                        RequireValue(args, ref i, "--omm-max-array-bytes"),
+                        CultureInfo.InvariantCulture);
+                    break;
                 case "--policy":
                 case "--timeout-ms":
                     _ = RequireValue(args, ref i, args[i]); // Accepted for parity with validation/import automation.
@@ -215,13 +247,41 @@ internal static class Program
         if (string.IsNullOrWhiteSpace(output))
             throw new ArgumentException("Cook requires --out <folder>.");
 
+        if (string.IsNullOrWhiteSpace(opacityMicromapBridgePath) !=
+            string.IsNullOrWhiteSpace(opacityMicromapProvenancePath))
+        {
+            throw new ArgumentException(
+                "C1 cooking requires both --omm-bridge and --omm-provenance; neither option enables it alone.");
+        }
+
+        using PinnedOpacityMicromapBakeBridge? opacityMicromapBridge =
+            string.IsNullOrWhiteSpace(opacityMicromapBridgePath)
+                ? null
+                : new PinnedOpacityMicromapBakeBridge(
+                    OpacityMicromapBridgeProvenanceManifest.LoadOptions(
+                        opacityMicromapProvenancePath!,
+                        opacityMicromapBridgePath!));
+        IOpacityMicromapModelPayloadProducer? opacityMicromapProducer =
+            opacityMicromapBridge is null
+                ? null
+                : new NvidiaOpacityMicromapModelPayloadProducer(
+                    opacityMicromapBridge,
+                    new NvidiaOpacityMicromapCookPolicy
+                    {
+                        RequestedSubdivisionLevel = opacityMicromapSubdivision,
+                        MaximumSubdivisionLevel = opacityMicromapMaximumSubdivision,
+                        MaximumWorkloadSize = opacityMicromapMaximumWorkload,
+                        MaximumArrayDataBytes = opacityMicromapMaximumArrayBytes
+                    });
+
         var options = new ModelCookOptions
         {
             ImporterOptions = new ImporterOptions { Backend = backend },
             TextureOptions = new TextureCookOptions(MaxDimension: maxDimension, TargetFormatPolicy: textureFormat),
             Force = force,
             Platform = platform,
-            SigningPrivateKey = signingKey
+            SigningPrivateKey = signingKey,
+            OpacityMicromapPayloadProducer = opacityMicromapProducer
         };
         using var cooker = new ModelAssetCooker();
         if (mode == "model")
@@ -401,8 +461,8 @@ internal static class Program
         Console.WriteLine("  Njulf.AssetTool validate <path-or-folder> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--policy <strict|gameDefault|permissive>] [--timeout-ms <ms>] [--max-bytes <bytes>] [--high-texture-bytes <bytes>] [--child-process-all]");
         Console.WriteLine("  Njulf.AssetTool import <path> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--policy <strict|gameDefault|permissive>]");
         Console.WriteLine("  Njulf.AssetTool report <path-or-folder> --json <output> [--backend <auto|assimp|sharpgltf>] [--policy <strict|gameDefault|permissive>]");
-        Console.WriteLine("  Njulf.AssetTool cook model <source> --out <folder> [--platform <rid>] [--texture-format <autoBc|rgba8|bc7|bc5|bc4|bc6h>] [--signing-key <pem>] [--backend <auto|assimp|sharpgltf>] [--max-texture-dimension <pixels>] [--force]");
-        Console.WriteLine("  Njulf.AssetTool cook folder|changed <source-folder> --out <folder> [--platform <rid>] [--texture-format <format>] [--signing-key <pem>] [--force]");
+        Console.WriteLine("  Njulf.AssetTool cook model <source> --out <folder> [--platform <rid>] [--texture-format <autoBc|rgba8|bc7|bc5|bc4|bc6h>] [--signing-key <pem>] [--backend <auto|assimp|sharpgltf>] [--max-texture-dimension <pixels>] [--force] [--omm-bridge <native-library> --omm-provenance <json> --omm-subdivision <0..12> --omm-max-subdivision <1..12> --omm-max-workload <count> --omm-max-array-bytes <bytes>]");
+        Console.WriteLine("  Njulf.AssetTool cook folder|changed <source-folder> --out <folder> [--platform <rid>] [--texture-format <format>] [--signing-key <pem>] [--force] [--omm-bridge <native-library> --omm-provenance <json>]");
         Console.WriteLine("  Njulf.AssetTool clean-stale --out <folder> [--platform <rid>]");
         Console.WriteLine("  Njulf.AssetTool migrate <cooked-folder> [--out <folder>] [--signing-key <pem>]");
         Console.WriteLine("  Njulf.AssetTool keygen --private <pem> --public <pem>");

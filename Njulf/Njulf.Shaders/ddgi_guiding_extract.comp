@@ -1,0 +1,315 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+// This pass is specialized to the active DDGI scratch representation by the
+// shader project. It runs after trace completion and is the only production
+// writer of C3 training records.
+#include "common.glsl"
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+#define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
+#include "ddgi_simple_shared.glsl"
+#include "ddgi_guiding_transport.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+const uint SIMPLE_DDGI_GUIDING_EXTRACT_ABI_VERSION = 0x43330006u;
+const uint SIMPLE_DDGI_GUIDING_TRAINING_FINITE_INCIDENT_RADIANCE = 1u << 0u;
+const uint SIMPLE_DDGI_GUIDING_TRAINING_CONTENT_REVISION_MATCHED = 1u << 1u;
+const uint SIMPLE_DDGI_GUIDING_TRAINING_RADIOMETRIC_TRANSPORT = 1u << 2u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS = 0u;
+
+struct SimpleDdgiGuidingTrainingRecord
+{
+    uint physicalProbeIndex;
+    uint virtualProbeId;
+    uint pageGeneration;
+    uint sourceDistributionGeneration;
+    uint directionProposalEpoch;
+    uint leafIndex;
+    float samplePdf;
+    float incidentLuminance;
+    uint contentRevision;
+    uint flags;
+};
+
+struct SimpleDdgiGuidingTrainingWorkItem
+{
+    uint physicalProbeIndex;
+    uint virtualProbeId;
+    uint pageGeneration;
+    uint sourceDistributionGeneration;
+    uint directionProposalEpoch;
+    uint recordOffset;
+    uint recordCount;
+    uint partialOffset;
+    uint expectedContentRevision;
+    uint queueOffset;
+    uint rayResultBaseIndex;
+    uint directionSlotsPerProbe;
+    uint sourceEpoch;
+    uint sourceLightingGeneration;
+};
+
+layout(std430, set = 2, binding = 0) buffer GuidingExtractTrainingRecordsBuffer
+{
+    SimpleDdgiGuidingTrainingRecord records[];
+} guidingExtractTrainingRecords;
+
+layout(std430, set = 2, binding = 1) readonly buffer GuidingExtractWorkItemsBuffer
+{
+    SimpleDdgiGuidingTrainingWorkItem workItems[];
+} guidingExtractWorkItems;
+
+layout(std430, set = 2, binding = 2) buffer GuidingExtractCountersBuffer
+{
+    uint counters[];
+} guidingExtractCounters;
+
+layout(push_constant) uniform SimpleDdgiGuidingExtractPushConstants
+{
+    uint abiVersion;
+    uint paramsBufferIndex;
+    uint rayResultScratchBufferIndex;
+    uint probeUpdateQueueBufferIndex;
+    uint trainingWorkItemCount;
+    uint trainingRecordCapacity;
+    uint probeUpdateCapacity;
+    uint rayResultCapacity;
+    uint physicalProbeCapacity;
+    uint leafResolution;
+    uint directionSlotsPerProbe;
+    uint flags;
+} guidingExtractPc;
+
+bool SimpleDdgiGuidingExtractFinite(vec3 value)
+{
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+uint SimpleDdgiGuidingExtractLeaf(vec3 direction, uint resolution)
+{
+    float u = atan(direction.y, direction.x) / (2.0 * SIMPLE_DDGI_PI);
+    u -= floor(u);
+    float v = clamp(direction.z * 0.5 + 0.5, 0.0, 1.0);
+    uint x = min(uint(floor(u * float(resolution))), resolution - 1u);
+    uint y = min(uint(floor(v * float(resolution))), resolution - 1u);
+    return y * resolution + x;
+}
+
+void SimpleDdgiGuidingExtractInvalidate(uint recordIndex)
+{
+    SimpleDdgiGuidingTrainingRecord invalid;
+    invalid.physicalProbeIndex = 0u;
+    invalid.virtualProbeId = 0u;
+    invalid.pageGeneration = 0u;
+    invalid.sourceDistributionGeneration = 0u;
+    invalid.directionProposalEpoch = 0u;
+    invalid.leafIndex = 0u;
+    invalid.samplePdf = 0.0;
+    invalid.incidentLuminance = 0.0;
+    invalid.contentRevision = 0u;
+    invalid.flags = 0u;
+    guidingExtractTrainingRecords.records[recordIndex] = invalid;
+    atomicAdd(guidingExtractCounters.counters[
+        SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+}
+
+void main()
+{
+    uint workItemIndex = gl_WorkGroupID.x;
+    uint recordBufferLength = uint(guidingExtractTrainingRecords.records.length());
+    uint workItemBufferLength = uint(guidingExtractWorkItems.workItems.length());
+    if (guidingExtractPc.abiVersion != SIMPLE_DDGI_GUIDING_EXTRACT_ABI_VERSION ||
+        guidingExtractPc.abiVersion !=
+            SIMPLE_DDGI_GUIDING_TRANSPORT_ABI_VERSION ||
+        guidingExtractPc.paramsBufferIndex !=
+            uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX) ||
+        guidingExtractPc.trainingWorkItemCount == 0u ||
+        guidingExtractPc.trainingWorkItemCount > workItemBufferLength ||
+        guidingExtractPc.trainingRecordCapacity == 0u ||
+        guidingExtractPc.trainingRecordCapacity > recordBufferLength ||
+        guidingExtractPc.leafResolution < 4u ||
+        guidingExtractPc.leafResolution > 16u ||
+        (guidingExtractPc.leafResolution &
+            (guidingExtractPc.leafResolution - 1u)) != 0u ||
+        guidingExtractPc.directionSlotsPerProbe == 0u ||
+        guidingExtractPc.directionSlotsPerProbe >
+            SIMPLE_DDGI_MAX_RAYS_PER_PROBE ||
+        workItemIndex >= guidingExtractPc.trainingWorkItemCount)
+    {
+        return;
+    }
+
+    SimpleDdgiGuidingTrainingWorkItem workItem =
+        guidingExtractWorkItems.workItems[workItemIndex];
+    bool baseIndexMatches = workItem.queueOffset <=
+            0xffffffffu / guidingExtractPc.directionSlotsPerProbe &&
+        workItem.rayResultBaseIndex == workItem.queueOffset *
+            guidingExtractPc.directionSlotsPerProbe;
+    bool recordRangeValid = workItem.recordOffset <=
+            guidingExtractPc.trainingRecordCapacity &&
+        workItem.recordCount <= guidingExtractPc.trainingRecordCapacity -
+            workItem.recordOffset;
+    bool rayRangeValid = workItem.rayResultBaseIndex <=
+            guidingExtractPc.rayResultCapacity &&
+        workItem.recordCount <= guidingExtractPc.rayResultCapacity -
+            workItem.rayResultBaseIndex;
+    bool workItemValid = workItem.physicalProbeIndex <
+            guidingExtractPc.physicalProbeCapacity &&
+        workItem.virtualProbeId < 0xffffffffu &&
+        workItem.pageGeneration != 0u &&
+        workItem.sourceDistributionGeneration != 0u &&
+        workItem.directionProposalEpoch != 0u &&
+        workItem.expectedContentRevision != 0u &&
+        workItem.sourceEpoch != 0u &&
+        workItem.sourceLightingGeneration != 0u &&
+        workItem.recordCount != 0u &&
+        workItem.recordCount <= guidingExtractPc.directionSlotsPerProbe &&
+        workItem.directionSlotsPerProbe ==
+            guidingExtractPc.directionSlotsPerProbe &&
+        workItem.queueOffset < guidingExtractPc.probeUpdateCapacity &&
+        baseIndexMatches && recordRangeValid && rayRangeValid;
+    if (!workItemValid)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+        {
+            atomicAdd(guidingExtractCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+        }
+        return;
+    }
+
+    SimpleDdgiParams params = ReadSimpleDdgiParams(
+        guidingExtractPc.paramsBufferIndex);
+    SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(
+        guidingExtractPc.probeUpdateQueueBufferIndex,
+        workItem.queueOffset);
+    uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
+    bool sourceIdentityValid = params.physicalProbeCapacity ==
+            guidingExtractPc.physicalProbeCapacity &&
+        params.raysPerProbe == guidingExtractPc.directionSlotsPerProbe &&
+        update.probeIndex == workItem.virtualProbeId &&
+        update.physicalProbeIndex == workItem.physicalProbeIndex &&
+        update.pageMappingGeneration == workItem.pageGeneration &&
+        update.sourceEpoch == workItem.sourceEpoch &&
+        update.sourceLightingGeneration ==
+            workItem.sourceLightingGeneration &&
+        activeRayCount == workItem.recordCount &&
+        SimpleDdgiUpdateRequiresSourceRefresh(update) &&
+        SimpleDdgiUpdateSourceRefreshMode(update) ==
+            SIMPLE_DDGI_SOURCE_MODE_FULL_TRACE &&
+        SimpleDdgiUpdateMatchesLiveAddress(params, update);
+
+    SimpleDdgiVolume volume;
+    uint localProbeIndex;
+    sourceIdentityValid = sourceIdentityValid &&
+        ResolveSimpleDdgiProbeVolume(
+            update.probeIndex,
+            params,
+            volume,
+            localProbeIndex) &&
+        update.volumeIndex < params.volumeCount;
+    uvec2 expectedStableProbeId = uvec2(
+        workItem.virtualProbeId,
+        update.expectedGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK);
+
+    for (uint relativeRecord = gl_LocalInvocationIndex;
+         relativeRecord < workItem.recordCount;
+         relativeRecord += gl_WorkGroupSize.x)
+    {
+        uint destinationIndex = workItem.recordOffset + relativeRecord;
+        if (!sourceIdentityValid)
+        {
+            SimpleDdgiGuidingExtractInvalidate(destinationIndex);
+            continue;
+        }
+
+        uint directionRayIndex = SimpleDdgiUpdateDirectionRayIndex(
+            relativeRecord,
+            activeRayCount,
+            SimpleDdgiUpdateSourceRayCount(update, params),
+            params);
+        vec4 radianceDistance;
+        vec3 direction;
+        vec2 visibilityHit;
+        uint directionEpoch;
+        bool rayValid = ReadSimpleDdgiRayResultStorage(
+            guidingExtractPc.rayResultScratchBufferIndex,
+            workItem.rayResultBaseIndex + relativeRecord,
+            volume,
+            params,
+            update.probeIndex,
+            directionRayIndex,
+            update.sourceEpoch,
+            radianceDistance,
+            direction,
+            visibilityHit,
+            directionEpoch);
+
+        bool sidecarBacked =
+            SimpleDdgiGuidingTransportProbeHasCompleteBacking(
+                workItem.physicalProbeIndex,
+                workItem.virtualProbeId,
+                workItem.pageGeneration,
+                expectedStableProbeId,
+                guidingExtractPc.directionSlotsPerProbe);
+        SimpleDdgiGuidingTransportPayload payload;
+        bool payloadValid = TryReadSimpleDdgiGuidingTransportPayload(
+            workItem.physicalProbeIndex,
+            workItem.virtualProbeId,
+            workItem.pageGeneration,
+            expectedStableProbeId,
+            directionRayIndex,
+            guidingExtractPc.directionSlotsPerProbe,
+            payload);
+        if (payloadValid)
+            direction = payload.direction;
+
+        float samplePdf = payloadValid
+            ? SimpleDdgiGuidingTrainingPdf(payload)
+            : SIMPLE_DDGI_GUIDING_UNIFORM_SPHERE_PDF;
+        uint sourceDistributionGeneration = payloadValid
+            ? payload.distributionGeneration
+            : workItem.sourceDistributionGeneration;
+        uint sourceProposalEpoch = payloadValid
+            ? payload.proposalEpoch
+            : workItem.directionProposalEpoch;
+        bool finiteRadiance = SimpleDdgiGuidingExtractFinite(
+                radianceDistance.rgb) &&
+            all(greaterThanEqual(radianceDistance.rgb, vec3(0.0)));
+        bool finiteDirection = SimpleDdgiGuidingExtractFinite(direction) &&
+            dot(direction, direction) > 0.999 &&
+            dot(direction, direction) < 1.001;
+        bool valid = rayValid && finiteRadiance && finiteDirection &&
+            (!sidecarBacked || payloadValid) &&
+            !isnan(samplePdf) && !isinf(samplePdf) && samplePdf > 0.0 &&
+            sourceDistributionGeneration != 0u &&
+            sourceProposalEpoch != 0u;
+        if (!valid)
+        {
+            SimpleDdgiGuidingExtractInvalidate(destinationIndex);
+            continue;
+        }
+
+        SimpleDdgiGuidingTrainingRecord record;
+        record.physicalProbeIndex = workItem.physicalProbeIndex;
+        record.virtualProbeId = workItem.virtualProbeId;
+        record.pageGeneration = workItem.pageGeneration;
+        record.sourceDistributionGeneration = sourceDistributionGeneration;
+        record.directionProposalEpoch = sourceProposalEpoch;
+        record.leafIndex = SimpleDdgiGuidingExtractLeaf(
+            direction,
+            guidingExtractPc.leafResolution);
+        record.samplePdf = samplePdf;
+        record.incidentLuminance = dot(
+            radianceDistance.rgb,
+            vec3(0.2126, 0.7152, 0.0722));
+        record.contentRevision = workItem.expectedContentRevision;
+        record.flags =
+            SIMPLE_DDGI_GUIDING_TRAINING_FINITE_INCIDENT_RADIANCE |
+            SIMPLE_DDGI_GUIDING_TRAINING_CONTENT_REVISION_MATCHED |
+            SIMPLE_DDGI_GUIDING_TRAINING_RADIOMETRIC_TRANSPORT;
+        guidingExtractTrainingRecords.records[destinationIndex] = record;
+    }
+}

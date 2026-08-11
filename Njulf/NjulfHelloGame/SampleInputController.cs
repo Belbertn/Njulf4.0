@@ -219,7 +219,7 @@ internal sealed class SampleInputController
     private IReadOnlyList<ParticleEffectInstance> _particleEffects;
     private SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private readonly System.Action? _cycleScene;
-    private readonly System.Action<SampleSceneKind>? _loadSceneKind;
+    private readonly Func<SampleSceneKind, bool>? _loadSceneKind;
     private readonly System.Action? _toggleDdgiDiagnosticsFilter;
     private readonly Func<SampleDiagnosticsFilter>? _getDiagnosticsFilter;
     private readonly System.Action? _restoreSceneRenderSettings;
@@ -360,7 +360,7 @@ internal sealed class SampleInputController
         IReadOnlyList<ParticleEffectInstance>? particleEffects = null,
         SamplePerformanceScenarioRunner? performanceScenarioRunner = null,
         System.Action? cycleScene = null,
-        System.Action<SampleSceneKind>? loadSceneKind = null,
+        Func<SampleSceneKind, bool>? loadSceneKind = null,
         System.Action? toggleDdgiDiagnosticsFilter = null,
         Func<SampleDiagnosticsFilter>? getDiagnosticsFilter = null,
         System.Action? restoreSceneRenderSettings = null,
@@ -494,12 +494,24 @@ internal sealed class SampleInputController
 
         if (WasChordPressed(Key.Number4, ref _loadSponzaPerformanceScenePressed))
         {
-            _loadSceneKind?.Invoke(SampleSceneKind.SponzaPlaza);
-            LoadPerformanceScenarioPreset(
-                SamplePerformanceScenario.GiSponzaRightWallStationary,
-                SponzaRightWallPosition,
-                SponzaRightWallYaw,
-                SponzaRightWallPitch);
+            bool? requestedSceneLoaded =
+                _loadSceneKind?.Invoke(
+                    SampleSceneKind.SponzaPlaza);
+            if (SampleScenePresetPolicy.ShouldApply(
+                    requestedSceneLoaded))
+            {
+                LoadPerformanceScenarioPreset(
+                    SamplePerformanceScenario
+                        .GiSponzaRightWallStationary,
+                    SponzaRightWallPosition,
+                    SponzaRightWallYaw,
+                    SponzaRightWallPitch);
+            }
+            else
+            {
+                Console.WriteLine(
+                    "Sponza performance preset skipped because the scene load recovered to the safe scene.");
+            }
         }
 
         if (_renderer != null && WasChordPressed(Key.B, ref _startRuntimeBenchmarkPressed))
@@ -872,6 +884,8 @@ internal sealed class SampleInputController
                 ReflectionDebugView.ProbePrefilterMip => ReflectionDebugView.BoxProjectionDirection,
                 ReflectionDebugView.BoxProjectionDirection => ReflectionDebugView.LocalReflectionOnly,
                 ReflectionDebugView.LocalReflectionOnly => ReflectionDebugView.GlobalFallbackOnly,
+                ReflectionDebugView.GlobalFallbackOnly => ReflectionDebugView.DdgiDirectionalRadianceLobe,
+                ReflectionDebugView.DdgiDirectionalRadianceLobe => ReflectionDebugView.SourceOwnership,
                 _ => ReflectionDebugView.None
             };
             PrintReflectionSettings("Reflection debug");

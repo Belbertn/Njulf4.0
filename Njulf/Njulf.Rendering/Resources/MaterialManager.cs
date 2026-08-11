@@ -16,7 +16,7 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Njulf.Rendering.Resources
 {
-    public sealed unsafe class MaterialManager : IDisposable
+    public sealed unsafe class MaterialManager : IDisposable, IDdgiMaterialMutationSource
     {
         private const uint InitialMaterialCapacity = 1024;
         private static readonly ulong MaterialStride = (ulong)Marshal.SizeOf<GPUMaterialData>();
@@ -3465,6 +3465,14 @@ namespace Njulf.Rendering.Resources
                 semantic != MaterialTextureSemantic.Normal ||
                 statisticsAvailable &&
                 statistics.Validity.HasFlag(TextureTransportStatisticsValidity.NormalVariance);
+            bool emissiveMaximumValid =
+                semantic == MaterialTextureSemantic.Emissive &&
+                statisticsAvailable &&
+                statistics.Status == TextureTransportStatisticsStatus.Valid &&
+                statistics.Validity.HasFlag(
+                    TextureTransportStatisticsValidity.EmissiveLuminanceMoments) &&
+                double.IsFinite(statistics.EmissiveLuminanceMaximum) &&
+                statistics.EmissiveLuminanceMaximum >= 0.0;
             return new MaterialTextureTransportInput(
                 bindlessIndex,
                 meanValid,
@@ -3475,7 +3483,11 @@ namespace Njulf.Rendering.Resources
                 normalVarianceValid && statisticsAvailable
                     ? (float)statistics.NormalVariance
                     : 0f,
-                statisticsAvailable ? statistics.SourceContentHash : 0);
+                statisticsAvailable ? statistics.SourceContentHash : 0,
+                emissiveMaximumValid,
+                emissiveMaximumValid
+                    ? (float)Math.Min(statistics.EmissiveLuminanceMaximum, float.MaxValue)
+                    : 0f);
         }
 
         private void PreflightTextureFanoutPublicationLocked(

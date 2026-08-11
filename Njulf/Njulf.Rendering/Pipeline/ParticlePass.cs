@@ -20,6 +20,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferManager _bufferManager;
         private readonly RenderTargetManager _renderTargets;
         private readonly ParticleSettings _settings;
+        private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
+            _receiverFeedbackRuntime;
 
         public ParticlePass(
             VulkanContext context,
@@ -28,13 +30,15 @@ namespace Njulf.Rendering.Pipeline
             PipelineObjects.ParticlePipeline particlePipeline,
             BufferManager bufferManager,
             RenderTargetManager renderTargets,
-            ParticleSettings settings)
+            ParticleSettings settings,
+            SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime = null)
             : base("ParticlePass", context, swapchain, bindlessHeap)
         {
             _particlePipeline = particlePipeline ?? throw new ArgumentNullException(nameof(particlePipeline));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _receiverFeedbackRuntime = receiverFeedbackRuntime;
         }
 
         public override void Initialize()
@@ -43,14 +47,53 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            bool receiverFeedbackRequired =
+                _receiverFeedbackRuntime?.IsPendingOwnedProducerRequired(
+                    frameIndex,
+                    SimpleDdgiReceiverFeedbackProducer.Particles) == true;
+            bool useReceiverFeedback = receiverFeedbackRequired;
+            if (useReceiverFeedback &&
+                sceneData.CurrentFrameIndex != checked((uint)frameIndex))
+            {
+                AbortReceiverFeedback(
+                    "receiver-feedback-particle-frame-index-mismatch");
+                receiverFeedbackRequired = false;
+                useReceiverFeedback = false;
+            }
+            if (useReceiverFeedback &&
+                !_particlePipeline.ReceiverFeedbackPipelinesAvailable)
+            {
+                AbortReceiverFeedback(
+                    "receiver-feedback-particle-pipelines-unavailable");
+                receiverFeedbackRequired = false;
+                useReceiverFeedback = false;
+            }
+
             if (sceneData.GpuParticlesEnabled != 0)
             {
-                ExecuteGpuParticles(cmd, frameIndex, sceneData);
+                bool drewParticles = ExecuteGpuParticles(
+                    cmd,
+                    frameIndex,
+                    sceneData,
+                    useReceiverFeedback);
+                CompleteOrAbortReceiverFeedback(
+                    cmd,
+                    frameIndex,
+                    receiverFeedbackRequired,
+                    useReceiverFeedback,
+                    drewParticles);
                 return;
             }
 
             if (!sceneData.ParticlesEnabled || sceneData.RenderedParticleCount <= 0 || sceneData.ParticleBatches.Count == 0)
+            {
+                if (receiverFeedbackRequired)
+                {
+                    AbortReceiverFeedback(
+                        "receiver-feedback-particle-producer-required-without-draws");
+                }
                 return;
+            }
 
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
@@ -111,6 +154,7 @@ namespace Njulf.Rendering.Pipeline
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
 
             ParticleBlendMode currentBlendMode = (ParticleBlendMode)uint.MaxValue;
+            bool drewAnyParticles = false;
             for (int i = 0; i < sceneData.ParticleBatches.Count; i++)
             {
                 GPUParticleBatch batch = sceneData.ParticleBatches[i];
@@ -121,7 +165,12 @@ namespace Njulf.Rendering.Pipeline
                 if (blendMode != currentBlendMode)
                 {
                     currentBlendMode = blendMode;
-                    _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _particlePipeline.GetPipeline(blendMode));
+                    _context.Api.CmdBindPipeline(
+                        cmd,
+                        PipelineBindPoint.Graphics,
+                        _particlePipeline.GetPipeline(
+                            blendMode,
+                            useReceiverFeedback));
                 }
 
                 var pushConstants = new GPUParticlePushConstants
@@ -144,15 +193,26 @@ namespace Njulf.Rendering.Pipeline
                     &pushConstants);
 
                 _context.Api.CmdDraw(cmd, 6, batch.Count, 0, 0);
+                drewAnyParticles = true;
             }
 
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            CompleteOrAbortReceiverFeedback(
+                cmd,
+                frameIndex,
+                receiverFeedbackRequired,
+                useReceiverFeedback,
+                drewAnyParticles);
         }
 
-        private void ExecuteGpuParticles(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
+        private bool ExecuteGpuParticles(
+            CommandBuffer cmd,
+            int frameIndex,
+            SceneRenderingData sceneData,
+            bool useReceiverFeedback)
         {
             if (sceneData.GpuParticleEmitterCount <= 0 || !sceneData.GpuParticleIndirectDrawBuffer.IsValid)
-                return;
+                return false;
 
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
@@ -215,7 +275,12 @@ namespace Njulf.Rendering.Pipeline
             for (uint bucket = 0; bucket < GpuBlendBucketCount; bucket++)
             {
                 var blendMode = (ParticleBlendMode)bucket;
-                _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _particlePipeline.GetPipeline(blendMode));
+                _context.Api.CmdBindPipeline(
+                    cmd,
+                    PipelineBindPoint.Graphics,
+                    _particlePipeline.GetPipeline(
+                        blendMode,
+                        useReceiverFeedback));
 
                 var pushConstants = new GPUParticlePushConstants
                 {
@@ -240,6 +305,40 @@ namespace Njulf.Rendering.Pipeline
                 _context.Api.CmdDrawIndirect(cmd, indirectBuffer, indirectOffset, 1, (uint)Marshal.SizeOf<GPUParticleDrawCommand>());
             }
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            return true;
+        }
+
+        private void CompleteOrAbortReceiverFeedback(
+            CommandBuffer commandBuffer,
+            int frameIndex,
+            bool receiverFeedbackRequired,
+            bool usedReceiverFeedback,
+            bool drewParticles)
+        {
+            if (!receiverFeedbackRequired)
+                return;
+            if (!usedReceiverFeedback || !drewParticles)
+            {
+                AbortReceiverFeedback(
+                    "receiver-feedback-particle-producer-did-not-record-exact-draws");
+                return;
+            }
+            if (_receiverFeedbackRuntime is null)
+                return;
+            if (!_receiverFeedbackRuntime.TryRecordOwnedProducerCompletion(
+                    commandBuffer,
+                    frameIndex,
+                    SimpleDdgiReceiverFeedbackProducer.Particles,
+                    out string reason))
+            {
+                AbortReceiverFeedback(
+                    "receiver-feedback-particle-completion-failed:" + reason);
+            }
+        }
+
+        private void AbortReceiverFeedback(string reason)
+        {
+            _receiverFeedbackRuntime?.AbortCapture(reason);
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

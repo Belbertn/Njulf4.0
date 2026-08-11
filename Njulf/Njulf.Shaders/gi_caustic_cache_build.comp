@@ -1,0 +1,474 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "gi_caustic_shared.glsl"
+
+// Deterministic production cache builder.  It performs a stable 7-key,
+// 8-bit LSD radix sort, segmented bottom-K compaction with exact K/M flux
+// correction, and deterministic full-key open-address table construction.
+// There are no device-scope floating-point atomics and no order-dependent
+// global scatter atomics.
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+shared uint giCausticSharedHistogram[GI_CAUSTIC_RADIX_BIN_COUNT];
+shared uint giCausticSharedDigits[GI_CAUSTIC_BUILD_WORKGROUP_SIZE];
+shared uint giCausticSharedPhotonKeep[GI_CAUSTIC_BUILD_WORKGROUP_SIZE];
+shared uint giCausticSharedCellHead[GI_CAUSTIC_BUILD_WORKGROUP_SIZE];
+shared uint giCausticSharedPhotonPrefix[GI_CAUSTIC_BUILD_WORKGROUP_SIZE];
+shared uint giCausticSharedCellPrefix[GI_CAUSTIC_BUILD_WORKGROUP_SIZE];
+
+uint GiCausticCandidateInputCount()
+{
+    return GiCausticScratchRead(GI_CAUSTIC_SCRATCH_CANDIDATE_COUNT);
+}
+
+bool GiCausticBuildRejected()
+{
+    return GiCausticScratchRead(GI_CAUSTIC_SCRATCH_BUILD_REJECTED_COUNT) != 0u ||
+        GiCausticScratchRead(GI_CAUSTIC_SCRATCH_TASK_REJECTED_COUNT) != 0u ||
+        GiCausticScratchRead(GI_CAUSTIC_SCRATCH_CANDIDATE_OVERFLOW_COUNT) != 0u ||
+        GiCausticScratchRead(GI_CAUSTIC_SCRATCH_CELL_OVERFLOW_COUNT) != 0u;
+}
+
+void GiCausticRejectBuild()
+{
+    atomicOr(BindlessStorageBuffers[giCausticPc.ScratchBufferIndex].Words[
+        GI_CAUSTIC_SCRATCH_BUILD_REJECTED_COUNT], 1u);
+}
+
+uint GiCausticRejectionFlags()
+{
+    uint flags = 0u;
+    if (GiCausticScratchRead(GI_CAUSTIC_SCRATCH_TASK_REJECTED_COUNT) != 0u)
+        flags |= GI_CAUSTIC_CACHE_TASK_OVERFLOW;
+    if (GiCausticScratchRead(
+            GI_CAUSTIC_SCRATCH_CANDIDATE_OVERFLOW_COUNT) != 0u ||
+        GiCausticCandidateInputCount() > giCausticPc.PhotonCapacity)
+    {
+        flags |= GI_CAUSTIC_CACHE_CANDIDATE_OVERFLOW;
+    }
+    if (GiCausticScratchRead(GI_CAUSTIC_SCRATCH_CELL_OVERFLOW_COUNT) != 0u)
+        flags |= GI_CAUSTIC_CACHE_CELL_TABLE_OVERFLOW;
+    if (GiCausticScratchRead(GI_CAUSTIC_SCRATCH_BUILD_REJECTED_COUNT) != 0u)
+        flags |= GI_CAUSTIC_CACHE_INVALID;
+    return flags == 0u ? GI_CAUSTIC_CACHE_INVALID : flags;
+}
+
+void GiCausticWriteRejectedHeader()
+{
+    uint overflowCount =
+        GiCausticScratchRead(GI_CAUSTIC_SCRATCH_TASK_REJECTED_COUNT) +
+        GiCausticScratchRead(GI_CAUSTIC_SCRATCH_CANDIDATE_OVERFLOW_COUNT) +
+        GiCausticScratchRead(GI_CAUSTIC_SCRATCH_CELL_OVERFLOW_COUNT) +
+        GiCausticScratchRead(GI_CAUSTIC_SCRATCH_BUILD_REJECTED_COUNT);
+    GiCausticWriteCacheHeader(
+        GI_CAUSTIC_CACHE_INITIALIZED | GiCausticRejectionFlags(),
+        GiCausticCandidateInputCount(),
+        0u,
+        0u,
+        0u,
+        overflowCount);
+}
+
+uint GiCausticRadixPassIndex()
+{
+    return GiCausticBuildRadixKeyIndex() * GI_CAUSTIC_RADIX_BYTES_PER_KEY +
+        GiCausticBuildRadixByteIndex();
+}
+
+uint GiCausticRadixInputBase()
+{
+    return (GiCausticRadixPassIndex() & 1u) == 0u
+        ? GiCausticIndexBank0WordOffset()
+        : GiCausticIndexBank1WordOffset();
+}
+
+uint GiCausticRadixOutputBase()
+{
+    return (GiCausticRadixPassIndex() & 1u) == 0u
+        ? GiCausticIndexBank1WordOffset()
+        : GiCausticIndexBank0WordOffset();
+}
+
+void GiCausticInitializeIndices(uint invocation)
+{
+    uint candidateCount = GiCausticCandidateInputCount();
+    if (invocation == 0u)
+    {
+        GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_RETAINED_COUNT, 0u);
+        GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_OCCUPIED_CELL_COUNT, 0u);
+        if (candidateCount > giCausticPc.PhotonCapacity ||
+            GiCausticScratchRead(GI_CAUSTIC_SCRATCH_TASK_REJECTED_COUNT) != 0u ||
+            GiCausticScratchRead(
+                GI_CAUSTIC_SCRATCH_CANDIDATE_OVERFLOW_COUNT) != 0u)
+        {
+            GiCausticRejectBuild();
+        }
+    }
+    if (invocation >= min(candidateCount, giCausticPc.PhotonCapacity))
+        return;
+    if (!GiCausticCandidateValid(invocation))
+    {
+        GiCausticRejectBuild();
+        return;
+    }
+    GiCausticScratchWrite(GiCausticIndexBank0WordOffset() + invocation,
+        invocation);
+}
+
+void GiCausticBuildHistogram(uint invocation, uint lane, uint groupIndex)
+{
+    giCausticSharedHistogram[lane] = 0u;
+    giCausticSharedHistogram[lane + GI_CAUSTIC_BUILD_WORKGROUP_SIZE] = 0u;
+    barrier();
+
+    uint candidateCount = min(GiCausticCandidateInputCount(),
+        giCausticPc.PhotonCapacity);
+    uint digit = 0u;
+    if (invocation < candidateCount && !GiCausticBuildRejected())
+    {
+        uint candidateIndex = GiCausticScratchRead(
+            GiCausticRadixInputBase() + invocation);
+        digit = GiCausticRadixDigit(candidateIndex,
+            GiCausticBuildRadixKeyIndex(), GiCausticBuildRadixByteIndex());
+        atomicAdd(giCausticSharedHistogram[digit], 1u);
+    }
+    barrier();
+
+    uint groupBase = GiCausticHistogramWordOffset() +
+        groupIndex * GI_CAUSTIC_RADIX_BIN_COUNT;
+    GiCausticScratchWrite(groupBase + lane,
+        giCausticSharedHistogram[lane]);
+    GiCausticScratchWrite(groupBase + lane + GI_CAUSTIC_BUILD_WORKGROUP_SIZE,
+        giCausticSharedHistogram[lane + GI_CAUSTIC_BUILD_WORKGROUP_SIZE]);
+}
+
+void GiCausticBuildGroupPrefixes(uint lane)
+{
+    uint groupCount = GiCausticBuildWorkgroupCount();
+    for (uint bin = lane; bin < GI_CAUSTIC_RADIX_BIN_COUNT;
+         bin += GI_CAUSTIC_BUILD_WORKGROUP_SIZE)
+    {
+        uint running = 0u;
+        for (uint group = 0u; group < groupCount; ++group)
+        {
+            uint histogram = GiCausticScratchRead(
+                GiCausticHistogramWordOffset() +
+                group * GI_CAUSTIC_RADIX_BIN_COUNT + bin);
+            GiCausticScratchWrite(GiCausticGroupPrefixWordOffset() +
+                group * GI_CAUSTIC_RADIX_BIN_COUNT + bin, running);
+            running += histogram;
+        }
+        giCausticSharedHistogram[bin] = running;
+    }
+    barrier();
+
+    for (uint bin = lane; bin < GI_CAUSTIC_RADIX_BIN_COUNT;
+         bin += GI_CAUSTIC_BUILD_WORKGROUP_SIZE)
+    {
+        uint base = 0u;
+        for (uint prior = 0u; prior < bin; ++prior)
+            base += giCausticSharedHistogram[prior];
+        GiCausticScratchWrite(GiCausticBinBaseWordOffset() + bin, base);
+    }
+}
+
+void GiCausticStableScatter(uint invocation, uint lane, uint groupIndex)
+{
+    uint candidateCount = min(GiCausticCandidateInputCount(),
+        giCausticPc.PhotonCapacity);
+    uint candidateIndex = 0u;
+    uint digit = 0xffffffffu;
+    if (invocation < candidateCount && !GiCausticBuildRejected())
+    {
+        candidateIndex = GiCausticScratchRead(
+            GiCausticRadixInputBase() + invocation);
+        digit = GiCausticRadixDigit(candidateIndex,
+            GiCausticBuildRadixKeyIndex(), GiCausticBuildRadixByteIndex());
+    }
+    giCausticSharedDigits[lane] = digit;
+    barrier();
+
+    if (invocation >= candidateCount || digit == 0xffffffffu ||
+        GiCausticBuildRejected())
+    {
+        return;
+    }
+    uint localRank = 0u;
+    for (uint prior = 0u; prior < lane; ++prior)
+        localRank += giCausticSharedDigits[prior] == digit ? 1u : 0u;
+    uint destination = GiCausticScratchRead(
+            GiCausticBinBaseWordOffset() + digit) +
+        GiCausticScratchRead(GiCausticGroupPrefixWordOffset() +
+            groupIndex * GI_CAUSTIC_RADIX_BIN_COUNT + digit) +
+        localRank;
+    if (destination >= candidateCount)
+    {
+        GiCausticRejectBuild();
+        return;
+    }
+    GiCausticScratchWrite(GiCausticRadixOutputBase() + destination,
+        candidateIndex);
+}
+
+void GiCausticCompactLocalScan(uint invocation, uint lane, uint groupIndex)
+{
+    uint candidateCount = min(GiCausticCandidateInputCount(),
+        giCausticPc.PhotonCapacity);
+    uint keep = 0u;
+    uint cellHead = 0u;
+    if (invocation < candidateCount && !GiCausticBuildRejected())
+    {
+        uint candidateIndex = GiCausticSortedCandidateIndex(invocation);
+        bool valid;
+        ivec4 cell = GiCausticCandidateCell(candidateIndex, valid);
+        uint runStart = valid ? GiCausticFindCellRunStart(invocation, cell) : 0u;
+        if (!valid)
+        {
+            GiCausticRejectBuild();
+        }
+        else
+        {
+            cellHead = invocation == runStart ? 1u : 0u;
+            keep = invocation - runStart < giCausticPc.MaximumPhotonsPerCell
+                ? 1u : 0u;
+        }
+    }
+    giCausticSharedPhotonKeep[lane] = keep;
+    giCausticSharedCellHead[lane] = cellHead;
+    barrier();
+
+    uint photonPrefix = 0u;
+    uint cellPrefix = 0u;
+    for (uint prior = 0u; prior < lane; ++prior)
+    {
+        photonPrefix += giCausticSharedPhotonKeep[prior];
+        cellPrefix += giCausticSharedCellHead[prior];
+    }
+    giCausticSharedPhotonPrefix[lane] = photonPrefix;
+    giCausticSharedCellPrefix[lane] = cellPrefix;
+    if (invocation < candidateCount)
+    {
+        GiCausticScratchWrite(GiCausticIndexBank1WordOffset() + invocation,
+            photonPrefix);
+        GiCausticScratchWrite(GiCausticGroupPrefixWordOffset() + invocation,
+            cellPrefix);
+    }
+    barrier();
+
+    if (lane == GI_CAUSTIC_BUILD_WORKGROUP_SIZE - 1u)
+    {
+        uint groupCount = GiCausticBuildWorkgroupCount();
+        uint groupScratch = GiCausticHistogramWordOffset();
+        GiCausticScratchWrite(groupScratch + groupIndex,
+            photonPrefix + keep);
+        GiCausticScratchWrite(groupScratch + 2u * groupCount + groupIndex,
+            cellPrefix + cellHead);
+    }
+}
+
+void GiCausticCompactGroupPrefix(uint invocation)
+{
+    if (invocation != 0u)
+        return;
+    if (GiCausticBuildRejected())
+        return;
+
+    uint groupCount = GiCausticBuildWorkgroupCount();
+    uint groupScratch = GiCausticHistogramWordOffset();
+    uint retained = 0u;
+    uint occupied = 0u;
+    for (uint group = 0u; group < groupCount; ++group)
+    {
+        uint photonCount = GiCausticScratchRead(groupScratch + group);
+        uint cellCount = GiCausticScratchRead(
+            groupScratch + 2u * groupCount + group);
+        GiCausticScratchWrite(groupScratch + groupCount + group, retained);
+        GiCausticScratchWrite(groupScratch + 3u * groupCount + group, occupied);
+        retained += photonCount;
+        occupied += cellCount;
+    }
+    if (retained > giCausticPc.PhotonCapacity ||
+        occupied > giCausticPc.MaximumOccupiedCells ||
+        occupied > giCausticPc.CellTableCapacity)
+    {
+        GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_CELL_OVERFLOW_COUNT, 1u);
+        GiCausticRejectBuild();
+        return;
+    }
+    GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_RETAINED_COUNT, retained);
+    GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_OCCUPIED_CELL_COUNT, occupied);
+}
+
+void GiCausticCompactScatter(uint invocation, uint groupIndex)
+{
+    uint candidateCount = min(GiCausticCandidateInputCount(),
+        giCausticPc.PhotonCapacity);
+    if (invocation >= candidateCount || GiCausticBuildRejected())
+        return;
+
+    uint candidateIndex = GiCausticSortedCandidateIndex(invocation);
+    bool valid;
+    ivec4 cell = GiCausticCandidateCell(candidateIndex, valid);
+    if (!valid)
+    {
+        GiCausticRejectBuild();
+        return;
+    }
+    uint runStart = GiCausticFindCellRunStart(invocation, cell);
+    uint runRank = invocation - runStart;
+    uint runEnd = GiCausticFindCellRunEnd(invocation, candidateCount, cell);
+    uint runLength = runEnd - runStart;
+    uint keepCount = min(runLength, giCausticPc.MaximumPhotonsPerCell);
+    if (runRank >= keepCount || keepCount == 0u)
+        return;
+
+    uint groupCount = GiCausticBuildWorkgroupCount();
+    uint groupScratch = GiCausticHistogramWordOffset();
+    uint destination = GiCausticScratchRead(
+            groupScratch + groupCount + groupIndex) +
+        GiCausticScratchRead(GiCausticIndexBank1WordOffset() + invocation);
+    if (destination >= giCausticPc.PhotonCapacity)
+    {
+        GiCausticRejectBuild();
+        return;
+    }
+    GiCausticCopyCandidateToCache(candidateIndex, destination,
+        float(runLength) / float(keepCount));
+
+    if (runRank == 0u)
+    {
+        uint cellOrdinal = GiCausticScratchRead(
+                groupScratch + 3u * groupCount + groupIndex) +
+            GiCausticScratchRead(
+                GiCausticGroupPrefixWordOffset() + invocation);
+        if (cellOrdinal >= giCausticPc.MaximumOccupiedCells ||
+            cellOrdinal >= giCausticPc.CellTableCapacity)
+        {
+            atomicAdd(BindlessStorageBuffers[giCausticPc.ScratchBufferIndex].Words[
+                GI_CAUSTIC_SCRATCH_CELL_OVERFLOW_COUNT], 1u);
+            GiCausticRejectBuild();
+            return;
+        }
+        GiCausticWriteLinearCellEntry(
+            cellOrdinal, cell, destination, keepCount);
+    }
+}
+
+void GiCausticHashAndFinalize(uint invocation)
+{
+    if (invocation != 0u)
+        return;
+    if (GiCausticBuildRejected())
+    {
+        GiCausticWriteRejectedHeader();
+        return;
+    }
+
+    uint occupied = GiCausticScratchRead(
+        GI_CAUSTIC_SCRATCH_OCCUPIED_CELL_COUNT);
+    for (uint cellIndex = 0u; cellIndex < occupied; ++cellIndex)
+    {
+        uint photonOffset;
+        uint photonCount;
+        bool valid;
+        ivec4 cell = GiCausticReadStagedCellEntry(
+            cellIndex, photonOffset, photonCount, valid);
+        if (!valid || !GiCausticInsertCell(cell, photonOffset, photonCount))
+        {
+            GiCausticScratchWrite(GI_CAUSTIC_SCRATCH_CELL_OVERFLOW_COUNT, 1u);
+            GiCausticRejectBuild();
+            GiCausticWriteRejectedHeader();
+            return;
+        }
+    }
+
+    uint candidateCount = GiCausticCandidateInputCount();
+    uint retained = GiCausticScratchRead(GI_CAUSTIC_SCRATCH_RETAINED_COUNT);
+    GiCausticWriteCacheHeader(
+        GI_CAUSTIC_CACHE_INITIALIZED,
+        candidateCount,
+        candidateCount,
+        retained,
+        occupied,
+        0u);
+    // BuildComplete is the transaction's final store.  CPU publication still
+    // waits for the submission fence and validates every header identity field.
+    memoryBarrierBuffer();
+    WriteStorageWordUniform(giCausticPc.CacheBufferIndex,
+        giCausticPc.CacheBankHeaderWordOffset + 13u,
+        GI_CAUSTIC_CACHE_INITIALIZED | GI_CAUSTIC_CACHE_BUILD_COMPLETE);
+}
+
+void main()
+{
+    if (!GiCausticPushConstantsValid())
+        return;
+
+    uint operation = GiCausticBuildOperation();
+    uint invocation = gl_GlobalInvocationID.x;
+    uint lane = gl_LocalInvocationIndex;
+    uint groupIndex = gl_WorkGroupID.x;
+
+    if (operation == GI_CAUSTIC_BUILD_PHASE_CLEAR)
+    {
+        if (invocation < giCausticPc.CellTableCapacity)
+            GiCausticClearCellEntry(invocation);
+        if (invocation == 0u)
+            GiCausticWriteCacheHeader(GI_CAUSTIC_CACHE_INITIALIZED,
+                0u, 0u, 0u, 0u, 0u);
+        return;
+    }
+    if (operation == GI_CAUSTIC_BUILD_PHASE_INITIALIZE_INDICES)
+    {
+        GiCausticInitializeIndices(invocation);
+        return;
+    }
+    if (operation == GI_CAUSTIC_BUILD_PHASE_RADIX_HISTOGRAM)
+    {
+        GiCausticBuildHistogram(invocation, lane, groupIndex);
+        return;
+    }
+    if (operation == GI_CAUSTIC_BUILD_PHASE_RADIX_PREFIX)
+    {
+        GiCausticBuildGroupPrefixes(lane);
+        return;
+    }
+    if (operation == GI_CAUSTIC_BUILD_PHASE_RADIX_SCATTER)
+    {
+        GiCausticStableScatter(invocation, lane, groupIndex);
+        return;
+    }
+    if (operation == GI_CAUSTIC_BUILD_PHASE_COMPACT_LOCAL_SCAN)
+    {
+        GiCausticCompactLocalScan(invocation, lane, groupIndex);
+        return;
+    }
+    if (operation == GI_CAUSTIC_BUILD_PHASE_COMPACT_GROUP_PREFIX)
+    {
+        GiCausticCompactGroupPrefix(invocation);
+        return;
+    }
+    if (operation == GI_CAUSTIC_BUILD_PHASE_COMPACT_SCATTER)
+    {
+        GiCausticCompactScatter(invocation, groupIndex);
+        return;
+    }
+    if (operation == GI_CAUSTIC_BUILD_PHASE_STAGE_SORTED_CELLS)
+    {
+        uint occupied = GiCausticScratchRead(
+            GI_CAUSTIC_SCRATCH_OCCUPIED_CELL_COUNT);
+        if (invocation < occupied && !GiCausticBuildRejected())
+            GiCausticStageLinearCellEntry(invocation);
+        return;
+    }
+    if (operation == GI_CAUSTIC_BUILD_PHASE_CLEAR_CELL_TABLE_FOR_HASH)
+    {
+        if (invocation < giCausticPc.CellTableCapacity)
+            GiCausticClearCellEntry(invocation);
+        return;
+    }
+    if (operation == GI_CAUSTIC_BUILD_PHASE_HASH_AND_FINALIZE)
+        GiCausticHashAndFinalize(invocation);
+}

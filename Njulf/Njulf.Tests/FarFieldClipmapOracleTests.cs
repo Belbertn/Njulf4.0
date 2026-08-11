@@ -115,7 +115,7 @@ namespace Njulf.Tests
         {
             Assert.Multiple(() =>
             {
-                Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(240));
+                Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(256));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiVolume>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiVolumePaging>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiResidencyHeader>(), Is.EqualTo(64));
@@ -153,6 +153,14 @@ namespace Njulf.Tests
                     Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
                         nameof(GPUSimpleDdgiResidencyFeedback.DevelopmentPinnedPageCount)).ToInt32(),
                     Is.EqualTo(352));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
+                        nameof(GPUSimpleDdgiResidencyFeedback.VisibleDemandSuppressedPageCount)).ToInt32(),
+                    Is.EqualTo(356));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
+                        nameof(GPUSimpleDdgiResidencyFeedback.VisibleDemandInitializingOrUnpublishedPageCount)).ToInt32(),
+                    Is.EqualTo(360));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageDemandPushConstants>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageResidencyPushConstants>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiRayResult>(), Is.EqualTo(20));

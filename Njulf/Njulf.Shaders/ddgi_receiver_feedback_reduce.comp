@@ -1,0 +1,644 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+#include "ddgi_receiver_feedback_abi.glsl"
+
+// Reduction has four independently dispatched operations:
+//  - build bounded partials from fully sorted raw records;
+//  - reduce stable resolved-probe partial runs to compact summaries;
+//  - reduce requested-probe/page fallback pressure; and
+//  - publish Validated last only after all prior operations complete.
+// Queue/render-graph barriers must separate these dispatches. No operation
+// reads or mutates the prior summary bank selected for scheduling.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void SimpleDdgiReceiverFeedbackWriteProbePartial(
+    uint resolvedProbe,
+    uint firstTile,
+    uint lastTile,
+    float mass,
+    float maximumWeight,
+    uint uniqueTileCount,
+    uint sampledReceiverCount,
+    uint consumerMask,
+    uint fallbackCount,
+    bool fallbackCountOverflow)
+{
+    uint destination = atomicAdd(BindlessStorageBuffers[
+        SimpleDdgiReceiverFeedbackSummaryBuffer()].Words[
+            SimpleDdgiReceiverFeedbackHeaderWord(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_PROBE_PARTIAL_COUNT)], 1u);
+    if (destination >= receiverFeedbackPc.recordCapacity)
+    {
+        SimpleDdgiReceiverFeedbackMarkBankFailure(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    uint packedConsumerAndFallback = consumerMask &
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_CONSUMER_MASK;
+    packedConsumerAndFallback |= min(fallbackCount, 0x7fffffu) <<
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_FALLBACK_SHIFT;
+    if (fallbackCountOverflow || fallbackCount > 0x7fffffu)
+        packedConsumerAndFallback |=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_FALLBACK_OVERFLOW;
+    SimpleDdgiReceiverFeedbackWriteProbePartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_RESOLVED_PROBE,
+        resolvedProbe);
+    SimpleDdgiReceiverFeedbackWriteProbePartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_FIRST_TILE,
+        firstTile);
+    SimpleDdgiReceiverFeedbackWriteProbePartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_LAST_TILE,
+        lastTile);
+    SimpleDdgiReceiverFeedbackWriteProbePartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_MASS,
+        floatBitsToUint(mass));
+    SimpleDdgiReceiverFeedbackWriteProbePartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_MAX_WEIGHT,
+        floatBitsToUint(maximumWeight));
+    SimpleDdgiReceiverFeedbackWriteProbePartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_UNIQUE_TILES,
+        uniqueTileCount);
+    SimpleDdgiReceiverFeedbackWriteProbePartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_SAMPLE_COUNT,
+        sampledReceiverCount);
+    SimpleDdgiReceiverFeedbackWriteProbePartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_CONSUMER_AND_FALLBACK,
+        packedConsumerAndFallback);
+}
+
+void SimpleDdgiReceiverFeedbackWriteFallbackPartial(
+    uint requestedProbe,
+    uint requestedPage,
+    float correctedMass)
+{
+    uint destination = atomicAdd(BindlessStorageBuffers[
+        SimpleDdgiReceiverFeedbackSummaryBuffer()].Words[
+            SimpleDdgiReceiverFeedbackHeaderWord(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FALLBACK_PARTIAL_COUNT)], 1u);
+    if (destination >= receiverFeedbackPc.recordCapacity)
+    {
+        SimpleDdgiReceiverFeedbackMarkBankFailure(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    SimpleDdgiReceiverFeedbackWriteFallbackPartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+        destination, 0u, requestedProbe);
+    SimpleDdgiReceiverFeedbackWriteFallbackPartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+        destination, 1u, requestedPage);
+    SimpleDdgiReceiverFeedbackWriteFallbackPartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+        destination, 2u, floatBitsToUint(correctedMass));
+    SimpleDdgiReceiverFeedbackWriteFallbackPartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+        destination, 3u, 1u);
+}
+
+void SimpleDdgiReceiverFeedbackBuildPartials()
+{
+    if (receiverFeedbackPc.inputKind !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_INPUT_RAW_RECORDS ||
+        receiverFeedbackPc.inputLocation !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK ||
+        receiverFeedbackPc.flags != 0u)
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    uint appendCount = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_APPEND_COUNT);
+    if (appendCount > receiverFeedbackPc.recordCapacity)
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_APPEND_OVERFLOW);
+        return;
+    }
+
+    uint blockBegin = gl_WorkGroupID.x *
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE;
+    if (blockBegin >= appendCount || gl_LocalInvocationIndex != 0u)
+        return;
+    uint blockEnd = min(appendCount, blockBegin +
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE);
+    uint cursor = blockBegin;
+    while (cursor < blockEnd)
+    {
+        uint resolvedProbe = SimpleDdgiReceiverFeedbackRawRecordWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+            cursor,
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_RESOLVED_PROBE);
+        uint firstTile = 0u;
+        uint lastTile = 0u;
+        bool hasValidTile = false;
+        float mass = 0.0;
+        float maximumWeight = 0.0;
+        uint uniqueTileCount = 0u;
+        uint sampledReceiverCount = 0u;
+        uint consumerMask = 0u;
+        uint fallbackCount = 0u;
+        bool fallbackCountOverflow = false;
+
+        while (cursor < blockEnd &&
+            SimpleDdgiReceiverFeedbackRawRecordWord(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+                cursor,
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_RESOLVED_PROBE) ==
+                    resolvedProbe)
+        {
+            if (!SimpleDdgiReceiverFeedbackRawRecordIsValid(
+                    SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+                    cursor))
+            {
+                SimpleDdgiReceiverFeedbackMarkInvalidInput(false);
+                ++cursor;
+                continue;
+            }
+
+            uint exactTile = SimpleDdgiReceiverFeedbackRawRecordWord(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+                cursor,
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_EXACT_TILE);
+            float correctedMass = SimpleDdgiReceiverFeedbackReadInputRawMass(cursor);
+            float interpolationWeight = uintBitsToFloat(
+                SimpleDdgiReceiverFeedbackRawRecordWord(
+                    SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+                    cursor,
+                    SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_INTERPOLATION_WEIGHT));
+            float nextMass = mass + correctedMass;
+            if (!SimpleDdgiReceiverFeedbackFinite(nextMass) || nextMass < 0.0)
+            {
+                SimpleDdgiReceiverFeedbackMarkInvalidInput(false);
+                ++cursor;
+                continue;
+            }
+            mass = nextMass;
+            maximumWeight = max(maximumWeight, interpolationWeight);
+            if (!hasValidTile || exactTile != lastTile)
+            {
+                if (uniqueTileCount == 0xffffffffu)
+                {
+                    SimpleDdgiReceiverFeedbackMarkBankFailure(
+                        SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+                }
+                else
+                {
+                    ++uniqueTileCount;
+                }
+                if (!hasValidTile)
+                    firstTile = exactTile;
+                lastTile = exactTile;
+                hasValidTile = true;
+            }
+            if (sampledReceiverCount == 0xffffffffu)
+            {
+                SimpleDdgiReceiverFeedbackMarkBankFailure(
+                    SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+            }
+            else
+            {
+                ++sampledReceiverCount;
+            }
+            consumerMask |= SimpleDdgiReceiverFeedbackProducerMask(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK, cursor);
+
+            if (SimpleDdgiReceiverFeedbackIsFallback(
+                    SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+                    cursor))
+            {
+                if (fallbackCount == 0xffffffffu)
+                    fallbackCountOverflow = true;
+                else
+                    ++fallbackCount;
+                uint requestedProbe = SimpleDdgiReceiverFeedbackRawRecordWord(
+                    SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+                    cursor,
+                    SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_REQUESTED_PROBE);
+                SimpleDdgiReceiverFeedbackWriteFallbackPartial(
+                    requestedProbe,
+                    SimpleDdgiReceiverFeedbackReadInputRequestedPage(cursor),
+                    correctedMass);
+            }
+            ++cursor;
+        }
+
+        if (hasValidTile && sampledReceiverCount != 0u)
+        {
+            SimpleDdgiReceiverFeedbackWriteProbePartial(
+                resolvedProbe,
+                firstTile,
+                lastTile,
+                mass,
+                maximumWeight,
+                uniqueTileCount,
+                sampledReceiverCount,
+                consumerMask,
+                fallbackCount,
+                fallbackCountOverflow);
+        }
+    }
+}
+
+bool SimpleDdgiReceiverFeedbackProbePartialIsValid(
+    uint location,
+    uint partialIndex)
+{
+    float mass = uintBitsToFloat(SimpleDdgiReceiverFeedbackProbePartialWord(
+        location, partialIndex, SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_MASS));
+    float maximumWeight = uintBitsToFloat(
+        SimpleDdgiReceiverFeedbackProbePartialWord(location, partialIndex,
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_MAX_WEIGHT));
+    uint uniqueCount = SimpleDdgiReceiverFeedbackProbePartialWord(
+        location, partialIndex,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_UNIQUE_TILES);
+    uint sampleCount = SimpleDdgiReceiverFeedbackProbePartialWord(
+        location, partialIndex,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_SAMPLE_COUNT);
+    uint consumerAndFallback = SimpleDdgiReceiverFeedbackProbePartialWord(
+        location, partialIndex,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_CONSUMER_AND_FALLBACK);
+    return SimpleDdgiReceiverFeedbackFinite(mass) && mass >= 0.0 &&
+        SimpleDdgiReceiverFeedbackFinite(maximumWeight) &&
+        maximumWeight >= 0.0 && maximumWeight <= 1.0 &&
+        uniqueCount != 0u && sampleCount != 0u &&
+        (consumerAndFallback &
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_CONSUMER_MASK) != 0u;
+}
+
+void SimpleDdgiReceiverFeedbackReduceProbeSummaries()
+{
+    if (receiverFeedbackPc.inputKind !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_INPUT_PROBE_PARTIALS ||
+        receiverFeedbackPc.inputLocation !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY ||
+        receiverFeedbackPc.flags != 0u)
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    uint partialCount = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_PROBE_PARTIAL_COUNT);
+    if (partialCount > receiverFeedbackPc.recordCapacity)
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    uint partialIndex = gl_GlobalInvocationID.x;
+    if (partialIndex >= partialCount)
+        return;
+    uint resolvedProbe = SimpleDdgiReceiverFeedbackProbePartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+        partialIndex,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_RESOLVED_PROBE);
+    if (partialIndex != 0u &&
+        SimpleDdgiReceiverFeedbackProbePartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+            partialIndex - 1u,
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_RESOLVED_PROBE) == resolvedProbe)
+    {
+        return;
+    }
+
+    float mass = 0.0;
+    float maximumWeight = 0.0;
+    uint uniqueTileCount = 0u;
+    uint sampledReceiverCount = 0u;
+    uint consumerMask = 0u;
+    uint fallbackCount = 0u;
+    bool fallbackCountOverflow = false;
+    uint priorLastTile = 0u;
+    bool hasPriorTile = false;
+    uint cursor = partialIndex;
+    while (cursor < partialCount &&
+        SimpleDdgiReceiverFeedbackProbePartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+            cursor,
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_RESOLVED_PROBE) == resolvedProbe)
+    {
+        if (!SimpleDdgiReceiverFeedbackProbePartialIsValid(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+                cursor))
+        {
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+            return;
+        }
+        uint firstTile = SimpleDdgiReceiverFeedbackProbePartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+            cursor, SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_FIRST_TILE);
+        uint lastTile = SimpleDdgiReceiverFeedbackProbePartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+            cursor, SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_LAST_TILE);
+        uint partialUniqueTileCount = SimpleDdgiReceiverFeedbackProbePartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+            cursor, SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_UNIQUE_TILES);
+        uint partialSampleCount = SimpleDdgiReceiverFeedbackProbePartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+            cursor, SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_SAMPLE_COUNT);
+        uint packedConsumerAndFallback =
+            SimpleDdgiReceiverFeedbackProbePartialWord(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+                cursor,
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_CONSUMER_AND_FALLBACK);
+        float nextMass = mass + uintBitsToFloat(
+            SimpleDdgiReceiverFeedbackProbePartialWord(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+                cursor, SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_MASS));
+        if (!SimpleDdgiReceiverFeedbackFinite(nextMass) || nextMass < 0.0 ||
+            uniqueTileCount > 0xffffffffu - partialUniqueTileCount ||
+            sampledReceiverCount > 0xffffffffu - partialSampleCount)
+        {
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+            return;
+        }
+        mass = nextMass;
+        maximumWeight = max(maximumWeight, uintBitsToFloat(
+            SimpleDdgiReceiverFeedbackProbePartialWord(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_TEMPORARY,
+                cursor, SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_MAX_WEIGHT)));
+        uniqueTileCount += partialUniqueTileCount;
+        if (hasPriorTile && priorLastTile == firstTile)
+        {
+            if (uniqueTileCount == 0u)
+            {
+                SimpleDdgiReceiverFeedbackMarkBankFailure(
+                    SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+                return;
+            }
+            --uniqueTileCount;
+        }
+        sampledReceiverCount += partialSampleCount;
+        consumerMask |= packedConsumerAndFallback &
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_CONSUMER_MASK;
+        uint partialFallbackCount = (packedConsumerAndFallback &
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_FALLBACK_MASK) >>
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_FALLBACK_SHIFT;
+        if (fallbackCount > 0xffffffffu - partialFallbackCount)
+            fallbackCountOverflow = true;
+        else
+            fallbackCount += partialFallbackCount;
+        fallbackCountOverflow = fallbackCountOverflow ||
+            (packedConsumerAndFallback &
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_PARTIAL_FALLBACK_OVERFLOW) != 0u;
+        priorLastTile = lastTile;
+        hasPriorTile = true;
+        ++cursor;
+    }
+
+    uint destination = atomicAdd(BindlessStorageBuffers[
+        SimpleDdgiReceiverFeedbackSummaryBuffer()].Words[
+            SimpleDdgiReceiverFeedbackHeaderWord(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_SUMMARY_COUNT)], 1u);
+    if (destination >= receiverFeedbackPc.summaryCapacity)
+    {
+        SimpleDdgiReceiverFeedbackMarkBankFailure(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    uint summaryStatus = SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_VALIDATED;
+    if (fallbackCountOverflow || fallbackCount > 0xffffu)
+    {
+        summaryStatus |=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_FALLBACK_COUNT_OVERFLOW;
+        // The frozen 16-bit packed count cannot represent the exact value;
+        // invalidate the complete bank rather than scheduling from partial data.
+        SimpleDdgiReceiverFeedbackMarkBankFailure(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+    }
+    uint packedFallbackCounts = min(fallbackCount, 0xffffu) |
+        (min(fallbackCount, 0xffffu) << 16u);
+    SimpleDdgiReceiverFeedbackWriteSummaryLocator(destination, resolvedProbe);
+    SimpleDdgiReceiverFeedbackWriteSummaryWord(destination, 0u, floatBitsToUint(mass));
+    SimpleDdgiReceiverFeedbackWriteSummaryWord(destination, 1u,
+        floatBitsToUint(maximumWeight));
+    SimpleDdgiReceiverFeedbackWriteSummaryWord(destination, 2u, uniqueTileCount);
+    SimpleDdgiReceiverFeedbackWriteSummaryWord(destination, 3u,
+        sampledReceiverCount);
+    SimpleDdgiReceiverFeedbackWriteSummaryWord(destination, 4u, consumerMask);
+    SimpleDdgiReceiverFeedbackWriteSummaryWord(destination, 5u, packedFallbackCounts);
+    SimpleDdgiReceiverFeedbackWriteSummaryWord(destination, 6u,
+        receiverFeedbackPc.feedbackGeneration);
+    SimpleDdgiReceiverFeedbackWriteSummaryWord(destination, 7u, summaryStatus);
+}
+
+void SimpleDdgiReceiverFeedbackReduceFallbackPressure()
+{
+    if (receiverFeedbackPc.inputKind !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_INPUT_FALLBACK_PARTIALS ||
+        receiverFeedbackPc.inputLocation !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK ||
+        receiverFeedbackPc.flags != 0u)
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+
+    uint partialCount = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FALLBACK_PARTIAL_COUNT);
+    if (partialCount > receiverFeedbackPc.recordCapacity)
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+    uint partialIndex = gl_GlobalInvocationID.x;
+    if (partialIndex >= partialCount)
+        return;
+
+    uint requestedProbe = SimpleDdgiReceiverFeedbackFallbackPartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+        partialIndex, 0u);
+    uint requestedPage = SimpleDdgiReceiverFeedbackFallbackPartialWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+        partialIndex, 1u);
+    if (partialIndex != 0u &&
+        SimpleDdgiReceiverFeedbackFallbackPartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+            partialIndex - 1u, 0u) == requestedProbe &&
+        SimpleDdgiReceiverFeedbackFallbackPartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+            partialIndex - 1u, 1u) == requestedPage)
+    {
+        return;
+    }
+
+    float mass = 0.0;
+    uint sampledReceiverCount = 0u;
+    uint cursor = partialIndex;
+    while (cursor < partialCount &&
+        SimpleDdgiReceiverFeedbackFallbackPartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+            cursor, 0u) == requestedProbe &&
+        SimpleDdgiReceiverFeedbackFallbackPartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+            cursor, 1u) == requestedPage)
+    {
+        float partialMass = uintBitsToFloat(
+            SimpleDdgiReceiverFeedbackFallbackPartialWord(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+                cursor, 2u));
+        uint partialSamples = SimpleDdgiReceiverFeedbackFallbackPartialWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_SCRATCH_FALLBACK,
+            cursor, 3u);
+        float nextMass = mass + partialMass;
+        if (!SimpleDdgiReceiverFeedbackFinite(partialMass) || partialMass < 0.0 ||
+            !SimpleDdgiReceiverFeedbackFinite(nextMass) || nextMass < 0.0 ||
+            partialSamples == 0u ||
+            sampledReceiverCount > 0xffffffffu - partialSamples)
+        {
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+            return;
+        }
+        mass = nextMass;
+        sampledReceiverCount += partialSamples;
+        ++cursor;
+    }
+
+    uint destination = atomicAdd(BindlessStorageBuffers[
+        SimpleDdgiReceiverFeedbackSummaryBuffer()].Words[
+            SimpleDdgiReceiverFeedbackHeaderWord(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FALLBACK_SUMMARY_COUNT)], 1u);
+    if (destination >= receiverFeedbackPc.fallbackCapacity)
+    {
+        SimpleDdgiReceiverFeedbackMarkBankFailure(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        return;
+    }
+    SimpleDdgiReceiverFeedbackWriteFallbackPressureWord(destination, 0u,
+        requestedProbe);
+    SimpleDdgiReceiverFeedbackWriteFallbackPressureWord(destination, 1u,
+        requestedPage);
+    SimpleDdgiReceiverFeedbackWriteFallbackPressureWord(destination, 2u,
+        floatBitsToUint(mass));
+    SimpleDdgiReceiverFeedbackWriteFallbackPressureWord(destination, 3u,
+        sampledReceiverCount);
+}
+
+void SimpleDdgiReceiverFeedbackFinalize()
+{
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+    if (!SimpleDdgiReceiverFeedbackLayoutIsSane() ||
+        !SimpleDdgiReceiverFeedbackHeaderMatchesWriteTransaction())
+    {
+        if (SimpleDdgiReceiverFeedbackLayoutIsSane())
+        {
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE);
+        }
+        return;
+    }
+
+    uint flags = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FLAGS) &
+        ~SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_VALIDATED;
+    uint appendCount = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_APPEND_COUNT);
+    uint droppedCount = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_DROPPED_COUNT);
+    uint producerOverflowMask = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_PRODUCER_OVERFLOW_MASK);
+    uint probePartialCount = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_PROBE_PARTIAL_COUNT);
+    uint fallbackPartialCount = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FALLBACK_PARTIAL_COUNT);
+    uint summaryCount = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_SUMMARY_COUNT);
+    uint fallbackSummaryCount = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FALLBACK_SUMMARY_COUNT);
+    uint invalidRecordCount = SimpleDdgiReceiverFeedbackReadHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_INVALID_RECORD_COUNT);
+    if (appendCount > receiverFeedbackPc.recordCapacity ||
+        droppedCount != 0u || producerOverflowMask != 0u ||
+        probePartialCount > receiverFeedbackPc.recordCapacity ||
+        fallbackPartialCount > receiverFeedbackPc.recordCapacity ||
+        summaryCount > receiverFeedbackPc.summaryCapacity ||
+        fallbackSummaryCount > receiverFeedbackPc.fallbackCapacity ||
+        invalidRecordCount != 0u)
+    {
+        flags |= invalidRecordCount != 0u
+            ? SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_NONFINITE_INPUT
+            : SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE;
+    }
+    if ((flags & ~(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_VALIDATED |
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_FAILURE_MASK)) != 0u)
+    {
+        flags |= SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_SORT_OR_REDUCE_FAILURE;
+    }
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FLAGS, flags);
+    if ((flags & SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_FAILURE_MASK) != 0u)
+        return;
+
+    // This is the sole publication point. The renderer must perform a
+    // compute-write -> next-frame shader-read barrier before consuming the
+    // selected previous bank; no same-frame pass reads this write bank.
+    memoryBarrierBuffer();
+    SimpleDdgiReceiverFeedbackWriteHeader(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FLAGS,
+        flags | SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_VALIDATED);
+}
+
+void main()
+{
+    if (!SimpleDdgiReceiverFeedbackBankCanProcess())
+        return;
+
+    if (receiverFeedbackPc.operation ==
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_OPERATION_BUILD_PARTIALS)
+    {
+        SimpleDdgiReceiverFeedbackBuildPartials();
+    }
+    else if (receiverFeedbackPc.operation ==
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_OPERATION_REDUCE_PROBE_SUMMARIES)
+    {
+        SimpleDdgiReceiverFeedbackReduceProbeSummaries();
+    }
+    else if (receiverFeedbackPc.operation ==
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_OPERATION_REDUCE_FALLBACK_PRESSURE)
+    {
+        SimpleDdgiReceiverFeedbackReduceFallbackPressure();
+    }
+    else if (receiverFeedbackPc.operation ==
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_OPERATION_FINALIZE)
+    {
+        SimpleDdgiReceiverFeedbackFinalize();
+    }
+}

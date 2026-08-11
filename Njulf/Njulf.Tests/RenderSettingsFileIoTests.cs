@@ -82,7 +82,7 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(8));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(10));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));

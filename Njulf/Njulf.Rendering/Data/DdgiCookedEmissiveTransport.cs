@@ -97,9 +97,7 @@ public static class DdgiCookedEmissiveTransport
     {
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(material);
-        float strength = float.IsFinite(material.EmissiveStrength)
-            ? Math.Clamp(material.EmissiveStrength, 0.0f, 65504.0f)
-            : 0.0f;
+        float strength = EmissivePhotometry.ResolveSceneLinearScale(material);
         float coverage = (float)Math.Clamp(record.Coverage, 0.0, 1.0);
         return new Vector3(
             Math.Clamp(
@@ -140,9 +138,7 @@ public static class DdgiCookedEmissiveTransport
         double maximumFactor = Math.Max(
             Math.Max(Math.Max(material.EmissiveFactor.X, 0.0f), Math.Max(material.EmissiveFactor.Y, 0.0f)),
             Math.Max(material.EmissiveFactor.Z, 0.0f));
-        double strength = float.IsFinite(material.EmissiveStrength)
-            ? Math.Clamp(material.EmissiveStrength, 0.0f, 65504.0f)
-            : 0.0;
+        double strength = EmissivePhotometry.ResolveSceneLinearScale(material);
         double areaScaleUpperBound =
             worldMatrix.M11 * worldMatrix.M11 +
             worldMatrix.M12 * worldMatrix.M12 +

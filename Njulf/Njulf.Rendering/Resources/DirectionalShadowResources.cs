@@ -26,6 +26,7 @@ namespace Njulf.Rendering.Resources
         private GPUShadowData _lastShadowData;
         private bool _hasUploadedShadowData;
         private bool _disposed;
+        private uint _resourceGeneration;
 
         public DirectionalShadowResources(VulkanContext context, BufferManager bufferManager, ShadowSettings settings)
         {
@@ -49,6 +50,12 @@ namespace Njulf.Rendering.Resources
         public int CascadeCount { get; private set; }
         public Format Format { get; }
         public bool HasImage => _workingImage.Handle != 0;
+        /// <summary>
+        /// Monotonically changes whenever the directional shadow image pair is
+        /// replaced or released.  Cache validity must be tied to this identity,
+        /// not just its dimensions and layout.
+        /// </summary>
+        public uint ResourceGeneration => _resourceGeneration;
         public Image Image => _workingImage;
         public Image StaticImage => _staticImage;
         public Image WorkingImage => _workingImage;
@@ -124,6 +131,7 @@ namespace Njulf.Rendering.Resources
                 DestroyImageResources();
                 MapSize = 0;
                 CascadeCount = 0;
+                AdvanceResourceGeneration();
                 return true;
             }
 
@@ -226,6 +234,7 @@ namespace Njulf.Rendering.Resources
             if (cascadeCount < 1 || cascadeCount > ShadowSettings.MaxDirectionalCascades)
                 throw new ArgumentOutOfRangeException(nameof(cascadeCount));
 
+            bool replacingExistingImages = _staticImage.Handle != 0 || _workingImage.Handle != 0;
             WaitForOutstandingImageUse();
             DestroyImageResources();
             ValidateFormatSupport();
@@ -267,6 +276,8 @@ namespace Njulf.Rendering.Resources
                 CascadeCount = 0;
                 Layout = ImageLayout.Undefined;
                 StaticLayout = ImageLayout.Undefined;
+                if (replacingExistingImages)
+                    AdvanceResourceGeneration();
                 System.Diagnostics.Debug.WriteLine("Directional shadow map allocation skipped because the GPU memory budget is exhausted.");
                 return;
             }
@@ -286,6 +297,19 @@ namespace Njulf.Rendering.Resources
 
             StaticLayout = ImageLayout.Undefined;
             Layout = ImageLayout.Undefined;
+            AdvanceResourceGeneration();
+        }
+
+        private void AdvanceResourceGeneration()
+        {
+            unchecked
+            {
+                _resourceGeneration++;
+                // Zero is reserved for a resource that has never existed, which
+                // makes a stale cache comparison unambiguous after recreation.
+                if (_resourceGeneration == 0)
+                    _resourceGeneration = 1;
+            }
         }
 
         private bool TryCreateImage(

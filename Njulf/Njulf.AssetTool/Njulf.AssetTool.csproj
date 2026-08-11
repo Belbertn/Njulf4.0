@@ -28,9 +28,9 @@
     <PropertyGroup>
       <Ktx2RedistributedPackageVersion>1.0.5</Ktx2RedistributedPackageVersion>
       <Ktx2RedistributedPackageRoot>$(NuGetPackageRoot)ktx2.net/$(Ktx2RedistributedPackageVersion)/</Ktx2RedistributedPackageRoot>
-      <Ktx2ThirdPartyNoticeSha256>1bde2c03564b3e3d32ed285ac494413cf05f4dcf942aa7697bf92eea009edee7</Ktx2ThirdPartyNoticeSha256>
-      <Ktx2ProvenanceManifestSha256>9289501fc7ea86382f76e1ccc52418b877cb19e8b70833ed13a398ed18c29175</Ktx2ProvenanceManifestSha256>
-      <WebPProvenanceManifestSha256>28691f4ee8a33820f6c5b63d66af1254edda51ef683021cd51c803b3dba5ef2e</WebPProvenanceManifestSha256>
+      <Ktx2ThirdPartyNoticeSha256>68cc83c638638f82ad5fc8879110682a3d1b3600e25cd7ad61e0a606c29072fe</Ktx2ThirdPartyNoticeSha256>
+      <Ktx2ProvenanceManifestSha256>068fcae63642e0ac6895ba7193c6ef0f1130529ed9f4e45cd1a672f5f914a225</Ktx2ProvenanceManifestSha256>
+      <WebPProvenanceManifestSha256>6d5d5a690ce3cfc74515a6dbb0bb41bf183e63b6d9f34cfcc86461846e71c204</WebPProvenanceManifestSha256>
     </PropertyGroup>
 
     <!--

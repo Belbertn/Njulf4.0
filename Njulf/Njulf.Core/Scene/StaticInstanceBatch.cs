@@ -13,6 +13,11 @@ public sealed class StaticInstanceBatch :
     private readonly ReadOnlyCollection<Matrix4x4> _readOnlyWorldMatrices;
     private uint _revision = 1;
     private RenderObject? _resourceOwner;
+    private object? _mesh;
+    private object? _material;
+    private bool _visible = true;
+
+    public event Action<StaticInstanceBatch>? Changed;
 
     public StaticInstanceBatch(IEnumerable<Matrix4x4> worldMatrices)
     {
@@ -27,9 +32,39 @@ public sealed class StaticInstanceBatch :
     public string Name { get; set; } = "StaticInstanceBatch";
     /// <summary>Source model identity used by scene serialization.</summary>
     public SceneAssetReference? AssetReference { get; set; }
-    public object? Mesh { get; set; }
-    public object? Material { get; set; }
-    public bool Visible { get; set; } = true;
+    public object? Mesh
+    {
+        get => _mesh;
+        set
+        {
+            if (Equals(_mesh, value))
+                return;
+            _mesh = value;
+            AdvanceRevision();
+        }
+    }
+    public object? Material
+    {
+        get => _material;
+        set
+        {
+            if (Equals(_material, value))
+                return;
+            _material = value;
+            AdvanceRevision();
+        }
+    }
+    public bool Visible
+    {
+        get => _visible;
+        set
+        {
+            if (_visible == value)
+                return;
+            _visible = value;
+            AdvanceRevision();
+        }
+    }
     public IReadOnlyList<Matrix4x4> WorldMatrices => _readOnlyWorldMatrices;
     public uint Revision => _revision;
 
@@ -63,9 +98,15 @@ public sealed class StaticInstanceBatch :
 
         _worldMatrices.Clear();
         _worldMatrices.AddRange(worldMatrices);
+        AdvanceRevision();
+    }
+
+    private void AdvanceRevision()
+    {
         _revision++;
         if (_revision == 0)
             _revision = 1;
+        Changed?.Invoke(this);
     }
 
     public void Dispose()
@@ -75,7 +116,8 @@ public sealed class StaticInstanceBatch :
 
         _resourceOwner.Dispose();
         _resourceOwner = null;
-        Mesh = null;
-        Material = null;
+        _mesh = null;
+        _material = null;
+        AdvanceRevision();
     }
 }

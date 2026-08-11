@@ -1,0 +1,500 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : require
+
+#include "gi_caustic_shared.glsl"
+
+layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
+
+#include "gi_caustic_ray_query.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct GiCausticTraceResult
+{
+    vec3 Endpoint;
+    vec3 Flux;
+    vec3 ReceiverNormal;
+    vec4 TangentPlaneFootprint;
+    uint PackedIncidentDirection;
+    uint SourceId;
+    uint HeroInstanceId;
+    uint PathFlags;
+    float PathWeightDebug;
+};
+
+uint GiCausticTaskWord(uint taskIndex, uint word)
+{
+    return ReadStorageWordUniform(
+        giCausticPc.TaskBufferIndex,
+        GiCausticTaskBaseWord(taskIndex) + word);
+}
+
+float GiCausticTaskFloat(uint taskIndex, uint word)
+{
+    return uintBitsToFloat(GiCausticTaskWord(taskIndex, word));
+}
+
+float GiCausticStableRandom(uint taskIndex, uint vertexIndex, uint dimension)
+{
+    uint state = GiCausticTaskWord(taskIndex, 2u) ^
+        (GiCausticTaskWord(taskIndex, 3u) * 0x9e3779b9u) ^
+        (vertexIndex * 0x85ebca6bu) ^ (dimension * 0xc2b2ae35u) ^
+        (giCausticPc.CacheGeneration * 0x27d4eb2du);
+    state = GiCausticHash(state);
+    return (float(state >> 8u) + 0.5) * (1.0 / 16777216.0);
+}
+
+float GiCausticDielectricReflectance(
+    float cosineIncident,
+    float etaIncident,
+    float etaTransmitted,
+    out bool totalInternalReflection)
+{
+    float cosI = clamp(abs(cosineIncident), 0.0, 1.0);
+    float eta = etaIncident / etaTransmitted;
+    float sinTransmittedSquared = eta * eta * max(0.0, 1.0 - cosI * cosI);
+    totalInternalReflection = sinTransmittedSquared >= 1.0;
+    if (totalInternalReflection)
+        return 1.0;
+    float cosT = sqrt(max(0.0, 1.0 - sinTransmittedSquared));
+    float rsDenominator = etaTransmitted * cosI + etaIncident * cosT;
+    float rpDenominator = etaIncident * cosI + etaTransmitted * cosT;
+    if (rsDenominator <= 1.0e-12 || rpDenominator <= 1.0e-12)
+    {
+        totalInternalReflection = true;
+        return 1.0;
+    }
+    float rs = (etaTransmitted * cosI - etaIncident * cosT) / rsDenominator;
+    float rp = (etaIncident * cosI - etaTransmitted * cosT) / rpDenominator;
+    return clamp(0.5 * (rs * rs + rp * rp), 0.0, 1.0);
+}
+
+vec3 GiCausticMaterialF0(GiCausticRayHit hit, float ior)
+{
+    vec4 baseColor = GiCausticSampleBaseColor(hit);
+    vec2 metallicRoughness = GiCausticSampleMetallicRoughness(hit);
+    float ratio = (ior - 1.0) / (ior + 1.0);
+    vec3 dielectric = vec3(clamp(ratio * ratio, 0.0, 1.0));
+    return clamp(mix(dielectric, baseColor.rgb, metallicRoughness.x),
+        vec3(0.0), vec3(1.0));
+}
+
+float GiCausticSmithG1(float nDotDirection, float alpha)
+{
+    float nDot = max(nDotDirection, 1.0e-6);
+    float alphaSquared = alpha * alpha;
+    float tangentSquared = max(0.0, 1.0 - nDot * nDot) / (nDot * nDot);
+    return 2.0 / (1.0 + sqrt(1.0 + alphaSquared * tangentSquared));
+}
+
+vec3 GiCausticSampleGgxVisibleNormal(
+    vec3 localView,
+    float alpha,
+    float u1,
+    float u2)
+{
+    // Heitz isotropic GGX VNDF sampling. Sampling the visible distribution is
+    // essential here: ordinary NDF sampling both wastes backfacing samples and
+    // requires a different PDF, which biases the rough-reference throughput.
+    vec3 stretchedView = normalize(vec3(
+        alpha * localView.x,
+        alpha * localView.y,
+        localView.z));
+    float lensq = dot(stretchedView.xy, stretchedView.xy);
+    vec3 tangent1 = lensq > 1.0e-12
+        ? vec3(-stretchedView.y, stretchedView.x, 0.0) * inversesqrt(lensq)
+        : vec3(1.0, 0.0, 0.0);
+    vec3 tangent2 = cross(stretchedView, tangent1);
+
+    float radius = sqrt(clamp(u1, 0.0, 1.0));
+    float phi = 2.0 * GI_CAUSTIC_PI * u2;
+    float t1 = radius * cos(phi);
+    float t2 = radius * sin(phi);
+    float blend = 0.5 * (1.0 + stretchedView.z);
+    t2 = mix(sqrt(max(0.0, 1.0 - t1 * t1)), t2, blend);
+    float normalZ = sqrt(max(0.0, 1.0 - t1 * t1 - t2 * t2));
+    vec3 stretchedNormal =
+        t1 * tangent1 + t2 * tangent2 + normalZ * stretchedView;
+    return normalize(vec3(
+        alpha * stretchedNormal.x,
+        alpha * stretchedNormal.y,
+        max(stretchedNormal.z, 0.0)));
+}
+
+bool GiCausticSampleRoughSpecular(
+    uint taskIndex,
+    uint vertexIndex,
+    GiCausticRayHit hit,
+    vec3 incidentDirection,
+    float taskRoughness,
+    float ior,
+    inout vec3 throughput,
+    out vec3 outgoingDirection)
+{
+    vec3 normal = GiCausticOrientedNormal(hit);
+    vec3 viewDirection = normalize(-incidentDirection);
+    float nDotV = max(dot(normal, viewDirection), 0.0);
+    if (nDotV <= 1.0e-5)
+        return false;
+
+    float alpha = max(taskRoughness * taskRoughness, 0.0016);
+    float u1 = clamp(GiCausticStableRandom(taskIndex, vertexIndex, 0u),
+        1.0e-6, 1.0 - 1.0e-6);
+    float u2 = GiCausticStableRandom(taskIndex, vertexIndex, 1u);
+    vec3 reference = abs(normal.z) < 0.9
+        ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+    vec3 tangent = normalize(cross(reference, normal));
+    vec3 bitangent = cross(normal, tangent);
+    vec3 localView = vec3(
+        dot(viewDirection, tangent),
+        dot(viewDirection, bitangent),
+        nDotV);
+    vec3 localHalf = GiCausticSampleGgxVisibleNormal(
+        localView, alpha, u1, u2);
+    vec3 halfVector = normalize(
+        tangent * localHalf.x + bitangent * localHalf.y +
+        normal * localHalf.z);
+
+    outgoingDirection = normalize(reflect(incidentDirection, halfVector));
+    float nDotL = max(dot(normal, outgoingDirection), 0.0);
+    float nDotH = max(dot(normal, halfVector), 0.0);
+    float vDotH = max(dot(viewDirection, halfVector), 0.0);
+    if (nDotL <= 1.0e-5 || nDotH <= 1.0e-5 || vDotH <= 1.0e-5)
+        return false;
+
+    float alphaSquared = alpha * alpha;
+    float denominator = nDotH * nDotH * (alphaSquared - 1.0) + 1.0;
+    float distribution = alphaSquared /
+        max(GI_CAUSTIC_PI * denominator * denominator, 1.0e-12);
+    float geometry = GiCausticSmithG1(nDotV, alpha) *
+        GiCausticSmithG1(nDotL, alpha);
+    vec3 f0 = GiCausticMaterialF0(hit, ior);
+    float oneMinus = 1.0 - vDotH;
+    float schlick = oneMinus * oneMinus;
+    schlick *= schlick * oneMinus;
+    vec3 fresnel = f0 + (vec3(1.0) - f0) * schlick;
+    vec3 brdf = fresnel * distribution * geometry /
+        max(4.0 * nDotV * nDotL, 1.0e-12);
+    float visibleNormalPdf = distribution *
+        GiCausticSmithG1(nDotV, alpha) * vDotH / nDotV;
+    float directionPdf = visibleNormalPdf /
+        max(4.0 * vDotH, 1.0e-12);
+    if (!GiCausticFinite(directionPdf) || directionPdf <= 0.0)
+        return false;
+    throughput *= brdf * (nDotL / directionPdf);
+    return GiCausticFinite(throughput) &&
+        all(greaterThanEqual(throughput, vec3(0.0)));
+}
+
+bool GiCausticHeroHitMatchesTask(
+    uint taskIndex,
+    GiCausticRayHit hit,
+    uint heroFlags,
+    vec4 heroOptics,
+    vec3 taskAbsorption)
+{
+    if (hit.Instance.StableInstanceIdentity != GiCausticTaskWord(taskIndex, 4u) ||
+        hit.Instance.MaterialRevision != GiCausticTaskWord(taskIndex, 5u) ||
+        DecodeMaterialAlphaMode(hit.Material.NormalScaleBias.y) !=
+            MATERIAL_ALPHA_MODE_OPAQUE ||
+        GiMaterialHasFlag(hit.Material.TransportFlags,
+            GI_MATERIAL_THIN_SURFACE_TRANSMISSION) ||
+        (hit.Instance.GeometryFlags &
+            (DDGI_RAY_GEOMETRY_FLAG_ALPHA_MASK |
+             DDGI_RAY_GEOMETRY_FLAG_ALPHA_BLEND |
+             DDGI_RAY_GEOMETRY_FLAG_THIN_TRANSMISSION)) != 0u)
+    {
+        return false;
+    }
+
+    vec2 metallicRoughness = GiCausticSampleMetallicRoughness(hit);
+    if (abs(metallicRoughness.y - heroOptics.y) > 0.02)
+        return false;
+    if ((heroFlags & GI_CAUSTIC_TASK_CLOSED_DIELECTRIC_HERO) == 0u)
+        return true;
+    if (hit.Material.ExtensionDataIndex < 0)
+        return false;
+
+    GPUMaterialExtensionData extensionData = ReadMaterialExtension(
+        uint(hit.Material.ExtensionDataIndex));
+    if (!GiCausticFinite(extensionData.Transmission) ||
+        !GiCausticFinite(extensionData.AttenuationColor.rgb) ||
+        extensionData.Transmission.x <= 0.0 ||
+        extensionData.Transmission.z <= 0.0 ||
+        abs(extensionData.Transmission.y - heroOptics.x) > 1.0e-3)
+    {
+        return false;
+    }
+    vec3 expectedAbsorption = extensionData.Transmission.w > 0.0
+        ? -log(clamp(extensionData.AttenuationColor.rgb,
+            vec3(1.0e-6), vec3(1.0))) / extensionData.Transmission.w
+        : vec3(0.0);
+    vec3 tolerance = max(vec3(1.0e-5), abs(expectedAbsorption) * 1.0e-3);
+    return all(lessThanEqual(abs(taskAbsorption - expectedAbsorption), tolerance));
+}
+
+bool GiCausticTraceTaggedFirstDiffuseEndpoint(
+    uint taskIndex,
+    out GiCausticTraceResult result)
+{
+    result.Endpoint = vec3(0.0);
+    result.Flux = vec3(0.0);
+    result.ReceiverNormal = vec3(0.0, 1.0, 0.0);
+    result.TangentPlaneFootprint = vec4(0.0);
+    result.PackedIncidentDirection = 0u;
+    result.SourceId = 0u;
+    result.HeroInstanceId = 0u;
+    result.PathFlags = 0u;
+    result.PathWeightDebug = 0.0;
+
+    uint taskBase = GiCausticTaskBaseWord(taskIndex);
+    uint heroFlags = GiCausticTaskWord(taskIndex, 7u) &
+        (GI_CAUSTIC_TASK_MIRROR_HERO |
+         GI_CAUSTIC_TASK_CLOSED_DIELECTRIC_HERO |
+         GI_CAUSTIC_TASK_ROUGH_SPECULAR_REFERENCE);
+    vec3 origin = vec3(
+        GiCausticTaskFloat(taskIndex, 8u),
+        GiCausticTaskFloat(taskIndex, 9u),
+        GiCausticTaskFloat(taskIndex, 10u));
+    vec3 direction = normalize(vec3(
+        GiCausticTaskFloat(taskIndex, 12u),
+        GiCausticTaskFloat(taskIndex, 13u),
+        GiCausticTaskFloat(taskIndex, 14u)));
+    vec3 initialFlux = vec3(
+        GiCausticTaskFloat(taskIndex, 20u),
+        GiCausticTaskFloat(taskIndex, 21u),
+        GiCausticTaskFloat(taskIndex, 22u));
+    vec4 heroOptics = vec4(
+        GiCausticTaskFloat(taskIndex, 24u),
+        GiCausticTaskFloat(taskIndex, 25u),
+        GiCausticTaskFloat(taskIndex, 26u),
+        GiCausticTaskFloat(taskIndex, 27u));
+    vec3 absorption = vec3(
+        GiCausticTaskFloat(taskIndex, 28u),
+        GiCausticTaskFloat(taskIndex, 29u),
+        GiCausticTaskFloat(taskIndex, 30u));
+    float remainingDistance = GiCausticTaskFloat(taskIndex, 31u);
+    vec3 throughput = initialFlux;
+    float coneRadius = heroOptics.z;
+    float coneSpread = heroOptics.w;
+    bool encounteredHero = false;
+    bool insideDielectric = false;
+    bool usedRefraction = false;
+
+    for (uint vertexIndex = 0u;
+         vertexIndex < GI_CAUSTIC_MAX_PATH_VERTICES;
+         ++vertexIndex)
+    {
+        GiCausticRayHit hit;
+        if (!GiCausticTraceNearest(origin, direction, remainingDistance, hit))
+            return false;
+        remainingDistance -= hit.Distance;
+        coneRadius += hit.Distance * coneSpread;
+        if (!GiCausticFinite(coneRadius) || coneRadius <= 0.0 ||
+            remainingDistance <= GI_CAUSTIC_RAY_EPSILON)
+        {
+            return false;
+        }
+        if (insideDielectric)
+        {
+            throughput *= exp(-absorption * hit.Distance);
+            if (!GiCausticFinite(throughput))
+                return false;
+        }
+
+        bool selectedHero = hit.Instance.StableInstanceIdentity ==
+            GiCausticTaskWord(taskIndex, 4u);
+        if (!encounteredHero && !selectedHero)
+            return false;
+
+        if (selectedHero)
+        {
+            if (!GiCausticHeroHitMatchesTask(
+                    taskIndex, hit, heroFlags, heroOptics, absorption))
+            {
+                return false;
+            }
+            encounteredHero = true;
+            vec3 normal = GiCausticOrientedNormal(hit);
+            float cosineIncident = max(dot(-direction, normal), 0.0);
+            if (cosineIncident <= 1.0e-5)
+                return false;
+
+            if ((heroFlags & GI_CAUSTIC_TASK_MIRROR_HERO) != 0u)
+            {
+                vec3 f0 = GiCausticMaterialF0(hit, heroOptics.x);
+                float oneMinus = 1.0 - cosineIncident;
+                float factor = oneMinus * oneMinus;
+                factor *= factor * oneMinus;
+                throughput *= f0 + (vec3(1.0) - f0) * factor;
+                direction = normalize(reflect(direction, normal));
+                coneSpread += heroOptics.y;
+            }
+            else if ((heroFlags & GI_CAUSTIC_TASK_ROUGH_SPECULAR_REFERENCE) != 0u)
+            {
+                vec3 outgoing;
+                if (!GiCausticSampleRoughSpecular(
+                        taskIndex, vertexIndex, hit, direction,
+                        heroOptics.y, heroOptics.x, throughput, outgoing))
+                {
+                    return false;
+                }
+                direction = outgoing;
+                coneSpread += heroOptics.y;
+            }
+            else
+            {
+                // A closed manifold must alternate front/back intersections
+                // whenever the sampled branch transmits through its boundary.
+                if (hit.FrontFacing == insideDielectric)
+                    return false;
+                float etaIncident = insideDielectric ? heroOptics.x : 1.0;
+                float etaTransmitted = insideDielectric ? 1.0 : heroOptics.x;
+                bool totalInternalReflection;
+                float fresnel = GiCausticDielectricReflectance(
+                    cosineIncident, etaIncident, etaTransmitted,
+                    totalInternalReflection);
+                float branchSample = GiCausticStableRandom(
+                    taskIndex, vertexIndex, 2u);
+                bool reflectBranch = totalInternalReflection ||
+                    branchSample < fresnel;
+                if (reflectBranch)
+                {
+                    float probability = totalInternalReflection ? 1.0 : fresnel;
+                    throughput *= fresnel / max(probability, 1.0e-6);
+                    direction = normalize(reflect(direction, normal));
+                }
+                else
+                {
+                    float probability = max(1.0 - fresnel, 1.0e-6);
+                    vec3 refracted = refract(
+                        direction, normal, etaIncident / etaTransmitted);
+                    if (dot(refracted, refracted) <= 1.0e-12)
+                        return false;
+                    // Radiance eta scaling cancels across a complete entry/exit
+                    // pair but remains explicit for internal reflections.
+                    float etaScale = (etaIncident * etaIncident) /
+                        (etaTransmitted * etaTransmitted);
+                    throughput *= ((1.0 - fresnel) / probability) * etaScale;
+                    direction = normalize(refracted);
+                    insideDielectric = !insideDielectric;
+                    usedRefraction = true;
+                    coneSpread *= etaIncident / etaTransmitted;
+                }
+            }
+            if (!GiCausticFinite(direction) || !GiCausticFinite(throughput) ||
+                all(lessThanEqual(throughput, vec3(0.0))))
+            {
+                return false;
+            }
+            origin = hit.Position + direction * GI_CAUSTIC_RAY_EPSILON * 2.0;
+            continue;
+        }
+
+        if (!encounteredHero || insideDielectric ||
+            !GiCausticHitIsDiffuseReceiver(hit))
+        {
+            return false;
+        }
+
+        vec3 receiverNormal = GiCausticOrientedNormal(hit);
+        float incidenceCosine = max(dot(receiverNormal, -direction), 0.05);
+        float minimumSupport = max(giCausticPc.CellOriginAndSize.w / 256.0,
+            1.0e-4);
+        float maximumSupport = giCausticPc.CellOriginAndSize.w;
+        float axisU = clamp(coneRadius / incidenceCosine,
+            minimumSupport, maximumSupport);
+        float axisV = clamp(coneRadius, minimumSupport, maximumSupport);
+        result.Endpoint = hit.Position;
+        result.Flux = max(throughput, vec3(0.0));
+        result.ReceiverNormal = receiverNormal;
+        result.TangentPlaneFootprint = vec4(axisU, axisV, 1.0, 0.0);
+        result.PackedIncidentDirection = GiCausticPackOctahedral(-direction);
+        result.SourceId = GiCausticTaskWord(taskIndex, 6u);
+        result.HeroInstanceId = GiCausticTaskWord(taskIndex, 4u);
+        result.PathFlags = GI_CAUSTIC_PHOTON_VALID |
+            GI_CAUSTIC_PHOTON_FIRST_DIFFUSE_ENDPOINT |
+            (usedRefraction
+                ? GI_CAUSTIC_PHOTON_REFRACTIVE_TO_DIFFUSE
+                : GI_CAUSTIC_PHOTON_SPECULAR_TO_DIFFUSE);
+        float initialMaximum = max(max(initialFlux.r, initialFlux.g), initialFlux.b);
+        float finalMaximum = max(max(result.Flux.r, result.Flux.g), result.Flux.b);
+        result.PathWeightDebug = initialMaximum > 0.0
+            ? finalMaximum / initialMaximum : 0.0;
+        return GiCausticFinite(result.Flux) &&
+            any(greaterThan(result.Flux, vec3(0.0)));
+    }
+    return false;
+}
+
+void main()
+{
+    if (!GiCausticPushConstantsValid())
+        return;
+    uint taskIndex = gl_GlobalInvocationID.x;
+    if (taskIndex >= giCausticPc.TaskCount ||
+        !GiCausticTaskWasValidated(taskIndex))
+    {
+        return;
+    }
+
+    GiCausticTraceResult result;
+    if (!GiCausticTraceTaggedFirstDiffuseEndpoint(taskIndex, result))
+        return;
+
+    uint candidateIndex = atomicAdd(
+        BindlessStorageBuffers[giCausticPc.ScratchBufferIndex].Words[
+            GI_CAUSTIC_SCRATCH_CANDIDATE_COUNT], 1u);
+    if (candidateIndex >= giCausticPc.PhotonCapacity)
+    {
+        atomicAdd(BindlessStorageBuffers[giCausticPc.ScratchBufferIndex].Words[
+            GI_CAUSTIC_SCRATCH_CANDIDATE_OVERFLOW_COUNT], 1u);
+        return;
+    }
+
+    uint photonBase = GiCausticCandidateBaseWord(candidateIndex);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 0u,
+        result.Endpoint.x);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 1u,
+        result.Endpoint.y);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 2u,
+        result.Endpoint.z);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 3u,
+        max(result.TangentPlaneFootprint.x, result.TangentPlaneFootprint.y));
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 4u,
+        result.Flux.x);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 5u,
+        result.Flux.y);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 6u,
+        result.Flux.z);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 7u,
+        result.PathWeightDebug);
+    WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 8u,
+        result.PackedIncidentDirection);
+    WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 9u,
+        GiCausticPackOctahedral(result.ReceiverNormal));
+    WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 10u,
+        result.PathFlags);
+    // Multiplication by an odd constant is a permutation over uint, giving
+    // every deterministic task slot one unique bottom-K key.
+    WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 11u,
+        (taskIndex + 1u) * 0x9e3779b9u);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 12u,
+        result.TangentPlaneFootprint.x);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 13u,
+        result.TangentPlaneFootprint.y);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 14u,
+        result.TangentPlaneFootprint.z);
+    WriteStorageFloatUniform(giCausticPc.PhotonBufferIndex, photonBase + 15u,
+        result.TangentPlaneFootprint.w);
+    WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 16u,
+        result.SourceId);
+    WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 17u,
+        result.HeroInstanceId);
+    WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 18u,
+        giCausticPc.TransportAbiVersion);
+    WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 19u,
+        giCausticPc.CacheGeneration);
+}

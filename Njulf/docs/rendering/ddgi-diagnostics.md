@@ -118,6 +118,118 @@ In `Shadow`, the depth pass stamps predicted opaque pages and rate-limited recei
 
 The views are observational. They do not pin or request pages. Development tools must explicitly call `TrySetSimpleDdgiProbeResidencyDevelopmentPin` or `SetSimpleDdgiProbeResidencyDevelopmentFreeze`; these APIs require debug tooling to be enabled. Pin state, command count, last command, and development freeze state are exported in residency telemetry. Runtime-failure freeze is a separate latch and cannot be cleared through the development API.
 
+## Content-Dependent DDGI Additions
+
+`ContentDependentDdgi` is the capture-stable authority for the many-light, directional-radiance, dynamic-geometry, transparency, and foliage additions. It is present both in `RendererDiagnostics` and at the top level of a performance snapshot. Inspect it before interpreting counters:
+
+- `ConfiguredFeatures` and every `Requested*Mode` record persisted/preset intent.
+- `ActiveFeatures` and every `Effective*Mode` record the independently qualified behavior used by the frame.
+- `DirectionalRadianceFallbackReason`, `RaySceneFallbackReason`, `FoliageFallbackReason`, and `SettingsMigrationDiagnostic` explain every downgrade. A requested feature with a weaker effective mode and no reason is a capture failure.
+- `LightBufferRevision`, `LightTreeTopologyRevision`, `LightTreeContentRevision`, `RaySceneResourceGeneration`, `RaySceneContentEpoch`, `SceneContentRevision`, `MaterialContentRevision`, `SourceLightingEpoch`, and `SamplingSequenceEpoch` distinguish resource lifetime from content invalidation.
+- `StochasticHashAbiVersion`, `DirectionalRadianceAbiVersion`, `RayQueryInstanceAbiVersion`, and `RayQueryInstanceRecordBytes` make replay/addressing compatibility explicit.
+
+Reference modes (`LegacyTopKReference`, `L1Reference`, and `RecursiveExperimental`) must show explicit validation authorization. They are not shipping fallbacks.
+
+### Many-light tree and estimator
+
+`LightTree` reports requested/effective mode, qualification, build action/reason, local-light/leaf/node/depth counts, complete publication revisions, generation, planned/allocated/peak/retired bytes, build/refit/reuse/bypass totals, allocation failures, publication-validation failures, and readback readiness.
+
+The single-sun/no-local fast path must show `BypassEmpty`, zero planned/allocated tree bytes, and no build/refit/traversal work. For a live tree, `PublicationFeedbackPending=true` means the finalized state copy is still owned by an in-flight frame fence; `PublicationValid` becomes authoritative only after the completed readback matches all revisions, bank, generation, counts, and checksum. A mismatch rejects the publication, increments `PublicationValidationFailureCount`, requests a new inactive-bank build, and uses the exact safety path.
+
+`ManyLightCounters` contains bypass/exact/tree-attempt/tree-success/tree-fallback hits; sampled and duplicate draws; visibility evaluations; zero-term rejects; uniform repairs; invalid sample/PDF repairs; and exact light evaluations. It also exposes decoded mean, geometric-mean, and minimum PDF plus maximum finite estimator weight. Duplicate draws are valid independent samples and must not be treated as an error. `UniformRepairCount` may rise for deliberately malformed validation inputs; sustained repairs or any `InvalidSampleOrPdfCount` fail a qualified capture.
+
+### Directional radiance and glossy ownership
+
+Requested/effective directional and glossy modes are independent. `DirectionalRadianceBudgetBytes`, `DirectionalRadiancePlannedBytes`, `DirectionalRadianceAllocatedBytes`, and `DirectionalRadianceParityBytes` reconcile the canonical sidecar and the extra previous-generation parity required by glossy modes. A failed sidecar never disables diffuse DDGI: effective directional/glossy mode becomes off, the DDGI rough-reflection weight becomes zero, and SSR/reflection-probe/environment ownership continues.
+
+`GpuSimpleDdgiDirectionalRadianceMicroseconds` covers the complete ordered
+prepare/project/publish sequence. It runs after diffuse blend and before
+canonical probe publication. The projector accumulates RGB L2 coefficients in
+FP32, one bounded source scan per probe, then the publisher validates the
+fingerprinted scratch record, blends compatible history, packs the 64-byte
+FP16 sidecar, and performs the final validity store. The sequence reuses the
+first 128 bytes of each queue-local ray-scratch allocation only after every
+diffuse consumer has finished; there is no persistent FP32 sidecar allocation.
+
+A structurally valid record with `validSampleCount=0` is a checked zero-support
+publication, for example when every cached hit is an authored one-sided reverse
+face. It allows the diffuse transaction to commit but is rejected as a
+directional receiver source, so reflection/environment fallback retains
+ownership. Do not classify this state as projection corruption.
+
+The scheduler's aggregate `producerFailureMask` reserves directional witnesses
+8 through 14 for capacity, missing work, projection, scratch, publication,
+header, and source failures respectively. Any such bit fails the transaction;
+all must be zero in a qualified capture. `missingCompletionMask` and
+`transactionPredicateMask` must also be zero. Trace-only many-light push flags
+share physical bits with cached-solve sweep controls by design, so they must
+never appear on transport, blend, directional, or publish dispatches.
+
+`SimpleDdgiRoughSpecularSampleCount` and `SimpleDdgiRoughSpecularNonzeroCount` show receiver attempts and accepted nonzero DDGI ownership. A nonzero count below the configured roughness band, a non-finite SH record reaching a receiver, or simultaneous full DDGI and environment ownership is a correctness failure.
+
+Use the reflection debug view `DdgiDirectionalRadianceLobe` to inspect the SH
+sidecar evaluated in each receiver's reflection direction before the BRDF.
+`SourceOwnership` displays normalized local-reflection, directional-DDGI, and
+environment weights as red, green, and blue; the channels must sum to one.
+
+### Ray geometry, transparency, decals, and foliage
+
+`RaySceneResourceGeneration` changes only when GPU resource identity/layout changes. `RaySceneContentEpoch` changes for pose, material, proxy, transform, or semantic content and remains stable across ordinary frame-slot/TLAS-buffer rotation. Dynamic-AS diagnostics report full builds, refits, proxy/exclusion/budget fallbacks, topology mismatches, primitive/scratch/storage/peak/retired bytes, and BLAS/TLAS CPU/GPU timings.
+
+Geometry decision counters distinguish stochastic-alpha accepts/rejects, deterministic transparent visibility layers/limits, thin-surface termination and unsupported hits, decal candidates/retention/association/rejection/overflow, invalid ray metadata, and foliage-proxy hits. Alpha decisions use stable probe/ray/source/instance/primitive identity rather than frame number. Geometry decals are overlays only and must never occlude a primary, visibility, or shadow ray. Thick refraction, nested dielectric paths, caustics, and participating volumes remain unsupported and must report a proxy or exclusion.
+
+The `Foliage` performance section reports GPU patch/vertex/index bytes, GPU generation and CPU record/upload time, requested and represented instance counts, density error, wind age, near/mid/far card counts, excluded patches, cadence/content signatures, LOD policy version, and fallback reason. Tier selection is based on authored probe influence in world space; camera motion alone must not change the signature, tier counts, or generated placement.
+
+### Advanced-GI experiment telemetry
+
+`GiRoadmapExperiments` reports the requested, supported, admitted, effective,
+qualified, resource-complete, and fallback state for B1/C1/C3/C4/C5. Treat an
+effective mode as a resource-lifetime state, not a quality result: promotion
+also requires the immutable device/driver/shader/content evidence identified by
+the mode's qualification ID. Rejected or disabled modes report zero allocated
+bytes, descriptors, and pass work.
+
+B1 is reported in `ReceiverFeedbackRuntime`. `Readable` means the exact
+64-byte summary header was copied after the submission, observed after its
+fence, and validated against the current allocation/generation/layout. Inspect
+append/capacity utilization, probe and fallback partial/summary counts,
+dropped/invalid records, producer-overflow mask, publication generation, and
+the five bounded timing regions. Any drop, producer overflow, invalid record,
+stale generation, or incomplete flag clears publication authority and leaves
+ordinary scheduler quotas in control. The record/sort/summary memory entries
+are the same central categories used by `SimpleDdgiContentMemory`.
+
+The C5 `SimpleDdgiNearFieldResidual` snapshot payload is schema-versioned and
+has an explicit readback state. Only `Available` with both timestamp and
+counter readback valid is a measured GPU sample. `PendingRendererIntegration`
+can report an admitted CPU memory plan but deliberately reports zero live
+allocation, timings, counters, energy, and capture IDs; it must never be used
+to claim a C5 implementation ran. The current renderer records dedicated C5
+passes and counter readback only after evidence-bound admission; incomplete
+frames remain pending or faulted. Snapshot migrations never infer C5 telemetry
+from a mode bit.
+
+For an authoritative C5 frame, inspect its exclusive source/raw-trace/temporal/
+filter/composite timings together with rays/hits/misses, bounded-step and
+mip-visit rejects, history accepts/rejects, variance clipping, signed and
+absolute residual energy, tile compaction/overflow, and exact requested/
+admitted/allocated/peak/retired bytes. A non-finite statistic, incomplete
+readback, stale source/layout identity, or missing reference capture is a
+failed qualification sample, not a zero-cost or zero-error result.
+
+Performance snapshot schemas add these contracts incrementally: v5 C5, v6/v7
+C1 lifecycle/content, v8 C3, v9 C4, and v10 B1. Opening an older schema
+explicitly zeroes only the telemetry that did not yet exist while preserving
+historical mode intent for inspection.
+
+The sample's compact diagnostics output mirrors these authoritative fields.
+Its roadmap line prints requested-to-effective mode and fallback state for all
+five experiments. The following B1 line prints publication generation/frame,
+append/drop/capacity utilization, probe and fallback reductions, invalid and
+overflow masks, the five GPU stage timings, and exact allocated/peak/retired
+bytes. This line is operational telemetry only: it does not replace the
+qualification manifest or the locked capture corpus.
+
 ## Troubleshooting
 
 | Symptom | Likely area |
@@ -142,6 +254,20 @@ The views are observational. They do not pin or request pages. Development tools
 | `MirrorInvalidMapFallbackCount` nonzero | Mapping generation, descriptor group/layer bounds, or compact range publication mismatch |
 | packed cache repairs increase | Epoch/source-generation identity, mixed-region address, or FP16 input validation failure |
 | Compact-24 absent for a volume | Its maximum range, half ULP, hit offset, architectural thickness, or synthetic exponent-boundary gate rejected FP16 distance |
+| requested/effective content mode differs | Inspect the matching fallback reason and the per-device rollout feature mask; reference modes also require validation authorization |
+| tree requested but `BypassEmpty` | No eligible local lights; this is the required zero-allocation single-sun path |
+| `PublicationFeedbackPending=true` | The frame-slot fence has not completed the 64-byte tree-state readback yet |
+| publication-validation failures nonzero | Stale revisions, wrong bank/generation/counts, or state checksum mismatch; the tree was rejected and a rebuild/exact fallback was requested |
+| many-light invalid sample/PDF nonzero | Malformed publication, traversal, or PDF mixture; capture fails even if final radiance looks plausible |
+| directional requested but effective off | Sidecar qualification, exact memory admission, allocation, ABI, or publication failed; diffuse DDGI should remain active |
+| directional time is nonzero but commit reports missing blend completion | Trace-only many-light push flags leaked into cached-solve sweep bits, or the blend-to-directional compute barrier/order was violated |
+| directional record is valid with zero samples | Checked zero directional support; diffuse may commit, while directional reflection ownership must remain zero |
+| DDGI rough-specular samples but zero nonzero ownership | Receiver roughness/confidence is outside the qualified band or higher-priority SSR/reflection-probe ownership is valid |
+| dynamic budget deferrals/topology mismatches grow | BLAS storage/scratch/build/primitive limits or a topology signature change forced rebuild/proxy/exclusion |
+| transparent layer/candidate limit nonzero | Scene exceeded its bounded deterministic transparency contract; inspect conservative overflow frequency before promotion |
+| decal candidate limit nonzero | More overlays intersected a ray than the deterministic retained set can hold; sustained overflow fails qualification |
+| foliage density error or excluded patches high | Proxy triangle budget or probe-space far-tier policy removed representation; inspect the explicit foliage fallback and tier counts |
+| foliage signature changes during camera-only motion | Camera data leaked into proxy generation/LOD; this is a correctness failure |
 
 ## Required Ownership Invariant
 

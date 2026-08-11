@@ -41,6 +41,38 @@ public sealed class GlobalIlluminationDefaultsTests
         });
     }
 
+    [TestCase(RenderQualityPreset.Low)]
+    [TestCase(RenderQualityPreset.Medium)]
+    [TestCase(RenderQualityPreset.High)]
+    [TestCase(RenderQualityPreset.Ultra)]
+    [TestCase(RenderQualityPreset.DdgiHigh)]
+    public void NewSettings_RequestEveryCompletedAdvancedGiPathByDefault(
+        RenderQualityPreset preset)
+    {
+        var settings = new RenderSettings();
+
+        settings.ApplyQualityPreset(preset);
+
+        GlobalIlluminationSettings gi = settings.GlobalIllumination;
+        Assert.Multiple(() =>
+        {
+            Assert.That(gi.SimpleDdgiReceiverFeedbackMode,
+                Is.EqualTo(SimpleDdgiReceiverFeedbackMode.ExactCompacted));
+            Assert.That(gi.DdgiOpacityMicromapMode,
+                Is.EqualTo(DdgiOpacityMicromapMode.ExtFourStateExperiment));
+            Assert.That(gi.SimpleDdgiDirectionalGuidingMode,
+                Is.EqualTo(SimpleDdgiDirectionalGuidingMode
+                    .PerProbeHistogramExperiment));
+            Assert.That(gi.GiCausticMode,
+                Is.EqualTo(GiCausticMode.WorldCacheExperiment));
+            Assert.That(gi.SimpleDdgiNearFieldResidualMode,
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode
+                    .HiZHalfResolutionExperiment));
+            Assert.That(gi.DdgiRayTracingPipelineExperimentEnabled, Is.False,
+                "C2/SER remains explicitly excluded.");
+        });
+    }
+
     [Test]
     public void NewGlobalIlluminationSettings_PreserveLowEnergyTransportPropagation()
     {

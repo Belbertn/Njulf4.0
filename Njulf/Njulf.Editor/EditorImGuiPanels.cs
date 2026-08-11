@@ -377,6 +377,8 @@ public sealed class EditorImGuiPanels
             material.EmissiveFactor.Y,
             material.EmissiveFactor.Z);
         float emissiveStrength = material.EmissiveStrength;
+        EmissivePhotometricUnit emissiveUnit = material.EmissiveUnit;
+        float emissiveArtisticMultiplier = material.EmissiveArtisticMultiplier;
         float metallic = material.MetallicFactor;
         float roughness = material.RoughnessFactor;
         float occlusion = material.OcclusionStrength;
@@ -400,12 +402,23 @@ public sealed class EditorImGuiPanels
         changed |= ImGui.ColorEdit3("Base color", ref baseColor);
         changed |= ImGui.DragFloat("Base opacity", ref baseOpacity, 0.01f, 0f, 1f);
         changed |= ImGui.ColorEdit3("Emission color", ref emissiveColor);
+        changed |= RenderEnumCombo("Emission unit", ref emissiveUnit);
         changed |= ImGui.DragFloat(
-            "Emission strength",
+            emissiveUnit == EmissivePhotometricUnit.LuminanceNits
+                ? "Emission luminance (nits)"
+                : "Emission radiance scale",
             ref emissiveStrength,
             0.01f,
             0f,
             MaximumEditableEmissionStrength);
+        changed |= ImGui.DragFloat(
+            "Emission artistic multiplier",
+            ref emissiveArtisticMultiplier,
+            0.01f,
+            0f,
+            MaximumEditableEmissionStrength);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Applied after photometric conversion; physical energy changes by this factor.");
         changed |= ImGui.DragFloat("Metallic", ref metallic, 0.01f, 0f, 1f);
         changed |= ImGui.DragFloat(
             "Roughness",
@@ -458,6 +471,8 @@ public sealed class EditorImGuiPanels
                 emissiveColor.Y,
                 emissiveColor.Z),
             EmissiveStrength = emissiveStrength,
+            EmissiveUnit = emissiveUnit,
+            EmissiveArtisticMultiplier = emissiveArtisticMultiplier,
             MetallicFactor = metallic,
             RoughnessFactor = roughness,
             OcclusionStrength = occlusion,
@@ -573,6 +588,14 @@ public sealed class EditorImGuiPanels
             $"Emission mean: {profile.MeanEmissiveRadiance.X:0.####}, " +
             $"{profile.MeanEmissiveRadiance.Y:0.####}, {profile.MeanEmissiveRadiance.Z:0.####}  " +
             $"importance {profile.EmissiveImportance:0.####}");
+        ImGui.TextDisabled(
+            $"Photometry: {profile.EmissiveUnit}, effective scale {profile.EffectiveEmissiveScale:0.####}, " +
+            $"artistic {profile.EmissiveArtisticMultiplier:0.####}x");
+        ImGui.TextDisabled(
+            $"Luminance: average {profile.AverageEmissiveLuminanceNits:0.###} nits, peak " +
+            (profile.PeakEmissiveLuminanceValid
+                ? $"<= {profile.PeakEmissiveLuminanceNits:0.###} nits"
+                : "unavailable"));
         ImGui.TextDisabled(
             $"AO mean: {profile.MeanMaterialOcclusion:0.####}  " +
             $"alpha coverage: {profile.AlphaCoverage:0.####}  " +

@@ -10,6 +10,30 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiProbePagingShaderContractTests
 {
     [Test]
+    public void PageFeedback_SeparatesVisibleSuppressionAndPublicationState()
+    {
+        string feedback = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_page_feedback.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(feedback, Does.Contain(
+                "shared uint feedbackVisibleDemandSuppressedPageCount;"));
+            Assert.That(feedback, Does.Contain(
+                "shared uint feedbackVisibleDemandInitializingOrUnpublishedPageCount;"));
+            Assert.That(feedback, Does.Contain(
+                "bool demandSuppressed ="));
+            Assert.That(feedback, Does.Contain(
+                "else if (demandInitializingOrUnpublished)"));
+            Assert.That(feedback, Does.Contain(
+                "feedbackBase + 89u, visibleDemandSuppressed"));
+            Assert.That(feedback, Does.Contain(
+                "feedbackBase + 90u,"));
+        });
+    }
+
+    [Test]
     public void ArenaClear_IsVisibleToBootstrapCopiesBeforeShaderUse()
     {
         string cache = ReadRepoText(
@@ -646,12 +670,18 @@ public sealed class SimpleDdgiProbePagingShaderContractTests
         Assert.Multiple(() =>
         {
             Assert.That(initialize, Does.Contain(
-                "uint cacheBase = volume.cacheBaseWord +"));
+                "uint cacheProbeBase = volume.cacheBaseWord +"));
             Assert.That(initialize, Does.Contain(
-                "volume.cacheStrideWords;"));
+                "localPhysicalProbe * raysPerProbe *\n                    volume.cacheStrideWords;"));
+            Assert.That(initialize, Does.Contain(
+                "uint cacheAddressStride ="));
+            Assert.That(initialize, Does.Contain(
+                "SimpleDdgiStorageUsesHotColdLayout(volume.cacheLayoutFlags)"));
             Assert.That(initialize, Does.Not.Contain(
                 "SIMPLE_DDGI_TRANSPORT_RAY_CACHE_STRIDE_WORDS"));
             Assert.That(initialize, Does.Contain(
+                "SimpleDdgiStorageGenerationWord("));
+            Assert.That(initialize, Does.Not.Contain(
                 "cacheBase + volume.cacheStrideWords - 1u"));
             Assert.That(initialize, Does.Contain(
                 "CPU layout compilation has already checked the complete region"));

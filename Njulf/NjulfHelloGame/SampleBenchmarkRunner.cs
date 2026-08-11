@@ -502,6 +502,7 @@ public sealed class SampleBenchmarkAnalyzer
         new("SimpleDdgiTracePass", d => d.GpuSimpleDdgiTraceMicroseconds),
         new("SimpleDdgiAcceleratedSolvePass", d => d.GpuSimpleDdgiAcceleratedSolveMicroseconds),
         new("SimpleDdgiTransportPass", d => d.GpuSimpleDdgiTransportMicroseconds),
+        new("SimpleDdgiDirectionalRadiancePass", d => d.GpuSimpleDdgiDirectionalRadianceMicroseconds),
         new("SimpleDdgiBlendPass", d => d.GpuSimpleDdgiBlendMicroseconds),
         new("SimpleDdgiRelocateClassifyPass", d => d.GpuSimpleDdgiRelocateClassifyMicroseconds),
         new("SimpleDdgiPublishPass", d => d.GpuSimpleDdgiPublishMicroseconds),

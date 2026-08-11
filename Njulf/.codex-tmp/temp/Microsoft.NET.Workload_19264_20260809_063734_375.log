@@ -1,0 +1,14 @@
+[2026-08-09 06:37:34.377] [00004B40] === Logging started ===
+[2026-08-09 06:37:34.382] [00004B40] Executing: "dotnet" run --project D:\Code\C#\Njulf4.0-Simplified\Njulf\Njulf.AssetTool\Njulf.AssetTool.csproj --configuration Release --no-restore -- report D:\Code\C#\Njulf4.0-Simplified\Njulf\Njulf.Tests\bin\Release\net10.0\asset-validation-tests\0-1076\a4857acfada447e7a6f49161a8db48ed --json D:\Code\C#\Njulf4.0-Simplified\Njulf\Njulf.Tests\bin\Release\net10.0\asset-validation-tests\0-1076\a4857acfada447e7a6f49161a8db48ed\tool-report.json --timeout-ms 30000, PID: 19264, PPID: 22220
+[2026-08-09 06:37:34.384] [00004B40] IsElevated: False
+[2026-08-09 06:37:34.384] [00004B40] Is64BitProcess: True
+[2026-08-09 06:37:34.384] [00004B40] RebootPending: False
+[2026-08-09 06:37:34.384] [00004B40] ProcessorArchitecture: amd64
+[2026-08-09 06:37:34.384] [00004B40] HostArchitecture: x64
+[2026-08-09 06:37:34.384] [00004B40] SdkDirectory: 10.0.203
+[2026-08-09 06:37:34.384] [00004B40] VerifySignatures: False
+[2026-08-09 06:37:34.384] [00004B40] SDK feature band: 10.0.200
+[2026-08-09 06:37:58.142] [00004B40] Shutting down
+[2026-08-09 06:37:58.142] [00004B40] Shutdown completed.
+[2026-08-09 06:37:58.142] [00004B40] Restart required: False
+[2026-08-09 06:37:58.142] [00004B40] === Logging ended ===

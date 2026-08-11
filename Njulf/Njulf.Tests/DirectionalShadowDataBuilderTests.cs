@@ -62,6 +62,361 @@ public sealed class DirectionalShadowDataBuilderTests
     }
 
     [Test]
+    public void FittedCameraSliceCorners_ProjectInsideTheirOwnCascade()
+    {
+        var camera = CreateCamera();
+        var settings = new ShadowSettings
+        {
+            DirectionalCascadeCount = 4,
+            DirectionalShadowMapSize = 2048,
+            DirectionalCascadeBlendFraction = 0.12f
+        };
+        GPUShadowData data = DirectionalShadowDataBuilder.Build(
+            camera,
+            new NumericsVector3(0.35f, -0.8f, 0.48f),
+            settings,
+            selectedLightIndex: 0,
+            shadowStrength: 1.0f);
+        float[] splits = DirectionalShadowDataBuilder.CalculateCascadeSplits(
+            camera.NearPlane,
+            settings.MaxShadowDistance,
+            settings.DirectionalCascadeCount);
+
+        for (int cascade = 0; cascade < settings.DirectionalCascadeCount; cascade++)
+        {
+            float near = cascade == 0 ? camera.NearPlane : splits[cascade - 1];
+            float far = splits[cascade];
+            CoreMatrix4x4 matrix = DirectionalShadowClipReference.GetCascadeMatrix(data, cascade);
+            foreach (CoreVector3 corner in DirectionalShadowDataBuilder.BuildFrustumCorners(camera, near, far))
+            {
+                DirectionalShadowClipReferenceResult result =
+                    DirectionalShadowClipReference.EvaluateSphere(corner, 0.0f, matrix);
+                Assert.That(result.Accepted, Is.True,
+                    $"cascade {cascade} corner {corner} clip={result.ClipCenter}");
+            }
+        }
+    }
+
+    [Test]
+    public void DirectClipReference_AcceptsSpheresTouchingEveryVulkanBoundary()
+    {
+        const float radius = 0.25f;
+        var expectedCentres = new (DirectionalShadowClipBoundary Boundary, CoreVector3 Centre)[]
+        {
+            (DirectionalShadowClipBoundary.Left, new CoreVector3(-1.0f - radius, 0.0f, 0.5f)),
+            (DirectionalShadowClipBoundary.Right, new CoreVector3(1.0f + radius, 0.0f, 0.5f)),
+            (DirectionalShadowClipBoundary.Bottom, new CoreVector3(0.0f, -1.0f - radius, 0.5f)),
+            (DirectionalShadowClipBoundary.Top, new CoreVector3(0.0f, 1.0f + radius, 0.5f)),
+            (DirectionalShadowClipBoundary.Near, new CoreVector3(0.0f, 0.0f, -radius)),
+            (DirectionalShadowClipBoundary.Far, new CoreVector3(0.0f, 0.0f, 1.0f + radius))
+        };
+
+        foreach ((DirectionalShadowClipBoundary boundary, CoreVector3 centre) in expectedCentres)
+        {
+            DirectionalShadowClipReferenceResult result =
+                DirectionalShadowClipReference.EvaluateSphere(centre, radius, CoreMatrix4x4.Identity);
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.Accepted, Is.True, boundary.ToString());
+                Assert.That(result.FirstRejectingBoundary, Is.Null, boundary.ToString());
+                Assert.That(result.GetSignedDistance(boundary), Is.EqualTo(-radius).Within(1.0e-6f));
+            });
+        }
+    }
+
+    [Test]
+    public void DirectClipReference_RejectsSpheresClearlyBeyondEveryVulkanBoundary()
+    {
+        const float radius = 0.25f;
+        const float outside = 0.05f;
+        var expectedCentres = new (DirectionalShadowClipBoundary Boundary, CoreVector3 Centre)[]
+        {
+            (DirectionalShadowClipBoundary.Left, new CoreVector3(-1.0f - radius - outside, 0.0f, 0.5f)),
+            (DirectionalShadowClipBoundary.Right, new CoreVector3(1.0f + radius + outside, 0.0f, 0.5f)),
+            (DirectionalShadowClipBoundary.Bottom, new CoreVector3(0.0f, -1.0f - radius - outside, 0.5f)),
+            (DirectionalShadowClipBoundary.Top, new CoreVector3(0.0f, 1.0f + radius + outside, 0.5f)),
+            (DirectionalShadowClipBoundary.Near, new CoreVector3(0.0f, 0.0f, -radius - outside)),
+            (DirectionalShadowClipBoundary.Far, new CoreVector3(0.0f, 0.0f, 1.0f + radius + outside))
+        };
+
+        foreach ((DirectionalShadowClipBoundary boundary, CoreVector3 centre) in expectedCentres)
+        {
+            DirectionalShadowClipReferenceResult result =
+                DirectionalShadowClipReference.EvaluateSphere(centre, radius, CoreMatrix4x4.Identity);
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.Accepted, Is.False, boundary.ToString());
+                Assert.That(result.FirstRejectingBoundary, Is.EqualTo(boundary), boundary.ToString());
+                Assert.That(result.GetSignedDistance(boundary), Is.LessThan(-radius));
+            });
+        }
+    }
+
+    [Test]
+    public void DirectClipReference_MatchesIndependentPlaneExtractionForRandomizedFixtures()
+    {
+        var random = new Random(7331);
+        for (int sample = 0; sample < 512; sample++)
+        {
+            CoreMatrix4x4 matrix = CreateRandomSupportedMatrix(random);
+            var centre = new CoreVector3(
+                NextRange(random, -12.0f, 12.0f),
+                NextRange(random, -12.0f, 12.0f),
+                NextRange(random, -12.0f, 12.0f));
+            float radius = NextRange(random, 0.0f, 2.0f);
+
+            DirectionalShadowClipReferenceResult direct =
+                DirectionalShadowClipReference.EvaluateSphere(centre, radius, matrix);
+            bool extractedPlanesAccept = ExtractedPlanesAcceptSphere(centre, radius, matrix);
+            Assert.That(direct.Accepted, Is.EqualTo(extractedPlanesAccept),
+                $"sample {sample}, clip={direct.ClipCenter}");
+        }
+    }
+
+    [Test]
+    public void NonUniformInstanceScale_UsesLongestAxisForConservativeWorldRadius()
+    {
+        const float localRadius = 1.25f;
+        CoreMatrix4x4 transform =
+            CoreMatrix4x4.CreateScale(new CoreVector3(0.5f, 3.0f, 1.75f)) *
+            CoreMatrix4x4.CreateRotationY(0.73f);
+
+        float radius = DirectionalShadowClipReference.ComputeConservativeWorldRadius(localRadius, transform);
+
+        Assert.That(radius, Is.EqualTo(localRadius * 3.0f).Within(1.0e-5f));
+    }
+
+    [Test]
+    public void Build_ExtremeSupportedCameraAndLightOrientationsRemainFinite()
+    {
+        var camera = new FirstPersonCamera(new CoreVector3(8000.0f, -2500.0f, 1200.0f), 2.9f, 1.54f)
+        {
+            FieldOfView = MathF.PI * 0.98f,
+            AspectRatio = 3.5f,
+            NearPlane = 0.001f,
+            FarPlane = 5000.0f
+        };
+        camera.Update();
+        var settings = new ShadowSettings
+        {
+            DirectionalCascadeCount = 4,
+            DirectionalShadowMapSize = 4096,
+            MaxShadowDistance = 4000.0f
+        };
+
+        GPUShadowData data = DirectionalShadowDataBuilder.Build(
+            camera,
+            new NumericsVector3(0.00001f, -0.99999f, 0.00001f),
+            settings,
+            selectedLightIndex: 0,
+            shadowStrength: 1.0f);
+
+        Assert.Multiple(() =>
+        {
+            AssertMatrixFinite(data.LightViewProjection0);
+            AssertMatrixFinite(data.LightViewProjection1);
+            AssertMatrixFinite(data.LightViewProjection2);
+            AssertMatrixFinite(data.LightViewProjection3);
+        });
+    }
+
+    [Test]
+    public void DirectionalShadowCasterDiagnostics_DecodesBoundedExactAttributionRecord()
+    {
+        uint[] counters = new uint[RendererDiagnosticsBuffer.CounterCount];
+        int header = RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterBase;
+        counters[header + 0] = (uint)RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticRecordCapacity + 3u;
+        counters[header + 1] = 19u;
+        counters[header + 2] = 3u;
+        counters[header + 3] = 0x89abcdefu;
+        counters[header + 4] = 0x01234567u;
+        counters[header + 5] = 91u;
+        counters[header + 6] = RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticFrameMetadataMagic;
+        int record = header + RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticHeaderWordCount;
+        counters[record + 0] = 71u;
+        counters[record + 1] = 71u;
+        counters[record + 2] = 991u;
+        counters[record + 3] = 0u;
+        counters[record + 4] = (uint)DirectionalShadowCasterClass.Static;
+        counters[record + 5] = 2u;
+        counters[record + 6] = 12u;
+        counters[record + 7] = 0x37u;
+        counters[record + 8] = 0xdecafbadu;
+        counters[record + 9] = 0u;
+        counters[record + 10] = 0u;
+        counters[record + 11] = (uint)DirectionalShadowClipBoundary.Top;
+        counters[record + 12] = BitConverter.SingleToUInt32Bits(-2.5f);
+        counters[record + 13] = BitConverter.SingleToUInt32Bits(1.0f);
+        counters[record + 14] = BitConverter.SingleToUInt32Bits(2.0f);
+        counters[record + 15] = BitConverter.SingleToUInt32Bits(3.0f);
+        counters[record + 16] = BitConverter.SingleToUInt32Bits(4.0f);
+        counters[record + 17] = BitConverter.SingleToUInt32Bits(0.1f);
+        counters[record + 18] = BitConverter.SingleToUInt32Bits(0.2f);
+        counters[record + 19] = BitConverter.SingleToUInt32Bits(0.3f);
+        counters[record + 20] = BitConverter.SingleToUInt32Bits(1.0f);
+        for (int plane = 0; plane < 6; plane++)
+            counters[record + 21 + plane] = BitConverter.SingleToUInt32Bits(plane - 2.0f);
+
+        DirectionalShadowCasterDiagnostics decoded =
+            RendererDiagnosticsBuffer.DecodeDirectionalShadowCasterDiagnostics(counters);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.ReadbackValid, Is.EqualTo(1));
+            Assert.That(decoded.SampledCandidateCount, Is.EqualTo(19u));
+            Assert.That(decoded.DroppedRecordCount, Is.EqualTo(3u));
+            Assert.That(decoded.GpuFrameSerial, Is.EqualTo(0x0123456789abcdefUL));
+            Assert.That(decoded.GpuResourceGeneration, Is.EqualTo(91u));
+            Assert.That(decoded.FrameMetadataValid, Is.EqualTo(1));
+            Assert.That(decoded.Records, Has.Length.EqualTo(RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticRecordCapacity));
+            Assert.That(decoded.Records[0].ObjectId, Is.EqualTo(71u));
+            Assert.That(decoded.Records[0].MeshletId, Is.EqualTo(991u));
+            Assert.That(decoded.Records[0].CasterClass, Is.EqualTo(DirectionalShadowCasterClass.Static));
+            Assert.That(decoded.Records[0].CascadeIndex, Is.EqualTo(2u));
+            Assert.That(decoded.Records[0].Accepted, Is.Zero);
+            Assert.That(decoded.Records[0].FirstRejectingPlane, Is.EqualTo((int)DirectionalShadowClipBoundary.Top));
+            Assert.That(decoded.Records[0].FirstRejectingSignedDistance, Is.EqualTo(-2.5f));
+            Assert.That(decoded.Records[0].WorldCenter, Is.EqualTo(new CoreVector3(1.0f, 2.0f, 3.0f)));
+            Assert.That(decoded.Records[0].WorldRadius, Is.EqualTo(4.0f));
+            Assert.That(decoded.Records[0].SignedPlaneDistances[3], Is.EqualTo(1.0f));
+        });
+    }
+
+    [Test]
+    public void DirectionalShadowCasterDiagnostics_AttachesIndependentCpuEvidenceToSameFrameMatrix()
+    {
+        var shadowData = new GPUShadowData
+        {
+            LightViewProjection0 = CoreMatrix4x4.Identity,
+            LightViewProjection1 = CoreMatrix4x4.Identity,
+            LightViewProjection2 = CoreMatrix4x4.Identity,
+            LightViewProjection3 = CoreMatrix4x4.Identity
+        };
+        CoreVector3 centre = new(0.0f, 0.0f, 0.5f);
+        DirectionalShadowClipReferenceResult cpu =
+            DirectionalShadowClipReference.EvaluateSphere(centre, 0.25f, CoreMatrix4x4.Identity);
+        var attribution = new DirectionalShadowCasterAttribution(
+            ObjectId: 5u,
+            InstanceId: 5u,
+            MeshletId: 9u,
+            SelectedLod: 0u,
+            CasterClass: DirectionalShadowCasterClass.Static,
+            CascadeIndex: 0u,
+            CandidateIndex: 0u,
+            EligibilityFlags: 0x37u,
+            MatrixHash: DirectionalShadowClipReference.ComputeMatrixHash32(CoreMatrix4x4.Identity),
+            Accepted: 1,
+            FirstRejectingPlane: -1,
+            FirstRejectingSignedDistance: 0.25f,
+            WorldCenter: centre,
+            WorldRadius: 0.25f,
+            ClipCenter: cpu.ClipCenter,
+            SignedPlaneDistances:
+            [
+                cpu.LeftSignedDistance,
+                cpu.RightSignedDistance,
+                cpu.BottomSignedDistance,
+                cpu.TopSignedDistance,
+                cpu.NearSignedDistance,
+                cpu.FarSignedDistance
+            ]);
+        var diagnostics = new DirectionalShadowCasterDiagnostics(1, 1u, 0u, [attribution])
+        {
+            GpuFrameSerial = 77UL,
+            GpuResourceGeneration = 4u,
+            FrameMetadataValid = 1
+        };
+        DirectionalShadowCasterFrameCapture capture = DirectionalShadowCasterFrameCapture.Create(
+            frameSerial: 77UL,
+            resourceGeneration: 4u,
+            cascadeCount: 1,
+            cameraPosition: CoreVector3.Zero,
+            lightDirection: new CoreVector3(0.0f, -1.0f, 0.0f),
+            shadowData: shadowData);
+
+        DirectionalShadowCasterDiagnostics joined =
+            DirectionalShadowCasterDiagnosticsEvaluator.AttachCpuReference(diagnostics, capture);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(joined.Records[0].CpuReferenceAvailable, Is.EqualTo(1));
+            Assert.That(joined.Records[0].MatrixMatchesCapturedBytes, Is.EqualTo(1));
+            Assert.That(joined.Records[0].ClipCoordinatesMatch, Is.EqualTo(1));
+            Assert.That(joined.Records[0].CpuGpuDecisionMatches, Is.EqualTo(1));
+            Assert.That(joined.Records[0].FrameGenerationMatchesCapturedSlot, Is.EqualTo(1));
+            Assert.That(joined.Records[0].FrameSerial, Is.EqualTo(77UL));
+            Assert.That(joined.Records[0].ResourceGeneration, Is.EqualTo(4u));
+            Assert.That(joined.Records[0].CpuReference.Accepted, Is.True);
+        });
+    }
+
+    [Test]
+    public void DirectionalShadowCasterDiagnostics_RejectsMismatchedFrameOwnershipOrCapturedBytes()
+    {
+        var shadowData = new GPUShadowData
+        {
+            LightViewProjection0 = CoreMatrix4x4.Identity,
+            LightViewProjection1 = CoreMatrix4x4.Identity,
+            LightViewProjection2 = CoreMatrix4x4.Identity,
+            LightViewProjection3 = CoreMatrix4x4.Identity
+        };
+        CoreVector3 centre = new(0.0f, 0.0f, 0.5f);
+        DirectionalShadowClipReferenceResult cpu =
+            DirectionalShadowClipReference.EvaluateSphere(centre, 0.25f, CoreMatrix4x4.Identity);
+        var attribution = new DirectionalShadowCasterAttribution(
+            ObjectId: 5u,
+            InstanceId: 5u,
+            MeshletId: 9u,
+            SelectedLod: 0u,
+            CasterClass: DirectionalShadowCasterClass.Static,
+            CascadeIndex: 0u,
+            CandidateIndex: 0u,
+            EligibilityFlags: 0x37u,
+            MatrixHash: DirectionalShadowClipReference.ComputeMatrixHash32(CoreMatrix4x4.Identity),
+            Accepted: 1,
+            FirstRejectingPlane: -1,
+            FirstRejectingSignedDistance: 0.25f,
+            WorldCenter: centre,
+            WorldRadius: 0.25f,
+            ClipCenter: cpu.ClipCenter,
+            SignedPlaneDistances: []);
+        var diagnostics = new DirectionalShadowCasterDiagnostics(1, 1u, 0u, [attribution])
+        {
+            GpuFrameSerial = 77UL,
+            GpuResourceGeneration = 4u,
+            FrameMetadataValid = 1
+        };
+        DirectionalShadowCasterFrameCapture capture = DirectionalShadowCasterFrameCapture.Create(
+            frameSerial: 77UL,
+            resourceGeneration: 4u,
+            cascadeCount: 1,
+            cameraPosition: CoreVector3.Zero,
+            lightDirection: new CoreVector3(0.0f, -1.0f, 0.0f),
+            shadowData: shadowData);
+
+        byte[] corruptBytes = (byte[])capture.ShadowDataBytes.Clone();
+        corruptBytes[0] ^= 0x1;
+        DirectionalShadowCasterDiagnostics corruptBytesJoined =
+            DirectionalShadowCasterDiagnosticsEvaluator.AttachCpuReference(
+                diagnostics,
+                capture with { ShadowDataBytes = corruptBytes });
+        DirectionalShadowCasterDiagnostics wrongFrameJoined =
+            DirectionalShadowCasterDiagnosticsEvaluator.AttachCpuReference(
+                diagnostics with { GpuFrameSerial = 78UL },
+                capture);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(corruptBytesJoined.Records[0].FrameGenerationMatchesCapturedSlot, Is.EqualTo(1));
+            Assert.That(corruptBytesJoined.Records[0].MatrixMatchesCapturedBytes, Is.Zero);
+            Assert.That(corruptBytesJoined.Records[0].CpuGpuDecisionMatches, Is.Zero);
+            Assert.That(wrongFrameJoined.Records[0].FrameGenerationMatchesCapturedSlot, Is.Zero);
+            Assert.That(wrongFrameJoined.Records[0].CpuReferenceAvailable, Is.Zero);
+            Assert.That(wrongFrameJoined.Records[0].CpuGpuDecisionMatches, Is.Zero);
+        });
+    }
+
+    [Test]
     public void ShadowDataUpload_SynchronizesComputeAndGraphicsConsumers()
     {
         const PipelineStageFlags2 expected =
@@ -241,4 +596,45 @@ public sealed class DirectionalShadowDataBuilderTests
                 Assert.That(float.IsFinite(matrix[row, column]), Is.True, $"matrix[{row},{column}]");
         }
     }
+
+    private static CoreMatrix4x4 CreateRandomSupportedMatrix(Random random)
+    {
+        CoreMatrix4x4 scale = CoreMatrix4x4.CreateScale(new CoreVector3(
+            NextRange(random, 0.2f, 2.0f),
+            NextRange(random, 0.2f, 2.0f),
+            NextRange(random, 0.2f, 2.0f)));
+        CoreMatrix4x4 rotation =
+            CoreMatrix4x4.CreateRotationX(NextRange(random, -MathF.PI, MathF.PI)) *
+            CoreMatrix4x4.CreateRotationY(NextRange(random, -MathF.PI, MathF.PI));
+        CoreMatrix4x4 translation = CoreMatrix4x4.CreateTranslation(new CoreVector3(
+            NextRange(random, -4.0f, 4.0f),
+            NextRange(random, -4.0f, 4.0f),
+            NextRange(random, -4.0f, 4.0f)));
+        return scale * rotation * translation;
+    }
+
+    private static bool ExtractedPlanesAcceptSphere(
+        CoreVector3 centre,
+        float radius,
+        CoreMatrix4x4 matrix)
+    {
+        return PlaneAccepts(matrix.M11 + matrix.M14, matrix.M21 + matrix.M24, matrix.M31 + matrix.M34, matrix.M41 + matrix.M44) &&
+               PlaneAccepts(matrix.M14 - matrix.M11, matrix.M24 - matrix.M21, matrix.M34 - matrix.M31, matrix.M44 - matrix.M41) &&
+               PlaneAccepts(matrix.M12 + matrix.M14, matrix.M22 + matrix.M24, matrix.M32 + matrix.M34, matrix.M42 + matrix.M44) &&
+               PlaneAccepts(matrix.M14 - matrix.M12, matrix.M24 - matrix.M22, matrix.M34 - matrix.M32, matrix.M44 - matrix.M42) &&
+               PlaneAccepts(matrix.M13, matrix.M23, matrix.M33, matrix.M43) &&
+               PlaneAccepts(matrix.M14 - matrix.M13, matrix.M24 - matrix.M23, matrix.M34 - matrix.M33, matrix.M44 - matrix.M43);
+
+        bool PlaneAccepts(float x, float y, float z, float w)
+        {
+            float length = MathF.Sqrt(x * x + y * y + z * z);
+            if (length <= float.Epsilon)
+                return w >= 0.0f;
+            float distance = (x * centre.X + y * centre.Y + z * centre.Z + w) / length;
+            return distance >= -radius - 1.0e-5f * MathF.Max(1.0f, MathF.Max(MathF.Abs(distance), radius));
+        }
+    }
+
+    private static float NextRange(Random random, float minimum, float maximum) =>
+        minimum + (float)random.NextDouble() * (maximum - minimum);
 }

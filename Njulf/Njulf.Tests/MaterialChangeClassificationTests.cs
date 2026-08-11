@@ -259,6 +259,20 @@ public sealed class MaterialChangeClassificationTests
             definition => definition with { EmissiveStrength = 2f },
             EmissionChange);
         yield return Change(
+            nameof(MaterialDefinition.EmissiveUnit),
+            definition => definition with
+            {
+                EmissiveUnit = EmissivePhotometricUnit.LuminanceNits
+            },
+            EmissionChange);
+        yield return Change(
+            nameof(MaterialDefinition.EmissiveArtisticMultiplier),
+            definition => definition with
+            {
+                EmissiveArtisticMultiplier = 2f
+            },
+            EmissionChange);
+        yield return Change(
             nameof(MaterialDefinition.MetallicFactor),
             definition => definition with { MetallicFactor = 0.5f },
             DiffuseChange);
@@ -478,6 +492,17 @@ public sealed class MaterialChangeClassificationTests
             MaterialFeatureFlags.Transmission,
             extension => extension with { TransmissionPolicy = GiTransmissionPolicy.ThinSurface },
             DiffuseChange | MaterialChangeMask.AccelerationStructure);
+        // C4 consumes the monotonically advancing material revision directly.
+        // Its opt-in hero tag must not invalidate canonical DDGI or ordinary AS
+        // aspects, keeping the experimental caustic path ownership isolated.
+        yield return ExtensionChange(
+            nameof(MaterialExtensionDefinition.CausticParticipation),
+            MaterialFeatureFlags.None,
+            extension => extension with
+            {
+                CausticParticipation = GiCausticParticipationMode.MirrorHero
+            },
+            RasterOnly);
         yield return ExtensionChange(
             nameof(MaterialExtensionDefinition.ThinTransmissionTint),
             MaterialFeatureFlags.Transmission,

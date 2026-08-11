@@ -1,0 +1,256 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_directional_guiding.glsl"
+
+// A single workgroup builds every hierarchy level for one physical probe.  It
+// reduces per-workgroup partial histograms in ascending partial order, uses
+// FP32 for all arithmetic, packs FP16 only at the persistent boundary, and
+// writes BuildComplete last.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer GuidingBuildWorkItemsBuffer
+{
+    SimpleDdgiGuidingBuildWorkItem workItems[];
+} guidingBuildWorkItems;
+
+layout(std430, set = 0, binding = 1) readonly buffer GuidingBuildPartialScratchBuffer
+{
+    float partialEnergy[];
+} guidingBuildScratch;
+
+layout(std430, set = 0, binding = 2) buffer GuidingBuildWriteBankBuffer
+{
+    uint words[];
+} guidingBuildWriteBank;
+
+layout(std430, set = 0, binding = 3) buffer GuidingBuildCountersBuffer
+{
+    uint counters[];
+} guidingBuildCounters;
+
+shared float hierarchy[SIMPLE_DDGI_GUIDING_MAX_HIERARCHY_WEIGHT_COUNT];
+shared float totalIncidentEnergy;
+shared uint buildInvalid;
+shared uint useUniformFallback;
+shared uint canWrite;
+
+void SimpleDdgiGuidingWriteInvalidHeader(
+    uint headerBase,
+    SimpleDdgiGuidingBuildWorkItem workItem)
+{
+    if (headerBase + SIMPLE_DDGI_GUIDING_HEADER_WORDS >
+        uint(guidingBuildWriteBank.words.length()))
+    {
+        return;
+    }
+    guidingBuildWriteBank.words[headerBase + 0u] = SIMPLE_DDGI_GUIDING_ABI_VERSION;
+    guidingBuildWriteBank.words[headerBase + 1u] = workItem.virtualProbeId;
+    guidingBuildWriteBank.words[headerBase + 2u] = workItem.pageGeneration;
+    guidingBuildWriteBank.words[headerBase + 3u] = workItem.targetDistributionGeneration;
+    guidingBuildWriteBank.words[headerBase + 4u] = workItem.targetProposalEpoch;
+    guidingBuildWriteBank.words[headerBase + 5u] = workItem.sampleCountAndAge;
+    guidingBuildWriteBank.words[headerBase + 6u] = floatBitsToUint(0.0);
+    guidingBuildWriteBank.words[headerBase + 7u] =
+        SimpleDdgiGuidingPackLeafResolutionAndFlags(
+            guidingPc.leafResolution,
+            SIMPLE_DDGI_GUIDING_DISTRIBUTION_INVALID);
+}
+
+void main()
+{
+    uint workItemIndex = gl_WorkGroupID.x;
+    if (workItemIndex >= guidingPc.dispatchCount)
+        return;
+
+    uint lane = gl_LocalInvocationIndex;
+    if (lane == 0u)
+    {
+        buildInvalid = 0u;
+        useUniformFallback = 0u;
+        canWrite = 0u;
+        totalIncidentEnergy = 0.0;
+    }
+    barrier();
+
+    SimpleDdgiGuidingBuildWorkItem workItem =
+        guidingBuildWorkItems.workItems[workItemIndex];
+    uint leafResolution = guidingPc.leafResolution;
+    bool supportedLeafResolution =
+        SimpleDdgiGuidingSupportedLeafResolution(leafResolution);
+    uint leafCount = supportedLeafResolution
+        ? SimpleDdgiGuidingLeafCount(leafResolution)
+        : 1u;
+    uint hierarchyWeightCount =
+        supportedLeafResolution
+            ? SimpleDdgiGuidingHierarchyWeightCount(leafResolution)
+            : 0u;
+    bool safePhysicalProbeIndex = workItem.physicalProbeIndex <
+            guidingPc.physicalProbeCapacity &&
+        guidingPc.bankStrideWords != 0u &&
+        workItem.physicalProbeIndex <=
+            0xffffffffu / guidingPc.bankStrideWords;
+    uint bankBase = safePhysicalProbeIndex
+        ? SimpleDdgiGuidingBankBaseWord(workItem.physicalProbeIndex)
+        : 0u;
+    bool workItemValid = guidingPc.abiVersion == SIMPLE_DDGI_GUIDING_ABI_VERSION &&
+        supportedLeafResolution &&
+        guidingPc.hierarchyWeightCount == hierarchyWeightCount &&
+        safePhysicalProbeIndex &&
+        workItem.targetDistributionGeneration != 0u &&
+        workItem.targetProposalEpoch != 0u &&
+        workItem.targetDistributionGeneration == guidingPc.targetDistributionGeneration &&
+        workItem.targetProposalEpoch == guidingPc.targetProposalEpoch &&
+        guidingPc.bankStrideWords >= SIMPLE_DDGI_GUIDING_HEADER_WORDS +
+            ((hierarchyWeightCount + 1u) >> 1u) &&
+        bankBase <= uint(guidingBuildWriteBank.words.length()) &&
+        guidingPc.bankStrideWords <=
+            uint(guidingBuildWriteBank.words.length()) - bankBase &&
+        workItem.partialOffset <= uint(guidingBuildScratch.partialEnergy.length()) &&
+        workItem.partialCount <=
+            (uint(guidingBuildScratch.partialEnergy.length()) -
+                workItem.partialOffset) / leafCount;
+    if (!workItemValid)
+    {
+        if (lane == 0u && safePhysicalProbeIndex)
+        {
+            SimpleDdgiGuidingWriteInvalidHeader(bankBase, workItem);
+            atomicAdd(guidingBuildCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_HEADERS], 1u);
+        }
+        return;
+    }
+
+    if (lane == 0u)
+        canWrite = 1u;
+    for (uint leafIndex = lane;
+         leafIndex < leafCount;
+         leafIndex += gl_WorkGroupSize.x)
+    {
+        float leafEnergy = 0.0;
+        for (uint partialIndex = 0u;
+             partialIndex < workItem.partialCount;
+             ++partialIndex)
+        {
+            float partial = guidingBuildScratch.partialEnergy[
+                workItem.partialOffset + partialIndex * leafCount + leafIndex];
+            if (!SimpleDdgiGuidingFinite(partial) || partial < 0.0)
+            {
+                atomicOr(buildInvalid, 1u);
+                continue;
+            }
+            leafEnergy += partial;
+        }
+        if (!SimpleDdgiGuidingFinite(leafEnergy) || leafEnergy < 0.0)
+        {
+            atomicOr(buildInvalid, 1u);
+            leafEnergy = 0.0;
+        }
+        hierarchy[leafIndex] = leafEnergy;
+    }
+    barrier();
+
+    if (lane == 0u)
+    {
+        float total = 0.0;
+        for (uint leafIndex = 0u; leafIndex < leafCount; ++leafIndex)
+            total += hierarchy[leafIndex];
+        if (buildInvalid != 0u || !SimpleDdgiGuidingFinite(total) || total <= 0.0)
+        {
+            useUniformFallback = 1u;
+            totalIncidentEnergy = 0.0;
+        }
+        else
+        {
+            totalIncidentEnergy = total;
+        }
+    }
+    barrier();
+
+    for (uint leafIndex = lane;
+         leafIndex < leafCount;
+         leafIndex += gl_WorkGroupSize.x)
+    {
+        hierarchy[leafIndex] = useUniformFallback != 0u
+            ? 1.0 / float(leafCount)
+            : hierarchy[leafIndex] / totalIncidentEnergy;
+    }
+    barrier();
+
+    // Parent nodes are global normalized probabilities.  Sampling uses child
+    // sums directly, so quantized traversal and later PDF evaluation consume
+    // exactly these same stored values.
+    for (uint parentSide = leafResolution >> 1u;; parentSide >>= 1u)
+    {
+        uint parentCount = parentSide * parentSide;
+        uint childSide = parentSide << 1u;
+        uint parentOffset = SimpleDdgiGuidingLevelOffset(leafResolution, parentSide);
+        uint childOffset = SimpleDdgiGuidingLevelOffset(leafResolution, childSide);
+        for (uint parentLinearIndex = lane;
+             parentLinearIndex < parentCount;
+             parentLinearIndex += gl_WorkGroupSize.x)
+        {
+            uint x = parentLinearIndex % parentSide;
+            uint y = parentLinearIndex / parentSide;
+            uint childX = x << 1u;
+            uint childY = y << 1u;
+            hierarchy[parentOffset + parentLinearIndex] =
+                hierarchy[childOffset + childY * childSide + childX] +
+                hierarchy[childOffset + childY * childSide + childX + 1u] +
+                hierarchy[childOffset + (childY + 1u) * childSide + childX] +
+                hierarchy[childOffset + (childY + 1u) * childSide + childX + 1u];
+        }
+        barrier();
+        if (parentSide == 1u)
+            break;
+    }
+
+    // Write an incomplete/invalid header first.  It prevents an erroneous
+    // direct reader from accepting a bank while weight writes are in flight;
+    // the BuildComplete bit is set only after the storage barrier below.
+    if (lane == 0u)
+        SimpleDdgiGuidingWriteInvalidHeader(bankBase, workItem);
+    barrier();
+
+    uint packedWeightWordCount = (hierarchyWeightCount + 1u) >> 1u;
+    for (uint pairIndex = lane;
+         pairIndex < packedWeightWordCount;
+         pairIndex += gl_WorkGroupSize.x)
+    {
+        uint firstWeightIndex = pairIndex << 1u;
+        float firstWeight = clamp(hierarchy[firstWeightIndex], 0.0, 1.0);
+        float secondWeight = firstWeightIndex + 1u < hierarchyWeightCount
+            ? clamp(hierarchy[firstWeightIndex + 1u], 0.0, 1.0)
+            : 0.0;
+        guidingBuildWriteBank.words[bankBase + SIMPLE_DDGI_GUIDING_HEADER_WORDS +
+            pairIndex] = packHalf2x16(vec2(firstWeight, secondWeight));
+    }
+    memoryBarrierBuffer();
+    barrier();
+
+    if (lane == 0u && canWrite != 0u)
+    {
+        uint flags = SIMPLE_DDGI_GUIDING_DISTRIBUTION_BUILD_COMPLETE;
+        if (useUniformFallback != 0u)
+            flags |= SIMPLE_DDGI_GUIDING_DISTRIBUTION_UNIFORM_FALLBACK;
+        if (buildInvalid != 0u)
+        {
+            // A non-finite input becomes a valid uniform guide, but the
+            // validation counter keeps the event visible to qualification.
+            atomicAdd(guidingBuildCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+        }
+        guidingBuildWriteBank.words[bankBase + 0u] = SIMPLE_DDGI_GUIDING_ABI_VERSION;
+        guidingBuildWriteBank.words[bankBase + 1u] = workItem.virtualProbeId;
+        guidingBuildWriteBank.words[bankBase + 2u] = workItem.pageGeneration;
+        guidingBuildWriteBank.words[bankBase + 3u] =
+            workItem.targetDistributionGeneration;
+        guidingBuildWriteBank.words[bankBase + 4u] = workItem.targetProposalEpoch;
+        guidingBuildWriteBank.words[bankBase + 5u] = workItem.sampleCountAndAge;
+        guidingBuildWriteBank.words[bankBase + 6u] =
+            floatBitsToUint(totalIncidentEnergy);
+        memoryBarrierBuffer();
+        guidingBuildWriteBank.words[bankBase + 7u] =
+            SimpleDdgiGuidingPackLeafResolutionAndFlags(leafResolution, flags);
+    }
+}

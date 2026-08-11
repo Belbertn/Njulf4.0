@@ -1,0 +1,14 @@
+[2026-08-09 07:06:01.978] [000066B0] === Logging started ===
+[2026-08-09 07:06:01.986] [000066B0] Executing: "C:\Program Files\dotnet\dotnet.exe" build Njulf.Rendering/Njulf.Rendering.csproj -c Release --no-restore --no-dependencies, PID: 26288, PPID: 29720
+[2026-08-09 07:06:01.989] [000066B0] IsElevated: False
+[2026-08-09 07:06:01.989] [000066B0] Is64BitProcess: True
+[2026-08-09 07:06:01.989] [000066B0] RebootPending: False
+[2026-08-09 07:06:01.989] [000066B0] ProcessorArchitecture: amd64
+[2026-08-09 07:06:01.989] [000066B0] HostArchitecture: x64
+[2026-08-09 07:06:01.989] [000066B0] SdkDirectory: 10.0.203
+[2026-08-09 07:06:01.989] [000066B0] VerifySignatures: False
+[2026-08-09 07:06:01.989] [000066B0] SDK feature band: 10.0.200
+[2026-08-09 07:06:42.208] [000066B0] Shutting down
+[2026-08-09 07:06:42.208] [000066B0] Shutdown completed.
+[2026-08-09 07:06:42.208] [000066B0] Restart required: False
+[2026-08-09 07:06:42.209] [000066B0] === Logging ended ===

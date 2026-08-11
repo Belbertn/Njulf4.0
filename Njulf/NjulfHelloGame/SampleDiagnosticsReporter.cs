@@ -225,6 +225,7 @@ internal sealed class SampleDiagnosticsReporter
             $"worstStall={diagnostics.RuntimeWorstStallReason}:{diagnostics.RuntimeWorstStallMicroseconds}us.");
         Console.WriteLine(
             $"Frame diagnostics memory: meshMiB={diagnostics.MeshBufferAllocatedBytes / (1024.0 * 1024.0):F1} used={diagnostics.MeshBufferUsedBytes / (1024.0 * 1024.0):F1}, " +
+            $"meshGrowthRetry={diagnostics.MeshBufferGrowthRetrySuccessCount}/{diagnostics.MeshBufferGrowthRetryCount}, meshCompactionOomSkip={diagnostics.MeshBufferCompactionOutOfDeviceMemorySkipCount}, " +
             $"sceneMiB={diagnostics.SceneBufferAllocatedBytes / (1024.0 * 1024.0):F1}, materialMiB={diagnostics.MaterialBufferAllocatedBytes / (1024.0 * 1024.0):F1}, " +
             $"lightMiB={(diagnostics.LightBufferAllocatedBytes + diagnostics.TiledLightBufferAllocatedBytes) / (1024.0 * 1024.0):F1}, texturesMiB={diagnostics.TextureAssetBytes / (1024.0 * 1024.0):F1}, " +
             $"rtMiB={diagnostics.RenderTargetBytes / (1024.0 * 1024.0):F1}, rtScale={diagnostics.RequestedDynamicResolutionScale:F2}/{diagnostics.CommittedRenderTargetScale:F2}, " +
@@ -515,7 +516,130 @@ internal sealed class SampleDiagnosticsReporter
                 $"generation storage/mirror/allocation={storage.StorageLayoutFingerprint}/{storage.MirrorLayoutFingerprint}/{storage.MirrorAllocationGeneration}, " +
                 $"fallback='{storage.MirrorFallbackReason}'.");
         }
+        SimpleDdgiWarmStartTelemetry warmStart =
+            diagnostics.SimpleDdgiWarmStart;
+        if (warmStart.Enabled)
+        {
+            Console.WriteLine(
+                $"Frame diagnostics Simple DDGI warm start: eligible/found/accepted/active=" +
+                $"{warmStart.Eligible}/{warmStart.CacheFound}/{warmStart.CacheAccepted}/{warmStart.PriorActive}, " +
+                $"pending load/readback/save={warmStart.LoadPending}/{warmStart.ReadbackPending}/{warmStart.SavePending}, " +
+                $"cached volumes/probes/applied={warmStart.CachedVolumeCount}/{warmStart.CachedProbeCount}/{warmStart.AppliedProbeCount}, " +
+                $"loads/rejects/applies/saves={warmStart.LoadCount}/{warmStart.RejectCount}/{warmStart.ApplyCount}/{warmStart.SaveCount}, " +
+                $"bytes loaded/readback/saved={warmStart.LoadedFileBytes}/{warmStart.ReadbackBytes}/{warmStart.SavedFileBytes}, " +
+                $"status='{warmStart.Status}', path='{warmStart.CachePath}'.");
+        }
+        SimpleDdgiTransportConvergenceTelemetry transportConvergence =
+            diagnostics.SimpleDdgiTransportConvergence;
+        Console.WriteLine(
+            $"Frame diagnostics Simple DDGI tail: phase/reason/current=" +
+            $"{transportConvergence.TailPhase}/{transportConvergence.TailReason}/{transportConvergence.TailCertificateCurrent}, " +
+            $"controller solve/audit={transportConvergence.TailSolveEpoch}/{transportConvergence.TailAuditEpoch}, " +
+            $"resident solve/visited/participants=" +
+            $"{diagnostics.SimpleDdgiSchedulerFeedbackSolveEpoch}/" +
+            $"{diagnostics.SimpleDdgiSchedulerFeedbackSolveVisitedCount}/" +
+            $"{diagnostics.SimpleDdgiSchedulerFeedbackSolveParticipantCount}, " +
+            $"accepted/source/cached/published=" +
+            $"{diagnostics.SimpleDdgiSchedulerFeedbackAcceptedCount}/" +
+            $"{diagnostics.SimpleDdgiSchedulerFeedbackSourceProbeCount}/" +
+            $"{diagnostics.SimpleDdgiSchedulerFeedbackCachedSolverProbeCount}/" +
+            $"{diagnostics.SimpleDdgiSchedulerFeedbackPublishedCount}, " +
+            $"deadlineRecoveries={transportConvergence.TailConvergenceDeadlineRecoveryCount}.");
+        SimpleDdgiRefinementBrickDiagnostics refinement =
+            diagnostics.SimpleDdgiRefinement;
+        SimpleDdgiRefinementEmissiveDemandDiagnostics emissiveDemand =
+            diagnostics.SimpleDdgiRefinementEmissiveDemand;
+        Console.WriteLine(
+            $"Frame diagnostics Simple DDGI B3 refinement: requested/enabled={refinement.Requested}, " +
+            $"bricks requested/admitted/ready/baseFallback={refinement.RequestedBrickCount}/{refinement.AdmittedBrickCount}/{refinement.ReceiverReadyBrickCount}/{refinement.BaseFallbackBrickCount}, " +
+            $"probes/evictions/topologyChanged={refinement.AllocatedProbeCount}/{refinement.EvictionCount}/{refinement.TopologyChangedThisFrame}, " +
+            $"emissive examined/eligible/admitted/rejectLarge/rejectDim={emissiveDemand.ExaminedSourceCount}/{emissiveDemand.EligibleSourceCount}/{emissiveDemand.AdmittedDemandCount}/{emissiveDemand.RejectedLargeSourceCount}/{emissiveDemand.RejectedDimSourceCount}, " +
+            $"status='{refinement.AdmissionStatus}'.");
+        SimpleDdgiNearVisibilityDiagnostics nearVisibility =
+            diagnostics.SimpleDdgiNearVisibility;
+        Console.WriteLine(
+            $"Frame diagnostics Simple DDGI B4 near visibility: requested/active={nearVisibility.Requested}/{nearVisibility.Active}, " +
+            $"eligibleVolumes={nearVisibility.EligibleVolumeCount}, " +
+            $"bytes public/private/allocated/required/budget={nearVisibility.PublicBytes}/{nearVisibility.PrivateBytes}/{nearVisibility.AllocatedBytes}/{nearVisibility.RequiredBytes}/{nearVisibility.BudgetBytes}, " +
+            $"status='{nearVisibility.Status}'.");
+        GiRoadmapExperimentDiagnostics experiments =
+            diagnostics.GiRoadmapExperiments;
+        Console.WriteLine(
+            $"Frame diagnostics GI gated roadmap: " +
+            $"B1={FormatExperimentMode(experiments.Modes.ReceiverFeedback)}, " +
+            $"B5={FormatExperiment(experiments.DirectionalFog)}, " +
+            $"C1={FormatExperiment(experiments.OpacityMicromap)}, " +
+            $"C2={FormatExperiment(experiments.RayTracingInvocationReorder)}, " +
+            $"C3={FormatExperiment(experiments.DirectionalRayGuiding)}, " +
+            $"C4={FormatExperiment(experiments.TaggedCausticCache)}, " +
+            $"C5={FormatExperiment(experiments.NearFieldResidual)}, " +
+            $"allocated={experiments.AllocatedBytes}.");
+        SimpleDdgiReceiverFeedbackDiagnostics receiverFeedback =
+            experiments.ReceiverFeedbackRuntime;
+        Console.WriteLine(
+            $"Frame diagnostics B1 exact receiver feedback: state={receiverFeedback.State}, " +
+            $"authoritative={receiverFeedback.HasAuthoritativePublication}, " +
+            $"generation/frame={receiverFeedback.Publication.FeedbackGeneration}/" +
+            $"{receiverFeedback.Publication.FrameSerial}, " +
+            $"records append/dropped/capacity={receiverFeedback.Publication.AppendCount}/" +
+            $"{receiverFeedback.Publication.DroppedCount}/" +
+            $"{receiverFeedback.Publication.RecordCapacity}, " +
+            $"partials probe/fallback={receiverFeedback.Publication.ProbePartialCount}/" +
+            $"{receiverFeedback.Publication.FallbackPartialCount}, " +
+            $"summaries probe/fallback={receiverFeedback.Publication.SummaryCount}/" +
+            $"{receiverFeedback.Publication.FallbackSummaryCount}, " +
+            $"invalid/overflowMask={receiverFeedback.Publication.InvalidRecordCount}/" +
+            $"0x{receiverFeedback.Publication.ProducerOverflowMask:X8}, " +
+            $"utilization={receiverFeedback.Publication.AppendUtilization:P2}, " +
+            $"us reset/capture/rawRadix/partialRadix/reduce=" +
+            $"{receiverFeedback.Timings.ResetMicroseconds}/" +
+            $"{receiverFeedback.Timings.CaptureMicroseconds}/" +
+            $"{receiverFeedback.Timings.RawRadixMicroseconds}/" +
+            $"{receiverFeedback.Timings.PartialBuildAndRadixMicroseconds}/" +
+            $"{receiverFeedback.Timings.ReduceAndFinalizeMicroseconds}, " +
+            $"bytes allocated/peak/retired={receiverFeedback.Memory.AllocatedBytes}/" +
+            $"{receiverFeedback.Memory.PeakLiveBytes}/" +
+            $"{receiverFeedback.Memory.RetiredButLiveBytes}, " +
+            $"status='{receiverFeedback.Reason}'.");
+        SimpleDdgiNearFieldResidualDiagnostics nearFieldResidual =
+            diagnostics.SimpleDdgiNearFieldResidual;
+        Console.WriteLine(
+            $"Frame diagnostics C5 telemetry: state={nearFieldResidual.Readback.State}, " +
+            $"authoritative={nearFieldResidual.IsAuthoritativeReadback}, " +
+            $"frame/age={nearFieldResidual.Readback.CompletedFrameSerial}/" +
+            $"{nearFieldResidual.Readback.AgeFrames}, " +
+            $"bytes requested/admitted/allocated/peak/retired=" +
+            $"{nearFieldResidual.Memory.RequestedBytes}/" +
+            $"{nearFieldResidual.Memory.AdmittedBytes}/" +
+            $"{nearFieldResidual.Memory.AllocatedBytes}/" +
+            $"{nearFieldResidual.Memory.PeakAllocatedBytes}/" +
+            $"{nearFieldResidual.Memory.RetiredBytes}, " +
+            $"us source/trace/temporal/filter/composite=" +
+            $"{nearFieldResidual.Timings.SourceMicroseconds}/" +
+            $"{nearFieldResidual.Timings.RawTraceMicroseconds}/" +
+            $"{nearFieldResidual.Timings.TemporalMicroseconds}/" +
+            $"{nearFieldResidual.Timings.FilterMicroseconds}/" +
+            $"{nearFieldResidual.Timings.CompositeMicroseconds}, " +
+            $"trace hit/miss/edge/nonfinite={nearFieldResidual.Trace.RayHitCount}/" +
+            $"{nearFieldResidual.Trace.RayMissCount}/" +
+            $"{nearFieldResidual.Trace.EdgeRejectedCount}/" +
+            $"{nearFieldResidual.Trace.NonFiniteRejectedCount}, " +
+            $"history accepted/rejected={nearFieldResidual.History.AcceptedHistoryCount}/" +
+            $"{nearFieldResidual.History.RejectedHistoryCount}, " +
+            $"tiles compacted/candidate/overflow={nearFieldResidual.Tiles.CompactedTileCount}/" +
+            $"{nearFieldResidual.Tiles.CandidateTileCount}/" +
+            $"{nearFieldResidual.Tiles.OverflowTileCount}, " +
+            $"status='{nearFieldResidual.Readback.Reason}'.");
     }
+
+    private static string FormatExperiment(GiExperimentAdmission admission) =>
+        $"{admission.Stage}/{admission.Requested}/{admission.Active}/'{admission.Status}'";
+
+    private static string FormatExperimentMode<TMode>(
+        GiExperimentModeState<TMode> mode)
+        where TMode : struct, Enum =>
+        $"{mode.RequestedMode}->{mode.EffectiveMode}/" +
+        $"{mode.FallbackReason}/'{mode.FallbackDetail}'";
 
 
     private static void PrintDdgiInvestigationDiagnostics(RendererDiagnostics diagnostics)

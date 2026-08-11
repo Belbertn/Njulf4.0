@@ -1,12 +1,50 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 
+#ifndef NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#define NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION 0
+#endif
+
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#endif
+
 #include "common.glsl"
 #include "foliage_coverage.glsl"
+
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT 0u
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE false
+#define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE false
+#define SIMPLE_DDGI_RECEIVER_COVERAGE_HASH 0u
+#define SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS SIMPLE_DDGI_RECEIVER_CONSUMER_OPAQUE
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 0
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 0u
+#define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
+#include "ddgi_simple_shared.glsl"
+#undef SIMPLE_DDGI_OPAQUE_GATHER_ORACLE
+#undef SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET
+#undef SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT
+#undef SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS
+#undef SIMPLE_DDGI_RECEIVER_COVERAGE_HASH
+#undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
+#undef SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE
+#undef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
+#include "ddgi_receiver_feedback_source_abi.glsl"
+#include "ddgi_receiver_feedback_producer.glsl"
+#include "ddgi_receiver_feedback_surface_producer.glsl"
+#endif
 
 #ifndef NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 #define NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT 0
 #endif
+
+const uint FOLIAGE_MATERIAL_TRANSPORT_PROVENANCE_FLAG = 1u << 2u;
+const uint FOLIAGE_REFLECTION_FEEDBACK_FLAG = 1u << 3u;
+const uint FOLIAGE_REFLECTION_CAPTURE_LAYER_SHIFT = 8u;
+const uint FOLIAGE_REFLECTION_CAPTURE_LAYER_MASK = 0x1fffu;
 
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 1) flat in uint fragMaterialIndex;
@@ -37,8 +75,7 @@ void WriteFoliageForwardColor(vec4 color)
 void WriteFoliageMaterialTransportProvenance(uint sourcePath)
 {
 #if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
-    const uint foliageMaterialTransportProvenanceFlag = 1u << 2u;
-    if ((pc.Push.Flags & foliageMaterialTransportProvenanceFlag) != 0u)
+    if ((pc.Push.Flags & FOLIAGE_MATERIAL_TRANSPORT_PROVENANCE_FLAG) != 0u)
         outMaterialTransportProvenance = float(min(sourcePath, 255u)) / 255.0;
 #endif
 }
@@ -134,12 +171,93 @@ void main()
     vec3 viewDirection = SafeNormalize(pc.Push.CameraPositionTime.xyz - fragWorldPosition, vec3(0.0, 0.0, 1.0));
     vec3 normal = ComputeBentNormal(fragNormal, viewDirection, cluster, prototype);
     vec3 foliageDirectLighting = ApplyFoliageLighting(baseColor, normal, viewDirection, prototype);
-    vec3 ddgiIndirect = fragDdgiIrradianceCoverage.rgb * (baseColor / 3.14159265359) * fragDdgiIrradianceCoverage.a;
+    vec4 ddgiIrradianceCoverage = fragDdgiIrradianceCoverage;
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+    SimpleDdgiParams simpleDdgiParams = ReadSimpleDdgiParams(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    bool simpleDdgiConfigured =
+        (simpleDdgiParams.flags &
+            (SIMPLE_DDGI_FLAG_ENABLED |
+             SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) ==
+            (SIMPLE_DDGI_FLAG_ENABLED |
+             SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) &&
+        simpleDdgiParams.probeCount > 0u;
+    SimpleDdgiGatherResult exactGather = EmptySimpleDdgiGatherResult();
+    float radiometricOwnership = 0.0;
+    float leakAttenuation = 0.0;
+    if (simpleDdgiConfigured)
+    {
+        exactGather = SampleSimpleDdgiGather(
+            simpleDdgiParams,
+            fragWorldPosition,
+            normal,
+            viewDirection);
+        radiometricOwnership = SimpleDdgiRadiometricOwnership(exactGather);
+        leakAttenuation = SimpleDdgiLeakAttenuation(
+            exactGather,
+            simpleDdgiParams);
+        ddgiIrradianceCoverage = vec4(
+            clamp(
+                exactGather.irradiance *
+                    max(simpleDdgiParams.indirectIntensity, 0.0),
+                vec3(0.0),
+                vec3(64.0)),
+            clamp(
+                radiometricOwnership * leakAttenuation,
+                0.0,
+                1.0));
+    }
+#endif
+    vec3 ddgiIndirect = ddgiIrradianceCoverage.rgb *
+        (baseColor / 3.14159265359) * ddgiIrradianceCoverage.a;
     vec3 foliageLighting = clamp(foliageDirectLighting + ddgiIndirect, vec3(0.0), vec3(64.0));
     WriteFoliageForwardColor(vec4(foliageLighting, 1.0));
     // Foliage carries a precomputed DDGI estimate rather than enough per-probe
     // metadata to identify a compact/far contributor. Mark covered foliage as
     // the detailed mesh path and leave unsupported pixels explicitly unknown.
     WriteFoliageMaterialTransportProvenance(
-        fragDdgiIrradianceCoverage.a > 0.0001 ? 1u : 255u);
+        ddgiIrradianceCoverage.a > 0.0001 ? 1u : 255u);
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+    float survivingCoverage = FoliageLodCoverage(fragLodBand) *
+        (fragGeometryMode == 0u
+            ? 1.0
+            : clamp(material.Albedo.a * sampledAlbedo.a, 0.0, 1.0));
+    bool reflectionFeedback =
+        (pc.Push.Flags & FOLIAGE_REFLECTION_FEEDBACK_FLAG) != 0u;
+    uint reflectionCaptureLayer =
+        (pc.Push.Flags >> FOLIAGE_REFLECTION_CAPTURE_LAYER_SHIFT) &
+        FOLIAGE_REFLECTION_CAPTURE_LAYER_MASK;
+    uint tileNamespaceBase = 0u;
+    bool tileNamespaceValid = !reflectionFeedback ||
+        SimpleDdgiTryComputeCubemapTileNamespace(
+            reflectionCaptureLayer,
+            pc.Push.ScreenDimensions.xy,
+            tileNamespaceBase);
+    float physicalSurfaceWeight = reflectionFeedback
+        ? SimpleDdgiCubemapTexelSolidAngle(
+              gl_FragCoord.xy,
+              pc.Push.ScreenDimensions.xy) *
+          SimpleDdgiRoughSpecularWeight(
+              simpleDdgiParams.residencyFlags,
+              clamp(material.MetallicRoughnessAO.y, 0.04, 1.0))
+        : survivingCoverage;
+    EmitSimpleDdgiSurfaceReceiverFeedbackCore(
+        exactGather,
+        simpleDdgiConfigured,
+        radiometricOwnership,
+        leakAttenuation,
+        physicalSurfaceWeight,
+        true,
+        reflectionFeedback ? 5u : 1u,
+        pc.Push.CurrentFrameIndex,
+        pc.Push.ScreenDimensions.xy,
+        tileNamespaceValid,
+        tileNamespaceBase,
+        uvec3(
+            fragClusterIndex,
+            fragMaterialIndex,
+            fragGeometryMode == 1u
+                ? fragDebugMeshletIndex
+                : fragLodBand));
+#endif
 }

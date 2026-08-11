@@ -1,0 +1,33 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\ShaderMake\ShaderMake\argparse.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\ShaderMake\ShaderMake\ShaderBlob.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\ShaderMake\ShaderMake\ShaderMake.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\ShaderMake\ShaderMake\argparse.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\ShaderMake\ShaderMake\ShaderBlob.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\external\ShaderMake\ShaderMake\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{993A2A53-CB4F-384F-B7FB-F4252C67CFF1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{1B3E5EFA-BFAA-3B49-8F99-A108B7ED36C9}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

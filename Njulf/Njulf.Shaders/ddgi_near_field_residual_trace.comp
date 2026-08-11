@@ -1,0 +1,843 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_near_field_residual.glsl"
+
+// C5 trace only owns a direct-diffuse-plus-emissive source attachment and
+// receiver/depth metadata.  It deliberately has no descriptor for final scene
+// colour, DDGI, C4 photons/cache, IBL, reflections, fog, or prior history.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D directDiffuseEmissiveSource;
+layout(set = 0, binding = 1) uniform sampler2D depthHierarchy;
+layout(set = 0, binding = 2) uniform sampler2D receiverDepth;
+// One integer payload replaces four full-resolution auxiliary MRTs. It owns
+// octahedral geometric/shading normals, 16-bit object/material identity, and
+// the exact Lambertian cosine-sample throughput.
+layout(set = 0, binding = 3) uniform usampler2D receiverPayload;
+layout(rgba16f, set = 0, binding = 4) uniform writeonly image2D rawResidualOutput;
+layout(std430, set = 0, binding = 5) buffer TraceHitMetadataBuffer
+{
+    SimpleDdgiNearFieldResidualHitMetadata values[];
+} traceHitMetadata;
+// Words 0..2 are reset/dispatch counters.  Each 8x8 workgroup owns one
+// four-word tile record beginning at word 3, so this raw layout exactly matches
+// the existing 3-word-header + 16-byte-per-tile C5 allocation formula without
+// std430 struct-alignment padding.
+layout(std430, set = 0, binding = 6) buffer TraceTileRecordsBuffer
+{
+    uint words[];
+} traceTileRecords;
+layout(std430, set = 0, binding = 7) readonly buffer TraceFrameConstantsBuffer
+{
+    SimpleDdgiNearFieldResidualTraceFrameConstants frame;
+} traceFrameConstants;
+
+layout(push_constant) uniform NearFieldTracePushBlock
+{
+    SimpleDdgiNearFieldResidualTracePushConstants pc;
+};
+
+shared vec3 c5TileNear[64];
+shared vec3 c5TileLow[64];
+shared float c5TileConfidence[64];
+shared uint c5TileValid[64];
+shared uint c5TileCovered[64];
+shared uint c5TileReasonFlags[64];
+shared uint c5TileRayLaunched[64];
+shared uint c5TileTraceSteps[64];
+shared uint c5TileMipVisits[64];
+shared uint c5TileRefinementVisits[64];
+shared vec3 c5TileMeanResidual;
+
+const uint C5_TRACE_REASON_SCREEN_EXIT = 1u << 0u;
+const uint C5_TRACE_REASON_INVALID_RECEIVER = 1u << 1u;
+const uint C5_TRACE_REASON_INVALID_RAY = 1u << 2u;
+const uint C5_TRACE_REASON_STEP_BUDGET = 1u << 3u;
+const uint C5_TRACE_REASON_MIP_BUDGET = 1u << 4u;
+const uint C5_TRACE_REASON_DEPTH = 1u << 5u;
+const uint C5_TRACE_REASON_NORMAL = 1u << 6u;
+const uint C5_TRACE_REASON_SOURCE = 1u << 7u;
+const uint C5_TRACE_REASON_NONFINITE = 1u << 8u;
+const uint C5_TRACE_REASON_MISS = 1u << 9u;
+
+bool IsInsideUv(vec2 uv)
+{
+    return all(greaterThanEqual(uv, vec2(0.0))) &&
+        all(lessThanEqual(uv, vec2(1.0)));
+}
+
+bool CrossesDepth(float rayDepth, float sceneDepth, float thickness, bool reversedZ)
+{
+    return reversedZ
+        ? rayDepth <= sceneDepth + thickness
+        : rayDepth >= sceneDepth - thickness;
+}
+
+vec4 C5MulRowMajor(vec4 value, mat4 matrix)
+{
+    return vec4(
+        dot(value, vec4(matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0])),
+        dot(value, vec4(matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1])),
+        dot(value, vec4(matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2])),
+        dot(value, vec4(matrix[0][3], matrix[1][3], matrix[2][3], matrix[3][3])));
+}
+
+bool C5Finite(vec4 value)
+{
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+bool C5ReconstructWorldPosition(vec2 uv, float depth, out vec3 worldPosition)
+{
+    worldPosition = vec3(0.0);
+    vec4 clip = vec4(uv * 2.0 - vec2(1.0), depth, 1.0);
+    vec4 world = C5MulRowMajor(
+        clip, traceFrameConstants.frame.inverseViewProjection);
+    if (!C5Finite(world) || abs(world.w) <= 1.0e-7)
+        return false;
+    worldPosition = world.xyz / world.w;
+    return SimpleDdgiNearFieldFinite(worldPosition);
+}
+
+bool C5ProjectWorldPosition(vec3 worldPosition, out vec3 projected)
+{
+    projected = vec3(0.0);
+    vec4 clip = C5MulRowMajor(vec4(worldPosition, 1.0),
+        traceFrameConstants.frame.viewProjection);
+    if (!C5Finite(clip) || abs(clip.w) <= 1.0e-7)
+        return false;
+    vec3 ndc = clip.xyz / clip.w;
+    projected = vec3(ndc.xy * 0.5 + vec2(0.5), ndc.z);
+    return SimpleDdgiNearFieldFinite(projected);
+}
+
+bool C5CreateProjectedRay(
+    vec2 receiverUv,
+    float receiverDepthValue,
+    vec3 receiverWorldPosition,
+    vec3 direction,
+    out vec3 projectedRay)
+{
+    projectedRay = vec3(0.0);
+    vec3 projectedEnd;
+    if (!C5ProjectWorldPosition(
+            receiverWorldPosition + direction * pc.maximumTraceDistance,
+            projectedEnd))
+    {
+        return false;
+    }
+    projectedRay = projectedEnd - vec3(receiverUv, receiverDepthValue);
+    return SimpleDdgiNearFieldFinite(projectedRay) &&
+        length(projectedRay.xy) > 1.0e-6;
+}
+
+uint C5ProjectedFootprintRadius(
+    vec3 worldPosition,
+    vec3 shadingNormal)
+{
+    float worldRadius = traceFrameConstants.frame.reserved.x;
+    if (!SimpleDdgiNearFieldFinite(worldRadius) || worldRadius <= 0.0)
+        return 0u;
+    vec3 tangent;
+    vec3 bitangent;
+    NjulfC5OrthonormalBasis(shadingNormal, tangent, bitangent);
+    vec3 centre;
+    vec3 tangentPoint;
+    vec3 bitangentPoint;
+    if (!C5ProjectWorldPosition(worldPosition, centre) ||
+        !C5ProjectWorldPosition(worldPosition + tangent * worldRadius,
+            tangentPoint) ||
+        !C5ProjectWorldPosition(worldPosition + bitangent * worldRadius,
+            bitangentPoint))
+    {
+        return 0u;
+    }
+    vec2 fullExtent = traceFrameConstants.frame.fullExtentAndInverse.xy;
+    float pixelRadius = max(
+        length((tangentPoint.xy - centre.xy) * fullExtent),
+        length((bitangentPoint.xy - centre.xy) * fullExtent));
+    if (!SimpleDdgiNearFieldFinite(pixelRadius) || pixelRadius <= 0.0)
+        return 0u;
+    return uint(clamp(ceil(pixelRadius), 1.0,
+        float(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS)));
+}
+
+uint EstimateMip(vec2 rayDirection, uint step, int maximumAvailableMip)
+{
+    float screenSpan = length(rayDirection) *
+        max(float(pc.fullWidth), float(pc.fullHeight));
+    float estimate = screenSpan <= 0.0
+        ? 0.0
+        : floor(log2(1.0 + screenSpan / max(float(step), 1.0)));
+    uint maximumMip = uint(max(maximumAvailableMip, 0));
+    return min(uint(max(estimate, 0.0)), maximumMip);
+}
+
+bool TraceShortDepthRay(
+    vec2 startUv,
+    vec3 projectedRay,
+    float startDepth,
+    out vec2 hitUv,
+    out float hitRayDepth,
+    out float hitSceneDepth,
+    out uint failureFlags,
+    out uint traceSteps,
+    out uint mipVisits,
+    out uint refinementVisits)
+{
+    hitUv = vec2(0.0);
+    hitRayDepth = 0.0;
+    hitSceneDepth = 0.0;
+    failureFlags = 0u;
+    traceSteps = 0u;
+    mipVisits = 0u;
+    refinementVisits = 0u;
+    if (!SimpleDdgiNearFieldFinite(startDepth) ||
+        !SimpleDdgiNearFieldFinite(projectedRay) ||
+        length(projectedRay.xy) <= 1.0e-6)
+    {
+        failureFlags = C5_TRACE_REASON_INVALID_RAY |
+            C5_TRACE_REASON_NONFINITE;
+        return false;
+    }
+
+    uint stepCount = min(pc.maximumTraceSteps,
+        SIMPLE_DDGI_NEAR_FIELD_MAX_TRACE_STEPS);
+    uint maximumMipVisits = min(pc.maximumMipVisits,
+        SIMPLE_DDGI_NEAR_FIELD_MAX_MIP_VISITS);
+    if (stepCount == 0u || maximumMipVisits == 0u)
+    {
+        failureFlags = (stepCount == 0u
+            ? C5_TRACE_REASON_STEP_BUDGET
+            : C5_TRACE_REASON_MIP_BUDGET) |
+            C5_TRACE_REASON_MISS;
+        return false;
+    }
+
+    bool reversedZ = SimpleDdgiNearFieldHasFlag(pc.flags,
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_REVERSED_Z);
+    float previousT = 0.0;
+    float endDepth = startDepth + projectedRay.z;
+    int maximumAvailableMip = textureQueryLevels(depthHierarchy) - 1;
+    for (uint step = 1u; step <= SIMPLE_DDGI_NEAR_FIELD_MAX_TRACE_STEPS; ++step)
+    {
+        if (step > stepCount)
+            break;
+        traceSteps = step;
+
+        float t = float(step) / float(stepCount);
+        vec2 sampleUv = startUv + projectedRay.xy * t;
+        if (!IsInsideUv(sampleUv))
+        {
+            failureFlags = C5_TRACE_REASON_SCREEN_EXIT |
+                C5_TRACE_REASON_MISS;
+            return false;
+        }
+
+        if (mipVisits >= maximumMipVisits)
+        {
+            failureFlags = C5_TRACE_REASON_MIP_BUDGET |
+                C5_TRACE_REASON_MISS;
+            return false;
+        }
+        uint mip = EstimateMip(projectedRay.xy, step, maximumAvailableMip);
+        float sceneDepth = textureLod(depthHierarchy, sampleUv, float(mip)).r;
+        mipVisits++;
+        float rayDepth = mix(startDepth + pc.startBias, endDepth, t);
+        if (!SimpleDdgiNearFieldFinite(sceneDepth) ||
+            !SimpleDdgiNearFieldFinite(rayDepth))
+        {
+            failureFlags = C5_TRACE_REASON_NONFINITE |
+                C5_TRACE_REASON_MISS;
+            return false;
+        }
+        if (!CrossesDepth(rayDepth, sceneDepth, pc.thickness, reversedZ))
+        {
+            previousT = t;
+            continue;
+        }
+
+        float lo = previousT;
+        float hi = t;
+        float refinedSceneDepth = sceneDepth;
+        uint refinementCount = min(pc.binaryRefinementSteps,
+            SIMPLE_DDGI_NEAR_FIELD_MAX_BINARY_REFINEMENTS);
+        for (uint refinement = 0u;
+             refinement < SIMPLE_DDGI_NEAR_FIELD_MAX_BINARY_REFINEMENTS;
+             ++refinement)
+        {
+            if (refinement >= refinementCount)
+                break;
+            if (mipVisits >= maximumMipVisits)
+            {
+                failureFlags = C5_TRACE_REASON_MIP_BUDGET |
+                    C5_TRACE_REASON_MISS;
+                return false;
+            }
+            float mid = 0.5 * (lo + hi);
+            refinementVisits++;
+            vec2 midUv = startUv + projectedRay.xy * mid;
+            if (!IsInsideUv(midUv))
+                break;
+            float midDepth = textureLod(depthHierarchy, midUv, 0.0).r;
+            mipVisits++;
+            float midRayDepth = mix(startDepth + pc.startBias, endDepth, mid);
+            if (!SimpleDdgiNearFieldFinite(midDepth) ||
+                !SimpleDdgiNearFieldFinite(midRayDepth))
+            {
+                failureFlags = C5_TRACE_REASON_NONFINITE |
+                    C5_TRACE_REASON_MISS;
+                return false;
+            }
+            if (CrossesDepth(midRayDepth, midDepth, pc.thickness, reversedZ))
+            {
+                hi = mid;
+                refinedSceneDepth = midDepth;
+            }
+            else
+            {
+                lo = mid;
+            }
+        }
+
+        hitUv = startUv + projectedRay.xy * hi;
+        hitRayDepth = mix(startDepth + pc.startBias, endDepth, hi);
+        hitSceneDepth = refinedSceneDepth;
+        return IsInsideUv(hitUv) && SimpleDdgiNearFieldFinite(hitRayDepth) &&
+            SimpleDdgiNearFieldFinite(hitSceneDepth);
+    }
+
+    failureFlags = C5_TRACE_REASON_STEP_BUDGET |
+        C5_TRACE_REASON_MISS;
+    return false;
+}
+
+float B3Kernel(float distanceInLobes)
+{
+    float x = abs(distanceInLobes);
+    if (x < 1.0)
+        return 2.0 / 3.0 - x * x + 0.5 * x * x * x;
+    if (x < 2.0)
+    {
+        float tail = 2.0 - x;
+        return tail * tail * tail / 6.0;
+    }
+    return 0.0;
+}
+
+// B3-frequency separation uses only the permitted source and geometry
+// metadata.  Taps are bounded explicitly (independent of sampler wrap mode),
+// reject depth/normal/material discontinuities, and renormalize at edges.
+bool DirectDiffuseEmissiveLowFrequencyEstimate(
+    vec2 uv,
+    float centreDepth,
+    uvec4 centrePayload,
+    uint footprintRadius,
+    out vec3 estimate)
+{
+    estimate = vec3(0.0);
+    ivec2 extent = textureSize(directDiffuseEmissiveSource, 0);
+    ivec2 centre = clamp(ivec2(uv * vec2(extent)), ivec2(0),
+        max(extent - ivec2(1), ivec2(0)));
+    vec4 centrePackedNormals;
+    uvec2 centreIdentity;
+    vec3 centreThroughput;
+    SimpleDdgiNearFieldDecodeReceiverPayload(
+        centrePayload, centrePackedNormals, centreIdentity, centreThroughput);
+    vec3 centreGeometric = SimpleDdgiNearFieldDecodeOctNormal(
+        centrePackedNormals.xy);
+    vec3 centreShading = SimpleDdgiNearFieldDecodeOctNormal(
+        centrePackedNormals.zw);
+    if (dot(centreGeometric, centreGeometric) <= 0.0 ||
+        dot(centreShading, centreShading) <= 0.0)
+    {
+        return false;
+    }
+
+    uint maximumRadius = min(pc.maximumB3FootprintRadius,
+        SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS);
+    if (pc.minimumB3FootprintRadius == 0u ||
+        pc.minimumB3FootprintRadius > maximumRadius)
+    {
+        return false;
+    }
+    uint boundedRadius = clamp(footprintRadius,
+        pc.minimumB3FootprintRadius, maximumRadius);
+    float radiusScale = 2.0 / max(float(boundedRadius) + 1.0, 1.0);
+    vec3 sum = vec3(0.0);
+    float weightSum = 0.0;
+    for (int y = -int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS);
+         y <= int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS); ++y)
+    {
+        if (abs(y) > int(boundedRadius))
+            continue;
+        float wy = B3Kernel(float(abs(y)) * radiusScale);
+        for (int x = -int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS);
+             x <= int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS); ++x)
+        {
+            if (abs(x) > int(boundedRadius))
+                continue;
+            ivec2 samplePixel = centre + ivec2(x, y);
+            if (any(lessThan(samplePixel, ivec2(0))) ||
+                any(greaterThanEqual(samplePixel, extent)))
+            {
+                continue;
+            }
+
+            float sampleDepth = texelFetch(receiverDepth, samplePixel, 0).r;
+            uvec4 payload = texelFetch(receiverPayload, samplePixel, 0);
+            vec4 packedNormals;
+            uvec2 identity;
+            vec3 ignoredThroughput;
+            SimpleDdgiNearFieldDecodeReceiverPayload(
+                payload, packedNormals, identity, ignoredThroughput);
+            vec3 geometric = SimpleDdgiNearFieldDecodeOctNormal(
+                packedNormals.xy);
+            vec3 shading = SimpleDdgiNearFieldDecodeOctNormal(
+                packedNormals.zw);
+            if (!SimpleDdgiNearFieldFinite(sampleDepth) ||
+                any(notEqual(identity, centreIdentity)) ||
+                dot(geometric, centreGeometric) < pc.minimumNormalDot ||
+                dot(shading, centreShading) < pc.minimumNormalDot)
+            {
+                continue;
+            }
+
+            float weight = B3Kernel(float(abs(x)) * radiusScale) * wy *
+                SimpleDdgiNearFieldDepthWeight(
+                    centreDepth, sampleDepth, pc.depthTolerance);
+            vec4 sampleSource = texelFetch(
+                directDiffuseEmissiveSource, samplePixel, 0);
+            vec3 sampleValue = sampleSource.rgb;
+            if (!SimpleDdgiNearFieldFinite(sampleValue) ||
+                !SimpleDdgiNearFieldFinite(sampleSource.a) ||
+                sampleSource.a <= 0.5 ||
+                !SimpleDdgiNearFieldFinite(weight) || weight <= 0.0)
+            {
+                continue;
+            }
+            sum += max(sampleValue, vec3(0.0)) * weight;
+            weightSum += weight;
+        }
+    }
+    if (!SimpleDdgiNearFieldFinite(sum) ||
+        !SimpleDdgiNearFieldFinite(weightSum) || weightSum <= 0.0)
+    {
+        return false;
+    }
+    estimate = sum / weightSum;
+    return SimpleDdgiNearFieldFinite(estimate);
+}
+
+void WriteInvalid(ivec2 pixel, uint metadataIndex)
+{
+    imageStore(rawResidualOutput, pixel, vec4(0.0));
+    if (metadataIndex < uint(traceHitMetadata.values.length()))
+        traceHitMetadata.values[metadataIndex] = SimpleDdgiNearFieldZeroMetadata();
+}
+
+void RecordTileSummary()
+{
+    uint coveredCount = 0u;
+    uint validCount = 0u;
+    uint invalidCount = 0u;
+    uint raysLaunched = 0u;
+    uint screenExits = 0u;
+    uint invalidReceivers = 0u;
+    uint invalidRays = 0u;
+    uint stepBudgetRejects = 0u;
+    uint mipBudgetRejects = 0u;
+    uint depthRejects = 0u;
+    uint normalRejects = 0u;
+    uint sourceRejects = 0u;
+    uint nonFiniteRejects = 0u;
+    uint totalSteps = 0u;
+    uint totalMipVisits = 0u;
+    uint totalRefinementVisits = 0u;
+    uint maximumSteps = 0u;
+    uint maximumMipVisits = 0u;
+    for (uint lane = 0u; lane < 64u; ++lane)
+    {
+        if (c5TileCovered[lane] == 0u)
+            continue;
+        coveredCount++;
+        raysLaunched += c5TileRayLaunched[lane];
+        totalSteps += c5TileTraceSteps[lane];
+        totalMipVisits += c5TileMipVisits[lane];
+        totalRefinementVisits += c5TileRefinementVisits[lane];
+        maximumSteps = max(maximumSteps, c5TileTraceSteps[lane]);
+        maximumMipVisits = max(maximumMipVisits, c5TileMipVisits[lane]);
+        if (c5TileValid[lane] != 0u)
+            validCount++;
+        else
+            invalidCount++;
+        uint reasons = c5TileReasonFlags[lane];
+        screenExits += (reasons & C5_TRACE_REASON_SCREEN_EXIT) != 0u ? 1u : 0u;
+        invalidReceivers += (reasons & C5_TRACE_REASON_INVALID_RECEIVER) != 0u ? 1u : 0u;
+        invalidRays += (reasons & C5_TRACE_REASON_INVALID_RAY) != 0u ? 1u : 0u;
+        stepBudgetRejects += (reasons & C5_TRACE_REASON_STEP_BUDGET) != 0u ? 1u : 0u;
+        mipBudgetRejects += (reasons & C5_TRACE_REASON_MIP_BUDGET) != 0u ? 1u : 0u;
+        depthRejects += (reasons & C5_TRACE_REASON_DEPTH) != 0u ? 1u : 0u;
+        normalRejects += (reasons & C5_TRACE_REASON_NORMAL) != 0u ? 1u : 0u;
+        sourceRejects += (reasons & C5_TRACE_REASON_SOURCE) != 0u ? 1u : 0u;
+        nonFiniteRejects += (reasons & C5_TRACE_REASON_NONFINITE) != 0u ? 1u : 0u;
+    }
+    uint tileIndex = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    uint recordBase = SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS +
+        tileIndex * SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS;
+    if (recordBase > uint(traceTileRecords.words.length()) ||
+        SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS >
+            uint(traceTileRecords.words.length()) - recordBase)
+    {
+        if (uint(traceTileRecords.words.length()) > 15u)
+            atomicOr(traceTileRecords.words[15u], 1u);
+        return;
+    }
+    traceTileRecords.words[recordBase + 0u] = tileIndex;
+    traceTileRecords.words[recordBase + 1u] =
+        SimpleDdgiNearFieldPackFourTileCounts(uvec4(
+            coveredCount, validCount, invalidCount, raysLaunched));
+    traceTileRecords.words[recordBase + 2u] =
+        SimpleDdgiNearFieldPackFourTileCounts(uvec4(
+            screenExits, invalidReceivers, invalidRays, stepBudgetRejects));
+    traceTileRecords.words[recordBase + 3u] =
+        SimpleDdgiNearFieldPackFourTileCounts(uvec4(
+            mipBudgetRejects, depthRejects, normalRejects, sourceRejects));
+    traceTileRecords.words[recordBase + 4u] =
+        SimpleDdgiNearFieldPackFourTileCounts(uvec4(
+            nonFiniteRejects, 0u, 0u, 0u));
+    traceTileRecords.words[recordBase + 5u] = 0u;
+    traceTileRecords.words[recordBase + 6u] = 0u;
+    traceTileRecords.words[recordBase + 7u] =
+        (totalSteps & 0xffffu) | ((totalMipVisits & 0xffffu) << 16u);
+    traceTileRecords.words[recordBase + 8u] =
+        (totalRefinementVisits & 0xffffu) |
+        ((maximumSteps & 0x1ffu) << 16u) |
+        ((maximumMipVisits & 0x3fu) << 25u);
+    traceTileRecords.words[recordBase + 9u] = floatBitsToUint(0.0);
+    traceTileRecords.words[recordBase + 10u] = floatBitsToUint(0.0);
+    traceTileRecords.words[recordBase + 11u] = floatBitsToUint(0.0);
+    traceTileRecords.words[recordBase + 12u] = floatBitsToUint(0.0);
+    traceTileRecords.words[recordBase + 13u] = floatBitsToUint(0.0);
+    traceTileRecords.words[recordBase + 14u] = floatBitsToUint(0.0);
+    uint maximumDistanceHalf = packHalf2x16(
+        vec2(pc.maximumTraceDistance, 0.0)) & 0xffffu;
+    traceTileRecords.words[recordBase + 15u] = maximumDistanceHalf |
+        (SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE << 16u);
+
+    // Aggregate once per tile; no trace pixel performs a global atomic.
+    atomicAdd(traceTileRecords.words[8u], coveredCount);
+    atomicAdd(traceTileRecords.words[9u], raysLaunched);
+    atomicAdd(traceTileRecords.words[10u], validCount);
+    atomicAdd(traceTileRecords.words[11u], raysLaunched - validCount);
+    atomicAdd(traceTileRecords.words[12u], invalidReceivers);
+    atomicAdd(traceTileRecords.words[13u], invalidRays);
+    atomicAdd(traceTileRecords.words[14u], invalidCount);
+    if (tileIndex == 0u)
+    {
+        traceTileRecords.words[4u] = pc.traceWidth;
+        traceTileRecords.words[5u] = pc.traceHeight;
+        atomicOr(traceTileRecords.words[7u],
+            SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE);
+    }
+}
+
+bool EvaluateCandidate(
+    ivec2 pixel,
+    uint metadataIndex,
+    out vec3 nearEstimate,
+    out vec3 lowEstimate,
+    out float confidence,
+    out SimpleDdgiNearFieldResidualHitMetadata metadata,
+    out uint failureFlags,
+    out uint rayLaunched,
+    out uint traceSteps,
+    out uint mipVisits,
+    out uint refinementVisits)
+{
+    nearEstimate = vec3(0.0);
+    lowEstimate = vec3(0.0);
+    confidence = 0.0;
+    metadata = SimpleDdgiNearFieldZeroMetadata();
+    failureFlags = C5_TRACE_REASON_INVALID_RECEIVER;
+    rayLaunched = 0u;
+    traceSteps = 0u;
+    mipVisits = 0u;
+    refinementVisits = 0u;
+    if (pc.abiVersion != SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION ||
+        !SimpleDdgiNearFieldTraceSourcesAllowed(pc.traceSourceTerms) ||
+        !SimpleDdgiNearFieldHasFlag(pc.flags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_ATTACHMENT_VERIFIED) ||
+        !SimpleDdgiNearFieldHasFlag(pc.flags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED) ||
+        pc.fullWidth == 0u || pc.fullHeight == 0u ||
+        pc.traceSourceRevision == 0u || pc.historyEpoch == 0u ||
+        !SimpleDdgiNearFieldFinite(pc.maximumTraceDistance) ||
+        pc.maximumTraceDistance <= 0.0 ||
+        pc.maximumTraceDistance >
+            SIMPLE_DDGI_NEAR_FIELD_MAX_ENCODED_TRACE_DISTANCE ||
+        !C5Finite(traceFrameConstants.frame.fullExtentAndInverse) ||
+        traceFrameConstants.frame.fullExtentAndInverse.x != float(pc.fullWidth) ||
+        traceFrameConstants.frame.fullExtentAndInverse.y != float(pc.fullHeight) ||
+        abs(traceFrameConstants.frame.fullExtentAndInverse.z *
+            float(pc.fullWidth) - 1.0) > 1.0e-5 ||
+        abs(traceFrameConstants.frame.fullExtentAndInverse.w *
+            float(pc.fullHeight) - 1.0) > 1.0e-5 ||
+        traceFrameConstants.frame.reserved.y != pc.maximumTraceDistance ||
+        floatBitsToUint(traceFrameConstants.frame.reserved.w) != 3u ||
+        metadataIndex >= uint(traceHitMetadata.values.length()))
+    {
+        failureFlags |= C5_TRACE_REASON_SOURCE;
+        return false;
+    }
+
+    vec2 traceUv = (vec2(pixel) + vec2(0.5)) /
+        max(vec2(pc.traceWidth, pc.traceHeight), vec2(1.0));
+    ivec2 receiverExtent = textureSize(receiverDepth, 0);
+    if (receiverExtent != ivec2(pc.fullWidth, pc.fullHeight) ||
+        textureSize(receiverPayload, 0) != receiverExtent ||
+        textureSize(directDiffuseEmissiveSource, 0) != receiverExtent)
+    {
+        failureFlags |= C5_TRACE_REASON_SOURCE;
+        return false;
+    }
+    ivec2 receiverPixel = clamp(ivec2(traceUv * vec2(receiverExtent)),
+        ivec2(0), max(receiverExtent - ivec2(1), ivec2(0)));
+    vec2 receiverUv = (vec2(receiverPixel) + vec2(0.5)) /
+        vec2(receiverExtent);
+    float startDepth = texelFetch(receiverDepth, receiverPixel, 0).r;
+    uvec4 receiverPayloadValue = texelFetch(
+        receiverPayload, receiverPixel, 0);
+    vec4 receiverPackedNormals;
+    uvec2 receiverIds;
+    vec3 receiverThroughput;
+    SimpleDdgiNearFieldDecodeReceiverPayload(
+        receiverPayloadValue,
+        receiverPackedNormals,
+        receiverIds,
+        receiverThroughput);
+    vec3 receiverGeometric = SimpleDdgiNearFieldDecodeOctNormal(
+        receiverPackedNormals.xy);
+    vec3 receiverShading = SimpleDdgiNearFieldDecodeOctNormal(
+        receiverPackedNormals.zw);
+    vec4 receiverSource = texelFetch(
+        directDiffuseEmissiveSource, receiverPixel, 0);
+    vec3 receiverWorldPosition;
+    vec3 generationDirection;
+    float generationPdf;
+    vec3 projectedRay;
+    if (!SimpleDdgiNearFieldFinite(startDepth) ||
+        !SimpleDdgiNearFieldFinite(receiverThroughput))
+    {
+        failureFlags |= C5_TRACE_REASON_NONFINITE;
+        return false;
+    }
+    if (dot(receiverGeometric, receiverGeometric) <= 0.0 ||
+        dot(receiverShading, receiverShading) <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(receiverSource.a) ||
+        receiverSource.a <= 0.5 ||
+        any(lessThan(receiverThroughput, vec3(0.0))))
+    {
+        failureFlags |= C5_TRACE_REASON_SOURCE;
+        return false;
+    }
+    if (!C5ReconstructWorldPosition(
+            receiverUv, startDepth, receiverWorldPosition) ||
+        !NjulfC5CreateStableCosineDirection(
+            uvec2(receiverPixel),
+            receiverIds,
+            floatBitsToUint(traceFrameConstants.frame.reserved.z),
+            receiverShading,
+            generationDirection,
+            generationPdf) ||
+        !C5CreateProjectedRay(
+            receiverUv,
+            startDepth,
+            receiverWorldPosition,
+            generationDirection,
+            projectedRay))
+    {
+        failureFlags = C5_TRACE_REASON_INVALID_RAY |
+            C5_TRACE_REASON_NONFINITE;
+        return false;
+    }
+    rayLaunched = 1u;
+
+    vec2 hitUv;
+    float hitRayDepth;
+    float hitSceneDepth;
+    if (!TraceShortDepthRay(receiverUv, projectedRay, startDepth,
+            hitUv, hitRayDepth, hitSceneDepth, failureFlags,
+            traceSteps, mipVisits, refinementVisits))
+    {
+        failureFlags = C5_TRACE_REASON_NORMAL;
+        return false;
+    }
+
+    ivec2 hitPixel = clamp(ivec2(hitUv * vec2(receiverExtent)), ivec2(0),
+        max(receiverExtent - ivec2(1), ivec2(0)));
+    uvec4 hitPayloadValue = texelFetch(receiverPayload, hitPixel, 0);
+    vec4 hitPackedNormals;
+    uvec2 hitIds;
+    vec3 ignoredHitThroughput;
+    SimpleDdgiNearFieldDecodeReceiverPayload(
+        hitPayloadValue,
+        hitPackedNormals,
+        hitIds,
+        ignoredHitThroughput);
+    vec3 hitGeometric = SimpleDdgiNearFieldDecodeOctNormal(
+        hitPackedNormals.xy);
+    vec3 hitShading = SimpleDdgiNearFieldDecodeOctNormal(
+        hitPackedNormals.zw);
+    if (dot(hitGeometric, hitGeometric) <= 0.0 ||
+        dot(hitShading, hitShading) <= 0.0)
+    {
+        failureFlags = C5_TRACE_REASON_INVALID_RAY |
+            C5_TRACE_REASON_NORMAL;
+        return false;
+    }
+
+    float receiverCosine = max(dot(receiverShading, generationDirection), 0.0);
+    float expectedPdf = receiverCosine / 3.14159265359;
+    float hitFrontFaceCosine = dot(hitGeometric, -generationDirection);
+    if (!SimpleDdgiNearFieldFinite(generationPdf) ||
+        generationPdf <= 0.0 || generationPdf > 0.31831 ||
+        dot(generationDirection, generationDirection) <= 0.0 ||
+        abs(generationPdf - expectedPdf) > 2.0e-4 ||
+        !SimpleDdgiNearFieldFinite(hitFrontFaceCosine) ||
+        hitFrontFaceCosine <= 0.01)
+    {
+        failureFlags = C5_TRACE_REASON_SOURCE;
+        return false;
+    }
+
+    vec4 directAtHitPayload = texelFetch(
+        directDiffuseEmissiveSource, hitPixel, 0);
+    vec3 directAtHit = max(directAtHitPayload.rgb, vec3(0.0));
+    vec3 hitWorldPosition;
+    vec3 directLowFrequency;
+    uint footprintRadius = 0u;
+    if (!SimpleDdgiNearFieldFinite(directAtHit) ||
+        !SimpleDdgiNearFieldFinite(directAtHitPayload.a) ||
+        directAtHitPayload.a <= 0.5 ||
+        !C5ReconstructWorldPosition(
+            hitUv, hitSceneDepth, hitWorldPosition) ||
+        (footprintRadius = C5ProjectedFootprintRadius(
+            hitWorldPosition, hitShading)) == 0u ||
+        !DirectDiffuseEmissiveLowFrequencyEstimate(
+            hitUv,
+            hitSceneDepth,
+            hitPayloadValue,
+            footprintRadius,
+            directLowFrequency))
+    {
+        failureFlags = C5_TRACE_REASON_DEPTH |
+            C5_TRACE_REASON_NONFINITE;
+        return false;
+    }
+
+    float depthConfidence = pc.depthTolerance <= 0.0
+        ? 1.0
+        : clamp(1.0 - abs(hitRayDepth - hitSceneDepth) /
+            pc.depthTolerance, 0.0, 1.0);
+    float normalConfidence = clamp(hitFrontFaceCosine, 0.0, 1.0);
+    confidence = depthConfidence * normalConfidence;
+    nearEstimate = directAtHit * receiverThroughput;
+    lowEstimate = directLowFrequency * receiverThroughput;
+    if (!SimpleDdgiNearFieldFinite(confidence) || confidence <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(nearEstimate) ||
+        !SimpleDdgiNearFieldFinite(lowEstimate))
+    {
+        return false;
+    }
+
+    metadata.receiverDepth = startDepth;
+    metadata.hitDepth = hitSceneDepth;
+    metadata.confidence = confidence;
+    metadata.packedFlags = SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE |
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_SCREEN_SPACE_HIT |
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_ATTACHMENT_VERIFIED |
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED;
+    metadata.identity = uvec4(receiverIds, hitIds);
+    metadata.hitUv = hitUv;
+    failureFlags = 0u;
+    return true;
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputExtent = imageSize(rawResidualOutput);
+    bool covered = pixel.x < outputExtent.x && pixel.y < outputExtent.y &&
+        pixel.x < int(pc.traceWidth) && pixel.y < int(pc.traceHeight);
+    uint metadataIndex = covered
+        ? uint(pixel.y) * uint(outputExtent.x) + uint(pixel.x)
+        : 0u;
+    uint localIndex = gl_LocalInvocationIndex;
+
+    vec3 nearEstimate = vec3(0.0);
+    vec3 lowEstimate = vec3(0.0);
+    float confidence = 0.0;
+    SimpleDdgiNearFieldResidualHitMetadata metadata =
+        SimpleDdgiNearFieldZeroMetadata();
+    uint failureFlags = covered ? C5_TRACE_REASON_INVALID_RECEIVER : 0u;
+    uint rayLaunched = 0u;
+    uint traceSteps = 0u;
+    uint mipVisits = 0u;
+    uint refinementVisits = 0u;
+    bool valid = covered && EvaluateCandidate(
+        pixel, metadataIndex, nearEstimate, lowEstimate, confidence, metadata,
+        failureFlags, rayLaunched, traceSteps, mipVisits, refinementVisits);
+
+    c5TileCovered[localIndex] = covered ? 1u : 0u;
+    c5TileValid[localIndex] = valid ? 1u : 0u;
+    c5TileNear[localIndex] = valid ? nearEstimate : vec3(0.0);
+    c5TileLow[localIndex] = valid ? lowEstimate : vec3(0.0);
+    c5TileConfidence[localIndex] = valid ? confidence : 0.0;
+    c5TileReasonFlags[localIndex] = valid ? 0u : failureFlags;
+    c5TileRayLaunched[localIndex] = rayLaunched;
+    c5TileTraceSteps[localIndex] = traceSteps;
+    c5TileMipVisits[localIndex] = mipVisits;
+    c5TileRefinementVisits[localIndex] = refinementVisits;
+    barrier();
+
+    if (localIndex == 0u)
+    {
+        vec3 residualSum = vec3(0.0);
+        uint validCount = 0u;
+        for (uint lane = 0u; lane < 64u; ++lane)
+        {
+            if (c5TileValid[lane] == 0u)
+                continue;
+            residualSum += c5TileNear[lane] - c5TileLow[lane];
+            validCount++;
+        }
+        // Subtracting the valid-tile mean makes the isolated high-frequency
+        // residual energy-neutral over every 8x8 trace tile. Invalid/edge
+        // pixels never participate in this correction.
+        c5TileMeanResidual = validCount == 0u
+            ? vec3(0.0)
+            : residualSum / float(validCount);
+        RecordTileSummary();
+    }
+    barrier();
+
+    if (!covered)
+        return;
+    if (!valid)
+    {
+        WriteInvalid(pixel, metadataIndex);
+        return;
+    }
+
+    vec3 signedResidual = nearEstimate - lowEstimate - c5TileMeanResidual;
+    if (!SimpleDdgiNearFieldFinite(signedResidual))
+    {
+        WriteInvalid(pixel, metadataIndex);
+        return;
+    }
+    imageStore(rawResidualOutput, pixel,
+        vec4(signedResidual, confidence));
+    traceHitMetadata.values[metadataIndex] = metadata;
+}

@@ -41,6 +41,8 @@ shared uint feedbackDevelopmentPinnedPageCount;
 shared uint feedbackRetainedPageCount;
 shared uint feedbackVisibleDemandResidentHitPageCount;
 shared uint feedbackVisibleDemandMissingPageCount;
+shared uint feedbackVisibleDemandSuppressedPageCount;
+shared uint feedbackVisibleDemandInitializingOrUnpublishedPageCount;
 shared uint feedbackRetainedAge0To15PageCount;
 shared uint feedbackRetainedAge16To63PageCount;
 shared uint feedbackRetainedAge64To255PageCount;
@@ -242,6 +244,8 @@ void main()
                     SIMPLE_DDGI_RESIDENCY_COUNTER_RECEIVER_OVERFLOW],
                 0u));
         ResidencyWrite(params, feedbackBase + 58u, pc.DemandEpoch);
+        ResidencyWrite(params, feedbackBase + 89u, 0u);
+        ResidencyWrite(params, feedbackBase + 90u, 0u);
         ResidencyWrite(
             params,
             feedbackBase + 59u,
@@ -299,6 +303,8 @@ void main()
         feedbackRetainedPageCount = 0u;
         feedbackVisibleDemandResidentHitPageCount = 0u;
         feedbackVisibleDemandMissingPageCount = 0u;
+        feedbackVisibleDemandSuppressedPageCount = 0u;
+        feedbackVisibleDemandInitializingOrUnpublishedPageCount = 0u;
         feedbackRetainedAge0To15PageCount = 0u;
         feedbackRetainedAge16To63PageCount = 0u;
         feedbackRetainedAge64To255PageCount = 0u;
@@ -575,6 +581,12 @@ void main()
         if (visibleDemanded)
         {
             atomicAdd(feedbackVisibleDemandPageCount, 1u);
+            bool demandSuppressed =
+                (table.z & SIMPLE_DDGI_PAGE_TABLE_SUPPRESSED_EMPTY) != 0u ||
+                (historyFlags & SIMPLE_DDGI_PAGE_HISTORY_SUPPRESSED) != 0u;
+            bool demandInitializingOrUnpublished = !valid ||
+                (table.z & SIMPLE_DDGI_PAGE_TABLE_INITIALIZING) != 0u ||
+                (table.z & SIMPLE_DDGI_PAGE_TABLE_PUBLISHED) == 0u;
             bool receiverUsable = valid &&
                 (table.z & SIMPLE_DDGI_PAGE_TABLE_PUBLISHED) != 0u &&
                 (table.z & (SIMPLE_DDGI_PAGE_TABLE_INITIALIZING |
@@ -583,6 +595,12 @@ void main()
                 atomicAdd(feedbackVisibleDemandResidentHitPageCount, 1u);
             else
                 atomicAdd(feedbackVisibleDemandMissingPageCount, 1u);
+            if (demandSuppressed)
+                atomicAdd(feedbackVisibleDemandSuppressedPageCount, 1u);
+            else if (demandInitializingOrUnpublished)
+                atomicAdd(
+                    feedbackVisibleDemandInitializingOrUnpublishedPageCount,
+                    1u);
         }
         if (receiverDemanded)
             atomicAdd(feedbackReceiverDemandPageCount, 1u);
@@ -683,6 +701,9 @@ void main()
     uint retained = feedbackRetainedPageCount;
     uint visibleDemandResidentHits = feedbackVisibleDemandResidentHitPageCount;
     uint visibleDemandMissing = feedbackVisibleDemandMissingPageCount;
+    uint visibleDemandSuppressed = feedbackVisibleDemandSuppressedPageCount;
+    uint visibleDemandInitializingOrUnpublished =
+        feedbackVisibleDemandInitializingOrUnpublishedPageCount;
     uint retainedAge0To15 = feedbackRetainedAge0To15PageCount;
     uint retainedAge16To63 = feedbackRetainedAge16To63PageCount;
     uint retainedAge64To255 = feedbackRetainedAge64To255PageCount;
@@ -889,6 +910,11 @@ void main()
     ResidencyWrite(params, feedbackBase + 61u, predictorFalsePositives);
     ResidencyWrite(params, feedbackBase + 62u, opaqueGatherDemand);
     ResidencyWrite(params, feedbackBase + 63u, predictorTruePositives);
+    ResidencyWrite(params, feedbackBase + 89u, visibleDemandSuppressed);
+    ResidencyWrite(
+        params,
+        feedbackBase + 90u,
+        visibleDemandInitializingOrUnpublished);
     for (uint ringWord = 0u; ringWord < 18u; ringWord++)
         ResidencyWrite(
             params,

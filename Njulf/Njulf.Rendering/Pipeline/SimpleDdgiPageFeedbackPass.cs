@@ -21,6 +21,7 @@ public sealed unsafe class SimpleDdgiPageFeedbackPass : RenderPassBase
 {
     private readonly RenderSettings _settings;
     private readonly SimpleDdgiVolumeManager _volumeManager;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private nint _entryPointName;
     private PipelineLayout _pipelineLayout;
     private PipelineCache _pipelineCache;
@@ -31,11 +32,13 @@ public sealed unsafe class SimpleDdgiPageFeedbackPass : RenderPassBase
         SwapchainManager swapchain,
         BindlessHeap bindlessHeap,
         RenderSettings settings,
-        SimpleDdgiVolumeManager volumeManager)
+        SimpleDdgiVolumeManager volumeManager,
+        GiPipelineCacheService? pipelineCacheService = null)
         : base("SimpleDdgiPageFeedbackPass", context, swapchain, bindlessHeap)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _volumeManager = volumeManager ?? throw new ArgumentNullException(nameof(volumeManager));
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr("main");
     }
 
@@ -49,7 +52,10 @@ public sealed unsafe class SimpleDdgiPageFeedbackPass : RenderPassBase
     {
         try
         {
-            CreatePipelineCache();
+            if (_pipelineCacheService != null)
+                _pipelineCache = _pipelineCacheService.Cache;
+            else
+                CreatePipelineCache();
             CreatePipelineLayout();
             _pipeline = CreatePipeline();
         }
@@ -141,7 +147,7 @@ public sealed unsafe class SimpleDdgiPageFeedbackPass : RenderPassBase
             _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
         if (_pipelineLayout.Handle != 0)
             _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService == null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_entryPointName != 0)
         {
@@ -223,13 +229,25 @@ public sealed unsafe class SimpleDdgiPageFeedbackPass : RenderPassBase
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device,
-                _pipelineCache,
-                1,
-                &info,
-                null,
-                out VkPipeline pipeline);
+            long pipelineStart = _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+            Result result;
+            VkPipeline pipeline;
+            try
+            {
+                result = _context.Api.CreateComputePipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &info,
+                    null,
+                    out pipeline);
+            }
+            finally
+            {
+                _pipelineCacheService?.EndPipelineCreation(
+                    $"{Name}:ddgi_simple_page_feedback.comp.spv",
+                    pipelineStart);
+            }
             if (result != Result.Success)
                 throw new VulkanException(
                     "Failed to create Simple-DDGI page-feedback pipeline",

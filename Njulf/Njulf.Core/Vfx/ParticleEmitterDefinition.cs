@@ -27,5 +27,26 @@ namespace Njulf.Core.Vfx
         public int MaxParticles { get; init; } = 1024;
         public float MaxDrawDistance { get; init; } = 1000.0f;
         public int Priority { get; init; }
+
+        /// <summary>
+        /// Admission policy for the DDGI macro-emitter representation. The
+        /// default keeps sustained fire/smoke-like emission automatic while
+        /// excluding short sparks and muzzle flashes.
+        /// </summary>
+        public ParticleGiEmissionMode GlobalIlluminationEmission { get; init; } =
+            ParticleGiEmissionMode.AutoSustained;
+
+        /// <summary>
+        /// Exposure-independent integrated RGB radiant power. A positive value
+        /// makes GI energy independent of particle count/tessellation. Zero
+        /// asks the runtime to derive power from the authored particle envelope.
+        /// </summary>
+        public Vector3 GlobalIlluminationPower { get; init; } = Vector3.Zero;
+
+        public ParticleGiSourceShape GlobalIlluminationSourceShape { get; init; } =
+            ParticleGiSourceShape.Auto;
+
+        /// <summary>Relative deadband used only for macro-source refits.</summary>
+        public float GlobalIlluminationEnergyHysteresis { get; init; } = 0.02f;
     }
 }

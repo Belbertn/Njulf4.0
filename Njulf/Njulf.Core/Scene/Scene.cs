@@ -31,6 +31,12 @@ namespace Njulf.Core.Scene
         private bool _disposeInProgress;
         private bool _disposed;
         private uint _reflectionProbeRevision;
+        private ulong _mutationSerial;
+        private Color _ambientLight = new(0.2f, 0.2f, 0.2f, 1f);
+
+        public event Action<SceneMutation>? Mutated;
+        public event Action<RenderObjectMutation>? RenderObjectMutated;
+        public ulong MutationSerial => _mutationSerial;
 
         public Scene()
         {
@@ -46,7 +52,22 @@ namespace Njulf.Core.Scene
 
         public Guid Id { get; set; } = Guid.NewGuid();
         public string Name { get; set; } = "DefaultScene";
-        public Color AmbientLight { get; set; } = new(0.2f, 0.2f, 0.2f, 1f);
+        public Color AmbientLight
+        {
+            get => _ambientLight;
+            set
+            {
+                if (_ambientLight.Equals(value))
+                    return;
+                _ambientLight = value;
+                PublishMutation(
+                    this,
+                    SceneMutationKind.Content | SceneMutationKind.Global,
+                    null,
+                    null,
+                    _mutationSerial);
+            }
+        }
 
         public IReadOnlyList<RenderObject> RenderObjects => _readOnlyRenderObjects;
         public IReadOnlyList<IUpdateable> Updateables => _readOnlyUpdateables;
@@ -62,8 +83,15 @@ namespace Njulf.Core.Scene
         {
             EnsureCanAdd(renderObject);
             _renderObjects.Add(renderObject);
+            renderObject.Changed += OnRenderObjectChanged;
             if (renderObject is IDisposable disposable)
                 AddDisposableReference(disposable);
+            PublishMutation(
+                renderObject,
+                SceneMutationKind.Added | SceneMutationKind.Geometry,
+                null,
+                TryGetRenderObjectBounds(renderObject),
+                renderObject.Revision);
         }
 
         public void Add(IUpdateable updateable)
@@ -102,6 +130,13 @@ namespace Njulf.Core.Scene
 
             EnsureCanAdd(particleEffect);
             _particleEffects.Add(particleEffect);
+            particleEffect.Changed += OnParticleEffectChanged;
+            PublishMutation(
+                particleEffect,
+                SceneMutationKind.Added | SceneMutationKind.ParticleState,
+                null,
+                null,
+                particleEffect.Version);
         }
 
         public void Add(StaticInstanceBatch staticInstanceBatch)
@@ -111,7 +146,14 @@ namespace Njulf.Core.Scene
 
             EnsureCanAdd(staticInstanceBatch);
             _staticInstanceBatches.Add(staticInstanceBatch);
+            staticInstanceBatch.Changed += OnStaticInstanceBatchChanged;
             AddDisposableReference(staticInstanceBatch);
+            PublishMutation(
+                staticInstanceBatch,
+                SceneMutationKind.Added | SceneMutationKind.StaticInstances,
+                null,
+                null,
+                staticInstanceBatch.Revision);
         }
 
         public void Add(FoliagePrototype foliagePrototype)
@@ -123,6 +165,7 @@ namespace Njulf.Core.Scene
             {
                 EnsureCanAdd(foliagePrototype);
                 _foliagePrototypes.Add(foliagePrototype);
+                foliagePrototype.Changed += OnFoliagePrototypeChanged;
                 AddDisposableReference(foliagePrototype);
             }
         }
@@ -135,6 +178,13 @@ namespace Njulf.Core.Scene
             Add(foliagePatch.Prototype);
             EnsureCanAdd(foliagePatch);
             _foliagePatches.Add(foliagePatch);
+            foliagePatch.Changed += OnFoliagePatchChanged;
+            PublishMutation(
+                foliagePatch,
+                SceneMutationKind.Added | SceneMutationKind.Foliage,
+                null,
+                foliagePatch.Bounds,
+                foliagePatch.ContentRevision);
         }
 
         public void Remove(RenderObject renderObject)
@@ -142,8 +192,16 @@ namespace Njulf.Core.Scene
             EnsureMutable();
             if (!_renderObjects.Contains(renderObject))
                 return;
+            BoundingBox? oldBounds = TryGetRenderObjectBounds(renderObject);
+            renderObject.Changed -= OnRenderObjectChanged;
             RemoveDisposableReference(renderObject);
             _renderObjects.Remove(renderObject);
+            PublishMutation(
+                renderObject,
+                SceneMutationKind.Removed | SceneMutationKind.Geometry,
+                oldBounds,
+                null,
+                renderObject.Revision);
         }
 
         public void Remove(IUpdateable updateable)
@@ -175,7 +233,16 @@ namespace Njulf.Core.Scene
         public void Remove(ParticleEffectInstance particleEffect)
         {
             EnsureMutable();
-            _particleEffects.Remove(particleEffect);
+            if (_particleEffects.Remove(particleEffect))
+            {
+                particleEffect.Changed -= OnParticleEffectChanged;
+                PublishMutation(
+                    particleEffect,
+                    SceneMutationKind.Removed | SceneMutationKind.ParticleState,
+                    null,
+                    null,
+                    particleEffect.Version);
+            }
         }
 
         public void Remove(StaticInstanceBatch staticInstanceBatch)
@@ -183,8 +250,15 @@ namespace Njulf.Core.Scene
             EnsureMutable();
             if (!_staticInstanceBatches.Contains(staticInstanceBatch))
                 return;
+            staticInstanceBatch.Changed -= OnStaticInstanceBatchChanged;
             RemoveDisposableReference(staticInstanceBatch);
             _staticInstanceBatches.Remove(staticInstanceBatch);
+            PublishMutation(
+                staticInstanceBatch,
+                SceneMutationKind.Removed | SceneMutationKind.StaticInstances,
+                null,
+                null,
+                staticInstanceBatch.Revision);
         }
 
         public void Remove(FoliagePrototype foliagePrototype)
@@ -192,15 +266,32 @@ namespace Njulf.Core.Scene
             EnsureMutable();
             if (!_foliagePrototypes.Contains(foliagePrototype))
                 return;
+
+            for (int index = _foliagePatches.Count - 1; index >= 0; index--)
+            {
+                FoliagePatch patch = _foliagePatches[index];
+                if (ReferenceEquals(patch.Prototype, foliagePrototype))
+                    Remove(patch);
+            }
+
+            foliagePrototype.Changed -= OnFoliagePrototypeChanged;
             RemoveDisposableReference(foliagePrototype);
             _foliagePrototypes.Remove(foliagePrototype);
-            _foliagePatches.RemoveAll(patch => ReferenceEquals(patch.Prototype, foliagePrototype));
         }
 
         public void Remove(FoliagePatch foliagePatch)
         {
             EnsureMutable();
-            _foliagePatches.Remove(foliagePatch);
+            if (_foliagePatches.Remove(foliagePatch))
+            {
+                foliagePatch.Changed -= OnFoliagePatchChanged;
+                PublishMutation(
+                    foliagePatch,
+                    SceneMutationKind.Removed | SceneMutationKind.Foliage,
+                    foliagePatch.Bounds,
+                    null,
+                    foliagePatch.ContentRevision);
+            }
         }
 
         public T? GetComponent<T>() where T : class
@@ -238,6 +329,7 @@ namespace Njulf.Core.Scene
         public void Clear()
         {
             EnsureMutable();
+            PublishGlobalClearMutation();
             ClearCollections();
         }
 
@@ -249,6 +341,16 @@ namespace Njulf.Core.Scene
 
         private void ClearEntityCollections()
         {
+            foreach (RenderObject renderObject in _renderObjects)
+                renderObject.Changed -= OnRenderObjectChanged;
+            foreach (ParticleEffectInstance particleEffect in _particleEffects)
+                particleEffect.Changed -= OnParticleEffectChanged;
+            foreach (StaticInstanceBatch batch in _staticInstanceBatches)
+                batch.Changed -= OnStaticInstanceBatchChanged;
+            foreach (FoliagePatch patch in _foliagePatches)
+                patch.Changed -= OnFoliagePatchChanged;
+            foreach (FoliagePrototype prototype in _foliagePrototypes)
+                prototype.Changed -= OnFoliagePrototypeChanged;
             if (_reflectionProbes.Count > 0)
             {
                 foreach (ReflectionProbe probe in _reflectionProbes)
@@ -264,6 +366,90 @@ namespace Njulf.Core.Scene
             _foliagePrototypes.Clear();
             _foliagePatches.Clear();
         }
+
+        private void OnRenderObjectChanged(RenderObjectMutation mutation)
+        {
+            RenderObjectMutated?.Invoke(mutation);
+            PublishMutation(
+                mutation.Source,
+                mutation.Kind,
+                mutation.OldWorldBounds,
+                mutation.NewWorldBounds,
+                mutation.Revision);
+        }
+
+        private void OnParticleEffectChanged(
+            ParticleEffectInstance particleEffect,
+            SceneMutationKind kind) =>
+            PublishMutation(
+                particleEffect,
+                kind,
+                null,
+                null,
+                particleEffect.Version);
+
+        private void OnStaticInstanceBatchChanged(StaticInstanceBatch batch) =>
+            PublishMutation(
+                batch,
+                SceneMutationKind.StaticInstances,
+                null,
+                null,
+                batch.Revision);
+
+        private void OnFoliagePatchChanged(
+            FoliagePatch patch,
+            BoundingBox previousBounds)
+        {
+            if (!_foliagePrototypes.Contains(patch.Prototype))
+                Add(patch.Prototype);
+            PublishMutation(
+                patch,
+                SceneMutationKind.Foliage,
+                previousBounds,
+                patch.Bounds,
+                patch.ContentRevision);
+        }
+
+        private void OnFoliagePrototypeChanged(FoliagePrototype prototype)
+        {
+            foreach (FoliagePatch patch in _foliagePatches)
+            {
+                if (!ReferenceEquals(patch.Prototype, prototype))
+                    continue;
+                PublishMutation(
+                    patch,
+                    SceneMutationKind.Foliage | SceneMutationKind.Content,
+                    patch.Bounds,
+                    patch.Bounds,
+                    patch.ContentRevision);
+            }
+        }
+
+        private void PublishMutation(
+            IIdentifiedSceneEntity producer,
+            SceneMutationKind kind,
+            BoundingBox? oldWorldBounds,
+            BoundingBox? newWorldBounds,
+            ulong contentRevision)
+        {
+            _mutationSerial = _mutationSerial == ulong.MaxValue
+                ? 1UL
+                : _mutationSerial + 1UL;
+            Mutated?.Invoke(new SceneMutation(
+                _mutationSerial,
+                producer.Id,
+                producer,
+                kind,
+                oldWorldBounds,
+                newWorldBounds,
+                contentRevision));
+        }
+
+        private static BoundingBox? TryGetRenderObjectBounds(
+            RenderObject renderObject) =>
+            renderObject.LocalMeshBounds is { } local
+                ? BoundingBox.Transform(local, renderObject.WorldMatrix)
+                : null;
 
         private void OnReflectionProbeChanged(ReflectionProbe probe) => AdvanceReflectionProbeRevision();
 
@@ -293,6 +479,7 @@ namespace Njulf.Core.Scene
             if (_disposed || _disposeRequested || _disposeInProgress)
                 throw new ObjectDisposedException(nameof(Scene));
 
+            PublishGlobalClearMutation();
             _clearDisposalPending = true;
             _disposeInProgress = true;
             List<Exception>? failures = null;
@@ -330,6 +517,7 @@ namespace Njulf.Core.Scene
             if (_disposed || _disposeInProgress)
                 return;
 
+            PublishGlobalClearMutation();
             _disposeRequested = true;
             _disposeInProgress = true;
             List<Exception>? failures = null;
@@ -401,6 +589,24 @@ namespace Njulf.Core.Scene
             }
             else
                 _ownedDisposableReferences[disposable] = references - 1;
+        }
+
+        private void PublishGlobalClearMutation()
+        {
+            if (_renderObjects.Count == 0 &&
+                _particleEffects.Count == 0 &&
+                _staticInstanceBatches.Count == 0 &&
+                _foliagePatches.Count == 0)
+            {
+                return;
+            }
+
+            PublishMutation(
+                this,
+                SceneMutationKind.Removed | SceneMutationKind.Global,
+                null,
+                null,
+                _mutationSerial);
         }
 
         private static IIdentifiedSceneEntity? Find<T>(IEnumerable<T> entities, Guid id)

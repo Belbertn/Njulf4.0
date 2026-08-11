@@ -1,0 +1,365 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+#include "ddgi_receiver_feedback_abi.glsl"
+
+// Sparse producers write frozen 48-byte candidates into disjoint reservations
+// in a frame-ringed staging buffer. This pass validates the complete source
+// transaction, compacts only initialized records, and reserves one contiguous
+// destination span per workgroup. It never hashes identity or lets an
+// arbitrary overflow prefix affect scheduling.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+shared uint capturePrefix[SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE];
+shared uint captureDestinationBase;
+shared uint captureDestinationValid;
+
+uint SimpleDdgiReceiverFeedbackCaptureControlWord(uint word)
+{
+    return ReadStorageWordUniform(receiverFeedbackPc.captureSourceBufferIndex,
+        receiverFeedbackPc.captureSourceControlOffsetWords + word);
+}
+
+uint SimpleDdgiReceiverFeedbackCaptureRangeWord(uint producer, uint word)
+{
+    return SimpleDdgiReceiverFeedbackCaptureControlWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_HEADER_WORDS +
+        producer * SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_RANGE_WORDS +
+        word);
+}
+
+bool SimpleDdgiReceiverFeedbackCaptureControlIsValid(
+    out uint overflowMask,
+    out uint droppedCount)
+{
+    overflowMask = 0u;
+    droppedCount = 0u;
+    uint sourceLength = uint(BindlessStorageBuffers[
+        receiverFeedbackPc.captureSourceBufferIndex].Words.length());
+    uint controlOffset = receiverFeedbackPc.captureSourceControlOffsetWords;
+    if (controlOffset > sourceLength ||
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_CONTROL_WORDS >
+            sourceLength - controlOffset ||
+        receiverFeedbackPc.captureSourceRecordOffsetWords < controlOffset ||
+        receiverFeedbackPc.captureSourceRecordOffsetWords - controlOffset !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_CONTROL_WORDS ||
+        receiverFeedbackPc.captureSourceRecordOffsetWords > sourceLength ||
+        receiverFeedbackPc.captureSourceRecordCount >
+            (sourceLength - receiverFeedbackPc.captureSourceRecordOffsetWords) /
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CANDIDATE_WORDS)
+    {
+        return false;
+    }
+
+    if (SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_ABI) !=
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_ABI_VERSION ||
+        SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_LAYOUT) !=
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_LAYOUT_REVISION ||
+        SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_GENERATION) !=
+                receiverFeedbackPc.feedbackGeneration ||
+        SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_VIEWPORT) !=
+                receiverFeedbackPc.viewportGeneration ||
+        SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_FRAME_LOW) !=
+                receiverFeedbackPc.frameSerialLow ||
+        SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_FRAME_HIGH) !=
+                receiverFeedbackPc.frameSerialHigh ||
+        SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_CAPACITY) !=
+                receiverFeedbackPc.recordCapacity ||
+        receiverFeedbackPc.captureSourceRecordCount !=
+                receiverFeedbackPc.recordCapacity ||
+        SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_PRODUCER_COUNT) !=
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_PRODUCER_COUNT ||
+        SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_ENDIAN) !=
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_ENDIAN_SENTINEL ||
+        SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_FLAGS) !=
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_READY)
+    {
+        return false;
+    }
+
+    uint expectedBase = 0u;
+    uint totalCount = 0u;
+    for (uint producer = 0u;
+         producer < SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_PRODUCER_COUNT;
+         ++producer)
+    {
+        uint base = SimpleDdgiReceiverFeedbackCaptureRangeWord(
+            producer, SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_RANGE_BASE);
+        uint capacity = SimpleDdgiReceiverFeedbackCaptureRangeWord(
+            producer, SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_RANGE_CAPACITY);
+        uint count = SimpleDdgiReceiverFeedbackCaptureRangeWord(
+            producer, SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_RANGE_COUNT);
+        uint dropped = SimpleDdgiReceiverFeedbackCaptureRangeWord(
+            producer, SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_RANGE_DROPPED);
+        if (base != expectedBase || capacity > receiverFeedbackPc.recordCapacity -
+                expectedBase || count > capacity)
+        {
+            return false;
+        }
+        expectedBase += capacity;
+        totalCount += count;
+        droppedCount += dropped;
+    }
+
+    uint sharedBase = SimpleDdgiReceiverFeedbackCaptureControlWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_SHARED_BASE);
+    uint sharedCapacity = SimpleDdgiReceiverFeedbackCaptureControlWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_SHARED_CAPACITY);
+    uint sharedCount = SimpleDdgiReceiverFeedbackCaptureControlWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_SHARED_COUNT);
+    uint requiredMask = SimpleDdgiReceiverFeedbackCaptureControlWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_REQUIRED_MASK);
+    uint completedMask = SimpleDdgiReceiverFeedbackCaptureControlWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_COMPLETED_MASK);
+    overflowMask = SimpleDdgiReceiverFeedbackCaptureControlWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_OVERFLOW_MASK);
+    if (sharedBase != expectedBase ||
+        sharedCapacity != receiverFeedbackPc.recordCapacity - expectedBase ||
+        sharedCount > sharedCapacity)
+    {
+        return false;
+    }
+    totalCount += sharedCount;
+    return requiredMask != 0u &&
+        (requiredMask &
+            ~SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_KNOWN_PRODUCER_MASK) == 0u &&
+        completedMask == requiredMask &&
+        totalCount == SimpleDdgiReceiverFeedbackCaptureControlWord(
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_TOTAL_COUNT) &&
+        overflowMask == 0u && droppedCount == 0u;
+}
+
+bool SimpleDdgiReceiverFeedbackCaptureCandidateIsInitialized(
+    uint candidateIndex,
+    out uint expectedProducer)
+{
+    expectedProducer = 0xffffffffu;
+    for (uint producer = 0u;
+         producer < SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_SOURCE_PRODUCER_COUNT;
+         ++producer)
+    {
+        uint base = SimpleDdgiReceiverFeedbackCaptureRangeWord(
+            producer, SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_RANGE_BASE);
+        uint count = SimpleDdgiReceiverFeedbackCaptureRangeWord(
+            producer, SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_RANGE_COUNT);
+        if (candidateIndex >= base && candidateIndex - base < count)
+        {
+            expectedProducer = producer;
+            return true;
+        }
+    }
+
+    uint sharedBase = SimpleDdgiReceiverFeedbackCaptureControlWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_SHARED_BASE);
+    uint sharedCount = SimpleDdgiReceiverFeedbackCaptureControlWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CONTROL_SHARED_COUNT);
+    return candidateIndex >= sharedBase && candidateIndex - sharedBase < sharedCount;
+}
+
+uint SimpleDdgiReceiverFeedbackCaptureWord(uint candidateIndex, uint word)
+{
+    return ReadStorageWordUniform(receiverFeedbackPc.captureSourceBufferIndex,
+        receiverFeedbackPc.captureSourceRecordOffsetWords +
+            candidateIndex *
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_CAPTURE_CANDIDATE_WORDS + word);
+}
+
+void main()
+{
+    if (receiverFeedbackPc.operation !=
+            SIMPLE_DDGI_RECEIVER_FEEDBACK_OPERATION_CAPTURE ||
+        !SimpleDdgiReceiverFeedbackBankCanProcess())
+    {
+        return;
+    }
+
+    uint overflowMask;
+    uint droppedCount;
+    bool controlValid = receiverFeedbackPc.captureSourceBufferIndex ==
+            uint(SIMPLE_DDGI_RECEIVER_FEEDBACK_CANDIDATE_BUFFER_INDEX) &&
+        SimpleDdgiReceiverFeedbackCaptureControlIsValid(
+            overflowMask, droppedCount);
+    if (!controlValid)
+    {
+        if (gl_GlobalInvocationID.x == 0u)
+        {
+            uint propagatedMask = overflowMask == 0u ? 0x80000000u : overflowMask;
+            atomicOr(BindlessStorageBuffers[
+                SimpleDdgiReceiverFeedbackSummaryBuffer()].Words[
+                    SimpleDdgiReceiverFeedbackHeaderWord(
+                        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_PRODUCER_OVERFLOW_MASK)],
+                propagatedMask);
+            atomicAdd(BindlessStorageBuffers[
+                SimpleDdgiReceiverFeedbackSummaryBuffer()].Words[
+                    SimpleDdgiReceiverFeedbackHeaderWord(
+                        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_DROPPED_COUNT)],
+                max(droppedCount, 1u));
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_PRODUCER_RANGE_OVERFLOW);
+        }
+        return;
+    }
+
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    uint expectedProducer;
+    bool initialized = candidateIndex < receiverFeedbackPc.captureSourceRecordCount &&
+        SimpleDdgiReceiverFeedbackCaptureCandidateIsInitialized(
+            candidateIndex, expectedProducer);
+
+    uint requestedProbe = 0u;
+    uint resolvedProbe = 0u;
+    uint resolvedPage = 0u;
+    uint requestedPage = 0u;
+    uint exactTile = 0u;
+    float interpolationWeight = 0.0;
+    float inverseInclusionProbability = 0.0;
+    float correctedMass = 0.0;
+    uint packedRoleAndPageGeneration = 0u;
+    uint feedbackGeneration = 0u;
+    uint producer = 0xffffffffu;
+    bool valid = false;
+
+    if (initialized)
+    {
+        requestedProbe = SimpleDdgiReceiverFeedbackCaptureWord(candidateIndex, 0u);
+        resolvedProbe = SimpleDdgiReceiverFeedbackCaptureWord(candidateIndex, 1u);
+        resolvedPage = SimpleDdgiReceiverFeedbackCaptureWord(candidateIndex, 2u);
+        requestedPage = SimpleDdgiReceiverFeedbackCaptureWord(candidateIndex, 3u);
+        exactTile = SimpleDdgiReceiverFeedbackCaptureWord(candidateIndex, 4u);
+        interpolationWeight = uintBitsToFloat(
+            SimpleDdgiReceiverFeedbackCaptureWord(candidateIndex, 5u));
+        inverseInclusionProbability = uintBitsToFloat(
+            SimpleDdgiReceiverFeedbackCaptureWord(candidateIndex, 6u));
+        float physicalContribution = uintBitsToFloat(
+            SimpleDdgiReceiverFeedbackCaptureWord(candidateIndex, 7u));
+        packedRoleAndPageGeneration =
+            SimpleDdgiReceiverFeedbackCaptureWord(candidateIndex, 8u);
+        feedbackGeneration =
+            SimpleDdgiReceiverFeedbackCaptureWord(candidateIndex, 9u);
+        producer = packedRoleAndPageGeneration & 0xfu;
+        uint fallbackRole = (packedRoleAndPageGeneration >> 4u) & 0xfu;
+        uint pageGeneration = packedRoleAndPageGeneration >> 8u;
+        bool producerRangeValid = producer <= 6u &&
+            (expectedProducer == 0xffffffffu || producer == expectedProducer);
+        valid = producerRangeValid && fallbackRole <= 3u &&
+            feedbackGeneration == receiverFeedbackPc.feedbackGeneration &&
+            pageGeneration != 0u &&
+            SimpleDdgiReceiverFeedbackTryCorrectedMass(
+                physicalContribution,
+                interpolationWeight,
+                inverseInclusionProbability,
+                correctedMass);
+        if (!valid)
+        {
+            if (!producerRangeValid || fallbackRole > 3u)
+                SimpleDdgiReceiverFeedbackMarkProducerOverflow(producer);
+            SimpleDdgiReceiverFeedbackMarkInvalidInput(
+                !producerRangeValid || fallbackRole > 3u);
+        }
+    }
+
+    uint localIndex = gl_LocalInvocationIndex;
+    capturePrefix[localIndex] = valid ? 1u : 0u;
+    barrier();
+    for (uint offset = 1u;
+         offset < SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE;
+         offset <<= 1u)
+    {
+        uint prior = localIndex >= offset
+            ? capturePrefix[localIndex - offset]
+            : 0u;
+        barrier();
+        capturePrefix[localIndex] += prior;
+        barrier();
+    }
+
+    uint workgroupCount = capturePrefix[
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_WORKGROUP_SIZE - 1u];
+    if (localIndex == 0u)
+    {
+        captureDestinationBase = atomicAdd(BindlessStorageBuffers[
+            SimpleDdgiReceiverFeedbackSummaryBuffer()].Words[
+                SimpleDdgiReceiverFeedbackHeaderWord(
+                    SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_APPEND_COUNT)],
+            workgroupCount);
+        captureDestinationValid =
+            captureDestinationBase <= receiverFeedbackPc.recordCapacity &&
+            workgroupCount <= receiverFeedbackPc.recordCapacity -
+                captureDestinationBase
+            ? 1u
+            : 0u;
+        if (captureDestinationValid == 0u)
+        {
+            atomicAdd(BindlessStorageBuffers[
+                SimpleDdgiReceiverFeedbackSummaryBuffer()].Words[
+                    SimpleDdgiReceiverFeedbackHeaderWord(
+                        SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_DROPPED_COUNT)],
+                workgroupCount);
+            SimpleDdgiReceiverFeedbackMarkProducerOverflow(0xffffffffu);
+            SimpleDdgiReceiverFeedbackMarkBankFailure(
+                SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_APPEND_OVERFLOW);
+        }
+    }
+    barrier();
+    if (!valid || captureDestinationValid == 0u)
+        return;
+
+    uint destination = captureDestinationBase + capturePrefix[localIndex] - 1u;
+    SimpleDdgiReceiverFeedbackWriteRawRecordWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_REQUESTED_PROBE,
+        requestedProbe);
+    SimpleDdgiReceiverFeedbackWriteRawRecordWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_RESOLVED_PROBE,
+        resolvedProbe);
+    SimpleDdgiReceiverFeedbackWriteRawRecordWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_RESOLVED_PAGE,
+        resolvedPage);
+    SimpleDdgiReceiverFeedbackWriteRawRecordWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_EXACT_TILE,
+        exactTile);
+    SimpleDdgiReceiverFeedbackWriteRawRecordWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_INTERPOLATION_WEIGHT,
+        floatBitsToUint(interpolationWeight));
+    SimpleDdgiReceiverFeedbackWriteRawRecordWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_INVERSE_INCLUSION,
+        floatBitsToUint(inverseInclusionProbability));
+    SimpleDdgiReceiverFeedbackWriteRawRecordWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_PACKED_ROLE_PAGE_GENERATION,
+        packedRoleAndPageGeneration);
+    SimpleDdgiReceiverFeedbackWriteRawRecordWord(
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_LOCATION_RECORD_BANK,
+        destination,
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_FEEDBACK_GENERATION,
+        feedbackGeneration);
+    WriteStorageWordUniform(SimpleDdgiReceiverFeedbackScratchBuffer(),
+        SimpleDdgiReceiverFeedbackRawMassAOffsetWords() + destination,
+        floatBitsToUint(correctedMass));
+    WriteStorageWordUniform(SimpleDdgiReceiverFeedbackScratchBuffer(),
+        SimpleDdgiReceiverFeedbackRequestedPageAOffsetWords() + destination,
+        requestedPage);
+}

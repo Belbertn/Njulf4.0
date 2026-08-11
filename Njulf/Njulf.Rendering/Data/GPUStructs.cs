@@ -460,7 +460,14 @@ namespace Njulf.Rendering.Data
         public int Type;
         public int ShadowFlags;
         public float ShadowStrength;
+        // Reinterpreted by DDGI as a stable slot/generation identity. Keep the
+        // field name for one schema so existing capture readers still compile.
         public int Padding0;
+        public int StableIdentity
+        {
+            readonly get => Padding0;
+            set => Padding0 = value;
+        }
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -807,6 +814,11 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUFoliageDrawPushConstants
     {
+        private const uint MaterialTransportProvenanceFlag = 1u << 2;
+        private const uint ReflectionFeedbackFlag = 1u << 3;
+        private const int ReflectionCaptureLayerShift = 8;
+        private const uint ReflectionCaptureLayerMask = 0x1FFFu;
+
         public Matrix4x4 ViewProjectionMatrix;
         public Vector4 CameraPositionTime;
         public Vector4 ScreenDimensions;
@@ -818,6 +830,30 @@ namespace Njulf.Rendering.Data
         public float ShadowDensityScale;
         public uint Padding1;
         public uint Padding2;
+
+        public static uint PackFlags(
+            bool materialTransportProvenanceEnabled,
+            bool reflectionFeedbackEnabled = false,
+            int reflectionCaptureLayer = 0)
+        {
+            if (!reflectionFeedbackEnabled)
+                return materialTransportProvenanceEnabled
+                    ? MaterialTransportProvenanceFlag
+                    : 0u;
+            if ((uint)reflectionCaptureLayer > ReflectionCaptureLayerMask)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(reflectionCaptureLayer),
+                    reflectionCaptureLayer,
+                    $"Reflection capture layer must be in [0, {ReflectionCaptureLayerMask}].");
+            }
+
+            return (materialTransportProvenanceEnabled
+                       ? MaterialTransportProvenanceFlag
+                       : 0u) |
+                   ReflectionFeedbackFlag |
+                   ((uint)reflectionCaptureLayer << ReflectionCaptureLayerShift);
+        }
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -876,6 +912,8 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUForwardPushConstants
     {
+        public const int MaximumReflectionCaptureLayer = 0x1FFF;
+
         private const uint DebugViewModeMask = 0xFFu;
         private const int AmbientOcclusionEnabledShift = 8;
         private const int AmbientOcclusionDebugViewShift = 16;
@@ -893,10 +931,17 @@ namespace Njulf.Rendering.Data
         private const uint DecalReceiveShadowsFlag = 1u << 6;
         // Keep the forward push-constant ABI at 256 bytes. The low diagnostic
         // bits are already part of the shader contract. Bit 30 selects the
-        // frame-local opaque DDGI receiver cache and bit 31 is reserved for the
-        // capture-only path exposed through the property below.
+        // frame-local opaque DDGI receiver cache. Bit 31 enables reflection
+        // capture and bits 16..28 carry its exact cubemap array layer without
+        // changing the established 256-byte push-constant ABI.
         private const uint DdgiReceiverCacheEnabledFlag = 1u << 30;
         private const uint ReflectionCaptureEnabledFlag = 1u << 31;
+        private const int ReflectionCaptureLayerShift = 16;
+        private const uint ReflectionCaptureLayerMask =
+            MaximumReflectionCaptureLayer;
+        private const uint ReflectionCaptureFlagsMask =
+            ReflectionCaptureEnabledFlag |
+            (ReflectionCaptureLayerMask << ReflectionCaptureLayerShift);
         private const int DirectionalShadowPreviewCascadeShift = 8;
         private const uint DirectionalShadowPreviewCascadeMask = 0x03u;
 
@@ -919,16 +964,38 @@ namespace Njulf.Rendering.Data
 
         public uint CaptureFlags
         {
-            get => DiagnosticFlags & ReflectionCaptureEnabledFlag;
+            readonly get => DiagnosticFlags & ReflectionCaptureFlagsMask;
             set
             {
-                DiagnosticFlags = (DiagnosticFlags & ~ReflectionCaptureEnabledFlag) |
-                                  (value & ReflectionCaptureEnabledFlag);
+                DiagnosticFlags = (DiagnosticFlags & ~ReflectionCaptureFlagsMask) |
+                                  (value & ReflectionCaptureFlagsMask);
             }
         }
 
-        public static uint PackCaptureFlags(bool reflectionCaptureEnabled) =>
-            reflectionCaptureEnabled ? ReflectionCaptureEnabledFlag : 0u;
+        public readonly bool ReflectionCaptureEnabled =>
+            (DiagnosticFlags & ReflectionCaptureEnabledFlag) != 0u;
+
+        public readonly uint ReflectionCaptureLayer =>
+            (DiagnosticFlags >> ReflectionCaptureLayerShift) &
+            ReflectionCaptureLayerMask;
+
+        public static uint PackCaptureFlags(
+            bool reflectionCaptureEnabled,
+            int reflectionCaptureLayer = 0)
+        {
+            if (!reflectionCaptureEnabled)
+                return 0u;
+            if ((uint)reflectionCaptureLayer > ReflectionCaptureLayerMask)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(reflectionCaptureLayer),
+                    reflectionCaptureLayer,
+                    $"Reflection capture layer must be in [0, {ReflectionCaptureLayerMask}].");
+            }
+
+            return ReflectionCaptureEnabledFlag |
+                   ((uint)reflectionCaptureLayer << ReflectionCaptureLayerShift);
+        }
 
         public static uint PackDebugAndAoFlags(
             uint debugViewMode,
@@ -1219,13 +1286,38 @@ namespace Njulf.Rendering.Data
         public Vector4 Statistics;
     }
 
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    /// <summary>
+    /// Versioned DDGI ray-hit metadata. The 96-byte scalar header provides
+    /// per-instance geometry addressing and material semantics; the trailing
+    /// matrix preserves the established row-major normal-transform contract.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4, Size = DdgiRayQueryInstanceAbi.SizeInBytes)]
     public struct GPUDdgiRayQueryInstance
     {
+        public uint AbiVersion;
+        public uint GeometryClass;
+        public uint GeometryFlags;
+        public uint StableInstanceIdentity;
+        public uint VertexBufferIndex;
         public uint VertexOffset;
+        public uint VertexStride;
+        public uint VertexFormat;
+        public uint PositionOffset;
+        public uint NormalOffset;
+        public uint TangentOffset;
+        public uint TexCoord0Offset;
+        public uint TexCoord1Offset;
+        public uint ColorOffset;
+        public uint IndexBufferIndex;
         public uint IndexOffset;
+        public uint IndexType;
         public uint MaterialIndex;
-        public uint Padding0;
+        public uint MaterialRevision;
+        public uint PackedAlpha;
+        public uint PackedDecalLayerAndOrder;
+        public float DecalDepthTolerance;
+        public float DecalDepthBias;
+        public uint RepresentationGeneration;
         public Matrix4x4 WorldMatrixInverseTranspose;
     }
 
@@ -1240,7 +1332,20 @@ namespace Njulf.Rendering.Data
         public Vector4 RadianceSelectionProbability;
     }
 
-    // 240 bytes. Fixed-grid DDGI params, mirrored by ddgi_simple_shared.glsl.
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiEmissiveSurface
+    {
+        // uv0(v0,v1), uv0(v2)+uv1(v0), uv1(v1,v2), then
+        // uintBits(material index)+per-vertex alpha. This compact sidecar is
+        // present only for source leaves; hierarchy nodes remain hot and do
+        // not carry texture payloads.
+        public Vector4 Uv0Vertex01;
+        public Vector4 Uv0Vertex2Uv1Vertex0;
+        public Vector4 Uv1Vertex12;
+        public Vector4 MaterialAndVertexAlpha;
+    }
+
+    // 256 bytes. Fixed-grid DDGI params, mirrored by ddgi_simple_shared.glsl.
     // The final two vectors are the V2 transport contract.  They deliberately
     // live in the params header instead of pass-local state so every shader that
     // samples DDGI can identify the published (receiver-visible) atlas.
@@ -1277,6 +1382,12 @@ namespace Njulf.Rendering.Data
         // X = SimpleDdgiProbeResidencyMode, Y = dense physical probe count,
         // Z = sparse physical page capacity, W = residency feature flags.
         public Vector4 ResidencyControls;
+        // XYZ = component-wise primary-directional radiance scale for an exact
+        // sole-sun cached-hit relight. W = bit-preserving one-based word offset
+        // of the two-bank receiver-contribution region in the scheduler arena;
+        // zero disables B1 feedback. The queue-carried relight mode remains
+        // authoritative and zero-initialized/unused frames never consume XYZ.
+        public Vector4 SourceRelightScaleAndPadding;
     }
 
     // 112 bytes. Appended after GPUSimpleDdgiParams in the simple DDGI params buffer.
@@ -1288,7 +1399,8 @@ namespace Njulf.Rendering.Data
         public Vector4 WorldMinAndEdgeFade;
         public Vector4 WorldMaxAndKind;
         // X/Y = queue start/count, Z = required complete source-ray
-        // cardinality, W reserved.
+        // cardinality, W = whole-brick receiver-ready gate for B3 refinement
+        // volumes (numeric 0/1; ignored by every other volume kind).
         public Vector4 UpdateStartAndCount;
         public Vector4 RaysAndReserved;
         // Integer payload encoded with bit-preserving uint/float conversion:
@@ -1500,6 +1612,11 @@ namespace Njulf.Rendering.Data
         public uint CutAllocationToPublicationP95;
         public uint CutAllocationToPublicationMax;
         public uint DevelopmentPinnedPageCount;
+        // Visible-demand state is distinct from aggregate suppressed pages:
+        // liveness must not mistake an intentionally empty unrelated page for
+        // the reason a receiver-visible page was not admitted.
+        public uint VisibleDemandSuppressedPageCount;
+        public uint VisibleDemandInitializingOrUnpublishedPageCount;
     }
 
     // 112-byte depth-demand ABI. One shader invocation predicts one 8x8
@@ -1519,7 +1636,9 @@ namespace Njulf.Rendering.Data
         public uint Reserved0;
     }
 
-    // 112-byte ABI for the frame-local opaque receiver cache. One compute
+    // 128-byte ABI for the frame-local opaque receiver cache. The final four
+    // words are zero in the ordinary accelerator and carry the frame-scoped
+    // exact B1 source transaction only in its dedicated shader variant.
     // invocation evaluates a complete Simple-DDGI gather for one 12x12 screen
     // block, then writes a packed 16-byte gather-lattice sample.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1535,6 +1654,10 @@ namespace Njulf.Rendering.Data
         public uint DepthTextureIndex;
         public uint CacheBufferIndex;
         public uint ReceiverScale;
+        public uint FeedbackControlOffsetWords;
+        public uint FeedbackSamplePeriod;
+        public uint FeedbackSamplePhase;
+        public uint FeedbackMaximumOwnersPerTile;
     }
 
     // 24-byte ABI for publishing the reduced gather lattice to a frame-local
@@ -1956,7 +2079,7 @@ namespace Njulf.Rendering.Data
         public uint SchedulerFrameOffsetWords;
     }
 
-    // 160 bytes.  This is the only CPU-authored scheduler record that changes
+    // 224 bytes.  This is the only CPU-authored scheduler record that changes
     // on a normal frame.  Generation/frame ownership is represented by uints,
     // never float bitcasts.  Ray targets are bounded by the authored DDGI
     // budgets and therefore fit in uint without lossy conversion.
@@ -2005,6 +2128,28 @@ namespace Njulf.Rendering.Data
         public uint RayBucket5;
         public uint InvalidationMarkerGeneration;
         public uint Reserved0;
+        // Delayed completed-frame Q8.8 work frequencies. These are ordering
+        // hints only; request/ray budgets and liveness deadlines remain hard.
+        public uint CostVisibilityPerPrimaryQ8;
+        public uint CostAlphaCandidatesPerPrimaryQ8;
+        public uint CostMaterialEvaluationsPerPrimaryQ8;
+        public uint CostFarFieldStepsPerPrimaryQ8;
+        // B1 exact receiver-feedback binding. The summary buffer is a stable
+        // bindless allocation; a frame selects one immutable bank and carries
+        // the complete expected header identity. The scheduler validates the
+        // 64-byte native header before reading even one locator/summary.
+        public uint ExactFeedbackSummaryBufferIndex;
+        public uint ExactFeedbackSummaryBankOffsetWords;
+        public uint ExactFeedbackSummaryBankStrideWords;
+        public uint ExactFeedbackRecordCapacity;
+        public uint ExactFeedbackSummaryCapacity;
+        public uint ExactFeedbackFallbackCapacity;
+        public uint ExactFeedbackExpectedGeneration;
+        public uint ExactFeedbackExpectedViewportGeneration;
+        public uint ExactFeedbackSourceFrameSerialLow;
+        public uint ExactFeedbackSourceFrameSerialHigh;
+        public uint ExactFeedbackFlags;
+        public uint ExactFeedbackReserved0;
     }
 
     // 176 bytes.  Volume policy is uploaded only when topology, quality, or
@@ -2060,21 +2205,26 @@ namespace Njulf.Rendering.Data
         public uint CacheLayoutFlags;
     }
 
-    // 48 bytes.  Dirty-region records are bounded and coalesced by the CPU;
-    // generation and reason remain integer fields so overlap handling cannot
-    // accidentally reinterpret ownership metadata as a float.
+    // 80 bytes. Minimum/Maximum are the scheduler influence bounds, while
+    // SegmentMinimum/SegmentMaximum retain the exact old/new swept bounds used
+    // by conservative cached-ray segment tests. Generation and reason remain
+    // integer fields so overlap handling cannot accidentally reinterpret
+    // ownership metadata as a float.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiSchedulerDirtyRegion
     {
         public Vector4 Minimum;
         public Vector4 Maximum;
+        public Vector4 SegmentMinimum;
+        public Vector4 SegmentMaximum;
         public uint ReasonFlags;
         public uint Generation;
         public uint Reserved0;
         public uint Reserved1;
     }
 
-    // 44 bytes / eleven uint words.  The packed word has documented,
+    // 48 bytes / twelve uint words.  The packed lifecycle and propagation
+    // words have documented,
     // unit-tested bounds in SimpleDdgiSchedulerProbeStatePacking.  The private
     // scheduler ABI keeps dirty-latency start and the applied invalidation
     // marker in separate words; neither is allowed to alias the other.
@@ -2095,6 +2245,11 @@ namespace Njulf.Rendering.Data
         // only after validating the same address carried by the producer
         // transaction; zero remains the invalid/uncommitted sentinel.
         public uint CacheProbeBaseWordPlusOne;
+        // Conservative next-frame sparse-ordering hint: binary16 residual in
+        // bits 0..15, transport generation modulo 256 in 16..23, and bounded
+        // starvation deadline modulo 256 in 24..31. Every successful
+        // transport commit clears it before propagation publishes a new hint.
+        public uint PackedPropagationState;
     }
 
     // 32 bytes.  Invalid candidates use ProbeIndex == uint.MaxValue.  The
@@ -2400,7 +2555,7 @@ namespace Njulf.Rendering.Data
         public uint ColorMode;
         public uint DebugView;
         public uint DirectionalInscatteringEnabled;
-        public uint Padding0;
+        public uint CurrentFrameIndex;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

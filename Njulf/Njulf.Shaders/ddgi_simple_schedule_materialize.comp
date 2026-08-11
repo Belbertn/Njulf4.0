@@ -39,6 +39,13 @@ void main()
     bool sourceWork =
         transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
         transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+    bool radiometricRelight = sourceWork &&
+        SchedulerCandidateUsesRadiometricRelight(candidateReasons);
+    bool segmentSelective = sourceWork &&
+        SchedulerSourceRefreshMode() ==
+            SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_SEGMENT_SELECTIVE &&
+        (candidateReasons &
+            SIMPLE_DDGI_SCHEDULER_REASON_SEGMENT_SELECTIVE) != 0u;
     uint requiredSourceRayCount = clamp(
         SchedulerVolumeFullRays(volumeIndex),
         1u,
@@ -62,19 +69,36 @@ void main()
         flags |= SIMPLE_DDGI_SCHEDULER_PROBE_SCROLL;
     if (rayTier == SIMPLE_DDGI_SCHEDULER_RAY_MAINTENANCE)
         flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_MAINTENANCE;
-    if ((candidateReasons & (
+    uint invalidatingReasons = candidateReasons & (
             SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
             SIMPLE_DDGI_SCHEDULER_REASON_SCROLL |
             SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY |
             SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
             SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID |
-            SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY)) != 0u)
+            SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY);
+    if (radiometricRelight)
+    {
+        invalidatingReasons &= ~(
+            SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
+            SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID);
+    }
+    if (invalidatingReasons != 0u)
     {
         flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_INVALIDATE;
     }
     if (sourceWork)
     {
         flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH;
+        if (radiometricRelight)
+        {
+            flags |= SchedulerSourceRefreshMode() <<
+                SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_SHIFT;
+        }
+        else if (segmentSelective)
+        {
+            flags |= SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_SEGMENT_SELECTIVE <<
+                SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_MODE_SHIFT;
+        }
         if (transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE)
             flags |= SIMPLE_DDGI_SCHEDULER_UPDATE_ROUTINE_SOURCE;
     }

@@ -3,12 +3,25 @@ using Njulf.Core.Math;
 
 namespace Njulf.Assets.Cooked;
 
+[Flags]
+internal enum MeshOptimizerSimplificationOptions : uint
+{
+    None = 0,
+    LockBorder = 1u << 0
+}
+
 /// <summary>Thin, bounds-checked access to the meshoptimizer codec shipped by Meshoptimizer.NET.</summary>
 internal static unsafe class MeshOptimizerCodec
 {
     private const string Library = "meshoptimizer";
 
-    public static uint[] Simplify(ReadOnlySpan<uint> indices, ReadOnlySpan<Vector3> positions, int targetIndexCount, float targetError, out float resultError)
+    public static uint[] Simplify(
+        ReadOnlySpan<uint> indices,
+        ReadOnlySpan<Vector3> positions,
+        int targetIndexCount,
+        float targetError,
+        MeshOptimizerSimplificationOptions options,
+        out float resultError)
     {
         if (indices.Length == 0 || indices.Length % 3 != 0)
             throw new ArgumentException("Meshoptimizer simplification requires a non-empty triangle list.", nameof(indices));
@@ -29,7 +42,7 @@ internal static unsafe class MeshOptimizerCodec
                 checked((nuint)sizeof(Vector3)),
                 checked((nuint)targetIndexCount),
                 targetError,
-                0,
+                (uint)options,
                 out resultError);
             if (count == 0 || count > (nuint)indices.Length || count % 3 != 0)
                 throw new InvalidOperationException($"meshoptimizer returned invalid simplified index count {count}.");

@@ -25,6 +25,8 @@ void main()
     if (SchedulerCertifiedQuiesced())
         return;
 
+    SchedulerPrepareReceiverFeedbackWorkgroup();
+
     uint sequenceOrdinal = gl_GlobalInvocationID.x;
     if (sequenceOrdinal >= SchedulerActiveProbeCount())
         return;
@@ -83,8 +85,48 @@ void main()
         (stateFlags & SIMPLE_DDGI_PROBE_FLAG_SOURCE_CACHE_INVALID) != 0u ||
         (schedulerMetadata & SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR) != 0u;
     uint sourceGeneration = SchedulerArenaRead(schedulerStateBase + 2u);
+    uint sourceRays = SchedulerArenaRead(schedulerStateBase + 7u) & 0x1ffu;
+    uint requiredSourceRays = clamp(
+        SchedulerVolumeFullRays(volumeIndex),
+        1u,
+        SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+    uint sourceEpoch = SchedulerArenaRead(schedulerStateBase + 3u);
+    uint sourceVolumeGeneration = SchedulerArenaRead(schedulerStateBase + 4u);
+    uint solveEpoch = SchedulerSolveEpoch();
+    uint lastSolveEpoch = SchedulerArenaRead(schedulerStateBase + 9u);
+    uint cacheProbeBaseWordPlusOne = SchedulerArenaRead(schedulerStateBase + 10u);
+    bool sourceReady = SchedulerTransportV2() &&
+        SimpleDdgiTransportSourceReady(
+            stateFlags,
+            sourceRays,
+            requiredSourceRays,
+            sourceGeneration,
+            SchedulerSourceGeneration(),
+            sourceEpoch,
+            sourceVolumeGeneration,
+            SchedulerVolumeGeneration(),
+            schedulerMetadata,
+            cacheProbeBaseWordPlusOne);
+    // Evaluate geometry readiness against the committed public state before
+    // this invocation proposes FRESH for a private invalidation transaction.
+    bool cachedGeometryReady = SchedulerTransportV2() &&
+        sourceGeneration != 0u &&
+        SimpleDdgiTransportSourceReady(
+            stateFlags,
+            sourceRays,
+            requiredSourceRays,
+            sourceGeneration,
+            sourceGeneration,
+            sourceEpoch,
+            sourceVolumeGeneration,
+            SchedulerVolumeGeneration(),
+            schedulerMetadata,
+            cacheProbeBaseWordPlusOne);
     bool globalDirtySignal = SchedulerDirtyReasonFlags() != 0u;
     bool globalDirty = globalDirtySignal && sourceGeneration != SchedulerSourceGeneration();
+    bool radiometricRelightGeneration = globalDirty && !sourceInvalid &&
+        SchedulerSourceModeUsesRadiometricRelight(
+            SchedulerSourceRefreshMode());
     bool regionalDirty = regionalDirtySignal &&
         invalidationMarker != SchedulerVolumeDirtyGeneration(volumeIndex);
     bool fresh = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
@@ -137,8 +179,16 @@ void main()
          int(logicalY) - deltaY < 0 || int(logicalY) - deltaY >= int(countY) ||
          int(logicalZ) - deltaZ < 0 || int(logicalZ) - deltaZ >= int(countZ));
 
-    uint invalidationReasons = dirtyReasons;
-    if (globalDirty)
+    bool segmentSelectiveEligible = regionalDirty &&
+        SchedulerSourceRefreshMode() ==
+            SIMPLE_DDGI_SCHEDULER_SOURCE_MODE_SEGMENT_SELECTIVE &&
+        cachedGeometryReady && !topologyInvalid && !exposed &&
+        !SchedulerAtlasFresh() && !sourceInvalid && !relocationRetry;
+
+    uint invalidationReasons = regionalDirty
+        ? SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY
+        : 0u;
+    if (globalDirty && !radiometricRelightGeneration)
         invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY;
     if (exposed)
         invalidationReasons |= SIMPLE_DDGI_SCHEDULER_REASON_SCROLL;
@@ -173,26 +223,11 @@ void main()
         scrollExposed = (invalidationReasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) != 0u;
     }
 
-    uint sourceRays = SchedulerArenaRead(schedulerStateBase + 7u) & 0x1ffu;
-    uint requiredSourceRays = clamp(
-        SchedulerVolumeFullRays(volumeIndex),
-        1u,
-        SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
-    uint sourceEpoch = SchedulerArenaRead(schedulerStateBase + 3u);
-    uint sourceVolumeGeneration = SchedulerArenaRead(schedulerStateBase + 4u);
-    uint cacheProbeBaseWordPlusOne = SchedulerArenaRead(schedulerStateBase + 10u);
-    bool sourceReady = SchedulerTransportV2() &&
-        SimpleDdgiTransportSourceReady(
-            stateFlags,
-            sourceRays,
-            requiredSourceRays,
-            sourceGeneration,
-            SchedulerSourceGeneration(),
-            sourceEpoch,
-            sourceVolumeGeneration,
-            SchedulerVolumeGeneration(),
-            schedulerMetadata,
-            cacheProbeBaseWordPlusOne);
+    // Geometry readiness remains valid for radiometric and segment-copy
+    // transactions even though sourceReady may target a newer lighting epoch.
+    bool radiometricRelightEligible = radiometricRelightGeneration &&
+        cachedGeometryReady && !regionalDirty && !topologyInvalid &&
+        !exposed && !atlasFresh && !relocationRetry;
     uint lastSourceFrame = SchedulerArenaRead(schedulerStateBase + 1u);
     uint sourceRefreshInterval = max(SchedulerFrame(29u), 1u);
     uint periodicControlFrame = SchedulerPeriodicSourceRefreshControlFrame();
@@ -206,7 +241,7 @@ void main()
         periodicControlFrame);
     bool routineDue = SchedulerTransportV2() && sourceReady &&
         (SchedulerTailCertification()
-            ? SchedulerSolveEpoch() == 0u &&
+            ? solveEpoch == 0u &&
                 (periodicWaveMember ||
                     (!SchedulerGlobalConvergence() &&
                      !SchedulerPeriodicSourceRefreshWave() &&
@@ -228,6 +263,10 @@ void main()
     // zero-support lane from starving offscreen source repair.
     if (!sourceReady)
         reasons |= SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID;
+    if (radiometricRelightEligible)
+        reasons |= SIMPLE_DDGI_SCHEDULER_REASON_RADIOMETRIC_RELIGHT;
+    if (segmentSelectiveEligible)
+        reasons |= SIMPLE_DDGI_SCHEDULER_REASON_SEGMENT_SELECTIVE;
     vec3 camera = vec3(
         uintBitsToFloat(SchedulerFrame(20u)),
         uintBitsToFloat(SchedulerFrame(21u)),
@@ -266,9 +305,31 @@ void main()
     bool visibilityRefreshRequired = globalDirtySignal || fresh || scrollExposed ||
         regionalDirtySignal || inactive ||
         stableUpdates < max(SchedulerFrame(30u), 1u);
+    float measuredReceiverContribution;
+    uint receiverCoverageAndFlags;
+    bool receiverContributionFeedbackEnabled =
+        SchedulerReadPreviousReceiverContribution(
+            probeIndex,
+            measuredReceiverContribution,
+            receiverCoverageAndFlags);
+    bool measuredReceiver = receiverContributionFeedbackEnabled &&
+        measuredReceiverContribution > 0.0 &&
+        (receiverCoverageAndFlags &
+            SIMPLE_DDGI_SCHEDULER_RECEIVER_ROLE_MASK) != 0u;
     int importance = baseImportance + (proximity ? 3 : 0) +
         (scrollExposed ? 1 : 0);
-    bool visible = visibilityRefreshRequired && importance >= 4;
+    bool visible = visibilityRefreshRequired &&
+        (importance >= 4 || measuredReceiver);
+    if (SchedulerUrgentRelight() &&
+        !(radiometricRelightEligible && visible && ring == 0u && !inactive))
+    {
+        // The pre-forward lane cannot wait on new geometry or repair a source
+        // cache. Leave every ineligible probe byte-identical for the ordinary
+        // post-forward scheduler, whose budget and complete-field authority are
+        // intentionally independent of this bounded transaction.
+        SchedulerWriteInvalidCandidate(candidateBase);
+        return;
+    }
     bool stableTailParticipant =
         sourceReady &&
         !fresh &&
@@ -299,7 +360,7 @@ void main()
             1u);
     }
     if (SchedulerTailCertification() &&
-        SchedulerSolveEpoch() != 0u &&
+        solveEpoch != 0u &&
         !stableTailParticipant)
     {
         // A solve epoch and its audit certify one frozen source operator. Do
@@ -310,12 +371,43 @@ void main()
         SchedulerWriteInvalidCandidate(candidateBase);
         return;
     }
+    if (SchedulerTailCertification() &&
+        solveEpoch != 0u &&
+        lastSolveEpoch == solveEpoch)
+    {
+        // A tail solve is an exact complete-field sweep, not an open-ended
+        // maintenance queue. Once this participant has published for the
+        // current epoch, exclude it from classification until the controller
+        // advances the epoch. This makes progress independent of lane cursor
+        // stability and prevents a warm prior from repeatedly consuming the
+        // frame budget with the same high-priority subset.
+        SchedulerWriteInvalidCandidate(candidateBase);
+        return;
+    }
     bool zeroSupport = fresh || relocationRetry || activeWeight <= 0.0001 ||
         (SchedulerTransportV2() && sourceRays == 0u && !inactive);
     bool visibleZeroSupport = visible && zeroSupport;
     float residualEnvelope = ReadStorageFloatUniform(
         pc.ProbeStateBufferIndex,
         stateBase + 7u);
+    uint packedPropagation = SchedulerArenaRead(schedulerStateBase + 11u);
+    float propagatedResidual = unpackHalf2x16(
+        packedPropagation & 0xffffu).x;
+    uint propagationGeneration = (packedPropagation >> 16u) & 0xffu;
+    uint propagationDeadline = packedPropagation >> 24u;
+    bool sparsePropagationDue = SchedulerSparseResidualPropagation() &&
+        propagationGeneration == (SchedulerTransportGeneration() & 0xffu) &&
+        !isnan(propagatedResidual) && !isinf(propagatedResidual) &&
+        propagatedResidual > max(
+            uintBitsToFloat(SchedulerFrame(39u)),
+            1.0e-7);
+    float orderingResidual = sparsePropagationDue &&
+            (isnan(residualEnvelope) || isinf(residualEnvelope) ||
+                residualEnvelope < 0.0)
+        ? propagatedResidual
+        : (sparsePropagationDue
+            ? max(residualEnvelope, propagatedResidual)
+            : residualEnvelope);
     uint packedTransport = SchedulerArenaRead(schedulerStateBase + 7u);
     uint completedTransportGeneration =
         (packedTransport & SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_MASK) >>
@@ -327,7 +419,8 @@ void main()
         !isnan(residualEnvelope) && !isinf(residualEnvelope) &&
         residualEnvelope >= 0.0 &&
         residualEnvelope <= uintBitsToFloat(SchedulerFrame(39u));
-    if (solverConverged && !globalDirty && !regionalDirty && !fresh &&
+    if (solverConverged && !sparsePropagationDue &&
+        !globalDirty && !regionalDirty && !fresh &&
         !scrollExposed && !sourceInvalid && !relocationRetry && !inactiveRetry)
     {
         SchedulerWriteInvalidCandidate(candidateBase);
@@ -412,8 +505,8 @@ void main()
         // A genuinely due periodic source refresh remains legal after a
         // certificate has returned the controller to epoch zero.
         if (SchedulerTailCertification() &&
-            SchedulerSolveEpoch() == 0u &&
-            !routineDue)
+            solveEpoch == 0u &&
+            !routineDue && !sparsePropagationDue)
         {
             SchedulerWriteInvalidCandidate(candidateBase);
             return;
@@ -427,12 +520,65 @@ void main()
             : SIMPLE_DDGI_SCHEDULER_RAY_FULL;
         reasons |= sourceReady ? SIMPLE_DDGI_SCHEDULER_REASON_CONVERGENCE :
             SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID;
+        if (sparsePropagationDue)
+            reasons |= SIMPLE_DDGI_SCHEDULER_REASON_RESIDUAL_PROPAGATION;
         if (routineDue)
         {
             transport = SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
             rayTier = SIMPLE_DDGI_SCHEDULER_RAY_FULL;
             reasons |= SIMPLE_DDGI_SCHEDULER_REASON_ROUTINE_DUE;
         }
+    }
+
+    if (SchedulerCostAwarePriority() &&
+        workClass >= SIMPLE_DDGI_SCHEDULER_WORK_NEAR_MAINTENANCE)
+    {
+        // Reclassify only the three maintenance priority lanes. Volume/ring
+        // quotas remain independent, and age at the hard deadline always wins
+        // regardless of predicted expense. The frozen audit still visits the
+        // complete participant set, so this changes order rather than quality.
+        uint priorityRayCount = rayTier == SIMPLE_DDGI_SCHEDULER_RAY_FULL
+            ? max(SchedulerVolumeFullRays(volumeIndex), 1u)
+            : max(SchedulerVolumeMaintenanceRays(volumeIndex), 1u);
+        bool cachedOnly = transport ==
+            SIMPLE_DDGI_SCHEDULER_TRANSPORT_CACHED_SOLVER;
+        bool primaryTrace = (transport ==
+                SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
+            transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE) &&
+            !SchedulerCandidateUsesRadiometricRelight(reasons);
+        float normalizedResidual = orderingResidual /
+            max(uintBitsToFloat(SchedulerFrame(39u)), 0.000001);
+        uint maximumLatency = max(retryFrames, 60u);
+        // Actual delayed contribution dominates the quality-sensitive order.
+        // Retain a small camera-visible prior for the bootstrap frame and for
+        // reflection/safety work that is intentionally outside the sampled
+        // receiver set. Hard latency and per-ring quotas remain below/above
+        // this score and therefore cannot be suppressed by absent feedback.
+        float ordinaryReceiverPrior = visible
+            ? max(activeWeight, 1.0)
+            : activeWeight * 0.25;
+        float priorityReceiverContribution = ordinaryReceiverPrior +
+            (receiverContributionFeedbackEnabled
+                ? measuredReceiverContribution
+                : 0.0);
+        float score = SchedulerErrorReductionPerCost(
+            normalizedResidual,
+            priorityReceiverContribution,
+            stateAge,
+            maximumLatency,
+            SchedulerPredictedRelativeCost(
+                priorityRayCount,
+                primaryTrace,
+                cachedOnly));
+        bool propagationDeadlineReached = sparsePropagationDue &&
+            (((SchedulerFrameIndex() & 0xffu) - propagationDeadline) & 0xffu) <
+                0x80u;
+        if (stateAge >= maximumLatency || propagationDeadlineReached || score >= 0.08)
+            workClass = SIMPLE_DDGI_SCHEDULER_WORK_NEAR_MAINTENANCE;
+        else if (score >= 0.025)
+            workClass = SIMPLE_DDGI_SCHEDULER_WORK_MID_MAINTENANCE;
+        else
+            workClass = SIMPLE_DDGI_SCHEDULER_WORK_FAR_MAINTENANCE;
     }
 
     // Cardinalities are deterministic policy values for this volume, transport
@@ -473,4 +619,11 @@ void main()
         lane);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
         pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE_CLASS_BASE + workClass], 1u);
+    atomicAdd(BindlessStorageBuffers[nonuniformEXT(pc.ArenaBufferIndex)].Words[
+        pc.CountersOffsetWords +
+            SIMPLE_DDGI_SCHEDULER_COUNTER_ELIGIBLE_RING_BASE +
+            min(SchedulerVolumeRing(volumeIndex), 2u)], 1u);
 }

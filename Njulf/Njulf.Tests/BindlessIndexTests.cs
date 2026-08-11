@@ -42,6 +42,14 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.SimpleDdgiStorageValidationBufferFrame1, Is.EqualTo(BindlessIndex.SimpleDdgiStorageValidationBufferBase + 1));
             Assert.That(BindlessIndex.SimpleDdgiReceiverGatherBufferBase, Is.EqualTo(BindlessIndex.SimpleDdgiStorageValidationBufferFrame1 + 1));
             Assert.That(BindlessIndex.SimpleDdgiReceiverGatherBufferFrame1, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherBufferBase + 1));
+            Assert.That(BindlessIndex.SimpleDdgiEmissiveSurfaceBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherBufferFrame1 + 1));
+            Assert.That(BindlessIndex.SimpleDdgiLightTreeNodeBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiEmissiveSurfaceBuffer + 1));
+            Assert.That(BindlessIndex.SimpleDdgiDirectionalRadianceBuffer, Is.EqualTo(BindlessIndex.SimpleDdgiLightTreeScratchBuffer + 1));
+            Assert.That(BindlessIndex.DdgiDecalCandidateBuffer, Is.EqualTo(BindlessIndex.DdgiFoliageProxyIndexBuffer + 1));
+            Assert.That(BindlessIndex.DdgiFoliageProxyVertexBufferFrame1, Is.EqualTo(BindlessIndex.DdgiDecalCandidateBuffer + 1));
+            Assert.That(BindlessIndex.DdgiFoliageProxyIndexBufferFrame1, Is.EqualTo(BindlessIndex.DdgiFoliageProxyVertexBufferFrame1 + 1));
+            Assert.That(BindlessIndex.DdgiFoliageProxyPatchBuffer, Is.EqualTo(BindlessIndex.DdgiFoliageProxyIndexBufferFrame1 + 1));
+            Assert.That(BindlessIndex.DdgiFoliageProxyPatchBufferFrame1, Is.EqualTo(BindlessIndex.DdgiFoliageProxyPatchBuffer + 1));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiRayQueryInstanceBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiRayQueryInstanceBuffer)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiEmissiveSourceBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiEmissiveSourceBuffer)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiReceiverProbeBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiReceiverProbeBuffer)));
@@ -50,6 +58,9 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiStorageValidationBufferFrame1), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiStorageValidationBufferFrame1)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiReceiverGatherBufferBase), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiReceiverGatherBufferBase)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiReceiverGatherBufferFrame1), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiReceiverGatherBufferFrame1)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiEmissiveSurfaceBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiEmissiveSurfaceBuffer)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiLightTreeStateBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiLightTreeStateBuffer)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiDirectionalRadianceBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiDirectionalRadianceBuffer)));
             Assert.That(
                 BindlessIndex.FirstDynamicTextureIndex,
                 Is.EqualTo(
@@ -79,6 +90,36 @@ public sealed class BindlessIndexTests
             ["SIMPLE_DDGI_STORAGE_VALIDATION_BUFFER_BASE_INDEX"] = BindlessIndex.SimpleDdgiStorageValidationBufferBase,
             ["SIMPLE_DDGI_RECEIVER_GATHER_BUFFER_BASE_INDEX"] = BindlessIndex.SimpleDdgiReceiverGatherBufferBase,
             ["FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX"] = BindlessIndex.FarFieldClipmapParamsBuffer,
+            ["SIMPLE_DDGI_EMISSIVE_SURFACE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiEmissiveSurfaceBuffer,
+            ["SIMPLE_DDGI_LIGHT_TREE_NODE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiLightTreeNodeBuffer,
+            ["SIMPLE_DDGI_LIGHT_TREE_LEAF_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiLightTreeLeafBuffer,
+            ["SIMPLE_DDGI_LIGHT_TREE_STATE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiLightTreeStateBuffer,
+            ["SIMPLE_DDGI_LIGHT_TREE_SCRATCH_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiLightTreeScratchBuffer,
+            ["SIMPLE_DDGI_DIRECTIONAL_RADIANCE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiDirectionalRadianceBuffer,
+            ["SIMPLE_DDGI_DIRECTIONAL_RADIANCE_PARITY_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiDirectionalRadianceParityBuffer,
+            ["DDGI_FOLIAGE_PROXY_VERTEX_BUFFER_INDEX"] = BindlessIndex.DdgiFoliageProxyVertexBuffer,
+            ["DDGI_FOLIAGE_PROXY_INDEX_BUFFER_INDEX"] = BindlessIndex.DdgiFoliageProxyIndexBuffer,
+            ["DDGI_DECAL_CANDIDATE_BUFFER_INDEX"] = BindlessIndex.DdgiDecalCandidateBuffer,
+            ["DDGI_FOLIAGE_PROXY_VERTEX_BUFFER_FRAME1_INDEX"] = BindlessIndex.DdgiFoliageProxyVertexBufferFrame1,
+            ["DDGI_FOLIAGE_PROXY_INDEX_BUFFER_FRAME1_INDEX"] = BindlessIndex.DdgiFoliageProxyIndexBufferFrame1,
+            ["DDGI_FOLIAGE_PROXY_PATCH_BUFFER_INDEX"] = BindlessIndex.DdgiFoliageProxyPatchBuffer,
+            ["DDGI_FOLIAGE_PROXY_PATCH_BUFFER_FRAME1_INDEX"] = BindlessIndex.DdgiFoliageProxyPatchBufferFrame1,
+            ["SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORDS_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiReceiverFeedbackRecordsBuffer,
+            ["SIMPLE_DDGI_RECEIVER_FEEDBACK_SORT_SCRATCH_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiReceiverFeedbackSortScratchBuffer,
+            ["SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiReceiverFeedbackSummaryBuffer,
+            ["OPACITY_MICROMAP_RESIDENT_BUFFER_INDEX"] = BindlessIndex.OpacityMicromapResidentBuffer,
+            ["OPACITY_MICROMAP_BUILD_SCRATCH_BUFFER_INDEX"] = BindlessIndex.OpacityMicromapBuildScratchBuffer,
+            ["OPACITY_MICROMAP_COMPACTION_BUFFER_INDEX"] = BindlessIndex.OpacityMicromapCompactionBuffer,
+            ["SIMPLE_DDGI_GUIDING_DISTRIBUTION_BANK0_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiGuidingDistributionBank0Buffer,
+            ["SIMPLE_DDGI_GUIDING_DISTRIBUTION_BANK1_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiGuidingDistributionBank1Buffer,
+            ["SIMPLE_DDGI_GUIDING_TRAINING_SCRATCH_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiGuidingTrainingScratchBuffer,
+            ["SIMPLE_DDGI_GUIDING_DIRECTION_PDF_SIDECAR_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiGuidingDirectionPdfSidecarBuffer,
+            ["GI_CAUSTIC_TASK_BUFFER_INDEX"] = BindlessIndex.GiCausticTaskBuffer,
+            ["GI_CAUSTIC_PHOTON_BUFFER_INDEX"] = BindlessIndex.GiCausticPhotonBuffer,
+            ["GI_CAUSTIC_CACHE_BUFFER_INDEX"] = BindlessIndex.GiCausticCacheBuffer,
+            ["GI_CAUSTIC_SCRATCH_BUFFER_INDEX"] = BindlessIndex.GiCausticScratchBuffer,
+            ["SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_TILE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiNearFieldResidualTileBuffer,
+            ["SIMPLE_DDGI_RECEIVER_FEEDBACK_CANDIDATE_BUFFER_INDEX"] = BindlessIndex.SimpleDdgiReceiverFeedbackCandidateBuffer,
             ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount
         };
 

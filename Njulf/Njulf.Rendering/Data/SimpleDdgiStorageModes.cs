@@ -22,6 +22,18 @@ public enum SimpleDdgiStoragePackingMode : uint
     Packed = 2
 }
 
+/// <summary>
+/// Selects the page-local organization of packed transport-source records.
+/// Auto admits the conditional sidecar only after a bounded completed-work
+/// sample demonstrates enough miss/backface traffic to cover its address cost.
+/// </summary>
+public enum SimpleDdgiSourceCacheLayoutMode : uint
+{
+    FixedRecord = 0,
+    Auto = 1,
+    HotHeaderConditionalPayload = 2
+}
+
 /// <summary>Controls which complete physical probe ranges receive an image mirror.</summary>
 public enum SimpleDdgiSampledAtlasCoverageMode : uint
 {
@@ -43,7 +55,7 @@ public enum SimpleDdgiTransportCacheFormat : uint
 public enum SimpleDdgiStorageAbiVersion : uint
 {
     Legacy = 4,
-    Packed = 6
+    Packed = 7
 }
 
 /// <summary>Opt-in GPU evidence for packed storage and compact mirror qualification.</summary>
@@ -116,6 +128,15 @@ public readonly record struct SimpleDdgiStorageValidationCounters(
 
 public static class SimpleDdgiStorageModeExtensions
 {
+    public static bool IsDefined(this SimpleDdgiSourceCacheLayoutMode mode) =>
+        mode is SimpleDdgiSourceCacheLayoutMode.FixedRecord or
+            SimpleDdgiSourceCacheLayoutMode.Auto or
+            SimpleDdgiSourceCacheLayoutMode.HotHeaderConditionalPayload;
+
+    public static SimpleDdgiSourceCacheLayoutMode Sanitize(
+        this SimpleDdgiSourceCacheLayoutMode mode) =>
+        mode.IsDefined() ? mode : SimpleDdgiSourceCacheLayoutMode.FixedRecord;
+
     public static bool IsDefined(this SimpleDdgiStoragePackingMode mode) =>
         mode is SimpleDdgiStoragePackingMode.Legacy or
             SimpleDdgiStoragePackingMode.Validate or

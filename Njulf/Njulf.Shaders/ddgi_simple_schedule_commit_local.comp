@@ -67,8 +67,8 @@ bool SealCommittedSourceCache(
                 SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_ADDRESS;
             return false;
         }
-        uint generationWord = cacheBase +
-            SimpleDdgiStorageExpectedStride(cacheFormat) - 1u;
+        uint generationWord = SimpleDdgiStorageGenerationWord(
+            cacheBase, cacheFormat, cacheLayoutFlags);
         uint generationAndFlags = ReadStorageWordUniform(
             sourceCacheBufferIndex,
             generationWord);
@@ -144,8 +144,8 @@ bool SealCommittedSourceCache(
                 SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_ADDRESS;
             return false;
         }
-        uint generationWord = cacheBase +
-            SimpleDdgiStorageExpectedStride(cacheFormat) - 1u;
+        uint generationWord = SimpleDdgiStorageGenerationWord(
+            cacheBase, cacheFormat, cacheLayoutFlags);
         uint generationAndFlags = ReadStorageWordUniform(
             sourceCacheBufferIndex,
             generationWord);
@@ -191,6 +191,14 @@ void RejectOutcome(
     uint outcomeIndex,
     uint failureCategory)
 {
+    // Propagation runs in a separate indirect dispatch after this pass. Mark
+    // commit-time rejection in the shared outcome so it cannot mistake a
+    // producer-complete but unpublished transaction for a residual seed.
+    uint outcomeBase = pc.OutcomesOffsetWords +
+        outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
+    SchedulerArenaAtomicOr(
+        outcomeBase + 9u,
+        SIMPLE_DDGI_SCHEDULER_FAILURE_PUBLIC_WRITE);
     // Admission pins a sparse page before publishing its queue record. Every
     // terminal path must drop that pin so reconciliation can later evict it.
     ReleaseSparsePageForOutcome(probeIndex, outcomeIndex);
@@ -220,6 +228,7 @@ void main()
         SchedulerRequestCapacity());
     if (outcomeIndex >= accepted)
         return;
+    bool urgentRelight = SchedulerUrgentRelight();
 
     uint outcomeBase = pc.OutcomesOffsetWords +
         outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
@@ -311,7 +320,9 @@ void main()
     uint committedSourceEpoch = SchedulerArenaRead(stateBase + 3u);
     uint sourceEpoch =
         (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u
-            ? SchedulerAdvanceSourceEpoch(committedSourceEpoch)
+            ? (SchedulerUpdatePreservesSourceEpoch(updateFlags)
+                ? committedSourceEpoch
+                : SchedulerAdvanceSourceEpoch(committedSourceEpoch))
             : committedSourceEpoch;
     if (sourceEpoch == 0u)
     {
@@ -442,7 +453,7 @@ void main()
             SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
     uint cacheFailureCategory =
         SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CACHE_PRECONDITION;
-    if (sourceRefresh && !SealCommittedSourceCache(
+    if (sourceRefresh && !urgentRelight && !SealCommittedSourceCache(
             volumeIndex,
             cacheProbeBaseWordPlusOne,
             sourceRayCount,
@@ -475,6 +486,7 @@ void main()
             SchedulerVolumeSpacing(volumeIndex),
             proposedActiveWeight,
             receiverFlags,
+            committedGeneration,
             physicalProbeIndex,
             packedReceiver))
     {
@@ -514,6 +526,45 @@ void main()
                 ReadStorageWordUniform(
                     pc.TransportIrradianceAtlasBufferIndex,
                     privateVisibilityBase + word));
+
+        uint paramsFlags = ReadStorageWordUniform(
+            pc.ParamsBufferIndex,
+            SIMPLE_DDGI_SCHEDULER_PARAMS_FLAGS_WORD);
+        if ((paramsFlags & SIMPLE_DDGI_FLAG_NEAR_VISIBILITY_SIDECAR) != 0u &&
+            SchedulerVolumeUsesNearVisibilitySidecar(volumeIndex))
+        {
+            uint physicalProbeCapacity = ReadStorageWordUniform(
+                pc.ParamsBufferIndex,
+                SIMPLE_DDGI_SCHEDULER_PARAMS_PHYSICAL_CAPACITY_WORD);
+            if (physicalProbeIndex < physicalProbeCapacity &&
+                physicalProbeCapacity <=
+                    0xffffffffu /
+                        SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE)
+            {
+                uint canonicalVisibilityWords = physicalProbeCapacity *
+                    SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
+                uint privateNearVisibilityBase =
+                    pc.PrivateVisibilityAtlasOffsetWords +
+                    canonicalVisibilityWords +
+                    physicalProbeIndex *
+                        SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
+                uint publicNearVisibilityBase =
+                    canonicalVisibilityWords +
+                    physicalProbeIndex *
+                        SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
+                for (uint word = 0u;
+                     word < SIMPLE_DDGI_SCHEDULER_VISIBILITY_WORDS_PER_PROBE;
+                     word++)
+                {
+                    WriteStorageWordUniform(
+                        pc.VisibilityAtlasBufferIndex,
+                        publicNearVisibilityBase + word,
+                        ReadStorageWordUniform(
+                            pc.TransportIrradianceAtlasBufferIndex,
+                            privateNearVisibilityBase + word));
+                }
+            }
+        }
     }
 
     WriteStorageVec4Uniform(
@@ -538,84 +589,107 @@ void main()
         probeIndex,
         packedReceiver);
 
-    SchedulerArenaWrite(stateBase + 0u, SchedulerFrameIndex());
-    // Persist the exact producer-validated address only after every producer
-    // and receiver-visible publication has succeeded. Lightweight diagnostic
-    // consumers can use this one-based base without compiling the sparse page
-    // resolver into their hot ray kernel; reduction independently revalidates
-    // the current publication and ownership context before certifying it.
-    SchedulerArenaWrite(stateBase + 10u, cacheProbeBaseWordPlusOne);
-    // For a source refresh the admitted active-ray count is also the source
-    // sequence cardinality. It is retained in the expected-ray-count word;
-    // the former sixteenth outcome word was a duplicate of this value.
-    if (sourceRefresh)
+    if (!urgentRelight)
     {
-        SchedulerArenaWrite(stateBase + 1u, SchedulerFrameIndex());
-        SchedulerArenaWrite(stateBase + 2u, sourceGeneration);
-        SchedulerArenaWrite(stateBase + 3u, sourceEpoch);
-        SchedulerArenaWrite(stateBase + 7u, min(sourceRayCount, 0x1ffu));
-        SchedulerArenaWrite(stateBase + 9u, 0u);
-    }
-    else if (SchedulerTransportV2())
-    {
-        uint packedLifecycle = SchedulerArenaRead(stateBase + 7u);
-        uint sourceRays = packedLifecycle & SIMPLE_DDGI_SCHEDULER_SOURCE_RAY_MASK;
-        uint previousTransportGeneration =
-            (packedLifecycle & SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_MASK) >>
-            SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT;
-        uint stableUpdates =
-            (packedLifecycle & SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_MASK) >>
-            SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT;
-        if (sourceRays != 0u)
+        SchedulerArenaWrite(stateBase + 0u, SchedulerFrameIndex());
+        // Persist the exact producer-validated address only after every producer
+        // and receiver-visible publication has succeeded. Lightweight diagnostic
+        // consumers can use this one-based base without compiling the sparse page
+        // resolver into their hot ray kernel; reduction independently revalidates
+        // the current publication and ownership context before certifying it.
+        SchedulerArenaWrite(stateBase + 10u, cacheProbeBaseWordPlusOne);
+        // For a source refresh the admitted active-ray count is also the source
+        // sequence cardinality. It is retained in the expected-ray-count word;
+        // the former sixteenth outcome word was a duplicate of this value.
+        if (sourceRefresh)
         {
-            previousTransportGeneration = SchedulerTransportGeneration() & 0xffu;
-            stableUpdates = min(stableUpdates + 1u, 0xffu);
+            SchedulerArenaWrite(stateBase + 1u, SchedulerFrameIndex());
+            SchedulerArenaWrite(stateBase + 2u, sourceGeneration);
+            SchedulerArenaWrite(stateBase + 3u, sourceEpoch);
+            SchedulerArenaWrite(stateBase + 7u, min(sourceRayCount, 0x1ffu));
+            SchedulerArenaWrite(stateBase + 9u, 0u);
         }
-        SchedulerArenaWrite(
-            stateBase + 7u,
-            sourceRays |
-            (previousTransportGeneration << SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT) |
-            (stableUpdates << SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT));
-        if (SchedulerTailCertification() && SchedulerSolveEpoch() != 0u)
-            SchedulerArenaWrite(stateBase + 9u, SchedulerSolveEpoch());
-    }
-    SchedulerArenaWrite(stateBase + 4u, SchedulerVolumeGeneration());
-    uint previousSchedulerMetadata = SchedulerArenaRead(stateBase + 5u);
-    uint schedulerMetadata = previousSchedulerMetadata &
-        SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK;
-    if (!sourceRefresh)
-        schedulerMetadata |= previousSchedulerMetadata &
-            SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR;
-    if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE) != 0u)
-        schedulerMetadata |= SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE |
-            SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED;
-    if (sourceRefresh)
-        schedulerMetadata &= ~SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR;
-    SchedulerArenaWrite(stateBase + 5u, schedulerMetadata);
+        else if (SchedulerTransportV2())
+        {
+            uint packedLifecycle = SchedulerArenaRead(stateBase + 7u);
+            uint sourceRays = packedLifecycle & SIMPLE_DDGI_SCHEDULER_SOURCE_RAY_MASK;
+            uint previousTransportGeneration =
+                (packedLifecycle & SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_MASK) >>
+                SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT;
+            uint stableUpdates =
+                (packedLifecycle & SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_MASK) >>
+                SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT;
+            if (sourceRays != 0u)
+            {
+                previousTransportGeneration = SchedulerTransportGeneration() & 0xffu;
+                stableUpdates = min(stableUpdates + 1u, 0xffu);
+            }
+            SchedulerArenaWrite(
+                stateBase + 7u,
+                sourceRays |
+                (previousTransportGeneration << SIMPLE_DDGI_SCHEDULER_TRANSPORT_GENERATION_SHIFT) |
+                (stableUpdates << SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT));
+            if (SchedulerTailCertification() && SchedulerSolveEpoch() != 0u)
+                SchedulerArenaWrite(stateBase + 9u, SchedulerSolveEpoch());
+        }
+        SchedulerArenaWrite(stateBase + 4u, SchedulerVolumeGeneration());
+        uint previousSchedulerMetadata = SchedulerArenaRead(stateBase + 5u);
+        uint schedulerMetadata = previousSchedulerMetadata &
+            SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK;
+        if (!sourceRefresh)
+            schedulerMetadata |= previousSchedulerMetadata &
+                SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR;
+        if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_VISIBLE) != 0u)
+            schedulerMetadata |= SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBLE |
+                SIMPLE_DDGI_SCHEDULER_PROBE_META_PUBLISHED;
+        if (sourceRefresh)
+            schedulerMetadata &= ~SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR;
+        SchedulerArenaWrite(stateBase + 5u, schedulerMetadata);
 
-    // Apply the invalidation marker only after the public record and private
-    // atlas publication have passed every generation/completion check. A
-    // failed or partial request therefore remains eligible on the next frame.
-    // Cached solver publication is not an invalidation event. Preserve the
-    // marker that acknowledged the last topology/source/dirty proposal;
-    // replacing it with an unrelated dirty generation can re-arm a still-live
-    // atlas-fresh signal and send a stable field back to source repair.
-    uint appliedMarker = SchedulerArenaRead(stateBase + 8u);
-    if ((candidateReasons & (
-            SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
-            SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY |
-            SIMPLE_DDGI_SCHEDULER_REASON_SCROLL)) != 0u)
-        appliedMarker = SchedulerVolumeGeneration();
-    else if ((candidateReasons &
-            SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY) != 0u)
-        appliedMarker = SchedulerVolumeDirtyGeneration(volumeIndex);
-    else if ((candidateReasons & (
-            SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
-            SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID)) != 0u)
-        appliedMarker = SchedulerSourceGeneration();
-    if (appliedMarker == 0u)
-        appliedMarker = SchedulerQueueGeneration();
-    SchedulerArenaWrite(stateBase + 8u, appliedMarker);
+        // Apply the invalidation marker only after the public record and private
+        // atlas publication have passed every generation/completion check. A
+        // failed or partial request therefore remains eligible on the next frame.
+        // Cached solver publication is not an invalidation event. Preserve the
+        // marker that acknowledged the last topology/source/dirty proposal;
+        // replacing it with an unrelated dirty generation can re-arm a still-live
+        // atlas-fresh signal and send a stable field back to source repair.
+        uint appliedMarker = SchedulerArenaRead(stateBase + 8u);
+        if ((candidateReasons & (
+                SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
+                SIMPLE_DDGI_SCHEDULER_REASON_TOPOLOGY |
+                SIMPLE_DDGI_SCHEDULER_REASON_SCROLL)) != 0u)
+            appliedMarker = SchedulerVolumeGeneration();
+        else if ((candidateReasons &
+                SIMPLE_DDGI_SCHEDULER_REASON_REGIONAL_DIRTY) != 0u)
+            appliedMarker = SchedulerVolumeDirtyGeneration(volumeIndex);
+        else if ((candidateReasons & (
+                SIMPLE_DDGI_SCHEDULER_REASON_GLOBAL_DIRTY |
+                SIMPLE_DDGI_SCHEDULER_REASON_SOURCE_INVALID)) != 0u)
+            appliedMarker = SchedulerSourceGeneration();
+        if (appliedMarker == 0u)
+            appliedMarker = SchedulerQueueGeneration();
+        SchedulerArenaWrite(stateBase + 8u, appliedMarker);
+
+        // This transaction consumed the prior sparse wake. Propagation executes
+        // after every local commit and may publish a newer conservative bound for
+        // neighbouring dependents without racing this clear.
+        SchedulerArenaWrite(stateBase + 11u, 0u);
+    }
+
+    if (urgentRelight)
+    {
+        // This marker is visible only after canonical atlas, public state, and
+        // the coherent receiver record have all been published. The sampled
+        // mirror dispatch consumes it after CommitLocal and never exposes a
+        // producer-complete but rejected private payload.
+        SchedulerArenaAtomicOr(
+            outcomeBase + 8u,
+            SIMPLE_DDGI_SCHEDULER_COMPLETE_URGENT_COMMIT);
+        SchedulerArenaAtomicAdd(
+            pc.CountersOffsetWords +
+                SIMPLE_DDGI_SCHEDULER_COUNTER_URGENT_TELEMETRY,
+            1u);
+    }
 
     SchedulerArenaAtomicAdd(
         pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_COMMITTED,

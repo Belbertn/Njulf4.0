@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
@@ -121,9 +122,42 @@ namespace Njulf.Rendering.Resources
         public const int SimpleDdgiVolumeEnergyEvidenceCounterCount =
             GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount *
             SimpleDdgiVolumeEnergyEvidenceCounterStride;
-        public const int CounterCount =
+        // Bounded exact-attribution records for directional-shadow compaction.
+        // This family is appended so all existing renderer diagnostic offsets
+        // remain capture-compatible.
+        public const int DirectionalShadowCasterDiagnosticCounterBase =
             SimpleDdgiVolumeEnergyEvidenceCounterBase +
             SimpleDdgiVolumeEnergyEvidenceCounterCount;
+        // The first three words are atomically written by the diagnostic
+        // shader.  The remaining words are transfer-initialized once per
+        // frame-slot, which binds a completed record bank to the exact CPU
+        // shadow-data capture used to evaluate it after its fence signals.
+        public const int DirectionalShadowCasterDiagnosticHeaderWordCount = 7;
+        public const uint DirectionalShadowCasterDiagnosticFrameMetadataMagic =
+            0x44534346u; // "DSCF"
+        public const int DirectionalShadowCasterDiagnosticRecordCapacity = 16;
+        public const int DirectionalShadowCasterDiagnosticRecordStride = 28;
+        public const int DirectionalShadowCasterDiagnosticCounterCount =
+            DirectionalShadowCasterDiagnosticHeaderWordCount +
+            DirectionalShadowCasterDiagnosticRecordCapacity *
+            DirectionalShadowCasterDiagnosticRecordStride;
+        // Content-dependent ray-scene participation. Appended so captures made
+        // against every earlier counter ABI remain byte-for-byte decodable.
+        public const int DdgiGeometryParticipationCounterBase =
+            DirectionalShadowCasterDiagnosticCounterBase +
+            DirectionalShadowCasterDiagnosticCounterCount;
+        public const int DdgiGeometryParticipationCounterCount = 12;
+        // Detailed many-light estimator evidence. Quantized PDF statistics are
+        // appended to preserve every established capture offset.
+        public const int DdgiManyLightCounterBase =
+            DdgiGeometryParticipationCounterBase +
+            DdgiGeometryParticipationCounterCount;
+        public const int DdgiManyLightCounterCount = 16;
+        public const float DdgiManyLightPdfScale = 1_048_576.0f;
+        public const float DdgiManyLightLogPdfScale = 1_024.0f;
+        public const float DdgiManyLightEstimatorWeightScale = 1_024.0f;
+        public const int CounterCount =
+            DdgiManyLightCounterBase + DdgiManyLightCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -152,12 +186,20 @@ namespace Njulf.Rendering.Resources
         private readonly uint[] _lastValidSimpleVolumeEnergyCounterAge =
             new uint[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
         private readonly DirectionalShadowReceiverCounters[] _lastCompletedDirectionalShadowReceiverCounters = new DirectionalShadowReceiverCounters[FramesInFlight];
+        private readonly DirectionalShadowCasterDiagnostics[] _lastCompletedDirectionalShadowCasterDiagnostics =
+            new DirectionalShadowCasterDiagnostics[FramesInFlight];
         private readonly FarFieldMaterialV2Counters[] _lastCompletedFarFieldMaterialV2Counters =
             new FarFieldMaterialV2Counters[FramesInFlight];
         private readonly MaterialGiGpuCounters[] _lastCompletedMaterialGiCounters =
             new MaterialGiGpuCounters[FramesInFlight];
         private readonly ThinSurfaceTransportCounters[] _lastCompletedThinSurfaceTransportCounters =
             new ThinSurfaceTransportCounters[FramesInFlight];
+        private readonly DdgiGeometryParticipationGpuCounters[]
+            _lastCompletedDdgiGeometryParticipationCounters =
+                new DdgiGeometryParticipationGpuCounters[FramesInFlight];
+        private readonly DdgiManyLightGpuCounters[]
+            _lastCompletedDdgiManyLightCounters =
+                new DdgiManyLightGpuCounters[FramesInFlight];
         private bool _disposed;
 
         public RendererDiagnosticsBuffer(VulkanContext context, BufferManager bufferManager)
@@ -168,6 +210,7 @@ namespace Njulf.Rendering.Resources
             for (int i = 0; i < FramesInFlight; i++)
             {
                 _lastCompletedDirectionalShadowReceiverCounters[i] = DirectionalShadowReceiverCounters.Empty;
+                _lastCompletedDirectionalShadowCasterDiagnostics[i] = DirectionalShadowCasterDiagnostics.Empty;
                 _buffers[i] = _bufferManager.CreateBuffer(
                     CounterBufferSize,
                     BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
@@ -220,6 +263,9 @@ namespace Njulf.Rendering.Resources
             uint* storageValidationCounters = (uint*)_bufferManager.GetMappedPointer(
                 _simpleDdgiStorageValidationBuffers[frameIndex]);
 
+            _lastCompletedDirectionalShadowCasterDiagnostics[frameIndex] =
+                DecodeDirectionalShadowCasterDiagnostics(new ReadOnlySpan<uint>(counters, CounterCount));
+
             _lastCompletedThinSurfaceTransportCounters[frameIndex] = new ThinSurfaceTransportCounters(
                 DetailedHitCount: counters[ThinSurfaceTransportCounterBase + 0],
                 CompactHitCount: counters[ThinSurfaceTransportCounterBase + 1],
@@ -254,6 +300,50 @@ namespace Njulf.Rendering.Resources
                 EstimatedCorrectnessFallbackHitCount: counters[MaterialGiCounterBase + 7],
                 EstimatedFarFieldTransportHitCount: counters[MaterialGiCounterBase + 8],
                 EstimatedEmissiveSamplingInvocationCount: counters[MaterialGiCounterBase + 9]);
+            _lastCompletedDdgiGeometryParticipationCounters[frameIndex] =
+                new DdgiGeometryParticipationGpuCounters(
+                    TransparentVisibilityLayerCount:
+                        counters[DdgiGeometryParticipationCounterBase + 0],
+                    TransparentVisibilityLimitCount:
+                        counters[DdgiGeometryParticipationCounterBase + 1],
+                    DecalCandidateCount:
+                        counters[DdgiGeometryParticipationCounterBase + 2],
+                    DecalRetainedCount:
+                        counters[DdgiGeometryParticipationCounterBase + 3],
+                    DecalAssociatedCount:
+                        counters[DdgiGeometryParticipationCounterBase + 4],
+                    DecalDepthRejectCount:
+                        counters[DdgiGeometryParticipationCounterBase + 5],
+                    DecalFacingRejectCount:
+                        counters[DdgiGeometryParticipationCounterBase + 6],
+                    DecalCandidateLimitCount:
+                        counters[DdgiGeometryParticipationCounterBase + 7],
+                    FoliageProxyHitCount:
+                        counters[DdgiGeometryParticipationCounterBase + 8],
+                    InvalidRayMetadataCount:
+                        counters[DdgiGeometryParticipationCounterBase + 9],
+                    StochasticAlphaAcceptCount:
+                        counters[DdgiGeometryParticipationCounterBase + 10],
+                    StochasticAlphaRejectCount:
+                        counters[DdgiGeometryParticipationCounterBase + 11]);
+            _lastCompletedDdgiManyLightCounters[frameIndex] =
+                new DdgiManyLightGpuCounters(
+                    BypassHitCount: counters[DdgiManyLightCounterBase + 0],
+                    ExactHitCount: counters[DdgiManyLightCounterBase + 1],
+                    TreeAttemptHitCount: counters[DdgiManyLightCounterBase + 2],
+                    TreeSuccessHitCount: counters[DdgiManyLightCounterBase + 3],
+                    TreeFallbackHitCount: counters[DdgiManyLightCounterBase + 4],
+                    SampledLightCount: counters[DdgiManyLightCounterBase + 5],
+                    DuplicateDrawCount: counters[DdgiManyLightCounterBase + 6],
+                    VisibilityEvaluationCount: counters[DdgiManyLightCounterBase + 7],
+                    RejectedZeroTermCount: counters[DdgiManyLightCounterBase + 8],
+                    UniformRepairCount: counters[DdgiManyLightCounterBase + 9],
+                    InvalidSampleOrPdfCount: counters[DdgiManyLightCounterBase + 10],
+                    QuantizedPdfSum: counters[DdgiManyLightCounterBase + 11],
+                    QuantizedNegativeLog2PdfSum: counters[DdgiManyLightCounterBase + 12],
+                    QuantizedMaximumNegativeLog2Pdf: counters[DdgiManyLightCounterBase + 13],
+                    QuantizedMaximumEstimatorWeight: counters[DdgiManyLightCounterBase + 14],
+                    ExactLightEvaluationCount: counters[DdgiManyLightCounterBase + 15]);
 
             _lastCompletedCounters[frameIndex] = new GpuMeshletCounters(
                 checked((int)counters[0]),
@@ -843,6 +933,12 @@ namespace Njulf.Rendering.Resources
             return _lastCompletedDirectionalShadowReceiverCounters[frameIndex];
         }
 
+        public DirectionalShadowCasterDiagnostics GetLastCompletedDirectionalShadowCasterDiagnostics(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedDirectionalShadowCasterDiagnostics[frameIndex];
+        }
+
         public FarFieldMaterialV2Counters GetLastCompletedFarFieldMaterialV2Counters(int frameIndex)
         {
             ValidateFrameIndex(frameIndex);
@@ -861,9 +957,107 @@ namespace Njulf.Rendering.Resources
             return _lastCompletedThinSurfaceTransportCounters[frameIndex];
         }
 
+        public DdgiGeometryParticipationGpuCounters
+            GetLastCompletedDdgiGeometryParticipationCounters(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedDdgiGeometryParticipationCounters[frameIndex];
+        }
+
+        public DdgiManyLightGpuCounters GetLastCompletedDdgiManyLightCounters(
+            int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedDdgiManyLightCounters[frameIndex];
+        }
+
         private static int DecodeSignedCounter(uint value)
         {
             return unchecked((int)value);
+        }
+
+        internal static DirectionalShadowCasterDiagnostics DecodeDirectionalShadowCasterDiagnostics(
+            ReadOnlySpan<uint> counters)
+        {
+            const int headerRecordCountOffset = 0;
+            const int headerSampledCountOffset = 1;
+            const int headerDroppedCountOffset = 2;
+            const int headerFrameSerialLowOffset = 3;
+            const int headerFrameSerialHighOffset = 4;
+            const int headerResourceGenerationOffset = 5;
+            const int headerFrameMetadataMagicOffset = 6;
+            int requiredLength = DirectionalShadowCasterDiagnosticCounterBase +
+                DirectionalShadowCasterDiagnosticCounterCount;
+            if (counters.Length < requiredLength)
+                throw new ArgumentException("The renderer diagnostics span does not contain the directional-shadow caster bank.", nameof(counters));
+
+            int headerBase = DirectionalShadowCasterDiagnosticCounterBase;
+            uint rawRecordCount = counters[headerBase + headerRecordCountOffset];
+            uint sampledCandidateCount = counters[headerBase + headerSampledCountOffset];
+            uint droppedRecordCount = counters[headerBase + headerDroppedCountOffset];
+            ulong gpuFrameSerial = counters[headerBase + headerFrameSerialLowOffset] |
+                ((ulong)counters[headerBase + headerFrameSerialHighOffset] << 32);
+            uint gpuResourceGeneration = counters[headerBase + headerResourceGenerationOffset];
+            bool frameMetadataValid = counters[headerBase + headerFrameMetadataMagicOffset] ==
+                DirectionalShadowCasterDiagnosticFrameMetadataMagic;
+            if (rawRecordCount == 0u && sampledCandidateCount == 0u && droppedRecordCount == 0u)
+                return DirectionalShadowCasterDiagnostics.Empty;
+
+            int recordCount = checked((int)Math.Min(
+                rawRecordCount,
+                (uint)DirectionalShadowCasterDiagnosticRecordCapacity));
+            var records = new DirectionalShadowCasterAttribution[recordCount];
+            int recordBase = headerBase + DirectionalShadowCasterDiagnosticHeaderWordCount;
+            for (int record = 0; record < recordCount; record++)
+            {
+                int offset = recordBase + record * DirectionalShadowCasterDiagnosticRecordStride;
+                uint rawClass = counters[offset + 4];
+                DirectionalShadowCasterClass casterClass = rawClass <= (uint)DirectionalShadowCasterClass.Foliage
+                    ? (DirectionalShadowCasterClass)rawClass
+                    : DirectionalShadowCasterClass.Unknown;
+                uint rejectingPlane = counters[offset + 11];
+                var signedDistances = new float[6];
+                for (int plane = 0; plane < signedDistances.Length; plane++)
+                    signedDistances[plane] = BitConverter.UInt32BitsToSingle(counters[offset + 21 + plane]);
+
+                records[record] = new DirectionalShadowCasterAttribution(
+                    ObjectId: counters[offset + 0],
+                    InstanceId: counters[offset + 1],
+                    MeshletId: counters[offset + 2],
+                    SelectedLod: counters[offset + 3],
+                    CasterClass: casterClass,
+                    CascadeIndex: counters[offset + 5],
+                    CandidateIndex: counters[offset + 6],
+                    EligibilityFlags: counters[offset + 7],
+                    MatrixHash: counters[offset + 8] | ((ulong)counters[offset + 9] << 32),
+                    Accepted: counters[offset + 10] != 0u ? 1 : 0,
+                    FirstRejectingPlane: rejectingPlane == uint.MaxValue
+                        ? -1
+                        : checked((int)rejectingPlane),
+                    FirstRejectingSignedDistance: BitConverter.UInt32BitsToSingle(counters[offset + 12]),
+                    WorldCenter: new Vector3(
+                        BitConverter.UInt32BitsToSingle(counters[offset + 13]),
+                        BitConverter.UInt32BitsToSingle(counters[offset + 14]),
+                        BitConverter.UInt32BitsToSingle(counters[offset + 15])),
+                    WorldRadius: BitConverter.UInt32BitsToSingle(counters[offset + 16]),
+                    ClipCenter: new Vector4(
+                        BitConverter.UInt32BitsToSingle(counters[offset + 17]),
+                        BitConverter.UInt32BitsToSingle(counters[offset + 18]),
+                        BitConverter.UInt32BitsToSingle(counters[offset + 19]),
+                        BitConverter.UInt32BitsToSingle(counters[offset + 20])),
+                    SignedPlaneDistances: signedDistances);
+            }
+
+            return new DirectionalShadowCasterDiagnostics(
+                ReadbackValid: 1,
+                SampledCandidateCount: sampledCandidateCount,
+                DroppedRecordCount: droppedRecordCount,
+                Records: records)
+            {
+                GpuFrameSerial = gpuFrameSerial,
+                GpuResourceGeneration = gpuResourceGeneration,
+                FrameMetadataValid = frameMetadataValid ? 1 : 0
+            };
         }
 
         private static unsafe float ReadAlbedoAverage(uint* counters, int relativeSumOffset, uint count)
@@ -1050,16 +1244,51 @@ namespace Njulf.Rendering.Resources
                 EvidenceAgeFrames = retained.EvidenceAgeFrames
             };
 
-        public void ResetCounters(CommandBuffer commandBuffer, int frameIndex)
+        public void ResetCounters(
+            CommandBuffer commandBuffer,
+            int frameIndex,
+            ulong directionalShadowCasterFrameSerial = 0UL,
+            uint directionalShadowCasterResourceGeneration = 0u,
+            bool directionalShadowCasterFrameMetadataValid = false)
         {
             ValidateFrameIndex(frameIndex);
 
+            // Do not overlap a fill and an update write to the frame-metadata
+            // header. Vulkan does not make the later transfer write win merely
+            // because it was recorded later. The two non-overlapping fills keep
+            // the entire bank zeroed while CmdUpdateBuffer stamps its ownership.
+            ulong directionalShadowCasterHeaderOffset =
+                (ulong)DirectionalShadowCasterDiagnosticCounterBase * sizeof(uint);
+            ulong directionalShadowCasterHeaderSize =
+                (ulong)DirectionalShadowCasterDiagnosticHeaderWordCount * sizeof(uint);
+            VkBuffer diagnosticBuffer = _bufferManager.GetBuffer(_buffers[frameIndex]);
             _context.Api.CmdFillBuffer(
                 commandBuffer,
-                _bufferManager.GetBuffer(_buffers[frameIndex]),
+                diagnosticBuffer,
                 0,
-                CounterBufferSize,
+                directionalShadowCasterHeaderOffset,
                 0);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                diagnosticBuffer,
+                directionalShadowCasterHeaderOffset + directionalShadowCasterHeaderSize,
+                CounterBufferSize -
+                    directionalShadowCasterHeaderOffset -
+                    directionalShadowCasterHeaderSize,
+                0);
+            Span<uint> directionalShadowCasterHeader =
+                stackalloc uint[DirectionalShadowCasterDiagnosticHeaderWordCount];
+            directionalShadowCasterHeader[3] = unchecked((uint)directionalShadowCasterFrameSerial);
+            directionalShadowCasterHeader[4] = unchecked((uint)(directionalShadowCasterFrameSerial >> 32));
+            directionalShadowCasterHeader[5] = directionalShadowCasterResourceGeneration;
+            directionalShadowCasterHeader[6] = directionalShadowCasterFrameMetadataValid
+                ? DirectionalShadowCasterDiagnosticFrameMetadataMagic
+                : 0u;
+            _context.Api.CmdUpdateBuffer(
+                commandBuffer,
+                diagnosticBuffer,
+                directionalShadowCasterHeaderOffset,
+                directionalShadowCasterHeader);
             _context.Api.CmdFillBuffer(
                 commandBuffer,
                 _bufferManager.GetBuffer(_simpleDdgiStorageValidationBuffers[frameIndex]),
@@ -1081,7 +1310,10 @@ namespace Njulf.Rendering.Resources
                 SType = StructureType.BufferMemoryBarrier2,
                 SrcStageMask = PipelineStageFlags2.TransferBit,
                 SrcAccessMask = AccessFlags2.TransferWriteBit,
-                DstStageMask = PipelineStageFlags2.TaskShaderBitExt | PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit,
+                DstStageMask = PipelineStageFlags2.TaskShaderBitExt |
+                    PipelineStageFlags2.MeshShaderBitExt |
+                    PipelineStageFlags2.FragmentShaderBit |
+                    PipelineStageFlags2.ComputeShaderBit,
                 DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
                 SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
                 DstQueueFamilyIndex = Vk.QueueFamilyIgnored,

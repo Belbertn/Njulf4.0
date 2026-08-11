@@ -25,6 +25,15 @@ namespace Njulf.Rendering.Resources
         private static readonly ulong MatrixStride = (ulong)Marshal.SizeOf<Matrix4x4>();
         private static readonly ulong DispatchStride = (ulong)Marshal.SizeOf<GPUSkinningDispatch>();
         private static readonly ulong VertexStride = (ulong)Marshal.SizeOf<GPUVertex>();
+        internal static readonly uint OutputVertexStride =
+            checked((uint)Marshal.SizeOf<GPUVertex>());
+        internal static readonly uint OutputPositionOffset =
+            checked((uint)Marshal.OffsetOf<GPUVertex>(nameof(GPUVertex.Position)).ToInt32());
+        internal const BufferUsageFlags OutputVertexBufferUsage =
+            BufferUsageFlags.StorageBufferBit |
+            BufferUsageFlags.TransferDstBit |
+            BufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKhr |
+            BufferUsageFlags.ShaderDeviceAddressBit;
 
         private readonly VulkanContext _context;
         private readonly BufferManager _bufferManager;
@@ -55,7 +64,11 @@ namespace Njulf.Rendering.Resources
             {
                 _matrixBuffers[i] = CreateBuffer(InitialMatrixCapacity, MatrixStride, $"Skinning.MatrixBuffer.Frame{i}");
                 _dispatchBuffers[i] = CreateBuffer(InitialDispatchCapacity, DispatchStride, $"Skinning.DispatchBuffer.Frame{i}");
-                _skinnedVertexBuffers[i] = CreateBuffer(InitialSkinnedVertexCapacity, VertexStride, $"Skinning.OutputVertexBuffer.Frame{i}");
+                _skinnedVertexBuffers[i] = CreateBuffer(
+                    InitialSkinnedVertexCapacity,
+                    VertexStride,
+                    $"Skinning.OutputVertexBuffer.Frame{i}",
+                    accelerationStructureInput: true);
             }
         }
 
@@ -128,7 +141,12 @@ namespace Njulf.Rendering.Resources
                 long sampleMicroseconds = ElapsedMicroseconds(start);
                 EnsureCapacity(ref _matrixBuffers[frameIndex], CheckedCount(_matrixScratch.Count), MatrixStride, $"Skinning.MatrixBuffer.Frame{frameIndex}");
                 EnsureCapacity(ref _dispatchBuffers[frameIndex], CheckedCount(_dispatchScratch.Count), DispatchStride, $"Skinning.DispatchBuffer.Frame{frameIndex}");
-                EnsureCapacity(ref _skinnedVertexBuffers[frameIndex], skinnedVertexOffset, VertexStride, $"Skinning.OutputVertexBuffer.Frame{frameIndex}");
+                EnsureCapacity(
+                    ref _skinnedVertexBuffers[frameIndex],
+                    skinnedVertexOffset,
+                    VertexStride,
+                    $"Skinning.OutputVertexBuffer.Frame{frameIndex}",
+                    accelerationStructureInput: true);
                 UpdateRegisteredBindlessBuffers();
 
                 long uploadStart = Stopwatch.GetTimestamp();
@@ -178,21 +196,35 @@ namespace Njulf.Rendering.Resources
             return skinMatrix * bindTransform;
         }
 
-        private SkinningBuffer CreateBuffer(uint elementCapacity, ulong stride, string debugName)
+        private SkinningBuffer CreateBuffer(
+            uint elementCapacity,
+            ulong stride,
+            string debugName,
+            bool accelerationStructureInput = false)
         {
             uint capacity = Math.Max(1u, elementCapacity);
             ulong byteSize = checked(capacity * stride);
+            BufferUsageFlags usage =
+                BufferUsageFlags.StorageBufferBit |
+                BufferUsageFlags.TransferDstBit;
+            if (accelerationStructureInput)
+                usage = OutputVertexBufferUsage;
             BufferHandle handle = _bufferManager.CreateDeviceBuffer(
                 byteSize,
-                BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                true,
+                usage,
+                requireDeviceAddress: accelerationStructureInput,
                 MemoryBudgetCategory.ObjectAndInstanceBuffers,
                 debugName);
             _context.SetDebugName(_bufferManager.GetBuffer(handle).Handle, ObjectType.Buffer, debugName);
             return new SkinningBuffer(handle, capacity, byteSize);
         }
 
-        private void EnsureCapacity(ref SkinningBuffer buffer, uint requiredElements, ulong stride, string debugName)
+        private void EnsureCapacity(
+            ref SkinningBuffer buffer,
+            uint requiredElements,
+            ulong stride,
+            string debugName,
+            bool accelerationStructureInput = false)
         {
             if (requiredElements <= buffer.ElementCapacity)
                 return;
@@ -205,7 +237,11 @@ namespace Njulf.Rendering.Resources
             while (newCapacity < requiredElements);
 
             DestroyIfValid(buffer.Handle);
-            buffer = CreateBuffer(newCapacity, stride, debugName);
+            buffer = CreateBuffer(
+                newCapacity,
+                stride,
+                debugName,
+                accelerationStructureInput);
         }
 
         private ulong UploadSpan<T>(ReadOnlySpan<T> data, BufferHandle destination, CommandBuffer commandBuffer)

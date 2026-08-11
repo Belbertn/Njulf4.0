@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Njulf.Core.Animation;
 using Njulf.Core.Geometry;
 using Njulf.Core.Math;
+using Njulf.Assets.Validation;
 
 namespace Njulf.Assets.Cooked;
 
@@ -58,6 +59,13 @@ public sealed record CookedSubMeshRecord(
     public int MeshletLod1Count { get; init; }
     public int MeshletLod2Offset { get; init; }
     public int MeshletLod2Count { get; init; }
+    /// <summary>
+    /// Optional C4 topology evidence. A zero/default value is the only valid
+    /// representation for legacy or untagged content and never admits a hero.
+    /// </summary>
+    public ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence { get; init; }
+    public ModelGiCausticHeroValidation CausticAuthoringValidation { get; init; }
+    public string CausticTopologyDetail { get; init; } = "participation-disabled";
 }
 
 public sealed record CookedMeshPayload(
@@ -103,7 +111,37 @@ public sealed record CookedMaterialTable(IReadOnlyList<ModelMaterial> Materials)
     public IReadOnlyList<GiPrimitiveTransportProfile> PrimitiveTransportProfiles { get; init; } = Array.Empty<GiPrimitiveTransportProfile>();
     public uint PrimitiveTransportAlgorithmVersion { get; init; }
     public bool HasCompleteTransportMetadata { get; init; }
+
+    /// <summary>
+    /// Ephemeral, cook-transaction-local identities for the exact KTX2 files
+    /// produced for base-color alpha. They are deliberately excluded from the
+    /// material JSON: an optional OMM producer consumes them before the model
+    /// package is published, while persisted payload identity lives in the OMM
+    /// chunk itself.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<OpacityMicromapCookedTextureArtifact>
+        OpacityMicromapTextureArtifacts { get; init; } =
+        Array.Empty<OpacityMicromapCookedTextureArtifact>();
 }
+
+/// <summary>
+/// Authenticated exact cooked-texture input available only during a model cook.
+/// The absolute path is never serialized and is valid only for the current
+/// transaction.
+/// </summary>
+public sealed record OpacityMicromapCookedTextureArtifact(
+    int MaterialSlot,
+    string AbsoluteKtx2Path,
+    OpacityMicromapContentKey Ktx2Sha256,
+    uint VulkanFormat,
+    int Width,
+    int Height,
+    int MipCount,
+    TextureColorSpace ColorSpace,
+    TextureSamplerDescription Sampler,
+    bool AlphaCoveragePreserved,
+    float? AlphaCoverageCutoff);
 public sealed record CookedAnimationPayload(
     IReadOnlyList<Skeleton> Skeletons,
     IReadOnlyList<Skin> Skins,
@@ -155,7 +193,17 @@ public sealed record CookedModelAsset(
     CookedMaterialTable Materials,
     CookedAnimationPayload Animation,
     string PackagePath,
-    long BytesRead);
+    long BytesRead)
+{
+    /// <summary>
+    /// Optional, backend-specific EXT four-state payload.  A null value never
+    /// blocks the base model and selects ordinary alpha-candidate traversal.
+    /// </summary>
+    public OpacityMicromapCookedPayload? OpacityMicromapPayload { get; init; }
+
+    public CookedOpacityMicromapPayloadLoadStatus OpacityMicromapLoadStatus { get; init; } =
+        CookedOpacityMicromapPayloadLoadStatus.Missing;
+}
 
 internal static class CookedJson
 {

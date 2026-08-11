@@ -1,0 +1,25 @@
+{"kind":"header","timestampUtc":"2026-08-10T23:59:50.1951144+00:00","processId":16656,"osVersion":"Microsoft Windows NT 10.0.26200.0","dotnetVersion":"10.0.7","executablePath":"C:\\Program Files\\dotnet\\dotnet.exe","workingDirectory":"D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf","commandLineArgs":["--smoke-mode=startup","--smoke-frames=6","--validation=off","--health-report=.codex-tmp\\advanced-gi-startup-health.json","--startup-log=.codex-tmp\\advanced-gi-startup.log","--simple-ddgi-receiver-feedback-mode=exact-compacted"],"rendererStartupLog":"D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\.codex-tmp\\advanced-gi-startup.log"}
+{"kind":"step","step":{"Name":"Game.CreateWindow","Status":"Started","TimestampUtc":"2026-08-10T23:59:50.2766169+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"Game.CreateWindow","Status":"Succeeded","TimestampUtc":"2026-08-10T23:59:50.4083824+00:00","ElapsedMicroseconds":131798}}
+{"kind":"step","step":{"Name":"Game.ConfigureServices","Status":"Started","TimestampUtc":"2026-08-10T23:59:51.1497603+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"Game.ConfigureServices","Status":"Succeeded","TimestampUtc":"2026-08-10T23:59:51.2212825+00:00","ElapsedMicroseconds":71526}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateInstance","Status":"Started","TimestampUtc":"2026-08-10T23:59:51.2576524+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.ValidateInstanceExtensions","Status":"Started","TimestampUtc":"2026-08-10T23:59:51.2735679+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.ValidateInstanceExtensions","Status":"Succeeded","TimestampUtc":"2026-08-10T23:59:51.2846948+00:00","ElapsedMicroseconds":11095}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateInstance","Status":"Succeeded","TimestampUtc":"2026-08-10T23:59:51.6027657+00:00","ElapsedMicroseconds":345124}}
+{"kind":"step","step":{"Name":"VulkanContext.LoadDebugUtils","Status":"Started","TimestampUtc":"2026-08-10T23:59:51.6028449+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.LoadDebugUtils","Status":"Succeeded","TimestampUtc":"2026-08-10T23:59:51.6151912+00:00","ElapsedMicroseconds":12347}}
+{"kind":"step","step":{"Name":"VulkanContext.PickPhysicalDevice","Status":"Started","TimestampUtc":"2026-08-10T23:59:51.615271+00:00","ElapsedMicroseconds":0}}
+{"kind":"device","timestampUtc":"2026-08-10T23:59:51.632089+00:00","report":{"DeviceName":"NVIDIA GeForce RTX 3060 Laptop GPU","VendorId":4318,"DeviceId":9568,"ApiVersion":"1.4.341","DriverVersion":"610.248.0","MissingInstanceExtensions":[],"MissingInstanceLayers":[],"MissingDeviceExtensions":[],"MissingFeatures":[],"MissingQueueFamilies":[],"IsSupported":true}}
+{"kind":"step","step":{"Name":"VulkanContext.PickPhysicalDevice","Status":"Succeeded","TimestampUtc":"2026-08-10T23:59:51.6439964+00:00","ElapsedMicroseconds":28726}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateLogicalDevice","Status":"Started","TimestampUtc":"2026-08-10T23:59:51.6440395+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateLogicalDevice","Status":"Succeeded","TimestampUtc":"2026-08-10T23:59:51.9179258+00:00","ElapsedMicroseconds":273892}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateAllocator","Status":"Started","TimestampUtc":"2026-08-10T23:59:51.9180124+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateAllocator","Status":"Succeeded","TimestampUtc":"2026-08-10T23:59:51.9257415+00:00","ElapsedMicroseconds":7728}}
+{"kind":"step","step":{"Name":"VulkanContext.LoadExtensions","Status":"Started","TimestampUtc":"2026-08-10T23:59:51.9258647+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.LoadExtensions","Status":"Succeeded","TimestampUtc":"2026-08-10T23:59:51.9405398+00:00","ElapsedMicroseconds":14676}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateSingleTimeCommandPool","Status":"Started","TimestampUtc":"2026-08-10T23:59:51.9406162+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanContext.CreateSingleTimeCommandPool","Status":"Succeeded","TimestampUtc":"2026-08-10T23:59:51.9424617+00:00","ElapsedMicroseconds":1846}}
+{"kind":"step","step":{"Name":"VulkanRenderer.Initialize","Status":"Started","TimestampUtc":"2026-08-10T23:59:52.2045256+00:00","ElapsedMicroseconds":0}}
+{"kind":"step","step":{"Name":"VulkanRenderer.Initialize","Status":"Failed","TimestampUtc":"2026-08-11T00:01:41.5301627+00:00","ElapsedMicroseconds":109328284,"ExceptionType":"Njulf.Rendering.VulkanException","ExceptionMessage":"Failed to create mesh graphics pipeline: ErrorUnknown"}}
+{"kind":"failure","timestampUtc":"2026-08-11T00:01:41.5306169+00:00","report":{"OperationName":"VulkanRenderer.Initialize","LastSuccessfulStep":"Game.ConfigureServices","ExceptionType":"Njulf.Rendering.VulkanException","ExceptionMessage":"Failed to create mesh graphics pipeline: ErrorUnknown","StartupLogPath":"D:\\Code\\C#\\Njulf4.0-Simplified\\Njulf\\.codex-tmp\\advanced-gi-startup.log"}}

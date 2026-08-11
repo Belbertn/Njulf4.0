@@ -71,6 +71,10 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
             source.GiTransmissionPolicy,
             material.Extensions.TransmissionPolicy,
             nameof(source.GiTransmissionPolicy));
+        EmissivePhotometricUnit emissiveUnit = ParseEnum(
+            source.EmissiveUnit,
+            material.EmissiveUnit,
+            nameof(source.EmissiveUnit));
         SceneColor? transmissionTint = source.ThinTransmissionTint;
         MaterialExtensionDefinition extensions = material.Extensions with
         {
@@ -97,6 +101,9 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
                 ? new Vector3(emissiveColor.R, emissiveColor.G, emissiveColor.B)
                 : material.EmissiveFactor,
             EmissiveStrength = source.EmissiveStrength ?? material.EmissiveStrength,
+            EmissiveUnit = emissiveUnit,
+            EmissiveArtisticMultiplier =
+                source.EmissiveArtisticMultiplier ?? material.EmissiveArtisticMultiplier,
             MetallicFactor = source.Metallic ?? material.MetallicFactor,
             RoughnessFactor = source.Roughness ?? material.RoughnessFactor,
             OcclusionStrength = source.OcclusionStrength ?? material.OcclusionStrength,
@@ -134,6 +141,8 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
                 material.EmissiveFactor.Z,
                 1f),
             EmissiveStrength = material.EmissiveStrength,
+            EmissiveUnit = material.EmissiveUnit.ToString(),
+            EmissiveArtisticMultiplier = material.EmissiveArtisticMultiplier,
             Metallic = material.MetallicFactor,
             Roughness = material.RoughnessFactor,
             OcclusionStrength = material.OcclusionStrength,

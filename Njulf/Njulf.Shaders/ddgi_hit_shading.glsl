@@ -39,6 +39,58 @@
 #define DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED true
 #endif
 
+#ifndef DDGI_HIT_BINARY_OPAQUE_SHADOW_FAST_PATH
+#define DDGI_HIT_BINARY_OPAQUE_SHADOW_FAST_PATH 0
+#endif
+
+#ifndef DDGI_HIT_LOCAL_LIGHTS_ENABLED
+#define DDGI_HIT_LOCAL_LIGHTS_ENABLED 1
+#endif
+
+#ifndef DDGI_HIT_EMISSIVE_SOURCES_ENABLED
+#define DDGI_HIT_EMISSIVE_SOURCES_ENABLED 1
+#endif
+
+#ifndef DDGI_HIT_ONE_DIRECTIONAL_LIGHT_ONLY
+#define DDGI_HIT_ONE_DIRECTIONAL_LIGHT_ONLY 0
+#endif
+
+#ifndef DDGI_HIT_CONTENT_DEPENDENT_LOCAL_LIGHTS
+#define DDGI_HIT_CONTENT_DEPENDENT_LOCAL_LIGHTS 0
+#endif
+
+#ifndef DDGI_HIT_LOCAL_SAMPLING_ENABLED
+#define DDGI_HIT_LOCAL_SAMPLING_ENABLED false
+#endif
+
+#ifndef DDGI_HIT_LOCAL_SAMPLING_MODE
+#define DDGI_HIT_LOCAL_SAMPLING_MODE 3u
+#endif
+
+#ifndef DDGI_HIT_EXACT_LOCAL_LIGHT_THRESHOLD
+#define DDGI_HIT_EXACT_LOCAL_LIGHT_THRESHOLD 0u
+#endif
+
+#ifndef DDGI_HIT_UNIFORM_LIGHT_MIXTURE
+#define DDGI_HIT_UNIFORM_LIGHT_MIXTURE 0.02
+#endif
+
+#ifndef DDGI_HIT_WORLD_PROBE_STABLE_KEY
+#define DDGI_HIT_WORLD_PROBE_STABLE_KEY uvec2(0u)
+#endif
+
+#ifndef DDGI_HIT_DIRECTION_RAY_ORDINAL
+#define DDGI_HIT_DIRECTION_RAY_ORDINAL 0u
+#endif
+
+#ifndef DDGI_HIT_SOURCE_LIGHTING_EPOCH
+#define DDGI_HIT_SOURCE_LIGHTING_EPOCH 1u
+#endif
+
+#ifndef DDGI_HIT_SAMPLING_SEQUENCE_EPOCH
+#define DDGI_HIT_SAMPLING_SEQUENCE_EPOCH 1u
+#endif
+
 #ifndef DDGI_HIT_CURRENT_FRAME_INDEX
 #define DDGI_HIT_CURRENT_FRAME_INDEX pc.CurrentFrameIndex
 #endif
@@ -75,7 +127,12 @@ const uint DDGI_HIT_TOP_LIGHT_LIMIT = 8u;
 const uint DDGI_HIT_LIGHT_CANDIDATE_LIMIT = 64u;
 // Pathological stacks of cutout geometry cannot create unbounded any-hit
 // texture work. Overflow resolves conservatively as opaque and is diagnosed.
-const uint DDGI_HIT_ALPHA_CANDIDATE_LIMIT = 64u;
+#ifndef DDGI_HIT_ALPHA_CANDIDATE_LIMIT
+#define DDGI_HIT_ALPHA_CANDIDATE_LIMIT 64u
+#endif
+#ifndef DDGI_HIT_TRANSPARENCY_LAYER_LIMIT
+#define DDGI_HIT_TRANSPARENCY_LAYER_LIMIT 8u
+#endif
 const uint DDGI_MATERIAL_ALPHA_DIAGNOSTIC_SAMPLE_WEIGHT = 64u;
 const uint DDGI_MATERIAL_PROVENANCE_DIAGNOSTIC_SAMPLE_WEIGHT = 64u;
 
@@ -389,16 +446,101 @@ GPUDdgiRayQueryInstance ReadDdgiRayQueryInstance(uint instanceIndex)
 {
     uint baseWord = instanceIndex * uint(SIZEOF_GPU_DDGI_RAY_QUERY_INSTANCE / 4);
     uint bufferIndex = uint(SIMPLE_DDGI_RAY_QUERY_INSTANCE_BUFFER_INDEX);
-    uvec4 header = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord);
+    uvec4 header0 = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord + 0u);
+    uvec4 header1 = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord + 4u);
+    uvec4 header2 = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord + 8u);
+    uvec4 header3 = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord + 12u);
+    uvec4 header4 = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord + 16u);
+    uvec4 header5 = ReadStorageAlignedUVec4Uniform(bufferIndex, baseWord + 20u);
     GPUDdgiRayQueryInstance instance;
-    instance.VertexOffset = header.x;
-    instance.IndexOffset = header.y;
-    instance.MaterialIndex = header.z;
-    instance.Padding0 = header.w;
+    instance.AbiVersion = header0.x;
+    instance.GeometryClass = header0.y;
+    instance.GeometryFlags = header0.z;
+    instance.StableInstanceIdentity = header0.w;
+    instance.VertexBufferIndex = header1.x;
+    instance.VertexOffset = header1.y;
+    instance.VertexStride = header1.z;
+    instance.VertexFormat = header1.w;
+    instance.PositionOffset = header2.x;
+    instance.NormalOffset = header2.y;
+    instance.TangentOffset = header2.z;
+    instance.TexCoord0Offset = header2.w;
+    instance.TexCoord1Offset = header3.x;
+    instance.ColorOffset = header3.y;
+    instance.IndexBufferIndex = header3.z;
+    instance.IndexOffset = header3.w;
+    instance.IndexType = header4.x;
+    instance.MaterialIndex = header4.y;
+    instance.MaterialRevision = header4.z;
+    instance.PackedAlpha = header4.w;
+    instance.PackedDecalLayerAndOrder = header5.x;
+    instance.DecalDepthTolerance = uintBitsToFloat(header5.y);
+    instance.DecalDepthBias = uintBitsToFloat(header5.z);
+    instance.RepresentationGeneration = header5.w;
     instance.WorldMatrixInverseTranspose = ReadStorageAlignedMat4Uniform(
         bufferIndex,
-        baseWord + 4u);
+        baseWord + 24u);
     return instance;
+}
+
+bool DdgiRayQueryInstanceIsValid(GPUDdgiRayQueryInstance instance)
+{
+    return instance.AbiVersion == DDGI_RAY_QUERY_INSTANCE_ABI_V2 &&
+        instance.GeometryClass != DDGI_RAY_GEOMETRY_INVALID &&
+        instance.RepresentationGeneration != 0u &&
+        instance.IndexType == 0u &&
+        (instance.VertexFormat == DDGI_RAY_VERTEX_FORMAT_SPLIT_STATIC ||
+         instance.VertexFormat == DDGI_RAY_VERTEX_FORMAT_GPU_VERTEX ||
+         instance.VertexFormat == DDGI_RAY_VERTEX_FORMAT_FOLIAGE_PROXY);
+}
+
+bool DdgiRayGeometryHasFlag(
+    GPUDdgiRayQueryInstance instance,
+    uint flag)
+{
+    return (instance.GeometryFlags & flag) == flag;
+}
+
+bool DdgiRayGeometryIsDecal(GPUDdgiRayQueryInstance instance)
+{
+    return instance.GeometryClass == DDGI_RAY_GEOMETRY_DECAL_OVERLAY ||
+        DdgiRayGeometryHasFlag(instance, DDGI_RAY_GEOMETRY_FLAG_DECAL_OVERLAY);
+}
+
+uint ReadDdgiRayIndex(GPUDdgiRayQueryInstance instance, uint indexOffset)
+{
+    // V2 currently admits only uint32 index streams. Keep the type check in
+    // the ABI validator so an unsupported future stream fails closed.
+    return ReadStorageWord(
+        instance.IndexBufferIndex,
+        instance.IndexOffset + indexOffset);
+}
+
+GPUVertex ReadDdgiRayVertex(
+    GPUDdgiRayQueryInstance instance,
+    uint localVertexIndex)
+{
+    uint vertexIndex = instance.VertexOffset + localVertexIndex;
+    if (instance.VertexFormat == DDGI_RAY_VERTEX_FORMAT_SPLIT_STATIC)
+        return ReadSplitVertex(vertexIndex);
+
+    // Interleaved GPUVertex is the current-pose skinning ABI. Foliage proxy
+    // records deliberately use the same attribute offsets and stride in their
+    // first production version so hit shading stays typed and bounded.
+    return ReadVertexFromBuffer(instance.VertexBufferIndex, vertexIndex);
+}
+
+void RecordDdgiFoliageProxyHit(GPUDdgiRayQueryInstance instance)
+{
+    if (instance.GeometryClass == DDGI_RAY_GEOMETRY_AUTHORED_FOLIAGE ||
+        instance.GeometryClass == DDGI_RAY_GEOMETRY_PROCEDURAL_FOLIAGE ||
+        DdgiRayGeometryHasFlag(instance, DDGI_RAY_GEOMETRY_FLAG_FOLIAGE))
+    {
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_FOLIAGE_PROXY_HIT_COUNTER,
+            1u);
+    }
 }
 
 bool ResolveCommittedHitSurface(
@@ -415,45 +557,47 @@ bool ResolveCommittedHitSurface(
     out GiSurfaceSample surface)
 {
     GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
-    uint triangleIndexBase = instance.IndexOffset + primitiveIndex * 3u;
-    uint i0 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
-    uint i1 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
-    uint i2 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
-    uint v0 = instance.VertexOffset + i0;
-    uint v1 = instance.VertexOffset + i1;
-    uint v2 = instance.VertexOffset + i2;
+    if (!DdgiRayQueryInstanceIsValid(instance))
+        return false;
+    uint triangleIndexBase = primitiveIndex * 3u;
+    uint i0 = ReadDdgiRayIndex(instance, triangleIndexBase + 0u);
+    uint i1 = ReadDdgiRayIndex(instance, triangleIndexBase + 1u);
+    uint i2 = ReadDdgiRayIndex(instance, triangleIndexBase + 2u);
+    GPUVertex vertex0 = ReadDdgiRayVertex(instance, i0);
+    GPUVertex vertex1 = ReadDdgiRayVertex(instance, i1);
+    GPUVertex vertex2 = ReadDdgiRayVertex(instance, i2);
 
     vec3 bary = vec3(
         1.0 - barycentrics.x - barycentrics.y,
         barycentrics.x,
         barycentrics.y);
 
-    vec3 p0 = ReadSplitVertexPosition(v0);
-    vec3 p1 = ReadSplitVertexPosition(v1);
-    vec3 p2 = ReadSplitVertexPosition(v2);
+    vec3 p0 = vertex0.Position;
+    vec3 p1 = vertex1.Position;
+    vec3 p2 = vertex2.Position;
     vec3 localGeometricNormal = cross(p1 - p0, p2 - p0);
     localGeometricNormal = dot(localGeometricNormal, localGeometricNormal) > 0.000001
         ? normalize(localGeometricNormal)
         : vec3(0.0, 1.0, 0.0);
     vec3 localShadingNormal =
-        ReadSplitVertexNormal(v0) * bary.x +
-        ReadSplitVertexNormal(v1) * bary.y +
-        ReadSplitVertexNormal(v2) * bary.z;
+        vertex0.Normal * bary.x +
+        vertex1.Normal * bary.y +
+        vertex2.Normal * bary.z;
     if (dot(localShadingNormal, localShadingNormal) <= 0.000001)
         localShadingNormal = localGeometricNormal;
 
-    vec2 texCoord00 = ReadSplitVertexTexCoord(v0);
-    vec2 texCoord01 = ReadSplitVertexTexCoord(v1);
-    vec2 texCoord02 = ReadSplitVertexTexCoord(v2);
-    vec2 texCoord10 = ReadSplitVertexTexCoord2(v0);
-    vec2 texCoord11 = ReadSplitVertexTexCoord2(v1);
-    vec2 texCoord12 = ReadSplitVertexTexCoord2(v2);
+    vec2 texCoord00 = vertex0.TexCoord;
+    vec2 texCoord01 = vertex1.TexCoord;
+    vec2 texCoord02 = vertex2.TexCoord;
+    vec2 texCoord10 = vertex0.TexCoord2;
+    vec2 texCoord11 = vertex1.TexCoord2;
+    vec2 texCoord12 = vertex2.TexCoord2;
     vec2 uv0 = texCoord00 * bary.x + texCoord01 * bary.y + texCoord02 * bary.z;
     vec2 uv1 = texCoord10 * bary.x + texCoord11 * bary.y + texCoord12 * bary.z;
     vec4 vertexColor =
-        ReadSplitVertexColor(v0) * bary.x +
-        ReadSplitVertexColor(v1) * bary.y +
-        ReadSplitVertexColor(v2) * bary.z;
+        vertex0.Color * bary.x +
+        vertex1.Color * bary.y +
+        vertex2.Color * bary.z;
 
     GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
     bool doubleSided = GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_DOUBLE_SIDED);
@@ -511,6 +655,7 @@ bool ResolveCommittedHitSurface(
             primitiveIndex,
             barycentrics,
             MATERIAL_GI_COMPACT_TRANSPORT_HIT_COUNTER);
+        RecordDdgiFoliageProxyHit(instance);
         return true;
     }
 
@@ -631,9 +776,9 @@ bool ResolveCommittedHitSurface(
         material.NormalScaleBias.x > 0.001)
     {
         vec4 localTangent =
-            ReadSplitVertexTangent(v0) * bary.x +
-            ReadSplitVertexTangent(v1) * bary.y +
-            ReadSplitVertexTangent(v2) * bary.z;
+            vertex0.Tangent * bary.x +
+            vertex1.Tangent * bary.y +
+            vertex2.Tangent * bary.z;
         vec3 worldTangent = GiSafeNormal(
             MulRowMajor(vec4(localTangent.xyz, 0.0), worldMatrix).xyz,
             vec3(1.0, 0.0, 0.0));
@@ -817,56 +962,50 @@ bool ResolveCommittedHitSurface(
         compactTextureFallback
             ? MATERIAL_GI_CORRECTNESS_FALLBACK_HIT_COUNTER
             : MATERIAL_GI_DETAILED_TRANSPORT_HIT_COUNTER);
+    RecordDdgiFoliageProxyHit(instance);
     return true;
 }
 
-// The TLAS marks alpha-mask instances non-opaque. Only those intersections take
-// this path; ordinary opaque geometry remains on Vulkan's fast opaque traversal.
-// Use a fixed LOD so a cutout has deterministic transport visibility independent
-// of probe direction or ray differentials, neither of which ray queries expose.
-bool DdgiCandidatePassesOpacityPolicy(
-    uint instanceIndex,
+// Resolve coverage once for all ray classes. Primary transport uses the result
+// for either a deterministic mask or stable stochastic coverage; visibility
+// uses the exact same authored alpha analytically and never turns a blended
+// layer into a stochastic blocker.
+float ResolveDdgiCandidateCoverageAlpha(
+    GPUDdgiRayQueryInstance instance,
     uint primitiveIndex,
     vec2 barycentrics,
-    bool frontFacing,
-    bool enforceMaterialSidedness)
+    GPUMaterialData material)
 {
-    GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
-    GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
-    bool doubleSided = GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_DOUBLE_SIDED);
-    if (enforceMaterialSidedness && !EvaluateGiSidedness(doubleSided, frontFacing))
-        return false;
-    if (!DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED)
-        return true;
-    if (DecodeMaterialAlphaMode(material.NormalScaleBias.y) != MATERIAL_ALPHA_MODE_MASK)
-        return true;
-
-    uint triangleIndexBase = instance.IndexOffset + primitiveIndex * 3u;
-    uint i0 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
-    uint i1 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
-    uint i2 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
-    uint v0 = instance.VertexOffset + i0;
-    uint v1 = instance.VertexOffset + i1;
-    uint v2 = instance.VertexOffset + i2;
-    vec3 bary = vec3(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y);
-    vec2 texCoord00 = ReadSplitVertexTexCoord(v0);
-    vec2 texCoord01 = ReadSplitVertexTexCoord(v1);
-    vec2 texCoord02 = ReadSplitVertexTexCoord(v2);
-    vec2 texCoord10 = ReadSplitVertexTexCoord2(v0);
-    vec2 texCoord11 = ReadSplitVertexTexCoord2(v1);
-    vec2 texCoord12 = ReadSplitVertexTexCoord2(v2);
-    vec2 uv0 = texCoord00 * bary.x + texCoord01 * bary.y + texCoord02 * bary.z;
-    vec2 uv1 = texCoord10 * bary.x + texCoord11 * bary.y + texCoord12 * bary.z;
+    uint triangleIndexBase = primitiveIndex * 3u;
+    uint i0 = ReadDdgiRayIndex(instance, triangleIndexBase + 0u);
+    uint i1 = ReadDdgiRayIndex(instance, triangleIndexBase + 1u);
+    uint i2 = ReadDdgiRayIndex(instance, triangleIndexBase + 2u);
+    GPUVertex vertex0 = ReadDdgiRayVertex(instance, i0);
+    GPUVertex vertex1 = ReadDdgiRayVertex(instance, i1);
+    GPUVertex vertex2 = ReadDdgiRayVertex(instance, i2);
+    vec3 bary = vec3(
+        1.0 - barycentrics.x - barycentrics.y,
+        barycentrics.x,
+        barycentrics.y);
+    vec2 uv0 = vertex0.TexCoord * bary.x +
+        vertex1.TexCoord * bary.y +
+        vertex2.TexCoord * bary.z;
+    vec2 uv1 = vertex0.TexCoord2 * bary.x +
+        vertex1.TexCoord2 * bary.y +
+        vertex2.TexCoord2 * bary.z;
     float vertexAlpha = clamp(
-        ReadSplitVertexColor(v0).a * bary.x +
-        ReadSplitVertexColor(v1).a * bary.y +
-        ReadSplitVertexColor(v2).a * bary.z,
+        vertex0.Color.a * bary.x +
+        vertex1.Color.a * bary.y +
+        vertex2.Color.a * bary.z,
         0.0,
         1.0);
     float sampledTextureAlpha = 1.0;
-    // Visibility is independent from color-transport quality. Masked geometry
-    // always evaluates its coverage texture at a deterministic policy LOD.
-    if (GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_HAS_BASE_COLOR_TEXTURE))
+    // Ray queries have no derivatives. The authored deterministic DDGI LOD is
+    // shared by primary, visibility, and shadow queries so classification
+    // cannot disagree merely because the consumer changed.
+    if (GiMaterialHasFlag(
+            material.TransportFlags,
+            GI_MATERIAL_HAS_BASE_COLOR_TEXTURE))
     {
         vec2 uv = MaterialDdgiHitUv(
             uv0,
@@ -881,12 +1020,101 @@ bool DdgiCandidatePassesOpacityPolicy(
             vec4(1.0)).a;
     }
 
-    bool covered = DdgiAlphaCandidateOccupiesOpaqueTransport(
+    return ComposeDdgiCandidateAlpha(
         material.Albedo.a,
         vertexAlpha,
-        sampledTextureAlpha,
-        material.NormalScaleBias.y,
-        material.NormalScaleBias.z);
+        sampledTextureAlpha);
+}
+
+// The TLAS marks alpha-mask, alpha-blend, thin, foliage, and decal instances
+// non-opaque. Ordinary opaque geometry remains on Vulkan's fast path. Decals
+// are retained separately by primary transport and are never confirmed here.
+bool DdgiCandidatePassesOpacityPolicy(
+    uint instanceIndex,
+    uint primitiveIndex,
+    vec2 barycentrics,
+    bool frontFacing,
+    bool enforceMaterialSidedness)
+{
+    GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
+    // Invalid V2 metadata is conservative: candidate geometry blocks rather
+    // than being interpreted with legacy offsets. Decals are the inverse—an
+    // overlay is never confirmed as an occluder by any ray class.
+    if (!DdgiRayQueryInstanceIsValid(instance))
+    {
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_RAY_METADATA_INVALID_COUNTER,
+            1u);
+        return true;
+    }
+    if (DdgiRayGeometryIsDecal(instance))
+        return false;
+
+    GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
+    bool doubleSided = GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_DOUBLE_SIDED);
+    if (enforceMaterialSidedness && !EvaluateGiSidedness(doubleSided, frontFacing))
+        return false;
+
+    bool alphaMask = DdgiRayGeometryHasFlag(
+        instance,
+        DDGI_RAY_GEOMETRY_FLAG_ALPHA_MASK);
+    bool alphaBlend = DdgiRayGeometryHasFlag(
+        instance,
+        DDGI_RAY_GEOMETRY_FLAG_ALPHA_BLEND);
+    if (!alphaMask && !alphaBlend)
+        return true;
+    if (alphaMask && !DDGI_HIT_ALPHA_MASK_TRANSPORT_ENABLED)
+        return true;
+
+    float effectiveAlpha = ResolveDdgiCandidateCoverageAlpha(
+        instance,
+        primitiveIndex,
+        barycentrics,
+        material);
+    bool thin = DdgiRayGeometryHasFlag(
+        instance,
+        DDGI_RAY_GEOMETRY_FLAG_THIN_TRANSMISSION);
+    bool covered;
+    if (alphaBlend && !thin)
+    {
+        // Barycentrics are quantized into the primitive identity so two
+        // geometrically distinct candidates on a large triangle do not share
+        // a coverage decision. Frame number is deliberately absent.
+        uvec2 quantizedBary = uvec2(round(clamp(barycentrics, vec2(0.0), vec2(1.0)) * 65535.0));
+        uint candidateIdentity = primitiveIndex ^
+            (quantizedBary.x * 0x9e3779b9u) ^
+            (quantizedBary.y * 0x85ebca6bu);
+        float stableRandom = DdgiStableDecisionUnitFloat(
+            DDGI_HIT_WORLD_PROBE_STABLE_KEY,
+            DDGI_HIT_DIRECTION_RAY_ORDINAL,
+            DDGI_HIT_SOURCE_LIGHTING_EPOCH,
+            DDGI_HIT_SAMPLING_SEQUENCE_EPOCH,
+            DDGI_STOCHASTIC_DOMAIN_ALPHA_COVERAGE,
+            instance.StableInstanceIdentity,
+            candidateIdentity);
+        covered = stableRandom < effectiveAlpha;
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            covered
+                ? DDGI_STOCHASTIC_ALPHA_ACCEPT_COUNTER
+                : DDGI_STOCHASTIC_ALPHA_REJECT_COUNTER,
+            1u);
+    }
+    else if (alphaBlend)
+    {
+        // A physical thin-surface contract owns this interaction. It must not
+        // also enter the stochastic ordinary-blend mixture. Its alpha is folded
+        // into deterministic layer transmittance by visibility queries.
+        covered = effectiveAlpha > 0.0;
+    }
+    else
+    {
+        covered = MaterialAlphaOccupiesOpaqueTransport(
+            effectiveAlpha,
+            material.NormalScaleBias.y,
+            material.NormalScaleBias.z);
+    }
     RecordDdgiAlphaCandidateDiagnostics(instanceIndex, primitiveIndex, !covered);
     return covered;
 }
@@ -933,23 +1161,23 @@ vec3 ResolveDdgiThinCandidateTransmittance(
         GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_HAS_TRANSMISSION_TEXTURE))
     {
         GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
-        uint triangleIndexBase = instance.IndexOffset + primitiveIndex * 3u;
-        uint i0 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 0u);
-        uint i1 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 1u);
-        uint i2 = ReadStorageWordUniform(uint(INDEX_BUFFER_INDEX), triangleIndexBase + 2u);
-        uint v0 = instance.VertexOffset + i0;
-        uint v1 = instance.VertexOffset + i1;
-        uint v2 = instance.VertexOffset + i2;
+        uint triangleIndexBase = primitiveIndex * 3u;
+        uint i0 = ReadDdgiRayIndex(instance, triangleIndexBase + 0u);
+        uint i1 = ReadDdgiRayIndex(instance, triangleIndexBase + 1u);
+        uint i2 = ReadDdgiRayIndex(instance, triangleIndexBase + 2u);
+        GPUVertex vertex0 = ReadDdgiRayVertex(instance, i0);
+        GPUVertex vertex1 = ReadDdgiRayVertex(instance, i1);
+        GPUVertex vertex2 = ReadDdgiRayVertex(instance, i2);
         vec3 bary = vec3(
             1.0 - barycentrics.x - barycentrics.y,
             barycentrics.x,
             barycentrics.y);
-        vec2 uv0 = ReadSplitVertexTexCoord(v0) * bary.x +
-            ReadSplitVertexTexCoord(v1) * bary.y +
-            ReadSplitVertexTexCoord(v2) * bary.z;
-        vec2 uv1 = ReadSplitVertexTexCoord2(v0) * bary.x +
-            ReadSplitVertexTexCoord2(v1) * bary.y +
-            ReadSplitVertexTexCoord2(v2) * bary.z;
+        vec2 uv0 = vertex0.TexCoord * bary.x +
+            vertex1.TexCoord * bary.y +
+            vertex2.TexCoord * bary.z;
+        vec2 uv1 = vertex0.TexCoord2 * bary.x +
+            vertex1.TexCoord2 * bary.y +
+            vertex2.TexCoord2 * bary.z;
         vec2 transmissionUv = MaterialDdgiHitUv(
             uv0,
             uv1,
@@ -992,6 +1220,7 @@ vec3 TraceLightVisibility(
     vec3 origin = worldPosition + offsetNormal * normalOffset;
     vec3 visibilityRgb = vec3(1.0);
     uint thinLayerCount = 0u;
+    uint blendedLayerCount = 0u;
 
     bool recordVisibilityDiagnostics =
         DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED &&
@@ -1012,13 +1241,26 @@ vec3 TraceLightVisibility(
     }
 
     rayQueryEXT shadowQuery;
+#if DDGI_HIT_BINARY_OPAQUE_SHADOW_FAST_PATH
+    // The selected TLAS content class contains neither alpha candidates nor
+    // layered transmission. For analytic direct rays retain candidate access
+    // solely to reject the originating primitive; other NEE rays can let the
+    // implementation accept the first opaque blocker directly. In both cases
+    // TerminateOnFirstHit is exact because visibility is binary.
+    uint shadowRayFlags = gl_RayFlagsTerminateOnFirstHitEXT |
+        (recordAnalyticDirectDiagnostics
+            ? gl_RayFlagsNoOpaqueEXT
+            : gl_RayFlagsOpaqueEXT);
+#else
+    const uint shadowRayFlags = gl_RayFlagsNoneEXT;
+#endif
     rayQueryInitializeEXT(
         shadowQuery,
         SceneTlas,
         // Sidedness belongs to DdgiCandidatePassesOpacity below. Hardware
         // backface culling would discard the reverse side of authored
         // double-sided/thin cloth before its transmission can be evaluated.
-        gl_RayFlagsNoneEXT,
+        shadowRayFlags,
         0xff,
         origin,
         rayTMin,
@@ -1030,14 +1272,23 @@ vec3 TraceLightVisibility(
     {
         if (rayQueryGetIntersectionTypeEXT(shadowQuery, false) == gl_RayQueryCandidateIntersectionTriangleEXT)
         {
-            alphaCandidateCount++;
-            if (alphaCandidateCount > DDGI_HIT_ALPHA_CANDIDATE_LIMIT)
+#if DDGI_HIT_BINARY_OPAQUE_SHADOW_FAST_PATH
+            if (recordAnalyticDirectDiagnostics)
             {
-                RecordDdgiAlphaCandidateLimitReached();
-                rayQueryConfirmIntersectionEXT(shadowQuery);
-                rayQueryTerminateEXT(shadowQuery);
-                break;
+                uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(
+                    shadowQuery,
+                    false);
+                uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(
+                    shadowQuery,
+                    false);
+                if (instanceIndex == DDGI_HIT_RECEIVER_INSTANCE_INDEX &&
+                    primitiveIndex == DDGI_HIT_RECEIVER_PRIMITIVE_INDEX)
+                {
+                    continue;
+                }
             }
+            rayQueryConfirmIntersectionEXT(shadowQuery);
+#else
             uint instanceIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(shadowQuery, false);
             uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(shadowQuery, false);
             vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(shadowQuery, false);
@@ -1054,14 +1305,98 @@ vec3 TraceLightVisibility(
             {
                 continue;
             }
-            if (!DdgiCandidatePassesOpacity(instanceIndex, primitiveIndex, barycentrics, frontFacing))
+
+            GPUDdgiRayQueryInstance instance =
+                ReadDdgiRayQueryInstance(instanceIndex);
+            // Decal geometry is an overlay source only. It cannot consume the
+            // visibility candidate/layer budget and never blocks a light ray.
+            if (DdgiRayQueryInstanceIsValid(instance) &&
+                DdgiRayGeometryIsDecal(instance))
+            {
+                continue;
+            }
+
+            alphaCandidateCount++;
+            if (alphaCandidateCount > DDGI_HIT_ALPHA_CANDIDATE_LIMIT)
+            {
+                RecordDdgiAlphaCandidateLimitReached();
+                rayQueryConfirmIntersectionEXT(shadowQuery);
+                rayQueryTerminateEXT(shadowQuery);
+                break;
+            }
+
+            // Invalid metadata is fail-closed. Do not dereference material or
+            // vertex payload under an ABI that did not validate.
+            if (!DdgiRayQueryInstanceIsValid(instance))
+            {
+                rayQueryConfirmIntersectionEXT(shadowQuery);
+                rayQueryTerminateEXT(shadowQuery);
+                break;
+            }
+
+            GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
+            bool doubleSided = GiMaterialHasFlag(
+                material.TransportFlags,
+                GI_MATERIAL_DOUBLE_SIDED);
+            if (!EvaluateGiSidedness(doubleSided, frontFacing))
                 continue;
 
-            GPUDdgiRayQueryInstance instance = ReadDdgiRayQueryInstance(instanceIndex);
-            GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
-            bool thin = DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED && GiMaterialHasFlag(
-                material.TransportFlags,
-                GI_MATERIAL_THIN_SURFACE_TRANSMISSION);
+            bool thin = DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED &&
+                DdgiRayGeometryHasFlag(
+                    instance,
+                    DDGI_RAY_GEOMETRY_FLAG_THIN_TRANSMISSION) &&
+                GiMaterialHasFlag(
+                    material.TransportFlags,
+                    GI_MATERIAL_THIN_SURFACE_TRANSMISSION);
+            bool ordinaryBlend = !thin && DdgiRayGeometryHasFlag(
+                instance,
+                DDGI_RAY_GEOMETRY_FLAG_ALPHA_BLEND);
+            if (ordinaryBlend)
+            {
+                // Visibility integrates expected front-to-back coverage. Stable
+                // stochastic acceptance is reserved for primary transport; a
+                // cached light path therefore never flickers between blockers.
+                float coverage = ResolveDdgiCandidateCoverageAlpha(
+                    instance,
+                    primitiveIndex,
+                    barycentrics,
+                    material);
+                visibilityRgb *= vec3(1.0 - coverage);
+                blendedLayerCount++;
+                AddRendererDiagnostic(
+                    DDGI_HIT_CURRENT_FRAME_INDEX,
+                    DDGI_TRANSPARENT_VISIBILITY_LAYER_COUNTER,
+                    1u);
+                RecordDdgiAlphaCandidateDiagnostics(
+                    instanceIndex,
+                    primitiveIndex,
+                    coverage <= 0.0);
+                if (blendedLayerCount >=
+                    DDGI_HIT_TRANSPARENCY_LAYER_LIMIT)
+                {
+                    AddRendererDiagnostic(
+                        DDGI_HIT_CURRENT_FRAME_INDEX,
+                        DDGI_TRANSPARENT_VISIBILITY_LIMIT_COUNTER,
+                        1u);
+                    visibilityRgb = vec3(0.0);
+                    break;
+                }
+                if (max(visibilityRgb.r, max(visibilityRgb.g, visibilityRgb.b)) < 0.01)
+                {
+                    break;
+                }
+                continue;
+            }
+
+            if (!DdgiCandidatePassesOpacity(
+                    instanceIndex,
+                    primitiveIndex,
+                    barycentrics,
+                    frontFacing))
+            {
+                continue;
+            }
+
             if (thin && material.ExtensionDataIndex >= 0)
             {
                 GPUMaterialExtensionData extensionData =
@@ -1072,12 +1407,27 @@ vec3 TraceLightVisibility(
                     barycentrics,
                     material,
                     extensionData);
+                if (DdgiRayGeometryHasFlag(
+                        instance,
+                        DDGI_RAY_GEOMETRY_FLAG_ALPHA_BLEND))
+                {
+                    float coverage = ResolveDdgiCandidateCoverageAlpha(
+                        instance,
+                        primitiveIndex,
+                        barycentrics,
+                        material);
+                    layerTransmission = mix(
+                        vec3(1.0),
+                        layerTransmission,
+                        coverage);
+                }
                 visibilityRgb *= layerTransmission;
                 thinLayerCount++;
-                if (thinLayerCount >= 8u)
+                if (thinLayerCount >= DDGI_HIT_TRANSPARENCY_LAYER_LIMIT)
                 {
                     if (DDGI_HIT_SHADOW_DIAGNOSTICS_ENABLED)
                         AddRendererDiagnostic(DDGI_HIT_CURRENT_FRAME_INDEX, DDGI_THIN_SHADOW_LAYER_LIMIT_COUNTER, 1u);
+                    visibilityRgb = vec3(0.0);
                     break;
                 }
                 if (max(visibilityRgb.r, max(visibilityRgb.g, visibilityRgb.b)) < 0.01)
@@ -1092,6 +1442,7 @@ vec3 TraceLightVisibility(
             rayQueryConfirmIntersectionEXT(shadowQuery);
             rayQueryTerminateEXT(shadowQuery);
             break;
+#endif
         }
     }
 
@@ -1337,7 +1688,7 @@ vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
         uint luminance = uint(round(clamp(
             DdgiHitLuminance(noShadowDiffuse) * DDGI_THIN_LUMINANCE_SCALE,
             0.0,
-            4294967295.0)));
+            4294967040.0)));
         AddRendererDiagnostic(
             DDGI_HIT_CURRENT_FRAME_INDEX,
             transmitted
@@ -1367,12 +1718,861 @@ vec3 EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
     return noShadowDiffuse * tracedVisibility;
 }
 
+#if DDGI_HIT_CONTENT_DEPENDENT_LOCAL_LIGHTS
+const uint DDGI_LOCAL_LIGHT_MODE_AUTO = 0u;
+const uint DDGI_LOCAL_LIGHT_MODE_EXACT = 1u;
+const uint DDGI_LOCAL_LIGHT_MODE_TREE = 2u;
+const uint DDGI_LOCAL_LIGHT_MODE_LEGACY_TOP_K_REFERENCE = 3u;
+
+bool DdgiFiniteLocalLight(GPULight light)
+{
+    return all(not(isnan(light.Position))) && all(not(isinf(light.Position))) &&
+        all(not(isnan(light.Color))) && all(not(isinf(light.Color))) &&
+        !isnan(light.Intensity) && !isinf(light.Intensity);
+}
+
+bool DdgiTryBuildLocalLightContribution(
+    vec3 worldPosition,
+    GiSurfaceSample surface,
+    GPULight light,
+    out vec3 lightDirection,
+    out float distanceToLight,
+    out float attenuation)
+{
+    lightDirection = vec3(0.0, 1.0, 0.0);
+    distanceToLight = 0.0;
+    attenuation = 0.0;
+    if (light.Type == 1 || !DdgiFiniteLocalLight(light) ||
+        isnan(light.Range) || light.Range <= 0.0 || light.Intensity <= 0.0 ||
+        DdgiHitLuminance(light.Color) <= 0.0)
+    {
+        return false;
+    }
+
+    vec3 toLight = light.Position - worldPosition;
+    float distanceSquared = dot(toLight, toLight);
+    if (isnan(distanceSquared) || isinf(distanceSquared) ||
+        distanceSquared >= light.Range * light.Range)
+        return false;
+    distanceToLight = sqrt(max(distanceSquared, 0.0));
+    lightDirection = distanceToLight > 1e-5
+        ? toLight / distanceToLight
+        : surface.ShadingNormal;
+    bool thinSurface = DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED &&
+        GiMaterialHasFlag(surface.Flags, GI_MATERIAL_THIN_SURFACE_TRANSMISSION);
+    float nDotL = thinSurface
+        ? abs(dot(surface.ShadingNormal, lightDirection))
+        : max(dot(surface.ShadingNormal, lightDirection), 0.0);
+    if (nDotL <= 0.0)
+        return false;
+
+    attenuation = EvaluateNjulfPunctualRangeAttenuation(
+        distanceToLight,
+        light.Range);
+    if (light.Type == 2)
+    {
+        attenuation *= EvaluateNjulfSpotAttenuation(
+            light.Direction,
+            lightDirection,
+            light.SpotAngle);
+    }
+    return attenuation > 0.0 && !isnan(attenuation) && !isinf(attenuation);
+}
+
+void DdgiEvaluateDirectionalLightsExact(
+    vec3 worldPosition,
+    GiSurfaceSample surface,
+    vec3 viewDirection,
+    float receiverProbeSpacing,
+    inout vec3 radiance,
+    inout vec3 noShadowRadiance)
+{
+    for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)
+    {
+        GPULight light = ReadLight(lightIndex);
+        if (light.Type != 1 ||
+            any(isnan(light.Color)) || any(isinf(light.Color)) ||
+            isnan(light.Intensity) || isinf(light.Intensity) ||
+            all(lessThanEqual(max(light.Color, vec3(0.0)), vec3(0.0))) ||
+            !(light.Intensity > 0.0) ||
+            any(isnan(light.Direction)) || any(isinf(light.Direction)) ||
+            dot(light.Direction, light.Direction) <= 1e-10)
+        {
+            continue;
+        }
+        ApplyDdgiSteppedAtmosphereDirectionalLight(lightIndex, light);
+        vec3 lightNoShadow;
+        radiance += EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
+            worldPosition,
+            surface,
+            viewDirection,
+            light,
+            normalize(-light.Direction),
+            DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE,
+            1.0,
+            receiverProbeSpacing,
+            lightNoShadow);
+        noShadowRadiance += lightNoShadow;
+    }
+}
+
+void DdgiEvaluateLocalLightsExact(
+    vec3 worldPosition,
+    GiSurfaceSample surface,
+    vec3 viewDirection,
+    float receiverProbeSpacing,
+    inout vec3 radiance,
+    inout vec3 noShadowRadiance)
+{
+    for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)
+    {
+        GPULight light = ReadLight(lightIndex);
+        vec3 lightDirection;
+        float distanceToLight;
+        float attenuation;
+        if (!DdgiTryBuildLocalLightContribution(
+            worldPosition,
+            surface,
+            light,
+            lightDirection,
+            distanceToLight,
+            attenuation))
+        {
+            continue;
+        }
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_EXACT_LIGHT_EVALUATION_COUNTER,
+            1u);
+        vec3 lightNoShadow;
+        radiance += EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
+            worldPosition,
+            surface,
+            viewDirection,
+            light,
+            lightDirection,
+            distanceToLight,
+            attenuation,
+            receiverProbeSpacing,
+            lightNoShadow);
+        noShadowRadiance += lightNoShadow;
+    }
+}
+
+bool DdgiEvaluateLocalLightTreeSamples(
+    vec3 worldPosition,
+    GiSurfaceSample surface,
+    vec3 viewDirection,
+    float receiverProbeSpacing,
+    uint sampleCount,
+    out vec3 radiance,
+    out vec3 noShadowRadiance)
+{
+    radiance = vec3(0.0);
+    noShadowRadiance = vec3(0.0);
+    DdgiLightTreeState state = DdgiReadLightTreeState();
+    if ((state.flags & DDGI_LIGHT_TREE_STATE_VALID_BIT) == 0u ||
+        state.leafCount == 0u || state.leafCount > DDGI_LIGHT_TREE_MAX_LEAVES ||
+        state.paddedLeafCount == 0u || state.nodeCount == 0u ||
+        !DdgiLightTreeStateMatchesCurrentLightBuffer(
+            state,
+            pc.LightCount,
+            pc.LocalLightCount))
+    {
+        return false;
+    }
+
+#if NJULF_DDGI_DETAILED_COUNTERS
+    uint sampledLeafOrdinals[64];
+#endif
+    for (uint sampleOrdinal = 0u; sampleOrdinal < sampleCount; sampleOrdinal++)
+    {
+        DdgiLightTreeSample lightSample = DdgiSampleLocalLightTree(
+            worldPosition,
+            DDGI_HIT_WORLD_PROBE_STABLE_KEY,
+            DDGI_HIT_DIRECTION_RAY_ORDINAL,
+            DDGI_HIT_SOURCE_LIGHTING_EPOCH,
+            DDGI_HIT_SAMPLING_SEQUENCE_EPOCH,
+            sampleOrdinal,
+            DDGI_HIT_UNIFORM_LIGHT_MIXTURE);
+        if (!lightSample.valid ||
+            lightSample.packedLightIndex >= pc.LightCount ||
+            !(lightSample.pdf > 0.0) ||
+            isnan(lightSample.pdf) || isinf(lightSample.pdf))
+        {
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                DDGI_MANY_LIGHT_INVALID_SAMPLE_PDF_COUNTER,
+                1u);
+            return false;
+        }
+
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_SAMPLED_LIGHT_COUNTER,
+            1u);
+        if (lightSample.repairedInvalidBound)
+        {
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                DDGI_MANY_LIGHT_UNIFORM_REPAIR_COUNTER,
+                1u);
+        }
+#if NJULF_DDGI_DETAILED_COUNTERS
+        bool duplicate = false;
+        for (uint previousOrdinal = 0u;
+             previousOrdinal < sampleOrdinal;
+             previousOrdinal++)
+        {
+            duplicate = duplicate ||
+                sampledLeafOrdinals[previousOrdinal] == lightSample.leafOrdinal;
+        }
+        sampledLeafOrdinals[sampleOrdinal] = lightSample.leafOrdinal;
+        if (duplicate)
+        {
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                DDGI_MANY_LIGHT_DUPLICATE_DRAW_COUNTER,
+                1u);
+        }
+        float negativeLog2Pdf = clamp(-log2(lightSample.pdf), 0.0, 32.0);
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_PDF_SUM_COUNTER,
+            uint(round(clamp(
+                lightSample.pdf * DDGI_MANY_LIGHT_PDF_SCALE,
+                0.0,
+                4294967040.0))));
+        uint quantizedNegativeLog2Pdf = uint(round(
+            negativeLog2Pdf * DDGI_MANY_LIGHT_LOG_PDF_SCALE));
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_NEGATIVE_LOG2_PDF_SUM_COUNTER,
+            quantizedNegativeLog2Pdf);
+        MaxRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_MAX_NEGATIVE_LOG2_PDF_COUNTER,
+            quantizedNegativeLog2Pdf);
+#endif
+
+        GPULight light = ReadLight(lightSample.packedLightIndex);
+        // Packed indices are allowed to change after topology edits. The stable
+        // identity turns a stale publication into an exact fallback instead of
+        // silently sampling the wrong light.
+        if (light.Type == 1 ||
+            light.StableIdentity != lightSample.stableLightIdentity)
+        {
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                DDGI_MANY_LIGHT_INVALID_SAMPLE_PDF_COUNTER,
+                1u);
+            return false;
+        }
+
+        vec3 lightDirection;
+        float distanceToLight;
+        float attenuation;
+        if (!DdgiTryBuildLocalLightContribution(
+            worldPosition,
+            surface,
+            light,
+            lightDirection,
+            distanceToLight,
+            attenuation))
+        {
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                DDGI_MANY_LIGHT_REJECTED_ZERO_TERM_COUNTER,
+                1u);
+            continue;
+        }
+
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_VISIBILITY_EVALUATION_COUNTER,
+            1u);
+        vec3 lightNoShadow;
+        vec3 contribution = EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
+            worldPosition,
+            surface,
+            viewDirection,
+            light,
+            lightDirection,
+            distanceToLight,
+            attenuation,
+            receiverProbeSpacing,
+            lightNoShadow);
+        float inverseEstimatorPdf = 1.0 /
+            (float(sampleCount) * lightSample.pdf);
+        if (isnan(inverseEstimatorPdf) || isinf(inverseEstimatorPdf) ||
+            !(inverseEstimatorPdf > 0.0))
+        {
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                DDGI_MANY_LIGHT_INVALID_SAMPLE_PDF_COUNTER,
+                1u);
+            return false;
+        }
+#if NJULF_DDGI_DETAILED_COUNTERS
+        MaxRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_MAX_ESTIMATOR_WEIGHT_COUNTER,
+            uint(round(clamp(
+                inverseEstimatorPdf *
+                    DDGI_MANY_LIGHT_ESTIMATOR_WEIGHT_SCALE,
+                0.0,
+                4294967040.0))));
+#endif
+        // Samples are drawn with replacement. Duplicate leaves remain
+        // independent contributions and are deliberately not collapsed.
+        radiance += contribution * inverseEstimatorPdf;
+        noShadowRadiance += lightNoShadow * inverseEstimatorPdf;
+    }
+    return true;
+}
+
+vec3 DdgiEvaluateContentDependentDirectDiffuseRadianceAtHit(
+    vec3 worldPosition,
+    GiSurfaceSample surface,
+    vec3 viewDirection,
+    float receiverProbeSpacing,
+    out vec3 directNoShadowDiffuse)
+{
+    vec3 radiance = vec3(0.0);
+    directNoShadowDiffuse = vec3(0.0);
+    DdgiEvaluateDirectionalLightsExact(
+        worldPosition,
+        surface,
+        viewDirection,
+        receiverProbeSpacing,
+        radiance,
+        directNoShadowDiffuse);
+
+#if DDGI_HIT_LOCAL_LIGHTS_ENABLED
+    if (pc.LocalLightCount == 0u)
+    {
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_BYPASS_HIT_COUNTER,
+            1u);
+        return radiance;
+    }
+
+    uint mode = DDGI_HIT_LOCAL_SAMPLING_MODE;
+    bool exact = mode == DDGI_LOCAL_LIGHT_MODE_EXACT ||
+        pc.LocalLightCount <= DDGI_HIT_EXACT_LOCAL_LIGHT_THRESHOLD;
+    if (exact)
+    {
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_EXACT_HIT_COUNTER,
+            1u);
+        DdgiEvaluateLocalLightsExact(
+            worldPosition,
+            surface,
+            viewDirection,
+            receiverProbeSpacing,
+            radiance,
+            directNoShadowDiffuse);
+        return radiance;
+    }
+
+    // Keep malformed/manual shader variants inside the bounded duplicate-tracking
+    // storage even though the settings contract already clamps this value.
+    uint sampleCount = min(DDGI_HIT_MAX_SHADED_LIGHTS, 64u);
+    if (sampleCount == 0u)
+    {
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_TREE_FALLBACK_HIT_COUNTER,
+            1u);
+        DdgiEvaluateLocalLightsExact(
+            worldPosition,
+            surface,
+            viewDirection,
+            receiverProbeSpacing,
+            radiance,
+            directNoShadowDiffuse);
+        return radiance;
+    }
+    AddRendererDiagnostic(
+        DDGI_HIT_CURRENT_FRAME_INDEX,
+        DDGI_MANY_LIGHT_TREE_ATTEMPT_HIT_COUNTER,
+        1u);
+    vec3 sampledRadiance;
+    vec3 sampledNoShadow;
+    if (DdgiEvaluateLocalLightTreeSamples(
+        worldPosition,
+        surface,
+        viewDirection,
+        receiverProbeSpacing,
+        sampleCount,
+        sampledRadiance,
+        sampledNoShadow))
+    {
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_MANY_LIGHT_TREE_SUCCESS_HIT_COUNTER,
+            1u);
+        radiance += sampledRadiance;
+        directNoShadowDiffuse += sampledNoShadow;
+        return radiance;
+    }
+
+    // Invalid/stale/unpublished hierarchy: preserve correctness with the
+    // all-lights oracle. This can cost more, but never drops supported energy.
+    AddRendererDiagnostic(
+        DDGI_HIT_CURRENT_FRAME_INDEX,
+        DDGI_MANY_LIGHT_TREE_FALLBACK_HIT_COUNTER,
+        1u);
+    DdgiEvaluateLocalLightsExact(
+        worldPosition,
+        surface,
+        viewDirection,
+        receiverProbeSpacing,
+        radiance,
+        directNoShadowDiffuse);
+#endif
+    return radiance;
+}
+#endif
+
+float DdgiEmissiveRandom(inout uint state)
+{
+    state = state * 1664525u + 1013904223u;
+    return float(state >> 8u) * (1.0 / 16777216.0);
+}
+
+uint DdgiEmissiveHierarchyLeafCapacity(uint sourceCount)
+{
+    uint capacity = 1u;
+    while (capacity < sourceCount)
+        capacity <<= 1u;
+    return capacity;
+}
+
+GPUDdgiEmissiveSource ReadDdgiEmissiveHierarchyNode(
+    uint sourceCount,
+    uint nodeIndex)
+{
+    // Hierarchy nodes immediately follow the live source prefix in the same
+    // 64-byte-record storage buffer.
+    return ReadDdgiEmissiveSource(sourceCount + nodeIndex);
+}
+
+float DdgiEmissiveMaximumCosineWithinCone(
+    vec3 referenceAxis,
+    vec3 coneAxis,
+    float coneHalfAngle)
+{
+    float cosine = clamp(dot(
+        GiSafeNormal(referenceAxis, vec3(0.0, 1.0, 0.0)),
+        GiSafeNormal(coneAxis, vec3(0.0, 1.0, 0.0))), -1.0, 1.0);
+    float angle = acos(cosine);
+    if (angle <= coneHalfAngle)
+        return 1.0;
+    return max(cos(min(angle - coneHalfAngle, 3.14159265359)), 0.0);
+}
+
+float EvaluateDdgiEmissiveHierarchyNodeImportance(
+    GPUDdgiEmissiveSource node,
+    vec3 receiverPosition,
+    vec3 receiverNormal)
+{
+    const uint NodeValid = 1u << 0u;
+    const uint NodeContainsDoubleSided = 1u << 1u;
+    const uint NodeConeUnbounded = 1u << 2u;
+    const float ImportanceFloor = 1.0 / 1024.0;
+
+    uint nodeFlags = floatBitsToUint(node.Edge2AliasFlags.w);
+    float power = node.Vertex0Area.w;
+    if ((nodeFlags & NodeValid) == 0u ||
+        !(power > 0.0) || isnan(power) || isinf(power))
+    {
+        return 0.0;
+    }
+
+    vec3 minimum = node.Vertex0Area.xyz;
+    vec3 maximum = node.Edge1AliasProbability.xyz;
+    vec3 center = (minimum + maximum) * 0.5;
+    float radius = max(length(maximum - minimum) * 0.5, 1e-4);
+    vec3 toCenter = center - receiverPosition;
+    float centerDistance = length(toCenter);
+    float directionConeAngle;
+    vec3 centerDirection;
+    if (!(centerDistance > radius) || isnan(centerDistance) || isinf(centerDistance))
+    {
+        directionConeAngle = 3.14159265359;
+        centerDirection = receiverNormal;
+    }
+    else
+    {
+        directionConeAngle = asin(clamp(radius / centerDistance, 0.0, 1.0));
+        centerDirection = toCenter / centerDistance;
+    }
+
+    float receiverBound = DdgiEmissiveMaximumCosineWithinCone(
+        receiverNormal,
+        centerDirection,
+        directionConeAngle);
+    float sourceBound = 1.0;
+    if ((nodeFlags & (NodeContainsDoubleSided | NodeConeUnbounded)) == 0u)
+    {
+        vec3 sourceAxis = GiSafeNormal(
+            node.Edge2AliasFlags.xyz,
+            vec3(0.0, 1.0, 0.0));
+        float sourceConeAngle = acos(clamp(
+            node.Edge1AliasProbability.w,
+            -1.0,
+            1.0));
+        sourceBound = DdgiEmissiveMaximumCosineWithinCone(
+            sourceAxis,
+            -centerDirection,
+            min(sourceConeAngle + directionConeAngle, 3.14159265359));
+    }
+
+    vec3 delta = max(max(minimum - receiverPosition, vec3(0.0)),
+        receiverPosition - maximum);
+    float distanceSquared = dot(delta, delta);
+    float scale = max(radius * radius * 1e-4, 1e-6);
+    distanceSquared = max(distanceSquared, scale);
+    float angularBound = max(receiverBound * sourceBound, ImportanceFloor);
+    float importance = power * angularBound / distanceSquared;
+    return importance > 0.0 && !isnan(importance) && !isinf(importance)
+        ? importance
+        : 0.0;
+}
+
+bool SampleDdgiEmissiveHierarchy(
+    vec3 receiverPosition,
+    vec3 receiverNormal,
+    uint sourceCount,
+    inout uint seed,
+    out uint selectedIndex,
+    out float selectionProbability)
+{
+    selectedIndex = 0u;
+    selectionProbability = 0.0;
+    if (sourceCount == 0u)
+        return false;
+
+    uint leafCapacity = DdgiEmissiveHierarchyLeafCapacity(sourceCount);
+    uint leafBase = leafCapacity - 1u;
+    uint nodeIndex = 0u;
+    float probability = 1.0;
+    while (nodeIndex < leafBase)
+    {
+        uint leftIndex = nodeIndex * 2u + 1u;
+        uint rightIndex = leftIndex + 1u;
+        float leftWeight = EvaluateDdgiEmissiveHierarchyNodeImportance(
+            ReadDdgiEmissiveHierarchyNode(sourceCount, leftIndex),
+            receiverPosition,
+            receiverNormal);
+        float rightWeight = EvaluateDdgiEmissiveHierarchyNodeImportance(
+            ReadDdgiEmissiveHierarchyNode(sourceCount, rightIndex),
+            receiverPosition,
+            receiverNormal);
+        float totalWeight = leftWeight + rightWeight;
+        if (!(totalWeight > 0.0) || isnan(totalWeight) || isinf(totalWeight))
+            return false;
+
+        float leftProbability = clamp(leftWeight / totalWeight, 0.0, 1.0);
+        bool chooseLeft = DdgiEmissiveRandom(seed) < leftProbability;
+        probability *= chooseLeft ? leftProbability : 1.0 - leftProbability;
+        nodeIndex = chooseLeft ? leftIndex : rightIndex;
+    }
+
+    selectedIndex = nodeIndex - leafBase;
+    if (selectedIndex >= sourceCount ||
+        !(probability > 0.0) || isnan(probability) || isinf(probability))
+    {
+        selectedIndex = 0u;
+        selectionProbability = 0.0;
+        return false;
+    }
+
+    selectionProbability = probability;
+    return true;
+}
+
+float EvaluateDdgiEmissiveHierarchyProbability(
+    vec3 receiverPosition,
+    vec3 receiverNormal,
+    uint sourceCount,
+    uint sourceIndex)
+{
+    if (sourceCount == 0u || sourceIndex >= sourceCount)
+        return 0.0;
+
+    uint leafCapacity = DdgiEmissiveHierarchyLeafCapacity(sourceCount);
+    uint nodeIndex = 0u;
+    uint rangeStart = 0u;
+    uint rangeSize = leafCapacity;
+    float probability = 1.0;
+    while (rangeSize > 1u)
+    {
+        uint leftIndex = nodeIndex * 2u + 1u;
+        uint rightIndex = leftIndex + 1u;
+        float leftWeight = EvaluateDdgiEmissiveHierarchyNodeImportance(
+            ReadDdgiEmissiveHierarchyNode(sourceCount, leftIndex),
+            receiverPosition,
+            receiverNormal);
+        float rightWeight = EvaluateDdgiEmissiveHierarchyNodeImportance(
+            ReadDdgiEmissiveHierarchyNode(sourceCount, rightIndex),
+            receiverPosition,
+            receiverNormal);
+        float totalWeight = leftWeight + rightWeight;
+        if (!(totalWeight > 0.0) || isnan(totalWeight) || isinf(totalWeight))
+            return 0.0;
+
+        uint halfRange = rangeSize >> 1u;
+        bool chooseLeft = sourceIndex < rangeStart + halfRange;
+        float leftProbability = clamp(leftWeight / totalWeight, 0.0, 1.0);
+        probability *= chooseLeft ? leftProbability : 1.0 - leftProbability;
+        if (chooseLeft)
+        {
+            nodeIndex = leftIndex;
+        }
+        else
+        {
+            nodeIndex = rightIndex;
+            rangeStart += halfRange;
+        }
+        rangeSize = halfRange;
+    }
+
+    return probability > 0.0 && !isnan(probability) && !isinf(probability)
+        ? probability
+        : 0.0;
+}
+
+uint SampleDdgiEmissiveGlobalAlias(uint sourceCount, inout uint seed)
+{
+    const uint EmissiveSourceAliasIndexMask = 0x0000ffffu;
+    float columnSample = DdgiEmissiveRandom(seed);
+    float aliasSample = DdgiEmissiveRandom(seed);
+    uint column = min(uint(columnSample * float(sourceCount)), sourceCount - 1u);
+    GPUDdgiEmissiveSource columnSource = ReadDdgiEmissiveSource(column);
+    uint packedAliasFlags = floatBitsToUint(columnSource.Edge2AliasFlags.w);
+    uint aliasIndex = min(
+        packedAliasFlags & EmissiveSourceAliasIndexMask,
+        sourceCount - 1u);
+    return aliasSample < clamp(columnSource.Edge1AliasProbability.w, 0.0, 1.0)
+        ? column
+        : aliasIndex;
+}
+
+void DdgiMacroBasis(vec3 axis, out vec3 tangent, out vec3 bitangent)
+{
+    axis = GiSafeNormal(axis, vec3(0.0, 1.0, 0.0));
+    vec3 helper = abs(axis.y) < 0.9
+        ? vec3(0.0, 1.0, 0.0)
+        : vec3(1.0, 0.0, 0.0);
+    tangent = GiSafeNormal(cross(helper, axis), vec3(1.0, 0.0, 0.0));
+    bitangent = GiSafeNormal(cross(axis, tangent), vec3(0.0, 0.0, 1.0));
+}
+
+vec3 SampleDdgiMacroEmitterPosition(
+    GPUDdgiEmissiveSource source,
+    uint sourceFlags,
+    inout uint seed)
+{
+    const uint MacroShapeMask = 0x0f00u;
+    vec3 center = source.Vertex0Area.xyz;
+    float radius = max(source.Vertex0Area.w, 1e-4);
+    vec3 axis = GiSafeNormal(source.Edge1AliasProbability.xyz, vec3(0.0, 1.0, 0.0));
+    float axialExtent = max(source.Edge2AliasFlags.x, 0.0);
+    float secondaryExtent = max(source.Edge2AliasFlags.y, 0.0);
+    uint shape = (sourceFlags & MacroShapeMask) >> 8u;
+    vec3 tangent;
+    vec3 bitangent;
+    DdgiMacroBasis(axis, tangent, bitangent);
+
+    float u0 = DdgiEmissiveRandom(seed);
+    float u1 = DdgiEmissiveRandom(seed);
+    float u2 = DdgiEmissiveRandom(seed);
+    float angle = 6.28318530718 * u0;
+    vec2 diskDirection = vec2(cos(angle), sin(angle));
+
+    if (shape == 4u) // line / beam
+        return center + axis * ((u1 * 2.0 - 1.0) * axialExtent);
+
+    if (shape == 2u) // capsule/cylindrical volume
+    {
+        vec2 disk = diskDirection * (radius * sqrt(u1));
+        return center + axis * ((u2 * 2.0 - 1.0) * axialExtent) +
+            tangent * disk.x + bitangent * disk.y;
+    }
+
+    if (shape == 3u) // cone volume
+    {
+        float heightT = pow(max(u2, 0.0), 1.0 / 3.0);
+        float localRadius = radius * heightT * sqrt(u1);
+        float axial = (heightT * 2.0 - 1.0) * axialExtent;
+        return center + axis * axial +
+            tangent * (diskDirection.x * localRadius) +
+            bitangent * (diskDirection.y * localRadius);
+    }
+
+    if (shape == 5u) // disk
+    {
+        float diskRadius = radius * sqrt(u1);
+        return center + tangent * (diskDirection.x * diskRadius) +
+            bitangent * (diskDirection.y * diskRadius) +
+            axis * ((u2 * 2.0 - 1.0) * secondaryExtent);
+    }
+
+    if (shape == 6u) // bounded volume
+    {
+        vec3 extents = vec3(radius, max(axialExtent, 1e-4), max(secondaryExtent, 1e-4));
+        return center + (vec3(u0, u1, u2) * 2.0 - vec3(1.0)) * extents;
+    }
+
+    // Sphere volume is the robust default for point and unknown authored
+    // shapes. Cuberoot radial sampling preserves uniform power density.
+    float z = 1.0 - 2.0 * u1;
+    float radial = sqrt(max(1.0 - z * z, 0.0));
+    vec3 direction = vec3(radial * diskDirection.x, z, radial * diskDirection.y);
+    return center + direction * (radius * pow(max(u2, 0.0), 1.0 / 3.0));
+}
+
+vec3 EvaluateDdgiMacroEmitterDiffuseRadiance(
+    GPUDdgiEmissiveSource source,
+    uint sourceFlags,
+    float sourceSelectionProbability,
+    vec3 worldPosition,
+    GiSurfaceSample surface,
+    float nDotV,
+    float receiverProbeSpacing,
+    inout uint seed)
+{
+    vec3 samplePosition = SampleDdgiMacroEmitterPosition(source, sourceFlags, seed);
+    vec3 toSource = samplePosition - worldPosition;
+    float distanceSquared = dot(toSource, toSource);
+    if (!(distanceSquared > 0.000004) || isnan(distanceSquared) || isinf(distanceSquared))
+        return vec3(0.0);
+
+    float distanceToSource = sqrt(distanceSquared);
+    vec3 lightDirection = toSource / distanceToSource;
+    float receiverCosine = max(dot(surface.ShadingNormal, lightDirection), 0.0);
+    if (receiverCosine <= 0.0)
+        return vec3(0.0);
+
+    // IntegratedPower is distributed according to the exact analytic sample
+    // above. Its conditional spatial density cancels the matching normalized
+    // emission density; only source-selection probability remains in the
+    // one-source estimator.
+    vec3 integratedPower = max(source.RadianceSelectionProbability.rgb, vec3(0.0));
+    vec3 incidentIrradiance = integratedPower *
+        (receiverCosine /
+         max(12.5663706144 * distanceSquared * sourceSelectionProbability, 1e-10));
+    vec3 contribution = incidentIrradiance * EvaluateGiDiffuseBrdf(
+        surface.DirectionalDiffuseBase,
+        surface.DielectricF0,
+        receiverCosine,
+        nDotV);
+    vec3 visibility = TraceLightVisibility(
+        worldPosition,
+        surface.GeometricNormal,
+        lightDirection,
+        distanceToSource,
+        receiverProbeSpacing,
+        false);
+    return contribution * visibility;
+}
+
+vec3 EvaluateDdgiDynamicEmissiveSurfaceRadiance(
+    uint sourceIndex,
+    vec3 barycentrics)
+{
+    GPUDdgiEmissiveSurface sourceSurface =
+        ReadDdgiEmissiveSurface(sourceIndex);
+    uint materialIndex = floatBitsToUint(
+        sourceSurface.MaterialAndVertexAlpha.x);
+    GPUMaterialData material = ReadMaterial(materialIndex);
+
+    vec2 uv00 = sourceSurface.Uv0Vertex01.xy;
+    vec2 uv01 = sourceSurface.Uv0Vertex01.zw;
+    vec2 uv02 = sourceSurface.Uv0Vertex2Uv1Vertex0.xy;
+    vec2 uv10 = sourceSurface.Uv0Vertex2Uv1Vertex0.zw;
+    vec2 uv11 = sourceSurface.Uv1Vertex12.xy;
+    vec2 uv12 = sourceSurface.Uv1Vertex12.zw;
+    vec2 uv0 = uv00 * barycentrics.x +
+        uv01 * barycentrics.y +
+        uv02 * barycentrics.z;
+    vec2 uv1 = uv10 * barycentrics.x +
+        uv11 * barycentrics.y +
+        uv12 * barycentrics.z;
+
+    float vertexAlpha = clamp(dot(
+        sourceSurface.MaterialAndVertexAlpha.yzw,
+        barycentrics), 0.0, 1.0);
+    float policyLod = max(material.DdgiMaterialPolicy.y, 0.0);
+    if (DecodeMaterialAlphaMode(material.NormalScaleBias.y) ==
+        MATERIAL_ALPHA_MODE_MASK)
+    {
+        float sampledTextureAlpha = 1.0;
+        if (GiMaterialHasFlag(
+                material.TransportFlags,
+                GI_MATERIAL_HAS_BASE_COLOR_TEXTURE))
+        {
+            vec2 alphaUv = MaterialDdgiHitUv(
+                uv0,
+                uv1,
+                material.TextureTexCoordSets.x,
+                material.BaseColorOffsetScale,
+                material.TextureRotations.x);
+            sampledTextureAlpha = SampleDdgiMaterialTexture(
+                material.AlbedoTextureIndex,
+                alphaUv,
+                policyLod,
+                vec4(1.0)).a;
+        }
+        if (!DdgiAlphaCandidateOccupiesOpaqueTransport(
+                material.Albedo.a,
+                vertexAlpha,
+                sampledTextureAlpha,
+                material.NormalScaleBias.y,
+                material.NormalScaleBias.z))
+        {
+            return vec3(0.0);
+        }
+    }
+
+    vec3 emissiveTexture = vec3(1.0);
+    if (GiMaterialHasFlag(
+            material.TransportFlags,
+            GI_MATERIAL_HAS_EMISSIVE_TEXTURE))
+    {
+        vec2 emissiveUv = MaterialDdgiHitUv(
+            uv0,
+            uv1,
+            material.TextureTexCoordSets.w,
+            material.EmissiveOffsetScale,
+            material.TextureRotations.w);
+        emissiveTexture = SampleDdgiMaterialTexture(
+            material.EmissiveTextureIndex,
+            emissiveUv,
+            policyLod,
+            vec4(1.0)).rgb;
+    }
+
+    vec3 radiance = max(material.Emissive.rgb, vec3(0.0)) *
+        max(emissiveTexture, vec3(0.0));
+    return any(isnan(radiance)) || any(isinf(radiance))
+        ? vec3(0.0)
+        : radiance;
+}
+
 vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
     vec3 worldPosition,
     GiSurfaceSample surface,
     vec3 viewDirection,
     float receiverProbeSpacing)
 {
+#if !DDGI_HIT_EMISSIVE_SOURCES_ENABLED
+    return vec3(0.0);
+#else
     // Estimator ownership: this function is next-event estimation at the
     // receiver. It never replaces direct surface-hit emission and never owns
     // cached recursive irradiance. CPU policy uploads exactly one NEE mode:
@@ -1391,6 +2591,9 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
     const uint EmissiveSourceTriangleFlag = 1u << 0u;
     const uint EmissiveSourceDoubleSidedFlag = 1u << 1u;
     const uint EmissiveSourceProxyRollbackFlag = 1u << 4u;
+    const uint EmissiveSourceSpatialHierarchyFlag = 1u << 5u;
+    const uint EmissiveSourceMacroEmitterFlag = 1u << 6u;
+    const uint EmissiveSourceDynamicTextureFlag = 1u << 7u;
 
     GPUDdgiEmissiveSource firstSource = ReadDdgiEmissiveSource(0u);
     uint firstPackedAliasFlags = floatBitsToUint(firstSource.Edge2AliasFlags.w);
@@ -1453,12 +2656,13 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
         return diffuseRadiance + dominantContribution * (dominantVisibility - vec3(1.0));
     }
 
-    if ((firstFlags & EmissiveSourceTriangleFlag) == 0u)
+    if ((firstFlags & (EmissiveSourceTriangleFlag | EmissiveSourceMacroEmitterFlag)) == 0u)
         return vec3(0.0);
 
-    // A deterministic per-hit seed drives one Vose alias sample and one
-    // uniform-area triangle sample. Selection PDF and area are stored explicitly
-    // so the estimator remains invariant under triangle area and bounds padding.
+    // A deterministic per-hit seed drives either the point-dependent spatial
+    // hierarchy or the global Vose alias support floor, followed by one
+    // uniform-area triangle sample. Both technique probabilities are evaluated
+    // for the selected leaf, yielding the exact mixture PDF.
     uint seed =
         floatBitsToUint(worldPosition.x) * 0x9e3779b9u ^
         floatBitsToUint(worldPosition.y) * 0x85ebca6bu ^
@@ -1467,28 +2671,72 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
     seed ^= seed >> 16u;
     seed *= 0x7feb352du;
     seed ^= seed >> 15u;
-    float u0 = float(seed) * 2.3283064365386963e-10;
-    seed = seed * 1664525u + 1013904223u;
-    float u1 = float(seed) * 2.3283064365386963e-10;
-    seed = seed * 1664525u + 1013904223u;
-    float u2 = float(seed) * 2.3283064365386963e-10;
-    seed = seed * 1664525u + 1013904223u;
-    float u3 = float(seed) * 2.3283064365386963e-10;
 
     uint sourceCount = pc.EmissiveSourceCount;
-    uint column = min(uint(u0 * float(sourceCount)), sourceCount - 1u);
-    GPUDdgiEmissiveSource columnSource = ReadDdgiEmissiveSource(column);
-    uint packedAliasFlags = floatBitsToUint(columnSource.Edge2AliasFlags.w);
-    uint aliasIndex = min(packedAliasFlags & EmissiveSourceAliasIndexMask, sourceCount - 1u);
-    uint selectedIndex = u1 < clamp(columnSource.Edge1AliasProbability.w, 0.0, 1.0)
-        ? column
-        : aliasIndex;
+    uint selectedIndex = 0u;
+    float hierarchySelectionProbability = 0.0;
+    bool hierarchyAvailable =
+        (firstFlags & EmissiveSourceSpatialHierarchyFlag) != 0u;
+    const float HierarchyTechniqueProbability = 0.875;
+
+    // Local helpers are defined below as macros cannot carry inout RNG state
+    // safely across all GLSL compilers used by the build matrix.
+    float techniqueSample = DdgiEmissiveRandom(seed);
+    if (hierarchyAvailable && techniqueSample < HierarchyTechniqueProbability)
+    {
+        hierarchyAvailable = SampleDdgiEmissiveHierarchy(
+            worldPosition,
+            surface.ShadingNormal,
+            sourceCount,
+            seed,
+            selectedIndex,
+            hierarchySelectionProbability);
+    }
+
+    if (!hierarchyAvailable || techniqueSample >= HierarchyTechniqueProbability)
+    {
+        selectedIndex = SampleDdgiEmissiveGlobalAlias(sourceCount, seed);
+        if (hierarchyAvailable)
+        {
+            hierarchySelectionProbability = EvaluateDdgiEmissiveHierarchyProbability(
+                worldPosition,
+                surface.ShadingNormal,
+                sourceCount,
+                selectedIndex);
+        }
+    }
+
     GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(selectedIndex);
     uint sourceFlags = floatBitsToUint(source.Edge2AliasFlags.w) >> EmissiveSourceFlagsShift;
 
+    float globalSelectionProbability = max(
+        source.RadianceSelectionProbability.w,
+        1e-10);
+    float selectionProbability = hierarchyAvailable &&
+            hierarchySelectionProbability > 0.0
+        ? (1.0 - HierarchyTechniqueProbability) * globalSelectionProbability +
+            HierarchyTechniqueProbability * hierarchySelectionProbability
+        : globalSelectionProbability;
+
+    if ((sourceFlags & EmissiveSourceMacroEmitterFlag) != 0u)
+    {
+        return EvaluateDdgiMacroEmitterDiffuseRadiance(
+            source,
+            sourceFlags,
+            max(selectionProbability, 1e-10),
+            worldPosition,
+            surface,
+            nDotV,
+            receiverProbeSpacing,
+            seed);
+    }
+
+    float u2 = DdgiEmissiveRandom(seed);
+    float u3 = DdgiEmissiveRandom(seed);
     float sqrtU2 = sqrt(clamp(u2, 0.0, 1.0));
     float bary1 = sqrtU2 * (1.0 - u3);
     float bary2 = sqrtU2 * u3;
+    vec3 sourceBarycentrics = vec3(1.0 - bary1 - bary2, bary1, bary2);
     vec3 samplePosition =
         source.Vertex0Area.xyz +
         source.Edge1AliasProbability.xyz * bary1 +
@@ -1516,8 +2764,11 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
         return vec3(0.0);
 
     float area = max(source.Vertex0Area.w, 1e-10);
-    float selectionProbability = max(source.RadianceSelectionProbability.w, 1e-10);
-    vec3 incidentIrradiance = max(source.RadianceSelectionProbability.rgb, vec3(0.0)) *
+    selectionProbability = max(selectionProbability, 1e-10);
+    vec3 sourceRadiance = (sourceFlags & EmissiveSourceDynamicTextureFlag) != 0u
+        ? EvaluateDdgiDynamicEmissiveSurfaceRadiance(selectedIndex, sourceBarycentrics)
+        : max(source.RadianceSelectionProbability.rgb, vec3(0.0));
+    vec3 incidentIrradiance = sourceRadiance *
         (receiverCosine * sourceCosine * area /
          max(distanceSquared * selectionProbability, 1e-10));
     // This is direct illumination from an area emitter. Material AO is a
@@ -1536,6 +2787,7 @@ vec3 EvaluateSelectedDdgiEmissiveDiffuseRadianceAtHit(
         receiverProbeSpacing,
         false);
     return contribution * visibility;
+#endif
 }
 
 vec3 EvaluateDirectDiffuseRadianceAtHit(
@@ -1548,7 +2800,31 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
     vec3 directDiffuseRadiance = vec3(0.0);
     directNoShadowDiffuse = vec3(0.0);
 
-#if DDGI_HIT_USE_SELECTED_LIGHTS
+#if DDGI_HIT_ONE_DIRECTIONAL_LIGHT_ONLY
+    if (pc.PrimaryDirectionalLightIndex == 0xffffffffu ||
+        pc.PrimaryDirectionalLightIndex >= pc.LightCount)
+    {
+        return directDiffuseRadiance;
+    }
+    GPULight directionalLight = ReadLight(pc.PrimaryDirectionalLightIndex);
+    ApplyDdgiSteppedAtmosphereDirectionalLight(
+        pc.PrimaryDirectionalLightIndex,
+        directionalLight);
+    if (directionalLight.Type != 1)
+        return directDiffuseRadiance;
+    vec3 lightNoShadowDiffuse;
+    directDiffuseRadiance = EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
+        worldPosition,
+        surface,
+        viewDirection,
+        directionalLight,
+        normalize(-directionalLight.Direction),
+        DDGI_DIRECTIONAL_SHADOW_RAY_DISTANCE,
+        1.0,
+        receiverProbeSpacing,
+        lightNoShadowDiffuse);
+    directNoShadowDiffuse = lightNoShadowDiffuse;
+#elif DDGI_HIT_USE_SELECTED_LIGHTS
     uint selectedLightCapacity = min(DDGI_HIT_MAX_SHADED_LIGHTS, DDGI_MAX_SELECTED_HIT_LIGHTS);
     uint selectedLightCount = 0u;
     if (selectedLightCapacity == 0u || pc.LightCount == 0u)
@@ -1576,6 +2852,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
     if (selectedLightCount >= selectedLightCapacity)
         return directDiffuseRadiance;
 
+#if DDGI_HIT_LOCAL_LIGHTS_ENABLED
     GPULight localLight;
     vec3 localLightDirection;
     float localLightDistance;
@@ -1605,7 +2882,21 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
             lightNoShadowDiffuse);
         directNoShadowDiffuse += lightNoShadowDiffuse;
     }
+#endif
 #else
+#if DDGI_HIT_CONTENT_DEPENDENT_LOCAL_LIGHTS
+    if (DDGI_HIT_LOCAL_SAMPLING_ENABLED &&
+        DDGI_HIT_LOCAL_SAMPLING_MODE !=
+            DDGI_LOCAL_LIGHT_MODE_LEGACY_TOP_K_REFERENCE)
+    {
+        return DdgiEvaluateContentDependentDirectDiffuseRadianceAtHit(
+            worldPosition,
+            surface,
+            viewDirection,
+            receiverProbeSpacing,
+            directNoShadowDiffuse);
+    }
+#endif
     // Ray-query DDGI is memory-bound, so evaluate a bounded ALU-only estimate
     // for the local-light set before spending shadow rays. Directional lights
     // remain first-class transport contributors and bypass the ranking.
@@ -1637,6 +2928,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
         shadedLightCount++;
     }
 
+#if DDGI_HIT_LOCAL_LIGHTS_ENABLED
     uint localCapacity = selectedLightCapacity - shadedLightCount;
     if (localCapacity == 0u)
         return directDiffuseRadiance;
@@ -1712,6 +3004,7 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
             lightNoShadowDiffuse);
         directNoShadowDiffuse += lightNoShadowDiffuse;
     }
+#endif
 #endif
 
     return directDiffuseRadiance;

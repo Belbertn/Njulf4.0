@@ -12,6 +12,68 @@ namespace Njulf.Tests;
 public sealed unsafe class AccelerationStructureManagerTests
 {
     [Test]
+    public void PreparedSceneReuse_IsSuppressedWhileOpacityMicromapWorkCanAdvance()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                AccelerationStructureManager.ShouldReusePreparedRayScene(
+                    hasDynamicBuilds: false,
+                    meshBuffersChanged: false,
+                    pendingOpacityMicromapWork: false,
+                    preparationIdentityReusable: true),
+                Is.True);
+            Assert.That(
+                AccelerationStructureManager.ShouldReusePreparedRayScene(
+                    hasDynamicBuilds: false,
+                    meshBuffersChanged: false,
+                    pendingOpacityMicromapWork: true,
+                    preparationIdentityReusable: true),
+                Is.False,
+                "A stable TLAS must not starve a multi-frame OMM transaction.");
+        });
+    }
+
+    [TestCase(0UL, 16UL)]
+    [TestCase(1UL, 16UL)]
+    [TestCase(15UL, 16UL)]
+    [TestCase(16UL, 16UL)]
+    [TestCase(17UL, 17UL)]
+    public void OpacityMicromapAllocationSize_MatchesTrackedDeviceAllocation(
+        ulong requestedBytes,
+        ulong expectedBytes)
+    {
+        Assert.That(
+            AccelerationStructureManager.GetOpacityMicromapAllocationSize(
+                requestedBytes),
+            Is.EqualTo(expectedBytes));
+    }
+
+    [Test]
+    public void OpacityMicromapRetryDelay_IsBoundedExponentialBackoff()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                AccelerationStructureManager
+                    .CalculateOpacityMicromapRetryDelay(0U),
+                Is.Zero);
+            Assert.That(
+                AccelerationStructureManager
+                    .CalculateOpacityMicromapRetryDelay(1U),
+                Is.EqualTo(60UL));
+            Assert.That(
+                AccelerationStructureManager
+                    .CalculateOpacityMicromapRetryDelay(4U),
+                Is.EqualTo(480UL));
+            Assert.That(
+                AccelerationStructureManager
+                    .CalculateOpacityMicromapRetryDelay(uint.MaxValue),
+                Is.EqualTo(4_096UL));
+        });
+    }
+
+    [Test]
     public void CreateTransform_StoresVulkanThreeByFourMatrix()
     {
         var matrix = new Matrix4x4(
@@ -109,7 +171,11 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(metadata.VertexOffset, Is.EqualTo(12u));
             Assert.That(metadata.IndexOffset, Is.EqualTo(34u));
             Assert.That(metadata.MaterialIndex, Is.EqualTo(56u));
-            Assert.That(metadata.Padding0, Is.EqualTo(0u));
+            Assert.That(metadata.AbiVersion, Is.EqualTo(DdgiRayQueryInstanceAbi.Version2));
+            Assert.That(metadata.VertexFormat, Is.EqualTo((uint)DdgiRayVertexFormat.SplitStatic));
+            Assert.That(metadata.VertexStride, Is.EqualTo(16u));
+            Assert.That(metadata.IndexType, Is.EqualTo(DdgiRayQueryInstanceAbi.Uint32IndexType));
+            Assert.That(metadata.RepresentationGeneration, Is.EqualTo(1u));
             Assert.That(metadata.WorldMatrixInverseTranspose, Is.EqualTo(expectedNormalMatrix));
         });
     }
@@ -371,6 +437,150 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(bounded.MaximumStaticInstances, Is.EqualTo(256));
             Assert.That(bounded.EvictionGraceFrames, Is.EqualTo(3));
             Assert.That(bounded.AllowStaticMemoryCulling, Is.True);
+        });
+    }
+
+    [Test]
+    public void RaySceneContentSignature_IgnoresFrameSlotButTracksPoseAndMaterial()
+    {
+        var meshInfo = new MeshInfo
+        {
+            VertexOffset = 4u,
+            IndexOffset = 8u,
+            VertexCount = 64u,
+            IndexCount = 96u
+        };
+        var instance = new AccelerationStructureManager.StaticOpaqueInstance(
+            new MeshHandle(7, 2),
+            meshInfo,
+            3u,
+            Matrix4x4.Identity) with
+        {
+            ObjectIdentity =
+                new Guid("a0000000-0000-0000-0000-00000000000a"),
+            FrameSlot = 0,
+            VertexBufferIndex = 17u,
+            RepresentationGeneration = 9u,
+            MaterialRevision = 11u,
+            UsesDynamicBlas = true
+        };
+        var rotatedFrameResources = instance with
+        {
+            FrameSlot = 1,
+            VertexBufferIndex = 23u,
+            IndexBufferIndex = 29u
+        };
+        var advancedPose = rotatedFrameResources with
+        {
+            RepresentationGeneration = 10u
+        };
+        var editedMaterial = instance with { MaterialRevision = 12u };
+        DdgiDynamicRayScenePolicy policy =
+            DdgiDynamicRayScenePolicy.LegacyBaseline with
+            {
+                SkinnedGeometryMode = DdgiSkinnedGeometryMode.CurrentPose
+            };
+
+        ulong baseline = AccelerationStructureManager
+            .CreateRaySceneContentSignature(
+                enabled: true,
+                sceneContentRevision: 5,
+                policy,
+                new[] { instance });
+        ulong frameRotated = AccelerationStructureManager
+            .CreateRaySceneContentSignature(
+                enabled: true,
+                sceneContentRevision: 5,
+                policy,
+                new[] { rotatedFrameResources });
+        ulong poseChanged = AccelerationStructureManager
+            .CreateRaySceneContentSignature(
+                enabled: true,
+                sceneContentRevision: 5,
+                policy,
+                new[] { advancedPose });
+        ulong materialChanged = AccelerationStructureManager
+            .CreateRaySceneContentSignature(
+                enabled: true,
+                sceneContentRevision: 5,
+                policy,
+                new[] { editedMaterial });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(frameRotated, Is.EqualTo(baseline));
+            Assert.That(poseChanged, Is.Not.EqualTo(baseline));
+            Assert.That(materialChanged, Is.Not.EqualTo(baseline));
+        });
+    }
+
+    [Test]
+    public void SkinningOutput_IsExactAccelerationStructureVertexContract()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SkinningManager.OutputPositionOffset, Is.Zero);
+            Assert.That(
+                SkinningManager.OutputVertexStride,
+                Is.EqualTo((uint)System.Runtime.InteropServices.Marshal.SizeOf<GPUVertex>()));
+            Assert.That(SkinningManager.OutputVertexStride, Is.EqualTo(80u));
+            Assert.That(
+                SkinningManager.OutputVertexBufferUsage &
+                    BufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKhr,
+                Is.EqualTo(BufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKhr));
+            Assert.That(
+                SkinningManager.OutputVertexBufferUsage &
+                    BufferUsageFlags.ShaderDeviceAddressBit,
+                Is.EqualTo(BufferUsageFlags.ShaderDeviceAddressBit));
+        });
+    }
+
+    [Test]
+    public void StableInstanceIdentity_IsObjectAndOrdinalStableAndNeverZero()
+    {
+        Guid identity = Guid.Parse("e96354b7-e9fe-4d42-b50c-09df08a7051f");
+        uint first = AccelerationStructureManager.StableInstanceIdentity(identity);
+        uint repeated = AccelerationStructureManager.StableInstanceIdentity(identity);
+        uint nextOrdinal = AccelerationStructureManager.StableInstanceIdentity(identity, 1u);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.Not.Zero);
+            Assert.That(repeated, Is.EqualTo(first));
+            Assert.That(nextOrdinal, Is.Not.EqualTo(first));
+        });
+    }
+
+    [Test]
+    public void DynamicRayScenePolicy_SeparatesStorageScratchAndWorkCaps()
+    {
+        var policy = new DdgiDynamicRayScenePolicy(
+            DdgiSkinnedGeometryMode.CurrentPose,
+            DdgiTransparentGeometryMode.StochasticBlend,
+            DdgiFoliageGeometryMode.AuthoredAndProceduralProxy,
+            GeometryDecalsEnabled: true,
+            AlphaMaskedTransportEnabled: true,
+            DynamicStorageBudgetBytes: 64UL * 1024UL * 1024UL,
+            DynamicScratchBudgetBytes: 8UL * 1024UL * 1024UL,
+            MaximumBuildsPerFrame: 7,
+            MaximumPrimitivesPerFrame: 90_000,
+            DecalCandidateLimit: 8);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(policy.EffectiveDynamicStorageBudgetBytes, Is.EqualTo(64UL * 1024UL * 1024UL));
+            Assert.That(policy.EffectiveDynamicScratchBudgetBytes, Is.EqualTo(8UL * 1024UL * 1024UL));
+            Assert.That(policy.EffectiveMaximumBuildsPerFrame, Is.EqualTo(7));
+            Assert.That(policy.EffectiveMaximumPrimitivesPerFrame, Is.EqualTo(90_000));
+            Assert.That(policy.EffectiveDecalCandidateLimit, Is.EqualTo(8));
+            Assert.That(
+                (policy with
+                {
+                    SkinnedGeometryMode = DdgiSkinnedGeometryMode.Excluded,
+                    FoliageGeometryMode = DdgiFoliageGeometryMode.Excluded
+                })
+                    .EffectiveDynamicStorageBudgetBytes,
+                Is.Zero);
         });
     }
 

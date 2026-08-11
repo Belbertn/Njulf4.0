@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
+using Njulf.Assets.Validation;
 using Njulf.Core.Animation;
 using Njulf.Core.Geometry;
 using Njulf.Rendering.Core;
@@ -49,6 +50,7 @@ namespace Njulf.Rendering.Resources
         public bool HasVertexColor;
         public bool HasUv1;
         public bool HasTangents;
+        public ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence;
     }
 
     public sealed unsafe class MeshManager : IDisposable
@@ -134,6 +136,9 @@ namespace Njulf.Rendering.Resources
         private long _postCommitCleanupFailureCount;
         private Exception? _lastPostCommitCleanupFailure;
         private long _retainedDeadMeshBudgetRejectionCount;
+        private long _meshBufferGrowthRetryCount;
+        private long _meshBufferGrowthRetrySuccessCount;
+        private long _meshBufferCompactionOutOfDeviceMemorySkipCount;
         private BindlessHeap? _registeredBindlessHeap;
         private BufferHandle _registeredVertexBuffer = BufferHandle.Invalid;
         private BufferHandle _registeredIndexBuffer = BufferHandle.Invalid;
@@ -161,7 +166,8 @@ namespace Njulf.Rendering.Resources
                 uint[] indices,
                 bool generateMeshlets = true,
                 GPUVertexSkinningData[]? skinningData = null,
-                GiPrimitiveTransportProfile? primitiveTransportProfile = null)
+                GiPrimitiveTransportProfile? primitiveTransportProfile = null,
+                ModelGiCausticHeroTopologyEvidence causticTopologyEvidence = default)
             {
                 Vertices = vertices ?? throw new ArgumentNullException(nameof(vertices));
                 Indices = indices ?? throw new ArgumentNullException(nameof(indices));
@@ -177,6 +183,11 @@ namespace Njulf.Rendering.Resources
                 PrimitiveTransportProfile = ValidateAndCloneTransportProfile(
                     primitiveTransportProfile,
                     indices.Length / 3);
+                CausticTopologyEvidence = ValidateCausticTopologyEvidence(
+                    Positions,
+                    indices,
+                    SkinningData.Length > 0,
+                    causticTopologyEvidence);
             }
 
             internal MeshRegistrationData(
@@ -185,7 +196,8 @@ namespace Njulf.Rendering.Resources
                 uint[] indices,
                 bool generateMeshlets,
                 GPUVertexSkinningData[]? skinningData = null,
-                GiPrimitiveTransportProfile? primitiveTransportProfile = null)
+                GiPrimitiveTransportProfile? primitiveTransportProfile = null,
+                ModelGiCausticHeroTopologyEvidence causticTopologyEvidence = default)
             {
                 Vertices = vertices;
                 Positions = positions;
@@ -201,6 +213,11 @@ namespace Njulf.Rendering.Resources
                 PrimitiveTransportProfile = ValidateAndCloneTransportProfile(
                     primitiveTransportProfile,
                     indices.Length / 3);
+                CausticTopologyEvidence = ValidateCausticTopologyEvidence(
+                    Positions,
+                    indices,
+                    SkinningData.Length > 0,
+                    causticTopologyEvidence);
             }
 
             public MeshRegistrationData(
@@ -213,7 +230,8 @@ namespace Njulf.Rendering.Resources
                 int lod1MeshletCount,
                 int lod2MeshletCount,
                 GPUVertexSkinningData[]? skinningData = null,
-                GiPrimitiveTransportProfile? primitiveTransportProfile = null)
+                GiPrimitiveTransportProfile? primitiveTransportProfile = null,
+                ModelGiCausticHeroTopologyEvidence causticTopologyEvidence = default)
             {
                 Vertices = vertices ?? throw new ArgumentNullException(nameof(vertices));
                 Indices = indices ?? throw new ArgumentNullException(nameof(indices));
@@ -236,6 +254,11 @@ namespace Njulf.Rendering.Resources
                 PrimitiveTransportProfile = ValidateAndCloneTransportProfile(
                     primitiveTransportProfile,
                     indices.Length / 3);
+                CausticTopologyEvidence = ValidateCausticTopologyEvidence(
+                    Positions,
+                    indices,
+                    SkinningData.Length > 0,
+                    causticTopologyEvidence);
             }
 
             public MeshRegistrationData(
@@ -250,7 +273,8 @@ namespace Njulf.Rendering.Resources
                 int lod1MeshletCount,
                 int lod2MeshletCount,
                 GPUVertexSkinningData[]? skinningData = null,
-                GiPrimitiveTransportProfile? primitiveTransportProfile = null)
+                GiPrimitiveTransportProfile? primitiveTransportProfile = null,
+                ModelGiCausticHeroTopologyEvidence causticTopologyEvidence = default)
             {
                 VertexPositions = vertexPositions ?? throw new ArgumentNullException(nameof(vertexPositions));
                 VertexNormalTangents = vertexNormalTangents ?? throw new ArgumentNullException(nameof(vertexNormalTangents));
@@ -275,6 +299,11 @@ namespace Njulf.Rendering.Resources
                 PrimitiveTransportProfile = ValidateAndCloneTransportProfile(
                     primitiveTransportProfile,
                     indices.Length / 3);
+                CausticTopologyEvidence = ValidateCausticTopologyEvidence(
+                    Positions,
+                    indices,
+                    SkinningData.Length > 0,
+                    causticTopologyEvidence);
             }
 
             internal GPUVertex[] Vertices { get; }
@@ -294,6 +323,7 @@ namespace Njulf.Rendering.Resources
             internal int Lod1MeshletCount { get; }
             internal int Lod2MeshletCount { get; }
             internal GiPrimitiveTransportProfile? PrimitiveTransportProfile { get; }
+            internal ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence { get; }
 
             private static GiPrimitiveTransportProfile? ValidateAndCloneTransportProfile(
                 GiPrimitiveTransportProfile? profile,
@@ -324,6 +354,29 @@ namespace Njulf.Rendering.Resources
                     BaseColorSamplingBinding = profile.BaseColorSamplingBinding with { },
                     EmissiveSamplingBinding = profile.EmissiveSamplingBinding with { }
                 };
+            }
+
+            private static ModelGiCausticHeroTopologyEvidence
+                ValidateCausticTopologyEvidence(
+                    Vector3[] positions,
+                    uint[] indices,
+                    bool isSkinned,
+                    in ModelGiCausticHeroTopologyEvidence evidence)
+            {
+                if (evidence == default)
+                    return default;
+                if (!ModelGiCausticHeroTopologyAnalyzer.Matches(
+                        positions,
+                        indices,
+                        isSkinned,
+                        evidence,
+                        out string reason))
+                {
+                    throw new ArgumentException(
+                        $"C4 topology evidence does not match the registered mesh ({reason}).",
+                        nameof(evidence));
+                }
+                return evidence;
             }
         }
 
@@ -507,6 +560,8 @@ namespace Njulf.Rendering.Resources
                         finalMeshletTriangleIndexBytesUsed,
                         finalSkinningDataBytesUsed,
                         mesh.SkinningData.Length);
+                    meshInfo.CausticTopologyEvidence =
+                        mesh.CausticTopologyEvidence;
                     ApplyVertexAttributeFlags(ref meshInfo, mesh.VertexNormalTangents, mesh.VertexUvColors);
                     List<Meshlet> meshlets = new List<Meshlet>();
                     List<uint> localVertexIndices = new List<uint>();
@@ -592,9 +647,11 @@ namespace Njulf.Rendering.Resources
                     MeshTransportGeometry transportGeometry =
                         CreateTransportGeometry(
                             vertexPositions,
+                            vertexUvColors,
                             mesh.Indices,
                             mesh.SkinningData.Length > 0,
-                            mesh.PrimitiveTransportProfile);
+                            mesh.PrimitiveTransportProfile,
+                            mesh.CausticTopologyEvidence);
                     pendingUploads.Add(new PendingMeshUpload(
                         meshIndex,
                         generation,
@@ -814,7 +871,8 @@ namespace Njulf.Rendering.Resources
                     vertices,
                     subMesh.Indices,
                     generateMeshlets: generateRendererMeshlets,
-                    skinningData: skinningData.Length == 0 ? null : skinningData);
+                    skinningData: skinningData.Length == 0 ? null : skinningData,
+                    causticTopologyEvidence: subMesh.CausticTopologyEvidence);
             }
 
             return RegisterMeshes(registrations);
@@ -1185,200 +1243,523 @@ namespace Njulf.Rendering.Resources
             ulong finalMeshletTriangleIndexBytesUsed,
             ulong finalSkinningDataBytesUsed)
         {
-            UploadCommandContext upload = BeginUploadCommands(uploadStagingBytes);
-            uploadAttempt.Upload = upload;
-            MeshBufferHandles buffers = uploadAttempt.CandidateBuffers;
-
-            buffers = buffers with
-            {
-                VertexPosition = EnsureBufferCapacity(
-                    buffers.VertexPosition,
-                    _vertexPositionBytesUsed,
-                    finalVertexPositionBytesUsed,
-                    VertexPositionBufferUsage,
-                    "Mesh Vertex Position Storage Buffer",
-                    upload,
-                    uploadAttempt),
-                VertexNormalTangent = EnsureBufferCapacity(
-                    buffers.VertexNormalTangent,
-                    _vertexNormalTangentBytesUsed,
-                    finalVertexNormalTangentBytesUsed,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Mesh Vertex Normal/Tangent Storage Buffer",
-                    upload,
-                    uploadAttempt),
-                VertexUvColor = EnsureBufferCapacity(
-                    buffers.VertexUvColor,
-                    _vertexUvColorBytesUsed,
-                    finalVertexUvColorBytesUsed,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Mesh Vertex UV/Color Storage Buffer",
-                    upload,
-                    uploadAttempt),
-                Index = EnsureBufferCapacity(
-                    buffers.Index,
-                    _indexBytesUsed,
-                    finalIndexBytesUsed,
-                    IndexBufferUsage,
-                    "Mesh Index Storage Buffer",
-                    upload,
-                    uploadAttempt),
-                MeshMetadata = EnsureBufferCapacity(
-                    buffers.MeshMetadata,
-                    _meshMetadataBytesUsed,
-                    finalMeshMetadataBytesUsed,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Mesh Metadata Storage Buffer",
-                    upload,
-                    uploadAttempt),
-                Meshlet = EnsureBufferCapacity(
-                    buffers.Meshlet,
-                    _meshletBytesUsed,
-                    finalMeshletBytesUsed,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Meshlet Storage Buffer",
-                    upload,
-                    uploadAttempt),
-                MeshletVertexIndex = EnsureBufferCapacity(
-                    buffers.MeshletVertexIndex,
-                    _meshletVertexIndexBytesUsed,
-                    finalMeshletVertexIndexBytesUsed,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Meshlet Vertex Index Storage Buffer",
-                    upload,
-                    uploadAttempt),
-                MeshletTriangleIndex = EnsureBufferCapacity(
-                    buffers.MeshletTriangleIndex,
-                    _meshletTriangleIndexBytesUsed,
-                    finalMeshletTriangleIndexBytesUsed,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Meshlet Triangle Index Storage Buffer",
-                    upload,
-                    uploadAttempt),
-                SkinningData = EnsureBufferCapacity(
-                    buffers.SkinningData,
-                    _skinningDataBytesUsed,
-                    finalSkinningDataBytesUsed,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Mesh Skinning Data Storage Buffer",
-                    upload,
-                    uploadAttempt)
-            };
-            uploadAttempt.CandidateBuffers = buffers;
-
-            var meshMetadata = new GPUMeshInfo[1];
-            foreach (PendingMeshUpload pending in pendingUploads)
-            {
-                UploadSpan(
-                    pending.VertexPositions,
-                    buffers.VertexPosition,
-                    pending.MeshInfo.VertexOffset * VertexPositionStride,
-                    upload);
-                UploadSpan(
-                    pending.VertexNormalTangents,
-                    buffers.VertexNormalTangent,
-                    pending.MeshInfo.VertexOffset * VertexNormalTangentStride,
-                    upload);
-                UploadSpan(
-                    pending.VertexUvColors,
-                    buffers.VertexUvColor,
-                    pending.MeshInfo.VertexOffset * VertexUvColorStride,
-                    upload);
-                UploadSpan(
-                    pending.Indices,
-                    buffers.Index,
-                    pending.MeshInfo.IndexOffset * IndexStride,
-                    upload);
-                meshMetadata[0] = pending.MeshMetadata;
-                UploadSpan(
-                    meshMetadata,
-                    buffers.MeshMetadata,
-                    pending.MeshInfo.MeshMetadataOffset * MeshMetadataStride,
-                    upload);
-
-                if (pending.Meshlets.Count > 0)
-                {
-                    UploadSpan(
-                        CollectionsMarshal.AsSpan(pending.Meshlets),
-                        buffers.Meshlet,
-                        pending.MeshInfo.MeshletOffset * MeshletStride,
-                        upload);
-                }
-                if (pending.LocalVertexIndices.Count > 0)
-                {
-                    UploadSpan(
-                        CollectionsMarshal.AsSpan(pending.LocalVertexIndices),
-                        buffers.MeshletVertexIndex,
-                        pending.MeshInfo.LocalVertexIndexOffset * IndexStride,
-                        upload);
-                }
-                if (pending.LocalTriangleIndices.Count > 0)
-                {
-                    UploadSpan(
-                        CollectionsMarshal.AsSpan(pending.LocalTriangleIndices),
-                        buffers.MeshletTriangleIndex,
-                        pending.MeshInfo.LocalTriangleIndexOffset * IndexStride,
-                        upload);
-                }
-                if (pending.SkinningData.Length > 0)
-                {
-                    UploadSpan(
-                        pending.SkinningData,
-                        buffers.SkinningData,
-                        pending.MeshInfo.SkinningDataOffset * SkinningDataStride,
-                        upload);
-                }
-            }
-
-            RecordUploadShaderReadBarriers(upload);
-            uploadAttempt.UploadFence = EndUploadCommands(upload);
+            MeshBufferGrowthRetry.Execute(
+                executeAttempt: growthMode =>
+                    CompleteMeshGpuUploadAttempt(
+                        uploadAttempt,
+                        pendingUploads,
+                        uploadStagingBytes,
+                        finalVertexPositionBytesUsed,
+                        finalVertexNormalTangentBytesUsed,
+                        finalVertexUvColorBytesUsed,
+                        finalIndexBytesUsed,
+                        finalMeshMetadataBytesUsed,
+                        finalMeshletBytesUsed,
+                        finalMeshletVertexIndexBytesUsed,
+                        finalMeshletTriangleIndexBytesUsed,
+                        finalSkinningDataBytesUsed,
+                        growthMode),
+                isRetryable: static failure =>
+                    failure is MeshBufferGrowthAttemptException,
+                resetForRetry: () =>
+                    ResetMeshGpuUploadForRetry(uploadAttempt),
+                onRetrying: RecordMeshBufferGrowthRetry,
+                onRetrySucceeded:
+                    RecordMeshBufferGrowthRetrySuccess);
         }
 
-        private BufferHandle EnsureBufferCapacity(
-            BufferHandle buffer,
-            ulong usedBytes,
-            ulong requiredBytes,
-            BufferUsageFlags usage,
-            string debugName,
-            UploadCommandContext upload,
+        private void CompleteMeshGpuUploadAttempt(
+            MeshGpuUploadAttempt uploadAttempt,
+            IReadOnlyList<PendingMeshUpload> pendingUploads,
+            ulong uploadStagingBytes,
+            ulong finalVertexPositionBytesUsed,
+            ulong finalVertexNormalTangentBytesUsed,
+            ulong finalVertexUvColorBytesUsed,
+            ulong finalIndexBytesUsed,
+            ulong finalMeshMetadataBytesUsed,
+            ulong finalMeshletBytesUsed,
+            ulong finalMeshletVertexIndexBytesUsed,
+            ulong finalMeshletTriangleIndexBytesUsed,
+            ulong finalSkinningDataBytesUsed,
+            MeshBufferGrowthMode growthMode)
+        {
+            MeshBufferGrowthPlan growthPlan =
+                CreateMeshBufferGrowthPlan(
+                    uploadAttempt.OriginalBuffers,
+                    finalVertexPositionBytesUsed,
+                    finalVertexNormalTangentBytesUsed,
+                    finalVertexUvColorBytesUsed,
+                    finalIndexBytesUsed,
+                    finalMeshMetadataBytesUsed,
+                    finalMeshletBytesUsed,
+                    finalMeshletVertexIndexBytesUsed,
+                    finalMeshletTriangleIndexBytesUsed,
+                    finalSkinningDataBytesUsed,
+                    growthMode);
+
+            try
+            {
+                AllocateMeshBufferGrowthPlan(
+                    growthPlan,
+                    uploadAttempt);
+
+                UploadCommandContext upload =
+                    BeginUploadCommands(uploadStagingBytes);
+                uploadAttempt.Upload = upload;
+                MeshBufferHandles buffers =
+                    uploadAttempt.CandidateBuffers;
+                RecordMeshBufferReplacementCopies(
+                    uploadAttempt.OriginalBuffers,
+                    buffers,
+                    upload);
+
+                var meshMetadata = new GPUMeshInfo[1];
+                foreach (PendingMeshUpload pending in pendingUploads)
+                {
+                    UploadSpan(
+                        pending.VertexPositions,
+                        buffers.VertexPosition,
+                        pending.MeshInfo.VertexOffset *
+                        VertexPositionStride,
+                        upload);
+                    UploadSpan(
+                        pending.VertexNormalTangents,
+                        buffers.VertexNormalTangent,
+                        pending.MeshInfo.VertexOffset *
+                        VertexNormalTangentStride,
+                        upload);
+                    UploadSpan(
+                        pending.VertexUvColors,
+                        buffers.VertexUvColor,
+                        pending.MeshInfo.VertexOffset *
+                        VertexUvColorStride,
+                        upload);
+                    UploadSpan(
+                        pending.Indices,
+                        buffers.Index,
+                        pending.MeshInfo.IndexOffset * IndexStride,
+                        upload);
+                    meshMetadata[0] = pending.MeshMetadata;
+                    UploadSpan(
+                        meshMetadata,
+                        buffers.MeshMetadata,
+                        pending.MeshInfo.MeshMetadataOffset *
+                        MeshMetadataStride,
+                        upload);
+
+                    if (pending.Meshlets.Count > 0)
+                    {
+                        UploadSpan(
+                            CollectionsMarshal.AsSpan(
+                                pending.Meshlets),
+                            buffers.Meshlet,
+                            pending.MeshInfo.MeshletOffset *
+                            MeshletStride,
+                            upload);
+                    }
+                    if (pending.LocalVertexIndices.Count > 0)
+                    {
+                        UploadSpan(
+                            CollectionsMarshal.AsSpan(
+                                pending.LocalVertexIndices),
+                            buffers.MeshletVertexIndex,
+                            pending.MeshInfo.LocalVertexIndexOffset *
+                            IndexStride,
+                            upload);
+                    }
+                    if (pending.LocalTriangleIndices.Count > 0)
+                    {
+                        UploadSpan(
+                            CollectionsMarshal.AsSpan(
+                                pending.LocalTriangleIndices),
+                            buffers.MeshletTriangleIndex,
+                            pending.MeshInfo.LocalTriangleIndexOffset *
+                            IndexStride,
+                            upload);
+                    }
+                    if (pending.SkinningData.Length > 0)
+                    {
+                        UploadSpan(
+                            pending.SkinningData,
+                            buffers.SkinningData,
+                            pending.MeshInfo.SkinningDataOffset *
+                            SkinningDataStride,
+                            upload);
+                    }
+                }
+
+                RecordUploadShaderReadBarriers(upload);
+                uploadAttempt.UploadFence = EndUploadCommands(upload);
+            }
+            catch (BufferAllocationException failure) when (
+                failure.Result == Result.ErrorOutOfDeviceMemory)
+            {
+                throw new MeshBufferGrowthAttemptException(
+                    growthPlan,
+                    failure);
+            }
+        }
+
+        private MeshBufferGrowthPlan CreateMeshBufferGrowthPlan(
+            MeshBufferHandles buffers,
+            ulong finalVertexPositionBytesUsed,
+            ulong finalVertexNormalTangentBytesUsed,
+            ulong finalVertexUvColorBytesUsed,
+            ulong finalIndexBytesUsed,
+            ulong finalMeshMetadataBytesUsed,
+            ulong finalMeshletBytesUsed,
+            ulong finalMeshletVertexIndexBytesUsed,
+            ulong finalMeshletTriangleIndexBytesUsed,
+            ulong finalSkinningDataBytesUsed,
+            MeshBufferGrowthMode growthMode)
+        {
+            MeshBufferGrowthInput[] inputs =
+            {
+                new(
+                    MeshBufferStream.VertexPosition,
+                    _bufferManager.GetBufferSize(
+                        buffers.VertexPosition),
+                    finalVertexPositionBytesUsed),
+                new(
+                    MeshBufferStream.VertexNormalTangent,
+                    _bufferManager.GetBufferSize(
+                        buffers.VertexNormalTangent),
+                    finalVertexNormalTangentBytesUsed),
+                new(
+                    MeshBufferStream.VertexUvColor,
+                    _bufferManager.GetBufferSize(
+                        buffers.VertexUvColor),
+                    finalVertexUvColorBytesUsed),
+                new(
+                    MeshBufferStream.Index,
+                    _bufferManager.GetBufferSize(buffers.Index),
+                    finalIndexBytesUsed),
+                new(
+                    MeshBufferStream.MeshMetadata,
+                    _bufferManager.GetBufferSize(
+                        buffers.MeshMetadata),
+                    finalMeshMetadataBytesUsed),
+                new(
+                    MeshBufferStream.Meshlet,
+                    _bufferManager.GetBufferSize(buffers.Meshlet),
+                    finalMeshletBytesUsed),
+                new(
+                    MeshBufferStream.MeshletVertexIndex,
+                    _bufferManager.GetBufferSize(
+                        buffers.MeshletVertexIndex),
+                    finalMeshletVertexIndexBytesUsed),
+                new(
+                    MeshBufferStream.MeshletTriangleIndex,
+                    _bufferManager.GetBufferSize(
+                        buffers.MeshletTriangleIndex),
+                    finalMeshletTriangleIndexBytesUsed),
+                new(
+                    MeshBufferStream.SkinningData,
+                    _bufferManager.GetBufferSize(
+                        buffers.SkinningData),
+                    finalSkinningDataBytesUsed)
+            };
+
+            return MeshBufferGrowthPlanner.Create(
+                inputs,
+                growthMode,
+                BufferGrowthFactor);
+        }
+
+        private void AllocateMeshBufferGrowthPlan(
+            MeshBufferGrowthPlan growthPlan,
             MeshGpuUploadAttempt uploadAttempt)
         {
-            ulong currentSize = _bufferManager.GetBufferSize(buffer);
-            if (requiredBytes <= currentSize)
-                return buffer;
-
-            ulong newSize = currentSize;
-            do
+            MeshBufferHandles buffers = uploadAttempt.OriginalBuffers;
+            foreach (MeshBufferGrowthPlanEntry entry in
+                     growthPlan.Entries)
             {
-                newSize = checked(newSize * BufferGrowthFactor);
+                if (!entry.RequiresReplacement)
+                    continue;
+
+                BufferHandle original = GetMeshBufferHandle(
+                    buffers,
+                    entry.Stream);
+                BufferHandle candidate =
+                    CreateTrackedMeshBufferCandidate(
+                        original,
+                        entry.TargetSize,
+                        entry.Stream,
+                        uploadAttempt);
+                buffers = SetMeshBufferHandle(
+                    buffers,
+                    entry.Stream,
+                    candidate);
             }
-            while (newSize < requiredBytes);
 
-            BufferHandle oldBuffer = buffer;
-            BufferHandle newBuffer = CreateMeshBuffer(newSize, usage, debugName);
-            // Track ownership before any copy lookup can fail so rollback never
-            // loses a newly allocated candidate buffer.
-            uploadAttempt.TrackReplacement(oldBuffer, newBuffer);
+            uploadAttempt.CandidateBuffers = buffers;
+        }
 
-            if (usedBytes > 0)
+        private BufferHandle CreateTrackedMeshBufferCandidate(
+            BufferHandle original,
+            ulong targetSize,
+            MeshBufferStream stream,
+            MeshGpuUploadAttempt uploadAttempt)
+        {
+            BufferHandle candidate = CreateMeshBuffer(
+                targetSize,
+                GetMeshBufferUsage(stream),
+                GetMeshBufferDebugName(stream));
+            try
             {
-                var copy = new BufferCopy
+                uploadAttempt.TrackReplacement(
+                    original,
+                    candidate);
+            }
+            catch (Exception ownershipFailure)
+            {
+                try
                 {
-                    SrcOffset = 0,
-                    DstOffset = 0,
-                    Size = usedBytes
-                };
+                    _bufferManager.DestroyBuffer(candidate);
+                }
+                catch (Exception cleanupFailure)
+                {
+                    throw new AggregateException(
+                        "A mesh-buffer candidate could not be tracked or destroyed.",
+                        ownershipFailure,
+                        cleanupFailure);
+                }
 
-                _context.Api.CmdCopyBuffer(
-                    upload.CommandBuffer,
-                    _bufferManager.GetBuffer(oldBuffer),
-                    _bufferManager.GetBuffer(newBuffer),
-                    1,
-                    &copy);
-                upload.TrackWrittenRange(newBuffer, 0, usedBytes);
+                throw;
             }
 
-            return newBuffer;
+            return candidate;
+        }
+
+        private void RecordMeshBufferReplacementCopies(
+            MeshBufferHandles original,
+            MeshBufferHandles candidate,
+            UploadCommandContext upload)
+        {
+            RecordMeshBufferReplacementCopy(
+                original.VertexPosition,
+                candidate.VertexPosition,
+                _vertexPositionBytesUsed,
+                upload);
+            RecordMeshBufferReplacementCopy(
+                original.VertexNormalTangent,
+                candidate.VertexNormalTangent,
+                _vertexNormalTangentBytesUsed,
+                upload);
+            RecordMeshBufferReplacementCopy(
+                original.VertexUvColor,
+                candidate.VertexUvColor,
+                _vertexUvColorBytesUsed,
+                upload);
+            RecordMeshBufferReplacementCopy(
+                original.Index,
+                candidate.Index,
+                _indexBytesUsed,
+                upload);
+            RecordMeshBufferReplacementCopy(
+                original.MeshMetadata,
+                candidate.MeshMetadata,
+                _meshMetadataBytesUsed,
+                upload);
+            RecordMeshBufferReplacementCopy(
+                original.Meshlet,
+                candidate.Meshlet,
+                _meshletBytesUsed,
+                upload);
+            RecordMeshBufferReplacementCopy(
+                original.MeshletVertexIndex,
+                candidate.MeshletVertexIndex,
+                _meshletVertexIndexBytesUsed,
+                upload);
+            RecordMeshBufferReplacementCopy(
+                original.MeshletTriangleIndex,
+                candidate.MeshletTriangleIndex,
+                _meshletTriangleIndexBytesUsed,
+                upload);
+            RecordMeshBufferReplacementCopy(
+                original.SkinningData,
+                candidate.SkinningData,
+                _skinningDataBytesUsed,
+                upload);
+        }
+
+        private void RecordMeshBufferReplacementCopy(
+            BufferHandle original,
+            BufferHandle candidate,
+            ulong usedBytes,
+            UploadCommandContext upload)
+        {
+            if (original == candidate || usedBytes == 0)
+                return;
+
+            var copy = new BufferCopy
+            {
+                SrcOffset = 0,
+                DstOffset = 0,
+                Size = usedBytes
+            };
+
+            _context.Api.CmdCopyBuffer(
+                upload.CommandBuffer,
+                _bufferManager.GetBuffer(original),
+                _bufferManager.GetBuffer(candidate),
+                1,
+                &copy);
+            upload.TrackWrittenRange(candidate, 0, usedBytes);
+        }
+
+        private static BufferHandle GetMeshBufferHandle(
+            MeshBufferHandles buffers,
+            MeshBufferStream stream) =>
+            stream switch
+            {
+                MeshBufferStream.VertexPosition =>
+                    buffers.VertexPosition,
+                MeshBufferStream.VertexNormalTangent =>
+                    buffers.VertexNormalTangent,
+                MeshBufferStream.VertexUvColor =>
+                    buffers.VertexUvColor,
+                MeshBufferStream.Index => buffers.Index,
+                MeshBufferStream.MeshMetadata =>
+                    buffers.MeshMetadata,
+                MeshBufferStream.Meshlet => buffers.Meshlet,
+                MeshBufferStream.MeshletVertexIndex =>
+                    buffers.MeshletVertexIndex,
+                MeshBufferStream.MeshletTriangleIndex =>
+                    buffers.MeshletTriangleIndex,
+                MeshBufferStream.SkinningData =>
+                    buffers.SkinningData,
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(stream))
+            };
+
+        private static MeshBufferHandles SetMeshBufferHandle(
+            MeshBufferHandles buffers,
+            MeshBufferStream stream,
+            BufferHandle handle) =>
+            stream switch
+            {
+                MeshBufferStream.VertexPosition =>
+                    buffers with { VertexPosition = handle },
+                MeshBufferStream.VertexNormalTangent =>
+                    buffers with { VertexNormalTangent = handle },
+                MeshBufferStream.VertexUvColor =>
+                    buffers with { VertexUvColor = handle },
+                MeshBufferStream.Index =>
+                    buffers with { Index = handle },
+                MeshBufferStream.MeshMetadata =>
+                    buffers with { MeshMetadata = handle },
+                MeshBufferStream.Meshlet =>
+                    buffers with { Meshlet = handle },
+                MeshBufferStream.MeshletVertexIndex =>
+                    buffers with { MeshletVertexIndex = handle },
+                MeshBufferStream.MeshletTriangleIndex =>
+                    buffers with
+                    {
+                        MeshletTriangleIndex = handle
+                    },
+                MeshBufferStream.SkinningData =>
+                    buffers with { SkinningData = handle },
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(stream))
+            };
+
+        private static BufferUsageFlags GetMeshBufferUsage(
+            MeshBufferStream stream) =>
+            stream switch
+            {
+                MeshBufferStream.VertexPosition =>
+                    VertexPositionBufferUsage,
+                MeshBufferStream.Index => IndexBufferUsage,
+                MeshBufferStream.VertexNormalTangent or
+                MeshBufferStream.VertexUvColor or
+                MeshBufferStream.MeshMetadata or
+                MeshBufferStream.Meshlet or
+                MeshBufferStream.MeshletVertexIndex or
+                MeshBufferStream.MeshletTriangleIndex or
+                MeshBufferStream.SkinningData =>
+                    BufferUsageFlags.StorageBufferBit,
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(stream))
+            };
+
+        private static string GetMeshBufferDebugName(
+            MeshBufferStream stream) =>
+            stream switch
+            {
+                MeshBufferStream.VertexPosition =>
+                    "Mesh Vertex Position Storage Buffer",
+                MeshBufferStream.VertexNormalTangent =>
+                    "Mesh Vertex Normal/Tangent Storage Buffer",
+                MeshBufferStream.VertexUvColor =>
+                    "Mesh Vertex UV/Color Storage Buffer",
+                MeshBufferStream.Index =>
+                    "Mesh Index Storage Buffer",
+                MeshBufferStream.MeshMetadata =>
+                    "Mesh Metadata Storage Buffer",
+                MeshBufferStream.Meshlet =>
+                    "Meshlet Storage Buffer",
+                MeshBufferStream.MeshletVertexIndex =>
+                    "Meshlet Vertex Index Storage Buffer",
+                MeshBufferStream.MeshletTriangleIndex =>
+                    "Meshlet Triangle Index Storage Buffer",
+                MeshBufferStream.SkinningData =>
+                    "Mesh Skinning Data Storage Buffer",
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(stream))
+            };
+
+        private void ResetMeshGpuUploadForRetry(
+            MeshGpuUploadAttempt uploadAttempt)
+        {
+            CleanupMeshGpuUpload(uploadAttempt);
+            DestroyCandidateUploadBuffers(uploadAttempt);
+            uploadAttempt.ResetForRetry();
+        }
+
+        private void RecordMeshBufferGrowthRetry(
+            Exception firstFailure)
+        {
+            IncrementSaturating(ref _meshBufferGrowthRetryCount);
+            try
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    "Mesh-buffer geometric growth exhausted device memory; " +
+                    $"retrying with exact capacities. {firstFailure}");
+            }
+            catch
+            {
+                // Recovery diagnostics are best-effort.
+            }
+        }
+
+        private void RecordMeshBufferGrowthRetrySuccess()
+        {
+            IncrementSaturating(
+                ref _meshBufferGrowthRetrySuccessCount);
+        }
+
+        private void RecordMeshBufferCompactionMemorySkip(
+            Exception failure)
+        {
+            IncrementSaturating(
+                ref _meshBufferCompactionOutOfDeviceMemorySkipCount);
+            try
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    "Mesh-buffer compaction was skipped after device-memory exhaustion and complete transactional rollback. " +
+                    failure);
+            }
+            catch
+            {
+                // Optional-compaction diagnostics are best-effort.
+            }
+        }
+
+        private static void IncrementSaturating(ref long value)
+        {
+            if (value < long.MaxValue)
+                value++;
         }
 
         private bool ShouldCompactBuffer(
@@ -1392,142 +1773,135 @@ namespace Njulf.Rendering.Resources
             return targetSize < currentSize;
         }
 
-        private BufferHandle CompactBufferIfNeeded(
-            BufferHandle buffer,
-            ulong usedBytes,
-            ulong minimumSize,
-            BufferUsageFlags usage,
-            string debugName,
-            float headroomFactor,
-            UploadCommandContext upload,
-            MeshGpuUploadAttempt uploadAttempt)
+        private MeshBufferCompactionTarget[]
+            CreateMeshBufferCompactionPlan(
+                MeshBufferHandles buffers,
+                float headroomFactor)
+        {
+            return
+            [
+                CreateMeshBufferCompactionTarget(
+                    MeshBufferStream.VertexPosition,
+                    buffers.VertexPosition,
+                    _vertexPositionBytesUsed,
+                    InitialVertexPositionBufferSize,
+                    headroomFactor),
+                CreateMeshBufferCompactionTarget(
+                    MeshBufferStream.VertexNormalTangent,
+                    buffers.VertexNormalTangent,
+                    _vertexNormalTangentBytesUsed,
+                    InitialVertexNormalTangentBufferSize,
+                    headroomFactor),
+                CreateMeshBufferCompactionTarget(
+                    MeshBufferStream.VertexUvColor,
+                    buffers.VertexUvColor,
+                    _vertexUvColorBytesUsed,
+                    InitialVertexUvColorBufferSize,
+                    headroomFactor),
+                CreateMeshBufferCompactionTarget(
+                    MeshBufferStream.Index,
+                    buffers.Index,
+                    _indexBytesUsed,
+                    InitialIndexBufferSize,
+                    headroomFactor),
+                CreateMeshBufferCompactionTarget(
+                    MeshBufferStream.MeshMetadata,
+                    buffers.MeshMetadata,
+                    _meshMetadataBytesUsed,
+                    InitialMeshMetadataBufferSize,
+                    headroomFactor),
+                CreateMeshBufferCompactionTarget(
+                    MeshBufferStream.Meshlet,
+                    buffers.Meshlet,
+                    _meshletBytesUsed,
+                    InitialMeshletBufferSize,
+                    headroomFactor),
+                CreateMeshBufferCompactionTarget(
+                    MeshBufferStream.MeshletVertexIndex,
+                    buffers.MeshletVertexIndex,
+                    _meshletVertexIndexBytesUsed,
+                    InitialMeshletVertexIndexBufferSize,
+                    headroomFactor),
+                CreateMeshBufferCompactionTarget(
+                    MeshBufferStream.MeshletTriangleIndex,
+                    buffers.MeshletTriangleIndex,
+                    _meshletTriangleIndexBytesUsed,
+                    InitialMeshletTriangleIndexBufferSize,
+                    headroomFactor),
+                CreateMeshBufferCompactionTarget(
+                    MeshBufferStream.SkinningData,
+                    buffers.SkinningData,
+                    _skinningDataBytesUsed,
+                    InitialSkinningDataBufferSize,
+                    headroomFactor)
+            ];
+        }
+
+        private MeshBufferCompactionTarget
+            CreateMeshBufferCompactionTarget(
+                MeshBufferStream stream,
+                BufferHandle buffer,
+                ulong usedBytes,
+                ulong minimumSize,
+                float headroomFactor)
         {
             ulong currentSize = _bufferManager.GetBufferSize(buffer);
-            ulong targetSize = CalculateCompactedBufferSize(usedBytes, minimumSize, headroomFactor);
-            if (targetSize >= currentSize)
-                return buffer;
+            ulong targetSize = CalculateCompactedBufferSize(
+                usedBytes,
+                minimumSize,
+                headroomFactor);
+            return new MeshBufferCompactionTarget(
+                stream,
+                currentSize,
+                targetSize);
+        }
 
-            BufferHandle oldBuffer = buffer;
-            BufferHandle newBuffer = CreateMeshBuffer(targetSize, usage, debugName);
-            // Establish rollback ownership before any source/destination lookup
-            // or command recording can fail.
-            uploadAttempt.TrackReplacement(oldBuffer, newBuffer);
-
-            if (usedBytes > 0)
+        private void AllocateMeshBufferCompactionPlan(
+            IReadOnlyList<MeshBufferCompactionTarget> plan,
+            MeshGpuUploadAttempt uploadAttempt)
+        {
+            MeshBufferHandles buffers = uploadAttempt.OriginalBuffers;
+            foreach (MeshBufferCompactionTarget target in plan)
             {
-                var copy = new BufferCopy
-                {
-                    SrcOffset = 0,
-                    DstOffset = 0,
-                    Size = usedBytes
-                };
+                if (target.TargetSize >= target.CurrentSize)
+                    continue;
 
-                _context.Api.CmdCopyBuffer(
-                    upload.CommandBuffer,
-                    _bufferManager.GetBuffer(oldBuffer),
-                    _bufferManager.GetBuffer(newBuffer),
-                    1,
-                    &copy);
-                upload.TrackWrittenRange(newBuffer, 0, usedBytes);
+                BufferHandle original = GetMeshBufferHandle(
+                    buffers,
+                    target.Stream);
+                BufferHandle candidate =
+                    CreateTrackedMeshBufferCandidate(
+                        original,
+                        target.TargetSize,
+                        target.Stream,
+                        uploadAttempt);
+                buffers = SetMeshBufferHandle(
+                    buffers,
+                    target.Stream,
+                    candidate);
             }
 
-            return newBuffer;
+            uploadAttempt.CandidateBuffers = buffers;
         }
 
         private void CompleteMeshBufferCompaction(
             MeshGpuUploadAttempt uploadAttempt,
             float headroomFactor)
         {
+            MeshBufferCompactionTarget[] plan =
+                CreateMeshBufferCompactionPlan(
+                    uploadAttempt.OriginalBuffers,
+                    headroomFactor);
+            AllocateMeshBufferCompactionPlan(plan, uploadAttempt);
+
             UploadCommandContext upload =
                 BeginUploadCommands(UploadStagingAlignment);
             uploadAttempt.Upload = upload;
             MeshBufferHandles buffers = uploadAttempt.CandidateBuffers;
-
-            buffers = buffers with
-            {
-                VertexPosition = CompactBufferIfNeeded(
-                    buffers.VertexPosition,
-                    _vertexPositionBytesUsed,
-                    InitialVertexPositionBufferSize,
-                    VertexPositionBufferUsage,
-                    "Mesh Vertex Position Storage Buffer",
-                    headroomFactor,
-                    upload,
-                    uploadAttempt),
-                VertexNormalTangent = CompactBufferIfNeeded(
-                    buffers.VertexNormalTangent,
-                    _vertexNormalTangentBytesUsed,
-                    InitialVertexNormalTangentBufferSize,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Mesh Vertex Normal/Tangent Storage Buffer",
-                    headroomFactor,
-                    upload,
-                    uploadAttempt),
-                VertexUvColor = CompactBufferIfNeeded(
-                    buffers.VertexUvColor,
-                    _vertexUvColorBytesUsed,
-                    InitialVertexUvColorBufferSize,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Mesh Vertex UV/Color Storage Buffer",
-                    headroomFactor,
-                    upload,
-                    uploadAttempt),
-                Index = CompactBufferIfNeeded(
-                    buffers.Index,
-                    _indexBytesUsed,
-                    InitialIndexBufferSize,
-                    IndexBufferUsage,
-                    "Mesh Index Storage Buffer",
-                    headroomFactor,
-                    upload,
-                    uploadAttempt),
-                MeshMetadata = CompactBufferIfNeeded(
-                    buffers.MeshMetadata,
-                    _meshMetadataBytesUsed,
-                    InitialMeshMetadataBufferSize,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Mesh Metadata Storage Buffer",
-                    headroomFactor,
-                    upload,
-                    uploadAttempt),
-                Meshlet = CompactBufferIfNeeded(
-                    buffers.Meshlet,
-                    _meshletBytesUsed,
-                    InitialMeshletBufferSize,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Meshlet Storage Buffer",
-                    headroomFactor,
-                    upload,
-                    uploadAttempt),
-                MeshletVertexIndex = CompactBufferIfNeeded(
-                    buffers.MeshletVertexIndex,
-                    _meshletVertexIndexBytesUsed,
-                    InitialMeshletVertexIndexBufferSize,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Meshlet Vertex Index Storage Buffer",
-                    headroomFactor,
-                    upload,
-                    uploadAttempt),
-                MeshletTriangleIndex = CompactBufferIfNeeded(
-                    buffers.MeshletTriangleIndex,
-                    _meshletTriangleIndexBytesUsed,
-                    InitialMeshletTriangleIndexBufferSize,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Meshlet Triangle Index Storage Buffer",
-                    headroomFactor,
-                    upload,
-                    uploadAttempt),
-                SkinningData = CompactBufferIfNeeded(
-                    buffers.SkinningData,
-                    _skinningDataBytesUsed,
-                    InitialSkinningDataBufferSize,
-                    BufferUsageFlags.StorageBufferBit,
-                    "Mesh Skinning Data Storage Buffer",
-                    headroomFactor,
-                    upload,
-                    uploadAttempt)
-            };
-            uploadAttempt.CandidateBuffers = buffers;
+            RecordMeshBufferReplacementCopies(
+                uploadAttempt.OriginalBuffers,
+                buffers,
+                upload);
 
             RecordUploadShaderReadBarriers(upload);
             uploadAttempt.UploadFence = EndUploadCommands(upload);
@@ -2087,17 +2461,21 @@ namespace Njulf.Rendering.Resources
 
         private static MeshTransportGeometry CreateTransportGeometry(
             GPUVertexPositionStream[] vertexPositions,
+            GPUVertexUvColorStream[] vertexUvColors,
             uint[] indices,
             bool isSkinned,
-            GiPrimitiveTransportProfile? primitiveTransportProfile)
+            GiPrimitiveTransportProfile? primitiveTransportProfile,
+            ModelGiCausticHeroTopologyEvidence causticTopologyEvidence)
         {
             // Registration accepts caller-owned arrays. Retain private copies so
             // subsequent asset/editor mutation cannot invalidate GI sampling.
             return new MeshTransportGeometry(
                 (GPUVertexPositionStream[])vertexPositions.Clone(),
+                (GPUVertexUvColorStream[])vertexUvColors.Clone(),
                 (uint[])indices.Clone(),
                 isSkinned,
                 primitiveTransportProfile,
+                causticTopologyEvidence,
                 ComputeLocalSurfaceArea(vertexPositions, indices));
         }
 
@@ -2797,6 +3175,33 @@ namespace Njulf.Rendering.Resources
             : (float)((double)MeshBufferUsedBytes / MeshBufferAllocatedBytes);
         public int MeshBufferCompactionCount { get; private set; }
         public ulong MeshBufferCompactedBytesSaved { get; private set; }
+        public long MeshBufferGrowthRetryCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _meshBufferGrowthRetryCount;
+            }
+        }
+        public long MeshBufferGrowthRetrySuccessCount
+        {
+            get
+            {
+                lock (_lock)
+                    return _meshBufferGrowthRetrySuccessCount;
+            }
+        }
+        public long MeshBufferCompactionOutOfDeviceMemorySkipCount
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return
+                        _meshBufferCompactionOutOfDeviceMemorySkipCount;
+                }
+            }
+        }
         public long PostCommitCleanupFailureCount
         {
             get
@@ -2854,37 +3259,53 @@ namespace Njulf.Rendering.Resources
                 ulong afterBytes = beforeBytes;
                 ulong savedBytes = 0;
 
-                MeshUploadTransaction.Execute(
-                    completeGpuUpload: () =>
-                    {
-                        CompleteMeshBufferCompaction(
-                            uploadAttempt,
-                            headroomFactor);
-                        afterBytes = GetMeshBufferAllocatedBytes(
-                            uploadAttempt.CandidateBuffers);
-                        savedBytes = beforeBytes > afterBytes
-                            ? beforeBytes - afterBytes
-                            : 0;
-                    },
-                    publishCandidateBindings: () =>
-                        UpdateRegisteredBindlessBuffers(
-                            uploadAttempt.CandidateBuffers),
-                    commitAuthoritativeState: () =>
-                        CommitMeshBufferCompaction(
-                            uploadAttempt.CandidateBuffers,
-                            savedBytes),
-                    cleanupGpuUpload: () =>
-                        CleanupMeshGpuUpload(uploadAttempt),
-                    restoreAuthoritativeState: () =>
-                        stateSnapshot.Restore(this),
-                    restoreAuthoritativeBindings: () =>
-                        RestoreRegisteredBindlessBuffers(
-                            registeredBufferSnapshot),
-                    destroyCandidateResources: () =>
-                        DestroyCandidateUploadBuffers(uploadAttempt),
-                    quarantineCandidateResources: () =>
-                        QuarantineCandidateUploadBuffers(uploadAttempt),
-                    restoreReservations: static () => { });
+                try
+                {
+                    MeshUploadTransaction.Execute(
+                        completeGpuUpload: () =>
+                        {
+                            CompleteMeshBufferCompaction(
+                                uploadAttempt,
+                                headroomFactor);
+                            afterBytes = GetMeshBufferAllocatedBytes(
+                                uploadAttempt.CandidateBuffers);
+                            savedBytes = beforeBytes > afterBytes
+                                ? beforeBytes - afterBytes
+                                : 0;
+                        },
+                        publishCandidateBindings: () =>
+                            UpdateRegisteredBindlessBuffers(
+                                uploadAttempt.CandidateBuffers),
+                        commitAuthoritativeState: () =>
+                            CommitMeshBufferCompaction(
+                                uploadAttempt.CandidateBuffers,
+                                savedBytes),
+                        cleanupGpuUpload: () =>
+                            CleanupMeshGpuUpload(uploadAttempt),
+                        restoreAuthoritativeState: () =>
+                            stateSnapshot.Restore(this),
+                        restoreAuthoritativeBindings: () =>
+                            RestoreRegisteredBindlessBuffers(
+                                registeredBufferSnapshot),
+                        destroyCandidateResources: () =>
+                            DestroyCandidateUploadBuffers(
+                                uploadAttempt),
+                        quarantineCandidateResources: () =>
+                            QuarantineCandidateUploadBuffers(
+                                uploadAttempt),
+                        restoreReservations: static () => { });
+                }
+                catch (Exception failure) when (
+                    MeshBufferCompactionFailurePolicy.ShouldSkip(
+                        failure))
+                {
+                    RecordMeshBufferCompactionMemorySkip(failure);
+                    return new MeshBufferCompactionStats(
+                        false,
+                        beforeBytes,
+                        beforeBytes,
+                        0);
+                }
 
                 FinalizeCommittedMeshUpload(uploadAttempt);
 
@@ -3712,6 +4133,11 @@ namespace Njulf.Rendering.Resources
             BufferHandle Original,
             BufferHandle Candidate);
 
+        private readonly record struct MeshBufferCompactionTarget(
+            MeshBufferStream Stream,
+            ulong CurrentSize,
+            ulong TargetSize);
+
         private readonly record struct MeshReleaseState(
             ulong VertexPositionBytesUsed,
             ulong VertexNormalTangentBytesUsed,
@@ -3805,6 +4231,24 @@ namespace Njulf.Rendering.Resources
             public void MarkCandidateReleased(BufferHandle candidate)
             {
                 _liveCandidates.Remove(candidate);
+            }
+
+            public void ResetForRetry()
+            {
+                if (Upload != null || UploadFence.Handle != 0)
+                {
+                    throw new InvalidOperationException(
+                        "Mesh upload command resources must be cleaned before retry reset.");
+                }
+                if (_liveCandidates.Count != 0)
+                {
+                    throw new InvalidOperationException(
+                        "Every geometric mesh-buffer candidate must be released before retry reset.");
+                }
+
+                CandidateBuffers = OriginalBuffers;
+                _replacements.Clear();
+                _replacedBuffers.Clear();
             }
         }
 
@@ -4089,13 +4533,16 @@ namespace Njulf.Rendering.Resources
 
     public readonly record struct MeshTransportGeometry(
         ReadOnlyMemory<GPUVertexPositionStream> VertexPositions,
+        ReadOnlyMemory<GPUVertexUvColorStream> VertexUvColors,
         ReadOnlyMemory<uint> Indices,
         bool IsSkinned,
         GiPrimitiveTransportProfile? PrimitiveTransportProfile,
+        ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence,
         double LocalSurfaceArea)
     {
         public bool IsValid =>
             VertexPositions.Length > 0 &&
+            VertexUvColors.Length == VertexPositions.Length &&
             Indices.Length >= 3 &&
             Indices.Length % 3 == 0;
         public int TriangleCount => Indices.Length / 3;

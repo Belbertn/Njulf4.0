@@ -1,0 +1,194 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "ddgi_simple_shared.glsl"
+#include "ddgi_simple_directional_scratch.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform SimpleDdgiPushBlock
+{
+    uint ParamsBufferIndex;
+    uint IrradianceAtlasBufferIndex;
+    uint VisibilityAtlasBufferIndex;
+    uint RayResultScratchBufferIndex;
+    uint CurrentFrameIndex;
+    uint LightCount;
+    uint DirectionalLightCount;
+    uint LocalLightCount;
+    uint MaxShadedLights;
+    uint EmissiveSourceCount;
+    uint FarFieldParamsBufferIndex;
+    uint FarFieldVoxelBufferIndex;
+    uint FarFieldInstanceBufferIndex;
+    uint Flags;
+    uint MaterialTextureMaxCascade;
+    uint ProbeStateBufferIndex;
+    uint ProbeUpdateQueueBufferIndex;
+    uint RelocationClassificationBufferIndex;
+    uint TransportSourceCacheBufferIndex;
+    uint TransportReadIrradianceAtlasBufferIndex;
+    uint TransportWriteIrradianceAtlasBufferIndex;
+    uint PrivateVisibilityAtlasOffsetWords;
+    uint TransportGeneration;
+    uint PrimaryDirectionalLightIndex;
+    uint DispatchQueueOffset;
+    uint DispatchProbeCount;
+    uint DispatchRaysPerProbe;
+    uint SchedulerArenaBufferIndex;
+    uint SchedulerRayBucketIndex;
+    uint SchedulerRayBucketCommandsOffsetWords;
+    uint SchedulerRayBucketMetadataOffsetWords;
+    uint SchedulerOutcomesOffsetWords;
+    uint SchedulerCountersOffsetWords;
+    uint SchedulerUpdateRecordsOffsetWords;
+} pc;
+
+void main()
+{
+    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    uint mode = SimpleDdgiDirectionalRadianceMode(params.residencyFlags);
+    if (mode == SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF ||
+        params.probeCount == 0u)
+    {
+        return;
+    }
+
+    // V1 stores its only copy of traced radiance in this same allocation.
+    // Its projection dispatch must consume every ray before replacing the
+    // prefix with the transactional SH record, so preparation is deliberately
+    // folded into that serial per-probe invocation. V2 reads the independent
+    // source cache and can prepare (or elide) the transaction here.
+    if ((params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u)
+        return;
+
+    uint localProbeOffset = gl_WorkGroupID.x;
+    bool gpuScheduler = SimpleDdgiGpuSchedulerActive(
+        pc.SchedulerArenaBufferIndex);
+    uint requestCount = gpuScheduler
+        ? SimpleDdgiSchedulerAcceptedCount(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerCountersOffsetWords)
+        : params.probesToUpdate;
+    if (localProbeOffset >= requestCount)
+        return;
+
+    SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(
+        pc.ProbeUpdateQueueBufferIndex,
+        localProbeOffset);
+    uint probeIndex = update.probeIndex;
+    if (probeIndex >= params.probeCount)
+        return;
+
+    SimpleDdgiVolume volume;
+    uint localProbeIndex;
+    if (!ResolveSimpleDdgiProbeVolume(
+            probeIndex,
+            params,
+            volume,
+            localProbeIndex) ||
+        !SimpleDdgiUpdateMatchesLiveAddress(params, update))
+    {
+        return;
+    }
+
+    SimpleDdgiProbeState initialState = ReadSimpleDdgiProbeState(
+        pc.ProbeStateBufferIndex,
+        probeIndex);
+    if (!SimpleDdgiUpdateMatchesProbeGenerationAndRecord(
+            params,
+            update,
+            initialState))
+    {
+        return;
+    }
+
+    uint scratchCapacityWords =
+        SimpleDdgiDirectionalScratchCapacityWords(params, volume);
+    if (scratchCapacityWords < SIMPLE_DDGI_DIRECTIONAL_SCRATCH_WORDS)
+        return;
+    uint scratchBaseWord = SimpleDdgiDirectionalScratchBaseWord(
+        params,
+        volume,
+        localProbeOffset);
+
+    // Revoke any prior queue occupant before inspecting this probe. Every path
+    // below either leaves the record empty or publishes a new fingerprinted
+    // projection transaction.
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_WORD,
+        SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_EMPTY);
+    memoryBarrierBuffer();
+
+    bool inactiveProbe =
+        (initialState.flags & SIMPLE_DDGI_PROBE_FLAG_INACTIVE) != 0u ||
+        initialState.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE ||
+        initialState.activeWeight <= 0.001;
+    if (inactiveProbe ||
+        (initialState.flags &
+            SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u)
+    {
+        return;
+    }
+
+    uint physicalProbeIndex = update.physicalProbeIndex;
+    // Invalidating transactions publish the probe state with the next physical
+    // generation. Prepare the SH sidecar for that same atomic commit identity.
+    uint slotGeneration = SimpleDdgiDirectionalPublicationGeneration(
+        update,
+        initialState);
+    bool canonicalPublished =
+        SimpleDdgiDirectionalRecordHeaderIsPublished(
+            uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_BUFFER_INDEX),
+            physicalProbeIndex,
+            mode,
+            slotGeneration);
+    bool parityPublished = !SimpleDdgiDirectionalParityRequired(params) ||
+        SimpleDdgiDirectionalRecordHeaderIsPublished(
+            uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_PARITY_BUFFER_INDEX),
+            physicalProbeIndex,
+            mode,
+            slotGeneration);
+    bool freshUpdate =
+        (update.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u ||
+        (initialState.flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
+    bool projectionRequired =
+        freshUpdate ||
+        SimpleDdgiUpdateRequiresSourceRefresh(update) ||
+        !canonicalPublished ||
+        !parityPublished;
+    if (!projectionRequired)
+        return;
+
+    uint rayCount = min(
+        SimpleDdgiUpdateSourceRayCount(update, params),
+        SIMPLE_DDGI_MAX_RAYS_PER_PROBE);
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_VALID_COUNT_WORD,
+        0u);
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_RAY_COUNT_WORD,
+        rayCount);
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_GENERATION_WORD,
+        slotGeneration);
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FINGERPRINT_WORD,
+        SimpleDdgiDirectionalScratchFingerprint(
+            update,
+            slotGeneration,
+            rayCount,
+            mode));
+    memoryBarrierBuffer();
+    WriteStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_WORD,
+        SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_PROJECTING);
+}

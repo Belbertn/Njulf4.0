@@ -41,6 +41,7 @@ public readonly record struct DdgiEmissiveTableCacheDiagnostics(
 public sealed class DdgiEmissiveTableCache
 {
     private readonly GPUDdgiEmissiveSource[] _sources;
+    private readonly GPUDdgiEmissiveSurface[] _surfaces;
     private DdgiEmissiveTableCacheKey _key;
     private DdgiEmissiveTableBuildResult _result;
     private bool _hasValue;
@@ -56,6 +57,7 @@ public sealed class DdgiEmissiveTableCache
             throw new ArgumentOutOfRangeException(nameof(capacity));
 
         _sources = new GPUDdgiEmissiveSource[capacity];
+        _surfaces = new GPUDdgiEmissiveSurface[capacity];
     }
 
     public int Capacity => _sources.Length;
@@ -117,15 +119,37 @@ public sealed class DdgiEmissiveTableCache
         _sources.AsSpan(0, _result.Count).CopyTo(destination);
     }
 
+    public void CopySurfacePayloadTo(Span<GPUDdgiEmissiveSurface> destination)
+    {
+        if (!_hasValue)
+            throw new InvalidOperationException("The DDGI emissive table cache is empty.");
+        if (destination.Length < _result.Count)
+        {
+            throw new ArgumentException(
+                $"Surface destination capacity {destination.Length} is smaller than cached source count {_result.Count}.",
+                nameof(destination));
+        }
+        _surfaces.AsSpan(0, _result.Count).CopyTo(destination);
+    }
+
     public void Store(
         DdgiEmissiveTableCacheKey key,
         ReadOnlySpan<GPUDdgiEmissiveSource> sources,
+        DdgiEmissiveTableBuildResult result) =>
+        Store(key, sources, ReadOnlySpan<GPUDdgiEmissiveSurface>.Empty, result);
+
+    public void Store(
+        DdgiEmissiveTableCacheKey key,
+        ReadOnlySpan<GPUDdgiEmissiveSource> sources,
+        ReadOnlySpan<GPUDdgiEmissiveSurface> surfaces,
         DdgiEmissiveTableBuildResult result)
     {
         if (result.Count < 0 || result.Count > _sources.Length)
             throw new ArgumentOutOfRangeException(nameof(result), $"Source count must be in [0, {_sources.Length}].");
         if (sources.Length < result.Count)
             throw new ArgumentException("Source payload is shorter than the declared build result.", nameof(sources));
+        if (!surfaces.IsEmpty && surfaces.Length < result.Count)
+            throw new ArgumentException("Surface payload is shorter than the declared build result.", nameof(surfaces));
         if (!double.IsFinite(result.SkippedSkinnedImportance) || result.SkippedSkinnedImportance < 0.0)
             throw new ArgumentOutOfRangeException(nameof(result), "Skipped skinned importance must be finite and non-negative.");
 
@@ -133,8 +157,15 @@ public sealed class DdgiEmissiveTableCache
             _invalidationCount++;
 
         sources[..result.Count].CopyTo(_sources);
+        if (surfaces.IsEmpty)
+            Array.Clear(_surfaces, 0, result.Count);
+        else
+            surfaces[..result.Count].CopyTo(_surfaces);
         if (result.Count < _result.Count)
+        {
             Array.Clear(_sources, result.Count, _result.Count - result.Count);
+            Array.Clear(_surfaces, result.Count, _result.Count - result.Count);
+        }
         _key = key;
         _result = result;
         _hasValue = true;
@@ -147,6 +178,7 @@ public sealed class DdgiEmissiveTableCache
         if (_hasValue)
             _invalidationCount++;
         Array.Clear(_sources);
+        Array.Clear(_surfaces);
         _key = default;
         _result = default;
         _hasValue = false;
@@ -167,8 +199,11 @@ public enum DdgiEmissiveEstimatorOwnership : uint
 /// <summary>
 /// Checked-in radiometry and estimator-ownership contract for DDGI emission.
 ///
-/// Njulf interprets glTF emissive factor × linear emissive texture/profile ×
-/// emissive strength as scene-linear RGB radiance. Exposure is applied later;
+/// <see cref="EmissivePhotometry"/> converts explicit authored units first.
+/// The legacy glTF convention remains emissive factor × linear emissive
+/// texture/profile × emissive strength; photometric materials normalize their
+/// color to authored luminance in nits. Both produce scene-linear RGB radiance.
+/// Exposure is applied later;
 /// direct emitter radiance is not multiplied by albedo, metallic, AO, or 1/PI.
 /// Values remain HDR and are bounded only by the finite FP16 storage ceiling.
 ///

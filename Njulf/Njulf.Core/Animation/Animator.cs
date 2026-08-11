@@ -14,6 +14,7 @@ namespace Njulf.Core.Animation
         private float _fadeTimeSeconds;
         private float _fadeFromTimeSeconds;
         private bool _playing;
+        private ulong _poseRevision = 1UL;
 
         public Animator(Skeleton skeleton, IReadOnlyList<Skin>? skins = null, IReadOnlyList<AnimationClip>? clips = null)
         {
@@ -43,6 +44,11 @@ namespace Njulf.Core.Animation
         public bool Looping { get; private set; } = true;
         public bool IsPlaying => _playing && CurrentClip != null;
         public bool IsPaused => CurrentClip != null && !_playing;
+        /// <summary>
+        /// Monotonic content revision for the evaluated joint pose. Consumers
+        /// can schedule bounded dependent work without hashing every matrix.
+        /// </summary>
+        public ulong PoseRevision => _poseRevision;
 
         public void Play(AnimationClip clip, bool loop = true)
         {
@@ -74,6 +80,7 @@ namespace Njulf.Core.Animation
             CurrentPose.ResetToBindPose(Skeleton);
             CurrentPose.BuildGlobalMatrices(Skeleton);
             BuildSkinMatrices();
+            AdvancePoseRevision();
         }
 
         public void Seek(float timeSeconds)
@@ -151,6 +158,14 @@ namespace Njulf.Core.Animation
 
             CurrentPose.BuildGlobalMatrices(Skeleton);
             BuildSkinMatrices();
+            AdvancePoseRevision();
+        }
+
+        private void AdvancePoseRevision()
+        {
+            _poseRevision = _poseRevision == ulong.MaxValue
+                ? 1UL
+                : _poseRevision + 1UL;
         }
 
         private void ApplyBlendedClips(AnimationClip fromClip, float fromTime, AnimationClip toClip, float toTime, float amount)

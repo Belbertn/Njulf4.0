@@ -1,13 +1,18 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Njulf.Assets.Validation;
 
 namespace Njulf.Assets.Cooked;
 
 public sealed class ModelAssetCooker : IDisposable
 {
     private const int MaterialTransportMetadataRevision = 2;
+    // Included in the incremental-cook identity. Bump whenever generated mesh
+    // topology or LOD policy changes without changing the binary file layout.
+    private const int MeshLodAlgorithmRevision = 1;
 
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -86,6 +91,12 @@ public sealed class ModelAssetCooker : IDisposable
             options.ToolVersion,
             options.Platform,
             MaterialTransportMetadataRevision,
+            MeshLodAlgorithmRevision,
+            CausticTopologyAlgorithmVersion =
+                ModelGiCausticHeroTopologyAnalyzer.CurrentAlgorithmVersion,
+            OpacityMicromapPayloadProducer =
+                CreateOpacityMicromapProducerSettingsHashInput(
+                    options.OpacityMicromapPayloadProducer),
             TextureStatisticsAlgorithmVersion = TextureTransportStatistics.CurrentAlgorithmVersion,
             PrimitiveTransportAlgorithmVersion = GiPrimitiveTransportProfile.CurrentAlgorithmVersion,
             TextureTransportStatistics.StbDecoderVersion,
@@ -163,6 +174,19 @@ public sealed class ModelAssetCooker : IDisposable
 
         timer.Restart();
         ProcessedMeshAsset processed = _meshBuilder.Build(model, sourcePath);
+        foreach (ProcessedSubMeshAsset subMesh in processed.SubMeshes)
+        {
+            ModelGiCausticHeroValidation validation =
+                subMesh.CausticAuthoringValidation;
+            if (!validation.IsEligible &&
+                validation.Reason != ModelGiCausticHeroValidationReason.Disabled)
+            {
+                warnings.Add(
+                    $"C4_HERO_REJECTED: Submesh '{subMesh.Name}' was rejected " +
+                    $"before runtime work ({validation.Reason}: {validation.Detail}; " +
+                    $"{subMesh.CausticTopologyDetail}).");
+            }
+        }
         CookedMeshPayload mesh = CookedMeshBuilder.Build(processed);
         long meshMs = timer.ElapsedMilliseconds;
 
@@ -206,10 +230,21 @@ public sealed class ModelAssetCooker : IDisposable
                 subMesh.Name, index, subMesh.MaterialSlot, subMesh.NodeIndex, subMesh.SkinIndex, subMesh.SkinningBindTransform)).ToArray(),
             processed.BoundingBox,
             processed.BoundingSphere);
+        CookedOpacityMicromapModelChunk? opacityMicromapChunk =
+            TryProduceOpacityMicromapChunk(
+                options,
+                sourcePath,
+                manifest,
+                model,
+                processed,
+                mesh,
+                materials,
+                warnings);
         CookedPackage.WriteModel(
             stagedModelPath,
             manifest,
-            options.ToolVersion);
+            options.ToolVersion,
+            opacityMicromapChunk);
         long serializationMs = timer.ElapsedMilliseconds;
 
         var outputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { meshPath, materialPath };
@@ -392,6 +427,136 @@ public sealed class ModelAssetCooker : IDisposable
         return deleted;
     }
 
+    private static CookedOpacityMicromapModelChunk? TryProduceOpacityMicromapChunk(
+        ModelCookOptions options,
+        string sourcePath,
+        CookedModelManifest manifest,
+        ModelMesh model,
+        ProcessedMeshAsset processed,
+        CookedMeshPayload mesh,
+        CookedMaterialTable materials,
+        ICollection<string> warnings)
+    {
+        IOpacityMicromapModelPayloadProducer? producer =
+            options.OpacityMicromapPayloadProducer;
+        if (producer is null)
+            return null;
+
+        OpacityMicromapPayloadProducerIdentity identity = producer.Identity;
+        if (!identity.TryValidate(out string identityDetail))
+        {
+            warnings.Add(
+                "OpacityMicromap: optional payload disabled because " +
+                BoundedOptionalDiagnostic(identityDetail));
+            return null;
+        }
+
+        try
+        {
+            var context = new OpacityMicromapModelCookContext(
+                sourcePath,
+                manifest.AssetId,
+                manifest.SourceHash,
+                manifest.ImportSettingsHash,
+                manifest.DependencyListHash,
+                options.ToolVersion,
+                model,
+                processed,
+                mesh,
+                materials);
+            OpacityMicromapPayloadProductionResult result =
+                producer.Produce(context);
+            if (result.Status != OpacityMicromapPayloadProductionStatus.Produced ||
+                result.Payload is null)
+            {
+                warnings.Add(
+                    "OpacityMicromap: optional payload not published: " +
+                    BoundedOptionalDiagnostic(result.Detail));
+                return null;
+            }
+            if (result.Payload.CookAbi != identity.CookAbi)
+            {
+                warnings.Add(
+                    "OpacityMicromap: optional payload rejected because its cook ABI " +
+                    "does not match the producer identity.");
+                return null;
+            }
+            if (result.Payload.SdkProvenanceHash != identity.SdkProvenanceHash)
+            {
+                warnings.Add(
+                    "OpacityMicromap: optional payload rejected because its SDK " +
+                    "provenance does not match the producer identity.");
+                return null;
+            }
+            if (!CookedOpacityMicromapModelChunk.TryValidateModelAttachment(
+                    result.Payload,
+                    mesh,
+                    materials,
+                    out _,
+                    out string attachmentDetail))
+            {
+                warnings.Add(
+                    "OpacityMicromap: optional payload rejected: " +
+                    BoundedOptionalDiagnostic(attachmentDetail));
+                return null;
+            }
+            if (!CookedOpacityMicromapModelChunk.TryCreate(
+                    result.Payload,
+                    out CookedOpacityMicromapModelChunk? chunk,
+                    out string chunkDetail))
+            {
+                warnings.Add(
+                    "OpacityMicromap: optional payload rejected: " +
+                    BoundedOptionalDiagnostic(chunkDetail));
+                return null;
+            }
+
+            return chunk;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and
+                                           not StackOverflowException and
+                                           not AccessViolationException)
+        {
+            warnings.Add(
+                "OpacityMicromap: optional producer failed; ordinary alpha " +
+                "candidate path retained.");
+            return null;
+        }
+    }
+
+    private static string BoundedOptionalDiagnostic(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+            return "no-detail";
+        const int maximumCharacters = 192;
+        string sanitized = detail
+            .Replace('\r', ' ')
+            .Replace('\n', ' ');
+        return sanitized.Length <= maximumCharacters
+            ? sanitized
+            : sanitized[..maximumCharacters];
+    }
+
+    private static object? CreateOpacityMicromapProducerSettingsHashInput(
+        IOpacityMicromapModelPayloadProducer? producer)
+    {
+        if (producer is null)
+            return null;
+
+        OpacityMicromapPayloadProducerIdentity identity = producer.Identity;
+        // OpacityMicromapContentKey deliberately keeps its raw bytes private.
+        // Serialize its canonical hexadecimal form here rather than relying on
+        // the JSON serializer's public-property discovery (which would only
+        // observe IsZero and could therefore alias distinct non-zero keys).
+        return new
+        {
+            identity.Name,
+            identity.CookAbi,
+            identity.PolicyRevision,
+            SdkProvenanceHash = identity.SdkProvenanceHash.ToString()
+        };
+    }
+
     private CookedMaterialTable CookMaterials(
         ModelMesh model,
         string materialDirectory,
@@ -405,6 +570,8 @@ public sealed class ModelAssetCooker : IDisposable
             ? [ModelMaterial.Default]
             : sourceMaterials.Select(CloneMaterial).ToArray();
         var cookedTextures = new Dictionary<string, (string Path, CookedTextureReport Report)>(StringComparer.Ordinal);
+        var opacityMicromapTextureArtifacts =
+            new List<OpacityMicromapCookedTextureArtifact>();
         IReadOnlyList<ModelSubMesh> primitiveSubMeshes =
             GetPrimitiveTransportSubMeshes(model);
         var primitiveProfiles =
@@ -552,6 +719,37 @@ public sealed class ModelAssetCooker : IDisposable
                 }
                 if (semantic == TextureSemantic.Normal && cooked.Report.VulkanFormat == 141)
                     material.FeatureFlags |= 1u << 23;
+
+                if (property.Name == nameof(ModelMaterial.BaseColorTexture))
+                {
+                    string exactPath = Path.GetFullPath(cooked.Path);
+                    byte[] digest;
+                    using (FileStream textureStream = new(
+                               exactPath,
+                               FileMode.Open,
+                               FileAccess.Read,
+                               FileShare.Read,
+                               bufferSize: 128 * 1024,
+                               FileOptions.SequentialScan))
+                    {
+                        digest = SHA256.HashData(textureStream);
+                    }
+                    opacityMicromapTextureArtifacts.Add(
+                        new OpacityMicromapCookedTextureArtifact(
+                            materialIndex,
+                            exactPath,
+                            OpacityMicromapContentKey.FromSha256(digest),
+                            cooked.Report.VulkanFormat,
+                            cooked.Report.CookedWidth,
+                            cooked.Report.CookedHeight,
+                            cooked.Report.MipCount,
+                            cooked.Report.TransportStatistics.ColorSpace,
+                            slot.Sampler,
+                            cooked.Report.AlphaCoveragePreserved,
+                            cooked.Report.AlphaCoveragePreserved
+                                ? cooked.Report.AlphaCutoff
+                                : null));
+                }
             }
             foreach (System.Reflection.PropertyInfo pathProperty in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(string) && p.Name.EndsWith("TexturePath", StringComparison.Ordinal) && p.CanWrite))
                 pathProperty.SetValue(material, null);
@@ -579,7 +777,9 @@ public sealed class ModelAssetCooker : IDisposable
             PrimitiveTransportAlgorithmVersion = GiPrimitiveTransportProfile.CurrentAlgorithmVersion,
             HasCompleteTransportMetadata =
                 boundedProfiles.Count > 0 &&
-                boundedProfiles.All(profile => profile.IsComplete)
+                boundedProfiles.All(profile => profile.IsComplete),
+            OpacityMicromapTextureArtifacts =
+                opacityMicromapTextureArtifacts.ToArray()
         };
     }
 

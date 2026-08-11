@@ -6,7 +6,7 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -61,6 +61,9 @@ public sealed class SceneMaterialOverrideDocument
     public SceneColor? Emissive { get; init; }
     public SceneColor? EmissiveColor { get; init; }
     public float? EmissiveStrength { get; init; }
+    /// <summary>SceneLinearRadiance or LuminanceNits.</summary>
+    public string? EmissiveUnit { get; init; }
+    public float? EmissiveArtisticMultiplier { get; init; }
     public float? Metallic { get; init; }
     public float? Roughness { get; init; }
     public float? OcclusionStrength { get; init; }

@@ -13,5 +13,9 @@ namespace Njulf.Core.Vfx
         public int SegmentCount { get; init; } = 8;
         public float NoiseAmplitude { get; init; }
         public float UvScrollSpeed { get; init; }
+        public ParticleGiEmissionMode GlobalIlluminationEmission { get; init; } =
+            ParticleGiEmissionMode.Disabled;
+        public Vector3 GlobalIlluminationPower { get; init; } = Vector3.Zero;
+        public float GlobalIlluminationEnergyHysteresis { get; init; } = 0.02f;
     }
 }

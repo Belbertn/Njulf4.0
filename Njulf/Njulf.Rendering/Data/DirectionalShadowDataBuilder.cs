@@ -141,7 +141,7 @@ namespace Njulf.Rendering.Data
             return widths;
         }
 
-        private static CoreMatrix4x4 BuildCascadeMatrix(
+        internal static CoreMatrix4x4 BuildCascadeMatrix(
             ICamera camera,
             CoreVector3 lightDirection,
             float nearDistance,
@@ -175,6 +175,17 @@ namespace Njulf.Rendering.Data
             width = radius * 2f;
             height = radius * 2f;
 
+            // Snapping the fitted centre can move it by almost one texel.  A
+            // fit with no guard band can therefore push a frustum corner just
+            // outside its own cascade (most visibly on a bottom/right edge).
+            // Reserve two texels of half-extent on each side before snapping;
+            // this is a sub-percent expansion at the supported map sizes and
+            // keeps the camera slice contained after the quantized shift.
+            float baseTexelSize = width / MathF.Max(1u, shadowMapSize);
+            float snapGuardBand = baseTexelSize * 4f;
+            width += snapGuardBand;
+            height += snapGuardBand;
+
             float centerX = (min.X + max.X) * 0.5f;
             float centerY = (min.Y + max.Y) * 0.5f;
             float texelSize = width / MathF.Max(1u, shadowMapSize);
@@ -197,7 +208,7 @@ namespace Njulf.Rendering.Data
             return lightView * crop * projection;
         }
 
-        private static CoreVector3[] BuildFrustumCorners(ICamera camera, float nearDistance, float farDistance)
+        internal static CoreVector3[] BuildFrustumCorners(ICamera camera, float nearDistance, float farDistance)
         {
             float tan = MathF.Tan(camera.FieldOfView * 0.5f);
             CoreVector3 forward = camera.Forward.Normalized();

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using Silk.NET.Core.Native;
 using Njulf.Rendering.Core;
@@ -16,7 +17,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
+        private readonly bool _receiverFeedbackPipelinesEnabled;
         private readonly nint _entryPointName;
+        private ForwardNearFieldDirectSourcePipelineConfiguration
+            _nearFieldDirectSourceConfiguration;
+        private ForwardGiCausticReceiverPipelineConfiguration
+            _giCausticReceiverConfiguration;
 
         private VkPipeline _depthPipeline;
         private VkPipeline _maskedDepthPipeline;
@@ -28,12 +34,36 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardSimpleFullInputPipeline;
         private VkPipeline _forwardCompactedSimplePipeline;
         private VkPipeline _forwardCompactedSimpleFullInputPipeline;
+        private VkPipeline _forwardNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardCompactedNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardSimpleNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardSimpleFullInputNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardCompactedSimpleNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardGiCausticReceiverPipeline;
+        private VkPipeline _forwardCompactedGiCausticReceiverPipeline;
+        private VkPipeline _forwardSimpleGiCausticReceiverPipeline;
+        private VkPipeline _forwardSimpleFullInputGiCausticReceiverPipeline;
+        private VkPipeline _forwardCompactedSimpleGiCausticReceiverPipeline;
+        private VkPipeline _forwardCompactedSimpleFullInputGiCausticReceiverPipeline;
+        private VkPipeline _forwardCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardCompactedCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardSimpleCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardSimpleFullInputCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardCompactedSimpleCombinedAdvancedGiPipeline;
+        private VkPipeline _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline;
         private VkPipeline _forwardReceiverCachePipeline;
         private VkPipeline _forwardCompactedReceiverCachePipeline;
         private VkPipeline _forwardSimpleReceiverCachePipeline;
         private VkPipeline _forwardSimpleFullInputReceiverCachePipeline;
         private VkPipeline _forwardCompactedSimpleReceiverCachePipeline;
         private VkPipeline _forwardCompactedSimpleFullInputReceiverCachePipeline;
+        private VkPipeline _forwardAlphaMaskReceiverFeedbackPipeline;
+        private VkPipeline _forwardCompactedAlphaMaskReceiverFeedbackPipeline;
+        private VkPipeline _forwardSimpleAlphaMaskReceiverFeedbackPipeline;
+        private VkPipeline _forwardSimpleFullInputAlphaMaskReceiverFeedbackPipeline;
+        private VkPipeline _forwardCompactedSimpleAlphaMaskReceiverFeedbackPipeline;
+        private VkPipeline _forwardCompactedSimpleFullInputAlphaMaskReceiverFeedbackPipeline;
         private VkPipeline _forwardGiDisabledPipeline;
         private VkPipeline _forwardCompactedGiDisabledPipeline;
         private VkPipeline _forwardSimpleGiDisabledPipeline;
@@ -42,8 +72,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardCompactedSimpleFullInputGiDisabledPipeline;
         private VkPipeline _transparentForwardPipeline;
         private VkPipeline _weightedOitTransparentPipeline;
+        private VkPipeline _transparentReceiverFeedbackPipeline;
+        private VkPipeline _weightedOitReceiverFeedbackPipeline;
         private VkPipeline _motionVectorPipeline;
         private VkPipeline _sceneOpaqueCompactionPipeline;
+        private VkPipeline _sceneOpaqueCompactionDiagnosticsPipeline;
         private VkPipeline _forwardVisibilityCompactionPipeline;
         private PipelineLayout _layout;
         private PipelineLayout _sceneSubmissionComputeLayout;
@@ -56,11 +89,20 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             BindlessHeap bindlessHeap,
             Format colorFormat,
             Format depthFormat,
-            RenderSettings settings)
+            RenderSettings settings,
+            ForwardNearFieldDirectSourcePipelineConfiguration
+                nearFieldDirectSourceConfiguration = default,
+            ForwardGiCausticReceiverPipelineConfiguration
+                giCausticReceiverConfiguration = default,
+            bool receiverFeedbackPipelinesEnabled = false)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
             Settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _receiverFeedbackPipelinesEnabled =
+                receiverFeedbackPipelinesEnabled;
+            _nearFieldDirectSourceConfiguration = nearFieldDirectSourceConfiguration;
+            _giCausticReceiverConfiguration = giCausticReceiverConfiguration;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Math.Max(
@@ -92,8 +134,27 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ForwardCompactedSimpleFullInputGlobalIblPipeline => _forwardCompactedSimpleFullInputPipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
         public VkPipeline WeightedOitTransparentPipeline => _weightedOitTransparentPipeline;
+        public VkPipeline TransparentReceiverFeedbackPipeline =>
+            _transparentReceiverFeedbackPipeline;
+        public VkPipeline WeightedOitReceiverFeedbackPipeline =>
+            _weightedOitReceiverFeedbackPipeline;
+        public bool TransparentReceiverFeedbackPipelinesAvailable =>
+            _transparentReceiverFeedbackPipeline.Handle != 0 &&
+            _weightedOitReceiverFeedbackPipeline.Handle != 0;
+        public bool AlphaMaskReceiverFeedbackPipelinesAvailable =>
+            _forwardAlphaMaskReceiverFeedbackPipeline.Handle != 0 &&
+            _forwardCompactedAlphaMaskReceiverFeedbackPipeline.Handle != 0 &&
+            _forwardSimpleAlphaMaskReceiverFeedbackPipeline.Handle != 0 &&
+            _forwardSimpleFullInputAlphaMaskReceiverFeedbackPipeline.Handle != 0 &&
+            _forwardCompactedSimpleAlphaMaskReceiverFeedbackPipeline.Handle != 0 &&
+            _forwardCompactedSimpleFullInputAlphaMaskReceiverFeedbackPipeline.Handle != 0;
+        public string ReceiverFeedbackPipelineFailureReason { get; private set; } =
+            "receiver-feedback-pipelines-not-admitted-at-startup";
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
-        public VkPipeline SceneOpaqueCompactionPipeline => _sceneOpaqueCompactionPipeline;
+        public VkPipeline SceneOpaqueCompactionPipeline =>
+            GpuMeshletCountersEnabled && _sceneOpaqueCompactionDiagnosticsPipeline.Handle != 0
+                ? _sceneOpaqueCompactionDiagnosticsPipeline
+                : _sceneOpaqueCompactionPipeline;
         public VkPipeline ForwardVisibilityCompactionPipeline => _forwardVisibilityCompactionPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
         public PipelineLayout Layout => _layout;
@@ -103,12 +164,85 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public RenderSettings Settings { get; }
         public bool GpuMeshletCountersEnabled { get; private set; }
         public bool MaterialTransportProvenanceAttachmentEnabled { get; private set; }
+        /// <summary>
+        /// True only when construction received a validated C5-effective source
+        /// configuration and all opaque/masked graphics variants were built.
+        /// The normal renderer leaves this false and creates no C5 MRT pipeline.
+        /// </summary>
+        public bool NearFieldDirectSourceAttachmentEnabled { get; private set; }
+        public string NearFieldDirectSourceFailureReason { get; private set; } =
+            "near-field-direct-source-disabled";
+        public ForwardNearFieldDirectSourcePipelineConfiguration
+            NearFieldDirectSourceConfiguration => _nearFieldDirectSourceConfiguration;
+        public bool GiCausticReceiverAttachmentEnabled { get; private set; }
+        public string GiCausticReceiverFailureReason { get; private set; } =
+            "caustic-forward-receiver-disabled";
+        public ForwardGiCausticReceiverPipelineConfiguration
+            GiCausticReceiverConfiguration => _giCausticReceiverConfiguration;
+        public bool CombinedAdvancedGiAttachmentEnabled { get; private set; }
+
+        /// <summary>
+        /// Releases the optional C5 MRT variants during a renderer-controlled
+        /// device-idle fallback transition. Ordinary forward pipelines remain
+        /// intact and immediately become the sole selectable path.
+        /// </summary>
+        internal void DisableNearFieldDirectSourceAfterDeviceIdle(string reason)
+        {
+            DestroyNearFieldDirectSourcePipelines();
+            bool combinedWasEnabled = CombinedAdvancedGiAttachmentEnabled;
+            DestroyCombinedAdvancedGiPipelines();
+            _nearFieldDirectSourceConfiguration =
+                ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
+            NearFieldDirectSourceAttachmentEnabled = false;
+            NearFieldDirectSourceFailureReason = string.IsNullOrWhiteSpace(reason)
+                ? "near-field-direct-source-disabled"
+                : reason;
+            if (combinedWasEnabled)
+            {
+                _giCausticReceiverConfiguration =
+                    ForwardGiCausticReceiverPipelineConfiguration.Disabled;
+                GiCausticReceiverAttachmentEnabled = false;
+                GiCausticReceiverFailureReason = NearFieldDirectSourceFailureReason;
+            }
+        }
+
+        internal void DisableGiCausticReceiverAfterDeviceIdle(string reason)
+        {
+            DestroyGiCausticReceiverPipelines();
+            bool combinedWasEnabled = CombinedAdvancedGiAttachmentEnabled;
+            DestroyCombinedAdvancedGiPipelines();
+            _giCausticReceiverConfiguration =
+                ForwardGiCausticReceiverPipelineConfiguration.Disabled;
+            GiCausticReceiverAttachmentEnabled = false;
+            GiCausticReceiverFailureReason = string.IsNullOrWhiteSpace(reason)
+                ? "caustic-forward-receiver-disabled"
+                : reason;
+            if (combinedWasEnabled)
+            {
+                _nearFieldDirectSourceConfiguration =
+                    ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
+                NearFieldDirectSourceAttachmentEnabled = false;
+                NearFieldDirectSourceFailureReason = GiCausticReceiverFailureReason;
+            }
+        }
 
         public VkPipeline ResolveOpaqueSpecializedPipeline(
             VkPipeline exactPipeline,
             bool receiverCacheRequired,
-            bool globalIlluminationDisabled)
+            bool globalIlluminationDisabled,
+            bool alphaMaskReceiverFeedbackRequired = false)
         {
+            if (alphaMaskReceiverFeedbackRequired)
+            {
+                return ResolveOpaqueVariant(
+                    exactPipeline,
+                    _forwardAlphaMaskReceiverFeedbackPipeline,
+                    _forwardCompactedAlphaMaskReceiverFeedbackPipeline,
+                    _forwardSimpleAlphaMaskReceiverFeedbackPipeline,
+                    _forwardSimpleFullInputAlphaMaskReceiverFeedbackPipeline,
+                    _forwardCompactedSimpleAlphaMaskReceiverFeedbackPipeline,
+                    _forwardCompactedSimpleFullInputAlphaMaskReceiverFeedbackPipeline);
+            }
             if (MaterialTransportProvenanceAttachmentEnabled)
             {
                 return exactPipeline;
@@ -137,6 +271,116 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _forwardSimpleFullInputReceiverCachePipeline,
                 _forwardCompactedSimpleReceiverCachePipeline,
                 _forwardCompactedSimpleFullInputReceiverCachePipeline);
+        }
+
+        /// <summary>
+        /// Maps one ordinary opaque/alpha-mask base pipeline to the matching C5
+        /// MRT program.  Cache and GI-disabled specializations are deliberately
+        /// not considered: source ownership is valid only for the dedicated,
+        /// semantic-stamped fragment variants created with this pipeline set.
+        /// </summary>
+        public bool TryResolveNearFieldDirectSourcePipeline(
+            VkPipeline exactPipeline,
+            out VkPipeline nearFieldPipeline)
+        {
+            nearFieldPipeline = default;
+            if (!NearFieldDirectSourceAttachmentEnabled)
+                return false;
+
+            if (exactPipeline.Handle == _forwardPipeline.Handle)
+                nearFieldPipeline = _forwardNearFieldDirectSourcePipeline;
+            else if (exactPipeline.Handle == _forwardCompactedPipeline.Handle)
+                nearFieldPipeline = _forwardCompactedNearFieldDirectSourcePipeline;
+            else if (exactPipeline.Handle == _forwardSimplePipeline.Handle)
+                nearFieldPipeline = _forwardSimpleNearFieldDirectSourcePipeline;
+            else if (exactPipeline.Handle == _forwardSimpleFullInputPipeline.Handle)
+                nearFieldPipeline = _forwardSimpleFullInputNearFieldDirectSourcePipeline;
+            else if (exactPipeline.Handle == _forwardCompactedSimplePipeline.Handle)
+                nearFieldPipeline = _forwardCompactedSimpleNearFieldDirectSourcePipeline;
+            else if (exactPipeline.Handle ==
+                _forwardCompactedSimpleFullInputPipeline.Handle)
+            {
+                nearFieldPipeline =
+                    _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline;
+            }
+            else
+            {
+                return false;
+            }
+
+            return nearFieldPipeline.Handle != 0;
+        }
+
+        public bool TryResolveGiCausticReceiverPipeline(
+            VkPipeline exactPipeline,
+            out VkPipeline causticPipeline)
+        {
+            causticPipeline = default;
+            if (!GiCausticReceiverAttachmentEnabled)
+                return false;
+
+            if (exactPipeline.Handle == _forwardPipeline.Handle)
+                causticPipeline = _forwardGiCausticReceiverPipeline;
+            else if (exactPipeline.Handle == _forwardCompactedPipeline.Handle)
+                causticPipeline = _forwardCompactedGiCausticReceiverPipeline;
+            else if (exactPipeline.Handle == _forwardSimplePipeline.Handle)
+                causticPipeline = _forwardSimpleGiCausticReceiverPipeline;
+            else if (exactPipeline.Handle == _forwardSimpleFullInputPipeline.Handle)
+                causticPipeline = _forwardSimpleFullInputGiCausticReceiverPipeline;
+            else if (exactPipeline.Handle == _forwardCompactedSimplePipeline.Handle)
+                causticPipeline = _forwardCompactedSimpleGiCausticReceiverPipeline;
+            else if (exactPipeline.Handle ==
+                _forwardCompactedSimpleFullInputPipeline.Handle)
+            {
+                causticPipeline =
+                    _forwardCompactedSimpleFullInputGiCausticReceiverPipeline;
+            }
+            else
+            {
+                return false;
+            }
+
+            return causticPipeline.Handle != 0;
+        }
+
+        /// <summary>
+        /// Maps an ordinary opaque/alpha-mask pipeline to the single MRT
+        /// program that writes both the C4 and C5 producer contracts.
+        /// </summary>
+        public bool TryResolveCombinedAdvancedGiPipeline(
+            VkPipeline exactPipeline,
+            out VkPipeline combinedPipeline)
+        {
+            combinedPipeline = default;
+            if (!CombinedAdvancedGiAttachmentEnabled ||
+                !NearFieldDirectSourceAttachmentEnabled ||
+                !GiCausticReceiverAttachmentEnabled)
+            {
+                return false;
+            }
+
+            if (exactPipeline.Handle == _forwardPipeline.Handle)
+                combinedPipeline = _forwardCombinedAdvancedGiPipeline;
+            else if (exactPipeline.Handle == _forwardCompactedPipeline.Handle)
+                combinedPipeline = _forwardCompactedCombinedAdvancedGiPipeline;
+            else if (exactPipeline.Handle == _forwardSimplePipeline.Handle)
+                combinedPipeline = _forwardSimpleCombinedAdvancedGiPipeline;
+            else if (exactPipeline.Handle == _forwardSimpleFullInputPipeline.Handle)
+                combinedPipeline = _forwardSimpleFullInputCombinedAdvancedGiPipeline;
+            else if (exactPipeline.Handle == _forwardCompactedSimplePipeline.Handle)
+                combinedPipeline = _forwardCompactedSimpleCombinedAdvancedGiPipeline;
+            else if (exactPipeline.Handle ==
+                _forwardCompactedSimpleFullInputPipeline.Handle)
+            {
+                combinedPipeline =
+                    _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline;
+            }
+            else
+            {
+                return false;
+            }
+
+            return combinedPipeline.Handle != 0;
         }
 
         private VkPipeline ResolveOpaqueVariant(
@@ -346,6 +590,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 GlobalIlluminationDebugView.MaterialTransportHitProvenance;
             MaterialTransportProvenanceAttachmentEnabled =
                 materialTransportProvenanceEnabled;
+            NearFieldDirectSourceAttachmentEnabled = false;
+            NearFieldDirectSourceFailureReason =
+                "near-field-direct-source-disabled";
+            GiCausticReceiverAttachmentEnabled = false;
+            GiCausticReceiverFailureReason =
+                "caustic-forward-receiver-disabled";
+            CombinedAdvancedGiAttachmentEnabled = false;
             string provenanceSuffix =
                 materialTransportProvenanceEnabled ? "_provenance" : string.Empty;
             string forwardOpaqueFragmentShaderName =
@@ -501,6 +752,29 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardCompactedSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Compacted Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
+            if (_nearFieldDirectSourceConfiguration.IsC5EffectivelyEnabled &&
+                _giCausticReceiverConfiguration.IsC4EffectivelyEnabled)
+            {
+                CreateCombinedAdvancedGiPipelines(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    materialTransportProvenanceEnabled);
+            }
+            else
+            {
+                CreateNearFieldDirectSourcePipelines(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    materialTransportProvenanceEnabled);
+                CreateGiCausticReceiverPipelines(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    materialTransportProvenanceEnabled);
+            }
+
 #if !DEBUG && !NJULF_DETAILED_INVESTIGATION
             if (!materialTransportProvenanceEnabled)
             {
@@ -565,6 +839,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthFormat);
             _context.SetDebugName(_weightedOitTransparentPipeline.Handle, ObjectType.Pipeline, "Weighted OIT Transparent Mesh Pipeline");
 
+            CreateReceiverFeedbackPipelines(
+                colorFormat,
+                depthFormat,
+                forwardTaskShaderName,
+                materialTransportProvenanceFormat);
+
             _motionVectorPipeline = CreateGraphicsPipeline(
                 "motion_vector.task.spv",
                 "motion_vector.mesh.spv",
@@ -580,6 +860,321 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         }
 
+        private void CreateReceiverFeedbackPipelines(
+            Format colorFormat,
+            Format depthFormat,
+            string forwardTaskShaderName,
+            Format? materialTransportProvenanceFormat)
+        {
+            ReceiverFeedbackPipelineFailureReason =
+                "receiver-feedback-pipelines-not-admitted-at-startup";
+            if (!_receiverFeedbackPipelinesEnabled)
+                return;
+
+            try
+            {
+                string provenanceSuffix =
+                    materialTransportProvenanceFormat.HasValue
+                        ? "_provenance"
+                        : string.Empty;
+                CreateOpaqueSpecializedPipelineSet(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    $"forward_opaque_ddgi_b1{provenanceSuffix}.frag.spv",
+                    $"forward_opaque_simple_ddgi_b1{provenanceSuffix}.frag.spv",
+                    $"forward_opaque_simple_full_input_ddgi_b1{provenanceSuffix}.frag.spv",
+                    "B1 Exact Alpha-Mask Receiver Feedback",
+                    out _forwardAlphaMaskReceiverFeedbackPipeline,
+                    out _forwardCompactedAlphaMaskReceiverFeedbackPipeline,
+                    out _forwardSimpleAlphaMaskReceiverFeedbackPipeline,
+                    out _forwardSimpleFullInputAlphaMaskReceiverFeedbackPipeline,
+                    out _forwardCompactedSimpleAlphaMaskReceiverFeedbackPipeline,
+                    out _forwardCompactedSimpleFullInputAlphaMaskReceiverFeedbackPipeline,
+                    materialTransportProvenanceFormat:
+                        materialTransportProvenanceFormat);
+
+                _transparentReceiverFeedbackPipeline = CreateGraphicsPipeline(
+                    forwardTaskShaderName,
+                    "forward.mesh.spv",
+                    "forward_transparent_ddgi_b1.frag.spv",
+                    colorFormat,
+                    depthFormat,
+                    hasColorAttachment: true,
+                    depthWriteEnable: false,
+                    blendEnable: true,
+                    cullMode: CullModeFlags.None,
+                    depthBiasEnable: false);
+                _context.SetDebugName(
+                    _transparentReceiverFeedbackPipeline.Handle,
+                    ObjectType.Pipeline,
+                    "B1 Exact Transparent Forward Plus Mesh Pipeline");
+
+                _weightedOitReceiverFeedbackPipeline =
+                    CreateWeightedOitGraphicsPipeline(
+                        forwardTaskShaderName,
+                        "forward.mesh.spv",
+                        "forward_weighted_oit_ddgi_b1.frag.spv",
+                        RenderTargetManager.WeightedOitAccumulationFormat,
+                        RenderTargetManager.WeightedOitRevealageFormat,
+                        depthFormat);
+                _context.SetDebugName(
+                    _weightedOitReceiverFeedbackPipeline.Handle,
+                    ObjectType.Pipeline,
+                    "B1 Exact Weighted OIT Transparent Mesh Pipeline");
+
+                ReceiverFeedbackPipelineFailureReason =
+                    "receiver-feedback-pipelines-ready";
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                ArgumentException or InvalidOperationException)
+            {
+                // B1 is optional. A shader-module or native driver compiler
+                // failure must never take canonical DDGI or forward rendering
+                // down with it, and a partial set must never be selectable.
+                DestroyAlphaMaskReceiverFeedbackPipelines();
+                DestroyTransparentReceiverFeedbackPipelines();
+                ReceiverFeedbackPipelineFailureReason =
+                    "receiver-feedback-pipeline-creation-failed:" +
+                    exception.GetType().Name + ":" + exception.Message;
+                System.Diagnostics.Debug.WriteLine(
+                    "B1 receiver-feedback pipelines unavailable; canonical " +
+                    "forward rendering retained. " +
+                    ReceiverFeedbackPipelineFailureReason);
+            }
+        }
+
+        private void CreateNearFieldDirectSourcePipelines(
+            Format colorFormat,
+            Format depthFormat,
+            string forwardTaskShaderName,
+            bool materialTransportProvenanceEnabled)
+        {
+            if (!_nearFieldDirectSourceConfiguration.IsC5EffectivelyEnabled)
+                return;
+
+            if (materialTransportProvenanceEnabled)
+            {
+                NearFieldDirectSourceFailureReason =
+                    "near-field-direct-source-material-transport-provenance-conflict";
+                return;
+            }
+
+            if (!ForwardNearFieldDirectSourceContract
+                    .TryValidatePipelineConfiguration(
+                        _nearFieldDirectSourceConfiguration,
+                        out string failure))
+            {
+                NearFieldDirectSourceFailureReason = failure;
+                return;
+            }
+
+            try
+            {
+                CreateOpaqueSpecializedPipelineSet(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    ForwardNearFieldDirectSourceContract.OpaqueFragmentShader,
+                    ForwardNearFieldDirectSourceContract.SimpleOpaqueFragmentShader,
+                    ForwardNearFieldDirectSourceContract
+                        .SimpleFullInputOpaqueFragmentShader,
+                    "Near-Field Direct-Diffuse-and-Emissive Source",
+                    out _forwardNearFieldDirectSourcePipeline,
+                    out _forwardCompactedNearFieldDirectSourcePipeline,
+                    out _forwardSimpleNearFieldDirectSourcePipeline,
+                    out _forwardSimpleFullInputNearFieldDirectSourcePipeline,
+                    out _forwardCompactedSimpleNearFieldDirectSourcePipeline,
+                    out _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline,
+                    secondaryColorFormat:
+                        ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
+                    tertiaryColorFormat:
+                        ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
+
+                if (_forwardNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardCompactedNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardSimpleNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardSimpleFullInputNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardCompactedSimpleNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline.Handle == 0)
+                {
+                    DestroyNearFieldDirectSourcePipelines();
+                    NearFieldDirectSourceFailureReason =
+                        "near-field-direct-source-pipeline-variant-incomplete";
+                    return;
+                }
+
+                NearFieldDirectSourceAttachmentEnabled = true;
+                NearFieldDirectSourceFailureReason = "valid";
+            }
+            catch (Exception ex)
+            {
+                // C5 is optional. A missing artifact, unsupported MRT format, or
+                // native pipeline error must retain the ordinary forward path.
+                DestroyNearFieldDirectSourcePipelines();
+                NearFieldDirectSourceAttachmentEnabled = false;
+                NearFieldDirectSourceFailureReason =
+                    "near-field-direct-source-pipeline-creation-failed";
+                System.Diagnostics.Debug.WriteLine(
+                    $"C5 direct-source pipeline unavailable: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private void CreateGiCausticReceiverPipelines(
+            Format colorFormat,
+            Format depthFormat,
+            string forwardTaskShaderName,
+            bool materialTransportProvenanceEnabled)
+        {
+            if (!_giCausticReceiverConfiguration.IsC4EffectivelyEnabled)
+                return;
+
+            if (materialTransportProvenanceEnabled)
+            {
+                GiCausticReceiverFailureReason =
+                    "caustic-forward-receiver-MRT-ownership-conflict";
+                return;
+            }
+            if (!ForwardGiCausticReceiverContract.TryValidatePipelineConfiguration(
+                    _giCausticReceiverConfiguration,
+                    out string failure))
+            {
+                GiCausticReceiverFailureReason = failure;
+                return;
+            }
+
+            try
+            {
+                CreateOpaqueSpecializedPipelineSet(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    ForwardGiCausticReceiverContract.OpaqueFragmentShader,
+                    ForwardGiCausticReceiverContract.SimpleOpaqueFragmentShader,
+                    ForwardGiCausticReceiverContract
+                        .SimpleFullInputOpaqueFragmentShader,
+                    "C4 Current Receiver Payload",
+                    out _forwardGiCausticReceiverPipeline,
+                    out _forwardCompactedGiCausticReceiverPipeline,
+                    out _forwardSimpleGiCausticReceiverPipeline,
+                    out _forwardSimpleFullInputGiCausticReceiverPipeline,
+                    out _forwardCompactedSimpleGiCausticReceiverPipeline,
+                    out _forwardCompactedSimpleFullInputGiCausticReceiverPipeline,
+                    secondaryColorFormat:
+                        ForwardGiCausticReceiverContract.ReceiverPayloadFormat);
+
+                if (_forwardGiCausticReceiverPipeline.Handle == 0 ||
+                    _forwardCompactedGiCausticReceiverPipeline.Handle == 0 ||
+                    _forwardSimpleGiCausticReceiverPipeline.Handle == 0 ||
+                    _forwardSimpleFullInputGiCausticReceiverPipeline.Handle == 0 ||
+                    _forwardCompactedSimpleGiCausticReceiverPipeline.Handle == 0 ||
+                    _forwardCompactedSimpleFullInputGiCausticReceiverPipeline.Handle == 0)
+                {
+                    DestroyGiCausticReceiverPipelines();
+                    GiCausticReceiverFailureReason =
+                        "caustic-forward-receiver-pipeline-variant-incomplete";
+                    return;
+                }
+
+                GiCausticReceiverAttachmentEnabled = true;
+                GiCausticReceiverFailureReason = "valid";
+            }
+            catch (Exception ex)
+            {
+                DestroyGiCausticReceiverPipelines();
+                GiCausticReceiverAttachmentEnabled = false;
+                GiCausticReceiverFailureReason =
+                    "caustic-forward-receiver-pipeline-creation-failed";
+                System.Diagnostics.Debug.WriteLine(
+                    $"C4 receiver pipeline unavailable: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private void CreateCombinedAdvancedGiPipelines(
+            Format colorFormat,
+            Format depthFormat,
+            string forwardTaskShaderName,
+            bool materialTransportProvenanceEnabled)
+        {
+            if (materialTransportProvenanceEnabled)
+            {
+                NearFieldDirectSourceFailureReason =
+                    "combined-advanced-GI-material-provenance-conflict";
+                GiCausticReceiverFailureReason =
+                    NearFieldDirectSourceFailureReason;
+                return;
+            }
+            if (!ForwardAdvancedGiCombinedContract
+                    .TryValidatePipelineConfigurations(
+                        _giCausticReceiverConfiguration,
+                        _nearFieldDirectSourceConfiguration,
+                        out string failure))
+            {
+                NearFieldDirectSourceFailureReason = failure;
+                GiCausticReceiverFailureReason = failure;
+                return;
+            }
+
+            try
+            {
+                CreateOpaqueSpecializedPipelineSet(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    ForwardAdvancedGiCombinedContract.OpaqueFragmentShader,
+                    ForwardAdvancedGiCombinedContract.SimpleOpaqueFragmentShader,
+                    ForwardAdvancedGiCombinedContract
+                        .SimpleFullInputOpaqueFragmentShader,
+                    "Combined C4 Receiver and C5 Direct Source",
+                    out _forwardCombinedAdvancedGiPipeline,
+                    out _forwardCompactedCombinedAdvancedGiPipeline,
+                    out _forwardSimpleCombinedAdvancedGiPipeline,
+                    out _forwardSimpleFullInputCombinedAdvancedGiPipeline,
+                    out _forwardCompactedSimpleCombinedAdvancedGiPipeline,
+                    out _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline,
+                    secondaryColorFormat:
+                        ForwardGiCausticReceiverContract.ReceiverPayloadFormat,
+                    tertiaryColorFormat:
+                        ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
+                    quaternaryColorFormat:
+                        ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
+
+                if (_forwardCombinedAdvancedGiPipeline.Handle == 0 ||
+                    _forwardCompactedCombinedAdvancedGiPipeline.Handle == 0 ||
+                    _forwardSimpleCombinedAdvancedGiPipeline.Handle == 0 ||
+                    _forwardSimpleFullInputCombinedAdvancedGiPipeline.Handle == 0 ||
+                    _forwardCompactedSimpleCombinedAdvancedGiPipeline.Handle == 0 ||
+                    _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline.Handle == 0)
+                {
+                    DestroyCombinedAdvancedGiPipelines();
+                    NearFieldDirectSourceFailureReason =
+                        "combined-advanced-GI-pipeline-variant-incomplete";
+                    GiCausticReceiverFailureReason =
+                        NearFieldDirectSourceFailureReason;
+                    return;
+                }
+
+                CombinedAdvancedGiAttachmentEnabled = true;
+                NearFieldDirectSourceAttachmentEnabled = true;
+                GiCausticReceiverAttachmentEnabled = true;
+                NearFieldDirectSourceFailureReason = "valid";
+                GiCausticReceiverFailureReason = "valid";
+            }
+            catch (Exception ex)
+            {
+                DestroyCombinedAdvancedGiPipelines();
+                NearFieldDirectSourceAttachmentEnabled = false;
+                GiCausticReceiverAttachmentEnabled = false;
+                NearFieldDirectSourceFailureReason =
+                    "combined-advanced-GI-pipeline-creation-failed";
+                GiCausticReceiverFailureReason =
+                    NearFieldDirectSourceFailureReason;
+                System.Diagnostics.Debug.WriteLine(
+                    $"Combined C4/C5 forward pipeline unavailable: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
         private void CreateOpaqueSpecializedPipelineSet(
             Format colorFormat,
             Format depthFormat,
@@ -593,7 +1188,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             out VkPipeline simplePipeline,
             out VkPipeline simpleFullInputPipeline,
             out VkPipeline compactedSimplePipeline,
-            out VkPipeline compactedSimpleFullInputPipeline)
+            out VkPipeline compactedSimpleFullInputPipeline,
+            Format? secondaryColorFormat = null,
+            Format? tertiaryColorFormat = null,
+            Format? quaternaryColorFormat = null,
+            Format? materialTransportProvenanceFormat = null)
         {
             fullPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
@@ -605,7 +1204,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: false,
+                secondaryColorFormat: secondaryColorFormat,
+                tertiaryColorFormat: tertiaryColorFormat,
+                quaternaryColorFormat: quaternaryColorFormat,
+                materialTransportProvenanceFormat:
+                    materialTransportProvenanceFormat);
             compactedPipeline = CreateGraphicsPipeline(
                 taskShaderName: null,
                 "forward_compacted.mesh.spv",
@@ -616,7 +1220,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: false,
+                secondaryColorFormat: secondaryColorFormat,
+                tertiaryColorFormat: tertiaryColorFormat,
+                quaternaryColorFormat: quaternaryColorFormat,
+                materialTransportProvenanceFormat:
+                    materialTransportProvenanceFormat);
             simplePipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
                 "forward_simple.mesh.spv",
@@ -627,7 +1236,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: false,
+                secondaryColorFormat: secondaryColorFormat,
+                tertiaryColorFormat: tertiaryColorFormat,
+                quaternaryColorFormat: quaternaryColorFormat,
+                materialTransportProvenanceFormat:
+                    materialTransportProvenanceFormat);
             simpleFullInputPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
                 "forward.mesh.spv",
@@ -638,7 +1252,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: false,
+                secondaryColorFormat: secondaryColorFormat,
+                tertiaryColorFormat: tertiaryColorFormat,
+                quaternaryColorFormat: quaternaryColorFormat,
+                materialTransportProvenanceFormat:
+                    materialTransportProvenanceFormat);
             compactedSimplePipeline = CreateGraphicsPipeline(
                 taskShaderName: null,
                 "forward_simple_compacted.mesh.spv",
@@ -649,7 +1268,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: false,
+                secondaryColorFormat: secondaryColorFormat,
+                tertiaryColorFormat: tertiaryColorFormat,
+                quaternaryColorFormat: quaternaryColorFormat,
+                materialTransportProvenanceFormat:
+                    materialTransportProvenanceFormat);
             compactedSimpleFullInputPipeline = CreateGraphicsPipeline(
                 taskShaderName: null,
                 "forward_compacted.mesh.spv",
@@ -660,7 +1284,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthWriteEnable: false,
                 blendEnable: false,
                 cullMode: CullModeFlags.None,
-                depthBiasEnable: false);
+                depthBiasEnable: false,
+                secondaryColorFormat: secondaryColorFormat,
+                tertiaryColorFormat: tertiaryColorFormat,
+                quaternaryColorFormat: quaternaryColorFormat,
+                materialTransportProvenanceFormat:
+                    materialTransportProvenanceFormat);
 
             _context.SetDebugName(
                 fullPipeline.Handle,
@@ -692,6 +1321,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             _sceneOpaqueCompactionPipeline = CreateComputePipeline("scene_opaque_compact.comp.spv", _sceneSubmissionComputeLayout);
             _context.SetDebugName(_sceneOpaqueCompactionPipeline.Handle, ObjectType.Pipeline, "Scene Opaque Compaction Compute Pipeline");
+            if (GpuMeshletCountersEnabled)
+            {
+                _sceneOpaqueCompactionDiagnosticsPipeline = CreateComputePipeline(
+                    "scene_opaque_compact_diagnostics.comp.spv",
+                    _sceneSubmissionComputeLayout);
+                _context.SetDebugName(
+                    _sceneOpaqueCompactionDiagnosticsPipeline.Handle,
+                    ObjectType.Pipeline,
+                    "Scene Opaque Compaction Exact Shadow Diagnostics Pipeline");
+            }
             _forwardVisibilityCompactionPipeline = CreateComputePipeline("forward_visibility_compact.comp.spv", _sceneSubmissionComputeLayout);
             _context.SetDebugName(_forwardVisibilityCompactionPipeline.Handle, ObjectType.Pipeline, "Forward Visibility Compaction Compute Pipeline");
         }
@@ -708,6 +1347,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             CullModeFlags cullMode,
             bool depthBiasEnable,
             Format? secondaryColorFormat = null,
+            Format? tertiaryColorFormat = null,
+            Format? quaternaryColorFormat = null,
             Format? materialTransportProvenanceFormat = null)
         {
             ShaderModule taskModule = new ShaderModule();
@@ -735,13 +1376,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     fragmentModule,
                     colorFormat,
                     depthFormat,
-                hasColorAttachment,
-                depthWriteEnable,
-                blendEnable,
-                cullMode,
-                depthBiasEnable,
-                secondaryColorFormat,
-                materialTransportProvenanceFormat);
+                    hasColorAttachment,
+                    depthWriteEnable,
+                    blendEnable,
+                    cullMode,
+                    depthBiasEnable,
+                    secondaryColorFormat: secondaryColorFormat,
+                    tertiaryColorFormat: tertiaryColorFormat,
+                    quaternaryColorFormat: quaternaryColorFormat,
+                    materialTransportProvenanceFormat:
+                        materialTransportProvenanceFormat);
             }
             finally
             {
@@ -844,6 +1488,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             CullModeFlags cullMode,
             bool depthBiasEnable,
             Format? secondaryColorFormat = null,
+            Format? tertiaryColorFormat = null,
+            Format? quaternaryColorFormat = null,
             Format? materialTransportProvenanceFormat = null)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
@@ -918,13 +1564,43 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                                  ColorComponentFlags.BBit |
                                  ColorComponentFlags.ABit
             };
+            if ((secondaryColorFormat.HasValue || tertiaryColorFormat.HasValue ||
+                    quaternaryColorFormat.HasValue) &&
+                materialTransportProvenanceFormat.HasValue)
+            {
+                throw new InvalidOperationException(
+                    "A mesh pipeline cannot bind material provenance with a C4 or C5 experimental MRT output.");
+            }
+            if (tertiaryColorFormat.HasValue && !secondaryColorFormat.HasValue)
+            {
+                throw new InvalidOperationException(
+                    "A tertiary forward attachment requires a secondary attachment.");
+            }
+            if (quaternaryColorFormat.HasValue &&
+                (!secondaryColorFormat.HasValue || !tertiaryColorFormat.HasValue))
+            {
+                throw new InvalidOperationException(
+                    "A quaternary forward attachment requires contiguous secondary and tertiary attachments.");
+            }
+
             uint colorAttachmentCount =
                 ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
                     hasColorAttachment,
-                    materialTransportProvenanceFormat.HasValue);
-            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[2];
-            colorBlendAttachments[0] = colorBlendAttachment;
-            colorBlendAttachments[1] = colorBlendAttachment;
+                    materialTransportProvenanceFormat.HasValue,
+                    nearFieldDirectSourceEnabled: tertiaryColorFormat.HasValue,
+                    giCausticReceiverEnabled:
+                        secondaryColorFormat.HasValue &&
+                        (!tertiaryColorFormat.HasValue ||
+                         quaternaryColorFormat.HasValue));
+            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[
+                (int)ForwardAdvancedGiCombinedContract.ColorAttachmentCount];
+            for (int attachmentIndex = 0;
+                 attachmentIndex <
+                    (int)ForwardAdvancedGiCombinedContract.ColorAttachmentCount;
+                 attachmentIndex++)
+            {
+                colorBlendAttachments[attachmentIndex] = colorBlendAttachment;
+            }
 
             var colorBlendInfo = new PipelineColorBlendStateCreateInfo
             {
@@ -946,12 +1622,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PDynamicStates = dynamicStates
             };
 
-            var renderingColorFormats = stackalloc Format[2];
+            var renderingColorFormats = stackalloc Format[
+                (int)ForwardAdvancedGiCombinedContract.ColorAttachmentCount];
             renderingColorFormats[0] = colorFormat;
             renderingColorFormats[1] =
                 secondaryColorFormat ??
                 materialTransportProvenanceFormat ??
                 colorFormat;
+            renderingColorFormats[2] =
+                tertiaryColorFormat ?? colorFormat;
+            renderingColorFormats[3] =
+                quaternaryColorFormat ?? colorFormat;
             var renderingInfo = new PipelineRenderingCreateInfo
             {
                 SType = StructureType.PipelineRenderingCreateInfo,
@@ -1169,6 +1850,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void DestroyPipelines()
         {
+            NearFieldDirectSourceAttachmentEnabled = false;
+            GiCausticReceiverAttachmentEnabled = false;
+            CombinedAdvancedGiAttachmentEnabled = false;
+            DestroyNearFieldDirectSourcePipelines();
+            DestroyGiCausticReceiverPipelines();
+            DestroyCombinedAdvancedGiPipelines();
+            DestroyAlphaMaskReceiverFeedbackPipelines();
+            DestroyTransparentReceiverFeedbackPipelines();
+
             if (_depthPipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(_context.Device, _depthPipeline, null);
@@ -1331,11 +2021,94 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _sceneOpaqueCompactionPipeline = default;
             }
 
+            if (_sceneOpaqueCompactionDiagnosticsPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _sceneOpaqueCompactionDiagnosticsPipeline, null);
+                _sceneOpaqueCompactionDiagnosticsPipeline = default;
+            }
+
             if (_forwardVisibilityCompactionPipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(_context.Device, _forwardVisibilityCompactionPipeline, null);
                 _forwardVisibilityCompactionPipeline = default;
             }
+        }
+
+        private void DestroyNearFieldDirectSourcePipelines()
+        {
+            DestroyOptionalPipeline(ref _forwardNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleFullInputNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline);
+        }
+
+        private void DestroyGiCausticReceiverPipelines()
+        {
+            DestroyOptionalPipeline(ref _forwardGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleFullInputGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleGiCausticReceiverPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleFullInputGiCausticReceiverPipeline);
+        }
+
+        private void DestroyCombinedAdvancedGiPipelines()
+        {
+            CombinedAdvancedGiAttachmentEnabled = false;
+            DestroyOptionalPipeline(ref _forwardCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleFullInputCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleCombinedAdvancedGiPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline);
+        }
+
+        private void DestroyAlphaMaskReceiverFeedbackPipelines()
+        {
+            DestroyOptionalPipeline(
+                ref _forwardAlphaMaskReceiverFeedbackPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedAlphaMaskReceiverFeedbackPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleAlphaMaskReceiverFeedbackPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleFullInputAlphaMaskReceiverFeedbackPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleAlphaMaskReceiverFeedbackPipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleFullInputAlphaMaskReceiverFeedbackPipeline);
+        }
+
+        private void DestroyTransparentReceiverFeedbackPipelines()
+        {
+            DestroyOptionalPipeline(ref _transparentReceiverFeedbackPipeline);
+            DestroyOptionalPipeline(ref _weightedOitReceiverFeedbackPipeline);
+        }
+
+        private void DestroyOptionalPipeline(ref VkPipeline pipeline)
+        {
+            if (pipeline.Handle == 0)
+                return;
+
+            _context.Api.DestroyPipeline(_context.Device, pipeline, null);
+            pipeline = default;
         }
 
         private void DestroyShaderModule(ShaderModule module)

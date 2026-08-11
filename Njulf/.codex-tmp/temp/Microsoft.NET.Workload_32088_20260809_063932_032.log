@@ -1,0 +1,14 @@
+[2026-08-09 06:39:32.035] [00007D58] === Logging started ===
+[2026-08-09 06:39:32.041] [00007D58] Executing: "C:\Program Files\dotnet\dotnet.exe" test Njulf.Tests\Njulf.Tests.csproj -c Release --no-build --no-restore --disable-build-servers -m:1 --filter FullyQualifiedName=Njulf.Tests.ContentRendererIntegrationTests.LoadModel_RequiresRendererUploadService --logger console;verbosity=minimal, PID: 32088, PPID: 2144
+[2026-08-09 06:39:32.043] [00007D58] IsElevated: False
+[2026-08-09 06:39:32.043] [00007D58] Is64BitProcess: True
+[2026-08-09 06:39:32.043] [00007D58] RebootPending: False
+[2026-08-09 06:39:32.043] [00007D58] ProcessorArchitecture: amd64
+[2026-08-09 06:39:32.043] [00007D58] HostArchitecture: x64
+[2026-08-09 06:39:32.043] [00007D58] SdkDirectory: 10.0.203
+[2026-08-09 06:39:32.043] [00007D58] VerifySignatures: False
+[2026-08-09 06:39:32.043] [00007D58] SDK feature band: 10.0.200
+[2026-08-09 06:39:33.504] [00007D58] Shutting down
+[2026-08-09 06:39:33.504] [00007D58] Shutdown completed.
+[2026-08-09 06:39:33.504] [00007D58] Restart required: False
+[2026-08-09 06:39:33.504] [00007D58] === Logging ended ===

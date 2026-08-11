@@ -1,0 +1,14 @@
+[2026-08-09 07:02:57.101] [0000751C] === Logging started ===
+[2026-08-09 07:02:57.112] [0000751C] Executing: "C:\Program Files\dotnet\dotnet.exe" build NjulfHelloGame/NjulfHelloGame.csproj -c Release --no-restore, PID: 29980, PPID: 4500
+[2026-08-09 07:02:57.115] [0000751C] IsElevated: False
+[2026-08-09 07:02:57.115] [0000751C] Is64BitProcess: True
+[2026-08-09 07:02:57.115] [0000751C] RebootPending: False
+[2026-08-09 07:02:57.115] [0000751C] ProcessorArchitecture: amd64
+[2026-08-09 07:02:57.115] [0000751C] HostArchitecture: x64
+[2026-08-09 07:02:57.115] [0000751C] SdkDirectory: 10.0.203
+[2026-08-09 07:02:57.115] [0000751C] VerifySignatures: False
+[2026-08-09 07:02:57.115] [0000751C] SDK feature band: 10.0.200
+[2026-08-09 07:03:33.661] [0000751C] Shutting down
+[2026-08-09 07:03:33.661] [0000751C] Shutdown completed.
+[2026-08-09 07:03:33.661] [0000751C] Restart required: False
+[2026-08-09 07:03:33.661] [0000751C] === Logging ended ===

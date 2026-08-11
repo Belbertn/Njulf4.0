@@ -16,16 +16,30 @@
 
     <ItemGroup>
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
+      <!-- NVIDIA's native compiler rejects the fully unoptimized Debug IR for
+           the directional prepare/project/publish sequence even though SPIR-V
+           validation succeeds. Optimize only these isolated modules in Debug
+           while retaining detailed DDGI counters and validation behavior. -->
+      <ShaderSource Update="ddgi_simple_directional_prepare.comp;ddgi_simple_directional_project.comp;ddgi_simple_directional_publish.comp">
+        <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
+      </ShaderSource>
       <ShaderInclude Include="*.glsl" />
       <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_source.comp">
         <Source>ddgi_simple_trace.comp</Source>
         <StorageMode>1</StorageMode>
         <Role>1</Role>
       </SimpleDdgiTraceShaderVariant>
+      <!-- Reuse contains no ray-query program but shares the large transport
+           include graph. Debug glslang otherwise retains unreachable helper IR
+           that the NVIDIA native compiler rejects during pipeline creation.
+           Size optimization removes only unreachable/redundant SPIR-V while
+           preserving the Debug detailed-counter contract. Source/final roles
+           keep their separately specialized control flow. -->
       <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_reuse.comp">
         <Source>ddgi_simple_trace.comp</Source>
         <StorageMode>1</StorageMode>
         <Role>2</Role>
+        <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
       </SimpleDdgiTraceShaderVariant>
       <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_final.comp">
         <Source>ddgi_simple_trace.comp</Source>
@@ -46,6 +60,7 @@
         <StorageMode>1</StorageMode>
         <Role>2</Role>
         <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1</Defines>
+        <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
       </SimpleDdgiTraceShaderVariant>
       <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_validate_final.comp">
         <Source>ddgi_simple_trace.comp</Source>
@@ -62,11 +77,105 @@
         <Source>ddgi_simple_trace.comp</Source>
         <StorageMode>2</StorageMode>
         <Role>2</Role>
+        <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
       </SimpleDdgiTraceShaderVariant>
       <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_final.comp">
         <Source>ddgi_simple_trace.comp</Source>
         <StorageMode>2</StorageMode>
         <Role>3</Role>
+      </SimpleDdgiTraceShaderVariant>
+      <!-- C3 trace consumers are distinct native programs. Ordinary DDGI
+           never probes the slot-203 fallback and admitted C3 can be tied to an
+           exact shader hash/ABI without changing the baseline binaries. -->
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_guided_source.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>1</StorageMode><Role>1</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_guided_reuse.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>1</StorageMode><Role>2</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+        <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_guided_final.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>1</StorageMode><Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_validate_guided_source.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>1</StorageMode><Role>1</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1 -DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_validate_guided_reuse.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>1</StorageMode><Role>2</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1 -DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+        <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_validate_guided_final.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>1</StorageMode><Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1 -DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_guided_source.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>1</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_guided_reuse.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>2</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+        <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_guided_final.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <!-- Release trace fast paths. Reuse is content-independent and keeps the
+           canonical packed_reuse program; only source/final ray work is
+           specialized. Every artifact is prewarmed before frame execution. -->
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_general_complete_source.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>1</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=1 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_general_complete_final.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=1 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_general_split_source.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>1</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=2 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_general_split_final.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=2 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_opaque_complete_source.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>1</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=1 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1 -DSIMPLE_DDGI_TRACE_OPAQUE_ONLY=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_opaque_complete_final.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=1 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1 -DSIMPLE_DDGI_TRACE_OPAQUE_ONLY=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_opaque_split_source.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>1</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=2 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1 -DSIMPLE_DDGI_TRACE_OPAQUE_ONLY=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_opaque_split_final.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=2 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1 -DSIMPLE_DDGI_TRACE_OPAQUE_ONLY=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_opaque_sun_complete_source.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>1</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=1 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1 -DSIMPLE_DDGI_TRACE_OPAQUE_ONLY=1 -DSIMPLE_DDGI_TRACE_NO_LOCAL_LIGHTS=1 -DSIMPLE_DDGI_TRACE_NO_EMISSIVE_SOURCES=1 -DSIMPLE_DDGI_TRACE_ONE_DIRECTIONAL_LIGHT=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_opaque_sun_complete_final.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=1 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1 -DSIMPLE_DDGI_TRACE_OPAQUE_ONLY=1 -DSIMPLE_DDGI_TRACE_NO_LOCAL_LIGHTS=1 -DSIMPLE_DDGI_TRACE_NO_EMISSIVE_SOURCES=1 -DSIMPLE_DDGI_TRACE_ONE_DIRECTIONAL_LIGHT=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_opaque_sun_split_source.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>1</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=2 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1 -DSIMPLE_DDGI_TRACE_OPAQUE_ONLY=1 -DSIMPLE_DDGI_TRACE_NO_LOCAL_LIGHTS=1 -DSIMPLE_DDGI_TRACE_NO_EMISSIVE_SOURCES=1 -DSIMPLE_DDGI_TRACE_ONE_DIRECTIONAL_LIGHT=1</Defines>
+      </SimpleDdgiTraceShaderVariant>
+      <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_packed_opaque_sun_split_final.comp">
+        <Source>ddgi_simple_trace.comp</Source><StorageMode>2</StorageMode><Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_TRACE_FAR_FIELD_MODE=2 -DSIMPLE_DDGI_TRACE_NO_DETAILED_DIAGNOSTICS=1 -DSIMPLE_DDGI_TRACE_OPAQUE_ONLY=1 -DSIMPLE_DDGI_TRACE_NO_LOCAL_LIGHTS=1 -DSIMPLE_DDGI_TRACE_NO_EMISSIVE_SOURCES=1 -DSIMPLE_DDGI_TRACE_ONE_DIRECTIONAL_LIGHT=1</Defines>
       </SimpleDdgiTraceShaderVariant>
       <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_legacy.comp">
         <Source>ddgi_simple_transport.comp</Source>
@@ -94,6 +203,52 @@
         <Source>ddgi_simple_transport.comp</Source>
         <StorageMode>2</StorageMode>
       </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_guided_legacy.comp">
+        <Source>ddgi_simple_transport.comp</Source><StorageMode>1</StorageMode>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_guided_validate.comp">
+        <Source>ddgi_simple_transport.comp</Source><StorageMode>1</StorageMode>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1 -DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_guided_packed.comp">
+        <Source>ddgi_simple_transport.comp</Source><StorageMode>2</StorageMode>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_solve_guided_legacy.comp">
+        <Source>ddgi_simple_transport.comp</Source><StorageMode>1</StorageMode>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_solve_guided_validate.comp">
+        <Source>ddgi_simple_transport.comp</Source><StorageMode>1</StorageMode>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1 -DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiTransportShaderVariant Include="ddgi_simple_transport_solve_guided_packed.comp">
+        <Source>ddgi_simple_transport.comp</Source><StorageMode>2</StorageMode>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiTransportShaderVariant>
+      <SimpleDdgiGuidedShaderVariant Include="ddgi_simple_blend_guided.comp">
+        <Source>ddgi_simple_blend.comp</Source>
+      </SimpleDdgiGuidedShaderVariant>
+      <SimpleDdgiGuidedShaderVariant Include="ddgi_simple_relocate_classify_guided.comp">
+        <Source>ddgi_simple_relocate_classify.comp</Source>
+      </SimpleDdgiGuidedShaderVariant>
+      <SimpleDdgiGuidedShaderVariant Include="ddgi_simple_directional_project_guided.comp">
+        <Source>ddgi_simple_directional_project.comp</Source>
+      </SimpleDdgiGuidedShaderVariant>
+      <SimpleDdgiGuidingExtractShaderVariant Include="ddgi_guiding_extract_legacy.comp">
+        <Source>ddgi_guiding_extract.comp</Source>
+        <StorageMode>1</StorageMode>
+      </SimpleDdgiGuidingExtractShaderVariant>
+      <SimpleDdgiGuidingExtractShaderVariant Include="ddgi_guiding_extract_validate.comp">
+        <Source>ddgi_guiding_extract.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1</Defines>
+      </SimpleDdgiGuidingExtractShaderVariant>
+      <SimpleDdgiGuidingExtractShaderVariant Include="ddgi_guiding_extract_packed.comp">
+        <Source>ddgi_guiding_extract.comp</Source>
+        <StorageMode>2</StorageMode>
+      </SimpleDdgiGuidingExtractShaderVariant>
       <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_legacy.comp">
         <Source>ddgi_simple_transport_audit.comp</Source>
         <StorageMode>1</StorageMode>
@@ -135,6 +290,13 @@
         <Role>1</Role>
       </SimpleDdgiAdmissionShaderVariant>
       <GpuDiagnosticTaskShader Include="depth.task;forward.task;forward_compacted.task" />
+      <GpuDiagnosticMeshShader Include="foliage_grass.mesh;foliage_mesh.mesh" />
+      <!-- Compile the exact production compaction source with bounded caster
+           attribution enabled. Keeping this as a separate native program
+           avoids diagnostic atomics in the production culling path. -->
+      <GpuDiagnosticComputeShader Include="scene_opaque_compact_diagnostics.comp">
+        <Source>scene_opaque_compact.comp</Source>
+      </GpuDiagnosticComputeShader>
       <ForwardSimpleFragmentShader Include="forward.frag" />
       <ForwardWeightedOitFragmentShader Include="forward.frag" />
       <FoliageForwardFragmentShader Include="foliage_forward.frag" />
@@ -154,6 +316,111 @@
         <Source>foliage_forward.frag</Source>
         <Defines>-DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
       </MaterialTransportProvenanceShaderVariant>
+      <!-- C5's pre-DDGI trace source is a separate opaque/alpha-mask MRT
+           program. Never add these defines to the generic or transparent
+           forward artifacts: the additional outputs are valid only when the C5
+           attachment contract has been admitted by the renderer. -->
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_near_field_direct_source.frag">
+        <Source>forward.frag</Source>
+      <Defines>-DFORWARD_OPAQUE=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_near_field_direct_source.frag">
+        <Source>forward.frag</Source>
+      <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_near_field_direct_source.frag">
+        <Source>forward.frag</Source>
+      <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <!-- C4 receiver facts use a distinct two-attachment opaque MRT variant. -->
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_c4_receiver.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_c4_receiver.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_c4_receiver.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <!-- When C4 and C5 are both admitted, a single four-attachment program
+           writes both immutable producer contracts. This avoids multiple
+           forward geometry submissions and preserves their independent data
+           ownership: SceneColor, C4 receiver, C5 source, C5 receiver. -->
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_c4_c5.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_c4_c5.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_c4_c5.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <ReceiverFeedbackShaderVariant Include="ddgi_simple_receiver_cache_b1.comp">
+        <Source>ddgi_simple_receiver_cache.comp</Source>
+        <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackShaderVariant>
+      <ReceiverFeedbackShaderVariant Include="fog_b1.comp">
+        <Source>fog.comp</Source>
+        <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_ddgi_b1.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_ddgi_b1.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_WEIGHTED_OIT=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="particle_b1.vert">
+        <Source>particle.vert</Source>
+        <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_opaque_ddgi_b1.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_opaque_simple_ddgi_b1.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_opaque_simple_full_input_ddgi_b1.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_opaque_ddgi_b1_provenance.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_opaque_simple_ddgi_b1_provenance.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_opaque_simple_full_input_ddgi_b1_provenance.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="foliage_forward_ddgi_b1.frag">
+        <Source>foliage_forward.frag</Source>
+        <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="foliage_forward_ddgi_b1_provenance.frag">
+        <Source>foliage_forward.frag</Source>
+        <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="foliage_grass_b1.mesh">
+        <Source>foliage_grass.mesh</Source>
+        <Defines>-DNJULF_SIMPLE_DDGI_FOLIAGE_FRAGMENT_FEEDBACK=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="foliage_mesh_b1.mesh">
+        <Source>foliage_mesh.mesh</Source>
+        <Defines>-DNJULF_SIMPLE_DDGI_FOLIAGE_FRAGMENT_FEEDBACK=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
       <None Update="common.glsl" TargetPath="Shaders\common.glsl">
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       </None>
@@ -172,6 +439,14 @@
       <NjulfShaderDetailedDiagnosticsOptions>-DNJULF_DDGI_DETAILED_COUNTERS=0</NjulfShaderDetailedDiagnosticsOptions>
       <NjulfShaderDetailedDiagnosticsOptions Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'DetailedInvestigation'">-DNJULF_DDGI_DETAILED_COUNTERS=1</NjulfShaderDetailedDiagnosticsOptions>
       <NjulfShaderCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) $(NjulfShaderDetailedDiagnosticsOptions)</NjulfShaderCompileOptions>
+      <!-- B1 graphics variants already publish their own exact per-producer,
+           overflow, validity, and timing telemetry. Combining that path with
+           the much larger generic per-fragment investigation counter graph
+           exceeds the NVIDIA Debug-driver compiler on the RTX 3060 class and
+           adds unrelated atomics to a measured producer. Keep the ordinary
+           diagnostic variants available, but freeze B1 graphics to the
+           production counter profile in every configuration. -->
+      <NjulfReceiverFeedbackGraphicsCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) -DNJULF_DDGI_DETAILED_COUNTERS=0</NjulfReceiverFeedbackGraphicsCompileOptions>
     </PropertyGroup>
 
     <Target Name="RemoveObsoleteGiShaderArtifacts"
@@ -200,7 +475,7 @@
     <Target Name="CompileNjulfShaders"
             BeforeTargets="AssignTargetPaths"
             Inputs="@(ShaderSource);@(ShaderInclude);$(MSBuildProjectFullPath)"
-            Outputs="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv');@(SimpleDdgiTraceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiTransportShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiAuditShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiAdmissionShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv');@(MaterialTransportProvenanceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_simple_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv">
+            Outputs="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv');@(SimpleDdgiTraceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiTransportShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiGuidedShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiGuidingExtractShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiAuditShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(SimpleDdgiAdmissionShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv');@(GpuDiagnosticMeshShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv');@(GpuDiagnosticComputeShader -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(MaterialTransportProvenanceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(NearFieldDirectSourceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(ReceiverFeedbackShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');@(ReceiverFeedbackGraphicsShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv');$(IntermediateOutputPath)Shaders\forward_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_simple_compacted.mesh.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_ddgi_cache_required.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_opaque_simple_full_input_gi_disabled.frag.spv;$(IntermediateOutputPath)Shaders\forward_weighted_oit.frag.spv;$(IntermediateOutputPath)Shaders\foliage_forward_ddgi.frag.spv">
       <MakeDir Directories="$(IntermediateOutputPath)Shaders" />
       <MakeDir Directories="$(OutDir)Shaders" />
 
@@ -208,15 +483,23 @@
             StandardOutputImportance="Low"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(ShaderSource.Filename)%(ShaderSource.Extension).spv&quot; &quot;%(ShaderSource.FullPath)&quot;"
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(ShaderSource.AdditionalCompileOptions) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(ShaderSource.Filename)%(ShaderSource.Extension).spv&quot; &quot;%(ShaderSource.FullPath)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(SimpleDdgiTraceShaderVariant.Defines) -DSIMPLE_DDGI_STORAGE_SHADER_MODE=%(SimpleDdgiTraceShaderVariant.StorageMode) -DSIMPLE_DDGI_TRACE_SHADER_ROLE=%(SimpleDdgiTraceShaderVariant.Role) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiTraceShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiTraceShaderVariant.Source)&quot;"
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(SimpleDdgiTraceShaderVariant.AdditionalCompileOptions) %(SimpleDdgiTraceShaderVariant.Defines) -DSIMPLE_DDGI_STORAGE_SHADER_MODE=%(SimpleDdgiTraceShaderVariant.StorageMode) -DSIMPLE_DDGI_TRACE_SHADER_ROLE=%(SimpleDdgiTraceShaderVariant.Role) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiTraceShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiTraceShaderVariant.Source)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(SimpleDdgiTransportShaderVariant.Defines) -DSIMPLE_DDGI_STORAGE_SHADER_MODE=%(SimpleDdgiTransportShaderVariant.StorageMode) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiTransportShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiTransportShaderVariant.Source)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiGuidedShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiGuidedShaderVariant.Source)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(SimpleDdgiGuidingExtractShaderVariant.Defines) -DSIMPLE_DDGI_STORAGE_SHADER_MODE=%(SimpleDdgiGuidingExtractShaderVariant.StorageMode) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiGuidingExtractShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiGuidingExtractShaderVariant.Source)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
@@ -237,6 +520,14 @@
             StandardErrorImportance="High" />
 
       <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DNJULF_GPU_DIAGNOSTIC_COUNTERS=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(GpuDiagnosticTaskShader.Filename)_diagnostics%(GpuDiagnosticTaskShader.Extension).spv&quot; &quot;%(GpuDiagnosticTaskShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DNJULF_GPU_DIAGNOSTIC_COUNTERS=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(GpuDiagnosticMeshShader.Filename)_diagnostics%(GpuDiagnosticMeshShader.Extension).spv&quot; &quot;%(GpuDiagnosticMeshShader.FullPath)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DNJULF_GPU_DIAGNOSTIC_COUNTERS=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(GpuDiagnosticComputeShader.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(GpuDiagnosticComputeShader.Source)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
@@ -291,6 +582,18 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(NearFieldDirectSourceShaderVariant.Defines) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(NearFieldDirectSourceShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(NearFieldDirectSourceShaderVariant.Source)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(ReceiverFeedbackShaderVariant.Defines) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(ReceiverFeedbackShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(ReceiverFeedbackShaderVariant.Source)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfReceiverFeedbackGraphicsCompileOptions) %(ReceiverFeedbackGraphicsShaderVariant.Defines) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(ReceiverFeedbackGraphicsShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(ReceiverFeedbackGraphicsShaderVariant.Source)&quot;"
+            StandardOutputImportance="High"
+            StandardErrorImportance="High" />
+
       <Copy SourceFiles="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
@@ -300,6 +603,14 @@
             SkipUnchangedFiles="true" />
 
       <Copy SourceFiles="@(SimpleDdgiTransportShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="@(SimpleDdgiGuidedShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="@(SimpleDdgiGuidingExtractShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
@@ -316,6 +627,14 @@
             SkipUnchangedFiles="true" />
 
       <Copy SourceFiles="@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="@(GpuDiagnosticMeshShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="@(GpuDiagnosticComputeShader -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
@@ -351,6 +670,18 @@
             DestinationFolder="$(OutDir)Shaders"
             SkipUnchangedFiles="true" />
 
+      <Copy SourceFiles="@(NearFieldDirectSourceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="@(ReceiverFeedbackShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
+      <Copy SourceFiles="@(ReceiverFeedbackGraphicsShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')"
+            DestinationFolder="$(OutDir)Shaders"
+            SkipUnchangedFiles="true" />
+
       <ItemGroup>
         <EmbeddedResource Include="@(ShaderSource -> '$(IntermediateOutputPath)Shaders\%(Filename)%(Extension).spv')">
           <LogicalName>Njulf.Shaders.%(Filename)%(Extension)</LogicalName>
@@ -359,6 +690,12 @@
           <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
         </EmbeddedResource>
         <EmbeddedResource Include="@(SimpleDdgiTransportShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
+          <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(SimpleDdgiGuidedShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
+          <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(SimpleDdgiGuidingExtractShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
           <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
         </EmbeddedResource>
         <EmbeddedResource Include="@(SimpleDdgiAuditShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
@@ -375,6 +712,21 @@
         </EmbeddedResource>
         <EmbeddedResource Include="@(GpuDiagnosticTaskShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')">
           <LogicalName>Njulf.Shaders.%(Filename)_diagnostics%(Extension)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(GpuDiagnosticMeshShader -> '$(IntermediateOutputPath)Shaders\%(Filename)_diagnostics%(Extension).spv')">
+          <LogicalName>Njulf.Shaders.%(Filename)_diagnostics%(Extension)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(GpuDiagnosticComputeShader -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
+          <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(NearFieldDirectSourceShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
+          <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(ReceiverFeedbackShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
+          <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
+        </EmbeddedResource>
+        <EmbeddedResource Include="@(ReceiverFeedbackGraphicsShaderVariant -> '$(IntermediateOutputPath)Shaders\%(Identity).spv')">
+          <LogicalName>Njulf.Shaders.%(Identity)</LogicalName>
         </EmbeddedResource>
         <EmbeddedResource Include="$(IntermediateOutputPath)Shaders\forward_opaque_ddgi.frag.spv">
           <LogicalName>Njulf.Shaders.forward_opaque_ddgi.frag</LogicalName>

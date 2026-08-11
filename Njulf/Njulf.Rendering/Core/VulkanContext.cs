@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 using Silk.NET.Core;
 using Silk.NET.Core.Native;
 using Silk.NET.Vulkan;
@@ -25,6 +26,12 @@ namespace Njulf.Rendering.Core
         internal const string RayQueryExtensionName = "VK_KHR_ray_query";
         internal const string Spirv14ExtensionName = "VK_KHR_spirv_1_4";
         internal const string ShaderFloatControlsExtensionName = "VK_KHR_shader_float_controls";
+        internal const string OpacityMicromapExtensionName =
+            "VK_EXT_opacity_micromap";
+        internal const string RayTracingPipelineExtensionName =
+            "VK_KHR_ray_tracing_pipeline";
+        internal const string RayTracingInvocationReorderExtensionName =
+            "VK_EXT_ray_tracing_invocation_reorder";
         private const int MaxMemoryHeaps = 16;
 
         private static readonly string[] RequiredDeviceExtensions =
@@ -43,6 +50,7 @@ namespace Njulf.Rendering.Core
         private readonly RendererValidationMessageState _validationMessages = new();
         private readonly RendererStartupLog? _startupLog;
         private readonly DeviceRequirementOverride _requirementOverride;
+        private readonly VulkanOptionalDeviceFeatures _optionalDeviceFeatures;
         private readonly IWindow _window;
         private GCHandle _validationCallbackHandle;
 
@@ -65,10 +73,21 @@ namespace Njulf.Rendering.Core
         private bool _hasIndependentComputeQueue;
         private float _timestampPeriodNanoseconds;
         private bool _timestampComputeAndGraphicsSupported;
+        private ulong _maximumStorageBufferRange;
+        private ulong _minimumStorageBufferOffsetAlignment = 1UL;
         private bool _memoryBudgetExtensionEnabled;
         private bool _imageCompressionControlEnabled;
         private bool _rayQuerySupported;
+        private VulkanExtOpacityMicromapDeviceSupport
+            _opacityMicromapPhysicalSupport;
+        private bool _opacityMicromapExtensionEnabled;
+        private bool _opacityMicromapFeatureEnabled;
+        private OpacityMicromapExtCapabilityReport
+            _opacityMicromapExtCapability =
+                VulkanExtOpacityMicromapCapabilityInspector.Evaluate(default);
         private bool _shaderStorageImageArrayNonUniformIndexingSupported;
+        private GiHardwareResearchCapabilities _giHardwareResearchCapabilities =
+            GiHardwareResearchCapabilities.None;
         private uint _memoryHeapCount;
         private readonly MemoryHeapFlags[] _memoryHeapFlags = new MemoryHeapFlags[MaxMemoryHeaps];
 
@@ -80,6 +99,9 @@ namespace Njulf.Rendering.Core
         private KhrSynchronization2 _khrSync2 = null!;
         private KhrAccelerationStructure? _khrAccelerationStructure;
         private KhrDeferredHostOperations? _khrDeferredHostOps;
+        private ExtOpacityMicromap? _extOpacityMicromap;
+        private SilkNetExtOpacityMicromapCommandApi? _opacityMicromapCommandApi;
+        private bool _opacityMicromapBlasAttachmentIntegrated;
         private ExtDebugUtils? _extDebugUtils;
         private DebugUtilsMessengerEXT _debugMessenger;
         private CommandPool _singleTimeCommandPool;
@@ -109,11 +131,43 @@ namespace Njulf.Rendering.Core
         public bool HasIndependentComputeQueue => _hasIndependentComputeQueue;
         public float TimestampPeriodNanoseconds => _timestampPeriodNanoseconds;
         public bool TimestampComputeAndGraphicsSupported => _timestampComputeAndGraphicsSupported;
+        public ulong MaximumStorageBufferRange => _maximumStorageBufferRange;
+        public ulong MinimumStorageBufferOffsetAlignment =>
+            _minimumStorageBufferOffsetAlignment;
         public bool MemoryBudgetExtensionEnabled => _memoryBudgetExtensionEnabled;
         public bool ImageCompressionControlEnabled => _imageCompressionControlEnabled;
         public bool RayQuerySupported => _rayQuerySupported;
+        /// <summary>
+        /// The device-enabled C1 state.  Physical-device discovery alone never
+        /// makes this report usable: it stays fail-closed unless the optional
+        /// EXT extension and <c>micromap</c> feature were explicitly placed in
+        /// the logical-device create chain and the Silk dispatch loaded.
+        /// </summary>
+        public OpacityMicromapExtCapabilityReport OpacityMicromapExtCapability =>
+            _opacityMicromapExtCapability;
+        public bool OpacityMicromapExtRequested =>
+            _optionalDeviceFeatures.EnableExtOpacityMicromap;
+        /// <summary>
+        /// Non-null only after an explicit, successful device enablement of
+        /// <c>VK_EXT_opacity_micromap</c>.  This is a native command provider,
+        /// not evidence that a matching OMM-attached BLAS path has been
+        /// integrated or qualified.
+        /// </summary>
+        public SilkNetExtOpacityMicromapCommandApi? OpacityMicromapExtCommandApi =>
+            _opacityMicromapCommandApi;
+
+        internal void MarkOpacityMicromapBlasAttachmentIntegrated()
+        {
+            if (_opacityMicromapBlasAttachmentIntegrated)
+                return;
+            _opacityMicromapBlasAttachmentIntegrated = true;
+            if (_device.Handle != 0)
+                RefreshOpacityMicromapExtCapability();
+        }
         public bool ShaderStorageImageArrayNonUniformIndexingSupported =>
             _shaderStorageImageArrayNonUniformIndexingSupported;
+        public GiHardwareResearchCapabilities GiHardwareResearchCapabilities =>
+            _giHardwareResearchCapabilities;
         public KhrSurface KhrSurface => _khrSurface;
         public KhrSwapchain KhrSwapchain => _khrSwapchain;
         public ExtMeshShader ExtMeshShader => _extMeshShader;
@@ -140,13 +194,16 @@ namespace Njulf.Rendering.Core
             IWindow window,
             RendererValidationSettings validationSettings,
             RendererStartupLog? startupLog = null,
-            DeviceRequirementOverride? requirementOverride = null)
+            DeviceRequirementOverride? requirementOverride = null,
+            VulkanOptionalDeviceFeatures? optionalDeviceFeatures = null)
         {
             _window = window ?? throw new ArgumentNullException(nameof(window));
             _validationSettings = validationSettings ?? throw new ArgumentNullException(nameof(validationSettings));
             _debug = _validationSettings.EnableValidation;
             _startupLog = startupLog;
             _requirementOverride = requirementOverride ?? DeviceRequirementOverride.FromEnvironment();
+            _optionalDeviceFeatures = optionalDeviceFeatures ??
+                VulkanOptionalDeviceFeatures.FromEnvironment();
 
             RunStartupStep("VulkanContext.CreateInstance", CreateInstance);
             if (_validationSettings.EnableDebugUtils)
@@ -547,6 +604,10 @@ namespace Njulf.Rendering.Core
             _rayQuerySupported = rayQuerySupported;
             _shaderStorageImageArrayNonUniformIndexingSupported =
                 shaderStorageImageArrayNonUniformIndexingSupported;
+            _opacityMicromapPhysicalSupport =
+                QueryOpacityMicromapDeviceSupport(_physicalDevice);
+            _giHardwareResearchCapabilities =
+                QueryGiHardwareResearchCapabilities(_physicalDevice);
 
             var selectedProperties = new PhysicalDeviceProperties();
             _vk.GetPhysicalDeviceProperties(_physicalDevice, &selectedProperties);
@@ -557,6 +618,11 @@ namespace Njulf.Rendering.Core
                 _memoryHeapFlags[i] = memoryProperties.MemoryHeaps[(int)i].Flags;
             _timestampPeriodNanoseconds = selectedProperties.Limits.TimestampPeriod;
             _timestampComputeAndGraphicsSupported = selectedProperties.Limits.TimestampComputeAndGraphics;
+            _maximumStorageBufferRange =
+                selectedProperties.Limits.MaxStorageBufferRange;
+            _minimumStorageBufferOffsetAlignment = Math.Max(
+                1UL,
+                selectedProperties.Limits.MinStorageBufferOffsetAlignment);
             SelectedDeviceRequirementReport = BuildDeviceRequirementReport(
                 selectedProperties,
                 Array.Empty<string>(),
@@ -847,6 +913,196 @@ namespace Njulf.Rendering.Core
             return availableNames;
         }
 
+        /// <summary>
+        /// Samples only physical-device support.  The returned facts are never
+        /// exposed as an enabled C1 backend: <see cref="CreateLogicalDevice"/>
+        /// must still explicitly append the extension and chain the feature.
+        /// </summary>
+        private VulkanExtOpacityMicromapDeviceSupport
+            QueryOpacityMicromapDeviceSupport(PhysicalDevice device)
+        {
+            HashSet<string> extensions = GetDeviceExtensionNames(device);
+            bool opacityExtension =
+                extensions.Contains(OpacityMicromapExtensionName);
+            bool accelerationStructureExtension =
+                extensions.Contains(AccelerationStructureExtensionName);
+            bool deferredHostOperationsExtension =
+                extensions.Contains("VK_KHR_deferred_host_operations");
+
+            var features2 = new PhysicalDeviceFeatures2
+            {
+                SType = StructureType.PhysicalDeviceFeatures2
+            };
+            var opacityFeatures = new PhysicalDeviceOpacityMicromapFeaturesEXT
+            {
+                SType = StructureType.PhysicalDeviceOpacityMicromapFeaturesExt
+            };
+            var accelerationStructureFeatures =
+                new PhysicalDeviceAccelerationStructureFeaturesKHR
+                {
+                    SType = StructureType
+                        .PhysicalDeviceAccelerationStructureFeaturesKhr
+                };
+            var bufferDeviceAddressFeatures =
+                new PhysicalDeviceBufferDeviceAddressFeatures
+                {
+                    SType = StructureType
+                        .PhysicalDeviceBufferDeviceAddressFeatures
+                };
+
+            void* featureHead = null;
+            if (opacityExtension)
+            {
+                opacityFeatures.PNext = featureHead;
+                featureHead = &opacityFeatures;
+            }
+            if (accelerationStructureExtension)
+            {
+                accelerationStructureFeatures.PNext = featureHead;
+                featureHead = &accelerationStructureFeatures;
+            }
+            bufferDeviceAddressFeatures.PNext = featureHead;
+            featureHead = &bufferDeviceAddressFeatures;
+            features2.PNext = featureHead;
+            _vk.GetPhysicalDeviceFeatures2(device, &features2);
+
+            var properties2 = new PhysicalDeviceProperties2
+            {
+                SType = StructureType.PhysicalDeviceProperties2
+            };
+            var opacityProperties =
+                new PhysicalDeviceOpacityMicromapPropertiesEXT
+                {
+                    SType = StructureType
+                        .PhysicalDeviceOpacityMicromapPropertiesExt
+                };
+            if (opacityExtension)
+            {
+                properties2.PNext = &opacityProperties;
+                _vk.GetPhysicalDeviceProperties2(device, &properties2);
+            }
+
+            return new VulkanExtOpacityMicromapDeviceSupport(
+                ExtensionAdvertised: opacityExtension,
+                MicromapFeatureSupported:
+                    opacityExtension && opacityFeatures.Micromap,
+                AccelerationStructureExtensionSupported:
+                    accelerationStructureExtension,
+                AccelerationStructureFeatureSupported:
+                    accelerationStructureExtension &&
+                    accelerationStructureFeatures.AccelerationStructure,
+                BufferDeviceAddressSupported:
+                    bufferDeviceAddressFeatures.BufferDeviceAddress,
+                DeferredHostOperationsExtensionSupported:
+                    deferredHostOperationsExtension,
+                MaximumFourStateSubdivisionLevel:
+                    opacityProperties.MaxOpacity4StateSubdivisionLevel);
+        }
+
+        private GiHardwareResearchCapabilities
+            QueryGiHardwareResearchCapabilities(PhysicalDevice device)
+        {
+            HashSet<string> extensions = GetDeviceExtensionNames(device);
+            bool opacityExtension =
+                extensions.Contains(OpacityMicromapExtensionName);
+            bool pipelineExtension =
+                extensions.Contains(RayTracingPipelineExtensionName);
+            bool reorderExtension =
+                extensions.Contains(RayTracingInvocationReorderExtensionName);
+
+            var features2 = new PhysicalDeviceFeatures2
+            {
+                SType = StructureType.PhysicalDeviceFeatures2
+            };
+            var opacityFeatures = new PhysicalDeviceOpacityMicromapFeaturesEXT
+            {
+                SType = StructureType.PhysicalDeviceOpacityMicromapFeaturesExt
+            };
+            var pipelineFeatures =
+                new PhysicalDeviceRayTracingPipelineFeaturesKHR
+                {
+                    SType = StructureType
+                        .PhysicalDeviceRayTracingPipelineFeaturesKhr
+                };
+            var reorderFeatures =
+                new PhysicalDeviceRayTracingInvocationReorderFeaturesEXT
+                {
+                    SType = StructureType
+                        .PhysicalDeviceRayTracingInvocationReorderFeaturesExt
+                };
+            void* featureHead = null;
+            if (opacityExtension)
+            {
+                opacityFeatures.PNext = featureHead;
+                featureHead = &opacityFeatures;
+            }
+            if (pipelineExtension)
+            {
+                pipelineFeatures.PNext = featureHead;
+                featureHead = &pipelineFeatures;
+            }
+            if (reorderExtension)
+            {
+                reorderFeatures.PNext = featureHead;
+                featureHead = &reorderFeatures;
+            }
+            features2.PNext = featureHead;
+            if (featureHead != null)
+                _vk.GetPhysicalDeviceFeatures2(device, &features2);
+
+            var properties2 = new PhysicalDeviceProperties2
+            {
+                SType = StructureType.PhysicalDeviceProperties2
+            };
+            var opacityProperties =
+                new PhysicalDeviceOpacityMicromapPropertiesEXT
+                {
+                    SType = StructureType
+                        .PhysicalDeviceOpacityMicromapPropertiesExt
+                };
+            var reorderProperties =
+                new PhysicalDeviceRayTracingInvocationReorderPropertiesEXT
+                {
+                    SType = StructureType
+                        .PhysicalDeviceRayTracingInvocationReorderPropertiesExt
+                };
+            void* propertyHead = null;
+            if (opacityExtension)
+            {
+                opacityProperties.PNext = propertyHead;
+                propertyHead = &opacityProperties;
+            }
+            if (reorderExtension)
+            {
+                reorderProperties.PNext = propertyHead;
+                propertyHead = &reorderProperties;
+            }
+            properties2.PNext = propertyHead;
+            if (propertyHead != null)
+                _vk.GetPhysicalDeviceProperties2(device, &properties2);
+
+            return new GiHardwareResearchCapabilities(
+                new OpacityMicromapCapabilitySnapshot(
+                    opacityExtension,
+                    opacityExtension && opacityFeatures.Micromap,
+                    opacityExtension && opacityFeatures.MicromapHostCommands,
+                    opacityProperties.MaxOpacity2StateSubdivisionLevel,
+                    opacityProperties.MaxOpacity4StateSubdivisionLevel),
+                new RayTracingInvocationReorderCapabilitySnapshot(
+                    pipelineExtension,
+                    pipelineExtension && pipelineFeatures.RayTracingPipeline,
+                    reorderExtension,
+                    reorderExtension && reorderFeatures
+                        .RayTracingInvocationReorder,
+                    reorderExtension
+                        ? (uint)reorderProperties
+                            .RayTracingInvocationReorderReorderingHint
+                        : 0u,
+                    reorderExtension
+                        ? reorderProperties.MaxShaderBindingTableRecordIndex
+                        : 0u));
+        }
+
         private void CreateLogicalDevice()
         {
             var queuePriorities = stackalloc float[2] { 1.0f, 0.9f };
@@ -960,6 +1216,18 @@ namespace Njulf.Rendering.Core
                 RayQuery = true
             };
 
+            bool enableOpacityMicromapExt = ShouldEnableOpacityMicromapExt(
+                _optionalDeviceFeatures,
+                _opacityMicromapPhysicalSupport,
+                _rayQuerySupported);
+            var opacityMicromapFeatures =
+                new PhysicalDeviceOpacityMicromapFeaturesEXT
+                {
+                    SType = StructureType
+                        .PhysicalDeviceOpacityMicromapFeaturesExt,
+                    Micromap = enableOpacityMicromapExt
+                };
+
             var descriptorIndexingFeatures = new PhysicalDeviceDescriptorIndexingFeatures
             {
                 SType = StructureType.PhysicalDeviceDescriptorIndexingFeatures,
@@ -995,6 +1263,11 @@ namespace Njulf.Rendering.Core
                 rayQueryFeatures.PNext = &accelerationStructureFeatures;
                 shaderDemoteFeatures.PNext = &rayQueryFeatures;
             }
+            if (enableOpacityMicromapExt)
+            {
+                opacityMicromapFeatures.PNext = shaderDemoteFeatures.PNext;
+                shaderDemoteFeatures.PNext = &opacityMicromapFeatures;
+            }
             deviceFeatures2.PNext = &descriptorIndexingFeatures;
 
             if (!TryGetDeviceRequirements(_physicalDevice, out DeviceRequirements requirements) || !requirements.IsSupported)
@@ -1015,6 +1288,11 @@ namespace Njulf.Rendering.Core
                 deviceExtensions.Add(Spirv14ExtensionName);
                 deviceExtensions.Add(ShaderFloatControlsExtensionName);
             }
+            if (enableOpacityMicromapExt)
+                deviceExtensions.Add(OpacityMicromapExtensionName);
+
+            _opacityMicromapExtensionEnabled = enableOpacityMicromapExt;
+            _opacityMicromapFeatureEnabled = enableOpacityMicromapExt;
 
             var deviceCreateInfo = new DeviceCreateInfo
             {
@@ -1129,6 +1407,20 @@ namespace Njulf.Rendering.Core
             bool Supported,
             IReadOnlyList<string> MissingRequirements);
 
+        /// <summary>
+        /// C1 is a requested enhancement of the existing ray-query path. Do not
+        /// infer device enablement from extension advertisement: all EXT and
+        /// acceleration-structure prerequisites must have been sampled and the
+        /// startup policy must request the optional create-chain.
+        /// </summary>
+        internal static bool ShouldEnableOpacityMicromapExt(
+            VulkanOptionalDeviceFeatures optionalFeatures,
+            VulkanExtOpacityMicromapDeviceSupport physicalSupport,
+            bool rayQuerySupported) =>
+            optionalFeatures.EnableExtOpacityMicromap &&
+            rayQuerySupported &&
+            physicalSupport.CanEnable;
+
         private void CreateAllocator()
         {
             GpuAllocator.AllocatorCreateFlags flags = GpuAllocator.AllocatorCreateFlags.BufferDeviceAddressBit;
@@ -1220,7 +1512,71 @@ namespace Njulf.Rendering.Core
 
             _vk.TryGetDeviceExtension(_instance, _device, out _khrDeferredHostOps);
 
+            if (_opacityMicromapExtensionEnabled &&
+                _vk.TryGetDeviceExtension(
+                    _instance,
+                    _device,
+                    out ExtOpacityMicromap opacityMicromap))
+            {
+                _extOpacityMicromap = opacityMicromap;
+            }
+            else if (_opacityMicromapExtensionEnabled)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    "VK_EXT_opacity_micromap was enabled but its Silk.NET dispatch could not be loaded; C1 remains on the null backend.");
+            }
+
+            RefreshOpacityMicromapExtCapability();
+
             System.Diagnostics.Debug.WriteLine("All required Vulkan extensions loaded.");
+        }
+
+        private void RefreshOpacityMicromapExtCapability()
+        {
+            bool accelerationStructureEnabled =
+                _opacityMicromapExtensionEnabled &&
+                _khrAccelerationStructure is not null;
+            bool deferredHostOperationsEnabled =
+                _opacityMicromapExtensionEnabled &&
+                _khrDeferredHostOps is not null;
+            bool nativeDispatchLoaded = _extOpacityMicromap is not null;
+            var snapshot = new VulkanExtOpacityMicromapFeatureSnapshot(
+                ExtensionAdvertised:
+                    _opacityMicromapPhysicalSupport.ExtensionAdvertised,
+                ExtensionEnabled: _opacityMicromapExtensionEnabled,
+                MicromapFeatureEnabled: _opacityMicromapFeatureEnabled,
+                AccelerationStructureExtensionEnabled:
+                    accelerationStructureEnabled,
+                BufferDeviceAddressEnabled:
+                    _opacityMicromapExtensionEnabled &&
+                    _opacityMicromapPhysicalSupport.BufferDeviceAddressSupported,
+                DeferredHostOperationsExtensionEnabled:
+                    deferredHostOperationsEnabled,
+                NativeDispatchLoaded: nativeDispatchLoaded,
+                CommandBufferBuildEnabled:
+                    _opacityMicromapExtensionEnabled && nativeDispatchLoaded,
+                CompactedSizeQueryEnabled:
+                    _opacityMicromapExtensionEnabled && nativeDispatchLoaded,
+                BlasOpacityAttachmentEnabled:
+                    _opacityMicromapBlasAttachmentIntegrated,
+                MaximumFourStateSubdivisionLevel:
+                    _opacityMicromapPhysicalSupport
+                        .MaximumFourStateSubdivisionLevel);
+            _opacityMicromapExtCapability =
+                VulkanExtOpacityMicromapCapabilityInspector.Evaluate(snapshot);
+
+            bool commandProviderUsable =
+                snapshot.ExtensionEnabled &&
+                snapshot.MicromapFeatureEnabled &&
+                snapshot.AccelerationStructureExtensionEnabled &&
+                snapshot.BufferDeviceAddressEnabled &&
+                snapshot.DeferredHostOperationsExtensionEnabled &&
+                snapshot.NativeDispatchLoaded &&
+                snapshot.CommandBufferBuildEnabled &&
+                snapshot.MaximumFourStateSubdivisionLevel != 0U;
+            _opacityMicromapCommandApi = commandProviderUsable
+                ? new SilkNetExtOpacityMicromapCommandApi(_extOpacityMicromap!)
+                : null;
         }
 
         private void LoadDebugUtils()

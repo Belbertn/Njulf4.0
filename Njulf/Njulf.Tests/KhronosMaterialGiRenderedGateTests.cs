@@ -365,7 +365,7 @@ public sealed class KhronosMaterialGiRenderedGateTests
     }
 
     [Test]
-    public void ForwardDynamicRenderingContract_DeclaresOnlySceneAndOptionalProvenanceAttachments()
+    public void ForwardDynamicRenderingContract_DeclaresCompleteAdvancedGiAttachmentSets()
     {
         Assert.Multiple(() =>
         {
@@ -384,6 +384,24 @@ public sealed class KhronosMaterialGiRenderedGateTests
                     hasColorAttachment: true,
                     materialTransportProvenanceEnabled: true),
                 Is.EqualTo(2));
+            Assert.That(
+                ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
+                    hasColorAttachment: true,
+                    nearFieldDirectSourceEnabled: true),
+                Is.EqualTo(3));
+            Assert.That(
+                ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
+                    hasColorAttachment: true,
+                    nearFieldDirectSourceEnabled: true,
+                    giCausticReceiverEnabled: true),
+                Is.EqualTo(4));
+            Assert.That(
+                () => ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
+                    hasColorAttachment: true,
+                    materialTransportProvenanceEnabled: true,
+                    nearFieldDirectSourceEnabled: true,
+                    giCausticReceiverEnabled: true),
+                Throws.TypeOf<InvalidOperationException>());
         });
     }
 

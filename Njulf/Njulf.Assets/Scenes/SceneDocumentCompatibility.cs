@@ -84,6 +84,8 @@ internal static class SceneDocumentCompatibility
             Emissive = source.Emissive ?? LegacyEmissive,
             EmissiveColor = source.EmissiveColor,
             EmissiveStrength = source.EmissiveStrength,
+            EmissiveUnit = source.EmissiveUnit,
+            EmissiveArtisticMultiplier = source.EmissiveArtisticMultiplier,
             Metallic = source.Metallic ?? 0f,
             Roughness = source.Roughness ?? 1f,
             OcclusionStrength = source.OcclusionStrength,

@@ -560,6 +560,144 @@ namespace Njulf.Rendering.Descriptors
         public const int SimpleDdgiReceiverGatherBufferFrame1 =
             SimpleDdgiReceiverGatherBufferBase + 1;
 
+        /// <summary>
+        /// Conditional UV/material payload for animated emissive source leaves.
+        /// Appended to preserve every previously published static index.
+        /// </summary>
+        public const int SimpleDdgiEmissiveSurfaceBuffer =
+            SimpleDdgiReceiverGatherBufferFrame1 + 1;
+
+        /// <summary>Double-banked GPU local-light hierarchy nodes.</summary>
+        public const int SimpleDdgiLightTreeNodeBuffer =
+            SimpleDdgiEmissiveSurfaceBuffer + 1;
+
+        /// <summary>Double-banked sorted local-light leaves.</summary>
+        public const int SimpleDdgiLightTreeLeafBuffer =
+            SimpleDdgiLightTreeNodeBuffer + 1;
+
+        /// <summary>Atomically published local-light tree root and revisions.</summary>
+        public const int SimpleDdgiLightTreeStateBuffer =
+            SimpleDdgiLightTreeLeafBuffer + 1;
+
+        /// <summary>Bounds, stable-sort keys, parent links, and indirect work.</summary>
+        public const int SimpleDdgiLightTreeScratchBuffer =
+            SimpleDdgiLightTreeStateBuffer + 1;
+
+        /// <summary>Canonical probe incident-radiance SH sidecar.</summary>
+        public const int SimpleDdgiDirectionalRadianceBuffer =
+            SimpleDdgiLightTreeScratchBuffer + 1;
+
+        /// <summary>Previous-generation SH parity for Jacobi glossy transport.</summary>
+        public const int SimpleDdgiDirectionalRadianceParityBuffer =
+            SimpleDdgiDirectionalRadianceBuffer + 1;
+
+        /// <summary>Camera-independent DDGI foliage-proxy position stream.</summary>
+        public const int DdgiFoliageProxyVertexBuffer =
+            SimpleDdgiDirectionalRadianceParityBuffer + 1;
+
+        /// <summary>DDGI foliage-proxy index stream.</summary>
+        public const int DdgiFoliageProxyIndexBuffer =
+            DdgiFoliageProxyVertexBuffer + 1;
+
+        /// <summary>Non-occluding geometry-decal overlay candidates.</summary>
+        public const int DdgiDecalCandidateBuffer =
+            DdgiFoliageProxyIndexBuffer + 1;
+
+        /// <summary>Frame-slot 1 DDGI foliage-proxy position stream.</summary>
+        public const int DdgiFoliageProxyVertexBufferFrame1 =
+            DdgiDecalCandidateBuffer + 1;
+
+        /// <summary>Frame-slot 1 DDGI foliage-proxy index stream.</summary>
+        public const int DdgiFoliageProxyIndexBufferFrame1 =
+            DdgiFoliageProxyVertexBufferFrame1 + 1;
+
+        /// <summary>Compact compute-generation patch records for frame 0.</summary>
+        public const int DdgiFoliageProxyPatchBuffer =
+            DdgiFoliageProxyIndexBufferFrame1 + 1;
+
+        /// <summary>Compact compute-generation patch records for frame 1.</summary>
+        public const int DdgiFoliageProxyPatchBufferFrame1 =
+            DdgiFoliageProxyPatchBuffer + 1;
+
+        // ============================================
+        // ADVANCED GI EXPERIMENT STATIC BUFFERS
+        // ============================================
+        //
+        // These slots are append-only.  They deliberately remain reserved even
+        // when a feature is disabled so a device-local descriptor layout never
+        // changes underneath in-flight command buffers.  Feature allocation is
+        // still conditional; an unused slot is bound to the safe null buffer.
+
+        /// <summary>Exact B1 receiver-contribution records before deterministic reduction.</summary>
+        public const int SimpleDdgiReceiverFeedbackRecordsBuffer =
+            DdgiFoliageProxyPatchBufferFrame1 + 1;
+
+        /// <summary>B1 radix-sort histograms, scans, and ping-pong scratch.</summary>
+        public const int SimpleDdgiReceiverFeedbackSortScratchBuffer =
+            SimpleDdgiReceiverFeedbackRecordsBuffer + 1;
+
+        /// <summary>Published B1 full-identity probe summaries.</summary>
+        public const int SimpleDdgiReceiverFeedbackSummaryBuffer =
+            SimpleDdgiReceiverFeedbackSortScratchBuffer + 1;
+
+        /// <summary>Resident EXT opacity-micromap backing and page metadata.</summary>
+        public const int OpacityMicromapResidentBuffer =
+            SimpleDdgiReceiverFeedbackSummaryBuffer + 1;
+
+        /// <summary>EXT opacity-micromap build-input and repair scratch.</summary>
+        public const int OpacityMicromapBuildScratchBuffer =
+            OpacityMicromapResidentBuffer + 1;
+
+        /// <summary>EXT opacity-micromap compaction/query results.</summary>
+        public const int OpacityMicromapCompactionBuffer =
+            OpacityMicromapBuildScratchBuffer + 1;
+
+        /// <summary>C3 immutable read-bank directional distributions.</summary>
+        public const int SimpleDdgiGuidingDistributionBank0Buffer =
+            OpacityMicromapCompactionBuffer + 1;
+
+        /// <summary>C3 transactional write-bank directional distributions.</summary>
+        public const int SimpleDdgiGuidingDistributionBank1Buffer =
+            SimpleDdgiGuidingDistributionBank0Buffer + 1;
+
+        /// <summary>C3 FP32 training partials and deterministic build scratch.</summary>
+        public const int SimpleDdgiGuidingTrainingScratchBuffer =
+            SimpleDdgiGuidingDistributionBank1Buffer + 1;
+
+        /// <summary>
+        /// C3 source-cache-owned direction/PDF sidecar.  The slot is reserved
+        /// now, but the guiding manager must not allocate it independently.
+        /// </summary>
+        public const int SimpleDdgiGuidingDirectionPdfSidecarBuffer =
+            SimpleDdgiGuidingTrainingScratchBuffer + 1;
+
+        /// <summary>C4 bounded photon task queue and dispatch metadata.</summary>
+        public const int GiCausticTaskBuffer =
+            SimpleDdgiGuidingDirectionPdfSidecarBuffer + 1;
+
+        /// <summary>C4 bounded candidate photon records.</summary>
+        public const int GiCausticPhotonBuffer =
+            GiCausticTaskBuffer + 1;
+
+        /// <summary>C4 published sparse world-cell cache.</summary>
+        public const int GiCausticCacheBuffer =
+            GiCausticPhotonBuffer + 1;
+
+        /// <summary>C4 deterministic selection, sort, and build scratch.</summary>
+        public const int GiCausticScratchBuffer =
+            GiCausticCacheBuffer + 1;
+
+        /// <summary>C5 per-tile queue, prefix, and compaction storage.</summary>
+        public const int SimpleDdgiNearFieldResidualTileBuffer =
+            GiCausticScratchBuffer + 1;
+
+        /// <summary>
+        /// B1 frame-ringed 48-byte exact-candidate staging and producer control.
+        /// This is source storage; records/scratch/summaries remain slots 194-196.
+        /// </summary>
+        public const int SimpleDdgiReceiverFeedbackCandidateBuffer =
+            SimpleDdgiNearFieldResidualTileBuffer + 1;
+
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
         // ============================================
@@ -692,7 +830,8 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
 
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount = SimpleDdgiReceiverGatherBufferFrame1 + 1;
+        public const int StaticBufferCount =
+            SimpleDdgiReceiverFeedbackCandidateBuffer + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -888,6 +1027,36 @@ namespace Njulf.Rendering.Descriptors
                     SimpleDdgiStorageValidationBufferFrame1 => nameof(SimpleDdgiStorageValidationBufferFrame1),
                     SimpleDdgiReceiverGatherBufferBase => nameof(SimpleDdgiReceiverGatherBufferBase),
                     SimpleDdgiReceiverGatherBufferFrame1 => nameof(SimpleDdgiReceiverGatherBufferFrame1),
+                    SimpleDdgiEmissiveSurfaceBuffer => nameof(SimpleDdgiEmissiveSurfaceBuffer),
+                    SimpleDdgiLightTreeNodeBuffer => nameof(SimpleDdgiLightTreeNodeBuffer),
+                    SimpleDdgiLightTreeLeafBuffer => nameof(SimpleDdgiLightTreeLeafBuffer),
+                    SimpleDdgiLightTreeStateBuffer => nameof(SimpleDdgiLightTreeStateBuffer),
+                    SimpleDdgiLightTreeScratchBuffer => nameof(SimpleDdgiLightTreeScratchBuffer),
+                    SimpleDdgiDirectionalRadianceBuffer => nameof(SimpleDdgiDirectionalRadianceBuffer),
+                    SimpleDdgiDirectionalRadianceParityBuffer => nameof(SimpleDdgiDirectionalRadianceParityBuffer),
+                    DdgiFoliageProxyVertexBuffer => nameof(DdgiFoliageProxyVertexBuffer),
+                    DdgiFoliageProxyIndexBuffer => nameof(DdgiFoliageProxyIndexBuffer),
+                    DdgiDecalCandidateBuffer => nameof(DdgiDecalCandidateBuffer),
+                    DdgiFoliageProxyVertexBufferFrame1 => nameof(DdgiFoliageProxyVertexBufferFrame1),
+                    DdgiFoliageProxyIndexBufferFrame1 => nameof(DdgiFoliageProxyIndexBufferFrame1),
+                    DdgiFoliageProxyPatchBuffer => nameof(DdgiFoliageProxyPatchBuffer),
+                    DdgiFoliageProxyPatchBufferFrame1 => nameof(DdgiFoliageProxyPatchBufferFrame1),
+                    SimpleDdgiReceiverFeedbackRecordsBuffer => nameof(SimpleDdgiReceiverFeedbackRecordsBuffer),
+                    SimpleDdgiReceiverFeedbackSortScratchBuffer => nameof(SimpleDdgiReceiverFeedbackSortScratchBuffer),
+                    SimpleDdgiReceiverFeedbackSummaryBuffer => nameof(SimpleDdgiReceiverFeedbackSummaryBuffer),
+                    OpacityMicromapResidentBuffer => nameof(OpacityMicromapResidentBuffer),
+                    OpacityMicromapBuildScratchBuffer => nameof(OpacityMicromapBuildScratchBuffer),
+                    OpacityMicromapCompactionBuffer => nameof(OpacityMicromapCompactionBuffer),
+                    SimpleDdgiGuidingDistributionBank0Buffer => nameof(SimpleDdgiGuidingDistributionBank0Buffer),
+                    SimpleDdgiGuidingDistributionBank1Buffer => nameof(SimpleDdgiGuidingDistributionBank1Buffer),
+                    SimpleDdgiGuidingTrainingScratchBuffer => nameof(SimpleDdgiGuidingTrainingScratchBuffer),
+                    SimpleDdgiGuidingDirectionPdfSidecarBuffer => nameof(SimpleDdgiGuidingDirectionPdfSidecarBuffer),
+                    GiCausticTaskBuffer => nameof(GiCausticTaskBuffer),
+                    GiCausticPhotonBuffer => nameof(GiCausticPhotonBuffer),
+                    GiCausticCacheBuffer => nameof(GiCausticCacheBuffer),
+                    GiCausticScratchBuffer => nameof(GiCausticScratchBuffer),
+                    SimpleDdgiNearFieldResidualTileBuffer => nameof(SimpleDdgiNearFieldResidualTileBuffer),
+                    SimpleDdgiReceiverFeedbackCandidateBuffer => nameof(SimpleDdgiReceiverFeedbackCandidateBuffer),
                     _ => "Unknown"
                 };
             }

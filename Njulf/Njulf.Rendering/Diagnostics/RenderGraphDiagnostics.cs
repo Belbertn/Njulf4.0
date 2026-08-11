@@ -76,5 +76,6 @@ namespace Njulf.Rendering.Diagnostics
         string PreviousQueueIntent,
         string QueueIntent,
         bool QueueOwnershipTransition,
-        bool Executed);
+        bool Executed,
+        int HistoryIndex = -1);
 }

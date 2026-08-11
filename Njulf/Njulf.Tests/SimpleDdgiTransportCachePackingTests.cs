@@ -366,6 +366,101 @@ public sealed class SimpleDdgiTransportCachePackingTests
             source), Is.False);
     }
 
+    [TestCase(SimpleDdgiTransportCacheFormat.Legacy36)]
+    [TestCase(SimpleDdgiTransportCacheFormat.Compact28)]
+    [TestCase(SimpleDdgiTransportCacheFormat.Compact24)]
+    public void RadiometricUpdate_PreservesCompleteGeometricPayload(
+        SimpleDdgiTransportCacheFormat format)
+    {
+        SimpleDdgiTransportCachePacking.Sample source = CreateSample() with
+        {
+            HitKind = 0,
+            Distance = 37.25f,
+            SourceLightingGeneration = 11u,
+            SourceEpoch = 19u
+        };
+        uint[] words = new uint[9];
+        Assert.That(SimpleDdgiTransportCachePacking.Pack(
+            format,
+            source,
+            words,
+            out _), Is.EqualTo(format.WordCount()));
+        uint[] before = (uint[])words.Clone();
+        Vector3 relit = new(7.0f, 3.5f, 1.25f);
+
+        bool updated = SimpleDdgiTransportCachePacking.TryUpdateRadiance(
+            format,
+            words,
+            source.ProbeGeneration,
+            source.SourceEpoch,
+            relit);
+        bool decoded = SimpleDdgiTransportCachePacking.TryUnpack(
+            format,
+            words,
+            0u,
+            0u,
+            256u,
+            source.ProbeGeneration,
+            12u,
+            source.SourceEpoch,
+            source.SourceRayCount,
+            out SimpleDdgiTransportCachePacking.Sample result);
+
+        int firstImmutableWord = format ==
+            SimpleDdgiTransportCacheFormat.Legacy36 ? 3 : 2;
+        Assert.Multiple(() =>
+        {
+            Assert.That(updated, Is.True);
+            Assert.That(decoded, Is.True);
+            Assert.That(result.SourceRadiance.X, Is.EqualTo(relit.X).Within(0.01f));
+            Assert.That(result.SourceRadiance.Y, Is.EqualTo(relit.Y).Within(0.01f));
+            Assert.That(result.SourceRadiance.Z, Is.EqualTo(relit.Z).Within(0.01f));
+            Assert.That(result.Distance, Is.EqualTo(source.Distance).Within(0.01f));
+            Assert.That(words[firstImmutableWord..format.WordCount()],
+                Is.EqualTo(before[firstImmutableWord..format.WordCount()]));
+            if (format == SimpleDdgiTransportCacheFormat.Compact24)
+            {
+                Assert.That(words[1] & 0xffff_0000u,
+                    Is.EqualTo(before[1] & 0xffff_0000u));
+            }
+        });
+    }
+
+    [Test]
+    public void RadiometricUpdate_RejectsStaleProvenanceWithoutMutation()
+    {
+        SimpleDdgiTransportCachePacking.Sample source = CreateSample();
+        uint[] words = new uint[9];
+        SimpleDdgiTransportCachePacking.Pack(
+            SimpleDdgiTransportCacheFormat.Compact28,
+            source,
+            words,
+            out _);
+        uint[] before = (uint[])words.Clone();
+
+        bool staleGeneration =
+            SimpleDdgiTransportCachePacking.TryUpdateRadiance(
+                SimpleDdgiTransportCacheFormat.Compact28,
+                words,
+                source.ProbeGeneration + 1u,
+                source.SourceEpoch,
+                Vector3.One);
+        bool staleEpoch =
+            SimpleDdgiTransportCachePacking.TryUpdateRadiance(
+                SimpleDdgiTransportCacheFormat.Compact28,
+                words,
+                source.ProbeGeneration,
+                source.SourceEpoch + 1u,
+                Vector3.One);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(staleGeneration, Is.False);
+            Assert.That(staleEpoch, Is.False);
+            Assert.That(words, Is.EqualTo(before));
+        });
+    }
+
     private static bool TryDecode(
         SimpleDdgiTransportCacheFormat format,
         ReadOnlySpan<uint> words,

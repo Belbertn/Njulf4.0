@@ -479,7 +479,10 @@ namespace Njulf.Rendering.Pipeline
                     }
 
                     IReadOnlyList<RenderGraphConcreteResourceBinding> bindings =
-                        input.ResourceBindings.GetBindings(usage.Resource, input.FrameIndex);
+                        input.ResourceBindings.GetBindings(
+                            usage.Resource,
+                            input.FrameIndex,
+                            usage.HistoryBinding);
                     if (bindings.Count == 0)
                     {
                         string error = $"Pass '{pass.Name}' has no concrete binding for '{usage.Resource}'.";
@@ -673,7 +676,10 @@ namespace Njulf.Rendering.Pipeline
                     foreach (RenderGraphResourceUsage usage in pass.ResourceUsages)
                     {
                         IReadOnlyList<RenderGraphConcreteResourceBinding> bindings =
-                            input.ResourceBindings.GetBindings(usage.Resource, input.FrameIndex);
+                            input.ResourceBindings.GetBindings(
+                                usage.Resource,
+                                input.FrameIndex,
+                                usage.HistoryBinding);
                         foreach (RenderGraphConcreteResourceBinding binding in bindings)
                         {
                             if (lastUses.TryGetValue(binding.AllocationIdentity, out ResourceUse previous))

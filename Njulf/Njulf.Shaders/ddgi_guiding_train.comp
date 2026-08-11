@@ -1,0 +1,202 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_directional_guiding.glsl"
+
+// One workgroup owns one bounded record range for one physical probe.  Each
+// invocation integrates one or more leaves, producing a private partial
+// histogram.  This deliberately avoids device-wide floating point atomics per
+// ray; ddgi_guiding_build.comp reduces the partials in deterministic order.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer GuidingTrainingRecordsBuffer
+{
+    SimpleDdgiGuidingTrainingRecord records[];
+} guidingTrainingRecords;
+
+layout(std430, set = 0, binding = 1) readonly buffer GuidingTrainingWorkItemsBuffer
+{
+    SimpleDdgiGuidingTrainingWorkItem workItems[];
+} guidingTrainingWorkItems;
+
+layout(std430, set = 0, binding = 2) buffer GuidingTrainingPartialScratchBuffer
+{
+    float partialEnergy[];
+} guidingTrainingScratch;
+
+layout(std430, set = 0, binding = 3) buffer GuidingTrainingCountersBuffer
+{
+    uint counters[];
+} guidingTrainingCounters;
+
+// Every source record is fetched from global memory once per chunk.  The
+// subsequent leaf reduction reads shared memory, which keeps the no-global-
+// float-atomic design practical for 4x4, 8x8, and 16x16 distributions.
+shared uint stagedLeaf[64];
+shared float stagedEnergy[64];
+shared uint stagedValid[64];
+
+void main()
+{
+    uint workItemIndex = gl_WorkGroupID.x;
+    if (workItemIndex >= guidingPc.dispatchCount ||
+        guidingPc.abiVersion != SIMPLE_DDGI_GUIDING_ABI_VERSION ||
+        !SimpleDdgiGuidingSupportedLeafResolution(guidingPc.leafResolution))
+    {
+        return;
+    }
+
+    SimpleDdgiGuidingTrainingWorkItem workItem =
+        guidingTrainingWorkItems.workItems[workItemIndex];
+    uint leafCount = SimpleDdgiGuidingLeafCount(guidingPc.leafResolution);
+    bool validWorkItem = workItem.physicalProbeIndex < guidingPc.physicalProbeCapacity &&
+        workItem.directionProposalEpoch != 0u &&
+        workItem.sourceDistributionGeneration != 0u &&
+        workItem.recordOffset <= uint(guidingTrainingRecords.records.length()) &&
+        workItem.recordCount <=
+            uint(guidingTrainingRecords.records.length()) - workItem.recordOffset &&
+        workItem.partialOffset <= uint(guidingTrainingScratch.partialEnergy.length()) &&
+        leafCount <= uint(guidingTrainingScratch.partialEnergy.length()) -
+            workItem.partialOffset;
+    if (!validWorkItem)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            atomicAdd(guidingTrainingCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+        return;
+    }
+
+    uint lane = gl_LocalInvocationIndex;
+    uint leaf0 = lane;
+    uint leaf1 = lane + 64u;
+    uint leaf2 = lane + 128u;
+    uint leaf3 = lane + 192u;
+    float energy0 = 0.0;
+    float energy1 = 0.0;
+    float energy2 = 0.0;
+    float energy3 = 0.0;
+    for (uint recordBase = 0u;
+         recordBase < workItem.recordCount;
+         recordBase += 64u)
+    {
+        uint recordRelativeIndex = recordBase + lane;
+        if (recordRelativeIndex < workItem.recordCount)
+        {
+            SimpleDdgiGuidingTrainingRecord record =
+                guidingTrainingRecords.records[
+                    workItem.recordOffset + recordRelativeIndex];
+            // Bounded proposal rotation deliberately mixes immutable source
+            // records from several distribution generations/epochs. Their
+            // stored PDFs remain authoritative, so ownership/content must
+            // match while the individual non-zero proposal identities may
+            // differ from the build target carried by this work item.
+            bool compatible = record.physicalProbeIndex == workItem.physicalProbeIndex &&
+                record.virtualProbeId == workItem.virtualProbeId &&
+                record.pageGeneration == workItem.pageGeneration &&
+                record.sourceDistributionGeneration != 0u &&
+                record.directionProposalEpoch != 0u &&
+                record.contentRevision == workItem.expectedContentRevision &&
+                record.leafIndex < leafCount &&
+                (record.flags & SIMPLE_DDGI_GUIDING_TRAINING_REQUIRED_FLAGS) ==
+                    SIMPLE_DDGI_GUIDING_TRAINING_REQUIRED_FLAGS &&
+                SimpleDdgiGuidingFinite(record.samplePdf) && record.samplePdf > 0.0 &&
+                SimpleDdgiGuidingFinite(record.incidentLuminance);
+            if (!compatible)
+            {
+                atomicAdd(guidingTrainingCounters.counters[
+                    SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+                stagedValid[lane] = 0u;
+                stagedLeaf[lane] = 0u;
+                stagedEnergy[lane] = 0.0;
+            }
+            else
+            {
+                // This is the unbiased proposal-training signal.  Clamping a
+                // firefly belongs to a separately audited robust-build
+                // variant; the baseline stores the unclamped finite signal.
+                float depositedEnergy = max(record.incidentLuminance, 0.0) /
+                    record.samplePdf;
+                if (!SimpleDdgiGuidingFinite(depositedEnergy) || depositedEnergy < 0.0)
+                {
+                    atomicAdd(guidingTrainingCounters.counters[
+                        SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+                    stagedValid[lane] = 0u;
+                    stagedLeaf[lane] = 0u;
+                    stagedEnergy[lane] = 0.0;
+                }
+                else
+                {
+                    stagedValid[lane] = 1u;
+                    stagedLeaf[lane] = record.leafIndex;
+                    stagedEnergy[lane] = depositedEnergy;
+                }
+            }
+        }
+        else
+        {
+            stagedValid[lane] = 0u;
+            stagedLeaf[lane] = 0u;
+            stagedEnergy[lane] = 0.0;
+        }
+        barrier();
+
+        uint recordCountInChunk = min(64u, workItem.recordCount - recordBase);
+        for (uint stagedIndex = 0u;
+             stagedIndex < recordCountInChunk;
+             ++stagedIndex)
+        {
+            if (stagedValid[stagedIndex] == 0u)
+                continue;
+            if (leaf0 < leafCount && stagedLeaf[stagedIndex] == leaf0)
+                energy0 += stagedEnergy[stagedIndex];
+            if (leaf1 < leafCount && stagedLeaf[stagedIndex] == leaf1)
+                energy1 += stagedEnergy[stagedIndex];
+            if (leaf2 < leafCount && stagedLeaf[stagedIndex] == leaf2)
+                energy2 += stagedEnergy[stagedIndex];
+            if (leaf3 < leafCount && stagedLeaf[stagedIndex] == leaf3)
+                energy3 += stagedEnergy[stagedIndex];
+        }
+        barrier();
+    }
+
+    if (leaf0 < leafCount)
+    {
+        if (!SimpleDdgiGuidingFinite(energy0) || energy0 < 0.0)
+        {
+            atomicAdd(guidingTrainingCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+            energy0 = 0.0;
+        }
+        guidingTrainingScratch.partialEnergy[workItem.partialOffset + leaf0] = energy0;
+    }
+    if (leaf1 < leafCount)
+    {
+        if (!SimpleDdgiGuidingFinite(energy1) || energy1 < 0.0)
+        {
+            atomicAdd(guidingTrainingCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+            energy1 = 0.0;
+        }
+        guidingTrainingScratch.partialEnergy[workItem.partialOffset + leaf1] = energy1;
+    }
+    if (leaf2 < leafCount)
+    {
+        if (!SimpleDdgiGuidingFinite(energy2) || energy2 < 0.0)
+        {
+            atomicAdd(guidingTrainingCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+            energy2 = 0.0;
+        }
+        guidingTrainingScratch.partialEnergy[workItem.partialOffset + leaf2] = energy2;
+    }
+    if (leaf3 < leafCount)
+    {
+        if (!SimpleDdgiGuidingFinite(energy3) || energy3 < 0.0)
+        {
+            atomicAdd(guidingTrainingCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+            energy3 = 0.0;
+        }
+        guidingTrainingScratch.partialEnergy[workItem.partialOffset + leaf3] = energy3;
+    }
+}

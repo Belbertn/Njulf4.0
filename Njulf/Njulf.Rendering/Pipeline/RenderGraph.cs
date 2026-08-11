@@ -25,7 +25,14 @@ namespace Njulf.Rendering.Pipeline
         // still need graph-owned layout transitions before secondary command buffers consume them.
         private readonly Dictionary<RenderGraphResourceId, List<IRenderGraphLayoutTrackedImage>> _importedImageTargets = new();
         private readonly RenderGraphResourceBindings _concreteResourceBindings = new();
-        private readonly Dictionary<RenderGraphResourceId, RenderGraphResourceUsage> _lastResourceUsages = new();
+        // Same-queue image synchronization follows the layout-tracked physical wrapper rather
+        // than the logical graph ID. One Vulkan image can legitimately be exposed through more
+        // than one logical resource (for example, a shared sampled texture view); keying this
+        // state by the logical ID would lose a write -> read dependency when the second pass uses
+        // an alias. Reference identity is intentional: each history bank has its own wrapper and
+        // exact aliases register that same wrapper under every logical view.
+        private readonly Dictionary<IRenderGraphLayoutTrackedImage, RenderGraphResourceUsage> _lastImageUsages =
+            new(ReferenceEqualityComparer.Instance);
         private readonly List<RenderGraphPlannedBarrier> _framePlannedBarriers = new();
         private readonly StringBuilder _barrierSummaryBuilder = new();
         private ulong _resourceAllocationGeneration;
@@ -146,7 +153,8 @@ namespace Njulf.Rendering.Pipeline
                     barrier.PreviousQueueIntent.ToString(),
                     barrier.QueueIntent.ToString(),
                     barrier.QueueOwnershipTransition,
-                    barrier.Executed));
+                    barrier.Executed,
+                    barrier.HistoryIndex));
             }
 
             return new RenderGraphDiagnostics(
@@ -202,6 +210,88 @@ namespace Njulf.Rendering.Pipeline
             return _passResourceUsages.TryGetValue(passName, out List<RenderGraphResourceUsage>? usages)
                 ? usages
                 : Array.Empty<RenderGraphResourceUsage>();
+        }
+
+        /// <summary>
+        /// Removes optional pass instances at a renderer-controlled device-idle
+        /// transition. This is used when immutable feature evidence becomes
+        /// stale and the graph must expose zero pass work for the fallback.
+        /// </summary>
+        internal int RemovePassesAfterDeviceIdle(IEnumerable<string> passNames)
+        {
+            if (passNames == null)
+                throw new ArgumentNullException(nameof(passNames));
+
+            var requested = new HashSet<string>(passNames, StringComparer.Ordinal);
+            int removed = 0;
+            for (int index = _passes.Count - 1; index >= 0; index--)
+            {
+                RenderPassBase pass = _passes[index];
+                if (!requested.Remove(pass.Name))
+                    continue;
+
+                _passes.RemoveAt(index);
+                _passResourceUsages.Remove(pass.Name);
+                pass.Dispose();
+                removed++;
+            }
+
+            if (requested.Count != 0)
+            {
+                throw new InvalidOperationException(
+                    "Cannot remove unregistered render pass(es): " +
+                    string.Join(", ", requested));
+            }
+
+            if (removed != 0)
+                _concreteResourceBindings.Invalidate();
+            return removed;
+        }
+
+        /// <summary>
+        /// Removes logical resources only after all physical targets and every
+        /// pass usage have been retired. This keeps disabled optional features
+        /// out of both allocation and graph-inventory diagnostics.
+        /// </summary>
+        internal int UnregisterResourcesAfterDeviceIdle(
+            IEnumerable<RenderGraphResourceId> resourceIds)
+        {
+            if (resourceIds == null)
+                throw new ArgumentNullException(nameof(resourceIds));
+
+            int removed = 0;
+            foreach (RenderGraphResourceId id in resourceIds)
+            {
+                if (!_resources.ContainsKey(id))
+                    continue;
+                if (_ownedRenderTargets.ContainsKey(id) ||
+                    _importedRenderTargets.ContainsKey(id) ||
+                    _importedImageTargets.ContainsKey(id))
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot unregister graph resource '{id}' while a physical target is live.");
+                }
+
+                foreach ((string passName, List<RenderGraphResourceUsage> usages) in
+                         _passResourceUsages)
+                {
+                    if (usages.Exists(usage => usage.Resource == id))
+                    {
+                        throw new InvalidOperationException(
+                            $"Cannot unregister graph resource '{id}' while pass '{passName}' references it.");
+                    }
+                }
+
+                _resources.Remove(id);
+                removed++;
+            }
+
+            if (removed != 0)
+            {
+                _concreteResourceBindings.Invalidate();
+                AdvanceResourceAllocationGeneration();
+            }
+            return removed;
         }
 
         /// <summary>
@@ -432,9 +522,25 @@ namespace Njulf.Rendering.Pipeline
                     }
 
                     RenderGraphResourceDescriptor resource = _resources[usage.Resource];
+                    if (!Enum.IsDefined(usage.HistoryBinding))
+                    {
+                        throw new InvalidOperationException(
+                            $"Render pass '{passName}' declares unknown history binding selection " +
+                            $"'{usage.HistoryBinding}' for '{usage.Resource}'.");
+                    }
+                    if (usage.HistoryBinding != RenderGraphHistoryBindingSelection.All &&
+                        resource.Kind is not RenderGraphResourceKind.ImageChain and
+                            not RenderGraphResourceKind.BufferSet)
+                    {
+                        throw new InvalidOperationException(
+                            $"Render pass '{passName}' selects a history bank for '{usage.Resource}', " +
+                            $"but its graph resource kind is '{resource.Kind}', not ImageChain or BufferSet.");
+                    }
                     if (usage.Access == RenderGraphResourceAccess.Read &&
                         resource.Lifetime != RenderGraphResourceLifetime.Imported &&
-                        !HasPriorWrite(passName, usage.Resource))
+                        !HasPriorWrite(passName, usage.Resource) &&
+                        !(usage.HistoryBinding == RenderGraphHistoryBindingSelection.Previous &&
+                          resource.Kind == RenderGraphResourceKind.ImageChain))
                     {
                         throw new InvalidOperationException(
                             $"Render pass '{passName}' reads graph resource '{usage.Resource}' before any prior pass writes it.");
@@ -554,13 +660,26 @@ namespace Njulf.Rendering.Pipeline
                 foreach (RenderGraphResourceUsage usage in usages)
                 {
                     IReadOnlyList<RenderGraphConcreteResourceBinding> bindings =
-                        _concreteResourceBindings.GetBindings(usage.Resource, frameIndex);
+                        _concreteResourceBindings.GetBindings(
+                            usage.Resource,
+                            frameIndex,
+                            usage.HistoryBinding);
                     if (bindings.Count == 0)
                     {
-                        string error = $"Pass '{passName}' has no concrete binding for '{usage.Resource}'.";
+                        string error = $"Pass '{passName}' has no concrete binding for '{usage.Resource}' " +
+                            $"({usage.HistoryBinding}).";
                         if (seen.Add(error))
                             errors.Add(error);
                         continue;
+                    }
+
+                    if (usage.HistoryBinding != RenderGraphHistoryBindingSelection.All &&
+                        bindings.Count != 1)
+                    {
+                        string error = $"Pass '{passName}' resolved {bindings.Count} concrete bindings for " +
+                            $"history-selected resource '{usage.Resource}' ({usage.HistoryBinding}); exactly one is required.";
+                        if (seen.Add(error))
+                            errors.Add(error);
                     }
 
                     if (usage.StageMask == PipelineStageFlags2.None || usage.AccessMask == AccessFlags2.None)
@@ -636,6 +755,7 @@ namespace Njulf.Rendering.Pipeline
                 ExecuteGraphPlannedBarriers(
                     cmd,
                     pass.Name,
+                    frameIndex,
                     sceneData,
                     isComputeQueue,
                     usesExplicitQueueTransfers);
@@ -647,7 +767,12 @@ namespace Njulf.Rendering.Pipeline
                 if (!isComputeQueue && useSecondaryCommandBuffers && commandBuffers != null && pass.SupportsSecondaryCommandBuffer)
                 {
                     ExecuteSecondaryPass(commandBuffers, cmd, pass, frameIndex, sceneData, timestamps);
-                    ExecuteGraphFinalBarriers(cmd, pass.Name, sceneData, usesExplicitQueueTransfers);
+                    ExecuteGraphFinalBarriers(
+                        cmd,
+                        pass.Name,
+                        frameIndex,
+                        sceneData,
+                        usesExplicitQueueTransfers);
                     continue;
                 }
 
@@ -660,7 +785,12 @@ namespace Njulf.Rendering.Pipeline
                 try
                 {
                     pass.Execute(cmd, frameIndex, sceneData, timestamps);
-                    ExecuteGraphFinalBarriers(cmd, pass.Name, sceneData, usesExplicitQueueTransfers);
+                    ExecuteGraphFinalBarriers(
+                        cmd,
+                        pass.Name,
+                        frameIndex,
+                        sceneData,
+                        usesExplicitQueueTransfers);
                 }
                 finally
                 {
@@ -706,6 +836,7 @@ namespace Njulf.Rendering.Pipeline
         private void ExecuteGraphPlannedBarriers(
             CommandBuffer cmd,
             string passName,
+            int frameIndex,
             SceneRenderingData sceneData,
             bool isComputeQueue,
             bool usesExplicitQueueTransfers)
@@ -715,6 +846,7 @@ namespace Njulf.Rendering.Pipeline
 
             foreach (RenderGraphResourceUsage usage in usages)
             {
+                int historyIndex = ResolvePhysicalHistoryIndex(usage, frameIndex);
                 // Queue intent in the static declaration describes the preferred placement, not
                 // necessarily the queue that recorded this frame (for example, compute-capable
                 // passes remain on graphics in Disabled mode).  Track the actual recording
@@ -725,22 +857,6 @@ namespace Njulf.Rendering.Pipeline
                         ? RenderGraphQueueIntent.Compute
                         : RenderGraphQueueIntent.Graphics
                 };
-                bool hasPrevious = _lastResourceUsages.TryGetValue(usage.Resource, out RenderGraphResourceUsage previous);
-                bool crossesRecordedQueues = usesExplicitQueueTransfers &&
-                    hasPrevious &&
-                    previous.QueueIntent != effectiveUsage.QueueIntent &&
-                    previous.QueueIntent != RenderGraphQueueIntent.External &&
-                    effectiveUsage.QueueIntent != RenderGraphQueueIntent.External;
-
-                // QueueOwnershipTransferRecorder already emitted the matching release/acquire
-                // pair and semaphore edge. An ordinary barrier in the destination command buffer
-                // would both duplicate the dependency and can name source stages unsupported by
-                // a dedicated compute queue.
-                if (crossesRecordedQueues)
-                {
-                    _lastResourceUsages[usage.Resource] = effectiveUsage;
-                    continue;
-                }
 
                 IReadOnlyList<RenderTarget> targets = GetLayoutTrackedRenderTargets(usage.Resource);
                 IReadOnlyList<IRenderGraphLayoutTrackedImage> importedImageTargets = GetImportedImageTargets(usage.Resource);
@@ -749,17 +865,108 @@ namespace Njulf.Rendering.Pipeline
                     !IsImageResource(resource.Kind) ||
                     (targets.Count == 0 && importedImageTargets.Count == 0))
                 {
-                    _lastResourceUsages[usage.Resource] = effectiveUsage;
                     continue;
                 }
 
-                foreach (RenderTarget target in targets)
-                    PlanAndExecuteImageBarrier(cmd, passName, effectiveUsage, previous, hasPrevious, target, sceneData);
-                foreach (IRenderGraphLayoutTrackedImage target in importedImageTargets)
-                    PlanAndExecuteImageBarrier(cmd, passName, effectiveUsage, previous, hasPrevious, target, sceneData);
-
-                _lastResourceUsages[usage.Resource] = effectiveUsage;
+                if (historyIndex >= 0)
+                {
+                    if (targets.Count > 0)
+                    {
+                        if (historyIndex >= targets.Count)
+                        {
+                            throw new InvalidOperationException(
+                                $"Render pass '{passName}' selected history bank {historyIndex} for " +
+                                $"'{usage.Resource}', but the graph owns only {targets.Count} layout-tracked target(s).");
+                        }
+                        PlanTrackAndExecuteImageBarrier(
+                            cmd,
+                            passName,
+                            effectiveUsage,
+                            targets[historyIndex],
+                            sceneData,
+                            historyIndex,
+                            usesExplicitQueueTransfers);
+                    }
+                    if (importedImageTargets.Count > 0)
+                    {
+                        if (historyIndex >= importedImageTargets.Count)
+                        {
+                            throw new InvalidOperationException(
+                                $"Render pass '{passName}' selected history bank {historyIndex} for " +
+                                $"'{usage.Resource}', but the graph imports only {importedImageTargets.Count} layout-tracked image(s).");
+                        }
+                        PlanTrackAndExecuteImageBarrier(
+                            cmd,
+                            passName,
+                            effectiveUsage,
+                            importedImageTargets[historyIndex],
+                            sceneData,
+                            historyIndex,
+                            usesExplicitQueueTransfers);
+                    }
+                }
+                else
+                {
+                    foreach (RenderTarget target in targets)
+                    {
+                        PlanTrackAndExecuteImageBarrier(
+                            cmd,
+                            passName,
+                            effectiveUsage,
+                            target,
+                            sceneData,
+                            historyIndex,
+                            usesExplicitQueueTransfers);
+                    }
+                    foreach (IRenderGraphLayoutTrackedImage target in importedImageTargets)
+                    {
+                        PlanTrackAndExecuteImageBarrier(
+                            cmd,
+                            passName,
+                            effectiveUsage,
+                            target,
+                            sceneData,
+                            historyIndex,
+                            usesExplicitQueueTransfers);
+                    }
+                }
             }
+        }
+
+        private void PlanTrackAndExecuteImageBarrier(
+            CommandBuffer cmd,
+            string passName,
+            RenderGraphResourceUsage usage,
+            IRenderGraphLayoutTrackedImage target,
+            SceneRenderingData sceneData,
+            int historyIndex,
+            bool usesExplicitQueueTransfers)
+        {
+            bool hasPrevious = _lastImageUsages.TryGetValue(target, out RenderGraphResourceUsage previous);
+            bool crossesRecordedQueues = usesExplicitQueueTransfers &&
+                hasPrevious &&
+                previous.QueueIntent != usage.QueueIntent &&
+                previous.QueueIntent != RenderGraphQueueIntent.External &&
+                usage.QueueIntent != RenderGraphQueueIntent.External;
+
+            // QueueOwnershipTransferRecorder already emitted the matching release/acquire pair
+            // and semaphore edge for the concrete allocation. An ordinary barrier in the
+            // destination command buffer would duplicate that dependency and can name source
+            // stages unsupported by a dedicated compute queue.
+            if (!crossesRecordedQueues)
+            {
+                PlanAndExecuteImageBarrier(
+                    cmd,
+                    passName,
+                    usage,
+                    previous,
+                    hasPrevious,
+                    target,
+                    sceneData,
+                    historyIndex);
+            }
+
+            _lastImageUsages[target] = usage;
         }
 
         private void PlanAndExecuteImageBarrier(
@@ -769,7 +976,8 @@ namespace Njulf.Rendering.Pipeline
             RenderGraphResourceUsage previous,
             bool hasPrevious,
             IRenderGraphLayoutTrackedImage target,
-            SceneRenderingData sceneData)
+            SceneRenderingData sceneData,
+            int historyIndex)
         {
             ImageLayout oldLayout = target.Layout;
             bool layoutTransition = oldLayout != usage.ImageLayout;
@@ -808,7 +1016,8 @@ namespace Njulf.Rendering.Pipeline
                 hasPrevious ? previous.QueueIntent : usage.QueueIntent,
                 usage.QueueIntent,
                 queueOwnershipTransition,
-                Executed: true);
+                Executed: true,
+                HistoryIndex: historyIndex);
             _framePlannedBarriers.Add(barrier);
             sceneData.GraphPlannedBarrierCount++;
             sceneData.GraphExecutedBarrierCount++;
@@ -820,7 +1029,7 @@ namespace Njulf.Rendering.Pipeline
         private void ResetBarrierPlanning(SceneRenderingData sceneData)
         {
             _framePlannedBarriers.Clear();
-            _lastResourceUsages.Clear();
+            _lastImageUsages.Clear();
             _barrierSummaryBuilder.Clear();
             sceneData.GraphPlannedBarrierCount = 0;
             sceneData.GraphExecutedBarrierCount = 0;
@@ -836,7 +1045,15 @@ namespace Njulf.Rendering.Pipeline
             _barrierSummaryBuilder
                 .Append(barrier.PassName)
                 .Append(':')
-                .Append(barrier.Resource)
+                .Append(barrier.Resource);
+            if (barrier.HistoryIndex >= 0)
+            {
+                _barrierSummaryBuilder
+                    .Append("[history-")
+                    .Append(barrier.HistoryIndex)
+                    .Append(']');
+            }
+            _barrierSummaryBuilder
                 .Append(' ')
                 .Append(barrier.OldLayout)
                 .Append("->")
@@ -853,7 +1070,13 @@ namespace Njulf.Rendering.Pipeline
 
         private int CountPotentialQueueOwnershipTransitions(RenderFeatureIsolationMode featureIsolation)
         {
-            var lastQueueByResource = new Dictionary<RenderGraphResourceId, RenderGraphQueueIntent>();
+            // The declaration has no runtime frame index, but Current and
+            // Previous are still distinct physical streams. Treating them as
+            // one here would overstate queue handoffs and conceal a bank
+            // dependency in diagnostics.
+            var lastQueueByResource = new Dictionary<
+                (RenderGraphResourceId Resource, RenderGraphHistoryBindingSelection HistoryBinding),
+                RenderGraphQueueIntent>();
             int count = 0;
 
             foreach (RenderPassBase pass in _passes)
@@ -866,14 +1089,15 @@ namespace Njulf.Rendering.Pipeline
 
                 foreach (RenderGraphResourceUsage usage in usages)
                 {
+                    var key = (usage.Resource, usage.HistoryBinding);
                     if (!_resources.TryGetValue(usage.Resource, out RenderGraphResourceDescriptor? resource) ||
                         !IsImageResource(resource.Kind))
                     {
-                        lastQueueByResource[usage.Resource] = usage.QueueIntent;
+                        lastQueueByResource[key] = usage.QueueIntent;
                         continue;
                     }
 
-                    if (lastQueueByResource.TryGetValue(usage.Resource, out RenderGraphQueueIntent previousQueue) &&
+                    if (lastQueueByResource.TryGetValue(key, out RenderGraphQueueIntent previousQueue) &&
                         previousQueue != usage.QueueIntent &&
                         previousQueue != RenderGraphQueueIntent.External &&
                         usage.QueueIntent != RenderGraphQueueIntent.External)
@@ -881,7 +1105,7 @@ namespace Njulf.Rendering.Pipeline
                         count++;
                     }
 
-                    lastQueueByResource[usage.Resource] = usage.QueueIntent;
+                    lastQueueByResource[key] = usage.QueueIntent;
                 }
             }
 
@@ -926,6 +1150,17 @@ namespace Njulf.Rendering.Pipeline
         private static bool IsImageResource(RenderGraphResourceKind kind)
         {
             return kind == RenderGraphResourceKind.Image || kind == RenderGraphResourceKind.ImageChain;
+        }
+
+        private static int ResolvePhysicalHistoryIndex(
+            in RenderGraphResourceUsage usage,
+            int frameIndex)
+        {
+            return usage.HistoryBinding == RenderGraphHistoryBindingSelection.All
+                ? -1
+                : RenderGraphResourcePlan.ResolveHistoryIndex(
+                    frameIndex,
+                    usage.HistoryBinding);
         }
 
         private static bool RequiresMemoryDependency(RenderGraphResourceAccess previous, RenderGraphResourceAccess next)
@@ -1079,6 +1314,7 @@ namespace Njulf.Rendering.Pipeline
         private void ExecuteGraphFinalBarriers(
             CommandBuffer cmd,
             string passName,
+            int frameIndex,
             SceneRenderingData sceneData,
             bool usesExplicitQueueTransfers)
         {
@@ -1090,6 +1326,7 @@ namespace Njulf.Rendering.Pipeline
 
             foreach (RenderGraphResourceUsage usage in usages)
             {
+                int historyIndex = ResolvePhysicalHistoryIndex(usage, frameIndex);
                 IReadOnlyList<RenderTarget> targets = GetLayoutTrackedRenderTargets(usage.Resource);
                 IReadOnlyList<IRenderGraphLayoutTrackedImage> importedImageTargets = GetImportedImageTargets(usage.Resource);
                 if (usage.FinalImageLayout == ImageLayout.Undefined ||
@@ -1099,10 +1336,48 @@ namespace Njulf.Rendering.Pipeline
                     continue;
                 }
 
-                foreach (RenderTarget target in targets)
-                    ExecuteGraphFinalBarrier(cmd, passName, usage, target, sceneData);
-                foreach (IRenderGraphLayoutTrackedImage target in importedImageTargets)
-                    ExecuteGraphFinalBarrier(cmd, passName, usage, target, sceneData);
+                if (historyIndex >= 0)
+                {
+                    if (targets.Count > 0)
+                    {
+                        if (historyIndex >= targets.Count)
+                        {
+                            throw new InvalidOperationException(
+                                $"Render pass '{passName}' selected history bank {historyIndex} for " +
+                                $"'{usage.Resource}', but the graph owns only {targets.Count} layout-tracked target(s).");
+                        }
+                        ExecuteGraphFinalBarrier(
+                            cmd,
+                            passName,
+                            usage,
+                            targets[historyIndex],
+                            sceneData,
+                            historyIndex);
+                    }
+                    if (importedImageTargets.Count > 0)
+                    {
+                        if (historyIndex >= importedImageTargets.Count)
+                        {
+                            throw new InvalidOperationException(
+                                $"Render pass '{passName}' selected history bank {historyIndex} for " +
+                                $"'{usage.Resource}', but the graph imports only {importedImageTargets.Count} layout-tracked image(s).");
+                        }
+                        ExecuteGraphFinalBarrier(
+                            cmd,
+                            passName,
+                            usage,
+                            importedImageTargets[historyIndex],
+                            sceneData,
+                            historyIndex);
+                    }
+                }
+                else
+                {
+                    foreach (RenderTarget target in targets)
+                        ExecuteGraphFinalBarrier(cmd, passName, usage, target, sceneData, historyIndex);
+                    foreach (IRenderGraphLayoutTrackedImage target in importedImageTargets)
+                        ExecuteGraphFinalBarrier(cmd, passName, usage, target, sceneData, historyIndex);
+                }
             }
         }
 
@@ -1111,7 +1386,8 @@ namespace Njulf.Rendering.Pipeline
             string passName,
             RenderGraphResourceUsage usage,
             IRenderGraphLayoutTrackedImage target,
-            SceneRenderingData sceneData)
+            SceneRenderingData sceneData,
+            int historyIndex)
         {
             ImageLayout oldLayout = target.Layout;
             if (oldLayout == usage.FinalImageLayout)
@@ -1137,7 +1413,8 @@ namespace Njulf.Rendering.Pipeline
                 usage.QueueIntent,
                 usage.QueueIntent,
                 QueueOwnershipTransition: false,
-                Executed: true);
+                Executed: true,
+                HistoryIndex: historyIndex);
             _framePlannedBarriers.Add(barrier);
             sceneData.GraphPlannedBarrierCount++;
             sceneData.GraphExecutedBarrierCount++;

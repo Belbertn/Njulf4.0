@@ -1,0 +1,101 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake_cpu_impl.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake_gpu_impl.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\debug_impl.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\serialize_impl.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\shader_bindings.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\stb_lib.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\texture_impl.cpp">
+      <Filter>Sources</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake_cpu_impl.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake_gpu_impl.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake_kernels_cpu.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\debug_impl.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\defines.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\log.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\omm_handle.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\resource.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\serialize_impl.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\shader_bindings.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\shader_bindings_expand.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\shader_registry.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\std_allocator.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\std_containers.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\texture_impl.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\version.h">
+      <Filter>Sources</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include\omm.h">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\include\omm.hpp">
+      <Filter>Include</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="D:\Code\C#\Njulf4.0-Simplified\Njulf\.codex-tmp\omm-sdk-audit\libraries\omm-lib\src\bake.rc">
+      <Filter>Sources</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Include">
+      <UniqueIdentifier>{4651B8F0-6B35-3B37-B28D-C700F4DD616F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Sources">
+      <UniqueIdentifier>{5EEB1F4F-E385-37DE-85A9-594966805AAF}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

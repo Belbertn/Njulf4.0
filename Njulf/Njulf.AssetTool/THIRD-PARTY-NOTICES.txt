@@ -1,10 +1,11 @@
 THIRD-PARTY SOFTWARE NOTICES AND REDISTRIBUTION PROVENANCE
 
 This file accompanies Njulf.AssetTool builds and published distributions.
-The machine-readable companions are Ktx2.NET.provenance.json and
-Imazen.WebP.provenance.json. Any change to a listed package or payload requires
-a new dependency review, regenerated NuGet lock files, updated hashes, and an
-updated notice.
+The checked-in machine-readable companions are Ktx2.NET.provenance.json and
+Imazen.WebP.provenance.json. An optional pinned NVIDIA OMM bridge build emits
+its own binary-specific provenance manifest and complete license bundle. Any
+change to a listed package or payload requires a new dependency review,
+regenerated lock files where applicable, updated hashes, and an updated notice.
 
 Ktx2.NET 1.0.5
 ----------------
@@ -275,6 +276,41 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+NVIDIA Opacity Micro-Map SDK 1.9.2 (optional offline baker)
+-----------------------------------------------------------
+Purpose: CPU generation of four-state opacity micromaps during explicit,
+opt-in asset cooking. The shipping renderer does not load the baker bridge.
+Project: https://github.com/NVIDIA-RTX/OMM
+Reviewed source commit:
+  9abacd0f187d0efca491946a29ba7df8c5345264
+License identifier:
+  LicenseRef-NVIDIA-RTX-SDKs-2023-01-23
+
+The SDK is not vendored and the bridge is not part of an ordinary AssetTool
+build. `native/opacity_micromap_bridge/Build-PinnedBridge.ps1` accepts only the
+reviewed commit and SDK version, validates the required gitlink revisions,
+statically links the CPU SDK, rejects unexpected dynamic dependencies, and
+emits these files as one reviewed artifact set:
+
+  njulf_omm_bridge.dll
+  njulf_omm_bridge.provenance.json
+  NVIDIA-RTX-SDKs-LICENSE.txt
+  njulf_omm_bridge.third-party-notices.txt
+
+The full NVIDIA license must accompany any distribution of that optional
+bridge. It permits covered SDK materials to be distributed only when
+incorporated in object-code form into an application and subject to its
+distribution requirements and restrictions; review the emitted full license
+before distribution. In particular, the required NVIDIA notice is:
+
+  This software contains source code provided by NVIDIA Corporation.
+
+The statically linked CPU target also contains code from glm (MIT), LZ4
+(BSD-2-Clause), stb (MIT or public domain), and xxHash (BSD-2-Clause). Their
+exact license texts are reproduced in the emitted third-party notice bundle.
+No standalone SDK library, SDK developer tool, DXC, Slang, or shader compiler
+is included in the bridge artifact.
 
 miniz
 -----

@@ -50,6 +50,9 @@ void main()
     SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
     uint queueOffset = gl_WorkGroupID.x;
     bool gpuScheduler = SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex);
+    bool urgentRelight = SimpleDdgiSchedulerUrgentRelight(
+        pc.SchedulerArenaBufferIndex,
+        pc.SchedulerCountersOffsetWords);
     bool residentTransaction = gpuScheduler &&
         (ReadStorageWordUniform(
             pc.SchedulerArenaBufferIndex,
@@ -65,11 +68,29 @@ void main()
 
     SimpleDdgiProbeUpdate update =
         ReadSimpleDdgiProbeUpdate(pc.ProbeUpdateQueueBufferIndex, queueOffset);
+    if (urgentRelight)
+    {
+        uint outcomeBase = pc.SchedulerOutcomesOffsetWords +
+            update.outcomeIndex * SIMPLE_DDGI_SCHEDULER_OUTCOME_WORDS;
+        uint completion = SimpleDdgiSchedulerRead(
+            pc.SchedulerArenaBufferIndex,
+            outcomeBase + 8u);
+        uint failure = SimpleDdgiSchedulerRead(
+            pc.SchedulerArenaBufferIndex,
+            outcomeBase + 9u);
+        if (failure != 0u ||
+            (completion & SIMPLE_DDGI_SCHEDULER_COMPLETE_URGENT_COMMIT) == 0u)
+        {
+            // CommitLocal left canonical storage unchanged. Keeping the prior
+            // image tile is the only coherent sampled-mirror result.
+            return;
+        }
+    }
     if (!SimpleDdgiSchedulerOutcomeAllowsPublication(
             pc.SchedulerArenaBufferIndex,
             pc.SchedulerOutcomesOffsetWords,
             update.outcomeIndex,
-            true,
+            !urgentRelight,
             pc.SchedulerFrameOffsetWords))
     {
         SimpleDdgiSchedulerFailOutcome(
@@ -171,7 +192,7 @@ void main()
     {
         uint x = texel % params.irradianceTexels;
         uint y = texel / params.irradianceTexels;
-        vec4 value = residentTransaction
+        vec4 value = residentTransaction && !urgentRelight
             ? ReadSimpleDdgiIrradianceTexel(
                 pc.TransportIrradianceAtlasBufferIndex,
                 update.physicalProbeIndex,
@@ -195,7 +216,7 @@ void main()
     {
         uint x = texel % params.visibilityTexels;
         uint y = texel / params.visibilityTexels;
-        vec2 moments = residentTransaction
+        vec2 moments = residentTransaction && !urgentRelight
             ? ReadSimpleDdgiVisibilityMomentsAtOffset(
                 pc.TransportIrradianceAtlasBufferIndex,
                 pc.PrivateVisibilityAtlasOffsetWords,

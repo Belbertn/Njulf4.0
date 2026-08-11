@@ -374,9 +374,14 @@ public sealed class ProceduralSkyModelTests
             Assert.That(
                 BindlessIndex.SimpleDdgiStorageValidationBufferFrame1,
                 Is.EqualTo(BindlessIndex.SimpleDdgiStorageValidationBufferBase + 1));
+            // Advanced-GI slots are append-only so existing environment/DDGI
+            // bindings keep their historical indices while the fixed heap
+            // grows at the tail.  Keep this assertion tied to the current
+            // terminal reservation rather than the old foliage tail.
             Assert.That(
                 BindlessIndex.StaticBufferCount,
-                Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherBufferFrame1 + 1));
+                Is.EqualTo(
+                    BindlessIndex.SimpleDdgiReceiverFeedbackCandidateBuffer + 1));
         });
     }
 

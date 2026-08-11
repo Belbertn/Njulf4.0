@@ -1,0 +1,14 @@
+[2026-08-09 07:47:34.367] [00004E94] === Logging started ===
+[2026-08-09 07:47:34.373] [00004E94] Executing: "C:\Program Files\dotnet\dotnet.exe" test Njulf.Tests/Njulf.Tests.csproj -c Release --no-build --no-restore --disable-build-servers -m:1 --nologo --filter FullyQualifiedName=Njulf.Tests.ContentRendererIntegrationTests.LoadModel_RequiresRendererUploadService --logger console;verbosity=minimal, PID: 20116, PPID: 2684
+[2026-08-09 07:47:34.375] [00004E94] IsElevated: False
+[2026-08-09 07:47:34.375] [00004E94] Is64BitProcess: True
+[2026-08-09 07:47:34.375] [00004E94] RebootPending: False
+[2026-08-09 07:47:34.375] [00004E94] ProcessorArchitecture: amd64
+[2026-08-09 07:47:34.375] [00004E94] HostArchitecture: x64
+[2026-08-09 07:47:34.375] [00004E94] SdkDirectory: 10.0.203
+[2026-08-09 07:47:34.375] [00004E94] VerifySignatures: False
+[2026-08-09 07:47:34.375] [00004E94] SDK feature band: 10.0.200
+[2026-08-09 07:47:35.808] [00004E94] Shutting down
+[2026-08-09 07:47:35.809] [00004E94] Shutdown completed.
+[2026-08-09 07:47:35.809] [00004E94] Restart required: False
+[2026-08-09 07:47:35.809] [00004E94] === Logging ended ===
