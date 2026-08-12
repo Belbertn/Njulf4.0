@@ -183,6 +183,10 @@ internal static class Program
         uint opacityMicromapMaximumSubdivision = 8U;
         ulong opacityMicromapMaximumWorkload = 1UL << 28;
         uint opacityMicromapMaximumArrayBytes = 256U * 1024U * 1024U;
+        AssetCookTerminalProgressMode progressMode = AssetCookTerminalProgressMode.Plain;
+        AssetCookTerminalProgressDetail progressDetail = AssetCookTerminalProgressDetail.Items;
+        int jobs = 1;
+        long maxInflightBytes = 512L * 1024L * 1024L;
         for (int i = 2; i < args.Length; i++)
         {
             switch (args[i])
@@ -236,6 +240,28 @@ internal static class Program
                         RequireValue(args, ref i, "--omm-max-array-bytes"),
                         CultureInfo.InvariantCulture);
                     break;
+                case "--progress":
+                    progressMode = ParseProgressMode(
+                        RequireValue(args, ref i, "--progress"));
+                    break;
+                case "--progress-detail":
+                    progressDetail = ParseProgressDetail(
+                        RequireValue(args, ref i, "--progress-detail"));
+                    break;
+                case "--jobs":
+                    jobs = ParseCookJobs(RequireValue(args, ref i, "--jobs"));
+                    break;
+                case "--max-inflight-bytes":
+                    maxInflightBytes = long.Parse(
+                        RequireValue(args, ref i, "--max-inflight-bytes"),
+                        CultureInfo.InvariantCulture);
+                    if (maxInflightBytes <= 0)
+                    {
+                        throw new ArgumentOutOfRangeException(
+                            nameof(maxInflightBytes),
+                            "Maximum in-flight bytes must be positive.");
+                    }
+                    break;
                 case "--policy":
                 case "--timeout-ms":
                     _ = RequireValue(args, ref i, args[i]); // Accepted for parity with validation/import automation.
@@ -283,22 +309,115 @@ internal static class Program
             SigningPrivateKey = signingKey,
             OpacityMicromapPayloadProducer = opacityMicromapProducer
         };
-        using var cooker = new ModelAssetCooker();
-        if (mode == "model")
+        if (mode is not "model" and not "folder" and not "changed")
+            throw new ArgumentException($"Unknown cook mode '{mode}'.");
+
+        using var cancellationSource = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
         {
-            AssetCookResult result = cooker.CookModel(source, output, options);
-            PrintCookResult(result);
-            return result.Report.Status == "Succeeded" ? 0 : 1;
-        }
-        if (mode is "folder" or "changed")
+            eventArgs.Cancel = true;
+            cancellationSource.Cancel();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        AssetCookTerminalProgress? terminal = progressMode == AssetCookTerminalProgressMode.Off
+            ? null
+            : new AssetCookTerminalProgress(
+                Console.Error,
+                progressMode,
+                progressDetail);
+        try
         {
-            IReadOnlyList<AssetCookResult> results = cooker.CookFolder(source, output, options with { Force = mode == "folder" && force });
+            terminal?.Report(new AssetCookProgressEvent(
+                AssetCookProgressEventKind.RunStarted)
+            {
+                SourcePath = Path.GetFullPath(source),
+                OutputPath = CookedPlatform.ResolveOutputRoot(output, platform),
+                CookMode = mode,
+                Jobs = jobs,
+                MaxInflightBytes = maxInflightBytes
+            });
+
+            using var cooker = new ModelAssetCooker();
+            if (mode == "model")
+            {
+                AssetCookResult result = cooker.CookModel(
+                    source,
+                    output,
+                    options,
+                    terminal,
+                    cancellationSource.Token);
+                PrintCookResult(result);
+                int exitCode = result.Report.Status == "Succeeded" ? 0 : 1;
+                terminal?.Report(new AssetCookProgressEvent(
+                    AssetCookProgressEventKind.RunCompleted)
+                {
+                    Outcome = exitCode == 0
+                        ? AssetCookProgressOutcome.Succeeded
+                        : AssetCookProgressOutcome.Failed,
+                    AssetCount = 1,
+                    CookedCount = result.Skipped ? 0 : 1,
+                    SkippedCount = result.Skipped ? 1 : 0,
+                    FailedCount = exitCode == 0 ? 0 : 1
+                });
+                return exitCode;
+            }
+
+            IReadOnlyList<AssetCookResult> results = cooker.CookFolder(
+                source,
+                output,
+                options with { Force = mode == "folder" && force },
+                terminal,
+                cancellationSource.Token,
+                new AssetCookFolderOptions
+                {
+                    MaxDegreeOfParallelism = jobs,
+                    MaxInflightBytes = maxInflightBytes
+                });
             foreach (AssetCookResult result in results)
                 PrintCookResult(result);
-            Console.WriteLine($"Cooked {results.Count(result => !result.Skipped)} asset(s); skipped {results.Count(result => result.Skipped)} unchanged asset(s).");
-            return results.All(result => result.Report.Status == "Succeeded") ? 0 : 1;
+            int cookedCount = results.Count(result => !result.Skipped);
+            int skippedCount = results.Count(result => result.Skipped);
+            int failedCount = results.Count(result => result.Report.Status != "Succeeded");
+            Console.WriteLine($"Cooked {cookedCount} asset(s); skipped {skippedCount} unchanged asset(s).");
+            int folderExitCode = failedCount == 0 ? 0 : 1;
+            terminal?.Report(new AssetCookProgressEvent(
+                AssetCookProgressEventKind.RunCompleted)
+            {
+                Outcome = folderExitCode == 0
+                    ? AssetCookProgressOutcome.Succeeded
+                    : AssetCookProgressOutcome.Failed,
+                AssetCount = results.Count,
+                CookedCount = cookedCount,
+                SkippedCount = skippedCount,
+                FailedCount = failedCount
+            });
+            return folderExitCode;
         }
-        throw new ArgumentException($"Unknown cook mode '{mode}'.");
+        catch (OperationCanceledException) when (cancellationSource.IsCancellationRequested)
+        {
+            terminal?.Report(new AssetCookProgressEvent(
+                AssetCookProgressEventKind.RunCancelled)
+            {
+                Outcome = AssetCookProgressOutcome.Cancelled,
+                Message = "Cook cancelled."
+            });
+            return 130;
+        }
+        catch (Exception exception)
+        {
+            terminal?.Report(new AssetCookProgressEvent(
+                AssetCookProgressEventKind.RunFailed)
+            {
+                Outcome = AssetCookProgressOutcome.Failed,
+                Message = exception.Message
+            });
+            throw;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+            terminal?.Dispose();
+        }
     }
 
     private static int RunCleanStale(string[] args)
@@ -416,6 +535,38 @@ internal static class Program
         return args[index];
     }
 
+    private static AssetCookTerminalProgressMode ParseProgressMode(string value) =>
+        value.ToLowerInvariant() switch
+        {
+            "plain" => AssetCookTerminalProgressMode.Plain,
+            "jsonl" => AssetCookTerminalProgressMode.JsonLines,
+            "off" => AssetCookTerminalProgressMode.Off,
+            _ => throw new ArgumentException(
+                $"Unknown progress mode '{value}'. Expected plain, jsonl, or off.")
+        };
+
+    private static AssetCookTerminalProgressDetail ParseProgressDetail(string value) =>
+        value.ToLowerInvariant() switch
+        {
+            "stages" => AssetCookTerminalProgressDetail.Stages,
+            "items" => AssetCookTerminalProgressDetail.Items,
+            _ => throw new ArgumentException(
+                $"Unknown progress detail '{value}'. Expected stages or items.")
+        };
+
+    private static int ParseCookJobs(string value)
+    {
+        if (string.Equals(value, "auto", StringComparison.OrdinalIgnoreCase))
+            return Math.Max(1, Environment.ProcessorCount);
+
+        int jobs = int.Parse(value, CultureInfo.InvariantCulture);
+        if (jobs <= 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(value),
+                "Cook jobs must be a positive integer or 'auto'.");
+        return jobs;
+    }
+
     private static void PrintSummary(AssetValidationReport report, bool singleAsset)
     {
         if (singleAsset && report.Entries.Count == 1)
@@ -461,8 +612,8 @@ internal static class Program
         Console.WriteLine("  Njulf.AssetTool validate <path-or-folder> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--policy <strict|gameDefault|permissive>] [--timeout-ms <ms>] [--max-bytes <bytes>] [--high-texture-bytes <bytes>] [--child-process-all]");
         Console.WriteLine("  Njulf.AssetTool import <path> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--policy <strict|gameDefault|permissive>]");
         Console.WriteLine("  Njulf.AssetTool report <path-or-folder> --json <output> [--backend <auto|assimp|sharpgltf>] [--policy <strict|gameDefault|permissive>]");
-        Console.WriteLine("  Njulf.AssetTool cook model <source> --out <folder> [--platform <rid>] [--texture-format <autoBc|rgba8|bc7|bc5|bc4|bc6h>] [--signing-key <pem>] [--backend <auto|assimp|sharpgltf>] [--max-texture-dimension <pixels>] [--force] [--omm-bridge <native-library> --omm-provenance <json> --omm-subdivision <0..12> --omm-max-subdivision <1..12> --omm-max-workload <count> --omm-max-array-bytes <bytes>]");
-        Console.WriteLine("  Njulf.AssetTool cook folder|changed <source-folder> --out <folder> [--platform <rid>] [--texture-format <format>] [--signing-key <pem>] [--force] [--omm-bridge <native-library> --omm-provenance <json>]");
+        Console.WriteLine("  Njulf.AssetTool cook model <source> --out <folder> [--platform <rid>] [--texture-format <autoBc|rgba8|bc7|bc5|bc4|bc6h>] [--signing-key <pem>] [--backend <auto|assimp|sharpgltf>] [--max-texture-dimension <pixels>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--omm-bridge <native-library> --omm-provenance <json> --omm-subdivision <0..12> --omm-max-subdivision <1..12> --omm-max-workload <count> --omm-max-array-bytes <bytes>]");
+        Console.WriteLine("  Njulf.AssetTool cook folder|changed <source-folder> --out <folder> [--platform <rid>] [--texture-format <format>] [--signing-key <pem>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--jobs <count|auto>] [--max-inflight-bytes <bytes>] [--omm-bridge <native-library> --omm-provenance <json>]");
         Console.WriteLine("  Njulf.AssetTool clean-stale --out <folder> [--platform <rid>]");
         Console.WriteLine("  Njulf.AssetTool migrate <cooked-folder> [--out <folder>] [--signing-key <pem>]");
         Console.WriteLine("  Njulf.AssetTool keygen --private <pem> --public <pem>");
