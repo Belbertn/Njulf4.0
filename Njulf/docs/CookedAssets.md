@@ -13,6 +13,35 @@ dotnet run --project Njulf.AssetTool -- clean-stale --out NjulfHelloGame/Cooked
 
 The cooker defaults to the host RID and writes `Cooked/<rid>/`. Override it with `--platform win-x64`, `linux-x64`, or another supported desktop RID. `cook changed` skips an asset only when its source, effective settings, dependencies, tool version, platform, and every recorded output hash are unchanged. Package and database writes are atomic. Pass `--force` to rebuild.
 
+### Cook progress and bounded folder work
+
+Cook commands emit newline-delimited progress records to `stderr`; the existing
+per-asset summaries remain on `stdout`. This makes redirected CI and agent logs
+as useful as an interactive terminal. The default is human-readable `plain`
+records with material/texture detail:
+
+```powershell
+dotnet run --project Njulf.AssetTool -- cook folder NjulfHelloGame --out NjulfHelloGame/Cooked --progress plain --progress-detail items
+```
+
+- `--progress plain|jsonl|off` selects plain text, one JSON object per line,
+  or suppresses progress records. `plain` is the default.
+- `--progress-detail stages|items` limits output to major stages or includes
+  material/texture activity. `items` is the default.
+- Progress always goes to `stderr`, is flushed per record, uses no cursor
+  control, and emits a heartbeat after ten seconds without another event.
+- `--jobs <count|auto>` enables worker-local folder cooks; `1` remains the
+  default. `--max-inflight-bytes <bytes>` bounds source-byte admission, with a
+  single larger source admitted exclusively instead of starving forever.
+- Ctrl+C stops new work cooperatively, rolls back unpublished generation files,
+  retains completed asset database checkpoints, and returns exit code `130`.
+
+JSONL records include schema `1`, a process-local `runId`, monotonically
+increasing `sequence`, stable event/stage/outcome names, and separate
+`stageElapsedMs`, `itemElapsedMs`, `assetElapsedMs`, and `totalElapsedMs`
+fields. Progress configuration is diagnostic only: it is not included in cook
+identity, reports, or the asset database.
+
 Mesh payloads contain renderer-ready streams plus deterministic meshlet LOD0/1/2, simplified to approximately 100%, 50%, and 20% triangle density. Win-x64 and linux-x64 use meshoptimizer encoding; other RIDs use zstd until a compatible native decoder is available.
 
 Textures default to semantic BC formats in plain, non-supercompressed KTX2 containers: BC7 for color/data, BC5 for normal maps, BC4 for scalar maps, and BC6H for HDR. Full mip chains and color-correct filtering are generated offline. macOS currently selects RGBA8 pending an ASTC target profile. Use `--texture-format rgba8` when an uncompressed diagnostic output is useful.
@@ -39,6 +68,15 @@ Cooked/
 - `NJULF_COOKED_ASSET_PUBLIC_KEY=<path-or-PEM>` supplies the trusted ECDSA public key.
 
 `ContentManager.CookedDiagnostics` reports the selected path, bytes read, load/upload timings, fallback reasons, and mismatch counts. `TextureManager.RuntimeDecodedTextureCount`, `CookedTextureLoadCount`, and `DownscaledTextureCount` distinguish cooked loads from source decoding.
+
+For hosts that own a renderer upload queue, register an
+`IContentUploadDispatcher` and resolve `IAsyncContentManager`. `LoadAsync<T>`
+can then decode immutable cooked sidecars on CPU work while dispatching only
+GPU upload/publication to the host-approved context. `PreloadAsync<T>` accepts
+prioritized requests plus bounded concurrency and byte-admission options;
+completed assets remain manager-owned if another request fails or is cancelled.
+Without a dispatcher, `LoadAsync<T>` intentionally uses the synchronous path
+instead of performing renderer work on a thread-pool thread.
 
 Release sample publishing sets `CookedAssetsOnly=true`: source model/image files and source-import runtime assemblies are not copied. Debug builds retain the importer for the explicit fallback/editor path.
 

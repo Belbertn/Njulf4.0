@@ -1223,10 +1223,6 @@ namespace Njulf.Rendering.Resources
                     "Fetch the LFS object or replace the pointer with the real image file before loading this asset.");
             }
 
-            // Cache lookup deliberately follows the byte read. File identity,
-            // length, and timestamps are insufficient for editor hot reload:
-            // source bytes can change while all three remain stable.
-            ulong sourceContentHash = CalculateTextureSourceContentHash(imageBytes);
             bool isKtx2 = IsKtx2Source(source, fullPath);
             AuthenticatedCookedTexture? authenticatedCookedTexture =
                 isKtx2 && IsCookedSource(source)
@@ -1239,6 +1235,14 @@ namespace Njulf.Rendering.Resources
                         semantic,
                         normalizedMipPolicy)
                     : null;
+            // Cache lookup deliberately follows the byte read. File identity,
+            // length, and timestamps are insufficient for editor hot reload:
+            // source bytes can change while all three remain stable. Cooked
+            // authentication has already hashed this exact KTX2 snapshot, so
+            // reuse that proven fact instead of hashing the same bytes twice.
+            ulong sourceContentHash =
+                authenticatedCookedTexture?.Ktx2ContentHash ??
+                CalculateTextureSourceContentHash(imageBytes);
             ulong cacheContentHash =
                 authenticatedCookedTexture?.PublicationContentHash ??
                 sourceContentHash;

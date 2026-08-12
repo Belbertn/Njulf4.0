@@ -476,13 +476,12 @@ namespace Njulf.Rendering.Resources
                     GPUVertexNormalTangentStream[] vertexNormalTangents = BuildCookedNormalTangentStream(payload, subMesh);
                     GPUVertexUvColorStream[] vertexUvColors = BuildCookedUvColorStream(payload, subMesh);
                     uint[] indices = payload.Indices.AsSpan(subMesh.IndexOffset, subMesh.IndexCount).ToArray();
-                    Meshlet[] lod0 = payload.MeshletsLod0.AsSpan(subMesh.MeshletOffset, subMesh.MeshletCount).ToArray();
-                    Meshlet[] lod1 = payload.MeshletsLod1.AsSpan(subMesh.MeshletLod1Offset, subMesh.MeshletLod1Count).ToArray();
-                    Meshlet[] lod2 = payload.MeshletsLod2.AsSpan(subMesh.MeshletLod2Offset, subMesh.MeshletLod2Count).ToArray();
-                    Meshlet[] meshlets = new Meshlet[lod0.Length + lod1.Length + lod2.Length];
-                    lod0.CopyTo(meshlets, 0);
-                    lod1.CopyTo(meshlets, lod0.Length);
-                    lod2.CopyTo(meshlets, lod0.Length + lod1.Length);
+                    Meshlet[] meshlets = BuildCookedMeshletRanges(
+                        payload,
+                        subMesh,
+                        out int lod0Count,
+                        out int lod1Count,
+                        out int lod2Count);
                     uint[] meshletVertices = payload.MeshletVertices.AsSpan(subMesh.MeshletVertexOffset, subMesh.MeshletVertexCount).ToArray();
                     uint[] meshletTriangles = payload.MeshletTriangles.AsSpan(subMesh.MeshletTriangleOffset, subMesh.MeshletTriangleCount).ToArray();
                     GPUVertexSkinningData[] skinning = BuildCookedSkinning(payload, subMesh);
@@ -494,9 +493,9 @@ namespace Njulf.Rendering.Resources
                         meshlets,
                         meshletVertices,
                         meshletTriangles,
-                        lod0.Length,
-                        lod1.Length,
-                        lod2.Length,
+                        lod0Count,
+                        lod1Count,
+                        lod2Count,
                         skinning.Length == 0 ? null : skinning,
                         primitiveProfiles[i],
                         subMesh.CausticTopologyEvidence);
@@ -1015,6 +1014,37 @@ namespace Njulf.Rendering.Resources
                 };
             }
             return result;
+        }
+
+        /// <summary>
+        /// Materializes the three independent cooked LOD ranges directly into
+        /// the one contiguous registration buffer required by MeshManager.
+        /// This avoids the former three temporary LOD allocations before the
+        /// final contiguous upload copy.
+        /// </summary>
+        private static Meshlet[] BuildCookedMeshletRanges(
+            CookedMeshPayload payload,
+            CookedSubMeshRecord subMesh,
+            out int lod0Count,
+            out int lod1Count,
+            out int lod2Count)
+        {
+            lod0Count = subMesh.MeshletCount;
+            lod1Count = subMesh.MeshletLod1Count;
+            lod2Count = subMesh.MeshletLod2Count;
+            var combined = new Meshlet[checked(
+                lod0Count + lod1Count + lod2Count)];
+            payload.MeshletsLod0.AsSpan(
+                subMesh.MeshletOffset,
+                lod0Count).CopyTo(combined);
+            payload.MeshletsLod1.AsSpan(
+                subMesh.MeshletLod1Offset,
+                lod1Count).CopyTo(combined.AsSpan(lod0Count));
+            payload.MeshletsLod2.AsSpan(
+                subMesh.MeshletLod2Offset,
+                lod2Count).CopyTo(combined.AsSpan(
+                    checked(lod0Count + lod1Count)));
+            return combined;
         }
 
         private void SetLastUploadDiagnostics(ModelRenderUploadDiagnostics diagnostics)

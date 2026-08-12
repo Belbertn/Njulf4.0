@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -19,55 +21,481 @@ public sealed class ModelAssetCooker : IDisposable
         ".gltf", ".glb", ".obj", ".fbx", ".dae", ".3ds", ".blend", ".ply", ".stl"
     };
 
+    // Model material shape is process-invariant. Keeping these property lists
+    // outside the inner material loop also makes progress denominators cheap.
+    private static readonly System.Reflection.PropertyInfo[] TextureSlotProperties =
+        typeof(ModelMaterial).GetProperties()
+            .Where(property => property.PropertyType == typeof(ModelTextureSlot) &&
+                               property.CanRead && property.CanWrite)
+            .ToArray();
+
+    private static readonly System.Reflection.PropertyInfo[] ReadableTextureSlotProperties =
+        typeof(ModelMaterial).GetProperties()
+            .Where(property => property.PropertyType == typeof(ModelTextureSlot) &&
+                               property.CanRead)
+            .ToArray();
+
+    private static readonly System.Reflection.PropertyInfo[] WritableTexturePathProperties =
+        typeof(ModelMaterial).GetProperties()
+            .Where(property => property.PropertyType == typeof(string) &&
+                               property.Name.EndsWith("TexturePath", StringComparison.Ordinal) &&
+                               property.CanWrite)
+            .ToArray();
+
     private readonly ModelImporter _importer;
     private readonly ProcessedMeshAssetBuilder _meshBuilder;
     private readonly ITextureCooker _textureCooker;
+    private readonly bool _usesDefaultWorkerServices;
     private bool _disposed;
 
+    private sealed class CookProgressContext
+    {
+        private readonly IAssetCookProgressSink? _sink;
+        private readonly Stopwatch _runTimer;
+        private readonly Stopwatch _assetTimer = Stopwatch.StartNew();
+        private AssetCookStage? _activeStage;
+
+        public CookProgressContext(
+            IAssetCookProgressSink? sink,
+            Stopwatch runTimer,
+            string sourcePath,
+            int? assetIndex,
+            int? assetCount,
+            CancellationToken cancellationToken)
+        {
+            _sink = sink;
+            _runTimer = runTimer;
+            SourcePath = sourcePath;
+            AssetIndex = assetIndex;
+            AssetCount = assetCount;
+            CancellationToken = cancellationToken;
+        }
+
+        public string SourcePath { get; private set; }
+        public int? AssetIndex { get; }
+        public int? AssetCount { get; }
+        public CancellationToken CancellationToken { get; }
+
+        public void SetSourcePath(string sourcePath) => SourcePath = sourcePath;
+
+        public void ThrowIfCancellationRequested() =>
+            CancellationToken.ThrowIfCancellationRequested();
+
+        public void Report(AssetCookProgressEvent progress)
+        {
+            if (_sink is null)
+                return;
+
+            try
+            {
+                _sink.Report(progress with
+                {
+                    SourcePath = progress.SourcePath ?? SourcePath,
+                    AssetIndex = progress.AssetIndex ?? AssetIndex,
+                    AssetCount = progress.AssetCount ?? AssetCount,
+                    TotalElapsedMilliseconds =
+                        progress.TotalElapsedMilliseconds ?? _runTimer.ElapsedMilliseconds
+                });
+            }
+            catch
+            {
+                // Progress is diagnostic. A closed log pipe or a third-party
+                // observer must not corrupt an otherwise valid cook.
+            }
+        }
+
+        public void ReportStageStart(AssetCookStage stage, int? materialCount = null, int? textureSlotCount = null)
+        {
+            _activeStage = stage;
+            Report(new AssetCookProgressEvent(AssetCookProgressEventKind.StageStarted)
+            {
+                Stage = stage,
+                MaterialCount = materialCount,
+                TextureSlotCount = textureSlotCount
+            });
+        }
+
+        public void ReportStageCompleted(AssetCookStage stage, long elapsedMilliseconds, string? backend = null)
+        {
+            Report(new AssetCookProgressEvent(AssetCookProgressEventKind.StageCompleted)
+            {
+                Stage = stage,
+                StageElapsedMilliseconds = elapsedMilliseconds,
+                Backend = backend
+            });
+            if (_activeStage == stage)
+                _activeStage = null;
+        }
+
+        public void ReportAssetStarted() =>
+            Report(new AssetCookProgressEvent(AssetCookProgressEventKind.AssetStarted));
+
+        public void ReportAssetOutcome(
+            AssetCookProgressEventKind kind,
+            AssetCookProgressOutcome outcome,
+            int? meshCount = null,
+            int? textureCount = null,
+            int? warningCount = null,
+            string? message = null) =>
+            Report(new AssetCookProgressEvent(kind)
+            {
+                Stage = _activeStage,
+                Outcome = outcome,
+                MeshCount = meshCount,
+                TextureCount = textureCount,
+                WarningCount = warningCount,
+                Message = message,
+                AssetElapsedMilliseconds = _assetTimer.ElapsedMilliseconds
+            });
+    }
+
+    /// <summary>
+    /// State shared by every asset in one folder invocation. The database is
+    /// loaded once and each successful asset still takes its own locked,
+    /// atomic checkpoint. All mutable per-asset package work remains local.
+    /// </summary>
+    private sealed class CookRunSession
+    {
+        private readonly object _databaseGate = new();
+        private readonly ConcurrentDictionary<string, object> _textureKeyLocks =
+            new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, ulong> _artifactHashes =
+            new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Lazy<string>> _artifactSignatures =
+            new(StringComparer.OrdinalIgnoreCase);
+        private CookedAssetDatabase? _database;
+
+        public CookRunSession(string outputRoot, ModelCookOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            OutputRoot = options.UsePlatformSubdirectory
+                ? CookedPlatform.ResolveOutputRoot(outputRoot, options.Platform)
+                : Path.GetFullPath(outputRoot);
+            ModelDirectory = Path.Combine(OutputRoot, "models");
+            MaterialDirectory = Path.Combine(OutputRoot, "materials");
+            TextureDirectory = Path.Combine(OutputRoot, "textures");
+            ReportDirectory = Path.Combine(OutputRoot, "reports");
+            DatabasePath = Path.Combine(OutputRoot, "assetdb.njassetdb");
+            PlatformTextureOptions = options.TextureOptions with
+            {
+                TargetFormatPolicy = CookedPlatform.ResolveTexturePolicy(
+                    options.Platform,
+                    options.TextureOptions.TargetFormatPolicy)
+            };
+            SettingsHash = ComputeSettingsHash(options, PlatformTextureOptions);
+        }
+
+        public string OutputRoot { get; }
+        public string ModelDirectory { get; }
+        public string MaterialDirectory { get; }
+        public string TextureDirectory { get; }
+        public string ReportDirectory { get; }
+        public string DatabasePath { get; }
+        public TextureCookOptions PlatformTextureOptions { get; }
+        public ulong SettingsHash { get; }
+
+        public void EnsureInitialized()
+        {
+            lock (_databaseGate)
+            {
+                if (_database is not null)
+                    return;
+
+                Directory.CreateDirectory(OutputRoot);
+                Directory.CreateDirectory(ModelDirectory);
+                Directory.CreateDirectory(MaterialDirectory);
+                Directory.CreateDirectory(TextureDirectory);
+                Directory.CreateDirectory(ReportDirectory);
+                _database = CookedAssetDatabase.Load(DatabasePath);
+            }
+        }
+
+        public CookedAssetDatabaseEntry? GetEntry(string databaseKey)
+        {
+            EnsureInitialized();
+            lock (_databaseGate)
+            {
+                return _database!.Assets.TryGetValue(
+                    databaseKey,
+                    out CookedAssetDatabaseEntry? entry)
+                    ? entry
+                    : null;
+            }
+        }
+
+        public void CommitEntry(
+            string databaseKey,
+            CookedAssetDatabaseEntry entry)
+        {
+            ArgumentNullException.ThrowIfNull(entry);
+            EnsureInitialized();
+            lock (_databaseGate)
+            {
+                _database!.Assets[databaseKey] = entry;
+                _database.SaveAtomic(DatabasePath);
+            }
+        }
+
+        public object GetTextureKeyLock(string key) =>
+            _textureKeyLocks.GetOrAdd(key, static _ => new object());
+
+        public ulong GetOrRecordArtifactHash(string path)
+        {
+            string fullPath = Path.GetFullPath(path);
+            return _artifactHashes.GetOrAdd(fullPath, static candidate =>
+                CookedHash.File(candidate));
+        }
+
+        public void InvalidateArtifactHash(string path) =>
+            _artifactHashes.TryRemove(Path.GetFullPath(path), out _);
+
+        public void SetArtifactHash(string path, ulong contentHash) =>
+            _artifactHashes[Path.GetFullPath(path)] = contentHash;
+
+        public string SignArtifact(string path, string signingPrivateKey)
+        {
+            string fullPath = Path.GetFullPath(path);
+            Lazy<string> operation = _artifactSignatures.GetOrAdd(
+                fullPath,
+                candidate => new Lazy<string>(
+                    () => CookedPackageSigner.SignFile(
+                        candidate,
+                        signingPrivateKey),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+            try
+            {
+                string signaturePath = operation.Value;
+                InvalidateArtifactHash(signaturePath);
+                return signaturePath;
+            }
+            catch
+            {
+                if (_artifactSignatures.TryGetValue(fullPath, out Lazy<string>? current) &&
+                    ReferenceEquals(current, operation))
+                {
+                    _artifactSignatures.TryRemove(fullPath, out _);
+                }
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Keeps one stable encoded source snapshot only while later material
+    /// slots can still consume it. This avoids repeat file reads/hashes for
+    /// common shared textures without retaining every source image for the
+    /// entire cook or trusting timestamps as identity.
+    /// </summary>
+    private sealed class TextureSourceSnapshotCache
+    {
+        private const long MaximumRetainedBytes = 128L * 1024L * 1024L;
+        private readonly Dictionary<string, int> _remainingUses =
+            new(StringComparer.Ordinal);
+        private readonly Dictionary<string, TextureSourceSnapshot> _snapshots =
+            new(StringComparer.Ordinal);
+        private readonly Dictionary<ModelTextureSource, string> _anonymousKeys =
+            new(ReferenceEqualityComparer.Instance);
+        private long _retainedBytes;
+        private int _anonymousSequence;
+
+        public TextureSourceSnapshotCache(IReadOnlyList<ModelMaterial> materials)
+        {
+            foreach (ModelMaterial material in materials)
+            {
+                foreach (System.Reflection.PropertyInfo property in TextureSlotProperties)
+                {
+                    if (property.GetValue(material) is not ModelTextureSlot
+                        {
+                            Source: { } source
+                        })
+                    {
+                        continue;
+                    }
+
+                    string key = GetKey(source);
+                    _remainingUses.TryGetValue(key, out int count);
+                    _remainingUses[key] = checked(count + 1);
+                }
+            }
+        }
+
+        public string GetKey(ModelTextureSource source)
+        {
+            if (!string.IsNullOrWhiteSpace(source.FilePath))
+                return "file:" + Path.GetFullPath(source.FilePath);
+            // Embedded data has no independently re-openable stable path.
+            // Cache only the exact source object; a logical CacheIdentity can
+            // legitimately be reused by distinct importer-owned byte buffers.
+            if (_anonymousKeys.TryGetValue(source, out string? existing))
+                return existing;
+
+            string created = "object:" +
+                (++_anonymousSequence).ToString(
+                    System.Globalization.CultureInfo.InvariantCulture);
+            _anonymousKeys.Add(source, created);
+            return created;
+        }
+
+        public TextureSourceSnapshot Capture(
+            ModelTextureSource source,
+            string key)
+        {
+            if (_snapshots.TryGetValue(key, out TextureSourceSnapshot snapshot))
+                return snapshot;
+
+            byte[] bytes = ReadStableTextureSourceBytes(source);
+            snapshot = new TextureSourceSnapshot(bytes, CookedHash.Bytes(bytes));
+            if (_remainingUses.TryGetValue(key, out int remaining) &&
+                remaining > 1 &&
+                bytes.LongLength <= MaximumRetainedBytes &&
+                _retainedBytes <= MaximumRetainedBytes - bytes.LongLength)
+            {
+                _snapshots.Add(key, snapshot);
+                _retainedBytes += bytes.LongLength;
+            }
+            return snapshot;
+        }
+
+        public void Release(string key)
+        {
+            if (!_remainingUses.TryGetValue(key, out int remaining))
+                return;
+
+            remaining--;
+            if (remaining > 0)
+            {
+                _remainingUses[key] = remaining;
+                return;
+            }
+
+            _remainingUses.Remove(key);
+            if (_snapshots.Remove(key, out TextureSourceSnapshot snapshot))
+                _retainedBytes -= snapshot.Bytes.LongLength;
+        }
+    }
+
+    private readonly record struct TextureSourceSnapshot(
+        byte[] Bytes,
+        ulong ContentHash);
+
+    /// <summary>
+    /// Reuses immutable decoded transport images for compatible texture slots
+    /// across materials. Pixels are the expensive representation, so this is
+    /// deliberately hard-capped and simply declines new entries once full.
+    /// </summary>
+    private sealed class BoundedTransportImageCache
+    {
+        private const long MaximumRetainedBytes = 128L * 1024L * 1024L;
+        private readonly Dictionary<string, TextureTransportImage?> _images =
+            new(StringComparer.Ordinal);
+        private long _retainedBytes;
+
+        public bool TryGet(string key, out TextureTransportImage? image) =>
+            _images.TryGetValue(key, out image);
+
+        public void Add(string key, TextureTransportImage? image)
+        {
+            if (_images.ContainsKey(key))
+                return;
+
+            long bytes = EstimateBytes(image);
+            if (bytes > MaximumRetainedBytes ||
+                _retainedBytes > MaximumRetainedBytes - bytes)
+            {
+                return;
+            }
+
+            _images.Add(key, image);
+            _retainedBytes += bytes;
+        }
+
+        private static long EstimateBytes(TextureTransportImage? image)
+        {
+            if (image is null || image.Width <= 0 || image.Height <= 0)
+                return 0;
+            return checked((long)image.Width * image.Height * 4 * sizeof(double));
+        }
+    }
+
     public ModelAssetCooker()
-        : this(new ModelImporter(), new ProcessedMeshAssetBuilder(), new TextureCooker())
+        : this(
+            new ModelImporter(),
+            new ProcessedMeshAssetBuilder(),
+            new TextureCooker(),
+            usesDefaultWorkerServices: true)
     {
     }
 
     public ModelAssetCooker(ModelImporter importer, ProcessedMeshAssetBuilder meshBuilder, ITextureCooker textureCooker)
+        : this(importer, meshBuilder, textureCooker, usesDefaultWorkerServices: false)
+    {
+    }
+
+    private ModelAssetCooker(
+        ModelImporter importer,
+        ProcessedMeshAssetBuilder meshBuilder,
+        ITextureCooker textureCooker,
+        bool usesDefaultWorkerServices)
     {
         _importer = importer ?? throw new ArgumentNullException(nameof(importer));
         _meshBuilder = meshBuilder ?? throw new ArgumentNullException(nameof(meshBuilder));
         _textureCooker = textureCooker ?? throw new ArgumentNullException(nameof(textureCooker));
+        _usesDefaultWorkerServices = usesDefaultWorkerServices;
     }
 
-    public AssetCookResult CookModel(string sourcePath, string outputRoot, ModelCookOptions? options = null)
+    public AssetCookResult CookModel(
+        string sourcePath,
+        string outputRoot,
+        ModelCookOptions? options = null,
+        IAssetCookProgressSink? progress = null,
+        CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         options ??= new ModelCookOptions();
+        var runTimer = Stopwatch.StartNew();
+        var context = new CookProgressContext(
+            progress,
+            runTimer,
+            sourcePath,
+            assetIndex: 1,
+            assetCount: 1,
+            cancellationToken);
+        var session = new CookRunSession(outputRoot, options);
+        return CookModelCore(sourcePath, options, session, context);
+    }
+
+    private AssetCookResult CookModelCore(
+        string sourcePath,
+        ModelCookOptions options,
+        CookRunSession session,
+        CookProgressContext progress)
+    {
+        try
+        {
         sourcePath = Path.GetFullPath(sourcePath);
-        outputRoot = options.UsePlatformSubdirectory
-            ? CookedPlatform.ResolveOutputRoot(outputRoot, options.Platform)
-            : Path.GetFullPath(outputRoot);
+        progress.SetSourcePath(sourcePath);
+        progress.ReportAssetStarted();
+        progress.ThrowIfCancellationRequested();
+        string outputRoot = session.OutputRoot;
+
+        progress.ReportStageStart(AssetCookStage.Prepare);
+        var stageTimer = Stopwatch.StartNew();
         if (!File.Exists(sourcePath))
             throw new FileNotFoundException("Model source was not found.", sourcePath);
         if (!SupportedExtensions.Contains(Path.GetExtension(sourcePath)))
             throw new NotSupportedException($"Asset cooker does not support model extension '{Path.GetExtension(sourcePath)}'.");
 
-        Directory.CreateDirectory(outputRoot);
-        string modelDirectory = Path.Combine(outputRoot, "models");
-        string materialDirectory = Path.Combine(outputRoot, "materials");
-        string textureDirectory = Path.Combine(outputRoot, "textures");
-        string reportDirectory = Path.Combine(outputRoot, "reports");
-        Directory.CreateDirectory(modelDirectory);
-        Directory.CreateDirectory(materialDirectory);
-        Directory.CreateDirectory(textureDirectory);
-        Directory.CreateDirectory(reportDirectory);
+        session.EnsureInitialized();
+        string modelDirectory = session.ModelDirectory;
+        string materialDirectory = session.MaterialDirectory;
+        string textureDirectory = session.TextureDirectory;
+        string reportDirectory = session.ReportDirectory;
 
-        TextureCookOptions platformTextureOptions = options.TextureOptions with
-        {
-            TargetFormatPolicy = CookedPlatform.ResolveTexturePolicy(options.Platform, options.TextureOptions.TargetFormatPolicy)
-        };
+        TextureCookOptions platformTextureOptions = session.PlatformTextureOptions;
 
         string stem = SanitizeName(Path.GetFileNameWithoutExtension(sourcePath));
         string modelPath = Path.Combine(modelDirectory, stem + ".njmodel");
         string reportPath = Path.Combine(reportDirectory, stem + ".cook-report.json");
-        string databasePath = Path.Combine(outputRoot, "assetdb.njassetdb");
         if (File.Exists(modelPath))
         {
             using var existingReader = new CookedAssetReader(modelPath, CookedAssetKind.Model);
@@ -82,48 +510,58 @@ public sealed class ModelAssetCooker : IDisposable
                     "Cook them to separate output roots or give the source files distinct base names.");
             }
         }
+        long prepareMs = stageTimer.ElapsedMilliseconds;
+        progress.ReportStageCompleted(AssetCookStage.Prepare, prepareMs);
+        progress.ThrowIfCancellationRequested();
 
+        progress.ReportStageStart(AssetCookStage.IncrementalCheck);
+        stageTimer.Restart();
         ulong sourceHash = CookedHash.File(sourcePath);
-        ulong settingsHash = CookedHash.Bytes(CookedJson.Serialize(new
-        {
-            options.ImporterOptions,
-            TextureOptions = platformTextureOptions,
-            options.ToolVersion,
-            options.Platform,
-            MaterialTransportMetadataRevision,
-            MeshLodAlgorithmRevision,
-            CausticTopologyAlgorithmVersion =
-                ModelGiCausticHeroTopologyAnalyzer.CurrentAlgorithmVersion,
-            OpacityMicromapPayloadProducer =
-                CreateOpacityMicromapProducerSettingsHashInput(
-                    options.OpacityMicromapPayloadProducer),
-            TextureStatisticsAlgorithmVersion = TextureTransportStatistics.CurrentAlgorithmVersion,
-            PrimitiveTransportAlgorithmVersion = GiPrimitiveTransportProfile.CurrentAlgorithmVersion,
-            TextureTransportStatistics.StbDecoderVersion,
-            TextureTransportStatistics.WebPDecoderVersion,
-            TextureTransportStatistics.BcDecoderVersion,
-            TextureTransportStatistics.KtxStatisticsDecoderVersion
-        }));
+        ulong settingsHash = session.SettingsHash;
         string databaseKey = NormalizeRelative(outputRoot, sourcePath);
-        CookedAssetDatabase database = CookedAssetDatabase.Load(databasePath);
+        CookedAssetDatabaseEntry? previousEntry = session.GetEntry(databaseKey);
         var dependencies = new SortedDictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
         foreach ((string path, ulong hash) in DiscoverDependencies(sourcePath))
             dependencies[path] = hash;
-        if (database.Assets.TryGetValue(databaseKey, out CookedAssetDatabaseEntry? previousEntry))
+        if (previousEntry is not null)
         {
             foreach (string dependencyPath in previousEntry.Dependencies.Keys)
                 dependencies[dependencyPath] = File.Exists(dependencyPath) ? CookedHash.File(dependencyPath) : 0;
         }
         ulong dependencyHash = CookedHash.Ordered(dependencies.Select(pair => (pair.Key, pair.Value)));
-        if (!options.Force && database.Assets.TryGetValue(databaseKey, out CookedAssetDatabaseEntry? existing) &&
-            existing.SourceHash == sourceHash && existing.ImportSettingsHash == settingsHash &&
-            existing.DependencyHash == dependencyHash && existing.ToolVersion == options.ToolVersion &&
-            existing.Status == "Succeeded" && OutputsAreCurrent(outputRoot, existing.Outputs))
+        AssetCookIncrementalReason incrementalReason = DetermineIncrementalReason(
+            options,
+            previousEntry,
+            sourceHash,
+            settingsHash,
+            dependencyHash,
+            outputRoot);
+        long incrementalMs = stageTimer.ElapsedMilliseconds;
+        bool skipIncremental = incrementalReason == AssetCookIncrementalReason.Unchanged;
+        progress.Report(new AssetCookProgressEvent(AssetCookProgressEventKind.IncrementalCompleted)
+        {
+            Stage = AssetCookStage.IncrementalCheck,
+            IncrementalDecision = skipIncremental
+                ? AssetCookIncrementalDecision.Skip
+                : AssetCookIncrementalDecision.Cook,
+            IncrementalReason = incrementalReason,
+            StageElapsedMilliseconds = incrementalMs
+        });
+        progress.ReportStageCompleted(AssetCookStage.IncrementalCheck, incrementalMs);
+        progress.ThrowIfCancellationRequested();
+        if (skipIncremental)
         {
             AssetCookReport skippedReport = File.Exists(reportPath)
                 ? AssetCookReportJson.Read(reportPath)
-                : CreateSkippedReport(sourcePath, existing.Outputs);
-            return new AssetCookResult(skippedReport, true);
+                : CreateSkippedReport(sourcePath, previousEntry!.Outputs);
+            var skipped = new AssetCookResult(skippedReport, true);
+            progress.ReportAssetOutcome(
+                AssetCookProgressEventKind.AssetSkipped,
+                AssetCookProgressOutcome.Skipped,
+                meshCount: skippedReport.SubMeshCount,
+                textureCount: skippedReport.TextureCount,
+                warningCount: skippedReport.Warnings.Count);
+            return skipped;
         }
 
         // A stable .njmodel is the single package publication point. Every
@@ -162,6 +600,7 @@ public sealed class ModelAssetCooker : IDisposable
         {
         var warnings = new List<string>();
         var textureReports = new List<CookedTextureReport>();
+        progress.ReportStageStart(AssetCookStage.Import);
         var timer = Stopwatch.StartNew();
         ModelImportResult import = _importer.ImportDetailed(sourcePath, options.ImporterOptions);
         ModelMesh model = import.EnsureImported();
@@ -169,9 +608,15 @@ public sealed class ModelAssetCooker : IDisposable
             dependencies[path] = hash;
         dependencyHash = CookedHash.Ordered(dependencies.Select(pair => (pair.Key, pair.Value)));
         long importMs = timer.ElapsedMilliseconds;
+        progress.ReportStageCompleted(
+            AssetCookStage.Import,
+            importMs,
+            import.Backend.ToString());
+        progress.ThrowIfCancellationRequested();
         foreach (AssetImportMessage message in import.Diagnostics.Messages.Where(message => message.Severity != AssetImportSeverity.Info))
             warnings.Add($"{message.Code}: {message.Message}");
 
+        progress.ReportStageStart(AssetCookStage.Mesh);
         timer.Restart();
         ProcessedMeshAsset processed = _meshBuilder.Build(model, sourcePath);
         foreach (ProcessedSubMeshAsset subMesh in processed.SubMeshes)
@@ -189,11 +634,30 @@ public sealed class ModelAssetCooker : IDisposable
         }
         CookedMeshPayload mesh = CookedMeshBuilder.Build(processed);
         long meshMs = timer.ElapsedMilliseconds;
+        progress.ReportStageCompleted(AssetCookStage.Mesh, meshMs);
+        progress.ThrowIfCancellationRequested();
 
+        int textureSlotCount = CountOccupiedTextureSlots(model);
+        progress.ReportStageStart(
+            AssetCookStage.MaterialsTextures,
+            materialCount: Math.Max(1, model.Materials.Count),
+            textureSlotCount: textureSlotCount);
         timer.Restart();
-        CookedMaterialTable materials = CookMaterials(model, materialDirectory, textureDirectory, platformTextureOptions, options.ToolVersion, textureReports);
+        CookedMaterialTable materials = CookMaterials(
+            model,
+            materialDirectory,
+            textureDirectory,
+            platformTextureOptions,
+            options.ToolVersion,
+            textureReports,
+            progress,
+            textureSlotCount,
+            session);
         long textureMs = timer.ElapsedMilliseconds;
+        progress.ReportStageCompleted(AssetCookStage.MaterialsTextures, textureMs);
+        progress.ThrowIfCancellationRequested();
 
+        progress.ReportStageStart(AssetCookStage.Serialize);
         timer.Restart();
         CookedPackage.WriteMesh(
             meshPath,
@@ -203,7 +667,11 @@ public sealed class ModelAssetCooker : IDisposable
             dependencyHash,
             options.ToolVersion,
             CookedPlatform.SupportsMeshOptimizer(options.Platform));
+        session.InvalidateArtifactHash(meshPath);
+        ulong meshContentHash = session.GetOrRecordArtifactHash(meshPath);
         CookedPackage.WriteMaterials(materialPath, materials, sourceHash, settingsHash, dependencyHash, options.ToolVersion);
+        session.InvalidateArtifactHash(materialPath);
+        ulong materialContentHash = session.GetOrRecordArtifactHash(materialPath);
         CookedAssetReference? animationReference = null;
         if (model.Skeletons.Count > 0 || model.Skins.Count > 0 || model.AnimationClips.Count > 0)
         {
@@ -214,7 +682,10 @@ public sealed class ModelAssetCooker : IDisposable
                 settingsHash,
                 dependencyHash,
                 options.ToolVersion);
-            animationReference = new CookedAssetReference(Path.GetFileName(animationPath), CookedHash.File(animationPath));
+            session.InvalidateArtifactHash(animationPath);
+            animationReference = new CookedAssetReference(
+                Path.GetFileName(animationPath),
+                session.GetOrRecordArtifactHash(animationPath));
         }
         var manifest = new CookedModelManifest(
             CookedPackage.StableAssetId(sourcePath),
@@ -223,8 +694,8 @@ public sealed class ModelAssetCooker : IDisposable
             sourceHash,
             settingsHash,
             dependencyHash,
-            new CookedAssetReference(Path.GetFileName(meshPath), CookedHash.File(meshPath)),
-            new CookedAssetReference(NormalizeRelative(modelDirectory, materialPath), CookedHash.File(materialPath)),
+            new CookedAssetReference(Path.GetFileName(meshPath), meshContentHash),
+            new CookedAssetReference(NormalizeRelative(modelDirectory, materialPath), materialContentHash),
             animationReference,
             processed.SubMeshes.Select((subMesh, index) => new CookedModelSubObject(
                 subMesh.Name, index, subMesh.MaterialSlot, subMesh.NodeIndex, subMesh.SkinIndex, subMesh.SkinningBindTransform)).ToArray(),
@@ -246,12 +717,14 @@ public sealed class ModelAssetCooker : IDisposable
             options.ToolVersion,
             opacityMicromapChunk);
         long serializationMs = timer.ElapsedMilliseconds;
+        progress.ReportStageCompleted(AssetCookStage.Serialize, serializationMs);
+        progress.ThrowIfCancellationRequested();
 
         var outputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { meshPath, materialPath };
         if (animationReference is not null)
             outputPaths.Add(animationPath);
         foreach (ModelMaterial material in materials.Materials)
-            foreach (System.Reflection.PropertyInfo property in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(ModelTextureSlot) && p.CanRead))
+            foreach (System.Reflection.PropertyInfo property in ReadableTextureSlotProperties)
             {
                 if (property.GetValue(material) is not ModelTextureSlot { Source.FilePath: { } texturePath })
                     continue;
@@ -261,8 +734,10 @@ public sealed class ModelAssetCooker : IDisposable
             }
         if (!string.IsNullOrWhiteSpace(options.SigningPrivateKey))
         {
+            progress.ReportStageStart(AssetCookStage.Sign);
+            timer.Restart();
             foreach (string path in outputPaths.Where(File.Exists).OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray())
-                outputPaths.Add(CookedPackageSigner.SignFile(path, options.SigningPrivateKey));
+                outputPaths.Add(session.SignArtifact(path, options.SigningPrivateKey));
             string stagedSignature = CookedPackageSigner.SignFile(
                 stagedModelPath,
                 options.SigningPrivateKey);
@@ -284,17 +759,34 @@ public sealed class ModelAssetCooker : IDisposable
                 stagedSignature,
                 publishedSignaturePath,
                 overwrite: true);
+            session.InvalidateArtifactHash(publishedSignaturePath);
             signaturePublished = true;
             outputPaths.Add(publishedSignaturePath);
+            long signingMs = timer.ElapsedMilliseconds;
+            progress.ReportStageCompleted(AssetCookStage.Sign, signingMs);
+            progress.ThrowIfCancellationRequested();
         }
+
+        progress.ReportStageStart(AssetCookStage.Publish);
+        timer.Restart();
         File.Move(stagedModelPath, modelPath, overwrite: true);
+        session.InvalidateArtifactHash(modelPath);
         modelPublished = true;
         if (previousSignatureBackupPath != null)
             TryDeleteUnpublishedArtifact(previousSignatureBackupPath);
         outputPaths.Add(modelPath);
+        long publishMs = timer.ElapsedMilliseconds;
+        progress.ReportStageCompleted(AssetCookStage.Publish, publishMs);
+
+        // Once the stable model publication point has moved, finish the
+        // report/database checkpoint instead of letting cancellation leave a
+        // valid published package untracked by incremental cooking.
+        progress.ReportStageStart(AssetCookStage.ReportDatabase);
+        timer.Restart();
         var outputs = new SortedDictionary<string, ulong>(StringComparer.Ordinal);
         foreach (string path in outputPaths.Where(File.Exists).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-            outputs[NormalizeRelative(outputRoot, path)] = CookedHash.File(path);
+            outputs[NormalizeRelative(outputRoot, path)] =
+                session.GetOrRecordArtifactHash(path);
 
         var report = new AssetCookReport(
             sourcePath,
@@ -322,7 +814,7 @@ public sealed class ModelAssetCooker : IDisposable
             MeshletLod2Count = mesh.MeshletsLod2.Length
         };
         AssetCookReportJson.WriteAtomic(reportPath, report);
-        database.Assets[databaseKey] = new CookedAssetDatabaseEntry
+        session.CommitEntry(databaseKey, new CookedAssetDatabaseEntry
         {
             SourcePath = sourcePath,
             SourceHash = sourceHash,
@@ -333,9 +825,17 @@ public sealed class ModelAssetCooker : IDisposable
             CookedAtUtc = DateTimeOffset.UtcNow,
             Dependencies = dependencies,
             Outputs = outputs
-        };
-        database.SaveAtomic(databasePath);
-        return new AssetCookResult(report, false);
+        });
+        long reportDatabaseMs = timer.ElapsedMilliseconds;
+        progress.ReportStageCompleted(AssetCookStage.ReportDatabase, reportDatabaseMs);
+        var result = new AssetCookResult(report, false);
+        progress.ReportAssetOutcome(
+            AssetCookProgressEventKind.AssetCompleted,
+            AssetCookProgressOutcome.Succeeded,
+            meshCount: processed.SubMeshes.Count,
+            textureCount: textureReports.Count,
+            warningCount: warnings.Count);
+        return result;
         }
         catch (Exception cookFailure)
         {
@@ -384,18 +884,256 @@ public sealed class ModelAssetCooker : IDisposable
             }
             throw;
         }
+        }
+        catch (OperationCanceledException)
+        {
+            progress.ReportAssetOutcome(
+                AssetCookProgressEventKind.AssetCancelled,
+                AssetCookProgressOutcome.Cancelled,
+                message: "Cook cancelled.");
+            throw;
+        }
+        catch (Exception exception)
+        {
+            progress.ReportAssetOutcome(
+                AssetCookProgressEventKind.AssetFailed,
+                AssetCookProgressOutcome.Failed,
+                message: exception.Message);
+            throw;
+        }
     }
 
-    public IReadOnlyList<AssetCookResult> CookFolder(string sourceFolder, string outputRoot, ModelCookOptions? options = null)
+    public IReadOnlyList<AssetCookResult> CookFolder(
+        string sourceFolder,
+        string outputRoot,
+        ModelCookOptions? options = null,
+        IAssetCookProgressSink? progress = null,
+        CancellationToken cancellationToken = default,
+        AssetCookFolderOptions? folderOptions = null)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         sourceFolder = Path.GetFullPath(sourceFolder);
         if (!Directory.Exists(sourceFolder))
             throw new DirectoryNotFoundException($"Source folder '{sourceFolder}' was not found.");
-        return Directory.EnumerateFiles(sourceFolder, "*", SearchOption.AllDirectories)
+
+        folderOptions ??= new AssetCookFolderOptions();
+        if (folderOptions.MaxDegreeOfParallelism <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(folderOptions),
+                "MaxDegreeOfParallelism must be positive.");
+        }
+        if (folderOptions.MaxInflightBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(folderOptions),
+                "MaxInflightBytes must be positive.");
+        }
+
+        options ??= new ModelCookOptions();
+        var session = new CookRunSession(outputRoot, options);
+
+        var runTimer = Stopwatch.StartNew();
+        var folderProgress = new CookProgressContext(
+            progress,
+            runTimer,
+            sourceFolder,
+            assetIndex: null,
+            assetCount: null,
+            cancellationToken);
+        folderProgress.Report(new AssetCookProgressEvent(
+            AssetCookProgressEventKind.DiscoveryStarted));
+        string[] sources = Directory.EnumerateFiles(
+                sourceFolder,
+                "*",
+                SearchOption.AllDirectories)
             .Where(path => SupportedExtensions.Contains(Path.GetExtension(path)))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .Select(path => CookModel(path, outputRoot, options))
             .ToArray();
+        folderProgress.Report(new AssetCookProgressEvent(
+            AssetCookProgressEventKind.DiscoveryCompleted)
+        {
+            AssetCount = sources.Length
+        });
+        ValidateFolderOutputCollisions(sources, session.ModelDirectory);
+
+        if (folderOptions.MaxDegreeOfParallelism > 1 && !_usesDefaultWorkerServices)
+        {
+            throw new InvalidOperationException(
+                "Parallel folder cooking requires default worker-local cooker services. " +
+                "Use one job with an injected ModelAssetCooker or construct the default cooker for parallel work.");
+        }
+
+        if (sources.Length > 1 && folderOptions.MaxDegreeOfParallelism > 1)
+        {
+            return CookFolderParallel(
+                sources,
+                options,
+                session,
+                progress,
+                runTimer,
+                cancellationToken,
+                folderOptions);
+        }
+
+        var results = new AssetCookResult[sources.Length];
+        for (int index = 0; index < sources.Length; index++)
+        {
+            folderProgress.ThrowIfCancellationRequested();
+            var assetProgress = new CookProgressContext(
+                progress,
+                runTimer,
+                sources[index],
+                index + 1,
+                sources.Length,
+                cancellationToken);
+            results[index] = CookModelCore(
+                sources[index],
+                options,
+                session,
+                assetProgress);
+        }
+
+        return results;
+    }
+
+    private IReadOnlyList<AssetCookResult> CookFolderParallel(
+        IReadOnlyList<string> sources,
+        ModelCookOptions options,
+        CookRunSession session,
+        IAssetCookProgressSink? progress,
+        Stopwatch runTimer,
+        CancellationToken cancellationToken,
+        AssetCookFolderOptions folderOptions)
+    {
+        var results = new AssetCookResult[sources.Count];
+        var queue = new Queue<int>(Enumerable.Range(0, sources.Count));
+        var schedulerGate = new object();
+        long inflightBytes = 0;
+        ExceptionDispatchInfo? failure = null;
+        using var workerCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        int workerCount = Math.Min(
+            folderOptions.MaxDegreeOfParallelism,
+            sources.Count);
+        var workers = new Task[workerCount];
+
+        for (int workerIndex = 0; workerIndex < workerCount; workerIndex++)
+        {
+            int capturedWorkerIndex = workerIndex;
+            workers[workerIndex] = Task.Run(() =>
+            {
+                ModelAssetCooker worker = capturedWorkerIndex == 0
+                    ? this
+                    : new ModelAssetCooker();
+                bool ownsWorker = !ReferenceEquals(worker, this);
+                try
+                {
+                    while (true)
+                    {
+                        int sourceIndex;
+                        long reservation;
+                        lock (schedulerGate)
+                        {
+                            while (true)
+                            {
+                                if (workerCancellation.IsCancellationRequested)
+                                    return;
+                                if (queue.Count == 0)
+                                    return;
+
+                                sourceIndex = queue.Peek();
+                                reservation = GetInflightReservation(
+                                    sources[sourceIndex],
+                                    folderOptions.MaxInflightBytes);
+                                if (inflightBytes + reservation <=
+                                    folderOptions.MaxInflightBytes)
+                                {
+                                    queue.Dequeue();
+                                    inflightBytes += reservation;
+                                    break;
+                                }
+
+                                // The reservation for one over-budget input is
+                                // clamped to the whole budget, so it runs alone
+                                // after active work drains rather than starving.
+                                Monitor.Wait(schedulerGate, millisecondsTimeout: 100);
+                            }
+                        }
+
+                        try
+                        {
+                            var assetProgress = new CookProgressContext(
+                                progress,
+                                runTimer,
+                                sources[sourceIndex],
+                                sourceIndex + 1,
+                                sources.Count,
+                                workerCancellation.Token);
+                            results[sourceIndex] = worker.CookModelCore(
+                                sources[sourceIndex],
+                                options,
+                                session,
+                                assetProgress);
+                        }
+                        catch (OperationCanceledException)
+                            when (workerCancellation.IsCancellationRequested)
+                        {
+                            return;
+                        }
+                        catch (Exception exception)
+                        {
+                            lock (schedulerGate)
+                            {
+                                failure ??= ExceptionDispatchInfo.Capture(exception);
+                            }
+                            workerCancellation.Cancel();
+                            return;
+                        }
+                        finally
+                        {
+                            lock (schedulerGate)
+                            {
+                                inflightBytes -= reservation;
+                                Monitor.PulseAll(schedulerGate);
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    if (ownsWorker)
+                        worker.Dispose();
+                }
+            });
+        }
+
+        Task.WaitAll(workers);
+        failure?.Throw();
+        cancellationToken.ThrowIfCancellationRequested();
+        return results;
+    }
+
+    private static long GetInflightReservation(string sourcePath, long maximumBytes)
+    {
+        long sourceBytes;
+        try
+        {
+            sourceBytes = new FileInfo(sourcePath).Length;
+        }
+        catch (IOException)
+        {
+            // The worker will produce the authoritative source-read failure.
+            // Reserve a small unit rather than masking it in scheduling.
+            sourceBytes = 1;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            sourceBytes = 1;
+        }
+
+        sourceBytes = Math.Max(1, sourceBytes);
+        return Math.Min(sourceBytes, maximumBytes);
     }
 
     public int CleanStale(string outputRoot, string? platform = null, bool usePlatformSubdirectory = true)
@@ -426,6 +1164,32 @@ public sealed class ModelAssetCooker : IDisposable
             database.SaveAtomic(databasePath);
         return deleted;
     }
+
+    private static ulong ComputeSettingsHash(
+        ModelCookOptions options,
+        TextureCookOptions platformTextureOptions) =>
+        CookedHash.Bytes(CookedJson.Serialize(new
+        {
+            options.ImporterOptions,
+            TextureOptions = platformTextureOptions,
+            options.ToolVersion,
+            options.Platform,
+            MaterialTransportMetadataRevision,
+            MeshLodAlgorithmRevision,
+            CausticTopologyAlgorithmVersion =
+                ModelGiCausticHeroTopologyAnalyzer.CurrentAlgorithmVersion,
+            OpacityMicromapPayloadProducer =
+                CreateOpacityMicromapProducerSettingsHashInput(
+                    options.OpacityMicromapPayloadProducer),
+            TextureStatisticsAlgorithmVersion =
+                TextureTransportStatistics.CurrentAlgorithmVersion,
+            PrimitiveTransportAlgorithmVersion =
+                GiPrimitiveTransportProfile.CurrentAlgorithmVersion,
+            TextureTransportStatistics.StbDecoderVersion,
+            TextureTransportStatistics.WebPDecoderVersion,
+            TextureTransportStatistics.BcDecoderVersion,
+            TextureTransportStatistics.KtxStatisticsDecoderVersion
+        }));
 
     private static CookedOpacityMicromapModelChunk? TryProduceOpacityMicromapChunk(
         ModelCookOptions options,
@@ -563,34 +1327,67 @@ public sealed class ModelAssetCooker : IDisposable
         string textureDirectory,
         TextureCookOptions defaultOptions,
         uint toolVersion,
-        List<CookedTextureReport> reports)
+        List<CookedTextureReport> reports,
+        CookProgressContext progress,
+        int textureSlotCount,
+        CookRunSession session)
     {
         IReadOnlyList<ModelMaterial> sourceMaterials = model.Materials;
         ModelMaterial[] materials = sourceMaterials.Count == 0
             ? [ModelMaterial.Default]
             : sourceMaterials.Select(CloneMaterial).ToArray();
+        var sourceSnapshots = new TextureSourceSnapshotCache(materials);
         var cookedTextures = new Dictionary<string, (string Path, CookedTextureReport Report)>(StringComparer.Ordinal);
+        var transportImageCache = new BoundedTransportImageCache();
         var opacityMicromapTextureArtifacts =
             new List<OpacityMicromapCookedTextureArtifact>();
         IReadOnlyList<ModelSubMesh> primitiveSubMeshes =
             GetPrimitiveTransportSubMeshes(model);
         var primitiveProfiles =
             new GiPrimitiveTransportProfile?[primitiveSubMeshes.Count];
+        int textureSlotIndex = 0;
         for (int materialIndex = 0; materialIndex < materials.Length; materialIndex++)
         {
+            progress.ThrowIfCancellationRequested();
             ModelMaterial material = materials[materialIndex];
+            string materialName = string.IsNullOrWhiteSpace(material.Name)
+                ? $"material-{materialIndex + 1}"
+                : material.Name;
+            progress.Report(new AssetCookProgressEvent(AssetCookProgressEventKind.MaterialStarted)
+            {
+                ItemIndex = materialIndex + 1,
+                ItemCount = materials.Length,
+                ItemName = materialName
+            });
+            var materialTimer = Stopwatch.StartNew();
             var materialImages =
                 new Dictionary<(int MaterialIndex, string PropertyName), TextureTransportImage>();
             var materialTransportImages =
                 new Dictionary<string, TextureTransportImage?>(StringComparer.Ordinal);
-            foreach (System.Reflection.PropertyInfo property in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(ModelTextureSlot) && p.CanRead && p.CanWrite))
+            foreach (System.Reflection.PropertyInfo property in TextureSlotProperties)
             {
                 ModelTextureSlot? slot = property.GetValue(material) as ModelTextureSlot;
                 if (slot?.Source is null)
                     continue;
                 ModelTextureSource source = slot.Source;
-                byte[] sourceBytes = ReadStableTextureSourceBytes(source);
-                ulong sourceHash = CookedHash.Bytes(sourceBytes);
+                progress.ThrowIfCancellationRequested();
+                int currentTextureSlot = ++textureSlotIndex;
+                string textureName = string.IsNullOrWhiteSpace(source.DebugName)
+                    ? ResolveTextureSourceIdentity(source)
+                    : source.DebugName;
+                progress.Report(new AssetCookProgressEvent(AssetCookProgressEventKind.TextureStarted)
+                {
+                    ItemIndex = currentTextureSlot,
+                    ItemCount = textureSlotCount,
+                    ItemName = textureName
+                });
+                var textureTimer = Stopwatch.StartNew();
+                string sourceSnapshotKey = sourceSnapshots.GetKey(source);
+                TextureSourceSnapshot sourceSnapshot = sourceSnapshots.Capture(
+                    source,
+                    sourceSnapshotKey);
+                byte[] sourceBytes = sourceSnapshot.Bytes;
+                ulong sourceHash = sourceSnapshot.ContentHash;
                 string identity = ResolveTextureSourceIdentity(source);
                 TextureSemantic semantic = ClassifyTextureSemantic(property.Name, slot.ColorSpace);
                 bool foliageMaterial =
@@ -623,8 +1420,15 @@ public sealed class ModelAssetCooker : IDisposable
                     AlphaCutoff = material.AlphaCutoff
                 };
                 TextureTransportImage? transportImage;
+                AssetCookProgressOutcome textureOutcome;
                 if (!cookedTextures.TryGetValue(key, out var cooked))
                 {
+                    // Generation-qualified model sidecars are per asset, but
+                    // compatible cooked texture paths are shared. Serialize
+                    // only this producer/reuse contract to prevent concurrent
+                    // workers from racing a KTX2/.njtex publication pair.
+                    lock (session.GetTextureKeyLock(key))
+                    {
                     string textureStem = SanitizeName(string.IsNullOrWhiteSpace(source.DebugName) ? "texture" : Path.GetFileNameWithoutExtension(source.DebugName));
                     string suffix = CookedHash.Bytes(Encoding.UTF8.GetBytes(key)).ToString("x16")[..8];
                     string ktxPath = Path.Combine(textureDirectory, $"{textureStem}_{suffix}.ktx2");
@@ -640,9 +1444,11 @@ public sealed class ModelAssetCooker : IDisposable
                             preserveAlphaCoverage,
                             textureOptions,
                             toolVersion,
+                            session,
                             out textureReport,
                             out transportImage))
                     {
+                        session.InvalidateArtifactHash(ktxPath);
                         textureReport = _textureCooker.Cook(
                             CreateMemoryBackedTextureSource(source, sourceBytes),
                             ktxPath,
@@ -655,7 +1461,7 @@ public sealed class ModelAssetCooker : IDisposable
                             textureReport.OriginalWidth, textureReport.OriginalHeight, textureReport.CookedWidth, textureReport.CookedHeight,
                             textureReport.MipCount, textureReport.VulkanFormat, textureReport.CookedBytes)
                         {
-                            Ktx2ContentHash = CookedHash.File(ktxPath),
+                            Ktx2ContentHash = session.GetOrRecordArtifactHash(ktxPath),
                             Semantic = semantic,
                             TransportStatistics = textureReport.TransportStatistics,
                             AlphaCoveragePreserved = textureReport.AlphaCoveragePreserved,
@@ -663,7 +1469,13 @@ public sealed class ModelAssetCooker : IDisposable
                                 ? textureReport.AlphaCutoff
                                 : null
                         };
+                        session.InvalidateArtifactHash(metaPath);
                         CookedPackage.WriteTextureMeta(metaPath, meta, toolVersion);
+                        textureOutcome = AssetCookProgressOutcome.Cooked;
+                    }
+                    else
+                    {
+                        textureOutcome = AssetCookProgressOutcome.Reused;
                     }
                     textureReport = textureReport with
                     {
@@ -676,10 +1488,12 @@ public sealed class ModelAssetCooker : IDisposable
                     cooked = (ktxPath, textureReport);
                     cookedTextures.Add(key, cooked);
                     reports.Add(textureReport);
+                    }
                 }
                 else if (!materialTransportImages.TryGetValue(
                              key,
-                             out transportImage))
+                             out transportImage) &&
+                         !transportImageCache.TryGet(key, out transportImage))
                 {
                     TextureTransportSourceAnalysis analysis =
                         TextureCooker.AnalyzeTransportSource(
@@ -701,7 +1515,13 @@ public sealed class ModelAssetCooker : IDisposable
                             $"does not match source hash 0x{sourceHash:x16}.");
                     }
                     transportImage = analysis.Image;
+                    textureOutcome = AssetCookProgressOutcome.Deduplicated;
                 }
+                else
+                {
+                    textureOutcome = AssetCookProgressOutcome.Deduplicated;
+                }
+                transportImageCache.Add(key, transportImage);
                 materialTransportImages[key] = transportImage;
                 string relativeTexturePath = NormalizeRelative(materialDirectory, cooked.Path);
                 property.SetValue(
@@ -750,8 +1570,18 @@ public sealed class ModelAssetCooker : IDisposable
                                 ? cooked.Report.AlphaCutoff
                                 : null));
                 }
+                progress.Report(new AssetCookProgressEvent(AssetCookProgressEventKind.TextureCompleted)
+                {
+                    Outcome = textureOutcome,
+                    ItemIndex = currentTextureSlot,
+                    ItemCount = textureSlotCount,
+                    ItemName = textureName,
+                    ItemElapsedMilliseconds = textureTimer.ElapsedMilliseconds
+                });
+                sourceSnapshots.Release(sourceSnapshotKey);
+                progress.ThrowIfCancellationRequested();
             }
-            foreach (System.Reflection.PropertyInfo pathProperty in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(string) && p.Name.EndsWith("TexturePath", StringComparison.Ordinal) && p.CanWrite))
+            foreach (System.Reflection.PropertyInfo pathProperty in WritableTexturePathProperties)
                 pathProperty.SetValue(material, null);
             BuildPrimitiveTransportProfilesForMaterial(
                 materialIndex,
@@ -759,6 +1589,13 @@ public sealed class ModelAssetCooker : IDisposable
                 materials,
                 materialImages,
                 primitiveProfiles);
+            progress.Report(new AssetCookProgressEvent(AssetCookProgressEventKind.MaterialCompleted)
+            {
+                ItemIndex = materialIndex + 1,
+                ItemCount = materials.Length,
+                ItemName = materialName,
+                ItemElapsedMilliseconds = materialTimer.ElapsedMilliseconds
+            });
         }
         GiPrimitiveTransportProfile[] completedProfiles = primitiveProfiles
             .Select(
@@ -855,7 +1692,9 @@ public sealed class ModelAssetCooker : IDisposable
     private static ModelMaterial CloneMaterial(ModelMaterial source)
     {
         var clone = new ModelMaterial();
-        foreach (System.Reflection.PropertyInfo property in typeof(ModelMaterial).GetProperties().Where(p => p.CanRead && p.CanWrite))
+        foreach (System.Reflection.PropertyInfo property in
+                 typeof(ModelMaterial).GetProperties().Where(property =>
+                     property.CanRead && property.CanWrite))
             property.SetValue(clone, property.GetValue(source));
         return clone;
     }
@@ -922,6 +1761,7 @@ public sealed class ModelAssetCooker : IDisposable
         bool preserveAlphaCoverage,
         TextureCookOptions textureOptions,
         uint toolVersion,
+        CookRunSession session,
         out CookedTextureReport report,
         out TextureTransportImage? transportImage)
     {
@@ -980,6 +1820,8 @@ public sealed class ModelAssetCooker : IDisposable
             }
 
             transportImage = analysis.Image;
+            session.SetArtifactHash(ktxPath, authenticated.Ktx2ContentHash);
+            session.SetArtifactHash(metaPath, authenticated.MetadataContentHash);
             report = new CookedTextureReport(
                 metadata.SourceIdentity,
                 metadata.OriginalWidth,
@@ -1119,7 +1961,7 @@ public sealed class ModelAssetCooker : IDisposable
     {
         var result = new SortedDictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
         foreach (ModelMaterial material in model.Materials)
-            foreach (System.Reflection.PropertyInfo property in typeof(ModelMaterial).GetProperties().Where(p => p.PropertyType == typeof(ModelTextureSlot) && p.CanRead))
+            foreach (System.Reflection.PropertyInfo property in ReadableTextureSlotProperties)
             {
                 if (property.GetValue(material) is not ModelTextureSlot { Source.FilePath: { } filePath })
                     continue;
@@ -1129,12 +1971,99 @@ public sealed class ModelAssetCooker : IDisposable
         return result;
     }
 
-    private static bool OutputsAreCurrent(string outputRoot, IReadOnlyDictionary<string, ulong> outputs) =>
-        outputs.Count > 0 && outputs.All(pair =>
+    private enum CookedOutputsCurrentState
+    {
+        Current,
+        Missing,
+        HashMismatch
+    }
+
+    private static AssetCookIncrementalReason DetermineIncrementalReason(
+        ModelCookOptions options,
+        CookedAssetDatabaseEntry? existing,
+        ulong sourceHash,
+        ulong settingsHash,
+        ulong dependencyHash,
+        string outputRoot)
+    {
+        if (options.Force)
+            return AssetCookIncrementalReason.Forced;
+        if (existing is null)
+            return AssetCookIncrementalReason.DatabaseMiss;
+        if (existing.SourceHash != sourceHash)
+            return AssetCookIncrementalReason.SourceChanged;
+        if (existing.ImportSettingsHash != settingsHash)
+            return AssetCookIncrementalReason.SettingsChanged;
+        if (existing.DependencyHash != dependencyHash)
+            return AssetCookIncrementalReason.DependencyChanged;
+        if (existing.ToolVersion != options.ToolVersion)
+            return AssetCookIncrementalReason.ToolChanged;
+        if (!string.Equals(existing.Status, "Succeeded", StringComparison.Ordinal))
+            return AssetCookIncrementalReason.PreviousStatus;
+
+        return GetOutputsCurrentState(outputRoot, existing.Outputs) switch
         {
-            string path = Path.Combine(outputRoot, pair.Key);
-            return File.Exists(path) && CookedHash.File(path) == pair.Value;
-        });
+            CookedOutputsCurrentState.Current => AssetCookIncrementalReason.Unchanged,
+            CookedOutputsCurrentState.Missing => AssetCookIncrementalReason.OutputMissing,
+            _ => AssetCookIncrementalReason.OutputHashMismatch
+        };
+    }
+
+    private static CookedOutputsCurrentState GetOutputsCurrentState(
+        string outputRoot,
+        IReadOnlyDictionary<string, ulong> outputs)
+    {
+        if (outputs.Count == 0)
+            return CookedOutputsCurrentState.Missing;
+
+        foreach ((string relativePath, ulong expectedHash) in outputs)
+        {
+            string path = Path.Combine(outputRoot, relativePath);
+            if (!File.Exists(path))
+                return CookedOutputsCurrentState.Missing;
+            if (CookedHash.File(path) != expectedHash)
+                return CookedOutputsCurrentState.HashMismatch;
+        }
+
+        return CookedOutputsCurrentState.Current;
+    }
+
+    private static int CountOccupiedTextureSlots(ModelMesh model)
+    {
+        IReadOnlyList<ModelMaterial> materials = model.Materials.Count == 0
+            ? [ModelMaterial.Default]
+            : model.Materials;
+        int count = 0;
+        foreach (ModelMaterial material in materials)
+        {
+            foreach (System.Reflection.PropertyInfo property in TextureSlotProperties)
+            {
+                if (property.GetValue(material) is ModelTextureSlot { Source: not null })
+                    count++;
+            }
+        }
+        return count;
+    }
+
+    private static void ValidateFolderOutputCollisions(
+        IReadOnlyList<string> sources,
+        string modelDirectory)
+    {
+        foreach (IGrouping<string, string> collision in sources
+                     .GroupBy(
+                         source => SanitizeName(Path.GetFileNameWithoutExtension(source)),
+                         StringComparer.OrdinalIgnoreCase)
+                     .Where(group => group.Skip(1).Any()))
+        {
+            string[] paths = collision
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            string modelPath = Path.Combine(modelDirectory, collision.Key + ".njmodel");
+            throw new InvalidOperationException(
+                $"Cook output collision: {string.Join(", ", paths.Select(path => $"'{path}'"))} " +
+                $"all map to '{modelPath}'. Cook them to separate output roots or give the source files distinct base names.");
+        }
+    }
 
     private static string SanitizeName(string value)
     {

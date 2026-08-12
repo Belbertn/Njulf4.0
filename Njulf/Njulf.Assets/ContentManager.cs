@@ -19,31 +19,120 @@ namespace Njulf.Assets
         CookedModelAsset CookedAsset,
         Model RuntimeModel);
 
-    public class ContentManager : IContentManager, IDisposable
+    public class ContentManager : IContentManager, IAsyncContentManager, IDisposable
     {
         private readonly Dictionary<string, object> _cache =
             new(StringComparer.Ordinal);
         private readonly Lazy<ModelImporter> _modelImporter;
         private readonly Lazy<ProcessedMeshAssetBuilder> _processedMeshAssetBuilder;
         private readonly IModelRenderUploadService? _modelRenderUploadService;
+        private readonly IContentUploadDispatcher? _contentUploadDispatcher;
         private readonly Func<string, CookedModelPackageSnapshot>
             _modelSnapshotFactory;
+        private readonly bool _useResolverSnapshots;
         private readonly string _rootDirectory;
         private readonly CookedContentResolver _cookedResolver;
         private readonly List<CookedContentDiagnosticEntry> _cookedDiagnosticEntries = new();
         private readonly object _stateLock = new();
         private readonly object _diagnosticsLock = new();
+        private readonly object _uploadLock = new();
+        private readonly Dictionary<string, ModelLoadGate> _modelLoadGates =
+            new(StringComparer.Ordinal);
         private long _snapshotOwnershipSequence;
+        private long _cacheGeneration;
         private bool _disposed;
+
+        private sealed class ModelLoadGate
+        {
+            public SemaphoreSlim Semaphore { get; } = new(1, 1);
+            public int LeaseCount { get; set; }
+        }
+
+        private sealed record CookedModelAsyncPreparation(
+            string RequestedPath,
+            CookedResolution Resolution,
+            CookedModelPackageSnapshot Snapshot,
+            CookedModelAsset? Package,
+            string? CacheKey,
+            long CacheGeneration,
+            double LoadMilliseconds,
+            Model? CachedModel,
+            bool UseSourceFallback);
+
+        private sealed class ContentByteBudget
+        {
+            private readonly object _gate = new();
+            private readonly long _maximumBytes;
+            private long _inflightBytes;
+
+            public ContentByteBudget(long maximumBytes)
+            {
+                if (maximumBytes <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+                _maximumBytes = maximumBytes;
+            }
+
+            public async ValueTask<Lease> AcquireAsync(
+                long estimatedBytes,
+                CancellationToken cancellationToken)
+            {
+                long reservation = Math.Min(
+                    Math.Max(1, estimatedBytes),
+                    _maximumBytes);
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    lock (_gate)
+                    {
+                        if (_inflightBytes + reservation <= _maximumBytes)
+                        {
+                            _inflightBytes += reservation;
+                            return new Lease(this, reservation);
+                        }
+                    }
+
+                    await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            private void Release(long reservation)
+            {
+                lock (_gate)
+                    _inflightBytes -= reservation;
+            }
+
+            public sealed class Lease : IDisposable
+            {
+                private ContentByteBudget? _owner;
+                private readonly long _reservation;
+
+                internal Lease(ContentByteBudget owner, long reservation)
+                {
+                    _owner = owner;
+                    _reservation = reservation;
+                }
+
+                public void Dispose()
+                {
+                    ContentByteBudget? owner = Interlocked.Exchange(
+                        ref _owner,
+                        null);
+                    owner?.Release(_reservation);
+                }
+            }
+        }
 
         public ContentManager(
             string? rootDirectory = null,
-            IModelRenderUploadService? modelRenderUploadService = null)
+            IModelRenderUploadService? modelRenderUploadService = null,
+            IContentUploadDispatcher? contentUploadDispatcher = null)
             : this(
                 rootDirectory,
                 modelRenderUploadService,
                 static path =>
-                    CookedPackage.CaptureModelSnapshot(path))
+                    CookedPackage.CaptureModelSnapshot(path),
+                useResolverSnapshots: true,
+                contentUploadDispatcher: contentUploadDispatcher)
         {
         }
 
@@ -51,13 +140,30 @@ namespace Njulf.Assets
             string? rootDirectory,
             IModelRenderUploadService? modelRenderUploadService,
             Func<string, CookedModelPackageSnapshot> modelSnapshotFactory)
+            : this(
+                rootDirectory,
+                modelRenderUploadService,
+                modelSnapshotFactory,
+                useResolverSnapshots: false,
+                contentUploadDispatcher: null)
+        {
+        }
+
+        private ContentManager(
+            string? rootDirectory,
+            IModelRenderUploadService? modelRenderUploadService,
+            Func<string, CookedModelPackageSnapshot> modelSnapshotFactory,
+            bool useResolverSnapshots,
+            IContentUploadDispatcher? contentUploadDispatcher)
         {
             ArgumentNullException.ThrowIfNull(modelSnapshotFactory);
             _rootDirectory = rootDirectory ?? AppContext.BaseDirectory!;
             _modelImporter = new Lazy<ModelImporter>(() => new ModelImporter(), LazyThreadSafetyMode.ExecutionAndPublication);
             _processedMeshAssetBuilder = new Lazy<ProcessedMeshAssetBuilder>(() => new ProcessedMeshAssetBuilder(), LazyThreadSafetyMode.ExecutionAndPublication);
             _modelRenderUploadService = modelRenderUploadService;
+            _contentUploadDispatcher = contentUploadDispatcher;
             _modelSnapshotFactory = modelSnapshotFactory;
+            _useResolverSnapshots = useResolverSnapshots;
             _cookedResolver = new CookedContentResolver(_rootDirectory);
         }
 
@@ -101,54 +207,28 @@ namespace Njulf.Assets
 
         public T Load<T>(string path, ContentLoadOptions? options)
         {
+            if (string.IsNullOrEmpty(path))
+            {
+                throw new ArgumentException(
+                    "Path cannot be null or empty",
+                    nameof(path));
+            }
+
+            options ??= ContentLoadOptions.Default;
+            string fullPath = GetFullPath(path);
             lock (_stateLock)
             {
                 ThrowIfDisposed();
-                if (string.IsNullOrEmpty(path))
-                {
-                    throw new ArgumentException(
-                        "Path cannot be null or empty",
-                        nameof(path));
-                }
+            }
 
-                options ??= ContentLoadOptions.Default;
-                string fullPath = GetFullPath(path);
+            if (typeof(T) == typeof(Model))
+            {
+                return LoadModelPipeline<T>(path, fullPath, options);
+            }
 
-                if (typeof(T) == typeof(Model))
-                {
-                    bool strict = CookedRuntimePolicy.Strict;
-                    CookedResolution resolution =
-                        _cookedResolver.ResolveModel(path, fullPath, strict);
-                    if (resolution.Status == CookedResolutionStatus.Found)
-                    {
-                        return LoadResolvedCookedModel<T>(
-                            path,
-                            fullPath,
-                            resolution,
-                            strict);
-                    }
-
-                    bool allowFallback =
-                        CookedRuntimePolicy.AllowSourceFallback;
-                    if (!allowFallback)
-                    {
-                        throw new FileNotFoundException(
-                            $"Cooked model package is required for '{path}', but {resolution.Reason}. " +
-                            "Cook the asset with Njulf.AssetTool or set NJULF_ALLOW_SOURCE_ASSET_RUNTIME_LOAD=true for development fallback.",
-                            resolution.PackagePath);
-                    }
-
-                    RecordCookedDiagnostic(
-                        new CookedContentDiagnosticEntry(
-                            path,
-                            resolution.PackagePath,
-                            false,
-                            resolution.Reason,
-                            0,
-                            0,
-                            0));
-                }
-
+            lock (_stateLock)
+            {
+                ThrowIfDisposed();
                 if (!File.Exists(fullPath))
                 {
                     throw new FileNotFoundException(
@@ -168,11 +248,514 @@ namespace Njulf.Assets
             }
         }
 
-        private T LoadResolvedCookedModel<T>(
+        /// <summary>
+        /// Asynchronous entry point that preserves renderer ownership. When a
+        /// host supplies an <see cref="IContentUploadDispatcher"/>, immutable
+        /// resolver/read/decode work runs independently and only the final
+        /// upload/publication callback is dispatched to that approved context.
+        /// Without a dispatcher, this deliberately follows the existing
+        /// synchronous path rather than uploading from an arbitrary pool thread.
+        /// </summary>
+        public async Task<T> LoadAsync<T>(
+            string path,
+            ContentLoadOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrEmpty(path))
+            {
+                throw new ArgumentException(
+                    "Path cannot be null or empty",
+                    nameof(path));
+            }
+
+            options ??= ContentLoadOptions.Default;
+            string fullPath = GetFullPath(path);
+            lock (_stateLock)
+            {
+                ThrowIfDisposed();
+            }
+
+            if (typeof(T) == typeof(Model) &&
+                _contentUploadDispatcher is not null)
+            {
+                return await LoadModelPipelineAsync<T>(
+                    path,
+                    fullPath,
+                    options,
+                    _contentUploadDispatcher,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            // Without an owner-approved dispatcher there is no safe way to
+            // put renderer mutation on a pool thread. Preserve synchronous
+            // ownership semantics rather than merely wrapping Load in Task.Run.
+            return Load<T>(path, options);
+        }
+
+        /// <summary>
+        /// Preloads a prioritized group with bounded logical concurrency and
+        /// byte admission. Failed or cancelled items are reported in the
+        /// result while already-ready assets remain manager-owned.
+        /// </summary>
+        public async Task<ContentPreloadResult<T>> PreloadAsync<T>(
+            IEnumerable<ContentPreloadRequest> requests,
+            ContentPreloadOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(requests);
+            options ??= new ContentPreloadOptions();
+            if (options.MaxConcurrency <= 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(options),
+                    "MaxConcurrency must be positive.");
+            if (options.MaxInflightBytes <= 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(options),
+                    "MaxInflightBytes must be positive.");
+
+            // Materialize once: callers may provide a one-shot enumerable.
+            // Results deliberately retain this original input order even while
+            // admission below follows priority.
+            ContentPreloadRequest[] input = requests
+                .Select(request => request ?? throw new ArgumentException(
+                    "Preload requests cannot contain null items.",
+                    nameof(requests)))
+                .ToArray();
+            var ordered = input
+                .Select((request, index) => new { Request = request, Index = index })
+                .OrderByDescending(item => item.Request.Priority)
+                .ThenBy(item => item.Index)
+                .ToArray();
+            var results = new ContentPreloadItemResult<T>[input.Length];
+
+            using var concurrency = new SemaphoreSlim(options.MaxConcurrency);
+            var byteBudget = new ContentByteBudget(options.MaxInflightBytes);
+            Task[] work = ordered
+                .Select(item => PreloadOneAsync(item.Request, item.Index))
+                .ToArray();
+            await Task.WhenAll(work).ConfigureAwait(false);
+            return new ContentPreloadResult<T>(results);
+
+            async Task PreloadOneAsync(
+                ContentPreloadRequest request,
+                int resultIndex)
+            {
+                long estimate = request.EstimatedBytes;
+                if (estimate < 0)
+                {
+                    results[resultIndex] = new ContentPreloadItemResult<T>(
+                        request,
+                        default,
+                        new ArgumentOutOfRangeException(
+                            nameof(request.EstimatedBytes)),
+                        Cancelled: false);
+                    ReportContentProgress(
+                        options.Progress,
+                        request,
+                        ContentLoadStage.Failed,
+                        "EstimatedBytes cannot be negative.");
+                    return;
+                }
+
+                // An unknown request takes a conservative admission unit; a
+                // caller with package byte metadata can supply the exact value.
+                if (estimate == 0)
+                    estimate = Math.Min(options.MaxInflightBytes, 16L * 1024L * 1024L);
+                ReportContentProgress(options.Progress, request, ContentLoadStage.Queued, null);
+                ContentByteBudget.Lease? lease = null;
+                bool entered = false;
+                try
+                {
+                    lease = await byteBudget.AcquireAsync(
+                        estimate,
+                        cancellationToken).ConfigureAwait(false);
+                    await concurrency.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    entered = true;
+                    ReportContentProgress(options.Progress, request, ContentLoadStage.Started, null);
+                    if (typeof(T) == typeof(Model) && _contentUploadDispatcher is not null)
+                    {
+                        ReportContentProgress(
+                            options.Progress,
+                            request,
+                            ContentLoadStage.WaitingForUpload,
+                            null);
+                    }
+
+                    T asset = await LoadAsync<T>(
+                        request.Path,
+                        options.LoadOptions,
+                        cancellationToken).ConfigureAwait(false);
+                    results[resultIndex] = new ContentPreloadItemResult<T>(
+                        request,
+                        asset,
+                        Failure: null,
+                        Cancelled: false);
+                    ReportContentProgress(options.Progress, request, ContentLoadStage.Ready, null);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    results[resultIndex] = new ContentPreloadItemResult<T>(
+                        request,
+                        default,
+                        Failure: null,
+                        Cancelled: true);
+                    ReportContentProgress(options.Progress, request, ContentLoadStage.Cancelled, null);
+                }
+                catch (Exception exception)
+                {
+                    results[resultIndex] = new ContentPreloadItemResult<T>(
+                        request,
+                        default,
+                        exception,
+                        Cancelled: false);
+                    ReportContentProgress(
+                        options.Progress,
+                        request,
+                        ContentLoadStage.Failed,
+                        exception.Message);
+                }
+                finally
+                {
+                    if (entered)
+                        concurrency.Release();
+                    lease?.Dispose();
+                }
+            }
+        }
+
+        private T LoadModelPipeline<T>(
             string requestedPath,
             string sourcePath,
+            ContentLoadOptions options)
+        {
+            bool strict = CookedRuntimePolicy.Strict;
+            string gateKey = CreateModelLoadGateKey<T>(
+                requestedPath,
+                sourcePath,
+                strict);
+            ModelLoadGate gate = AcquireModelLoadGate(gateKey);
+            gate.Semaphore.Wait();
+            try
+            {
+                long cacheGeneration;
+                lock (_stateLock)
+                {
+                    ThrowIfDisposed();
+                    cacheGeneration = _cacheGeneration;
+                }
+
+                CookedResolution resolution =
+                    _cookedResolver.ResolveModel(
+                        requestedPath,
+                        sourcePath,
+                        strict,
+                        _useResolverSnapshots);
+                if (resolution.Status == CookedResolutionStatus.Found)
+                {
+                    return LoadResolvedCookedModel<T>(
+                        requestedPath,
+                        resolution,
+                        strict,
+                        cacheGeneration);
+                }
+
+                bool allowFallback = CookedRuntimePolicy.AllowSourceFallback;
+                if (!allowFallback)
+                {
+                    throw new FileNotFoundException(
+                        $"Cooked model package is required for '{requestedPath}', but {resolution.Reason}. " +
+                        "Cook the asset with Njulf.AssetTool or set NJULF_ALLOW_SOURCE_ASSET_RUNTIME_LOAD=true for development fallback.",
+                        resolution.PackagePath);
+                }
+
+                RecordCookedDiagnostic(
+                    new CookedContentDiagnosticEntry(
+                        requestedPath,
+                        resolution.PackagePath,
+                        false,
+                        resolution.Reason,
+                        0,
+                        0,
+                        0));
+
+                lock (_stateLock)
+                {
+                    ThrowIfDisposed();
+                    if (!File.Exists(sourcePath))
+                    {
+                        throw new FileNotFoundException(
+                            "Source asset file was not found and no usable cooked package was resolved.",
+                            sourcePath);
+                    }
+
+                    string cacheKey = CreateCacheKey<T>(sourcePath, options);
+                    if (_cache.TryGetValue(cacheKey, out object? cached))
+                        return (T)cached;
+
+                    object result = LoadInternal<T>(sourcePath, options);
+                    PublishOwnedAsset(cacheKey, result);
+                    return (T)result;
+                }
+            }
+            finally
+            {
+                gate.Semaphore.Release();
+                ReleaseModelLoadGate(gateKey, gate);
+            }
+        }
+
+        private async Task<T> LoadModelPipelineAsync<T>(
+            string requestedPath,
+            string sourcePath,
+            ContentLoadOptions options,
+            IContentUploadDispatcher uploadDispatcher,
+            CancellationToken cancellationToken)
+        {
+            bool strict = CookedRuntimePolicy.Strict;
+            string gateKey = CreateModelLoadGateKey<T>(
+                requestedPath,
+                sourcePath,
+                strict);
+            ModelLoadGate gate = AcquireModelLoadGate(gateKey);
+            bool entered = false;
+            try
+            {
+                await gate.Semaphore.WaitAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                entered = true;
+                long cacheGeneration;
+                lock (_stateLock)
+                {
+                    ThrowIfDisposed();
+                    cacheGeneration = _cacheGeneration;
+                }
+
+                CookedModelAsyncPreparation preparation = await Task.Run(
+                    () => PrepareCookedModelForAsyncLoad<T>(
+                        requestedPath,
+                        sourcePath,
+                        strict,
+                        cacheGeneration),
+                    cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (preparation.CachedModel is not null)
+                    return (T)(object)preparation.CachedModel;
+
+                if (preparation.UseSourceFallback)
+                {
+                    return await uploadDispatcher.DispatchAsync(
+                        () => LoadSourceFallbackModel<T>(sourcePath, options),
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                return await uploadDispatcher.DispatchAsync(
+                    () => UploadPreparedCookedModel<T>(preparation),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (entered)
+                    gate.Semaphore.Release();
+                ReleaseModelLoadGate(gateKey, gate);
+            }
+        }
+
+        private CookedModelAsyncPreparation PrepareCookedModelForAsyncLoad<T>(
+            string requestedPath,
+            string sourcePath,
+            bool strict,
+            long cacheGeneration)
+        {
+            CookedResolution resolution = _cookedResolver.ResolveModel(
+                requestedPath,
+                sourcePath,
+                strict,
+                _useResolverSnapshots);
+            if (resolution.Status != CookedResolutionStatus.Found)
+            {
+                if (!CookedRuntimePolicy.AllowSourceFallback)
+                {
+                    throw new FileNotFoundException(
+                        $"Cooked model package is required for '{requestedPath}', but {resolution.Reason}. " +
+                        "Cook the asset with Njulf.AssetTool or set NJULF_ALLOW_SOURCE_ASSET_RUNTIME_LOAD=true for development fallback.",
+                        resolution.PackagePath);
+                }
+
+                RecordCookedDiagnostic(new CookedContentDiagnosticEntry(
+                    requestedPath,
+                    resolution.PackagePath,
+                    false,
+                    resolution.Reason,
+                    0,
+                    0,
+                    0));
+                return new CookedModelAsyncPreparation(
+                    requestedPath,
+                    resolution,
+                    Snapshot: null!,
+                    Package: null,
+                    CacheKey: null,
+                    cacheGeneration,
+                    LoadMilliseconds: 0,
+                    CachedModel: null,
+                    UseSourceFallback: true);
+            }
+
+            if (_modelRenderUploadService is null)
+            {
+                throw new InvalidOperationException(
+                    "Loading a cooked Model requires an IModelRenderUploadService.");
+            }
+
+            CookedAssetReaderFlags readerFlags = CookedRuntimePolicy.ReaderFlags;
+            if (!strict)
+                readerFlags &= ~CookedAssetReaderFlags.StrictSourceHash;
+            ulong? expectedSourceHash = resolution.ExpectedSourceHash;
+            string cookedPath = resolution.PackagePath!;
+            var stopwatch = Stopwatch.StartNew();
+            CookedModelPackageSnapshot snapshot = resolution.ModelSnapshot ??
+                _modelSnapshotFactory(cookedPath) ??
+                throw new InvalidOperationException(
+                    "The cooked model snapshot factory returned null.");
+            string cookedKey = CreateCookedCacheKey<T>(
+                snapshot,
+                readerFlags,
+                expectedSourceHash);
+            lock (_stateLock)
+            {
+                ThrowIfDisposed();
+                if (_cache.TryGetValue(cookedKey, out object? cached))
+                {
+                    return new CookedModelAsyncPreparation(
+                        requestedPath,
+                        resolution,
+                        snapshot,
+                        Package: null,
+                        cookedKey,
+                        cacheGeneration,
+                        stopwatch.Elapsed.TotalMilliseconds,
+                        CachedModel: (Model)cached,
+                        UseSourceFallback: false);
+                }
+            }
+
+            CookedModelAsset package = CookedPackage.LoadModel(
+                snapshot,
+                readerFlags,
+                expectedSourceHash);
+            return new CookedModelAsyncPreparation(
+                requestedPath,
+                resolution,
+                snapshot,
+                package,
+                cookedKey,
+                cacheGeneration,
+                stopwatch.Elapsed.TotalMilliseconds,
+                CachedModel: null,
+                UseSourceFallback: false);
+        }
+
+        private T UploadPreparedCookedModel<T>(
+            CookedModelAsyncPreparation preparation)
+        {
+            if (_modelRenderUploadService is null ||
+                preparation.Package is null ||
+                string.IsNullOrWhiteSpace(preparation.CacheKey))
+            {
+                throw new InvalidOperationException(
+                    "The cooked model upload preparation is incomplete.");
+            }
+
+            lock (_stateLock)
+            {
+                ThrowIfDisposed();
+                if (_cache.TryGetValue(preparation.CacheKey, out object? cached))
+                    return (T)cached;
+            }
+
+            double uploadMs;
+            Model cookedModel;
+            lock (_uploadLock)
+            {
+                lock (_stateLock)
+                {
+                    ThrowIfDisposed();
+                    if (_cache.TryGetValue(preparation.CacheKey, out object? cached))
+                        return (T)cached;
+                }
+
+                var stopwatch = Stopwatch.StartNew();
+                cookedModel =
+                    _modelRenderUploadService.UploadCookedModel(preparation.Package) ??
+                    throw new InvalidOperationException(
+                        "The model upload service returned a null cooked model.");
+                uploadMs = stopwatch.Elapsed.TotalMilliseconds;
+                bool publicationInvoked = false;
+                try
+                {
+                    lock (_stateLock)
+                    {
+                        ThrowIfDisposed();
+                        if (_cacheGeneration != preparation.CacheGeneration)
+                        {
+                            throw new OperationCanceledException(
+                                "The content cache was cleared while this cooked model was loading.");
+                        }
+
+                        publicationInvoked = true;
+                        PublishOwnedAsset(preparation.CacheKey, cookedModel);
+                    }
+                }
+                catch (Exception publicationFailure)
+                {
+                    if (!publicationInvoked)
+                        DisposeUnpublishedAsset(cookedModel, publicationFailure);
+                    throw;
+                }
+            }
+
+            RecordCookedDiagnostic(new CookedContentDiagnosticEntry(
+                preparation.RequestedPath,
+                preparation.Snapshot.PackagePath,
+                true,
+                preparation.Resolution.Reason,
+                preparation.Package.BytesRead,
+                preparation.LoadMilliseconds,
+                uploadMs));
+            return (T)(object)cookedModel;
+        }
+
+        private T LoadSourceFallbackModel<T>(
+            string sourcePath,
+            ContentLoadOptions options)
+        {
+            lock (_stateLock)
+            {
+                ThrowIfDisposed();
+                if (!File.Exists(sourcePath))
+                {
+                    throw new FileNotFoundException(
+                        "Source asset file was not found and no usable cooked package was resolved.",
+                        sourcePath);
+                }
+
+                string cacheKey = CreateCacheKey<T>(sourcePath, options);
+                if (_cache.TryGetValue(cacheKey, out object? cached))
+                    return (T)cached;
+
+                object result = LoadInternal<T>(sourcePath, options);
+                PublishOwnedAsset(cacheKey, result);
+                return (T)result;
+            }
+        }
+
+        private T LoadResolvedCookedModel<T>(
+            string requestedPath,
             CookedResolution resolution,
-            bool strict)
+            bool strict,
+            long cacheGeneration)
         {
             if (_modelRenderUploadService == null)
             {
@@ -181,19 +764,15 @@ namespace Njulf.Assets
             }
 
             string cookedPath = resolution.PackagePath!;
-            bool packageRequestedDirectly = Path.GetExtension(requestedPath)
-                .Equals(".njmodel", StringComparison.OrdinalIgnoreCase);
             CookedAssetReaderFlags readerFlags =
                 CookedRuntimePolicy.ReaderFlags;
             if (!strict)
                 readerFlags &= ~CookedAssetReaderFlags.StrictSourceHash;
-            ulong? expectedSourceHash =
-                !packageRequestedDirectly && File.Exists(sourcePath)
-                    ? CookedHash.File(sourcePath)
-                    : null;
+            ulong? expectedSourceHash = resolution.ExpectedSourceHash;
 
             var stopwatch = Stopwatch.StartNew();
             CookedModelPackageSnapshot snapshot =
+                resolution.ModelSnapshot ??
                 _modelSnapshotFactory(cookedPath) ??
                 throw new InvalidOperationException(
                     "The cooked model snapshot factory returned null.");
@@ -201,8 +780,12 @@ namespace Njulf.Assets
                 snapshot,
                 readerFlags,
                 expectedSourceHash);
-            if (_cache.TryGetValue(cookedKey, out object? cookedCached))
-                return (T)cookedCached;
+            lock (_stateLock)
+            {
+                ThrowIfDisposed();
+                if (_cache.TryGetValue(cookedKey, out object? cookedCached))
+                    return (T)cookedCached;
+            }
 
             CookedModelAsset package = CookedPackage.LoadModel(
                 snapshot,
@@ -210,13 +793,46 @@ namespace Njulf.Assets
                 expectedSourceHash);
             double loadMs = stopwatch.Elapsed.TotalMilliseconds;
 
-            stopwatch.Restart();
-            Model cookedModel =
-                _modelRenderUploadService.UploadCookedModel(package) ??
-                throw new InvalidOperationException(
-                    "The model upload service returned a null cooked model.");
-            double uploadMs = stopwatch.Elapsed.TotalMilliseconds;
-            PublishOwnedAsset(cookedKey, cookedModel);
+            Model cookedModel;
+            double uploadMs;
+            lock (_uploadLock)
+            {
+                lock (_stateLock)
+                {
+                    ThrowIfDisposed();
+                    if (_cache.TryGetValue(cookedKey, out object? cached))
+                        return (T)cached;
+                }
+
+                stopwatch.Restart();
+                cookedModel =
+                    _modelRenderUploadService.UploadCookedModel(package) ??
+                    throw new InvalidOperationException(
+                        "The model upload service returned a null cooked model.");
+                uploadMs = stopwatch.Elapsed.TotalMilliseconds;
+                bool publicationInvoked = false;
+                try
+                {
+                    lock (_stateLock)
+                    {
+                        ThrowIfDisposed();
+                        if (_cacheGeneration != cacheGeneration)
+                        {
+                            throw new OperationCanceledException(
+                                "The content cache was cleared while this cooked model was loading.");
+                        }
+
+                        publicationInvoked = true;
+                        PublishOwnedAsset(cookedKey, cookedModel);
+                    }
+                }
+                catch (Exception publicationFailure)
+                {
+                    if (!publicationInvoked)
+                        DisposeUnpublishedAsset(cookedModel, publicationFailure);
+                    throw;
+                }
+            }
             RecordCookedDiagnostic(
                 new CookedContentDiagnosticEntry(
                     requestedPath,
@@ -389,6 +1005,73 @@ namespace Njulf.Assets
                 $"expectedSourceHash={sourceIdentity}");
         }
 
+        private static string CreateModelLoadGateKey<T>(
+            string requestedPath,
+            string sourcePath,
+            bool strict)
+        {
+            bool requestedCooked = Path.GetExtension(requestedPath).Equals(
+                ".njmodel",
+                StringComparison.OrdinalIgnoreCase);
+            return string.Join(
+                '|',
+                typeof(T).FullName,
+                Path.GetFullPath(sourcePath),
+                $"requestedCooked={requestedCooked}",
+                $"strict={strict}",
+                $"readerFlags={(uint)CookedRuntimePolicy.ReaderFlags}");
+        }
+
+        private ModelLoadGate AcquireModelLoadGate(string gateKey)
+        {
+            lock (_stateLock)
+            {
+                ThrowIfDisposed();
+                if (!_modelLoadGates.TryGetValue(gateKey, out ModelLoadGate? gate))
+                {
+                    gate = new ModelLoadGate();
+                    _modelLoadGates.Add(gateKey, gate);
+                }
+                gate.LeaseCount++;
+                return gate;
+            }
+        }
+
+        private void ReleaseModelLoadGate(string gateKey, ModelLoadGate gate)
+        {
+            lock (_stateLock)
+            {
+                gate.LeaseCount--;
+                if (gate.LeaseCount == 0 &&
+                    _modelLoadGates.TryGetValue(gateKey, out ModelLoadGate? current) &&
+                    ReferenceEquals(current, gate))
+                {
+                    _modelLoadGates.Remove(gateKey);
+                    gate.Semaphore.Dispose();
+                }
+            }
+        }
+
+        private static void DisposeUnpublishedAsset(
+            object asset,
+            Exception publicationFailure)
+        {
+            if (asset is not IDisposable disposable)
+                return;
+
+            try
+            {
+                disposable.Dispose();
+            }
+            catch (Exception rollbackFailure)
+            {
+                throw new AggregateException(
+                    "Content publication was invalidated and the unpublished asset could not be disposed.",
+                    publicationFailure,
+                    rollbackFailure);
+            }
+        }
+
         private void PublishOwnedAsset(string cacheKey, object asset)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(cacheKey);
@@ -443,6 +1126,7 @@ namespace Njulf.Assets
             {
                 ThrowIfDisposed();
                 ClearOwnedAssets();
+                _cacheGeneration++;
             }
         }
 
@@ -538,6 +1222,31 @@ namespace Njulf.Assets
                     : $"Cooked asset source fallback: {entry.RequestedPath}: {entry.Reason}");
         }
 
+        private static void ReportContentProgress(
+            IContentLoadProgressSink? sink,
+            ContentPreloadRequest request,
+            ContentLoadStage stage,
+            string? message)
+        {
+            if (sink is null)
+                return;
+
+            try
+            {
+                sink.Report(new ContentLoadProgressEvent(
+                    request.Path,
+                    request.Priority,
+                    stage,
+                    request.EstimatedBytes,
+                    message));
+            }
+            catch
+            {
+                // A diagnostic observer must not change content ownership or
+                // turn a successfully loaded asset into a failed preload.
+            }
+        }
+
         private void ThrowIfDisposed() =>
             ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -552,6 +1261,7 @@ namespace Njulf.Assets
                 }
 
                 ClearOwnedAssets();
+                _cacheGeneration++;
                 if (_modelImporter.IsValueCreated)
                     _modelImporter.Value.Dispose();
                 _disposed = true;

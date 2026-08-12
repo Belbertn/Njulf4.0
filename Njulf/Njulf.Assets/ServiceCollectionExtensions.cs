@@ -20,8 +20,10 @@ namespace Njulf.Assets
         {
             services.TryAddSingleton(provider => new ContentManager(
                 contentRoot,
-                provider.GetService<IModelRenderUploadService>()));
+                provider.GetService<IModelRenderUploadService>(),
+                provider.GetService<IContentUploadDispatcher>()));
             services.TryAddSingleton<IContentManager>(provider => provider.GetRequiredService<ContentManager>());
+            services.TryAddSingleton<IAsyncContentManager>(provider => provider.GetRequiredService<ContentManager>());
             services.TryAddSingleton<ModelImporter>();
             services.TryAddSingleton<MeshletBuilder>();
             services.TryAddSingleton<ProcessedMeshAssetBuilder>();

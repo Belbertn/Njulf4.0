@@ -248,16 +248,58 @@ public static class CookedPackage
             directory,
             packageRoot,
             manifest.Material.RelativePath);
-        CookedMeshPayload mesh = LoadMesh(
-            meshPath,
-            flags,
-            verifyWholeFileHashes ? manifest.Mesh.ContentHash : null,
-            out long meshBytes);
-        CookedMaterialTable materials = LoadMaterials(
-            materialPath,
-            flags,
-            verifyWholeFileHashes ? manifest.Material.ContentHash : null,
-            out long materialBytes);
+        string? animationPath = manifest.Animation is null
+            ? null
+            : ResolveReference(
+                directory,
+                packageRoot,
+                manifest.Animation.RelativePath);
+
+        // The manifest has already authenticated the independent sidecar
+        // references. Read/decode them concurrently so cold model loads can
+        // overlap disk latency and CPU decompression without involving the
+        // renderer thread. The set is bounded to these three fixed sidecars.
+        Task<(CookedMeshPayload Payload, long Bytes)> meshTask = Task.Run(() =>
+        {
+            CookedMeshPayload payload = LoadMesh(
+                meshPath,
+                flags,
+                verifyWholeFileHashes ? manifest.Mesh.ContentHash : null,
+                out long bytes);
+            return (payload, bytes);
+        });
+        Task<(CookedMaterialTable Payload, long Bytes)> materialTask =
+            Task.Run(() =>
+            {
+                CookedMaterialTable payload = LoadMaterials(
+                    materialPath,
+                    flags,
+                    verifyWholeFileHashes ? manifest.Material.ContentHash : null,
+                    out long bytes);
+                return (payload, bytes);
+            });
+        Task<(CookedAnimationPayload Payload, long Bytes)>? animationTask =
+            animationPath is null
+                ? null
+                : Task.Run(() =>
+                {
+                    CookedAnimationPayload payload = LoadAnimation(
+                        animationPath,
+                        flags,
+                        verifyWholeFileHashes
+                            ? manifest.Animation!.ContentHash
+                            : null,
+                        out long bytes);
+                    return (payload, bytes);
+                });
+        Task[] sidecarTasks = animationTask is null
+            ? [meshTask, materialTask]
+            : [meshTask, materialTask, animationTask];
+        Task.WhenAll(sidecarTasks).GetAwaiter().GetResult();
+
+        (CookedMeshPayload mesh, long meshBytes) = meshTask.GetAwaiter().GetResult();
+        (CookedMaterialTable materials, long materialBytes) =
+            materialTask.GetAwaiter().GetResult();
         RebaseMaterialTexturePaths(materials, Path.GetDirectoryName(materialPath)!);
         if (opacityMicromapPayload is not null &&
             !CookedOpacityMicromapModelChunk.TryValidateModelAttachment(
@@ -273,22 +315,12 @@ public static class CookedPackage
                     attachmentFailure,
                     attachmentDetail);
         }
-        CookedAnimationPayload animation = new(Array.Empty<Core.Animation.Skeleton>(), Array.Empty<Core.Animation.Skin>(), Array.Empty<Core.Animation.AnimationClip>());
-        long animationBytes = 0;
-        if (manifest.Animation is not null)
-        {
-            string animationPath = ResolveReference(
-                directory,
-                packageRoot,
-                manifest.Animation.RelativePath);
-            animation = LoadAnimation(
-                animationPath,
-                flags,
-                verifyWholeFileHashes
-                    ? manifest.Animation.ContentHash
-                    : null,
-                out animationBytes);
-        }
+        (CookedAnimationPayload animation, long animationBytes) = animationTask is null
+            ? (new CookedAnimationPayload(
+                Array.Empty<Core.Animation.Skeleton>(),
+                Array.Empty<Core.Animation.Skin>(),
+                Array.Empty<Core.Animation.AnimationClip>()), 0)
+            : animationTask.GetAwaiter().GetResult();
         return new CookedModelAsset(
             manifest,
             mesh,
