@@ -13,7 +13,7 @@ layout(push_constant) uniform ReflectionPrefilterPushBlock
     uint OutputSize;
     uint SampleCount;
     float Roughness;
-    uint Padding0;
+    float SourceTexelSize;
 } pc;
 
 #include "ggx_prefilter.glsl"
@@ -33,6 +33,56 @@ vec3 ReflectionCubeDirection(uint face, vec2 uv)
     if (face == 4u)
         return normalize(vec3(a, b, 1.0));
     return normalize(vec3(-a, b, -1.0));
+}
+
+float ReflectionPrefilterLuminance(vec3 radiance)
+{
+    return dot(max(radiance, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 SampleReflectionPrefilterRadiance(vec3 direction)
+{
+    vec3 center = max(
+        textureLod(ReflectionScratchInput, direction, 0.0).rgb,
+        vec3(0.0));
+
+    // A delta-like direct highlight can occupy one capture texel with many
+    // thousands of nits. Straight GGX convolution spreads that undersampled
+    // texel across every rough mip as visible fireflies. Derive a robust local
+    // ceiling from four samples outside the source bilinear footprint. Broad
+    // highlights survive because their neighbourhood is bright too, while an
+    // isolated spike is bounded before it enters the convolution.
+    vec3 tangent;
+    vec3 bitangent;
+    EnvironmentPrefilterBasis(direction, tangent, bitangent);
+    float offset = max(pc.SourceTexelSize * 2.5, 0.0001);
+    float l0 = ReflectionPrefilterLuminance(textureLod(
+        ReflectionScratchInput,
+        normalize(direction + tangent * offset),
+        0.0).rgb);
+    float l1 = ReflectionPrefilterLuminance(textureLod(
+        ReflectionScratchInput,
+        normalize(direction - tangent * offset),
+        0.0).rgb);
+    float l2 = ReflectionPrefilterLuminance(textureLod(
+        ReflectionScratchInput,
+        normalize(direction + bitangent * offset),
+        0.0).rgb);
+    float l3 = ReflectionPrefilterLuminance(textureLod(
+        ReflectionScratchInput,
+        normalize(direction - bitangent * offset),
+        0.0).rgb);
+    float minimumNeighbour = min(min(l0, l1), min(l2, l3));
+    float maximumNeighbour = max(max(l0, l1), max(l2, l3));
+    float medianNeighbour = 0.5 * (
+        l0 + l1 + l2 + l3 - minimumNeighbour - maximumNeighbour);
+    float luminanceLimit = max(
+        medianNeighbour * 4.0,
+        medianNeighbour + 4.0);
+    float centerLuminance = ReflectionPrefilterLuminance(center);
+    if (centerLuminance > luminanceLimit)
+        center *= luminanceLimit / max(centerLuminance, 0.000001);
+    return center;
 }
 
 void main()
@@ -78,7 +128,7 @@ void main()
             float nDotL = max(dot(reflection, lightDirection), 0.0);
             if (nDotL <= 0.0)
                 continue;
-            result += textureLod(ReflectionScratchInput, lightDirection, 0.0).rgb * nDotL;
+            result += SampleReflectionPrefilterRadiance(lightDirection) * nDotL;
             totalWeight += nDotL;
         }
     }

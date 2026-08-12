@@ -4663,7 +4663,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         maximumPageAdmissions,
                         gi.SimpleDdgiSparseRetentionFrames,
                         gi.SimpleDdgiSparseMaximumReceiverFeedbackRequests,
-                        gi.SimpleDdgiSparseInactiveRetryFrames);
+                        gi.SimpleDdgiSparseInactiveRetryFrames,
+                        ComputeProbeResidencyTopologyFingerprint());
                 if (residencyArenaTransition &&
                     !EnsureBindlessDescriptorReadersComplete(
                         commandBuffer,
@@ -4682,6 +4683,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         gi.SimpleDdgiSparseRetentionFrames,
                         gi.SimpleDdgiSparseMaximumReceiverFeedbackRequests,
                         gi.SimpleDdgiSparseInactiveRetryFrames,
+                        ComputeProbeResidencyTopologyFingerprint(),
                         commandBuffer,
                         _resourceLastUseFrameFenceValue);
                 if (residencyArenaReplaced)
@@ -11509,6 +11511,38 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 throw new InvalidOperationException(
                     $"Simple-DDGI dense fallback spans {densePhysicalCursor} probes; admitted layout requires {plan.DensePayloadProbeCount}.");
             }
+        }
+
+        private ulong ComputeProbeResidencyTopologyFingerprint()
+        {
+            const ulong offsetBasis = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            SimpleDdgiMemoryPlan plan = _capacityPlan;
+            ulong hash = offsetBasis;
+            Append((uint)plan.ResidencyMode.Sanitize());
+            Append(checked((uint)Math.Max(0, plan.VirtualProbeCount)));
+            Append(checked((uint)Math.Max(0, plan.SparseVirtualPageCount)));
+            Append(checked((uint)Math.Max(0, plan.DensePayloadProbeCount)));
+            Append(checked((uint)Math.Max(0, plan.SparsePhysicalPageCapacity)));
+            Append(checked((uint)Math.Max(0, plan.PhysicalProbeCapacity)));
+            Append(checked((uint)Math.Max(0, _volumeCount)));
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
+                GPUSimpleDdgiVolumePaging paging =
+                    _volumePagingScratch[volumeIndex];
+                Append(paging.VirtualFirstProbe);
+                Append(paging.PageTableFirst);
+                Append(paging.DensePhysicalFirstProbe);
+                Append(paging.ResidencyMode);
+                Append(paging.PageGridX);
+                Append(paging.PageGridY);
+                Append(paging.PageGridZ);
+                Append(paging.SparsePoolFirstProbe);
+            }
+
+            return hash == 0UL ? 1UL : hash;
+
+            void Append(uint value) => hash = (hash ^ value) * prime;
         }
 
         private void ApplyCompiledStorageAndMirrorLayout()

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Diagnostics;
 using NjulfHelloGame;
 using NUnit.Framework;
 
@@ -13,6 +14,75 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SampleSponzaGiCaptureHarnessTests
 {
+    [Test]
+    public void LiveReceiverHealth_RejectsTheZeroResidencyFlatField()
+    {
+        SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
+        RendererDiagnostics failed = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationDdgiActive = 1,
+            SimpleDdgiActive = 1,
+            DdgiProbeCount = 15_368,
+            DdgiActiveProbeCount = 15_368,
+            SimpleDdgiProbeResidency = new SimpleDdgiProbeResidencyTelemetry(
+                true,
+                SimpleDdgiProbeResidencyMode.SparseNearRing,
+                true,
+                string.Empty)
+            {
+                FeedbackValid = true,
+                ResidencyStateValid = true
+            },
+            DdgiForwardEstimateCountersReadbackValid = 1,
+            DdgiForwardEstimateSampleCount = 5_298,
+            DdgiForwardEstimateEnvironmentFallbackWeight = 1.0f
+        };
+
+        IReadOnlyList<string> blockers = contract.GetLiveReceiverHealthBlockers(failed);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blockers, Has.Some.Contains("no published receiver payload"));
+            Assert.That(blockers, Has.Some.Contains("receiver delivery is collapsed"));
+        });
+    }
+
+    [Test]
+    public void LiveReceiverHealth_AcceptsPublishedAutomaticRingField()
+    {
+        SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
+        RendererDiagnostics healthy = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationDdgiActive = 1,
+            SimpleDdgiActive = 1,
+            DdgiProbeCount = 15_368,
+            DdgiActiveProbeCount = 15_368,
+            SimpleDdgiProbeResidency = new SimpleDdgiProbeResidencyTelemetry(
+                true,
+                SimpleDdgiProbeResidencyMode.SparseNearRing,
+                true,
+                string.Empty)
+            {
+                FeedbackValid = true,
+                ResidencyStateValid = true,
+                ResidentPageCount = 294,
+                PublishedPageCount = 294,
+                ActiveResidentProbeCount = 6_177
+            },
+            DdgiForwardEstimateCountersReadbackValid = 1,
+            DdgiForwardEstimateSampleCount = 5_298,
+            DdgiAverageSpatialCoverageEstimate = 1.0f,
+            DdgiAverageSupportCoverageEstimate = 0.923f,
+            DdgiAverageEffectiveContributionEstimate = 1.0f,
+            DdgiAverageOwnershipConsumedEstimate = 1.0f,
+            DdgiForwardEstimateSampledIrradianceLuminance = 0.99f
+        };
+
+        Assert.That(contract.GetLiveReceiverHealthBlockers(healthy), Is.Empty);
+    }
+
     [Test]
     public void DefaultContract_DefinesLockedNamedEndpointsRoisAndOutputs()
     {
@@ -35,15 +105,20 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
             Assert.That(contract.MotionTraversalFrameCount, Is.EqualTo(300));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v12"));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v15"));
             Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_158));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
+            Assert.That(contract.LowBookmark.Pitch, Is.EqualTo(0.38493663f));
             Assert.That(contract.HighBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeHigh"));
             Assert.That(
                 SampleSponzaGiCaptureContract.VerticalTraversalName,
                 Is.EqualTo("SponzaPlazaUpperFacadeVerticalTraversal"));
-            Assert.That(contract.HighBookmark.Position.Y, Is.EqualTo(10.35f));
+            Assert.That(contract.HighBookmark.Position.X, Is.EqualTo(4.443325f));
+            Assert.That(contract.HighBookmark.Position.Y, Is.EqualTo(8.158655f));
+            Assert.That(contract.HighBookmark.Position.Z, Is.EqualTo(0.3589885f));
+            Assert.That(contract.HighBookmark.Yaw, Is.EqualTo(-2.8296268f));
+            Assert.That(contract.HighBookmark.Pitch, Is.EqualTo(-0.16935858f));
             Assert.That(contract.ReceiverRois.Select(static roi => roi.Name), Is.EquivalentTo(new[]
             {
                 "central-upper-facade",
@@ -78,8 +153,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "ownership",
                 "fallback",
                 "probe-state",
-                "classification-invalid-score",
-                "update-reasons",
+                "probe-index",
+                "ray-budget",
                 "visibility-moments",
                 "probe-relocation",
                 "probe-residency",
@@ -90,6 +165,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             SampleSponzaGiCaptureOutput directOnly = contract.Outputs.Single(static output => output.Name == "direct-only");
             Assert.That(directOnly.DisableGlobalIllumination, Is.True);
             Assert.That(directOnly.DisableEnvironmentLighting, Is.True);
+            Assert.That(contract.Outputs[^1], Is.SameAs(directOnly));
             Assert.That(
                 contract.Outputs.Where(static output => output.Name != "direct-only"),
                 Has.None.Matches<SampleSponzaGiCaptureOutput>(static output => output.DisableEnvironmentLighting));
@@ -115,8 +191,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(last.Position, Is.EqualTo(contract.HighBookmark.Position));
             Assert.That(first.Yaw, Is.EqualTo(contract.LowBookmark.Yaw));
             Assert.That(last.Pitch, Is.EqualTo(contract.HighBookmark.Pitch));
-            Assert.That(middle.Position.X, Is.EqualTo(contract.LowBookmark.Position.X));
-            Assert.That(middle.Position.Z, Is.EqualTo(contract.LowBookmark.Position.Z));
+            Assert.That(middle.Position.X, Is.InRange(contract.HighBookmark.Position.X, contract.LowBookmark.Position.X));
+            Assert.That(middle.Position.Z, Is.InRange(contract.LowBookmark.Position.Z, contract.HighBookmark.Position.Z));
             Assert.That(middle.Position.Y, Is.GreaterThan(contract.LowBookmark.Position.Y));
             Assert.That(middle.Position.Y, Is.LessThan(contract.HighBookmark.Position.Y));
             Assert.That(
@@ -288,6 +364,10 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 SampleSponzaGiCaptureContract.UsesDetailedInvestigationCounters(
                     SampleSponzaGiCaptureMode.DetailedDiagnostics),
                 Is.True);
+            Assert.That(
+                SampleSponzaGiCaptureContract.UsesDetailedInvestigationCounters(
+                    SampleSponzaGiCaptureMode.PresentationReview),
+                Is.False);
         });
     }
 
@@ -295,9 +375,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
     public void CanonicalProfile_SatisfiesCaptureLockAndReceiverCoverageOracle()
     {
         var settings = new RenderSettings();
-        SampleGlobalIlluminationValidation.ConfigureRenderSettings(
-            settings,
-            SamplePerformanceScenario.GiSponzaRightWallStationary);
+        SampleGlobalIlluminationValidation.ConfigureSponzaCaptureSettings(
+            settings);
         settings.Particles.Enabled = false;
         settings.Animation.Enabled = false;
         SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
@@ -324,12 +403,26 @@ public sealed class SampleSponzaGiCaptureHarnessTests
     }
 
     [Test]
+    public void CaptureLock_RejectsFrozenAstronomicalSourceDrift()
+    {
+        var settings = new RenderSettings();
+        SampleGlobalIlluminationValidation.ConfigureSponzaCaptureSettings(
+            settings);
+        settings.Particles.Enabled = false;
+        settings.Animation.Enabled = false;
+        settings.Environment.TimeOfDayHours += 0.25f;
+
+        Assert.That(
+            SampleSponzaGiCaptureContract.Default.ValidateLockedSettings(settings),
+            Has.Some.Contains("frozen astronomical source"));
+    }
+
+    [Test]
     public void CoverageOracleReport_SerializesDerivedTraceDistanceAsStrictJsonNull()
     {
         var settings = new RenderSettings();
-        SampleGlobalIlluminationValidation.ConfigureRenderSettings(
-            settings,
-            SamplePerformanceScenario.GiSponzaRightWallStationary);
+        SampleGlobalIlluminationValidation.ConfigureSponzaCaptureSettings(
+            settings);
         SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
         SimpleDdgiReceiverCoverageReport report = SimpleDdgiReceiverCoverageValidator.Validate(
             settings.GlobalIllumination,

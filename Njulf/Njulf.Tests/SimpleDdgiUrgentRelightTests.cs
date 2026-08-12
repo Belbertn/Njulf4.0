@@ -128,6 +128,8 @@ public sealed class SimpleDdgiUrgentRelightTests
             "Njulf.Shaders", "ddgi_simple_publish_sampled.comp");
         string pass = ReadRepoText(
             "Njulf.Rendering", "Pipeline", "SimpleDdgiUrgentRelightPass.cs");
+        string scheduler = ReadRepoText(
+            "Njulf.Rendering", "Resources", "SimpleDdgiGpuScheduler.cs");
 
         Assert.Multiple(() =>
         {
@@ -143,6 +145,10 @@ public sealed class SimpleDdgiUrgentRelightTests
             Assert.That(pass, Does.Contain("ExecuteResidentLocalOnly"));
             Assert.That(pass, Does.Contain("ExecuteSampledOnly"));
             Assert.That(pass, Does.Not.Contain("AccelerationStructure"));
+            Assert.That(scheduler, Does.Contain("_layout.Counters.Offset"));
+            Assert.That(scheduler, Does.Contain("_layout.Counters.ByteSize"));
+            Assert.That(scheduler, Does.Contain(
+                "allocation residue in word 95 can permanently make every ordinary"));
         });
     }
 

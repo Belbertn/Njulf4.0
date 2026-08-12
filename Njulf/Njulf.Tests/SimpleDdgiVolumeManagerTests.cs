@@ -630,6 +630,22 @@ public sealed class SimpleDdgiVolumeManagerTests
         });
     }
 
+    [TestCase(0UL, 17UL, true)]
+    [TestCase(17UL, 0UL, true)]
+    [TestCase(17UL, 18UL, true)]
+    [TestCase(17UL, 17UL, false)]
+    public void ResidencyArenaReuse_RequiresMatchingImmutableTopology(
+        ulong residentTopologyFingerprint,
+        ulong requestedTopologyFingerprint,
+        bool expectedReplacement)
+    {
+        Assert.That(
+            SimpleDdgiProbePageCache.RequiresTopologyReplacement(
+                residentTopologyFingerprint,
+                requestedTopologyFingerprint),
+            Is.EqualTo(expectedReplacement));
+    }
+
     [TestCase(0UL, 0UL)]
     [TestCase(5UL, 4UL)]
     [TestCase(10UL, 8UL)]

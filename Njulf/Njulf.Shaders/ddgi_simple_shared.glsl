@@ -1272,6 +1272,10 @@ struct SimpleDdgiDebugSample
     uint volumeIndex;
     vec3 logicalProbePosition;
     vec3 relocatedProbePosition;
+    vec3 relocation;
+    float activeWeight;
+    uint stateFlags;
+    uint classification;
     float visibility;
     float visibilityConfidence;
     float visibilityMomentMean;
@@ -6457,6 +6461,9 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(
         paging,
         uvec3(nearest));
     vec3 relocation = vec3(0.0);
+    float activeWeight = 0.0;
+    uint stateFlags = 0u;
+    uint classification = 0u;
     uint atlasProbeAddress = SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS;
 #if SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
     if (probeAddress.resident && probeAddress.published)
@@ -6465,6 +6472,9 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(
             uint(SIMPLE_DDGI_PROBE_STATE_BUFFER_INDEX),
             probeIndex);
         relocation = state.relocation;
+        activeWeight = state.activeWeight;
+        stateFlags = state.flags;
+        classification = state.classification;
         atlasProbeAddress = probeAddress.physicalProbeIndex;
     }
 #else
@@ -6479,6 +6489,13 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(
                 probeAddress.physicalProbeIndex)
         {
             relocation = receiverProbe.relocation;
+            activeWeight = receiverProbe.activeWeight;
+            stateFlags = receiverProbe.flags;
+            classification =
+                (receiverProbe.flags &
+                    SIMPLE_DDGI_RECEIVER_FLAG_INACTIVE_CLASSIFICATION) != 0u
+                    ? SIMPLE_DDGI_CLASSIFICATION_INACTIVE
+                    : 0u;
             atlasProbeAddress = probeAddress.physicalProbeIndex;
         }
     }
@@ -6512,6 +6529,10 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(
     result.volumeIndex = selectedVolumeIndex;
     result.logicalProbePosition = logicalProbePos;
     result.relocatedProbePosition = probePos;
+    result.relocation = relocation;
+    result.activeWeight = activeWeight;
+    result.stateFlags = stateFlags;
+    result.classification = classification;
     float visibilityBias = clamp(0.03 * p.selfShadowBiasScale * volume.spacing, 0.002, volume.spacing * 0.10);
     float biasedReceiverDistance = max(
         distanceToProbe - visibilityBias,

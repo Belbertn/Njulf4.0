@@ -109,7 +109,7 @@ public sealed unsafe class ReflectionProbePrefilterPass : RenderPassBase
                     mip.Resolution,
                     checked((uint)mip.SampleCount),
                     mip.Roughness,
-                    0U);
+                    2.0f / Math.Max(_manager.ProbeResolution, 1U));
                 _context.Api.CmdPushConstants(
                     commandBuffer,
                     _pipelineLayout,
@@ -357,14 +357,18 @@ public sealed unsafe class ReflectionProbePrefilterPass : RenderPassBase
         public readonly uint OutputSize;
         public readonly uint SampleCount;
         public readonly float Roughness;
-        public readonly uint Padding0;
+        public readonly float SourceTexelSize;
 
-        public ReflectionPrefilterPushConstants(uint outputSize, uint sampleCount, float roughness, uint padding0)
+        public ReflectionPrefilterPushConstants(
+            uint outputSize,
+            uint sampleCount,
+            float roughness,
+            float sourceTexelSize)
         {
             OutputSize = outputSize;
             SampleCount = sampleCount;
             Roughness = roughness;
-            Padding0 = padding0;
+            SourceTexelSize = sourceTexelSize;
         }
     }
 }

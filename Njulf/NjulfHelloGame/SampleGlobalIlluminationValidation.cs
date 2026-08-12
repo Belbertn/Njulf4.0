@@ -353,13 +353,12 @@ public static class SampleGlobalIlluminationValidation
 
         if (scenario == SamplePerformanceScenario.GiSponzaRightWallStationary)
         {
-            // Keep the validation path physically identical to normal Sponza.
-            // The narrow overlay below is limited to deterministic capture controls.
+            // The stationary camera is useful for both interactive review and
+            // deterministic evidence. Selecting it must not silently disable
+            // Sponza's auto exposure, authored reflection probes, or bloom;
+            // the capture harness opts into those overrides explicitly through
+            // ConfigureSponzaCaptureSettings below.
             SampleSponzaGlobalIlluminationProfile.Configure(settings);
-            SampleSponzaGlobalIlluminationProfile.ApplyValidationOverlay(settings);
-            // Exercise the authored curtain path only in the locked A/B
-            // qualification scenario until the hardware acceptance gates pass.
-            settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled = true;
             return;
         }
 
@@ -481,6 +480,19 @@ public static class SampleGlobalIlluminationValidation
             settings.Environment.Enabled = true;
             settings.Environment.DiffuseIntensity = 0.22f;
         }
+    }
+
+    public static void ConfigureSponzaCaptureSettings(RenderSettings settings)
+    {
+        if (settings == null)
+            throw new ArgumentNullException(nameof(settings));
+
+        SampleSponzaGlobalIlluminationProfile.Configure(settings);
+        SampleSponzaGlobalIlluminationProfile.ApplyValidationOverlay(settings);
+        // Exercise the authored curtain path only in the locked A/B
+        // qualification sequence until its hardware acceptance gates pass.
+        settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled =
+            true;
     }
 
 }

@@ -1,3 +1,4 @@
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
@@ -6,6 +7,49 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class ReflectionProbeRecapturePolicyTests
 {
+    [Test]
+    public void CaptureVersion_ExcludesDdgiGenerationsWhenCaptureDoesNotSampleDdgi()
+    {
+        var lighting = new LightingVersionSnapshot(
+            VisualEnvironmentGeneration: 2,
+            RequestedSpecularEnvironmentGeneration: 3,
+            PublishedSpecularEnvironmentGeneration: 4,
+            RequestedGiEnvironmentGeneration: 5,
+            AdmittedGiEnvironmentGeneration: 6,
+            CompletedGiSourceCohortGeneration: 7,
+            StaticGiConvergedGeneration: 8,
+            SceneRadianceRevision: 9);
+
+        ReflectionCaptureVersion localOnly =
+            ReflectionProbeManager.BuildCaptureVersion(lighting, captureIncludesDdgi: false);
+        ReflectionCaptureVersion withDdgi =
+            ReflectionProbeManager.BuildCaptureVersion(lighting, captureIncludesDdgi: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(localOnly.AdmittedEnvironmentGeneration, Is.Zero);
+            Assert.That(localOnly.CompletedDdgiGeneration, Is.Zero);
+            Assert.That(withDdgi.AdmittedEnvironmentGeneration, Is.EqualTo(6U));
+            Assert.That(withDdgi.CompletedDdgiGeneration, Is.EqualTo(8U));
+            Assert.That(localOnly.LightRevision, Is.EqualTo(2U));
+            Assert.That(localOnly.ShaderSettingsRevision, Is.EqualTo(4U));
+        });
+    }
+
+    [Test]
+    public void AnimatedLightingChanges_UseTheRecaptureInterval()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReflectionProbeManager.IsRateLimitedLightingRecaptureReason(
+                ReflectionCaptureReason.LightChanged), Is.True);
+            Assert.That(ReflectionProbeManager.IsRateLimitedLightingRecaptureReason(
+                ReflectionCaptureReason.EnvironmentChanged | ReflectionCaptureReason.DdgiChanged), Is.True);
+            Assert.That(ReflectionProbeManager.IsRateLimitedLightingRecaptureReason(
+                ReflectionCaptureReason.SceneChanged), Is.False);
+        });
+    }
+
     [Test]
     public void Observe_CoalescesStableVersionsAndMergesReasons()
     {

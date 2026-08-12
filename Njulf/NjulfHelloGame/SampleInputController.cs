@@ -349,6 +349,7 @@ internal sealed class SampleInputController
     private SimpleDdgiSampledAtlasCoverageMode _sponzaGiCaptureSampledAtlasCoverageMode =
         SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant;
     private int _sponzaGiScreenshotVerificationFrames;
+    private bool _sponzaGiRenderDocCaptureAttempted;
 
     public SampleInputController(
         FirstPersonCamera camera,
@@ -1314,7 +1315,8 @@ internal sealed class SampleInputController
         SampleLighting.ConfigureRenderSettings(_renderer.Settings, SampleLightingMode.DirectionalKey);
         SampleEnvironment.Configure(_renderer, SampleEnvironmentMode.ProceduralOutdoor);
         ApplyPerformanceScenario(contract.Scenario);
-        SampleGlobalIlluminationValidation.ConfigureRenderSettings(_renderer.Settings, contract.Scenario);
+        SampleGlobalIlluminationValidation.ConfigureSponzaCaptureSettings(
+            _renderer.Settings);
         GlobalIlluminationSettings captureGi = _renderer.Settings.GlobalIllumination;
         if (storagePackingModeOverride.HasValue)
             captureGi.SimpleDdgiStoragePackingMode = storagePackingModeOverride.Value;
@@ -1393,6 +1395,7 @@ internal sealed class SampleInputController
         _sponzaGiCaptureArtifacts.Clear();
         _sponzaGiPendingRendererScreenshots.Clear();
         _sponzaGiTemporalTrace = new SampleSponzaGiTemporalTrace();
+        _sponzaGiRenderDocCaptureAttempted = false;
 
         contract.WriteContract(_sponzaGiCaptureDirectory);
         contract.WriteVisualMetricGate(_sponzaGiCaptureDirectory, captureMode);
@@ -1446,7 +1449,34 @@ internal sealed class SampleInputController
         SampleSponzaGiCaptureInstruction instruction = sequence.CurrentInstruction;
         ApplySponzaGiCaptureCamera(instruction.Camera, viewportWidth, viewportHeight);
         ApplySponzaGiCaptureOutput(instruction.Output);
+        QueueSponzaGiRenderDocCapture(instruction);
         QueueSponzaGiRendererScreenshot(instruction);
+    }
+
+    private void QueueSponzaGiRenderDocCapture(
+        SampleSponzaGiCaptureInstruction instruction)
+    {
+        if (_renderer == null || _sponzaGiRenderDocCaptureAttempted ||
+            instruction.Stage != SampleSponzaGiCaptureStage.CaptureLowBookmark ||
+            instruction.StageFrameIndex != 0 ||
+            !string.Equals(instruction.Output?.Name, "beauty", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _sponzaGiRenderDocCaptureAttempted = true;
+        bool previousAllowRenderDocCapture =
+            _renderer.Settings.Debug.AllowRenderDocCapture;
+        try
+        {
+            _renderer.Settings.Debug.AllowRenderDocCapture = true;
+            _renderer.RequestRenderDocCapture();
+        }
+        finally
+        {
+            _renderer.Settings.Debug.AllowRenderDocCapture =
+                previousAllowRenderDocCapture;
+        }
     }
 
     private void ApplySponzaGiCaptureCamera(
@@ -1469,6 +1499,14 @@ internal sealed class SampleInputController
     {
         if (_renderer == null)
             return;
+
+        bool presentationFrame =
+            _sponzaGiCaptureMode == SampleSponzaGiCaptureMode.PresentationReview &&
+            (output == null || string.Equals(output.Name, "beauty", StringComparison.Ordinal));
+        if (presentationFrame)
+            SampleSponzaGlobalIlluminationProfile.ApplyPresentationOverlay(_renderer.Settings);
+        else if (_sponzaGiCaptureMode == SampleSponzaGiCaptureMode.PresentationReview)
+            SampleSponzaGlobalIlluminationProfile.ApplyValidationOverlay(_renderer.Settings);
 
         GlobalIlluminationSettings gi = _renderer.Settings.GlobalIllumination;
         bool normalGiEnabled = _sponzaGiCaptureRestoreState?.GlobalIlluminationEnabled ?? true;
@@ -1607,6 +1645,18 @@ internal sealed class SampleInputController
 
         SampleSponzaGiCaptureContract contract = _sponzaGiCaptureSequence.Contract;
         SampleSponzaGiCaptureOutput output = instruction.Output;
+        if (string.Equals(output.Name, "beauty", StringComparison.Ordinal))
+        {
+            IReadOnlyList<string> healthBlockers =
+                contract.GetLiveReceiverHealthBlockers(_renderer.LastDiagnostics);
+            if (healthBlockers.Count != 0)
+            {
+                AbortSponzaGiCapture(
+                    $"Live DDGI receiver health rejected '{instruction.BookmarkName}': " +
+                    string.Join(" ", healthBlockers));
+                return false;
+            }
+        }
         string relativeImagePath = contract.GetRelativeImagePath(instruction.BookmarkName, output);
         string imagePath = Path.Combine(_sponzaGiCaptureDirectory, relativeImagePath);
         Directory.CreateDirectory(Path.GetDirectoryName(imagePath) ?? _sponzaGiCaptureDirectory);
@@ -1877,6 +1927,7 @@ internal sealed class SampleInputController
     {
         SampleSponzaGiCaptureMode.ProductionTiming => "production beauty timing only",
         SampleSponzaGiCaptureMode.DetailedDiagnostics => "diagnostic evidence only; timing disabled",
+        SampleSponzaGiCaptureMode.PresentationReview => "presentation review; timing disabled",
         _ => throw new ArgumentOutOfRangeException(nameof(captureMode))
     };
 

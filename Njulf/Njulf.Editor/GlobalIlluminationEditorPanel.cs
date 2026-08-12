@@ -126,9 +126,125 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
                 : "Inactive";
             ImGui.Text($"Active backend: {backend} ({diagnostics.GlobalIlluminationMode})");
             ImGui.Text($"Runtime DDGI volumes: {runtimeVolumeCount}    Probes: {Math.Max(diagnostics.SimpleDdgiProbeCount, diagnostics.DdgiProbeCount)}");
+            RenderDdgiReceiverHealth(diagnostics);
             RenderAdvancedGiRuntimeSummary(diagnostics);
         }
     }
+
+    private static void RenderDdgiReceiverHealth(RendererDiagnostics diagnostics)
+    {
+        bool active = diagnostics.GlobalIlluminationEnabled != 0 &&
+                      diagnostics.GlobalIlluminationDdgiActive != 0 &&
+                      diagnostics.SimpleDdgiActive != 0;
+        bool hasReceiverEvidence = diagnostics.DdgiForwardEstimateCountersReadbackValid != 0 &&
+                                   diagnostics.DdgiForwardEstimateSampleCount > 0;
+        bool fallbackOnly = hasReceiverEvidence &&
+                            diagnostics.DdgiAverageSpatialCoverageEstimate > 0.5f &&
+                            diagnostics.DdgiAverageSupportCoverageEstimate <= 0.001f &&
+                            diagnostics.DdgiAverageDataConfidenceEstimate <= 0.001f &&
+                            diagnostics.DdgiAverageEffectiveContributionEstimate <= 0.001f;
+
+        if (!active)
+        {
+            ImGui.TextColored(
+                new System.Numerics.Vector4(1f, 0.35f, 0.25f, 1f),
+                "DDGI receiver path is inactive. Check Enabled, Mode, Use DDGI, ray query support, and emergency fallback.");
+        }
+        else if (fallbackOnly)
+        {
+            ImGui.TextColored(
+                new System.Numerics.Vector4(1f, 0.65f, 0.15f, 1f),
+                "DDGI is enabled, but covered receivers have no valid probe data; the image is environment fallback, not bounce lighting.");
+        }
+        else if (hasReceiverEvidence)
+        {
+            ImGui.TextColored(
+                new System.Numerics.Vector4(0.35f, 0.85f, 0.45f, 1f),
+                "DDGI receiver data is live.");
+        }
+        else
+        {
+            ImGui.TextDisabled("DDGI receiver health is warming or detailed counter readback is unavailable.");
+        }
+
+        DdgiContentRuntimeSnapshot content = diagnostics.ContentDependentDdgi;
+        DdgiContentFeature inactiveRequested =
+            content.ConfiguredFeatures & ~content.ActiveFeatures;
+        if (inactiveRequested != DdgiContentFeature.None)
+        {
+            ImGui.TextColored(
+                new System.Numerics.Vector4(1f, 0.65f, 0.15f, 1f),
+                $"Requested DDGI additions are inactive: {inactiveRequested}.");
+            ImGui.TextWrapped(
+                "Core diffuse DDGI can still be live, but requested thin/dynamic geometry or the directional rough-reflection lobe may be using its qualified fallback. Inspect requested/effective modes in Advanced GI.");
+        }
+        ImGui.TextDisabled(
+            $"Content-dependent DDGI: requested {content.ConfiguredFeatures}; active {content.ActiveFeatures} | " +
+            $"directional {content.RequestedDirectionalRadianceMode}->{content.EffectiveDirectionalRadianceMode}, " +
+            $"transparency {content.RequestedTransparentGeometryMode}->{content.EffectiveTransparentGeometryMode}");
+
+        ImGui.TextDisabled(
+            $"Receiver coverage: spatial {diagnostics.DdgiAverageSpatialCoverageEstimate:P1}, " +
+            $"support {diagnostics.DdgiAverageSupportCoverageEstimate:P1}, " +
+            $"data {diagnostics.DdgiAverageDataConfidenceEstimate:P1}, " +
+            $"ownership {diagnostics.DdgiAverageOwnershipConsumedEstimate:P1}, " +
+            $"fallback {diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:P1}");
+
+        GlobalIlluminationDebugView view = diagnostics.GlobalIlluminationRequestedDebugView;
+        string? viewHint = GetDdgiDebugViewHint(view);
+        if (!string.IsNullOrWhiteSpace(viewHint))
+            ImGui.TextWrapped(viewHint);
+    }
+
+    internal static string? GetDdgiDebugViewHint(GlobalIlluminationDebugView view) => view switch
+    {
+        GlobalIlluminationDebugView.DdgiGatherLocalVolume =>
+            "This view shows authored local volumes only. Black is expected in scenes such as Sponza that use automatic camera-relative rings.",
+        GlobalIlluminationDebugView.DdgiGatherClipmap =>
+            "This is a categorical camera-ring identity view. Large flat color regions are expected; boundaries should move with the automatic Sponza rings.",
+        GlobalIlluminationDebugView.DdgiGatherClipmapBlendWeight or
+        GlobalIlluminationDebugView.DdgiGatherBlendWeight =>
+            "A mostly uniform result is expected away from ring transitions; this view visualizes blend weight, not irradiance.",
+        GlobalIlluminationDebugView.DdgiGatherFallback =>
+            "Black is the healthy endpoint: the primary automatic ring supplied the receiver without needing a coarser-ring retry.",
+        GlobalIlluminationDebugView.DdgiUpdateReasons =>
+            "Simple DDGI does not publish per-probe scheduler reasons to the compact receiver ABI. This receiver view is black; use the DDGI Updated Probes / Update Reasons debug overlay for scheduler activity.",
+        GlobalIlluminationDebugView.DdgiRayBudget =>
+            "A uniform result is normal when the scheduler assigns one steady ray tier.",
+        GlobalIlluminationDebugView.DdgiCoverage or
+        GlobalIlluminationDebugView.DdgiSpatialCoverage =>
+            "White means receiver positions are inside a DDGI interpolation lattice; it does not prove that probe data is valid.",
+        GlobalIlluminationDebugView.DdgiSupportCoverage or
+        GlobalIlluminationDebugView.DdgiDataConfidence =>
+            "This is a scalar support mask. A nearly white healthy field is expected; inspect Sampled Irradiance or Final Diffuse for spatial lighting structure.",
+        GlobalIlluminationDebugView.DdgiEffectiveWeight =>
+            "White is the healthy endpoint: valid DDGI fully owns the indirect receiver. This mask is not a lighting image.",
+        GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight =>
+            "Black means DDGI owns the receiver; bright values mean environment fallback is replacing missing probe support.",
+        GlobalIlluminationDebugView.DdgiVisibility =>
+            "This is a scalar transport-visibility term. A mostly white field is valid; Visibility Moments exposes the spatial distance structure.",
+        GlobalIlluminationDebugView.DdgiConfidenceChain =>
+            "RGB encodes three confidence factors. Healthy saturated channels can cover broad regions; this is not a color image of indirect light.",
+        GlobalIlluminationDebugView.DdgiProbeState =>
+            "This is a categorical rejection/status view. Broad solid regions are normal; unexpected rejection colors over visible geometry indicate a problem.",
+        GlobalIlluminationDebugView.DdgiProbeIndex =>
+            "Published probe identities are hashed to colors. A healthy automatic-ring field should form many stable colored cells, not one screen-wide color.",
+        GlobalIlluminationDebugView.DdgiClassificationInvalidScore =>
+            "Simple DDGI does not publish the classifier's continuous invalidity score to the compact receiver ABI. Use Probe State, the activity overlay, or a persistent-buffer capture for classification evidence.",
+        GlobalIlluminationDebugView.DdgiProbeRelocation =>
+            "This samples the nearest published probe. Black means that selected probe was not relocated; most receivers can be black even when other probes in the ring were relocated.",
+        GlobalIlluminationDebugView.DdgiProbeRelocationDirection =>
+            "This samples the nearest published probe. Neutral gray means no relocation; colored deviations encode relocation direction.",
+        GlobalIlluminationDebugView.DdgiProbeResidency =>
+            "This is a categorical residency state. Broad flat regions are expected when receivers share the same dense or sparse-page state.",
+        GlobalIlluminationDebugView.DdgiResidencyFallback =>
+            "A uniform value is expected when all visible receivers use the same residency path; it does not measure irradiance.",
+        GlobalIlluminationDebugView.DdgiPageAge =>
+            "A settled stationary scene can have nearly uniform page age. Use Probe Index or Visibility Moments to verify spatial payload structure.",
+        GlobalIlluminationDebugView.DdgiPhysicalPage =>
+            "Physical page identities are hashed to colors. A healthy sparse field should show multiple stable regions rather than a single screen-wide value.",
+        _ => null
+    };
 
     private static void RenderAdvancedGiRuntimeSummary(
         RendererDiagnostics diagnostics)

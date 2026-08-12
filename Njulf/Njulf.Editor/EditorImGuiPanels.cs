@@ -84,6 +84,16 @@ public sealed class EditorImGuiPanels
         if (ImGui.Button("Add Directional Light"))
             Run(() => editor.AddLightAtCamera(LightType.Directional));
 
+        if (editor.RendererSettings is { } renderSettings)
+        {
+            ImGui.SeparatorText("Environment");
+            bool animateSun = renderSettings.Environment.AnimateTimeOfDay;
+            if (ImGui.Checkbox("Animate sun (direct light)", ref animateSun))
+                renderSettings.Environment.AnimateTimeOfDay = animateSun;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Advances the procedural sky clock and rotates its directional sun.");
+        }
+
         if (!string.IsNullOrWhiteSpace(_lastError))
             ImGui.TextColored(new System.Numerics.Vector4(1f, 0.35f, 0.25f, 1f), _lastError);
         ImGui.End();

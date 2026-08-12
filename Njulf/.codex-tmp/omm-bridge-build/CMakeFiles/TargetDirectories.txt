@@ -1,3 +1,0 @@
-D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-bridge-build/CMakeFiles/njulf_omm_bridge.dir
-D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-bridge-build/CMakeFiles/ALL_BUILD.dir
-D:/Code/C#/Njulf4.0-Simplified/Njulf/.codex-tmp/omm-bridge-build/CMakeFiles/ZERO_CHECK.dir

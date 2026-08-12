@@ -87,6 +87,19 @@ namespace Njulf.Rendering.Diagnostics
         public const bool SourceCacheRadianceReceiverDiagnosticCompiled = false;
 
         /// <summary>
+        /// The compact Simple-DDGI receiver payload does not carry the
+        /// scheduler's update-reason byte or the classifier's continuous
+        /// invalidity score. Advertising those branches produced valid black
+        /// images that looked like a disabled DDGI field.
+        /// </summary>
+        public const bool ExtendedProbeMetadataReceiverDiagnosticsCompiled = false;
+
+        private static bool RequiresExtendedProbeMetadata(
+            GlobalIlluminationDebugView view) =>
+            view is GlobalIlluminationDebugView.DdgiUpdateReasons or
+                GlobalIlluminationDebugView.DdgiClassificationInvalidScore;
+
+        /// <summary>
         /// Returns true for receiver views whose inputs and branch fan-out are
         /// deliberately absent from production Simple-DDGI shaders.  General GI
         /// views (final indirect, far-field inspection, and material provenance)
@@ -140,6 +153,8 @@ namespace Njulf.Rendering.Diagnostics
             GlobalIlluminationDebugView view) =>
             (SourceCacheRadianceReceiverDiagnosticCompiled ||
              view != GlobalIlluminationDebugView.DdgiSourceCacheRadiance) &&
+            (ExtendedProbeMetadataReceiverDiagnosticsCompiled ||
+             !RequiresExtendedProbeMetadata(view)) &&
             (DetailedDdgiDiagnosticsCompiled ||
              !RequiresDetailedDdgiReceiverDiagnostics(view));
 
@@ -163,6 +178,12 @@ namespace Njulf.Rendering.Diagnostics
             {
                 return "Raw DDGI source-cache inspection is not compiled into receiver shaders; " +
                     "it requires a compute-projected diagnostic resource.";
+            }
+            if (RequiresExtendedProbeMetadata(view))
+            {
+                return "The compact Simple-DDGI receiver payload does not publish this value. " +
+                    "Use Probe State / Probe Relocation for classifier evidence, or the " +
+                    "DDGI Updated Probes / Update Reasons overlay for scheduler evidence.";
             }
 
             return "The requested DDGI receiver view requires a Debug or DetailedInvestigation shader artifact.";

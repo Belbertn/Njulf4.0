@@ -100,7 +100,8 @@ public sealed record SampleSponzaGiCapturedArtifact(
 public enum SampleSponzaGiCaptureMode : byte
 {
     ProductionTiming = 0,
-    DetailedDiagnostics = 1
+    DetailedDiagnostics = 1,
+    PresentationReview = 2
 }
 
 /// <summary>
@@ -142,7 +143,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v12";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v15";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1600;
@@ -224,6 +225,7 @@ public sealed class SampleSponzaGiCaptureContract
     {
         SampleSponzaGiCaptureMode.ProductionTiming => false,
         SampleSponzaGiCaptureMode.DetailedDiagnostics => true,
+        SampleSponzaGiCaptureMode.PresentationReview => false,
         _ => throw new ArgumentOutOfRangeException(nameof(captureMode))
     };
 
@@ -286,6 +288,11 @@ public sealed class SampleSponzaGiCaptureContract
                 frameIndex,
                 $"The vertical traversal contains frames 0 through {frameCount - 1}.");
         }
+
+        if (frameIndex == 0)
+            return LowBookmark with { Name = VerticalTraversalName };
+        if (frameIndex == frameCount - 1)
+            return HighBookmark with { Name = VerticalTraversalName };
 
         float linear = frameCount <= 1 ? 1.0f : frameIndex / (float)(frameCount - 1);
         float t = linear * linear * (3.0f - 2.0f * linear);
@@ -423,7 +430,7 @@ public sealed class SampleSponzaGiCaptureContract
             violations.Add("Animation must be disabled for the locked GI comparison.");
         if (!settings.Environment.Enabled ||
             settings.Environment.SourceKind != EnvironmentSourceKind.ProceduralSky ||
-            settings.Environment.SunDriver != ProceduralSkySunDriver.SceneDirectionalLight ||
+            settings.Environment.SunDriver != ProceduralSkySunDriver.AstronomicalTime ||
             settings.Environment.AnimateTimeOfDay ||
             !NearlyEqual(settings.Environment.SkyIntensity, 1.0f) ||
             !NearlyEqual(settings.Environment.DiffuseIntensity, 1.0f) ||
@@ -432,7 +439,40 @@ public sealed class SampleSponzaGiCaptureContract
         {
             violations.Add(
                 "The canonical static Sponza environment must use the procedural sky with " +
-                "the authored-light driver, a paused clock, physical unity intensities, and locked rotation.");
+                "the astronomical driver, a paused clock, physical unity intensities, and locked rotation.");
+        }
+        if (!NearlyEqual(
+                settings.Environment.TimeOfDayHours,
+                SampleSponzaGlobalIlluminationProfile.DefaultSolarTimeHours) ||
+            !NearlyEqual(
+                settings.Environment.LatitudeDegrees,
+                SampleSponzaGlobalIlluminationProfile.DefaultLatitudeDegrees) ||
+            settings.Environment.DayOfYear !=
+                SampleSponzaGlobalIlluminationProfile.DefaultDayOfYear ||
+            !NearlyEqual(
+                settings.Environment.NorthOffsetDegrees,
+                SampleSponzaGlobalIlluminationProfile.DefaultNorthOffsetDegrees) ||
+            !NearlyEqual(
+                settings.Environment.Turbidity,
+                SampleSponzaGlobalIlluminationProfile.DefaultTurbidity) ||
+            !NearlyEqual(
+                settings.Environment.GroundAlbedo.X,
+                SampleSponzaGlobalIlluminationProfile.DefaultGroundAlbedo) ||
+            !NearlyEqual(
+                settings.Environment.GroundAlbedo.Y,
+                SampleSponzaGlobalIlluminationProfile.DefaultGroundAlbedo) ||
+            !NearlyEqual(
+                settings.Environment.GroundAlbedo.Z,
+                SampleSponzaGlobalIlluminationProfile.DefaultGroundAlbedo) ||
+            !NearlyEqual(
+                settings.Environment.AtmosphereIntensity,
+                SampleSponzaGlobalIlluminationProfile.DefaultAtmosphereIntensity) ||
+            !NearlyEqual(
+                settings.Environment.SolarIrradianceScale,
+                SampleSponzaGlobalIlluminationProfile.DefaultSolarIrradianceScale))
+        {
+            violations.Add(
+                "The frozen astronomical source must match the canonical Sponza clock, location, atmosphere, and solar irradiance.");
         }
         if (!settings.Shadows.DirectionalShadowsEnabled ||
             settings.Shadows.DirectionalShadowMapSize != 2048 ||
@@ -902,6 +942,83 @@ public sealed class SampleSponzaGiCaptureContract
         return Array.AsReadOnly(blockers.ToArray());
     }
 
+    /// <summary>
+    /// Rejects a cosmetically plausible endpoint when the live automatic-ring
+    /// field is not actually resident or contributing. These are producer /
+    /// receiver invariants, not image-quality thresholds.
+    /// </summary>
+    public IReadOnlyList<string> GetLiveReceiverHealthBlockers(
+        RendererDiagnostics diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+
+        var blockers = new List<string>();
+        if (diagnostics.GlobalIlluminationEnabled != 1 ||
+            diagnostics.GlobalIlluminationDdgiActive != 1 ||
+            diagnostics.SimpleDdgiActive != 1)
+        {
+            blockers.Add(
+                "Sponza beauty requires active Simple DDGI " +
+                $"(GI={diagnostics.GlobalIlluminationEnabled}, " +
+                $"DDGI={diagnostics.GlobalIlluminationDdgiActive}, " +
+                $"Simple={diagnostics.SimpleDdgiActive}).");
+        }
+        if (diagnostics.DdgiProbeCount <= 0 || diagnostics.DdgiActiveProbeCount <= 0)
+        {
+            blockers.Add(
+                "The automatic camera rings contain no active probes " +
+                $"(probes={diagnostics.DdgiProbeCount}, active={diagnostics.DdgiActiveProbeCount}).");
+        }
+
+        var residency = diagnostics.SimpleDdgiProbeResidency;
+        if (!residency.IsAvailable)
+        {
+            blockers.Add("Simple-DDGI residency telemetry is unavailable: " + residency.FallbackReason);
+        }
+        else if (residency.Mode.UsesSparsePayloads())
+        {
+            if (!residency.FeedbackValid || !residency.ResidencyStateValid)
+            {
+                blockers.Add(
+                    "Sparse Simple-DDGI residency feedback is not valid " +
+                    $"(feedback={residency.FeedbackValid}, state={residency.ResidencyStateValid}).");
+            }
+            if (residency.ResidentPageCount <= 0 ||
+                residency.PublishedPageCount <= 0 ||
+                residency.ActiveResidentProbeCount <= 0)
+            {
+                blockers.Add(
+                    "Sparse Simple-DDGI has no published receiver payload " +
+                    $"(residentPages={residency.ResidentPageCount}, " +
+                    $"publishedPages={residency.PublishedPageCount}, " +
+                    $"activeResidentProbes={residency.ActiveResidentProbeCount}).");
+            }
+        }
+
+        if (diagnostics.DdgiForwardEstimateCountersReadbackValid == 1 &&
+            diagnostics.DdgiForwardEstimateSampleCount > 0)
+        {
+            if (diagnostics.DdgiAverageSpatialCoverageEstimate <= 0.01f ||
+                diagnostics.DdgiAverageSupportCoverageEstimate <= 0.01f ||
+                diagnostics.DdgiAverageEffectiveContributionEstimate <= 0.01f ||
+                diagnostics.DdgiAverageOwnershipConsumedEstimate <= 0.01f ||
+                diagnostics.DdgiForwardEstimateSampledIrradianceLuminance <= 0.000001f ||
+                diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight >= 0.99f)
+            {
+                blockers.Add(
+                    "DDGI receiver delivery is collapsed " +
+                    $"(spatial={diagnostics.DdgiAverageSpatialCoverageEstimate:R}, " +
+                    $"support={diagnostics.DdgiAverageSupportCoverageEstimate:R}, " +
+                    $"effective={diagnostics.DdgiAverageEffectiveContributionEstimate:R}, " +
+                    $"ownership={diagnostics.DdgiAverageOwnershipConsumedEstimate:R}, " +
+                    $"irradiance={diagnostics.DdgiForwardEstimateSampledIrradianceLuminance:R}, " +
+                    $"fallback={diagnostics.DdgiForwardEstimateEnvironmentFallbackWeight:R}).");
+            }
+        }
+
+        return Array.AsReadOnly(blockers.ToArray());
+    }
+
     /// <summary>Builds a baseline-aware visual metric contract without inventing a baseline.</summary>
     public SampleSponzaGiVisualMetricGate CreateVisualMetricGate(SampleSponzaGiCaptureMode captureMode)
     {
@@ -1027,7 +1144,7 @@ public sealed class SampleSponzaGiCaptureContract
             "volume-contributor", "gather-clipmap", "gather-blend-weight", "gather-fallback",
             "spatial-coverage", "support", "visibility", "ownership", "fallback",
             "data-confidence", "directional-support", "confidence-chain",
-            "probe-state", "classification-invalid-score", "update-reasons"
+            "probe-state", "probe-index", "ray-budget"
             , "visibility-moments", "probe-relocation", "probe-residency",
             "residency-fallback", "page-age", "physical-page"
         ];
@@ -1064,21 +1181,19 @@ public sealed class SampleSponzaGiCaptureContract
             new SampleSponzaGiCameraBookmark(
                 "SponzaPlazaUpperFacadeLow",
                 new Vector3(6.0f, 1.35f, 0.0f),
-                // Quarter-turn from the former wall-facing capture orientation.
                 -MathF.PI * 0.5f,
-                -0.16f,
+                0.38493663f,
                 fov,
                 0.05f,
                 250.0f),
             new SampleSponzaGiCameraBookmark(
                 "SponzaPlazaUpperFacadeHigh",
-                // The reported camera-relative near-ring origin moved by nine
-                // metres between the supplied low/high captures. The source
-                // attachment lacks camera metadata, so this is the named,
-                // deterministic transform used by all subsequent captures.
-                new Vector3(6.0f, 10.35f, 0.0f),
-                -MathF.PI * 0.5f,
-                -0.16f,
+                // Exact high-gallery viewpoint from the supplied performance
+                // capture. Interpolating from the low viewpoint also sweeps the
+                // plaza instead of validating only one vertical sightline.
+                new Vector3(4.443325f, 8.158655f, 0.3589885f),
+                -2.8296268f,
+                -0.16935858f,
                 fov,
                 0.05f,
                 250.0f),
@@ -1149,13 +1264,6 @@ public sealed class SampleSponzaGiCaptureContract
             ],
             [
                 new SampleSponzaGiCaptureOutput("beauty", "beauty", GlobalIlluminationDebugView.None, false, "Full reference beauty image."),
-                new SampleSponzaGiCaptureOutput(
-                    "direct-only",
-                    "direct-only",
-                    GlobalIlluminationDebugView.None,
-                    true,
-                    "Direct sun/local-light reference with indirect environment surface lighting disabled.",
-                    DisableEnvironmentLighting: true),
                 new SampleSponzaGiCaptureOutput("final-indirect", "final-indirect", GlobalIlluminationDebugView.FinalIndirect, false, "Final indirect debug output."),
                 new SampleSponzaGiCaptureOutput("irradiance-log", "irradiance-log", GlobalIlluminationDebugView.DdgiIrradiance, false, "Log-normalized structured-gather irradiance; exact zero remains black while low nonzero energy stays visible."),
                 new SampleSponzaGiCaptureOutput("sampled-irradiance", "sampled-irradiance", GlobalIlluminationDebugView.DdgiSampledIrradiance, false, "Sampled DDGI irradiance before final diffuse composition."),
@@ -1173,14 +1281,25 @@ public sealed class SampleSponzaGiCaptureContract
                 new SampleSponzaGiCaptureOutput("ownership", "ownership", GlobalIlluminationDebugView.DdgiEffectiveWeight, false, "Effective normalized DDGI ownership weight."),
                 new SampleSponzaGiCaptureOutput("fallback", "fallback", GlobalIlluminationDebugView.DdgiEnvironmentFallbackWeight, false, "Environment fallback composition weight."),
                 new SampleSponzaGiCaptureOutput("probe-state", "probe-state", GlobalIlluminationDebugView.DdgiProbeState, false, "First gather rejection reason and combined rejection mask for unsupported Simple-DDGI receivers."),
-                new SampleSponzaGiCaptureOutput("classification-invalid-score", "classification-invalid-score", GlobalIlluminationDebugView.DdgiClassificationInvalidScore, false, "Probe relocation/classification invalid score."),
-                new SampleSponzaGiCaptureOutput("update-reasons", "update-reasons", GlobalIlluminationDebugView.DdgiUpdateReasons, false, "Scheduled probe update reasons and recovery activity."),
+                new SampleSponzaGiCaptureOutput("probe-index", "probe-index", GlobalIlluminationDebugView.DdgiProbeIndex, false, "Nearest published probe identity, hashed to a stable diagnostic color."),
+                new SampleSponzaGiCaptureOutput("ray-budget", "ray-budget", GlobalIlluminationDebugView.DdgiRayBudget, false, "Receiver probe ray tier, support coverage, and gather weight."),
                 new SampleSponzaGiCaptureOutput("visibility-moments", "visibility-moments", GlobalIlluminationDebugView.DdgiVisibilityMoments, false, "Visibility mean and second-moment attribution."),
                 new SampleSponzaGiCaptureOutput("probe-relocation", "probe-relocation", GlobalIlluminationDebugView.DdgiProbeRelocation, false, "Probe relocation and classification ownership."),
                 new SampleSponzaGiCaptureOutput("probe-residency", "probe-residency", GlobalIlluminationDebugView.DdgiProbeResidency, false, "Fine-page residency state at the receiver."),
                 new SampleSponzaGiCaptureOutput("residency-fallback", "residency-fallback", GlobalIlluminationDebugView.DdgiResidencyFallback, false, "Coherent coarse fallback used while fine data is absent or warming."),
                 new SampleSponzaGiCaptureOutput("page-age", "page-age", GlobalIlluminationDebugView.DdgiPageAge, false, "Sparse-page age and publication latency attribution."),
-                new SampleSponzaGiCaptureOutput("physical-page", "physical-page", GlobalIlluminationDebugView.DdgiPhysicalPage, false, "Virtual-to-physical sparse-page identity.")
+                new SampleSponzaGiCaptureOutput("physical-page", "physical-page", GlobalIlluminationDebugView.DdgiPhysicalPage, false, "Virtual-to-physical sparse-page identity."),
+                // Keep the destructive A/B reference last. Disabling GI changes
+                // the ray-scene content epoch; placing this ahead of the DDGI
+                // views sampled a newly re-enabled field after only three
+                // frames and made healthy diagnostics appear black or solid.
+                new SampleSponzaGiCaptureOutput(
+                    "direct-only",
+                    "direct-only",
+                    GlobalIlluminationDebugView.None,
+                    true,
+                    "Direct sun/local-light reference with indirect environment surface lighting disabled.",
+                    DisableEnvironmentLighting: true)
             ]);
     }
 
@@ -1214,6 +1333,15 @@ public sealed class SampleSponzaGiCaptureContract
             Append(builder, metric.RequiresApprovedBaseline ? 1 : 0);
         }
         Append(builder, RandomSeed);
+        Append(builder, ProceduralSkySunDriver.AstronomicalTime.ToString());
+        Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultSolarTimeHours);
+        Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultLatitudeDegrees);
+        Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultDayOfYear);
+        Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultNorthOffsetDegrees);
+        Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultTurbidity);
+        Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultGroundAlbedo);
+        Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultAtmosphereIntensity);
+        Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultSolarIrradianceScale);
         AppendVector(builder, DirectionalLightDirection);
         AppendVector(builder, DirectionalLightColor);
         Append(builder, DirectionalLightIntensity);
@@ -1319,6 +1447,8 @@ public sealed class SampleSponzaGiCaptureContract
             "production-timing: only the non-debug beauty endpoint is timing-eligible; debug images are evidence only",
         SampleSponzaGiCaptureMode.DetailedDiagnostics =>
             "detailed-diagnostics: debug views are timing-ineligible and GPU timing collection is disabled",
+        SampleSponzaGiCaptureMode.PresentationReview =>
+            "presentation-review: display-referred beauty is timing-ineligible; diagnostic views retain the linear validation overlay",
         _ => throw new ArgumentOutOfRangeException(nameof(captureMode))
     };
 

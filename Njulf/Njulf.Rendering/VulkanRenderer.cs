@@ -3064,6 +3064,10 @@ namespace Njulf.Rendering
                 throw new VulkanException("Failed to present swapchain image", presentResult);
             }
 
+            // TriggerCapture queues a single present-delimited frame. Retire
+            // the renderer-facing request only after that frame presented.
+            _renderDocCaptureService.EndFrame(IntPtr.Zero, IntPtr.Zero);
+
             // Advance to next frame
             _currentFrame = (_currentFrame + 1) % FramesInFlight;
             _temporalSampleIndex++;
@@ -3800,7 +3804,12 @@ namespace Njulf.Rendering
             _debugDraw.ClearFrame();
         }
 
-        internal static bool ShouldRenderGeometryDecals(uint forwardDebugViewMode) => forwardDebugViewMode == 0;
+        // GI diagnostics inspect the same receiver set as the beauty frame.
+        // Hiding decals here used to rebuild the transparent draw list on view
+        // selection and made the diagnostic itself change the scene it sampled.
+        internal static bool ShouldRenderGeometryDecals(uint forwardDebugViewMode) =>
+            forwardDebugViewMode == 0 ||
+            forwardDebugViewMode is >= 80 and <= 129;
 
         private uint ResolveForwardDebugViewMode()
         {

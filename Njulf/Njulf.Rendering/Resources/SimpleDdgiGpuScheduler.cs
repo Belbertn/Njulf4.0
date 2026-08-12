@@ -437,11 +437,33 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
 
             UploadSpan(stagingRing, commandBuffer, probeStates, _layout.ProbeState.Offset);
             UploadSpan(stagingRing, commandBuffer, laneCursors, _layout.LaneCursors.Offset);
-            // A replacement arena has undefined device-local contents. Clear
-            // both receiver-contribution banks exactly once at bootstrap so a
-            // first classifier pass can never interpret allocation residue as
-            // prior-frame screen coverage.
+            // A replacement arena has undefined device-local contents. The
+            // regular reset intentionally preserves counter words 94/95 because
+            // they are the urgent-relight telemetry mailbox and host-controlled
+            // mode flag. Initialize the complete counter block here; otherwise
+            // allocation residue in word 95 can permanently make every ordinary
+            // scheduler invocation look like the restricted urgent lane.
             Silk.NET.Vulkan.Buffer arena = _bufferManager.GetBuffer(_arenaBuffer);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                arena,
+                _layout.Counters.Offset,
+                _layout.Counters.ByteSize,
+                0u);
+            BufferMemoryBarrier2 countersBarrier = BarrierBuilder.BufferBarrier(
+                arena,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+                _layout.Counters.Offset,
+                _layout.Counters.ByteSize);
+            ExecuteBufferBarrier(commandBuffer, countersBarrier);
+
+            // Clear both receiver-contribution banks exactly once at bootstrap
+            // so a first classifier pass can never interpret allocation residue
+            // as prior-frame screen coverage.
             _context.Api.CmdFillBuffer(
                 commandBuffer,
                 arena,

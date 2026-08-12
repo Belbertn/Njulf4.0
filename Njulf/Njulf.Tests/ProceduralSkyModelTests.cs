@@ -78,6 +78,30 @@ public sealed class ProceduralSkyModelTests
     }
 
     [Test]
+    public void StableInputs_DoNotAdvanceAtmosphereContentRevision()
+    {
+        var settings = CreateDaylightSettings();
+        var model = new HosekWilkieSkyModel();
+        var frame = new ProceduralAtmosphereFrame();
+        Vector3 toSun = Vector3.Normalize(new Vector3(0.3f, 0.8f, 0.5f));
+
+        model.UpdateFrame(settings, toSun, authoredSunRadiance: null, frame);
+        uint stableRevision = frame.Revision;
+        model.UpdateFrame(settings, toSun * 2.0f, authoredSunRadiance: null, frame);
+        model.UpdateFrame(settings, toSun, authoredSunRadiance: null, frame);
+
+        settings.Turbidity += 0.25f;
+        model.UpdateFrame(settings, toSun, authoredSunRadiance: null, frame);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stableRevision, Is.EqualTo(1U));
+            Assert.That(frame.Revision, Is.EqualTo(2U));
+            Assert.That(frame.SourceSignature, Is.Not.Zero);
+        });
+    }
+
+    [Test]
     public void DiffuseSh_ReconstructsIndependentCosineConvolution()
     {
         var settings = CreateDaylightSettings();

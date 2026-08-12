@@ -518,6 +518,9 @@ namespace Njulf.Tests
                     RendererBuildFeatures.SourceCacheRadianceReceiverDiagnosticCompiled,
                     Is.False);
                 Assert.That(
+                    RendererBuildFeatures.ExtendedProbeMetadataReceiverDiagnosticsCompiled,
+                    Is.False);
+                Assert.That(
                     RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(
                         GlobalIlluminationDebugView.DdgiSourceCacheRadiance),
                     Is.False);
@@ -529,6 +532,18 @@ namespace Njulf.Tests
                     RendererBuildFeatures.GetGlobalIlluminationDebugViewAvailabilityReason(
                         GlobalIlluminationDebugView.DdgiSourceCacheRadiance),
                     Does.Contain("compute-projected"));
+                Assert.That(
+                    RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(
+                        GlobalIlluminationDebugView.DdgiUpdateReasons),
+                    Is.False);
+                Assert.That(
+                    RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(
+                        GlobalIlluminationDebugView.DdgiClassificationInvalidScore),
+                    Is.False);
+                Assert.That(
+                    RendererBuildFeatures.GetGlobalIlluminationDebugViewAvailabilityReason(
+                        GlobalIlluminationDebugView.DdgiUpdateReasons),
+                    Does.Contain("compact Simple-DDGI receiver payload"));
                 Assert.That(
                     RendererBuildFeatures.RequiresDetailedDdgiReceiverDiagnostics(
                         GlobalIlluminationDebugView.FinalIndirect),
@@ -728,6 +743,76 @@ namespace Njulf.Tests
                     controller,
                     Does.Contain(
                         "ReflectionDebugView.DdgiDirectionalRadianceLobe => ReflectionDebugView.SourceOwnership"));
+            });
+        }
+
+        [Test]
+        public void ReflectionSpecular_UsesProbeMipRangeAndAntialiasesCapturedHighlights()
+        {
+            string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+            string prefilter = ReadRepoText(
+                "Njulf.Shaders",
+                "reflection_probe_prefilter.comp");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(shader, Does.Contain(
+                    "float probeMaxLod = max(float(header.ProbeMipCount) - 1.0, 0.0);"));
+                Assert.That(shader, Does.Contain(
+                    "? mix(1.0, probeMaxLod, roughness)"));
+                Assert.That(shader, Does.Contain(
+                    "roughness = FilterSpecularRoughness(roughness, normal);"));
+                Assert.That(prefilter, Does.Contain(
+                    "float medianNeighbour = 0.5 *"));
+                Assert.That(prefilter, Does.Contain(
+                    "center *= luminanceLimit / max(centerLuminance, 0.000001);"));
+            });
+        }
+
+        [Test]
+        public void ReflectionCapture_RebindsMeshDescriptorsAfterSkyboxLayout()
+        {
+            string forwardPass = ReadRepoText(
+                "Njulf.Rendering",
+                "Pipeline",
+                "ForwardPlusPass.cs");
+            int skybox = forwardPass.IndexOf(
+                "RecordReflectionSkybox(cmd, view);",
+                StringComparison.Ordinal);
+            int meshRebind = forwardPass.IndexOf(
+                "BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);",
+                skybox,
+                StringComparison.Ordinal);
+            int firstBucket = forwardPass.IndexOf(
+                "DrawForwardBucket(",
+                skybox,
+                StringComparison.Ordinal);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(skybox, Is.GreaterThanOrEqualTo(0));
+                Assert.That(meshRebind, Is.GreaterThan(skybox));
+                Assert.That(firstBucket, Is.GreaterThan(meshRebind));
+            });
+        }
+
+        [Test]
+        public void DdgiReceiverDebugViews_DoNotPresentHealthyCandidateRejectionsOrIdleUpdatesAsFailures()
+        {
+            string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    shader,
+                    Does.Contain("ddgiSample.supportCoverage <= 0.000001"));
+                Assert.That(
+                    shader,
+                    Does.Contain("updateReason != 0u")
+                        .And.Contain("vec3(0.0)"));
+                Assert.That(
+                    shader,
+                    Does.Contain("ddgiSample.relocation = simpleDebug.relocation"));
             });
         }
 

@@ -346,6 +346,7 @@ namespace Njulf.Rendering.Resources
             destination.NightBlend = source.NightBlend;
             destination.StarIntensity = source.StarIntensity;
             destination.AirglowIntensity = source.AirglowIntensity;
+            destination.SourceSignature = source.SourceSignature;
             destination.Revision = source.Revision;
         }
 

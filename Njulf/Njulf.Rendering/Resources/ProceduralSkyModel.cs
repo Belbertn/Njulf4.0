@@ -53,6 +53,7 @@ internal sealed class ProceduralAtmosphereFrame
     public float NightBlend { get; set; }
     public float StarIntensity { get; set; }
     public float AirglowIntensity { get; set; }
+    public ulong SourceSignature { get; set; }
     public uint Revision { get; set; }
 }
 
@@ -90,6 +91,17 @@ internal sealed class HosekWilkieSkyModel : IProceduralSkyModel
                 settings.GroundAlbedo.Z),
             Vector3.Zero,
             Vector3.One);
+        Vector3? effectiveAuthoredSunRadiance = authoredSunRadiance.HasValue
+            ? Vector3.Max(authoredSunRadiance.Value, Vector3.Zero)
+            : null;
+        ulong sourceSignature = CreateSourceSignature(
+            settings,
+            toSun,
+            effectiveAuthoredSunRadiance,
+            turbidity,
+            groundAlbedo);
+        if (destination.SourceSignature == sourceSignature)
+            return;
 
         InitializeChannel(
             destination.HosekParameters.AsSpan(0, 9),
@@ -142,8 +154,8 @@ internal sealed class HosekWilkieSkyModel : IProceduralSkyModel
         destination.StarIntensity = settings.StarIntensity;
         destination.AirglowIntensity = settings.AirglowIntensity;
 
-        destination.SunRadiance = authoredSunRadiance.HasValue
-            ? Vector3.Max(authoredSunRadiance.Value, Vector3.Zero)
+        destination.SunRadiance = effectiveAuthoredSunRadiance.HasValue
+            ? effectiveAuthoredSunRadiance.Value
             : CalculateAtmosphericSunRadiance(
                 elevation,
                 turbidity,
@@ -172,6 +184,7 @@ internal sealed class HosekWilkieSkyModel : IProceduralSkyModel
             (diffuseSkyIrradiance + directHorizontalIrradiance) / Pi;
 
         ProjectDiffuseIrradianceSh(destination, destination.DiffuseIrradianceSh);
+        destination.SourceSignature = sourceSignature;
         destination.Revision++;
         if (destination.Revision == 0)
             destination.Revision = 1;
@@ -519,6 +532,48 @@ internal sealed class HosekWilkieSkyModel : IProceduralSkyModel
         value ^= value >> 15;
         value *= 0x846ca68bu;
         return value ^ (value >> 16);
+    }
+
+    private static ulong CreateSourceSignature(
+        EnvironmentSettings settings,
+        Vector3 toSun,
+        Vector3? authoredSunRadiance,
+        float turbidity,
+        Vector3 groundAlbedo)
+    {
+        const ulong offsetBasis = 14695981039346656037UL;
+        ulong hash = offsetBasis;
+        hash = HashSourceValue(hash, toSun);
+        hash = HashSourceValue(hash, authoredSunRadiance.HasValue ? 1U : 0U);
+        if (authoredSunRadiance.HasValue)
+            hash = HashSourceValue(hash, authoredSunRadiance.Value);
+        hash = HashSourceValue(hash, turbidity);
+        hash = HashSourceValue(hash, groundAlbedo);
+        hash = HashSourceValue(hash, settings.AtmosphereIntensity);
+        hash = HashSourceValue(hash, settings.SunAngularDiameterDegrees);
+        hash = HashSourceValue(hash, settings.MoonAngularDiameterDegrees);
+        hash = HashSourceValue(hash, settings.StarIntensity);
+        hash = HashSourceValue(hash, settings.AirglowIntensity);
+        hash = HashSourceValue(hash, settings.SolarIrradianceScale);
+        hash = HashSourceValue(hash, settings.MoonIrradianceScale);
+        return hash == 0UL ? 1UL : hash;
+    }
+
+    private static ulong HashSourceValue(ulong hash, Vector3 value)
+    {
+        hash = HashSourceValue(hash, value.X);
+        hash = HashSourceValue(hash, value.Y);
+        return HashSourceValue(hash, value.Z);
+    }
+
+    private static ulong HashSourceValue(ulong hash, float value) =>
+        HashSourceValue(hash, BitConverter.SingleToUInt32Bits(value));
+
+    private static ulong HashSourceValue(ulong hash, uint value)
+    {
+        const ulong prime = 1099511628211UL;
+        hash ^= value;
+        return hash * prime;
     }
 
     private static float RadicalInverseVdc(uint bits)

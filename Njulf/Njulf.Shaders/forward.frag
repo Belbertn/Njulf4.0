@@ -1934,6 +1934,21 @@ float GeometrySmith(float nDotV, float nDotL, float roughness)
     return GeometrySchlickGGX(nDotV, roughness) * GeometrySchlickGGX(nDotL, roughness);
 }
 
+float FilterSpecularRoughness(float roughness, vec3 shadingNormal)
+{
+    // Normal maps can vary by substantially more than one microfacet lobe in a
+    // screen pixel. Folding that footprint into alpha prevents direct and IBL
+    // highlights from collapsing to isolated pixels as the camera moves.
+    vec3 normalDx = dFdx(shadingNormal);
+    vec3 normalDy = dFdy(shadingNormal);
+    float normalVariance = clamp(
+        0.5 * (dot(normalDx, normalDx) + dot(normalDy, normalDy)),
+        0.0,
+        0.18);
+    float alphaSquared = roughness * roughness * roughness * roughness;
+    return pow(clamp(alphaSquared + normalVariance, 0.00000256, 1.0), 0.25);
+}
+
 vec3 FresnelSchlick(float cosTheta, vec3 f0)
 {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
@@ -2050,7 +2065,8 @@ vec3 EvaluateReflectionSpecular(
     GPUEnvironmentData environment,
     vec3 worldPosition,
     vec3 reflectionDirection,
-    float lod,
+    float globalLod,
+    float roughness,
     vec2 brdf,
     vec3 fresnel,
     float specularOcclusion,
@@ -2073,7 +2089,20 @@ vec3 EvaluateReflectionSpecular(
     vec3 globalReflection = SampleEnvironmentPrefilteredRadiance(
         environment,
         reflectionDirection,
-        lod) * header.GlobalFallbackIntensity;
+        globalLod) * header.GlobalFallbackIntensity;
+
+    // The global environment and local probes do not necessarily have the
+    // same mip count. Mapping a probe through the shorter environment chain
+    // leaves rough materials sampling a much sharper local mip, which makes
+    // stone and plaster read as wet.
+    float probeMaxLod = max(float(header.ProbeMipCount) - 1.0, 0.0);
+    // Mip zero is the raw radiance capture and can contain a delta directional
+    // highlight smaller than one cubemap texel. Local probes start at the first
+    // antialiased GGX mip; truly sharp materials still retain global/direct
+    // specular without exposing a captured firefly.
+    float probeLod = probeMaxLod > 0.0
+        ? mix(1.0, probeMaxLod, roughness)
+        : 0.0;
 
     vec3 localReflection = vec3(0.0);
     vec3 firstWeightColor = vec3(0.0);
@@ -2105,7 +2134,7 @@ vec3 EvaluateReflectionSpecular(
             vec3 probeColor = textureLod(
                 BindlessCubeArrayTextures[nonuniformEXT(header.ProbeCubemapArrayTextureIndex)],
                 vec4(probeDirection, float(probe.CubemapArrayIndex)),
-                lod).rgb * max(probe.BlendParams.y, 0.0);
+                probeLod).rgb * max(probe.BlendParams.y, 0.0);
 
             if (acceptedProbeCount == 0)
             {
@@ -2156,7 +2185,7 @@ vec3 EvaluateReflectionSpecular(
         else if (header.DebugView == REFLECTION_DEBUG_PROBE_CUBEMAP_FACE)
             debugColor = ReflectionFaceColor(projectedDirection);
         else if (header.DebugView == REFLECTION_DEBUG_PROBE_PREFILTER_MIP)
-            debugColor = vec3(header.ProbeMipCount <= 1u ? 0.0 : clamp(lod / float(header.ProbeMipCount - 1u), 0.0, 1.0));
+            debugColor = vec3(header.ProbeMipCount <= 1u ? 0.0 : clamp(probeLod / float(header.ProbeMipCount - 1u), 0.0, 1.0));
         else if (header.DebugView == REFLECTION_DEBUG_BOX_PROJECTION_DIRECTION)
             debugColor = projectedDirection * 0.5 + vec3(0.5);
         else if (header.DebugView == REFLECTION_DEBUG_LOCAL_REFLECTION_ONLY)
@@ -2271,15 +2300,15 @@ void EvaluateIbl(
 #endif
 
     vec3 reflectionDirection = reflect(-viewDirection, normal);
-    float maxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
-    float lod = roughness * maxLod;
+    float globalMaxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
+    float globalLod = roughness * globalMaxLod;
     vec2 brdf = texture(BindlessTextures[nonuniformEXT(environment.BrdfLutTextureIndex)], vec2(nDotV, roughness)).rg;
     float specularOcclusion = clamp(pow(ambientOcclusion, 1.0 + roughness), 0.0, 1.0);
 #if FORWARD_SIMPLE_OPAQUE
     specularIbl = EvaluateGlobalReflectionSpecular(
         environment,
         reflectionDirection,
-        lod,
+        globalLod,
         brdf,
         fresnel,
         specularOcclusion,
@@ -2292,7 +2321,8 @@ void EvaluateIbl(
         environment,
         fragWorldPosition,
         reflectionDirection,
-        lod,
+        globalLod,
+        roughness,
         brdf,
         fresnel,
         specularOcclusion,
@@ -3000,6 +3030,7 @@ void main()
 
     float roughness = clamp(material.MetallicRoughnessAO.y * armSample.g, 0.04, 1.0);
     float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);
+    roughness = FilterSpecularRoughness(roughness, normal);
     float sampledOcclusion = material.OcclusionTextureIndex == DEFAULT_WHITE_TEXTURE
         ? 1.0
         : SampleMaterialTexture(
@@ -3849,6 +3880,12 @@ void main()
             ddgiSample.probeIndex = simpleDebug.probeIndex;
             ddgiSample.logicalProbePosition = simpleDebug.logicalProbePosition;
             ddgiSample.relocatedProbePosition = simpleDebug.relocatedProbePosition;
+            ddgiSample.relocation = simpleDebug.relocation;
+            // Nearest-probe state is diagnostic only; the authoritative
+            // receiver estimate above remains the structured eight-corner
+            // gather. This makes relocation/state views observable without
+            // changing lighting composition or normal-frame buffer traffic.
+            ddgiSample.activeProbe = simpleDebug.activeWeight;
             ddgiSample.visibilityMomentMean = simpleDebug.visibilityMomentMean;
             ddgiSample.visibilityMomentVariance = simpleDebug.visibilityMomentVariance;
             ddgiSample.visibilityProbeDistance = simpleDebug.visibilityProbeDistance;
@@ -4055,17 +4092,19 @@ void main()
 #if NJULF_DDGI_DETAILED_COUNTERS
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE)
     {
-        // A logarithmic, reference-white-normalized presentation keeps exact
-        // zero black while making low but nonzero probe energy visible. The raw
-        // linear value remains available through DdgiSampledIrradiance.
+        // A logarithmic presentation keeps exact zero black while retaining
+        // headroom for the sun-lit tail. Eight linear units map to white; one
+        // unit remains mid-bright instead of saturating the whole scene. The
+        // raw linear value remains available through DdgiSampledIrradiance.
         vec3 safeIrradiance = max(ddgiSample.irradiance, vec3(0.0));
         float irradianceLuminance = DdgiDiagnosticLuminance(safeIrradiance);
         vec3 presentedIrradiance = vec3(0.0);
         if (irradianceLuminance > 0.00000001)
         {
-            const float logScale = 1024.0;
+            const float logScale = 64.0;
+            const float referenceWhite = 8.0;
             float presentedLuminance = log2(1.0 + irradianceLuminance * logScale) /
-                log2(1.0 + logScale);
+                log2(1.0 + referenceWhite * logScale);
             presentedIrradiance = clamp(
                 safeIrradiance * (presentedLuminance / irradianceLuminance),
                 vec3(0.0),
@@ -4087,9 +4126,10 @@ void main()
         vec3 presentedSource = vec3(0.0);
         if (sourceLuminance > 0.00000001)
         {
-            const float logScale = 1024.0;
+            const float logScale = 64.0;
+            const float referenceWhite = 8.0;
             float presentedLuminance = log2(1.0 + sourceLuminance * logScale) /
-                log2(1.0 + logScale);
+                log2(1.0 + referenceWhite * logScale);
             presentedSource = clamp(
                 safeSource * (presentedLuminance / sourceLuminance),
                 vec3(0.0),
@@ -4306,10 +4346,14 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE)
     {
         if (simpleDdgiActive && globalIlluminationEnabled &&
-            simpleDdgiCombinedRejectionMask != 0u)
+            simpleDdgiCombinedRejectionMask != 0u &&
+            ddgiSample.supportCoverage <= 0.000001)
         {
             // R = first failing reason, G/B = low/high portions of the combined
-            // nine-bit mask. Supported receivers retain the legacy state view.
+            // nine-bit mask. A structured gather normally rejects some of its
+            // corner candidates while still producing a valid estimate; showing
+            // those routine rejections made healthy receivers look failed. Only
+            // expose the rejection payload when the gather has no usable support.
             WriteDdgiDebugColor(
                 GLOBAL_ILLUMINATION_DEBUG_DDGI_PROBE_STATE,
                 vec3(
@@ -4397,7 +4441,11 @@ void main()
 
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS)
     {
-        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS, MeshletDebugColor(uint(clamp(ddgiSample.updateReason * 255.0, 0.0, 255.0))));
+        uint updateReason = uint(clamp(ddgiSample.updateReason * 255.0, 0.0, 255.0));
+        vec3 updateReasonColor = updateReason != 0u
+            ? MeshletDebugColor(updateReason)
+            : vec3(0.0);
+        WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_DDGI_UPDATE_REASONS, updateReasonColor);
         return;
     }
 

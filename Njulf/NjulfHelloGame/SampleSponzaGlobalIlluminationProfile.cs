@@ -25,7 +25,7 @@ public static class SampleSponzaGlobalIlluminationProfile
     public const float DefaultTimeScale = 60.0f;
     public const float DefaultTurbidity = 2.0f;
     public const float DefaultGroundAlbedo = 0.16f;
-    public const float DefaultAtmosphereIntensity = 0.30f;
+    public const float DefaultAtmosphereIntensity = 0.14f;
     public const float DefaultSolarIrradianceScale = 34.0f;
 
     /// <summary>
@@ -81,10 +81,13 @@ public static class SampleSponzaGlobalIlluminationProfile
             RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled;
         settings.Diagnostics.DirectionalShadowReceiverCountersEnabled =
             RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled;
-        // Locked captures compare a single, immutable authored key. Normal
-        // Sponza uses the astronomical driver configured below; the capture
-        // overlay is the deliberate deterministic exception.
-        settings.Environment.SunDriver = ProceduralSkySunDriver.SceneDirectionalLight;
+        // Freeze the same astronomical source used by normal Sponza. The
+        // previous capture-only authored-light driver reduced the 34-unit
+        // presentation sun to the scene's 14-unit loading key, so the judged
+        // image had a much larger sky/direct ratio and looked uniformly blue.
+        // A paused astronomical clock is deterministic without changing the
+        // physical lighting profile being reviewed.
+        settings.Environment.SunDriver = ProceduralSkySunDriver.AstronomicalTime;
         settings.Environment.AnimateTimeOfDay = false;
     }
 
@@ -99,7 +102,7 @@ public static class SampleSponzaGlobalIlluminationProfile
         environment.SourcePath = null;
         environment.TexturePrecision = EnvironmentTexturePrecision.Float16;
         environment.SunDriver = ProceduralSkySunDriver.AstronomicalTime;
-        environment.AnimateTimeOfDay = true;
+        environment.AnimateTimeOfDay = false;
 
         environment.TimeOfDayHours = DefaultSolarTimeHours;
         environment.LatitudeDegrees = DefaultLatitudeDegrees;
@@ -108,10 +111,9 @@ public static class SampleSponzaGlobalIlluminationProfile
         environment.TimeScale = DefaultTimeScale;
 
         // Clear maritime summer air. Hosek-Wilkie's RGB sky radiance and the
-        // directional solar irradiance use independent scales; this calibrated
-        // pair keeps initial horizontal diffuse skylight near one quarter of
-        // direct sunlight. That produces a blue dome and crisp solar modeling
-        // without materially increasing the scene's total daylight energy.
+        // directional solar irradiance use independent scales. Keep horizontal
+        // diffuse skylight near one tenth of direct sunlight so sky misses do
+        // not dominate every probe and flatten the courtyard.
         environment.Turbidity = DefaultTurbidity;
         environment.GroundAlbedo = new Vector3(DefaultGroundAlbedo);
         environment.SunAngularDiameterDegrees = 0.53f;
@@ -141,15 +143,7 @@ public static class SampleSponzaGlobalIlluminationProfile
     private static void ConfigureReferenceOutput(RenderSettings settings)
     {
         ConfigureDynamicEnvironment(settings);
-        // Interactive presentation follows the camera into shaded galleries.
-        // ApplyValidationOverlay intentionally overrides this for deterministic
-        // linear-light validation captures.
-        settings.AutoExposure.Enabled = true;
-        settings.AutoExposure.TargetLuminance = 0.18f;
-        settings.AutoExposure.MinExposure = 0.5f;
-        settings.AutoExposure.MaxExposure = 8.0f;
-        settings.AutoExposure.AdaptationSpeed = 2.0f;
-        settings.Reflections.Enabled = true;
+        ApplyPresentationOverlay(settings);
         settings.Shadows.DirectionalShadowMapSize = 2048;
         settings.Shadows.DirectionalCascadeCount = 3;
         // Sponza fits inside this range; concentrating the three cascades here
@@ -164,5 +158,56 @@ public static class SampleSponzaGlobalIlluminationProfile
         settings.AmbientOcclusion.Radius = 0.45f;
         settings.AmbientOcclusion.Intensity = 0.55f;
         settings.AmbientOcclusion.Power = 1.0f;
+    }
+
+    /// <summary>
+    /// Restores only Sponza's normal display-referred presentation controls.
+    /// The current sky, sun, DDGI layout, and transport remain untouched so a
+    /// fixed physical capture can be reviewed through the interactive output.
+    /// </summary>
+    public static void ApplyPresentationOverlay(RenderSettings settings)
+    {
+        if (settings == null)
+            throw new ArgumentNullException(nameof(settings));
+
+        // Interactive presentation follows the camera into shaded galleries.
+        // ApplyValidationOverlay disables presentation processing for diagnostic
+        // outputs but now retains this same sun at a frozen clock. The procedural
+        // daylight calibration is intentionally bright in HDR. Keep the key
+        // below middle gray and allow the open courtyard to settle below 0.5
+        // exposure so sunlit stone retains contrast without crushing the
+        // DDGI-lit galleries.
+        settings.AutoExposure.Enabled = true;
+        settings.AutoExposure.TargetLuminance = 0.05f;
+        settings.AutoExposure.MinExposure = 0.35f;
+        settings.AutoExposure.MaxExposure = 8.0f;
+        settings.AutoExposure.AdaptationSpeed = 2.0f;
+        settings.Bloom.Enabled = true;
+        settings.Bloom.MipCount = 6;
+        settings.Fog.Enabled = false;
+        settings.Reflections.Enabled = true;
+        settings.Reflections.Mode = ReflectionMode.StaticProbes;
+        settings.Reflections.MaxProbesPerPixel = 2;
+        // The authored cubemaps are necessarily sky-heavy in the open atrium.
+        // At unity they veil rough stone with a nearly uniform blue lobe and
+        // visually mask the structured diffuse field. This is a display balance,
+        // not a reduction of DDGI transport or environment source radiance.
+        settings.Reflections.Intensity = 0.45f;
+        settings.Reflections.GlobalFallbackIntensity = 0.65f;
+        // Sponza already authors two local reflection volumes, but the generic
+        // renderer default deliberately gives probe capture a zero-frame
+        // budget. Enabling reflections without admitting their producer left
+        // both probes permanently unpublished and made every rough receiver
+        // fall back to the unobstructed procedural sky. Capture the authored
+        // reflection probes so the scene supplies the local specular field;
+        // generic-ring DDGI continues to own diffuse bounce at the receiver.
+        // Keeping the probe transaction independent from DDGI convergence also
+        // avoids deadlocking first publication on a moving-atmosphere cohort.
+        settings.Reflections.CaptureOnLoad = true;
+        settings.Reflections.CaptureIncludesDdgi = false;
+        settings.Reflections.MaxProbeCapturesPerFrame = 1;
+        settings.Reflections.MaxConcurrentProbeCaptures = 1;
+        settings.Reflections.MaxProbeCaptureFacesPerFrame = 2;
+        settings.Reflections.MaxProbePrefilterMipsPerFrame = 2;
     }
 }

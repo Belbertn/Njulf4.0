@@ -1216,20 +1216,23 @@ public sealed class SampleSmokeOptionsParserTests
         });
     }
 
-    [Test]
-    public void ParsesExplicitProductionSponzaGiCaptureMode()
+    [TestCase("production", SampleSponzaGiCaptureMode.ProductionTiming)]
+    [TestCase("presentation", SampleSponzaGiCaptureMode.PresentationReview)]
+    public void ParsesExplicitSponzaGiCaptureMode(
+        string value,
+        SampleSponzaGiCaptureMode expected)
     {
-        string directory = Path.Combine(Path.GetTempPath(), "NjulfSponzaGiCaptureProduction");
+        string directory = Path.Combine(Path.GetTempPath(), "NjulfSponzaGiCaptureExplicitMode");
 
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
         [
             "--sponza-gi-capture-dir", directory,
-            "--sponza-gi-capture-mode", "production"
+            "--sponza-gi-capture-mode", value
         ]);
 
         Assert.That(
             options.SponzaGiCaptureMode,
-            Is.EqualTo(SampleSponzaGiCaptureMode.ProductionTiming));
+            Is.EqualTo(expected));
     }
 
     [Test]

@@ -66,6 +66,29 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(ringProbeCount, Is.EqualTo(15_368));
             Assert.That(ringProbeCount, Is.LessThanOrEqualTo(tierBudget.ProbeBudget));
             Assert.That(persistentBytes, Is.LessThanOrEqualTo(tierBudget.PersistentMemoryBudgetBytes));
+            Assert.That(settings.AutoExposure.Enabled, Is.True);
+            Assert.That(settings.Reflections.Enabled, Is.True);
+        });
+    }
+
+    [Test]
+    public void SponzaCaptureSettings_ExplicitlyOwnDeterministicPresentationOverrides()
+    {
+        var settings = new RenderSettings();
+
+        SampleGlobalIlluminationValidation.ConfigureSponzaCaptureSettings(
+            settings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.AutoExposure.Enabled, Is.False);
+            Assert.That(settings.Exposure, Is.EqualTo(1.0f));
+            Assert.That(settings.Reflections.Enabled, Is.False);
+            Assert.That(settings.Bloom.Enabled, Is.False);
+            Assert.That(
+                settings.GlobalIllumination
+                    .SimpleDdgiThinSurfaceTransmissionEnabled,
+                Is.True);
         });
     }
 
@@ -105,7 +128,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.Environment.SourceKind, Is.EqualTo(EnvironmentSourceKind.ProceduralSky));
             Assert.That(settings.Environment.SourcePath, Is.Null);
             Assert.That(settings.Environment.SunDriver, Is.EqualTo(ProceduralSkySunDriver.AstronomicalTime));
-            Assert.That(settings.Environment.AnimateTimeOfDay, Is.True);
+            Assert.That(settings.Environment.AnimateTimeOfDay, Is.False);
             Assert.That(settings.Environment.TimeOfDayHours, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultSolarTimeHours));
             Assert.That(settings.Environment.LatitudeDegrees, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultLatitudeDegrees));
             Assert.That(settings.Environment.DayOfYear, Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultDayOfYear));
@@ -127,8 +150,18 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.Environment.SpecularIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.AutoExposure.Enabled, Is.True);
-            Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.5f));
+            Assert.That(settings.AutoExposure.TargetLuminance, Is.EqualTo(0.05f));
+            Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.35f));
             Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(8.0f));
+            Assert.That(settings.Reflections.Enabled, Is.True);
+            Assert.That(settings.Reflections.Mode, Is.EqualTo(ReflectionMode.StaticProbes));
+            Assert.That(settings.Reflections.Intensity, Is.EqualTo(0.45f));
+            Assert.That(settings.Reflections.GlobalFallbackIntensity, Is.EqualTo(0.65f));
+            Assert.That(settings.Reflections.CaptureOnLoad, Is.True);
+            Assert.That(settings.Reflections.CaptureIncludesDdgi, Is.False);
+            Assert.That(settings.Reflections.MaxProbeCapturesPerFrame, Is.EqualTo(1));
+            Assert.That(settings.Reflections.MaxProbeCaptureFacesPerFrame, Is.EqualTo(2));
+            Assert.That(settings.Reflections.MaxProbePrefilterMipsPerFrame, Is.EqualTo(2));
             Assert.That(settings.GlobalIllumination.DdgiAlphaMaskedTransportEnabled, Is.True);
             Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
             Assert.That(settings.Shadows.MaxShadowDistance, Is.EqualTo(48.0f));
@@ -141,7 +174,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.AutoExposure.Enabled, Is.False);
             Assert.That(settings.Exposure, Is.EqualTo(1.0f));
             Assert.That(settings.Environment.SourceKind, Is.EqualTo(EnvironmentSourceKind.ProceduralSky));
-            Assert.That(settings.Environment.SunDriver, Is.EqualTo(ProceduralSkySunDriver.SceneDirectionalLight));
+            Assert.That(settings.Environment.SunDriver, Is.EqualTo(ProceduralSkySunDriver.AstronomicalTime));
             Assert.That(settings.Environment.AnimateTimeOfDay, Is.False);
             Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
             Assert.That(
@@ -201,16 +234,15 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
                 frame.DiffuseIrradianceSh);
         System.Numerics.Vector3 directHorizontalIrradiance =
             frame.SunRadiance * MathF.Max(toSun.Y, 0.0f);
-        float diffuseToDirect = Luminance(skyIrradiance) /
+        float dynamicDiffuseToDirect = Luminance(skyIrradiance) /
             MathF.Max(Luminance(directHorizontalIrradiance), 0.000001f);
-
         Assert.Multiple(() =>
         {
             Assert.That(settings.Environment.DayOfYear, Is.InRange(152, 243));
             Assert.That(settings.Environment.Turbidity, Is.LessThanOrEqualTo(2.0f));
             Assert.That(zenith.Z, Is.GreaterThan(zenith.X * 3.0f));
             Assert.That(frame.SunRadiance.Z, Is.GreaterThan(frame.SunRadiance.X * 0.75f));
-            Assert.That(diffuseToDirect, Is.InRange(0.20f, 0.32f));
+            Assert.That(dynamicDiffuseToDirect, Is.InRange(0.08f, 0.15f));
         });
     }
 

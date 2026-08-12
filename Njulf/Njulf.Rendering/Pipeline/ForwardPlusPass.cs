@@ -338,6 +338,12 @@ namespace Njulf.Rendering.Pipeline
                 // reverse-Z scene depth naturally occludes it.
                 RecordReflectionSkybox(cmd, view);
 
+                // The skybox uses a distinct pipeline layout. Rebind both
+                // bindless sets against the mesh layout before resuming mesh
+                // draws; descriptor-set compatibility is tracked from set zero
+                // and cannot be inherited across these layouts.
+                BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
+
                 ForwardOpaqueVariantSelection selection = ResolveOpaqueVariantSelection(sceneData);
                 DrawForwardBucket(
                     cmd,

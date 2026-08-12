@@ -47,13 +47,17 @@ public sealed class TransparencyAndDecalSettingsTests
     }
 
     [Test]
-    public void GeometryDecals_AreSuppressedForForwardDebugViews()
+    public void GeometryDecals_RemainVisibleForGiDiagnosticsOnly()
     {
         Assert.Multiple(() =>
         {
             Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(0u), Is.True);
-            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(80u), Is.False);
-            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(97u), Is.False);
+            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(1u), Is.False);
+            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(79u), Is.False);
+            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(80u), Is.True);
+            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(97u), Is.True);
+            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(129u), Is.True);
+            Assert.That(VulkanRenderer.ShouldRenderGeometryDecals(130u), Is.False);
         });
     }
 

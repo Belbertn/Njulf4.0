@@ -1381,7 +1381,7 @@ public static class SampleSmokeOptionsParser
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new ArgumentException(
-                "Sponza GI capture mode requires a value. Valid values: detailed, production.");
+                "Sponza GI capture mode requires a value. Valid values: detailed, production, presentation.");
         }
 
         return value.Trim()
@@ -1393,8 +1393,10 @@ public static class SampleSmokeOptionsParser
                 SampleSponzaGiCaptureMode.DetailedDiagnostics,
             "production" or "timing" or "productiontiming" =>
                 SampleSponzaGiCaptureMode.ProductionTiming,
+            "presentation" or "review" or "presentationreview" =>
+                SampleSponzaGiCaptureMode.PresentationReview,
             _ => throw new ArgumentException(
-                $"Invalid Sponza GI capture mode '{value}'. Valid values: detailed, production.")
+                $"Invalid Sponza GI capture mode '{value}'. Valid values: detailed, production, presentation.")
         };
     }
 

@@ -73,6 +73,7 @@ public sealed unsafe class SimpleDdgiProbePageCache : IDisposable
     private BufferHandle _placeholderBuffer;
     private ulong _placeholderBytes;
     private uint _resourceGeneration = 1u;
+    private ulong _topologyFingerprint;
     private SimpleDdgiProbePageTransactionPolicy _transactionPolicy;
     private bool _bootstrapRequired;
     private bool _runtimeFrozen;
@@ -102,6 +103,7 @@ public sealed unsafe class SimpleDdgiProbePageCache : IDisposable
     public SimpleDdgiProbePageLayout? Layout => _layout;
     public SimpleDdgiProbeResidencyMode Mode => _mode;
     public uint ResourceGeneration => _resourceGeneration;
+    public ulong TopologyFingerprint => _topologyFingerprint;
     public ulong ArenaBytes => _layout?.TotalBytes ?? 0UL;
     public ulong FeedbackReadbackBytes => CountFeedbackReadbackBytes();
     public ulong RetiredBytes => _retirement.ActiveBytes;
@@ -179,7 +181,8 @@ public sealed unsafe class SimpleDdgiProbePageCache : IDisposable
         int maximumAdmissionsPerFrame,
         int retentionFrames,
         int maximumReceiverFeedbackRequests,
-        int inactiveRetryFrames)
+        int inactiveRetryFrames,
+        ulong topologyFingerprint)
     {
         lock (_lock)
         {
@@ -198,6 +201,9 @@ public sealed unsafe class SimpleDdgiProbePageCache : IDisposable
             return _forceReplacement ||
                 _layout == null ||
                 !_arenaBuffer.IsValid ||
+                RequiresTopologyReplacement(
+                    _topologyFingerprint,
+                    topologyFingerprint) ||
                 _mode != resolvedMode ||
                 _layout.VirtualPageCount != virtualPageCount ||
                 _layout.SparsePhysicalPageCapacity !=
@@ -220,6 +226,7 @@ public sealed unsafe class SimpleDdgiProbePageCache : IDisposable
         int retentionFrames,
         int maximumReceiverFeedbackRequests,
         int inactiveRetryFrames,
+        ulong topologyFingerprint,
         CommandBuffer commandBuffer,
         ulong lastUseFrameFenceValue,
         ulong maxStorageBufferRange = ulong.MaxValue)
@@ -244,6 +251,7 @@ public sealed unsafe class SimpleDdgiProbePageCache : IDisposable
                 _lastDevelopmentControlledVirtualPage = -1;
                 _lastDevelopmentPinState = false;
                 _forceReplacement = false;
+                _topologyFingerprint = 0UL;
                 _transactionPolicy = default;
                 RegisterArenaOrPlaceholder();
                 return changed;
@@ -266,6 +274,9 @@ public sealed unsafe class SimpleDdgiProbePageCache : IDisposable
 
             if (!_forceReplacement &&
                 _layout != null && _arenaBuffer.IsValid &&
+                !RequiresTopologyReplacement(
+                    _topologyFingerprint,
+                    topologyFingerprint) &&
                 _mode == resolvedMode &&
                 _layout.VirtualPageCount == virtualPageCount &&
                 _layout.SparsePhysicalPageCapacity ==
@@ -321,6 +332,7 @@ public sealed unsafe class SimpleDdgiProbePageCache : IDisposable
             _arenaBuffer = nextArena;
             _layout = nextLayout;
             _mode = resolvedMode;
+            _topologyFingerprint = topologyFingerprint;
             _transactionPolicy = transactionPolicy;
             _resourceGeneration = NextGeneration(_resourceGeneration);
             _bootstrapRequired = true;
@@ -345,6 +357,13 @@ public sealed unsafe class SimpleDdgiProbePageCache : IDisposable
             return true;
         }
     }
+
+    internal static bool RequiresTopologyReplacement(
+        ulong residentTopologyFingerprint,
+        ulong requestedTopologyFingerprint) =>
+        residentTopologyFingerprint == 0UL ||
+        requestedTopologyFingerprint == 0UL ||
+        residentTopologyFingerprint != requestedTopologyFingerprint;
 
     /// <summary>
     /// Uploads only immutable transaction identity and the fixed per-volume

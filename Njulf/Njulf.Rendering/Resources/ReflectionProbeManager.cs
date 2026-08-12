@@ -506,16 +506,9 @@ namespace Njulf.Rendering.Resources
 
         public void UpdateCaptureVersions(in LightingVersionSnapshot versions)
         {
-            ReflectionCaptureVersion nextVersion = new(
-                versions.SceneRadianceRevision > uint.MaxValue
-                    ? uint.MaxValue
-                    : (uint)versions.SceneRadianceRevision,
-                versions.VisualEnvironmentGeneration,
-                versions.AdmittedGiEnvironmentGeneration,
-                versions.StaticGiConvergedGeneration,
-                0U,
-                0U,
-                versions.PublishedSpecularEnvironmentGeneration);
+            ReflectionCaptureVersion nextVersion = BuildCaptureVersion(
+                versions,
+                _settings.Reflections.CaptureIncludesDdgi);
             if (_captureVersionInitialized && nextVersion != _captureVersion)
             {
                 ReflectionCaptureReason reasons = ResolveVersionChangeReasons(_captureVersion, nextVersion);
@@ -529,6 +522,20 @@ namespace Njulf.Rendering.Resources
             }
             _captureVersionInitialized = true;
         }
+
+        internal static ReflectionCaptureVersion BuildCaptureVersion(
+            in LightingVersionSnapshot versions,
+            bool captureIncludesDdgi) =>
+            new(
+                versions.SceneRadianceRevision > uint.MaxValue
+                    ? uint.MaxValue
+                    : (uint)versions.SceneRadianceRevision,
+                versions.VisualEnvironmentGeneration,
+                captureIncludesDdgi ? versions.AdmittedGiEnvironmentGeneration : 0U,
+                captureIncludesDdgi ? versions.StaticGiConvergedGeneration : 0U,
+                0U,
+                0U,
+                versions.PublishedSpecularEnvironmentGeneration);
 
         public void Register(BindlessHeap bindlessHeap)
         {
@@ -1113,10 +1120,10 @@ namespace Njulf.Rendering.Resources
                     1U);
             }
 
-            ulong minimumIntervalFrames = IsEnvironmentRecaptureReason(reason)
+            ulong minimumIntervalFrames = IsRateLimitedLightingRecaptureReason(reason)
                 ? SecondsToFrames(_settings.Reflections.MinimumEnvironmentRecaptureIntervalSeconds)
                 : 0UL;
-            bool ageExceeded = IsEnvironmentRecaptureReason(reason) && MaximumCaptureAgeExceeded(layer);
+            bool ageExceeded = IsRateLimitedLightingRecaptureReason(reason) && MaximumCaptureAgeExceeded(layer);
             ReflectionProbeRecaptureDecision decision = _recapturePolicies[layer].Observe(
                 version,
                 reason,
@@ -1872,8 +1879,10 @@ namespace Njulf.Rendering.Resources
             return reasons;
         }
 
-        private static bool IsEnvironmentRecaptureReason(ReflectionCaptureReason reason) =>
-            (reason & (ReflectionCaptureReason.EnvironmentChanged | ReflectionCaptureReason.DdgiChanged)) != 0;
+        internal static bool IsRateLimitedLightingRecaptureReason(ReflectionCaptureReason reason) =>
+            (reason & (ReflectionCaptureReason.EnvironmentChanged |
+                       ReflectionCaptureReason.DdgiChanged |
+                       ReflectionCaptureReason.LightChanged)) != 0;
 
         private static ulong SecondsToFrames(float seconds)
         {
