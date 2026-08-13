@@ -410,6 +410,7 @@ namespace Njulf.Rendering.Data
         public int GpuForwardGiGatherTimingCoverage { get; set; }
         public long GpuTransparentMicroseconds { get; set; }
         public long GpuDirectionalShadowMicroseconds { get; set; }
+        public long GpuDirectionalRayShadowMicroseconds { get; set; }
         public long GpuSpotShadowMicroseconds { get; set; }
         public long GpuPointShadowMicroseconds { get; set; }
         public long GpuBloomExtractMicroseconds { get; set; }
@@ -542,6 +543,15 @@ namespace Njulf.Rendering.Data
         public int DirectionalShadowReceiverCountersReadbackValid { get; set; }
         public int DirectionalShadowReceiverUnresolvedCount { get; set; }
         public GPUShadowData ShadowData { get; set; }
+        public GPUDirectionalShadowParameters DirectionalShadowParameters { get; set; }
+        public RaySceneReadinessSnapshot RaySceneReadiness { get; set; }
+        public DirectionalShadowFramePlan DirectionalShadowFramePlan { get; set; }
+        public Vector3 DirectionalShadowLightDirection { get; set; } = Vector3.Zero;
+        public bool DirectionalRayShadowPassEnabled { get; set; }
+        public uint DirectionalRayShadowMaskWidth { get; set; }
+        public uint DirectionalRayShadowMaskHeight { get; set; }
+        public ulong DirectionalRayShadowMaskBytes { get; set; }
+        public uint DirectionalRayShadowResourceGeneration { get; set; }
         public bool SpotShadowsEnabled { get; set; }
         public bool SpotShadowRecordSkipped { get; set; }
         public int SpotShadowCandidateCount { get; set; }
@@ -578,6 +588,8 @@ namespace Njulf.Rendering.Data
         public int[] PointShadowFaceMasks { get; set; } = [];
         public GPULocalLightShadowIndex[] LocalLightShadowIndices { get; set; } = [];
         public int[] DirectionalShadowMeshletCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
+        public DirectionalShadowCascadeFitDiagnostics[] DirectionalShadowCascadeFitDiagnostics { get; } =
+            new DirectionalShadowCascadeFitDiagnostics[ShadowSettings.MaxDirectionalCascades];
         public int[] DirectionalShadowReceiverPrimarySelectionCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] DirectionalShadowReceiverProjectionRejectedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
         public int[] DirectionalShadowReceiverUvDepthRejectedCounts { get; } = new int[ShadowSettings.MaxDirectionalCascades];
@@ -1334,6 +1346,7 @@ namespace Njulf.Rendering.Data
         public long GpuAntiAliasingMicroseconds { get; set; }
         public int SmaaLookupTexturesReady { get; set; }
         public int MotionVectorsEnabled { get; set; }
+        public SurfaceHistoryConsumer SurfaceHistoryConsumers { get; set; }
         public int JitterEnabled { get; set; }
         public float JitterX { get; set; }
         public float JitterY { get; set; }
@@ -1710,6 +1723,7 @@ namespace Njulf.Rendering.Data
             GpuForwardGiGatherTimingCoverage = 0;
             GpuTransparentMicroseconds = 0;
             GpuDirectionalShadowMicroseconds = 0;
+            GpuDirectionalRayShadowMicroseconds = 0;
             GpuSpotShadowMicroseconds = 0;
             GpuPointShadowMicroseconds = 0;
             GpuBloomExtractMicroseconds = 0;
@@ -1911,6 +1925,15 @@ namespace Njulf.Rendering.Data
             DirectionalShadowReceiverCountersReadbackValid = 0;
             DirectionalShadowReceiverUnresolvedCount = 0;
             ShadowData = default;
+            DirectionalShadowParameters = default;
+            RaySceneReadiness = default;
+            DirectionalShadowFramePlan = default;
+            DirectionalShadowLightDirection = Vector3.Zero;
+            DirectionalRayShadowPassEnabled = false;
+            DirectionalRayShadowMaskWidth = 0u;
+            DirectionalRayShadowMaskHeight = 0u;
+            DirectionalRayShadowMaskBytes = 0UL;
+            DirectionalRayShadowResourceGeneration = 0u;
             SpotShadowsEnabled = false;
             SpotShadowRecordSkipped = false;
             SpotShadowCandidateCount = 0;
@@ -1949,6 +1972,10 @@ namespace Njulf.Rendering.Data
             TiledLightHeaderBufferClearBytes = 0;
             TiledLightIndexBufferClearBytes = 0;
             Array.Clear(DirectionalShadowMeshletCounts, 0, DirectionalShadowMeshletCounts.Length);
+            Array.Clear(
+                DirectionalShadowCascadeFitDiagnostics,
+                0,
+                DirectionalShadowCascadeFitDiagnostics.Length);
             Array.Clear(DirectionalShadowReceiverPrimarySelectionCounts, 0, DirectionalShadowReceiverPrimarySelectionCounts.Length);
             Array.Clear(DirectionalShadowReceiverProjectionRejectedCounts, 0, DirectionalShadowReceiverProjectionRejectedCounts.Length);
             Array.Clear(DirectionalShadowReceiverUvDepthRejectedCounts, 0, DirectionalShadowReceiverUvDepthRejectedCounts.Length);
@@ -2660,6 +2687,7 @@ namespace Njulf.Rendering.Data
             GpuAntiAliasingMicroseconds = 0;
             SmaaLookupTexturesReady = 0;
             MotionVectorsEnabled = 0;
+            SurfaceHistoryConsumers = SurfaceHistoryConsumer.None;
             JitterEnabled = 0;
             JitterX = 0;
             JitterY = 0;

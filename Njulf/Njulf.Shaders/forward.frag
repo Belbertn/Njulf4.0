@@ -1191,7 +1191,8 @@ float SampleDirectionalShadowPcf(
     vec2 uv,
     float receiverDepth,
     float mapSize,
-    int radius)
+    int radius,
+    int filterMode)
 {
     float safeMapSize = max(mapSize, 1.0);
     vec2 texelPosition = uv * safeMapSize - vec2(0.5);
@@ -1200,30 +1201,50 @@ float SampleDirectionalShadowPcf(
     vec2 weights = fract(texelPosition);
     int safeRadius = clamp(radius, 1, 3);
     float lit = 0.0;
+    float totalWeight = 0.0;
 
     // Adjacent bilinear PCF taps share their inner texels. Accumulating the
     // unique (2r + 2)^2 grid preserves the same filter while avoiding four
     // independent fetches for every tap.
     for (int y = -safeRadius; y <= safeRadius + 1; y++)
     {
-        float weightY = y == -safeRadius
-            ? 1.0 - weights.y
-            : (y == safeRadius + 1 ? weights.y : 1.0);
+        float weightY;
+        if (filterMode == 1)
+        {
+            float tentWidth = float(safeRadius + 1);
+            weightY = max(tentWidth - abs(float(y) - weights.y), 0.0);
+        }
+        else
+        {
+            weightY = y == -safeRadius
+                ? 1.0 - weights.y
+                : (y == safeRadius + 1 ? weights.y : 1.0);
+        }
         for (int x = -safeRadius; x <= safeRadius + 1; x++)
         {
-            float weightX = x == -safeRadius
-                ? 1.0 - weights.x
-                : (x == safeRadius + 1 ? weights.x : 1.0);
+            float weightX;
+            if (filterMode == 1)
+            {
+                float tentWidth = float(safeRadius + 1);
+                weightX = max(tentWidth - abs(float(x) - weights.x), 0.0);
+            }
+            else
+            {
+                weightX = x == -safeRadius
+                    ? 1.0 - weights.x
+                    : (x == safeRadius + 1 ? weights.x : 1.0);
+            }
+            float tapWeight = weightX * weightY;
             lit += SampleDirectionalShadowTexel(
                 textureIndex,
                 baseTexel + ivec2(x, y),
                 maxTexel,
-                receiverDepth) * weightX * weightY;
+                receiverDepth) * tapWeight;
+            totalWeight += tapWeight;
         }
     }
 
-    float filterWidth = float(safeRadius * 2 + 1);
-    return lit / (filterWidth * filterWidth);
+    return lit / max(totalWeight, 0.00001);
 }
 
 void InspectDirectionalShadowFootprint(
@@ -1274,9 +1295,12 @@ void InspectDirectionalShadowFootprint(
 
 bool TrySampleDirectionalShadowCascade(
     uint cascade,
-    vec3 biasedWorldPosition,
+    vec3 worldPosition,
+    vec3 geometricNormal,
     float mapSize,
     int radius,
+    vec4 worldTexelSizes,
+    vec4 filterAndBias,
     bool collectDepthDiagnostics,
     out float shadow,
     out uint rejection,
@@ -1290,6 +1314,16 @@ bool TrySampleDirectionalShadowCascade(
     diagnosticMinimumSampledDepth = 0.0;
     diagnosticMaximumSampledDepth = 0.0;
 
+    float normalBias = ReadShadowSettings().y;
+    int biasMode = int(clamp(round(filterAndBias.y), 0.0, 1.0));
+    if (biasMode == 1)
+    {
+        float worldTexelSize = max(worldTexelSizes[int(cascade)], 0.0);
+        normalBias = min(
+            worldTexelSize * max(filterAndBias.z, 0.0),
+            max(filterAndBias.w, 0.0));
+    }
+    vec3 biasedWorldPosition = worldPosition + geometricNormal * normalBias;
     vec4 lightClip = MulRowMajor(vec4(biasedWorldPosition, 1.0), ReadShadowMatrix(cascade));
     if (abs(lightClip.w) <= 0.00001 || any(isnan(lightClip)) || any(isinf(lightClip)))
     {
@@ -1338,7 +1372,8 @@ bool TrySampleDirectionalShadowCascade(
         uv,
         receiverDepth,
         mapSize,
-        radius);
+        radius,
+        int(clamp(round(filterAndBias.x), 0.0, 1.0)));
     return true;
 }
 
@@ -1439,6 +1474,51 @@ void RecordDirectionalShadowVisibility(
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, counter + cascade, 1u);
 }
 
+bool DirectionalRayShadowMaskSupportsReceiver(bool geometryDecal)
+{
+#if defined(FORWARD_OPAQUE) || defined(FORWARD_SIMPLE_OPAQUE)
+    // Geometry decals and layered transparent receivers retain the named CSM
+    // fallback. The screen mask represents the opaque depth owner only.
+    return !geometryDecal;
+#else
+    return false;
+#endif
+}
+
+float EvaluateDirectionalRayShadowMask(
+    uint lightIndex,
+    bool geometryDecal)
+{
+    vec4 shadowIndices = ReadShadowIndices();
+    if (shadowIndices.x < 0.5 ||
+        !ForwardLayeredReceiverAcceptsShadows(geometryDecal) ||
+        int(round(shadowIndices.w)) != int(lightIndex) ||
+        !DirectionalRayShadowMaskSupportsReceiver(geometryDecal))
+    {
+        return 1.0;
+    }
+
+    uvec2 dimensions = uvec2(max(
+        round(pc.Push.ScreenDimensions),
+        vec2(1.0)));
+    uvec2 pixel = uvec2(clamp(
+        floor(gl_FragCoord.xy),
+        vec2(0.0),
+        vec2(dimensions - uvec2(1u))));
+    uint pixelIndex = pixel.y * dimensions.x + pixel.x;
+    uint frameSlot = min(pc.Push.CurrentFrameIndex, uint(FRAMES_IN_FLIGHT - 1));
+    uint bufferIndex =
+        uint(DIRECTIONAL_RAY_SHADOW_MASK_BUFFER_BASE_INDEX) + frameSlot;
+    uint packedVisibility = ReadStorageWord(
+        bufferIndex,
+        pixelIndex >> 2u);
+    uint byteShift = (pixelIndex & 3u) * 8u;
+    float visibility = float((packedVisibility >> byteShift) & 0xffu) /
+        255.0;
+    float shadowStrength = clamp(ReadShadowSettings().x, 0.0, 1.0);
+    return mix(1.0, visibility, shadowStrength);
+}
+
 float EvaluateDirectionalShadow(
     uint lightIndex,
     vec3 worldPosition,
@@ -1460,10 +1540,11 @@ float EvaluateDirectionalShadow(
     uint cascadeCount = clamp(uint(round(shadowIndices.y)), 1u, uint(MAX_DIRECTIONAL_SHADOW_TEXTURES));
     vec4 splits = ReadShadowCascadeSplits();
     vec4 transitionData = ReadShadowCascadeTransitionData();
+    vec4 worldTexelSizes = ReadDirectionalShadowWorldTexelSizes();
+    vec4 filterAndBias = ReadDirectionalShadowFilterAndBias();
     float cameraDistance = CameraForwardDistance(worldPosition);
     selectedCascade = SelectShadowCascade(cameraDistance, splits, cascadeCount);
 
-    vec3 biasedPosition = worldPosition + normal * shadowSettings.y;
     float mapSize = max(shadowSettings.z, 1.0);
     int radius = int(clamp(round(shadowSettings.w), 0.0, 3.0));
     bool diagnosticPixel = DirectionalShadowReceiverDiagnosticPixel();
@@ -1482,9 +1563,12 @@ float EvaluateDirectionalShadow(
     float primaryMaximumSampledDepth = 0.0;
     bool primaryValid = TrySampleDirectionalShadowCascade(
         selectedCascade,
-        biasedPosition,
+        worldPosition,
+        normal,
         mapSize,
         radius,
+        worldTexelSizes,
+        filterAndBias,
         diagnosticPixel,
         primaryShadow,
         primaryRejection,
@@ -1566,9 +1650,12 @@ float EvaluateDirectionalShadow(
             ? primaryValid
             : TrySampleDirectionalShadowCascade(
                 lowerCascade,
-                biasedPosition,
+                worldPosition,
+                normal,
                 mapSize,
                 radius,
+                worldTexelSizes,
+                filterAndBias,
                 false,
                 lowerShadow,
                 ignoredRejection,
@@ -1582,9 +1669,12 @@ float EvaluateDirectionalShadow(
             ? primaryValid
             : TrySampleDirectionalShadowCascade(
                 upperCascade,
-                biasedPosition,
+                worldPosition,
+                normal,
                 mapSize,
                 radius,
+                worldTexelSizes,
+                filterAndBias,
                 false,
                 upperShadow,
                 ignoredRejection,
@@ -1633,9 +1723,12 @@ float EvaluateDirectionalShadow(
                 float ignoredMaximumSampledDepth = 0.0;
                 resolved = TrySampleDirectionalShadowCascade(
                     fallbackCascade,
-                    biasedPosition,
+                    worldPosition,
+                    normal,
                     mapSize,
                     radius,
+                    worldTexelSizes,
+                    filterAndBias,
                     false,
                     shadow,
                     ignoredRejection,
@@ -1653,9 +1746,12 @@ float EvaluateDirectionalShadow(
                 float ignoredMaximumSampledDepth = 0.0;
                 resolved = TrySampleDirectionalShadowCascade(
                     fallbackCascade,
-                    biasedPosition,
+                    worldPosition,
+                    normal,
                     mapSize,
                     radius,
+                    worldTexelSizes,
+                    filterAndBias,
                     false,
                     shadow,
                     ignoredRejection,
@@ -1705,6 +1801,43 @@ float EvaluateDirectionalShadow(
     }
 
     return finalShadow;
+}
+
+float EvaluateDirectionalShadowForEffectiveMode(
+    uint lightIndex,
+    vec3 worldPosition,
+    vec3 normal,
+    bool geometryDecal,
+    out uint selectedCascade)
+{
+    uint effectiveMode = uint(clamp(
+        round(ReadDirectionalShadowModeAndRayDistance().y),
+        0.0,
+        3.0));
+    bool maskReceiver =
+        DirectionalRayShadowMaskSupportsReceiver(geometryDecal);
+    if (maskReceiver &&
+        (effectiveMode == 2u || effectiveMode == 3u))
+    {
+        selectedCascade = 0u;
+        return EvaluateDirectionalRayShadowMask(lightIndex, geometryDecal);
+    }
+
+    float cascaded = EvaluateDirectionalShadow(
+        lightIndex,
+        worldPosition,
+        normal,
+        geometryDecal,
+        selectedCascade);
+    if (maskReceiver && effectiveMode == 1u)
+    {
+        // Both values already contain the authored shadow strength. Taking the
+        // darker result avoids applying that strength twice at contact hits.
+        return min(
+            cascaded,
+            EvaluateDirectionalRayShadowMask(lightIndex, geometryDecal));
+    }
+    return cascaded;
 }
 
 float CompareReverseZDepth(float receiverDepth, float sampledDepth, float bias)
@@ -2407,7 +2540,7 @@ void AccumulateLight(
         // the large number of back-facing fragments in dense meshlet scenes.
         if (dot(normal, lightDirection) <= 0.0)
             return;
-        shadowFactor = EvaluateDirectionalShadow(
+        shadowFactor = EvaluateDirectionalShadowForEffectiveMode(
             lightIndex,
             worldPosition,
             shadowNormal,

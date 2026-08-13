@@ -1,12 +1,50 @@
 # High-Quality Directional Shadows Production Implementation Plan
 
 - Date: 2026-08-07
-- Status: proposed; this document does not implement the rendering changes
+- Status: implemented through the deterministic CSM, hard-ray, and hybrid-contact slices; hardware promotion remains evidence-gated
 - Target: stable cascaded sun shadows for every quality tier, with an optional
   ray-query hard/soft shadow path for qualified Ultra hardware
 - Expands: `implementation/Shadows.md`
 - Related but independent work: DDGI cohort/history stabilization. Replacing a
   direct-shadow backend must not be presented as a fix for DDGI transitions.
+
+## Implementation outcome (2026-08-13)
+
+The approved initial-production scope is implemented:
+
+- CSM fitting now uses renderer-owned transported-basis state, a rotation-
+  invariant guarded sphere, symmetric nearest-texel snapping, and independently
+  hysteretic/outward-quantized depth. Split overlap and reverse-Z sampling remain
+  compatible with the existing forward path.
+- Directional settings now serialize requested mode, filter/bias policy, split
+  lambda, conservative caster extrusion, and contact-ray distance. Legacy files
+  migrate without silently opting into ray queries.
+- Static cache validity is tracked and refreshed per cascade. Current-submission
+  recording is distinct from post-submit durability, and dynamic/foliage depth
+  is recomposed correctly after skipped full-ray frames.
+- Acceleration-structure preparation is a union of active consumers and works
+  when DDGI is disabled. Directional readiness fails closed on missing category
+  semantics, culled static instances, rejected BLAS allocations, current-pose
+  proxy fallback, excluded foliage, or deferred dynamic builds.
+- A graphics-queue compute pass after visible depth writes a full-resolution,
+  double-buffered packed `R8Unorm`-equivalent mask. It reconstructs a closest-
+  depth geometric normal, applies bounded large-coordinate-safe offsets, uses a
+  dedicated TLAS instance mask, shares deterministic alpha-candidate semantics,
+  caps candidate traversal conservatively, and skips background/far receivers.
+- `RayQueryHard` consumes the mask once for supported opaque depth owners.
+  `HybridContact` conservatively combines it with CSM and fades the final 20% of
+  the bounded ray segment. Transparent/decal/debug receivers retain an explicit
+  named CSM fallback, and scenes without those receivers skip redundant map work.
+- Requested/effective state, stable fallback reason/detail, map/cache fitter
+  provenance, mask format/extent/bytes/generation, ray-scene generation/epoch,
+  and separate map/ray GPU timings are available in runtime diagnostics.
+
+The two evidence-gated phases remain intentionally inactive, as this plan
+requires: Phase 2 does not allocate a CSM temporal resolve without measured
+residual stepping, and Phase 6 `RayQuerySoft` resolves to deterministic CSM
+without preparing ray-scene, mask, motion, or history resources until finite-sun
+sampling and denoising qualify. All ray modes remain opt-in pending release-build
+visual, validation-layer, and target-GPU budget captures.
 
 ## 1. Decision
 
@@ -1001,4 +1039,3 @@ semantics, and denoising in one review.
 - [NVIDIA RTXGI overview](https://developer.nvidia.com/blog/rtx-global-illumination-part-i/) - architectural rationale for amortizing ray-tracing infrastructure across GI, glossy effects, and shadow rays. Its hardware-specific performance examples are not used as Njulf budgets.
 - `implementation/Shadows.md` - source outline and long-term hybrid direction.
 - `RendererSettingsReference.md` - current settings/debug-view contract to update alongside implementation.
-

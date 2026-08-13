@@ -53,6 +53,7 @@ public static class AsyncComputePassCatalog
 
         Graphics("SceneOpaqueCompactionPass", "Previous Hi-Z and scene uploads", "Shadow/depth/forward mesh dispatch", "Early graphics command stream producer; broad scene-submission aliases are intentionally not async-modeled."),
         Graphics("ForwardVisibilityCompactionPass", "Hi-Z and scene submissions", "Forward+ mesh dispatch", "Immediate forward consumer leaves no useful overlap window."),
+        Graphics("DirectionalRayShadowPass", "Visible depth, TLAS, and ray-scene metadata", "Forward+ directional lighting", "The full-resolution mask has an immediate fragment consumer and remains on the graphics queue until measured overlap justifies ownership transfers."),
         Graphics("TiledLightCullingPass", "Depth", "Forward+", "Immediate consumer and shared light-tile buffer retain graphics-queue execution."),
         Graphics("SimpleDdgiLightTreePass", "Canonical light buffer and revisions", "Simple DDGI ray-hit shading", "Inactive-bank publication, state verification readback, and the immediate trace consumer share the graphics-queue descriptor transaction."),
         Graphics("AmbientOcclusionPass", "Depth", "AO blur/forward", "Producer is retained with graphics; only the blur chain is independently profitable."),

@@ -35,6 +35,9 @@ namespace Njulf.Rendering.Resources
         public const string FoliageDdgiExclusionReason =
             "foliage uses clustered alpha geometry and requires explicit DDGI proxy cards or clusters";
         internal const byte StaticOpaqueInstanceMask = 0x01;
+        internal const byte DirectionalShadowInstanceMask = 0x02;
+        internal const byte SharedLightingInstanceMask =
+            StaticOpaqueInstanceMask | DirectionalShadowInstanceMask;
         private const ulong MinResourceBufferSize = 16;
         private const ulong IndexStride = sizeof(uint);
         private const int MaxBlasCompactionQueriesPerFrame = 4096;
@@ -166,6 +169,10 @@ namespace Njulf.Rendering.Resources
         private ulong _raySceneContentEpoch = 1;
         private ulong _lastRaySceneContentSignature;
         private bool _hasRaySceneContentSignature;
+        private RaySceneRequirement _preparedRaySceneRequirement;
+        private RaySceneGeometryCategory _preparedRaySceneSupportedCategories;
+        private string _preparedRaySceneCoverageFailure = string.Empty;
+        private RaySceneReadinessSnapshot _readinessSnapshot;
         private PreparedRayScene? _preparedRayScene;
         private StaticOpaqueInstance[] _publishedRaySceneInstances =
             Array.Empty<StaticOpaqueInstance>();
@@ -345,6 +352,7 @@ namespace Njulf.Rendering.Resources
         /// resource recreation and frame-slot rotation.
         /// </summary>
         public ulong RaySceneContentEpoch => _raySceneContentEpoch;
+        public RaySceneReadinessSnapshot ReadinessSnapshot => _readinessSnapshot;
 
         /// <summary>
         /// Extracts authored C4 heroes only from the immutable instance set
@@ -638,13 +646,21 @@ namespace Njulf.Rendering.Resources
             AccelerationStructureResidencyPolicy? residencyPolicy,
             DdgiDynamicRayScenePolicy dynamicPolicy,
             ulong sceneContentRevision = 0,
-            DdgiFoliageProxyFrame? foliageProxyFrame = null)
+            DdgiFoliageProxyFrame? foliageProxyFrame = null,
+            RaySceneRequirement requirement = default)
         {
             if (scene == null)
                 throw new ArgumentNullException(nameof(scene));
 
             ValidateCompactionFrameIndex(frameIndex);
             _preparedInstanceScratch.Clear();
+            _preparedRaySceneRequirement = requirement;
+            _preparedRaySceneSupportedCategories = ResolveSupportedCategories(dynamicPolicy);
+            _preparedRaySceneCoverageFailure =
+                ResolvePreparedCoverageFailure(
+                    scene,
+                    requirement,
+                    foliageProxyFrame);
             _rayQueryHasAlphaCandidateGeometry = false;
             _rayQueryHasThinTransmissionGeometry = false;
             if (enabled && Supported)
@@ -682,6 +698,7 @@ namespace Njulf.Rendering.Resources
                 frameIndex,
                 residencyPolicy ?? AccelerationStructureResidencyPolicy.Disabled,
                 dynamicPolicy,
+                requirement,
                 sceneContentRevision,
                 _rayQueryHasAlphaCandidateGeometry,
                 _rayQueryHasThinTransmissionGeometry,
@@ -798,7 +815,8 @@ namespace Njulf.Rendering.Resources
                     CreatePreparationIdentity(
                         sceneContentRevision,
                         _residencyPolicy,
-                        prepared.DynamicPolicy.AlphaMaskedTransportEnabled);
+                        prepared.DynamicPolicy,
+                        prepared.Requirement);
                 bool hasDynamicBuilds = Array.Exists(
                     prepared.Instances,
                     static instance => instance.UsesDynamicBlas);
@@ -2415,7 +2433,8 @@ namespace Njulf.Rendering.Resources
         private static AccelerationStructurePreparationIdentity CreatePreparationIdentity(
             ulong sceneContentRevision,
             AccelerationStructureResidencyPolicy residencyPolicy,
-            bool alphaMaskedTransportEnabled)
+            DdgiDynamicRayScenePolicy dynamicPolicy,
+            RaySceneRequirement requirement)
         {
             // Camera motion cannot alter the selected instance set when both the
             // distance and count limits are open.  Normalizing it out allows the
@@ -2428,7 +2447,8 @@ namespace Njulf.Rendering.Resources
             return new AccelerationStructurePreparationIdentity(
                 sceneContentRevision,
                 residencyPolicy,
-                alphaMaskedTransportEnabled);
+                dynamicPolicy,
+                requirement);
         }
 
         internal static bool ShouldReusePreparedRayScene(
@@ -3304,7 +3324,7 @@ namespace Njulf.Rendering.Resources
                     instance.WorldMatrix,
                     blasAddress,
                     (uint)i,
-                    StaticOpaqueInstanceMask,
+                    ResolveSharedInstanceMask(instance),
                     instance.InstanceFlags));
                 _rayQueryInstanceScratch.Add(CreateRayQueryInstanceMetadata(instance));
             }
@@ -4086,6 +4106,20 @@ namespace Njulf.Rendering.Resources
             return folded == 0u ? 1u : folded;
         }
 
+        internal static byte ResolveSharedInstanceMask(
+            in StaticOpaqueInstance instance)
+        {
+            bool directionalBlocker =
+                instance.GeometryClass != DdgiRayGeometryClass.DecalOverlay &&
+                (instance.GeometryFlags &
+                    (DdgiRayGeometryFlags.AlphaBlend |
+                     DdgiRayGeometryFlags.ThinTransmission |
+                     DdgiRayGeometryFlags.DecalOverlay)) == 0;
+            return directionalBlocker
+                ? SharedLightingInstanceMask
+                : StaticOpaqueInstanceMask;
+        }
+
         private static ulong NextNonZero(ulong value) =>
             value == ulong.MaxValue ? 1UL : value + 1UL;
 
@@ -4139,6 +4173,7 @@ namespace Njulf.Rendering.Resources
         private AccelerationStructureFrameStats CreateStats(bool active)
         {
             PersistTopLevelFrameSlot();
+            UpdateReadinessSnapshot(active);
             return new AccelerationStructureFrameStats(
                 Supported,
                 active,
@@ -4191,6 +4226,138 @@ namespace Njulf.Rendering.Resources
                 _lastDynamicBlasScratchBytes,
                 _lastDynamicBlasPrimitiveCount,
                 _lastFallbackReason);
+        }
+
+        private void UpdateReadinessSnapshot(bool active)
+        {
+            RaySceneConsumer requested = _preparedRaySceneRequirement.Consumers;
+            if (requested == RaySceneConsumer.None)
+            {
+                _readinessSnapshot = RaySceneReadinessSnapshot.Unavailable(
+                    requested,
+                    active ? string.Empty : _lastFallbackReason);
+                return;
+            }
+
+            RaySceneGeometryCategory admitted = active
+                ? _preparedRaySceneSupportedCategories
+                : RaySceneGeometryCategory.None;
+            RaySceneGeometryCategory complete = active
+                ? admitted & _preparedRaySceneRequirement.RequiredCategories
+                : RaySceneGeometryCategory.None;
+            string coverageFailure = BuildRaySceneCoverageFailureDetail(
+                _preparedRaySceneRequirement,
+                _lastStaticInstanceCulledCount,
+                _lastBlasBudgetRejectedCount,
+                _lastDynamicBlasProxyFallbackCount,
+                _lastDynamicBlasExcludedCount,
+                _lastDynamicBlasBudgetDeferredCount,
+                _preparedRaySceneCoverageFailure);
+            bool requirementsComplete = active &&
+                (complete & _preparedRaySceneRequirement.RequiredCategories) ==
+                _preparedRaySceneRequirement.RequiredCategories &&
+                string.IsNullOrEmpty(coverageFailure);
+            string failureDetail = requirementsComplete
+                ? string.Empty
+                : !string.IsNullOrWhiteSpace(_lastFallbackReason)
+                    ? _lastFallbackReason
+                    : !string.IsNullOrEmpty(coverageFailure)
+                        ? coverageFailure
+                    : $"ray-scene geometry categories are unqualified: required={_preparedRaySceneRequirement.RequiredCategories}, supported={_preparedRaySceneSupportedCategories}";
+            _readinessSnapshot = new RaySceneReadinessSnapshot(
+                requested,
+                requirementsComplete ? requested : RaySceneConsumer.None,
+                admitted,
+                complete,
+                requirementsComplete ? unchecked((uint)Math.Max(1UL, _resourceGeneration)) : 0u,
+                requirementsComplete ? _raySceneContentEpoch : 0UL,
+                failureDetail);
+        }
+
+        internal static string BuildRaySceneCoverageFailureDetail(
+            in RaySceneRequirement requirement,
+            int staticCulledCount,
+            int blasBudgetRejectedCount,
+            int dynamicProxyFallbackCount,
+            int dynamicExcludedCount,
+            int dynamicBudgetDeferredCount,
+            string preparedCoverageFailure = "")
+        {
+            List<string> failures = [];
+            if (!string.IsNullOrWhiteSpace(preparedCoverageFailure))
+                failures.Add(preparedCoverageFailure.Trim());
+            if (staticCulledCount > 0)
+                failures.Add($"{staticCulledCount} static instances are not resident");
+            if (blasBudgetRejectedCount > 0)
+                failures.Add($"{blasBudgetRejectedCount} BLAS allocations were budget-rejected");
+            if (requirement.RequiresCurrentPose && dynamicProxyFallbackCount > 0)
+            {
+                failures.Add(
+                    $"{dynamicProxyFallbackCount} current-pose instances fell back to conservative proxies");
+            }
+            bool foliageRequired =
+                (requirement.RequiredCategories &
+                    (RaySceneGeometryCategory.FoliageOpaque |
+                     RaySceneGeometryCategory.FoliageAlphaTested)) != 0;
+            if (foliageRequired && dynamicExcludedCount > 0)
+                failures.Add($"{dynamicExcludedCount} foliage instances were excluded");
+            if ((requirement.RequiresCurrentPose || foliageRequired) &&
+                dynamicBudgetDeferredCount > 0)
+            {
+                failures.Add(
+                    $"{dynamicBudgetDeferredCount} dynamic BLAS builds were budget-deferred");
+            }
+
+            return string.Join("; ", failures);
+        }
+
+        private static string ResolvePreparedCoverageFailure(
+            Scene scene,
+            in RaySceneRequirement requirement,
+            DdgiFoliageProxyFrame? foliageProxyFrame)
+        {
+            bool foliageRequired =
+                (requirement.RequiredCategories &
+                    (RaySceneGeometryCategory.FoliageOpaque |
+                     RaySceneGeometryCategory.FoliageAlphaTested)) != 0;
+            if (!foliageRequired || scene.FoliagePatches.Count == 0)
+                return string.Empty;
+            if (foliageProxyFrame == null)
+                return "required foliage proxy coverage was not prepared";
+            if (!string.IsNullOrWhiteSpace(foliageProxyFrame.FallbackReason))
+                return foliageProxyFrame.FallbackReason.Trim();
+            if (foliageProxyFrame.DroppedTriangleCount > 0 ||
+                foliageProxyFrame.ExcludedPatchCount > 0)
+            {
+                return $"foliage proxy coverage is incomplete: " +
+                    $"droppedTriangles={foliageProxyFrame.DroppedTriangleCount}, " +
+                    $"excludedPatches={foliageProxyFrame.ExcludedPatchCount}";
+            }
+            if (foliageProxyFrame.Instances.Count == 0)
+                return "required foliage proxy coverage contains no instances";
+            return string.Empty;
+        }
+
+        private static RaySceneGeometryCategory ResolveSupportedCategories(
+            in DdgiDynamicRayScenePolicy policy)
+        {
+            RaySceneGeometryCategory categories =
+                RaySceneGeometryCategory.StaticOpaque |
+                RaySceneGeometryCategory.DynamicOpaque |
+                RaySceneGeometryCategory.AlphaTested |
+                RaySceneGeometryCategory.DoubleSided;
+            if (policy.SkinnedGeometryMode == DdgiSkinnedGeometryMode.CurrentPose)
+                categories |= RaySceneGeometryCategory.SkinnedCurrentPose;
+            if (policy.FoliageGeometryMode != DdgiFoliageGeometryMode.Excluded)
+            {
+                categories |= RaySceneGeometryCategory.FoliageOpaque |
+                    RaySceneGeometryCategory.FoliageAlphaTested;
+            }
+            if (policy.TransparentGeometryMode != DdgiTransparentGeometryMode.MaskOnly)
+                categories |= RaySceneGeometryCategory.ThinTransmission;
+            if (policy.TransparentGeometryMode == DdgiTransparentGeometryMode.StochasticBlend)
+                categories |= RaySceneGeometryCategory.AlphaBlend;
+            return categories;
         }
 
         private void ResetFrameDiagnostics()
@@ -4577,13 +4744,15 @@ namespace Njulf.Rendering.Resources
         private readonly record struct AccelerationStructurePreparationIdentity(
             ulong SceneContentRevision,
             AccelerationStructureResidencyPolicy ResidencyPolicy,
-            bool AlphaMaskedTransportEnabled);
+            DdgiDynamicRayScenePolicy DynamicPolicy,
+            RaySceneRequirement Requirement);
 
         private sealed record PreparedRayScene(
             bool Enabled,
             int FrameIndex,
             AccelerationStructureResidencyPolicy ResidencyPolicy,
             DdgiDynamicRayScenePolicy DynamicPolicy,
+            RaySceneRequirement Requirement,
             ulong SceneContentRevision,
             bool HasAlphaCandidateGeometry,
             bool HasThinTransmissionGeometry,

@@ -10,8 +10,6 @@ namespace Njulf.Rendering.Data
 {
     public static class DirectionalShadowDataBuilder
     {
-        private const float SplitLambda = 0.5f;
-
         public static GPUShadowData Build(
             ICamera camera,
             NumericsVector3 lightDirection,
@@ -19,21 +17,58 @@ namespace Njulf.Rendering.Data
             int selectedLightIndex,
             float shadowStrength)
         {
+            var transientState = new DirectionalShadowStabilizationState();
+            return Build(
+                camera,
+                lightDirection,
+                settings,
+                selectedLightIndex,
+                shadowStrength,
+                transientState,
+                stableLightIdentity: 0UL,
+                shadowResourceGeneration: 0u);
+        }
+
+        public static GPUShadowData Build(
+            ICamera camera,
+            NumericsVector3 lightDirection,
+            ShadowSettings settings,
+            int selectedLightIndex,
+            float shadowStrength,
+            DirectionalShadowStabilizationState stabilizationState,
+            ulong stableLightIdentity,
+            uint shadowResourceGeneration)
+        {
             if (camera == null)
                 throw new ArgumentNullException(nameof(camera));
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
+            if (stabilizationState == null)
+                throw new ArgumentNullException(nameof(stabilizationState));
 
             int cascadeCount = settings.DirectionalCascadeCount;
             float near = MathF.Max(camera.NearPlane, 0.001f);
             float far = MathF.Min(camera.FarPlane, MathF.Max(near + 0.01f, settings.MaxShadowDistance));
             CoreVector3 lightDir = ToCore(lightDirection);
-            if (lightDir.Length() <= 0.0001f)
-                lightDir = new CoreVector3(0f, -1f, 0f);
-            lightDir = lightDir.Normalized();
+            ulong configurationSignature = CreateConfigurationSignature(
+                camera,
+                settings,
+                near,
+                far,
+                shadowResourceGeneration);
+            DirectionalShadowStabilizationState.BasisFrame basis =
+                stabilizationState.BeginFrame(
+                    stableLightIdentity,
+                    lightDir,
+                    configurationSignature);
+            lightDir = basis.Direction;
 
             CoreMatrix4x4[] matrices = new CoreMatrix4x4[ShadowSettings.MaxDirectionalCascades];
-            float[] splits = CalculateCascadeSplits(near, far, cascadeCount);
+            float[] splits = CalculateCascadeSplits(
+                near,
+                far,
+                cascadeCount,
+                settings.DirectionalCascadeSplitLambda);
             float[] transitionWidths = CalculateCascadeTransitionWidths(
                 near,
                 far,
@@ -54,8 +89,10 @@ namespace Njulf.Rendering.Data
                     lightDir,
                     cascadeNear,
                     cascadeFar,
-                    settings.DirectionalShadowMapSize,
-                    settings.MaxShadowDistance);
+                    settings,
+                    stabilizationState,
+                    basis,
+                    i);
             }
 
             for (int i = cascadeCount; i < matrices.Length; i++)
@@ -86,6 +123,45 @@ namespace Njulf.Rendering.Data
             };
         }
 
+        public static GPUDirectionalShadowParameters BuildParameters(
+            ShadowSettings settings,
+            ReadOnlySpan<DirectionalShadowCascadeFitDiagnostics> diagnostics,
+            DirectionalShadowMode effectiveMode = DirectionalShadowMode.Cascaded)
+        {
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
+            return new GPUDirectionalShadowParameters
+            {
+                CascadeWorldTexelSizes = new CoreVector4(
+                    GetWorldTexelSize(diagnostics, 0),
+                    GetWorldTexelSize(diagnostics, 1),
+                    GetWorldTexelSize(diagnostics, 2),
+                    GetWorldTexelSize(diagnostics, 3)),
+                FilterAndBias = new CoreVector4(
+                    (float)settings.DirectionalFilterMode,
+                    (float)settings.DirectionalBiasMode,
+                    0.75f,
+                    settings.NormalBias),
+                ModeAndRayDistance = new CoreVector4(
+                    (float)settings.RequestedDirectionalShadowMode,
+                    (float)effectiveMode,
+                    settings.DirectionalContactShadowDistance,
+                    0f),
+                Reserved = CoreVector4.Zero
+            };
+        }
+
+        private static float GetWorldTexelSize(
+            ReadOnlySpan<DirectionalShadowCascadeFitDiagnostics> diagnostics,
+            int cascade)
+        {
+            return (uint)cascade < (uint)diagnostics.Length &&
+                   float.IsFinite(diagnostics[cascade].WorldTexelSize)
+                ? MathF.Max(0f, diagnostics[cascade].WorldTexelSize)
+                : 0f;
+        }
+
         private static float ResolveShadowStrength(float shadowStrength)
         {
             // Match local-shadow and packed-light handling for legacy Lights.
@@ -94,6 +170,15 @@ namespace Njulf.Rendering.Data
 
         public static float[] CalculateCascadeSplits(float nearPlane, float farPlane, int cascadeCount)
         {
+            return CalculateCascadeSplits(nearPlane, farPlane, cascadeCount, 0.5f);
+        }
+
+        public static float[] CalculateCascadeSplits(
+            float nearPlane,
+            float farPlane,
+            int cascadeCount,
+            float splitLambda)
+        {
             cascadeCount = cascadeCount < 1 ? 1 : cascadeCount > ShadowSettings.MaxDirectionalCascades ? ShadowSettings.MaxDirectionalCascades : cascadeCount;
             nearPlane = MathF.Max(nearPlane, 0.001f);
             farPlane = MathF.Max(farPlane, nearPlane + 0.001f);
@@ -101,13 +186,14 @@ namespace Njulf.Rendering.Data
             var splits = new float[ShadowSettings.MaxDirectionalCascades];
             float range = farPlane - nearPlane;
             float ratio = farPlane / nearPlane;
+            splitLambda = Math.Clamp(splitLambda, 0f, 1f);
 
             for (int i = 0; i < cascadeCount; i++)
             {
                 float p = (i + 1f) / cascadeCount;
                 float log = nearPlane * MathF.Pow(ratio, p);
                 float uniform = nearPlane + range * p;
-                splits[i] = SplitLambda * log + (1f - SplitLambda) * uniform;
+                splits[i] = splitLambda * log + (1f - splitLambda) * uniform;
             }
 
             splits[cascadeCount - 1] = farPlane;
@@ -146,8 +232,10 @@ namespace Njulf.Rendering.Data
             CoreVector3 lightDirection,
             float nearDistance,
             float farDistance,
-            uint shadowMapSize,
-            float casterDepthPadding)
+            ShadowSettings settings,
+            DirectionalShadowStabilizationState stabilizationState,
+            DirectionalShadowStabilizationState.BasisFrame basis,
+            int cascadeIndex)
         {
             CoreVector3[] corners = BuildFrustumCorners(camera, nearDistance, farDistance);
             CoreVector3 center = CoreVector3.Zero;
@@ -155,57 +243,101 @@ namespace Njulf.Rendering.Data
                 center += corners[i];
             center /= corners.Length;
 
-            CoreVector3 up = MathF.Abs(CoreVector3.Dot(lightDirection, CoreVector3.UnitY)) > 0.95f
-                ? CoreVector3.UnitZ
-                : CoreVector3.UnitY;
-            CoreMatrix4x4 lightView = CoreMatrix4x4.CreateLookAt(center - lightDirection * 100f, center, up);
+            // A rotation-only light view makes the texel grid world anchored.
+            // Centering the view on the camera slice would make its light-space
+            // centre zero every frame and defeat snapping.
+            CoreMatrix4x4 lightView = CoreMatrix4x4.CreateLookAt(
+                -lightDirection * 100f,
+                CoreVector3.Zero,
+                basis.Up);
 
             CoreVector3 min = TransformPoint(corners[0], lightView);
             CoreVector3 max = min;
+            double radiusSquared = DistanceSquared(corners[0], center);
             for (int i = 1; i < corners.Length; i++)
             {
                 CoreVector3 lightSpaceCorner = TransformPoint(corners[i], lightView);
                 min = CoreVector3.Min(min, lightSpaceCorner);
                 max = CoreVector3.Max(max, lightSpaceCorner);
+                radiusSquared = Math.Max(radiusSquared, DistanceSquared(corners[i], center));
             }
 
-            float width = MathF.Max(max.X - min.X, 0.001f);
-            float height = MathF.Max(max.Y - min.Y, 0.001f);
-            float radius = MathF.Max(width, height) * 0.5f;
-            width = radius * 2f;
-            height = radius * 2f;
+            double receiverRadius = Math.Max(Math.Sqrt(radiusSquared), 0.0005);
+            double guardTexels = ResolveGuardTexels(settings);
+            double mapSize = Math.Max(1u, settings.DirectionalShadowMapSize);
+            double guardDenominator = Math.Max(0.5, 1.0 - 2.0 * guardTexels / mapSize);
+            double halfExtent = receiverRadius / guardDenominator;
+            float width = (float)Math.Max(halfExtent * 2.0, 0.001);
+            float height = width;
 
-            // Snapping the fitted centre can move it by almost one texel.  A
-            // fit with no guard band can therefore push a frustum corner just
-            // outside its own cascade (most visibly on a bottom/right edge).
-            // Reserve two texels of half-extent on each side before snapping;
-            // this is a sub-percent expansion at the supported map sizes and
-            // keeps the camera slice contained after the quantized shift.
-            float baseTexelSize = width / MathF.Max(1u, shadowMapSize);
-            float snapGuardBand = baseTexelSize * 4f;
-            width += snapGuardBand;
-            height += snapGuardBand;
-
-            float centerX = (min.X + max.X) * 0.5f;
-            float centerY = (min.Y + max.Y) * 0.5f;
-            float texelSize = width / MathF.Max(1u, shadowMapSize);
-            centerX = MathF.Floor(centerX / texelSize) * texelSize;
-            centerY = MathF.Floor(centerY / texelSize) * texelSize;
+            CoreVector3 lightSpaceCenter = TransformPoint(center, lightView);
+            double rawCenterX = lightSpaceCenter.X;
+            double rawCenterY = lightSpaceCenter.Y;
+            double texelSizeDouble = width / mapSize;
+            float centerX = (float)(Math.Round(
+                rawCenterX / texelSizeDouble,
+                MidpointRounding.AwayFromZero) * texelSizeDouble);
+            float centerY = (float)(Math.Round(
+                rawCenterY / texelSizeDouble,
+                MidpointRounding.AwayFromZero) * texelSizeDouble);
 
             min.X = centerX - width * 0.5f;
             max.X = centerX + width * 0.5f;
             min.Y = centerY - height * 0.5f;
             max.Y = centerY + height * 0.5f;
-            float depthPadding = MathF.Max(1f, casterDepthPadding);
-            min.Z -= depthPadding;
-            max.Z += depthPadding;
+            float rawDepthMinimum = min.Z - settings.DirectionalCasterExtrusionDistance;
+            float rawDepthMaximum = max.Z + settings.DirectionalCasterExtrusionDistance;
+            stabilizationState.StabilizeDepth(
+                cascadeIndex,
+                rawDepthMinimum,
+                rawDepthMaximum,
+                texelSizeDouble,
+                out float stableDepthMinimum,
+                out float stableDepthMaximum);
+            min.Z = stableDepthMinimum;
+            max.Z = stableDepthMaximum;
 
             CoreMatrix4x4 crop = CoreMatrix4x4.CreateTranslation(new CoreVector3(
                 -(min.X + max.X) * 0.5f,
                 -(min.Y + max.Y) * 0.5f,
                 0f));
             CoreMatrix4x4 projection = CoreMatrix4x4.CreateOrthographic(width, height, -max.Z, -min.Z);
+            stabilizationState.RecordDiagnostics(
+                cascadeIndex,
+                new DirectionalShadowCascadeFitDiagnostics(
+                    cascadeIndex,
+                    basis.Direction,
+                    basis.Right,
+                    basis.Up,
+                    (float)rawCenterX,
+                    (float)rawCenterY,
+                    centerX,
+                    centerY,
+                    width,
+                    (float)texelSizeDouble,
+                    (float)guardTexels,
+                    rawDepthMinimum,
+                    rawDepthMaximum,
+                    stableDepthMinimum,
+                    stableDepthMaximum,
+                    basis.ResetReason));
             return lightView * crop * projection;
+        }
+
+        private static double ResolveGuardTexels(ShadowSettings settings)
+        {
+            // The manual PCF footprint reaches radius+1 texels from its base
+            // texel. Add half a texel for nearest-grid snapping. Radius zero is
+            // still a bilinear four-comparison footprint.
+            return Math.Max(1.5, settings.PcfRadius + 1.5);
+        }
+
+        private static double DistanceSquared(CoreVector3 left, CoreVector3 right)
+        {
+            double x = (double)left.X - right.X;
+            double y = (double)left.Y - right.Y;
+            double z = (double)left.Z - right.Z;
+            return x * x + y * y + z * z;
         }
 
         internal static CoreVector3[] BuildFrustumCorners(ICamera camera, float nearDistance, float farDistance)
@@ -234,6 +366,37 @@ namespace Njulf.Rendering.Data
                 farCenter - right * (farWidth * 0.5f) + up * (farHeight * 0.5f),
                 farCenter + right * (farWidth * 0.5f) + up * (farHeight * 0.5f)
             };
+        }
+
+        private static ulong CreateConfigurationSignature(
+            ICamera camera,
+            ShadowSettings settings,
+            float effectiveNear,
+            float effectiveFar,
+            uint shadowResourceGeneration)
+        {
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            ulong hash = offset;
+            Add((uint)settings.DirectionalCascadeCount);
+            Add(settings.DirectionalShadowMapSize);
+            Add((uint)settings.PcfRadius);
+            Add((uint)settings.DirectionalFilterMode);
+            Add(BitConverter.SingleToUInt32Bits(settings.DirectionalCascadeSplitLambda));
+            Add(BitConverter.SingleToUInt32Bits(settings.DirectionalCascadeBlendFraction));
+            Add(BitConverter.SingleToUInt32Bits(settings.DirectionalCasterExtrusionDistance));
+            Add(BitConverter.SingleToUInt32Bits(camera.FieldOfView));
+            Add(BitConverter.SingleToUInt32Bits(camera.AspectRatio));
+            Add(BitConverter.SingleToUInt32Bits(effectiveNear));
+            Add(BitConverter.SingleToUInt32Bits(effectiveFar));
+            Add(shadowResourceGeneration);
+            return hash;
+
+            void Add(uint value)
+            {
+                hash ^= value;
+                hash *= prime;
+            }
         }
 
         private static CoreVector3 TransformPoint(CoreVector3 point, CoreMatrix4x4 matrix) => point * matrix;

@@ -153,7 +153,8 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
         {
             lock (_sync)
                 return !_disposed && _configuration.IsEnabled &&
-                    _workloadPlanner is not null && _workspace.IsValid;
+                    _workloadPlanner is not null && _workspace.IsValid &&
+                    _transientArena.IsCurrent(_workspace);
         }
     }
 
@@ -171,6 +172,7 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
             SimpleDdgiGuidingSourceCacheSnapshot source =
                 _sourceCacheSidecar.Snapshot;
             if (!_configuration.IsEnabled || !_workspace.IsValid ||
+                !_transientArena.IsCurrent(_workspace) ||
                 !source.IsReady ||
                 !_runtime.TryGetDistributionResourceSnapshot(
                     out SimpleDdgiGuidingDistributionResourceSnapshot distributions))
@@ -226,11 +228,31 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
             }
             if (!TryValidateConfiguration(configuration, out reason))
                 return false;
+
+            bool workspaceCurrent = _transientArena.IsCurrent(_workspace);
             if (_configuration.Equals(configuration) &&
-                _sourceCacheSidecar.Snapshot.IsReady && _workspace.IsValid)
+                _sourceCacheSidecar.Snapshot.IsReady && workspaceCurrent)
             {
                 reason = "guiding-frame-coordinator-configuration-reused";
                 return true;
+            }
+
+            if (_workspace.IsValid && !workspaceCurrent)
+            {
+                // Another transient category can force the shared arena to
+                // replace its backing buffer without changing C3's logical
+                // layout. Retire the allocation that borrowed the old slice
+                // before rebuilding against the current arena generation.
+                _ = _runtime.TryConfigure(
+                    new SimpleDdgiGuidingRuntimeRequest(false, default),
+                    configuration.GlobalPrerequisiteGateAdmitted,
+                    SimpleDdgiGuidingSourceCacheHandshake.Unavailable,
+                    out _);
+                _ = _sourceCacheSidecar.TryReconcile(
+                    SimpleDdgiGuidingSourceCacheLayout.Disabled,
+                    commandBuffer,
+                    out _);
+                ResetNoLock();
             }
 
             SimpleDdgiGuidingLayout layout = configuration.RuntimeRequest.Layout;
@@ -323,6 +345,11 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
                 _epochController is null || !_workspace.IsValid)
             {
                 reason = "guiding-frame-coordinator-not-configured";
+                return false;
+            }
+            if (!_transientArena.IsCurrent(_workspace))
+            {
+                reason = "guiding-transient-workspace-generation-changed";
                 return false;
             }
             if (commandBuffer.Handle == 0)

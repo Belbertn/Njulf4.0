@@ -52,7 +52,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferHandle[] _validationReadbackBuffers = new BufferHandle[RenderingConstants.FramesInFlight];
         private readonly bool[] _counterReadbackRecorded = new bool[RenderingConstants.FramesInFlight];
         private readonly bool[] _validationReadbackRecorded = new bool[RenderingConstants.FramesInFlight];
-        private Func<SceneRenderingData, bool>? _directionalStaticShadowRefreshNeeded;
+        private Func<SceneRenderingData, uint>? _directionalStaticShadowRefreshMask;
         private readonly ValidationExpectedFrame[] _validationExpectedFrames =
         [
             ValidationExpectedFrame.Invalid,
@@ -81,9 +81,9 @@ namespace Njulf.Rendering.Pipeline
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
         }
 
-        public void SetDirectionalStaticShadowRefreshQuery(Func<SceneRenderingData, bool> refreshNeeded)
+        public void SetDirectionalStaticShadowRefreshQuery(Func<SceneRenderingData, uint> refreshMask)
         {
-            _directionalStaticShadowRefreshNeeded = refreshNeeded ?? throw new ArgumentNullException(nameof(refreshNeeded));
+            _directionalStaticShadowRefreshMask = refreshMask ?? throw new ArgumentNullException(nameof(refreshMask));
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
@@ -136,11 +136,19 @@ namespace Njulf.Rendering.Pipeline
             bool compactDirectionalShadows =
                 sceneData.SceneSubmissionGpuShadowCompactionEnabled &&
                 sceneData.DirectionalShadowPassEnabled &&
+                sceneData.DirectionalShadowFramePlan.UsesCascadedShadowMap &&
                 sceneData.DirectionalShadowCascadeCount > 0;
+            uint activeDirectionalCascadeMask = sceneData.DirectionalShadowCascadeCount >= DirectionalShadowCascadeCapacity
+                ? (1u << DirectionalShadowCascadeCapacity) - 1u
+                : (1u << Math.Max(0, sceneData.DirectionalShadowCascadeCount)) - 1u;
+            uint directionalStaticShadowCascadeMask = compactDirectionalShadows
+                ? (_directionalStaticShadowRefreshMask?.Invoke(sceneData) ?? activeDirectionalCascadeMask) &
+                  activeDirectionalCascadeMask
+                : 0u;
             bool compactDirectionalStaticShadows =
                 compactDirectionalShadows &&
                 sceneData.DirectionalStaticShadowMeshletCount > 0 &&
-                (_directionalStaticShadowRefreshNeeded?.Invoke(sceneData) ?? true);
+                directionalStaticShadowCascadeMask != 0u;
             bool compactDirectionalDynamicShadows =
                 compactDirectionalShadows &&
                 sceneData.DirectionalDynamicShadowMeshletCount > 0;
@@ -204,7 +212,8 @@ namespace Njulf.Rendering.Pipeline
                 sceneData,
                 frameIndex,
                 directionalStaticShadowCandidateCount,
-                directionalDynamicShadowCandidateCount);
+                directionalDynamicShadowCandidateCount,
+                directionalStaticShadowCascadeMask);
             sceneData.SceneSubmissionOpaqueCompactedMeshletDrawBuffer = drawBuffer.Handle;
             sceneData.SceneSubmissionSolidDepthCompactedMeshletDrawBuffer = solidDepthDrawBuffer.Handle;
             sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer = maskedDepthDrawBuffer.Handle;
@@ -290,7 +299,7 @@ namespace Njulf.Rendering.Pipeline
                 GpuLod1DistanceRatio = gpuLod1DistanceRatio,
                 GpuLod2DistanceRatio = gpuLod2DistanceRatio,
                 GpuShadowLodBias = checked((uint)Math.Clamp(sceneData.SceneSubmissionGpuShadowLodBias, 0, 2)),
-                Padding0 = 0u
+                DirectionalStaticShadowCascadeMask = directionalStaticShadowCascadeMask
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -455,7 +464,8 @@ namespace Njulf.Rendering.Pipeline
             SceneRenderingData sceneData,
             int frameIndex,
             int staticCandidateCount,
-            int dynamicCandidateCount)
+            int dynamicCandidateCount,
+            uint staticCascadeMask)
         {
             sceneData.SceneSubmissionGpuDirectionalShadowCandidateCount =
                 checked(staticCandidateCount + dynamicCandidateCount);
@@ -463,7 +473,8 @@ namespace Njulf.Rendering.Pipeline
             {
                 RuntimeBuffer staticBuffer = _directionalStaticShadowCompactedDrawBuffers[frameIndex, cascade];
                 RuntimeBuffer dynamicBuffer = _directionalDynamicShadowCompactedDrawBuffers[frameIndex, cascade];
-                sceneData.SceneSubmissionGpuDirectionalStaticShadowCandidateCounts[cascade] = staticCandidateCount;
+                sceneData.SceneSubmissionGpuDirectionalStaticShadowCandidateCounts[cascade] =
+                    (staticCascadeMask & (1u << cascade)) != 0u ? staticCandidateCount : 0;
                 sceneData.SceneSubmissionGpuDirectionalDynamicShadowCandidateCounts[cascade] = dynamicCandidateCount;
                 sceneData.SceneSubmissionGpuDirectionalStaticShadowCapacities[cascade] =
                     (int)Math.Min(staticBuffer.ElementCapacity, int.MaxValue);

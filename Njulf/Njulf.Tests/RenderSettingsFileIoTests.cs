@@ -82,10 +82,101 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(10));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(11));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void SaveLoad_PreservesCompleteDirectionalShadowContract()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "directional-shadows.json");
+        try
+        {
+            var settings = new RenderSettings();
+            ShadowSettings shadows = settings.Shadows;
+            shadows.DirectionalShadowsEnabled = true;
+            shadows.RequestedDirectionalShadowMode = DirectionalShadowMode.RayQuerySoft;
+            shadows.DirectionalFilterMode = DirectionalShadowFilterMode.TentPcf;
+            shadows.DirectionalBiasMode = DirectionalShadowBiasMode.WorldTexelScaled;
+            shadows.DirectionalShadowMapSize = 4096;
+            shadows.DirectionalCascadeCount = 4;
+            shadows.MaxShadowDistance = 220f;
+            shadows.DirectionalCascadeBlendFraction = 0.18f;
+            shadows.DirectionalCascadeSplitLambda = 0.72f;
+            shadows.DirectionalCasterExtrusionDistance = 350f;
+            shadows.DirectionalContactShadowDistance = 4.5f;
+            shadows.NormalBias = 0.045f;
+            shadows.SlopeScaledDepthBias = 2.25f;
+            shadows.ConstantDepthBias = 0.00075f;
+            shadows.PcfRadius = 2;
+
+            settings.Save(path);
+            string json = File.ReadAllText(path);
+            ShadowSettings loaded = RenderSettings.Load(path).Shadows;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.RequestedDirectionalShadowMode,
+                    Is.EqualTo(DirectionalShadowMode.RayQuerySoft));
+                Assert.That(loaded.DirectionalFilterMode,
+                    Is.EqualTo(DirectionalShadowFilterMode.TentPcf));
+                Assert.That(loaded.DirectionalBiasMode,
+                    Is.EqualTo(DirectionalShadowBiasMode.WorldTexelScaled));
+                Assert.That(loaded.DirectionalShadowMapSize, Is.EqualTo(4096u));
+                Assert.That(loaded.DirectionalCascadeCount, Is.EqualTo(4));
+                Assert.That(loaded.MaxShadowDistance, Is.EqualTo(220f));
+                Assert.That(loaded.DirectionalCascadeBlendFraction, Is.EqualTo(0.18f));
+                Assert.That(loaded.DirectionalCascadeSplitLambda, Is.EqualTo(0.72f));
+                Assert.That(loaded.DirectionalCasterExtrusionDistance, Is.EqualTo(350f));
+                Assert.That(loaded.DirectionalContactShadowDistance, Is.EqualTo(4.5f));
+                Assert.That(loaded.NormalBias, Is.EqualTo(0.045f));
+                Assert.That(loaded.SlopeScaledDepthBias, Is.EqualTo(2.25f));
+                Assert.That(loaded.ConstantDepthBias, Is.EqualTo(0.00075f));
+                Assert.That(loaded.PcfRadius, Is.EqualTo(2));
+                Assert.That(json, Does.Contain("\"Shadows\""));
+                Assert.That(json, Does.Not.Contain("\"ShadowsEnabled\""));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_Version10ShadowSwitchRetainsLegacyDirectionalModes()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "legacy-shadows.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 10,
+                  "QualityPreset": 3,
+                  "ShadowsEnabled": false
+                }
+                """);
+
+            ShadowSettings loaded = RenderSettings.Load(path).Shadows;
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.DirectionalShadowsEnabled, Is.False);
+                Assert.That(loaded.RequestedDirectionalShadowMode,
+                    Is.EqualTo(DirectionalShadowMode.Cascaded));
+                Assert.That(loaded.DirectionalFilterMode,
+                    Is.EqualTo(DirectionalShadowFilterMode.LegacyBoxPcf));
+                Assert.That(loaded.DirectionalBiasMode,
+                    Is.EqualTo(DirectionalShadowBiasMode.Legacy));
             });
         }
         finally

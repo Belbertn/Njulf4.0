@@ -261,6 +261,27 @@ internal sealed class AdvancedGiTransientBufferArena : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Returns true only while <paramref name="slice"/> still names the exact
+    /// live arena allocation and placement from which it was captured. Arena
+    /// slices are borrowed views; syntactic <see cref="BufferHandle.IsValid"/>
+    /// does not make a view live after the arena has replaced its backing
+    /// buffer.
+    /// </summary>
+    public bool IsCurrent(in AdvancedGiTransientBufferSlice slice)
+    {
+        if (_disposed || !_buffer.IsValid || !slice.IsValid ||
+            slice.Buffer != _buffer || slice.ArenaGeneration != _generation ||
+            slice.LayoutFingerprint != _plan.LayoutFingerprint ||
+            !_plan.TryGetSlice(slice.Category, out GiExperimentScratchSlice planned))
+        {
+            return false;
+        }
+
+        return slice.NativeBufferHandle == _backend.GetNativeHandle(_buffer) &&
+            slice.Offset == planned.Offset && slice.Bytes == planned.Bytes;
+    }
+
     public void Dispose()
     {
         if (_disposed)

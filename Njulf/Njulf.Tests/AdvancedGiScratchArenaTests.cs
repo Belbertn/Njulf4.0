@@ -351,6 +351,8 @@ public sealed class AdvancedGiScratchArenaTests
             Assert.That(backend.RetirementCount, Is.Zero);
             Assert.That(waitCount, Is.Zero);
             Assert.That(arena.Diagnostics.AliasedBytesSaved, Is.EqualTo(2048UL));
+            Assert.That(arena.IsCurrent(b1), Is.True);
+            Assert.That(arena.IsCurrent(c3), Is.True);
         });
 
         // Idempotent reconciliation must not allocate, wait, or invalidate
@@ -368,6 +370,10 @@ public sealed class AdvancedGiScratchArenaTests
             SimpleDdgiAdvancedMemoryCategory.ReceiverFeedbackSortScratch,
             8192UL, 256UL, out AdvancedGiTransientBufferSlice replacement,
             out string replacementFailure), Is.True, replacementFailure);
+        Assert.That(arena.TryGetSlice(
+            SimpleDdgiAdvancedMemoryCategory.DirectionalGuidingBuildScratch,
+            2048UL, 256UL, out AdvancedGiTransientBufferSlice replacementC3,
+            out string replacementC3Failure), Is.True, replacementC3Failure);
         Assert.Multiple(() =>
         {
             Assert.That(replacement.Buffer, Is.Not.EqualTo(b1.Buffer));
@@ -375,6 +381,11 @@ public sealed class AdvancedGiScratchArenaTests
             Assert.That(backend.AllocationCount, Is.EqualTo(2));
             Assert.That(backend.RetirementCount, Is.EqualTo(1));
             Assert.That(waitCount, Is.EqualTo(1));
+            Assert.That(arena.IsCurrent(b1), Is.False);
+            Assert.That(arena.IsCurrent(c3), Is.False,
+                "Changing only B1 still invalidates C3's borrowed arena slice.");
+            Assert.That(arena.IsCurrent(replacement), Is.True);
+            Assert.That(arena.IsCurrent(replacementC3), Is.True);
         });
     }
 

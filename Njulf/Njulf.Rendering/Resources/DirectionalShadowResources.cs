@@ -23,7 +23,7 @@ namespace Njulf.Rendering.Resources
         private ImageView[] _workingCascadeViews = Array.Empty<ImageView>();
         private Sampler _sampler;
         private BufferHandle _shadowDataBuffer;
-        private GPUShadowData _lastShadowData;
+        private DirectionalShadowBufferUpload _lastShadowUpload;
         private bool _hasUploadedShadowData;
         private bool _disposed;
         private uint _resourceGeneration;
@@ -38,7 +38,7 @@ namespace Njulf.Rendering.Resources
             Format = Format.D32Sfloat;
             CreateSampler();
             _shadowDataBuffer = _bufferManager.CreateDeviceBuffer(
-                (ulong)Marshal.SizeOf<GPUShadowData>(),
+                (ulong)Marshal.SizeOf<DirectionalShadowBufferUpload>(),
                 BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
                 true,
                 MemoryBudgetCategory.ShadowMaps,
@@ -76,7 +76,7 @@ namespace Njulf.Rendering.Resources
                 new Extent3D { Width = MapSize, Height = MapSize, Depth = 1 },
                 mipLevels: 1,
                 arrayLayers: (uint)Math.Max(1, CascadeCount));
-        public ulong EstimatedBytes => EstimatedImageBytes + (ulong)Marshal.SizeOf<GPUShadowData>();
+        public ulong EstimatedBytes => EstimatedImageBytes + (ulong)Marshal.SizeOf<DirectionalShadowBufferUpload>();
 
         public ImageView GetCascadeView(int cascadeIndex)
         {
@@ -187,18 +187,30 @@ namespace Njulf.Rendering.Resources
             }
         }
 
-        public bool UploadShadowData(StagingRing stagingRing, CommandBuffer commandBuffer, in GPUShadowData shadowData)
+        public bool UploadShadowData(
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer,
+            in GPUShadowData shadowData,
+            in GPUDirectionalShadowParameters parameters)
         {
-            if (_hasUploadedShadowData && ShadowDataEquals(_lastShadowData, shadowData))
+            var upload = new DirectionalShadowBufferUpload
+            {
+                ShadowData = shadowData,
+                Parameters = parameters
+            };
+            if (_hasUploadedShadowData && ShadowDataEquals(_lastShadowUpload, upload))
                 return false;
 
-            UploadShadowDataCore(stagingRing, commandBuffer, shadowData);
-            _lastShadowData = shadowData;
+            UploadShadowDataCore(stagingRing, commandBuffer, upload);
+            _lastShadowUpload = upload;
             _hasUploadedShadowData = true;
             return true;
         }
 
-        private void UploadShadowDataCore(StagingRing stagingRing, CommandBuffer commandBuffer, in GPUShadowData shadowData)
+        private void UploadShadowDataCore(
+            StagingRing stagingRing,
+            CommandBuffer commandBuffer,
+            in DirectionalShadowBufferUpload upload)
         {
             if (stagingRing == null)
                 throw new ArgumentNullException(nameof(stagingRing));
@@ -211,20 +223,29 @@ namespace Njulf.Rendering.Resources
                 stagingRing,
                 commandBuffer,
                 _shadowDataBuffer,
-                shadowData,
+                upload,
                 barrierDescription: new UploadBarrierDescription(
                     ShadowDataConsumerStages,
                     AccessFlags2.ShaderStorageReadBit));
         }
 
-        private static bool ShadowDataEquals(in GPUShadowData left, in GPUShadowData right)
+        private static bool ShadowDataEquals(
+            in DirectionalShadowBufferUpload left,
+            in DirectionalShadowBufferUpload right)
         {
-            fixed (GPUShadowData* leftPtr = &left)
-            fixed (GPUShadowData* rightPtr = &right)
+            fixed (DirectionalShadowBufferUpload* leftPtr = &left)
+            fixed (DirectionalShadowBufferUpload* rightPtr = &right)
             {
-                return new ReadOnlySpan<byte>(leftPtr, sizeof(GPUShadowData))
-                    .SequenceEqual(new ReadOnlySpan<byte>(rightPtr, sizeof(GPUShadowData)));
+                return new ReadOnlySpan<byte>(leftPtr, sizeof(DirectionalShadowBufferUpload))
+                    .SequenceEqual(new ReadOnlySpan<byte>(rightPtr, sizeof(DirectionalShadowBufferUpload)));
             }
+        }
+
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
+        private struct DirectionalShadowBufferUpload
+        {
+            public GPUShadowData ShadowData;
+            public GPUDirectionalShadowParameters Parameters;
         }
 
         public void Recreate(uint mapSize, int cascadeCount)

@@ -69,10 +69,16 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `DirectionalShadowsEnabled` | Enables directional shadows. |
 | `SpotShadowsEnabled` | Enables spot light shadows. |
 | `PointShadowsEnabled` | Enables point light shadows. |
+| `RequestedDirectionalShadowMode` | Authored intent: `Cascaded`, `HybridContact`, `RayQueryHard`, or promotion-gated `RayQuerySoft`. The runtime can fall back to `Cascaded` when ray capability, scene completeness, or receiver resources are unavailable. |
+| `DirectionalFilterMode` | Directional-map filter: legacy box PCF or normalized tent PCF. |
+| `DirectionalBiasMode` | Directional receiver-bias interpretation: legacy clip-space values or world-texel-scaled bias for more consistent cascades. |
 | `DirectionalShadowMapSize` | Directional shadow map resolution. |
 | `DirectionalCascadeCount` | Number of directional cascades. |
 | `MaxShadowDistance` | Maximum directional shadow distance. |
 | `DirectionalCascadeBlendFraction` | Fraction of the smaller neighbouring cascade span used to overlap and smoothly hand off directional shadow cascades. Default `0.12`; clamped to `[0.02, 0.30]`. |
+| `DirectionalCascadeSplitLambda` | Practical split blend between uniform (`0`) and logarithmic (`1`) cascade partitions. |
+| `DirectionalCasterExtrusionDistance` | Conservative search distance toward the sun for casters outside the receiver slice. It expands depth coverage without changing stabilized XY coverage. |
+| `DirectionalContactShadowDistance` | Maximum ray segment for `HybridContact`; bounded by `MaxShadowDistance`. |
 | `NormalBias` | Directional normal bias. |
 | `SlopeScaledDepthBias` | Directional slope-scaled depth bias. |
 | `ConstantDepthBias` | Directional constant depth bias. |
@@ -92,6 +98,29 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `PointSlopeScaledDepthBias` | Point shadow slope-scaled depth bias. |
 | `PointPcfRadius` | Point shadow PCF radius. |
 | `DebugView` | Shadow debug view. |
+
+Directional shadow modes use a requested/effective contract. `HybridContact` combines
+the stable CSM result with a bounded deterministic ray query. `RayQueryHard` uses a
+full-resolution binary visibility mask for supported opaque receivers while retaining
+CSM for transparent/decal/debug receiver variants. Both ray modes require a complete,
+current shared ray scene and a successfully allocated mask; failures are diagnosed and
+fall back to CSM for that frame. `RayQuerySoft` is serialized as future intent but is
+currently held behind its finite-sun sampling and denoising qualification gate, so it
+also resolves to CSM and does not allocate motion/history resources.
+
+When a hard-ray frame contains transparent or geometry-decal receivers, diagnostics
+set `CascadedReceiverFallbackRequired` and the map is rendered only for those named
+layered receivers; opaque depth owners continue to use the hard mask. Scenes without
+such receivers avoid the redundant map work.
+
+The visibility mask uses a packed `R8Unorm`-equivalent storage-buffer layout
+(one byte per pixel and one bank per frame in flight); contact fading is resolved
+before packing. The stable CSM implementation uses a transported light basis, rotation-invariant
+cascade extents, symmetric nearest-texel snapping, independently stabilized depth,
+and per-cascade static-cache invalidation. Runtime diagnostics expose the requested
+and effective mode, fallback reason/detail, ray-mask allocation/generation, shared
+ray-scene generation/epoch, cascade-fit state, cache-layer provenance, and separate
+GPU timings for the map and ray-mask passes.
 
 Shadow debug views:
 

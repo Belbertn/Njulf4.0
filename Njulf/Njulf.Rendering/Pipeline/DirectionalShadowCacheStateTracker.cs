@@ -15,8 +15,8 @@ namespace Njulf.Rendering.Pipeline
         private uint _validMask;
         private uint _recordedRefreshMask;
         private uint _resourceGeneration;
-        private ulong _signature;
-        private bool _hasSignature;
+        private uint _signatureMask;
+        private readonly ulong[] _signatures = new ulong[ShadowSettings.MaxDirectionalCascades];
 
         public uint ValidMask => _validMask;
         /// <summary>
@@ -25,8 +25,14 @@ namespace Njulf.Rendering.Pipeline
         /// </summary>
         public uint RecordedRefreshMask => _recordedRefreshMask;
         public uint ResourceGeneration => _resourceGeneration;
-        public ulong Signature => _signature;
-        public bool HasSignature => _hasSignature;
+        public ulong Signature => _signatures[0];
+        public bool HasSignature => _signatureMask != 0u;
+
+        public ulong GetSignature(int cascade)
+        {
+            uint bit = GetCascadeBit(cascade);
+            return (_signatureMask & bit) != 0u ? _signatures[cascade] : 0UL;
+        }
 
         public bool IsDirty(
             uint activeMask,
@@ -35,34 +41,69 @@ namespace Njulf.Rendering.Pipeline
             bool resourcesDefined,
             bool forceRefresh)
         {
+            Span<ulong> signatures = stackalloc ulong[ShadowSettings.MaxDirectionalCascades];
+            signatures.Fill(requiredSignature);
+            return GetDirtyMask(
+                activeMask,
+                signatures,
+                resourceGeneration,
+                resourcesDefined,
+                forceRefresh) != 0u;
+        }
+
+        public uint GetDirtyMask(
+            uint activeMask,
+            ReadOnlySpan<ulong> requiredSignatures,
+            uint resourceGeneration,
+            bool resourcesDefined,
+            bool forceRefresh)
+        {
+            activeMask &= (1u << ShadowSettings.MaxDirectionalCascades) - 1u;
             if (activeMask == 0u)
             {
                 Invalidate();
-                return false;
+                return 0u;
             }
+            if (requiredSignatures.Length < ShadowSettings.MaxDirectionalCascades)
+                throw new ArgumentException("One signature per directional cascade is required.", nameof(requiredSignatures));
 
-            if (!resourcesDefined || forceRefresh)
+            if (!resourcesDefined)
             {
                 Invalidate();
-                return true;
+                return activeMask;
             }
-
-            if (!_hasSignature ||
-                _resourceGeneration != resourceGeneration ||
-                _signature != requiredSignature ||
-                (_validMask & activeMask) != activeMask)
+            if (forceRefresh)
             {
-                if (_resourceGeneration != resourceGeneration ||
-                    _signature != requiredSignature)
+                InvalidateMask(activeMask);
+                return activeMask;
+            }
+            if (_signatureMask != 0u && _resourceGeneration != resourceGeneration)
+                Invalidate();
+
+            uint dirtyMask = 0u;
+            for (int cascade = 0; cascade < ShadowSettings.MaxDirectionalCascades; cascade++)
+            {
+                uint bit = 1u << cascade;
+                if ((activeMask & bit) == 0u)
+                    continue;
+
+                bool signatureMatches = (_signatureMask & bit) != 0u &&
+                    _signatures[cascade] == requiredSignatures[cascade];
+                if (!signatureMatches)
                 {
-                    _validMask = 0u;
-                    _recordedRefreshMask = 0u;
+                    _validMask &= ~bit;
+                    _recordedRefreshMask &= ~bit;
+                    _signatureMask &= ~bit;
+                    _signatures[cascade] = 0UL;
+                    dirtyMask |= bit;
+                    continue;
                 }
 
-                return true;
+                if ((_validMask & bit) == 0u)
+                    dirtyMask |= bit;
             }
 
-            return false;
+            return dirtyMask;
         }
 
         public void BeginRefresh(uint activeMask)
@@ -73,14 +114,35 @@ namespace Njulf.Rendering.Pipeline
 
         public void RecordRefresh(uint refreshedMask, ulong signature, uint resourceGeneration)
         {
+            Span<ulong> signatures = stackalloc ulong[ShadowSettings.MaxDirectionalCascades];
+            signatures.Fill(signature);
+            RecordRefresh(refreshedMask, signatures, resourceGeneration);
+        }
+
+        public void RecordRefresh(
+            uint refreshedMask,
+            ReadOnlySpan<ulong> signatures,
+            uint resourceGeneration)
+        {
+            if (signatures.Length < ShadowSettings.MaxDirectionalCascades)
+                throw new ArgumentException("One signature per directional cascade is required.", nameof(signatures));
+            if (_signatureMask != 0u && _resourceGeneration != resourceGeneration)
+                Invalidate();
+
             // Recording is sufficient to copy a freshly cleared/rendered
             // static layer into this command buffer's working map. It is not
             // sufficient to reuse that layer in a later frame: submission may
             // still fail or the command buffer may be discarded.
             _recordedRefreshMask |= refreshedMask;
-            _signature = signature;
+            for (int cascade = 0; cascade < ShadowSettings.MaxDirectionalCascades; cascade++)
+            {
+                uint bit = 1u << cascade;
+                if ((refreshedMask & bit) == 0u)
+                    continue;
+                _signatures[cascade] = signatures[cascade];
+                _signatureMask |= bit;
+            }
             _resourceGeneration = resourceGeneration;
-            _hasSignature = true;
         }
 
         /// <summary>
@@ -95,10 +157,7 @@ namespace Njulf.Rendering.Pipeline
             _recordedRefreshMask = 0u;
         }
 
-        public uint GetReusableMask(uint activeMask) =>
-            activeMask != 0u && (_validMask & activeMask) == activeMask
-                ? activeMask
-                : 0u;
+        public uint GetReusableMask(uint activeMask) => activeMask & _validMask;
 
         /// <summary>
         /// Returns layers usable by the current command buffer. This permits
@@ -108,9 +167,7 @@ namespace Njulf.Rendering.Pipeline
         public uint GetCurrentSubmissionCopyMask(uint activeMask)
         {
             uint availableMask = _validMask | _recordedRefreshMask;
-            return activeMask != 0u && (availableMask & activeMask) == activeMask
-                ? activeMask
-                : 0u;
+            return activeMask & availableMask;
         }
 
         public DirectionalShadowCacheLayerState GetLayerState(int cascade, uint activeMask, uint refreshMask)
@@ -130,9 +187,24 @@ namespace Njulf.Rendering.Pipeline
         {
             _validMask = 0u;
             _recordedRefreshMask = 0u;
-            _hasSignature = false;
-            _signature = 0UL;
+            _signatureMask = 0u;
+            Array.Clear(_signatures, 0, _signatures.Length);
             _resourceGeneration = 0u;
+        }
+
+        private void InvalidateMask(uint mask)
+        {
+            _validMask &= ~mask;
+            _recordedRefreshMask &= ~mask;
+            _signatureMask &= ~mask;
+            for (int cascade = 0; cascade < ShadowSettings.MaxDirectionalCascades; cascade++)
+            {
+                uint bit = 1u << cascade;
+                if ((mask & bit) != 0u)
+                    _signatures[cascade] = 0UL;
+            }
+            if (_signatureMask == 0u)
+                _resourceGeneration = 0u;
         }
 
         private static uint GetCascadeBit(int cascade)

@@ -725,6 +725,10 @@ void ProcessDirectionalShadowCandidate(
     uint cascadeCount = min(pc.Push.DirectionalShadowCascadeCount, SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT);
     for (uint cascade = 0u; cascade < cascadeCount; cascade++)
     {
+        if (!dynamicShadow &&
+            (pc.Push.DirectionalStaticShadowCascadeMask & (1u << cascade)) == 0u)
+            continue;
+
         uint cascadeCounterBase = counterBaseWord + cascade * SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_STRIDE;
         atomicAdd(
             BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[

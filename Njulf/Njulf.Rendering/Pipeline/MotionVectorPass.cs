@@ -23,6 +23,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly FoliageManager? _foliageManager;
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
+        private readonly Func<SurfaceHistoryConsumer>? _historyConsumers;
         private Matrix4x4 _previousViewProjectionMatrix = Matrix4x4.Identity;
         private float _previousTime;
         private bool _hasPreviousViewProjectionMatrix;
@@ -36,7 +37,8 @@ namespace Njulf.Rendering.Pipeline
             RenderSettings settings,
             FoliagePipeline? foliagePipeline = null,
             BufferManager? bufferManager = null,
-            FoliageManager? foliageManager = null)
+            FoliageManager? foliageManager = null,
+            Func<SurfaceHistoryConsumer>? historyConsumers = null)
             : base("MotionVectorPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
@@ -45,6 +47,7 @@ namespace Njulf.Rendering.Pipeline
             _foliageManager = foliageManager;
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _historyConsumers = historyConsumers;
         }
 
         public override void Initialize()
@@ -53,12 +56,16 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
-            return NeedsMotionVectors();
+            SurfaceHistoryConsumer consumers = ResolveHistoryConsumers();
+            sceneData.SurfaceHistoryConsumers = consumers;
+            return consumers.RequiresMotionVectors();
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!NeedsMotionVectors())
+            SurfaceHistoryConsumer consumers = ResolveHistoryConsumers();
+            sceneData.SurfaceHistoryConsumers = consumers;
+            if (!consumers.RequiresMotionVectors())
             {
                 sceneData.MotionVectorsEnabled = 0;
                 return;
@@ -358,10 +365,9 @@ namespace Njulf.Rendering.Pipeline
             return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }
 
-        private bool NeedsMotionVectors()
-        {
-            return _settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa;
-        }
+        private SurfaceHistoryConsumer ResolveHistoryConsumers() =>
+            _historyConsumers?.Invoke() ??
+            SurfaceHistoryPolicy.Resolve(_settings, nearFieldResidualActive: false);
 
         private static bool IsCameraCut(Matrix4x4 current, Matrix4x4 previous)
         {

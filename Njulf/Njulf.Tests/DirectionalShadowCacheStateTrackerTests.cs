@@ -107,7 +107,7 @@ public sealed class DirectionalShadowCacheStateTrackerTests
             Assert.That(tracker.ValidMask, Is.Zero);
             Assert.That(tracker.RecordedRefreshMask, Is.EqualTo(0b0011u));
             Assert.That(tracker.GetReusableMask(AllFourCascades), Is.Zero);
-            Assert.That(tracker.GetCurrentSubmissionCopyMask(AllFourCascades), Is.Zero);
+            Assert.That(tracker.GetCurrentSubmissionCopyMask(AllFourCascades), Is.EqualTo(0b0011u));
             Assert.That(
                 tracker.GetLayerState(0, AllFourCascades, refreshMask: 0b0011u),
                 Is.EqualTo(DirectionalShadowCacheLayerState.RefreshRecorded));
@@ -121,7 +121,7 @@ public sealed class DirectionalShadowCacheStateTrackerTests
         {
             Assert.That(tracker.ValidMask, Is.EqualTo(0b0011u));
             Assert.That(tracker.RecordedRefreshMask, Is.Zero);
-            Assert.That(tracker.GetReusableMask(AllFourCascades), Is.Zero);
+            Assert.That(tracker.GetReusableMask(AllFourCascades), Is.EqualTo(0b0011u));
             Assert.That(
                 tracker.GetLayerState(0, AllFourCascades, refreshMask: 0u),
                 Is.EqualTo(DirectionalShadowCacheLayerState.Valid));
@@ -165,6 +165,34 @@ public sealed class DirectionalShadowCacheStateTrackerTests
         tracker.BeginRefresh(AllFourCascades);
         Assert.That(tracker.RecordedRefreshMask, Is.Zero);
         Assert.That(tracker.GetCurrentSubmissionCopyMask(AllFourCascades), Is.Zero);
+    }
+
+    [Test]
+    public void PerCascadeSignatureChangeInvalidatesOnlyAffectedLayer()
+    {
+        var tracker = new DirectionalShadowCacheStateTracker();
+        ulong[] initial = [11UL, 22UL, 33UL, 44UL];
+        tracker.BeginRefresh(AllFourCascades);
+        tracker.RecordRefresh(AllFourCascades, initial, resourceGeneration: 7u);
+        tracker.ConfirmRecordedRefreshSubmission();
+
+        ulong[] changed = [11UL, 99UL, 33UL, 44UL];
+        uint dirtyMask = tracker.GetDirtyMask(
+            AllFourCascades,
+            changed,
+            resourceGeneration: 7u,
+            resourcesDefined: true,
+            forceRefresh: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dirtyMask, Is.EqualTo(0b0010u));
+            Assert.That(tracker.ValidMask, Is.EqualTo(0b1101u));
+            Assert.That(tracker.GetReusableMask(AllFourCascades), Is.EqualTo(0b1101u));
+            Assert.That(tracker.GetSignature(0), Is.EqualTo(11UL));
+            Assert.That(tracker.GetSignature(1), Is.Zero);
+            Assert.That(tracker.GetSignature(2), Is.EqualTo(33UL));
+        });
     }
 
     private static DirectionalShadowCacheStateTracker CreateValidTracker()

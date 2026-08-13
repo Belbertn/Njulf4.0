@@ -32,7 +32,10 @@ namespace Njulf.Rendering.Pipeline
         // while retaining one provenance item for every supported cascade.
         private readonly DirectionalShadowCacheLayerProvenance[] _cacheLayerProvenance =
             new DirectionalShadowCacheLayerProvenance[ShadowSettings.MaxDirectionalCascades];
+        private readonly ulong[] _requiredCacheSignatures =
+            new ulong[ShadowSettings.MaxDirectionalCascades];
         private ulong _shadowSubmissionSerial;
+        private bool _workingMapHadTransientCasters;
 
         public DirectionalShadowPass(
             VulkanContext context,
@@ -60,10 +63,25 @@ namespace Njulf.Rendering.Pipeline
 
         public bool NeedsStaticCacheRefresh(SceneRenderingData sceneData)
         {
-            return sceneData.DirectionalShadowPassEnabled &&
-                   _shadowResources.HasImage &&
-                   sceneData.DirectionalStaticShadowMeshletCount > 0 &&
-                   IsStaticCacheDirty(sceneData);
+            return GetStaticCacheRefreshMask(sceneData) != 0u;
+        }
+
+        public uint GetStaticCacheRefreshMask(SceneRenderingData sceneData)
+        {
+            if (!sceneData.DirectionalShadowPassEnabled ||
+                !_shadowResources.HasImage ||
+                !sceneData.DirectionalShadowFramePlan.UsesCascadedShadowMap)
+                return 0u;
+
+            uint activeMask = GetStaticCacheActiveMask(sceneData);
+            CreateStaticCacheSignatures(sceneData, _settings, _requiredCacheSignatures);
+            return _staticCacheState.GetDirtyMask(
+                activeMask,
+                _requiredCacheSignatures,
+                _shadowResources.ResourceGeneration,
+                _shadowResources.StaticLayout != ImageLayout.Undefined &&
+                _shadowResources.Layout != ImageLayout.Undefined,
+                _settings.ForceStaticCascadeCacheRefresh);
         }
 
         /// <summary>
@@ -79,20 +97,26 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
-            if (!sceneData.DirectionalShadowPassEnabled || !_shadowResources.HasImage)
+            if (!sceneData.DirectionalShadowPassEnabled ||
+                !_shadowResources.HasImage ||
+                !sceneData.DirectionalShadowFramePlan.UsesCascadedShadowMap)
             {
+                // A skipped full-ray frame does not rewrite the working map.
+                // Preserve this bit so the next CSM frame can remove stale
+                // dynamic/foliage depth by recomposing from the static cache.
                 UpdateStaticCacheDiagnostics(sceneData, 0u, 0u, 0u);
                 return false;
             }
 
             uint activeMask = GetStaticCacheActiveMask(sceneData);
-            bool staticDirty = IsStaticCacheDirty(sceneData);
-            uint reuseMask = !staticDirty ? _staticCacheState.GetReusableMask(activeMask) : 0u;
+            uint dirtyMask = GetStaticCacheRefreshMask(sceneData);
+            uint reuseMask = _staticCacheState.GetReusableMask(activeMask) & ~dirtyMask;
             UpdateStaticCacheDiagnostics(sceneData, activeMask, 0u, reuseMask);
 
-            return staticDirty ||
-                   sceneData.DirectionalDynamicShadowMeshletCount > 0 ||
-                   HasFoliageShadowWork(sceneData);
+            bool hasTransientCasters =
+                sceneData.DirectionalDynamicShadowMeshletCount > 0 ||
+                HasFoliageShadowWork(sceneData);
+            return dirtyMask != 0u || hasTransientCasters || _workingMapHadTransientCasters;
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -101,25 +125,28 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             uint activeMask = GetStaticCacheActiveMask(sceneData);
-            bool staticDirty = IsStaticCacheDirty(sceneData);
-            ulong requiredSignature = CreateStaticCacheSignature(sceneData, _settings);
+            CreateStaticCacheSignatures(sceneData, _settings, _requiredCacheSignatures);
+            uint dirtyMask = _staticCacheState.GetDirtyMask(
+                activeMask,
+                _requiredCacheSignatures,
+                _shadowResources.ResourceGeneration,
+                _shadowResources.StaticLayout != ImageLayout.Undefined &&
+                _shadowResources.Layout != ImageLayout.Undefined,
+                _settings.ForceStaticCascadeCacheRefresh);
             uint refreshMask = 0u;
-            uint reuseMask = 0u;
-            if (staticDirty && activeMask != 0u)
+            if (dirtyMask != 0u)
             {
                 // Do not treat the previous contents as usable while a refresh is in
-                // progress. Every requested layer is cleared and rendered independently.
-                _staticCacheState.BeginRefresh(activeMask);
-                refreshMask = RenderStaticCache(cmd, sceneData);
+                // progress. Dirty layers are cleared and rendered independently;
+                // signatures for unaffected layers remain reusable.
+                _staticCacheState.BeginRefresh(dirtyMask);
+                refreshMask = RenderStaticCache(cmd, sceneData, dirtyMask);
                 _staticCacheState.RecordRefresh(
                     refreshMask,
-                    requiredSignature,
+                    _requiredCacheSignatures,
                     _shadowResources.ResourceGeneration);
             }
-            else if (_staticCacheState.GetReusableMask(activeMask) != 0u)
-            {
-                reuseMask = activeMask;
-            }
+            uint reuseMask = _staticCacheState.GetReusableMask(activeMask) & ~refreshMask;
 
             // A layer refreshed earlier in this command buffer can safely be
             // copied into its working counterpart, but is deliberately not
@@ -127,13 +154,11 @@ namespace Njulf.Rendering.Pipeline
             // been accepted.
             uint currentSubmissionCopyMask = _staticCacheState.GetCurrentSubmissionCopyMask(activeMask);
             if (currentSubmissionCopyMask != 0u)
-            {
-                CopyStaticCacheToWorking(cmd, sceneData);
-            }
-            else
-            {
-                ClearWorkingMap(cmd, sceneData);
-            }
+                CopyStaticCacheToWorking(cmd, sceneData, currentSubmissionCopyMask);
+
+            uint explicitClearMask = activeMask & ~currentSubmissionCopyMask;
+            if (explicitClearMask != 0u)
+                ClearWorkingLayers(cmd, sceneData, explicitClearMask);
 
             if (sceneData.DirectionalDynamicShadowMeshletCount > 0)
                 RenderWorkingDynamic(cmd, sceneData);
@@ -147,13 +172,19 @@ namespace Njulf.Rendering.Pipeline
                 activeMask,
                 refreshMask,
                 reuseMask,
-                workingMapExplicitlyCleared: currentSubmissionCopyMask == 0u,
+                workingMapExplicitClearMask: explicitClearMask,
                 dynamicWorkAppended: sceneData.DirectionalDynamicShadowMeshletCount > 0,
                 foliageWorkAppended: HasFoliageShadowWork(sceneData),
                 commandsRecorded: true);
+            _workingMapHadTransientCasters =
+                sceneData.DirectionalDynamicShadowMeshletCount > 0 ||
+                HasFoliageShadowWork(sceneData);
         }
 
-        private uint RenderStaticCache(CommandBuffer cmd, SceneRenderingData sceneData)
+        private uint RenderStaticCache(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            uint refreshMask)
         {
             TransitionStaticMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             BindShadowPipeline(cmd);
@@ -161,6 +192,10 @@ namespace Njulf.Rendering.Pipeline
             uint renderedMask = 0u;
             for (int cascade = 0; cascade < cascadeCount; cascade++)
             {
+                uint bit = 1u << cascade;
+                if ((refreshMask & bit) == 0u)
+                    continue;
+
                 _context.BeginDebugLabel(cmd, StaticCascadeDebugLabels[cascade]);
                 try
                 {
@@ -173,7 +208,7 @@ namespace Njulf.Rendering.Pipeline
                         GetStaticShadowMeshletDrawBufferBaseIndex(sceneData, cascade),
                         AttachmentLoadOp.Clear,
                         GetStaticShadowIndirectDispatchOffset(sceneData, cascade));
-                    renderedMask |= 1u << cascade;
+                    renderedMask |= bit;
                 }
                 finally
                 {
@@ -262,6 +297,8 @@ namespace Njulf.Rendering.Pipeline
         {
             if (meshletCount <= 0 && loadOp != AttachmentLoadOp.Clear)
                 return;
+
+            SetReverseDepthBias(cmd, sceneData, cascade);
 
             var depthAttachment = new RenderingAttachmentInfo
             {
@@ -444,6 +481,7 @@ namespace Njulf.Rendering.Pipeline
 
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
             BindFoliageShadowPipeline(cmd, _foliagePipeline.ShadowPipeline);
+            SetReverseDepthBias(cmd, sceneData, cascade);
             PushFoliageShadowConstants(
                 cmd,
                 sceneData,
@@ -549,7 +587,6 @@ namespace Njulf.Rendering.Pipeline
 
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
-            SetReverseDepthBias(cmd);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.ShadowAlphaDepthPipeline);
 
             var storageSet = _bindlessHeap.StorageBufferSet;
@@ -577,7 +614,6 @@ namespace Njulf.Rendering.Pipeline
 
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
-            SetReverseDepthBias(cmd);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
 
             var storageSet = _bindlessHeap.StorageBufferSet;
@@ -586,17 +622,40 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _foliagePipeline.GraphicsLayout, 1, 1, &textureSet, 0, null);
         }
 
-        private void SetReverseDepthBias(CommandBuffer cmd)
+        private void SetReverseDepthBias(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            int cascade)
         {
             // Directional shadow maps use reverse-Z (clear 0, GreaterOrEqual). Vulkan adds
             // depth bias to the generated depth value, so a positive bias moves casters
             // toward the light and makes detailed surfaces shadow themselves. Move the
             // stored caster depth away from the light instead.
+            float constantBias = _settings.ConstantDepthBias;
+            float slopeBias = _settings.SlopeScaledDepthBias;
+            if (_settings.DirectionalBiasMode == DirectionalShadowBiasMode.WorldTexelScaled &&
+                (uint)cascade < (uint)sceneData.DirectionalShadowCascadeFitDiagnostics.Length)
+            {
+                float referenceTexel = sceneData.DirectionalShadowCascadeFitDiagnostics[0].WorldTexelSize;
+                float cascadeTexel = sceneData.DirectionalShadowCascadeFitDiagnostics[cascade].WorldTexelSize;
+                if (float.IsFinite(referenceTexel) && float.IsFinite(cascadeTexel) &&
+                    referenceTexel > 0.000001f && cascadeTexel > 0f)
+                {
+                    // Keep existing authored bias values as the near-cascade
+                    // reference, then scale them in proportion to world texel
+                    // footprint. The bound prevents far cascades from detaching
+                    // shadows when split ratios are unusually aggressive.
+                    float worldTexelScale = Math.Clamp(cascadeTexel / referenceTexel, 0.25f, 4f);
+                    constantBias = MathF.Min(_settings.ConstantDepthBias * worldTexelScale, 0.1f);
+                    slopeBias = MathF.Min(_settings.SlopeScaledDepthBias * worldTexelScale, 16f);
+                }
+            }
+
             _context.Api.CmdSetDepthBias(
                 cmd,
-                -_settings.ConstantDepthBias,
+                -constantBias,
                 0.0f,
-                -_settings.SlopeScaledDepthBias);
+                -slopeBias);
         }
 
         private bool HasFoliageShadowWork(SceneRenderingData sceneData)
@@ -607,13 +666,18 @@ namespace Njulf.Rendering.Pipeline
                    _foliagePipeline != null;
         }
 
-        private void ClearWorkingMap(CommandBuffer cmd, SceneRenderingData sceneData)
+        private void ClearWorkingLayers(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            uint clearMask)
         {
             TransitionWorkingMap(cmd, ImageLayout.DepthStencilAttachmentOptimal);
             BindShadowPipeline(cmd);
             int cascadeCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
             for (int cascade = 0; cascade < cascadeCount; cascade++)
             {
+                if ((clearMask & (1u << cascade)) == 0u)
+                    continue;
                 RenderCascade(
                     cmd,
                     sceneData,
@@ -677,41 +741,55 @@ namespace Njulf.Rendering.Pipeline
             BarrierBuilder.ExecuteImageBarrier(cmd, barrier);
         }
 
-        private void CopyStaticCacheToWorking(CommandBuffer cmd, SceneRenderingData sceneData)
+        private void CopyStaticCacheToWorking(
+            CommandBuffer cmd,
+            SceneRenderingData sceneData,
+            uint copyMask)
         {
             TransitionStaticMap(cmd, ImageLayout.TransferSrcOptimal);
             TransitionWorkingMap(cmd, ImageLayout.TransferDstOptimal);
-            uint layerCount = (uint)Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
-            if (layerCount == 0)
+            int layerCount = Math.Min(sceneData.DirectionalShadowCascadeCount, _shadowResources.CascadeCount);
+            if (layerCount <= 0 || copyMask == 0u)
                 return;
 
-            var copy = new ImageCopy
+            for (int cascade = 0; cascade < layerCount; cascade++)
             {
-                SrcSubresource = new ImageSubresourceLayers
-                {
-                    AspectMask = ImageAspectFlags.DepthBit,
-                    MipLevel = 0,
-                    BaseArrayLayer = 0,
-                    LayerCount = layerCount
-                },
-                DstSubresource = new ImageSubresourceLayers
-                {
-                    AspectMask = ImageAspectFlags.DepthBit,
-                    MipLevel = 0,
-                    BaseArrayLayer = 0,
-                    LayerCount = layerCount
-                },
-                Extent = new Extent3D { Width = _shadowResources.MapSize, Height = _shadowResources.MapSize, Depth = 1 }
-            };
+                if ((copyMask & (1u << cascade)) == 0u)
+                    continue;
 
-            _context.Api.CmdCopyImage(
-                cmd,
-                _shadowResources.StaticImage,
-                ImageLayout.TransferSrcOptimal,
-                _shadowResources.WorkingImage,
-                ImageLayout.TransferDstOptimal,
-                1,
-                &copy);
+                var copy = new ImageCopy
+                {
+                    SrcSubresource = new ImageSubresourceLayers
+                    {
+                        AspectMask = ImageAspectFlags.DepthBit,
+                        MipLevel = 0,
+                        BaseArrayLayer = checked((uint)cascade),
+                        LayerCount = 1
+                    },
+                    DstSubresource = new ImageSubresourceLayers
+                    {
+                        AspectMask = ImageAspectFlags.DepthBit,
+                        MipLevel = 0,
+                        BaseArrayLayer = checked((uint)cascade),
+                        LayerCount = 1
+                    },
+                    Extent = new Extent3D
+                    {
+                        Width = _shadowResources.MapSize,
+                        Height = _shadowResources.MapSize,
+                        Depth = 1
+                    }
+                };
+
+                _context.Api.CmdCopyImage(
+                    cmd,
+                    _shadowResources.StaticImage,
+                    ImageLayout.TransferSrcOptimal,
+                    _shadowResources.WorkingImage,
+                    ImageLayout.TransferDstOptimal,
+                    1,
+                    &copy);
+            }
         }
 
         private uint GetStaticCacheActiveMask(SceneRenderingData sceneData)
@@ -736,7 +814,7 @@ namespace Njulf.Rendering.Pipeline
             uint activeMask,
             uint refreshMask,
             uint reuseMask,
-            bool workingMapExplicitlyCleared = false,
+            uint workingMapExplicitClearMask = 0u,
             bool dynamicWorkAppended = false,
             bool foliageWorkAppended = false,
             bool commandsRecorded = false)
@@ -755,19 +833,18 @@ namespace Njulf.Rendering.Pipeline
                 uint bit = 1u << cascade;
                 bool active = (activeMask & bit) != 0u;
                 bool refreshed = (refreshMask & bit) != 0u;
-                bool copied = (refreshMask & bit) != 0u ||
-                    (reuseMask & bit) != 0u ||
-                    (!workingMapExplicitlyCleared && (validMask & bit) != 0u);
+                bool explicitlyCleared = (workingMapExplicitClearMask & bit) != 0u;
+                bool copied = (refreshMask & bit) != 0u || (reuseMask & bit) != 0u;
                 provenance[cascade] = active
                     ? new DirectionalShadowCacheLayerProvenance(
                         CascadeIndex: cascade,
                         Active: 1,
-                        CacheSignature: _staticCacheState.Signature,
+                        CacheSignature: _staticCacheState.GetSignature(cascade),
                         ResourceGeneration: _shadowResources.ResourceGeneration,
                         CacheState: _staticCacheState.GetLayerState(cascade, activeMask, refreshMask),
                         CopiedFromCache: copied ? 1 : 0,
                         RefreshedThisFrame: refreshed ? 1 : 0,
-                        ExplicitlyCleared: refreshed || workingMapExplicitlyCleared ? 1 : 0,
+                        ExplicitlyCleared: refreshed || explicitlyCleared ? 1 : 0,
                         DynamicWorkAppended: dynamicWorkAppended ? 1 : 0,
                         FoliageWorkAppended: foliageWorkAppended ? 1 : 0,
                         FinalWorkingLayerValid: commandsRecorded
@@ -780,25 +857,32 @@ namespace Njulf.Rendering.Pipeline
             sceneData.DirectionalShadowCacheLayerProvenance = provenance;
         }
 
-        private bool IsStaticCacheDirty(SceneRenderingData sceneData)
+        private static void CreateStaticCacheSignatures(
+            SceneRenderingData sceneData,
+            ShadowSettings settings,
+            Span<ulong> signatures)
         {
-            uint requiredMask = GetStaticCacheActiveMask(sceneData);
-            ulong signature = CreateStaticCacheSignature(sceneData, _settings);
-            return _staticCacheState.IsDirty(
-                requiredMask,
-                signature,
-                _shadowResources.ResourceGeneration,
-                _shadowResources.StaticLayout != ImageLayout.Undefined &&
-                _shadowResources.Layout != ImageLayout.Undefined,
-                _settings.ForceStaticCascadeCacheRefresh);
+            if (signatures.Length < ShadowSettings.MaxDirectionalCascades)
+                throw new ArgumentException("One output signature per cascade is required.", nameof(signatures));
+
+            for (int cascade = 0; cascade < ShadowSettings.MaxDirectionalCascades; cascade++)
+                signatures[cascade] = CreateStaticCacheSignature(sceneData, settings, cascade);
         }
 
         internal static ulong CreateStaticCacheSignature(SceneRenderingData sceneData, ShadowSettings settings)
+            => CreateStaticCacheSignature(sceneData, settings, cascade: 0);
+
+        internal static ulong CreateStaticCacheSignature(
+            SceneRenderingData sceneData,
+            ShadowSettings settings,
+            int cascade)
         {
             if (sceneData == null)
                 throw new ArgumentNullException(nameof(sceneData));
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
+            if (cascade < 0 || cascade >= ShadowSettings.MaxDirectionalCascades)
+                throw new ArgumentOutOfRangeException(nameof(cascade));
 
             ulong hash = 14695981039346656037UL;
             // The draw-command IDs do not include instance transforms or material
@@ -811,18 +895,32 @@ namespace Njulf.Rendering.Pipeline
             hash = HashAdd(hash, sceneData.DirectionalShadowCascadeCount);
             hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(settings.ConstantDepthBias));
             hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(settings.SlopeScaledDepthBias));
+            hash = HashAdd(hash, (uint)settings.DirectionalBiasMode);
             hash = HashAdd(hash, sceneData.SceneSubmissionGpuCompactionEnabled ? 1u : 0u);
             hash = HashAdd(hash, sceneData.SceneSubmissionGpuLodSelectionEnabled ? 1u : 0u);
             hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(sceneData.SceneSubmissionGpuLod1DistanceRatio));
             hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(sceneData.SceneSubmissionGpuLod2DistanceRatio));
             hash = HashAdd(hash, sceneData.SceneSubmissionGpuShadowCompactionEnabled ? 1u : 0u);
             hash = HashAdd(hash, sceneData.SceneSubmissionGpuShadowLodBias);
-            GPUShadowData shadowData = sceneData.ShadowData;
-            GPUShadowData* shadowDataPtr = &shadowData;
-            byte* bytes = (byte*)shadowDataPtr;
-            for (int i = 0; i < sizeof(GPUShadowData); i++)
+
+            // Only this cascade's matrix participates. A near-cascade snap no
+            // longer invalidates stable far-cache layers.
+            Matrix4x4 matrix = GetCascadeMatrix(sceneData.ShadowData, cascade);
+            Matrix4x4* matrixPtr = &matrix;
+            byte* bytes = (byte*)matrixPtr;
+            for (int i = 0; i < sizeof(Matrix4x4); i++)
             {
                 hash = HashAdd(hash, bytes[i]);
+            }
+
+            if (settings.DirectionalBiasMode == DirectionalShadowBiasMode.WorldTexelScaled)
+            {
+                DirectionalShadowCascadeFitDiagnostics[] fit =
+                    sceneData.DirectionalShadowCascadeFitDiagnostics;
+                float referenceTexel = fit.Length > 0 ? fit[0].WorldTexelSize : 0f;
+                float cascadeTexel = cascade < fit.Length ? fit[cascade].WorldTexelSize : 0f;
+                hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(referenceTexel));
+                hash = HashAdd(hash, BitConverter.SingleToUInt32Bits(cascadeTexel));
             }
 
             return hash;

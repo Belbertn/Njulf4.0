@@ -254,7 +254,9 @@ const int GI_CAUSTIC_CACHE_BUFFER_INDEX = 206;
 const int GI_CAUSTIC_SCRATCH_BUFFER_INDEX = 207;
 const int SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_TILE_BUFFER_INDEX = 208;
 const int SIMPLE_DDGI_RECEIVER_FEEDBACK_CANDIDATE_BUFFER_INDEX = 209;
-const int STATIC_BUFFER_COUNT = 210;
+const int DIRECTIONAL_RAY_SHADOW_MASK_BUFFER_BASE_INDEX = 210;
+const int DIRECTIONAL_RAY_SHADOW_MASK_BUFFER_FRAME1_INDEX = 211;
+const int STATIC_BUFFER_COUNT = 212;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -998,7 +1000,7 @@ struct GPUSceneOpaqueCompactionPushConstants
     float GpuLod1DistanceRatio;
     float GpuLod2DistanceRatio;
     uint GpuShadowLodBias;
-    uint Padding0;
+    uint DirectionalStaticShadowCascadeMask;
 };
 
 struct GPUForwardVisibilityCompactionPushConstants
@@ -1167,6 +1169,14 @@ struct GPUShadowData
     vec4 Settings;
     vec4 Indices;
     vec4 CascadeTransitionData;
+};
+
+struct GPUDirectionalShadowParameters
+{
+    vec4 CascadeWorldTexelSizes;
+    vec4 FilterAndBias;
+    vec4 ModeAndRayDistance;
+    vec4 Reserved;
 };
 
 struct GPUSpotShadow
@@ -1454,6 +1464,7 @@ const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 256;
 const int SIZEOF_GPU_MOTION_VECTOR_PUSH_CONSTANTS = 160;
 const int SIZEOF_GPU_LIGHT_CULL_PUSH_CONSTANTS = 208;
 const int SIZEOF_GPU_SHADOW_DATA = 320;
+const int SIZEOF_GPU_DIRECTIONAL_SHADOW_PARAMETERS = 64;
 const int SIZEOF_GPU_SPOT_SHADOW = 112;
 const int SIZEOF_GPU_POINT_SHADOW = 432;
 const int SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX = 16;
@@ -1797,6 +1808,10 @@ const int OFFSET_GPU_SHADOW_DATA_CASCADE_SPLITS = 256;
 const int OFFSET_GPU_SHADOW_DATA_SETTINGS = 272;
 const int OFFSET_GPU_SHADOW_DATA_INDICES = 288;
 const int OFFSET_GPU_SHADOW_DATA_CASCADE_TRANSITION_DATA = 304;
+const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_CASCADE_WORLD_TEXEL_SIZES = 0;
+const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_FILTER_AND_BIAS = 16;
+const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_MODE_AND_RAY_DISTANCE = 32;
+const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RESERVED = 48;
 const int OFFSET_GPU_SPOT_SHADOW_LIGHT_VIEW_PROJECTION = 0;
 const int OFFSET_GPU_SPOT_SHADOW_ATLAS_SCALE_OFFSET = 64;
 const int OFFSET_GPU_SPOT_SHADOW_BIAS_STRENGTH_TEXEL_SIZE = 80;
@@ -3877,6 +3892,30 @@ vec4 ReadShadowIndices()
 vec4 ReadShadowCascadeTransitionData()
 {
     return ReadStorageAlignedVec4Uniform(uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX), uint(OFFSET_GPU_SHADOW_DATA_CASCADE_TRANSITION_DATA / 4));
+}
+
+vec4 ReadDirectionalShadowWorldTexelSizes()
+{
+    uint baseWord = uint(SIZEOF_GPU_SHADOW_DATA / 4);
+    return ReadStorageAlignedVec4Uniform(
+        uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX),
+        baseWord + uint(OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_CASCADE_WORLD_TEXEL_SIZES / 4));
+}
+
+vec4 ReadDirectionalShadowFilterAndBias()
+{
+    uint baseWord = uint(SIZEOF_GPU_SHADOW_DATA / 4);
+    return ReadStorageAlignedVec4Uniform(
+        uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX),
+        baseWord + uint(OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_FILTER_AND_BIAS / 4));
+}
+
+vec4 ReadDirectionalShadowModeAndRayDistance()
+{
+    uint baseWord = uint(SIZEOF_GPU_SHADOW_DATA / 4);
+    return ReadStorageAlignedVec4Uniform(
+        uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX),
+        baseWord + uint(OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_MODE_AND_RAY_DISTANCE / 4));
 }
 
 void WriteTiledLightHeader(uint tileIndex, uint lightCount, uint lightOffset, uint overflowCount)

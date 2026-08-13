@@ -31,6 +31,30 @@ namespace Njulf.Rendering.Data
         LocalShadowSelection = 7
     }
 
+    /// <summary>
+    /// User-authored directional-shadow intent. The renderer resolves this to an
+    /// effective mode only after capability, resource, and ray-scene checks pass.
+    /// </summary>
+    public enum DirectionalShadowMode : uint
+    {
+        Cascaded = 0,
+        HybridContact = 1,
+        RayQueryHard = 2,
+        RayQuerySoft = 3
+    }
+
+    public enum DirectionalShadowFilterMode : uint
+    {
+        LegacyBoxPcf = 0,
+        TentPcf = 1
+    }
+
+    public enum DirectionalShadowBiasMode : uint
+    {
+        Legacy = 0,
+        WorldTexelScaled = 1
+    }
+
     public sealed class ShadowSettings
     {
         public const int MaxDirectionalCascades = 4;
@@ -40,6 +64,15 @@ namespace Njulf.Rendering.Data
         private int _directionalShadowPreviewCascade;
         private float _maxShadowDistance = 80f;
         private float _directionalCascadeBlendFraction = 0.12f;
+        private float _directionalCascadeSplitLambda = 0.5f;
+        private float _directionalCasterExtrusionDistance = 80f;
+        private float _directionalContactShadowDistance = 3f;
+        private DirectionalShadowMode _requestedDirectionalShadowMode =
+            DirectionalShadowMode.Cascaded;
+        private DirectionalShadowFilterMode _directionalFilterMode =
+            DirectionalShadowFilterMode.LegacyBoxPcf;
+        private DirectionalShadowBiasMode _directionalBiasMode =
+            DirectionalShadowBiasMode.Legacy;
         private float _normalBias = 0.03f;
         private float _slopeScaledDepthBias = 1.5f;
         private float _constantDepthBias = 0.0005f;
@@ -61,6 +94,38 @@ namespace Njulf.Rendering.Data
         public bool DirectionalShadowsEnabled { get; set; } = true;
         public bool SpotShadowsEnabled { get; set; } = true;
         public bool PointShadowsEnabled { get; set; } = true;
+
+        public DirectionalShadowMode RequestedDirectionalShadowMode
+        {
+            get => _requestedDirectionalShadowMode;
+            set => _requestedDirectionalShadowMode = value is
+                DirectionalShadowMode.Cascaded or
+                DirectionalShadowMode.HybridContact or
+                DirectionalShadowMode.RayQueryHard or
+                DirectionalShadowMode.RayQuerySoft
+                    ? value
+                    : DirectionalShadowMode.Cascaded;
+        }
+
+        public DirectionalShadowFilterMode DirectionalFilterMode
+        {
+            get => _directionalFilterMode;
+            set => _directionalFilterMode = value is
+                DirectionalShadowFilterMode.LegacyBoxPcf or
+                DirectionalShadowFilterMode.TentPcf
+                    ? value
+                    : DirectionalShadowFilterMode.LegacyBoxPcf;
+        }
+
+        public DirectionalShadowBiasMode DirectionalBiasMode
+        {
+            get => _directionalBiasMode;
+            set => _directionalBiasMode = value is
+                DirectionalShadowBiasMode.Legacy or
+                DirectionalShadowBiasMode.WorldTexelScaled
+                    ? value
+                    : DirectionalShadowBiasMode.Legacy;
+        }
 
         public uint DirectionalShadowMapSize
         {
@@ -99,6 +164,33 @@ namespace Njulf.Rendering.Data
         {
             get => _directionalCascadeBlendFraction;
             set => _directionalCascadeBlendFraction = Clamp(value, 0.02f, 0.30f);
+        }
+
+        /// <summary>
+        /// Practical split-scheme blend between uniform (0) and logarithmic (1)
+        /// camera-frustum partitions.
+        /// </summary>
+        public float DirectionalCascadeSplitLambda
+        {
+            get => _directionalCascadeSplitLambda;
+            set => _directionalCascadeSplitLambda = Clamp(value, 0f, 1f);
+        }
+
+        /// <summary>
+        /// Conservative distance searched from a cascade receiver volume toward
+        /// the directional light when exact caster bounds are unavailable.
+        /// </summary>
+        public float DirectionalCasterExtrusionDistance
+        {
+            get => _directionalCasterExtrusionDistance;
+            set => _directionalCasterExtrusionDistance = Clamp(value, 1f, 5000f);
+        }
+
+        /// <summary>Maximum ray length used by bounded hybrid contact shadows.</summary>
+        public float DirectionalContactShadowDistance
+        {
+            get => MathF.Min(_directionalContactShadowDistance, MaxShadowDistance);
+            set => _directionalContactShadowDistance = Clamp(value, 0.1f, 100f);
         }
 
         public float NormalBias
@@ -4550,7 +4642,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 10;
+        public const int SerializationVersion = 11;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5106,6 +5198,8 @@ namespace Njulf.Rendering.Data
             // with typed content-dependent modes and independent budgets.
             // Version 10 adds requested advanced-GI modes plus evidence IDs;
             // the previous experiment booleans remain read-compatible aliases.
+            // Version 11 replaces the directional ShadowsEnabled scalar with a
+            // complete nested directional-shadow production contract.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -5120,7 +5214,9 @@ namespace Njulf.Rendering.Data
             public GlobalIlluminationFile? GlobalIllumination { get; init; }
             public bool FogEnabled { get; init; }
             public bool ReflectionsEnabled { get; init; } = true;
-            public bool ShadowsEnabled { get; init; } = true;
+            public ShadowSettingsFile? Shadows { get; init; }
+            [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+            public bool? ShadowsEnabled { get; init; }
             public bool ParticlesEnabled { get; init; } = true;
             public bool? TransparentReceiveGlobalIllumination { get; init; }
             public bool? DecalReceiveGlobalIllumination { get; init; }
@@ -5150,7 +5246,7 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination = GlobalIlluminationFile.FromSettings(settings.GlobalIllumination),
                     FogEnabled = settings.Fog.Enabled,
                     ReflectionsEnabled = settings.Reflections.Enabled,
-                    ShadowsEnabled = settings.Shadows.DirectionalShadowsEnabled,
+                    Shadows = ShadowSettingsFile.FromSettings(settings.Shadows),
                     ParticlesEnabled = settings.Particles.Enabled,
                     TransparentReceiveGlobalIllumination =
                         settings.Transparency.ReceiveGlobalIllumination,
@@ -5188,7 +5284,23 @@ namespace Njulf.Rendering.Data
                 settings.GlobalIllumination.UseQualifiedContentDependentBaseline();
                 settings.Fog.Enabled = FogEnabled;
                 settings.Reflections.Enabled = ReflectionsEnabled;
-                settings.Shadows.DirectionalShadowsEnabled = ShadowsEnabled;
+                if (Shadows != null)
+                {
+                    Shadows.ApplyTo(settings.Shadows);
+                }
+                else if (ShadowsEnabled.HasValue)
+                {
+                    // Version 10 and older persisted only the enable switch. All
+                    // other directional controls retain preset/default values and
+                    // legacy rendering behavior.
+                    settings.Shadows.DirectionalShadowsEnabled = ShadowsEnabled.Value;
+                    settings.Shadows.RequestedDirectionalShadowMode =
+                        DirectionalShadowMode.Cascaded;
+                    settings.Shadows.DirectionalFilterMode =
+                        DirectionalShadowFilterMode.LegacyBoxPcf;
+                    settings.Shadows.DirectionalBiasMode =
+                        DirectionalShadowBiasMode.Legacy;
+                }
                 settings.Particles.Enabled = ParticlesEnabled;
                 if (TransparentReceiveGlobalIllumination.HasValue)
                 {
@@ -5211,6 +5323,66 @@ namespace Njulf.Rendering.Data
                 AsyncCompute.ApplyTo(settings.AsyncCompute, missingModeMeansDisabled: !Version.HasValue || Version.Value < 3);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
                 settings.Diagnostics.DdgiForwardEstimateCountersEnabled = DdgiForwardEstimateCountersEnabled;
+            }
+        }
+
+        private sealed record ShadowSettingsFile
+        {
+            public bool DirectionalShadowsEnabled { get; init; } = true;
+            public DirectionalShadowMode RequestedDirectionalShadowMode { get; init; } =
+                DirectionalShadowMode.Cascaded;
+            public DirectionalShadowFilterMode DirectionalFilterMode { get; init; } =
+                DirectionalShadowFilterMode.LegacyBoxPcf;
+            public DirectionalShadowBiasMode DirectionalBiasMode { get; init; } =
+                DirectionalShadowBiasMode.Legacy;
+            public uint DirectionalShadowMapSize { get; init; } = 2048;
+            public int DirectionalCascadeCount { get; init; } = 2;
+            public float MaxShadowDistance { get; init; } = 80f;
+            public float DirectionalCascadeBlendFraction { get; init; } = 0.12f;
+            public float DirectionalCascadeSplitLambda { get; init; } = 0.5f;
+            public float DirectionalCasterExtrusionDistance { get; init; } = 80f;
+            public float DirectionalContactShadowDistance { get; init; } = 3f;
+            public float NormalBias { get; init; } = 0.03f;
+            public float SlopeScaledDepthBias { get; init; } = 1.5f;
+            public float ConstantDepthBias { get; init; } = 0.0005f;
+            public int PcfRadius { get; init; } = 1;
+
+            public static ShadowSettingsFile FromSettings(ShadowSettings settings) => new()
+            {
+                DirectionalShadowsEnabled = settings.DirectionalShadowsEnabled,
+                RequestedDirectionalShadowMode = settings.RequestedDirectionalShadowMode,
+                DirectionalFilterMode = settings.DirectionalFilterMode,
+                DirectionalBiasMode = settings.DirectionalBiasMode,
+                DirectionalShadowMapSize = settings.DirectionalShadowMapSize,
+                DirectionalCascadeCount = settings.DirectionalCascadeCount,
+                MaxShadowDistance = settings.MaxShadowDistance,
+                DirectionalCascadeBlendFraction = settings.DirectionalCascadeBlendFraction,
+                DirectionalCascadeSplitLambda = settings.DirectionalCascadeSplitLambda,
+                DirectionalCasterExtrusionDistance = settings.DirectionalCasterExtrusionDistance,
+                DirectionalContactShadowDistance = settings.DirectionalContactShadowDistance,
+                NormalBias = settings.NormalBias,
+                SlopeScaledDepthBias = settings.SlopeScaledDepthBias,
+                ConstantDepthBias = settings.ConstantDepthBias,
+                PcfRadius = settings.PcfRadius
+            };
+
+            public void ApplyTo(ShadowSettings settings)
+            {
+                settings.DirectionalShadowsEnabled = DirectionalShadowsEnabled;
+                settings.RequestedDirectionalShadowMode = RequestedDirectionalShadowMode;
+                settings.DirectionalFilterMode = DirectionalFilterMode;
+                settings.DirectionalBiasMode = DirectionalBiasMode;
+                settings.DirectionalShadowMapSize = DirectionalShadowMapSize;
+                settings.DirectionalCascadeCount = DirectionalCascadeCount;
+                settings.MaxShadowDistance = MaxShadowDistance;
+                settings.DirectionalCascadeBlendFraction = DirectionalCascadeBlendFraction;
+                settings.DirectionalCascadeSplitLambda = DirectionalCascadeSplitLambda;
+                settings.DirectionalCasterExtrusionDistance = DirectionalCasterExtrusionDistance;
+                settings.DirectionalContactShadowDistance = DirectionalContactShadowDistance;
+                settings.NormalBias = NormalBias;
+                settings.SlopeScaledDepthBias = SlopeScaledDepthBias;
+                settings.ConstantDepthBias = ConstantDepthBias;
+                settings.PcfRadius = PcfRadius;
             }
         }
 

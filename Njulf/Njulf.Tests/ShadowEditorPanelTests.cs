@@ -25,6 +25,9 @@ public sealed class ShadowEditorPanelTests
             Assert.That(actual, Does.Contain(nameof(ShadowSettings.ForceStaticCascadeCacheRefresh)));
             Assert.That(actual, Does.Contain(nameof(ShadowSettings.DirectionalShadowPreviewCascade)));
             Assert.That(ShadowEditorPanel.IsSupportedScalarType(typeof(ShadowDebugView)), Is.True);
+            Assert.That(ShadowEditorPanel.IsSupportedScalarType(typeof(DirectionalShadowMode)), Is.True);
+            Assert.That(actual, Does.Contain(nameof(ShadowSettings.RequestedDirectionalShadowMode)));
+            Assert.That(actual, Does.Contain(nameof(ShadowSettings.DirectionalCascadeSplitLambda)));
         });
     }
 

@@ -766,7 +766,7 @@ namespace Njulf.Rendering.Data
         public float GpuLod1DistanceRatio;
         public float GpuLod2DistanceRatio;
         public uint GpuShadowLodBias;
-        public uint Padding0;
+        public uint DirectionalStaticShadowCascadeMask;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1091,6 +1091,48 @@ namespace Njulf.Rendering.Data
         // x = transition fraction, y = effective camera near, z = effective shadow far.
         // Kept separate from Settings so the directional-shadow ABI remains explicit.
         public Vector4 CascadeTransitionData;
+    }
+
+    /// <summary>
+    /// Directional-shadow controls appended after <see cref="GPUShadowData" /> in
+    /// the directional shadow storage buffer. Keeping this as a separate block
+    /// preserves the established 320-byte shadow-data ABI.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDirectionalShadowParameters
+    {
+        // World-space diameter of one shadow-map texel for cascades 0..3.
+        public Vector4 CascadeWorldTexelSizes;
+        // x = DirectionalShadowFilterMode, y = DirectionalShadowBiasMode,
+        // z = world-texel normal-bias scale, w = maximum world normal bias.
+        public Vector4 FilterAndBias;
+        // x = requested mode, y = effective mode, z = contact-ray distance,
+        // w = reserved for the finite-sun angular radius.
+        public Vector4 ModeAndRayDistance;
+        // Reserved as a zeroed expansion lane so future ray/temporal controls do
+        // not require another storage-buffer ABI change.
+        public Vector4 Reserved;
+    }
+
+    /// <summary>
+    /// Immutable full-screen receiver reconstruction and ray-segment contract
+    /// for the deterministic directional ray-shadow mask pass.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDirectionalRayShadowPushConstants
+    {
+        public Matrix4x4 InverseViewProjectionMatrix;
+        // xyz = camera position, w = maximum camera-to-receiver distance.
+        public Vector4 CameraPositionAndReceiverDistance;
+        // xyz = normalized direction from receiver toward the sun,
+        // w = maximum tested ray-segment length.
+        public Vector4 RayDirectionAndMaximumDistance;
+        public uint ScreenWidth;
+        public uint ScreenHeight;
+        public uint OutputBufferIndex;
+        public uint InstanceMask;
+        // DirectionalShadowMode; only HybridContact and RayQueryHard execute.
+        public uint OutputMode;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

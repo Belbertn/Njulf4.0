@@ -698,6 +698,14 @@ namespace Njulf.Rendering.Descriptors
         public const int SimpleDdgiReceiverFeedbackCandidateBuffer =
             SimpleDdgiNearFieldResidualTileBuffer + 1;
 
+        /// <summary>Full-resolution directional ray-shadow visibility for frame 0.</summary>
+        public const int DirectionalRayShadowMaskBufferBase =
+            SimpleDdgiReceiverFeedbackCandidateBuffer + 1;
+
+        /// <summary>Full-resolution directional ray-shadow visibility for frame 1.</summary>
+        public const int DirectionalRayShadowMaskBufferFrame1 =
+            DirectionalRayShadowMaskBufferBase + 1;
+
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
         // ============================================
@@ -831,7 +839,7 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Number of static (fixed-index) buffers</summary>
         public const int StaticBufferCount =
-            SimpleDdgiReceiverFeedbackCandidateBuffer + 1;
+            DirectionalRayShadowMaskBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1057,6 +1065,8 @@ namespace Njulf.Rendering.Descriptors
                     GiCausticScratchBuffer => nameof(GiCausticScratchBuffer),
                     SimpleDdgiNearFieldResidualTileBuffer => nameof(SimpleDdgiNearFieldResidualTileBuffer),
                     SimpleDdgiReceiverFeedbackCandidateBuffer => nameof(SimpleDdgiReceiverFeedbackCandidateBuffer),
+                    DirectionalRayShadowMaskBufferBase => nameof(DirectionalRayShadowMaskBufferBase),
+                    DirectionalRayShadowMaskBufferFrame1 => nameof(DirectionalRayShadowMaskBufferFrame1),
                     _ => "Unknown"
                 };
             }

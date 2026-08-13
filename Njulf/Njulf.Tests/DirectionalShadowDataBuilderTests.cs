@@ -29,6 +29,154 @@ public sealed class DirectionalShadowDataBuilderTests
     }
 
     [Test]
+    public void CalculateCascadeSplits_ExposesUniformToLogarithmicDistribution()
+    {
+        float[] uniform = DirectionalShadowDataBuilder.CalculateCascadeSplits(
+            1f, 101f, 4, splitLambda: 0f);
+        float[] logarithmic = DirectionalShadowDataBuilder.CalculateCascadeSplits(
+            1f, 101f, 4, splitLambda: 1f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(uniform[0], Is.EqualTo(26f).Within(0.0001f));
+            Assert.That(logarithmic[0], Is.LessThan(uniform[0]));
+            Assert.That(uniform[3], Is.EqualTo(101f).Within(0.0001f));
+            Assert.That(logarithmic[3], Is.EqualTo(101f).Within(0.0001f));
+        });
+    }
+
+    [Test]
+    public void PersistentBasis_RemainsContinuousAcrossLegacyUpAxisThreshold()
+    {
+        var state = new DirectionalShadowStabilizationState();
+        var settings = new ShadowSettings { DirectionalCascadeCount = 1 };
+        var camera = CreateCamera();
+
+        DirectionalShadowDataBuilder.Build(
+            camera,
+            NumericsVector3.Normalize(new NumericsVector3(0.313f, -0.949f, 0.02f)),
+            settings,
+            0,
+            1f,
+            state,
+            stableLightIdentity: 17UL,
+            shadowResourceGeneration: 1u);
+        CoreVector3 firstUp = state.Diagnostics[0].BasisUp;
+
+        DirectionalShadowDataBuilder.Build(
+            camera,
+            NumericsVector3.Normalize(new NumericsVector3(0.307f, -0.952f, 0.02f)),
+            settings,
+            0,
+            1f,
+            state,
+            stableLightIdentity: 17UL,
+            shadowResourceGeneration: 1u);
+        DirectionalShadowCascadeFitDiagnostics second = state.Diagnostics[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CoreVector3.Dot(firstUp, second.BasisUp), Is.GreaterThan(0.999f));
+            Assert.That(MathF.Abs(CoreVector3.Dot(second.LightDirection, second.BasisUp)),
+                Is.LessThan(1.0e-5f));
+            Assert.That(second.ResetReason,
+                Is.EqualTo(DirectionalShadowStabilizationResetReason.None));
+        });
+    }
+
+    [Test]
+    public void PersistentFitter_ReplaysDeterministicallyAndSnapsSubTexelTranslation()
+    {
+        var settings = new ShadowSettings
+        {
+            DirectionalCascadeCount = 1,
+            DirectionalShadowMapSize = 2048,
+            PcfRadius = 2
+        };
+        NumericsVector3 light = NumericsVector3.Normalize(
+            new NumericsVector3(0.35f, -0.8f, 0.48f));
+
+        (GPUShadowData firstA, GPUShadowData secondA) = RunTrack(new DirectionalShadowStabilizationState());
+        (GPUShadowData firstB, GPUShadowData secondB) = RunTrack(new DirectionalShadowStabilizationState());
+
+        Assert.Multiple(() =>
+        {
+            AssertMatrixEqual(firstA.LightViewProjection0, firstB.LightViewProjection0);
+            AssertMatrixEqual(secondA.LightViewProjection0, secondB.LightViewProjection0);
+            AssertMatrixEqual(firstA.LightViewProjection0, secondA.LightViewProjection0);
+        });
+
+        (GPUShadowData, GPUShadowData) RunTrack(DirectionalShadowStabilizationState state)
+        {
+            FirstPersonCamera camera = CreateCamera();
+            GPUShadowData first = DirectionalShadowDataBuilder.Build(
+                camera, light, settings, 0, 1f, state, 5UL, 3u);
+            DirectionalShadowCascadeFitDiagnostics fit = state.Diagnostics[0];
+            float lightSpaceShift = MathF.Abs(fit.SnappedCenterX - fit.RawCenterX) >
+                                    fit.WorldTexelSize * 0.01f
+                ? (fit.SnappedCenterX - fit.RawCenterX) * 0.5f
+                : fit.WorldTexelSize * 0.1f;
+            camera.Position += fit.BasisRight * lightSpaceShift;
+            camera.Update();
+            GPUShadowData second = DirectionalShadowDataBuilder.Build(
+                camera, light, settings, 0, 1f, state, 5UL, 3u);
+            return (first, second);
+        }
+    }
+
+    [Test]
+    public void PersistentFitter_ResetsOnStableLightIdentityChange()
+    {
+        var state = new DirectionalShadowStabilizationState();
+        var settings = new ShadowSettings { DirectionalCascadeCount = 1 };
+        FirstPersonCamera camera = CreateCamera();
+        NumericsVector3 light = NumericsVector3.Normalize(new NumericsVector3(0.2f, -1f, 0.1f));
+
+        DirectionalShadowDataBuilder.Build(camera, light, settings, 0, 1f, state, 9UL, 1u);
+        DirectionalShadowDataBuilder.Build(camera, light, settings, 0, 1f, state, 10UL, 1u);
+
+        Assert.That(state.Diagnostics[0].ResetReason,
+            Is.EqualTo(DirectionalShadowStabilizationResetReason.LightIdentityChanged));
+    }
+
+    [Test]
+    public void StabilizedDepth_ContractsAcrossQuantizationBoundaries()
+    {
+        var state = new DirectionalShadowStabilizationState();
+        CoreVector3 direction = new(0.2f, -1f, 0.1f);
+        state.BeginFrame(1UL, direction, 2UL);
+        state.StabilizeDepth(
+            cascade: 0,
+            rawMinimum: 0.0,
+            rawMaximum: 100.0,
+            depthQuantum: 1.0,
+            out _,
+            out _);
+
+        float contractedMinimum = 0f;
+        float contractedMaximum = 100f;
+        for (int frame = 0; frame < 20; frame++)
+        {
+            state.BeginFrame(1UL, direction, 2UL);
+            state.StabilizeDepth(
+                cascade: 0,
+                rawMinimum: 10.0,
+                rawMaximum: 90.0,
+                depthQuantum: 1.0,
+                out contractedMinimum,
+                out contractedMaximum);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(contractedMinimum, Is.GreaterThan(0f));
+            Assert.That(contractedMaximum, Is.LessThan(100f));
+            Assert.That(contractedMinimum, Is.LessThanOrEqualTo(10f));
+            Assert.That(contractedMaximum, Is.GreaterThanOrEqualTo(90f));
+        });
+    }
+
+    [Test]
     public void Build_ProducesFiniteMatricesAndExpectedIndices()
     {
         var camera = CreateCamera();
@@ -529,6 +677,41 @@ public sealed class DirectionalShadowDataBuilderTests
         });
     }
 
+    [Test]
+    public void StaticShadowCacheSignature_TracksOnlySelectedCascadeMatrix()
+    {
+        var sceneData = new SceneRenderingData
+        {
+            SceneContentRevision = 12,
+            DirectionalStaticShadowMeshletCount = 8,
+            DirectionalStaticShadowMeshletDrawSignature = 44,
+            DirectionalShadowMapSize = 2048,
+            DirectionalShadowCascadeCount = 2,
+            ShadowData = new GPUShadowData
+            {
+                LightViewProjection0 = CoreMatrix4x4.Identity,
+                LightViewProjection1 = CoreMatrix4x4.Identity
+            }
+        };
+        var settings = new ShadowSettings();
+
+        ulong cascade0Before = DirectionalShadowPass.CreateStaticCacheSignature(sceneData, settings, 0);
+        ulong cascade1Before = DirectionalShadowPass.CreateStaticCacheSignature(sceneData, settings, 1);
+        GPUShadowData changed = sceneData.ShadowData;
+        changed.LightViewProjection1.M41 = 3.5f;
+        sceneData.ShadowData = changed;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                DirectionalShadowPass.CreateStaticCacheSignature(sceneData, settings, 0),
+                Is.EqualTo(cascade0Before));
+            Assert.That(
+                DirectionalShadowPass.CreateStaticCacheSignature(sceneData, settings, 1),
+                Is.Not.EqualTo(cascade1Before));
+        });
+    }
+
     [TestCase(0f, 1f)]
     [TestCase(-0.5f, 1f)]
     [TestCase(0.35f, 0.35f)]
@@ -546,6 +729,43 @@ public sealed class DirectionalShadowDataBuilderTests
     }
 
     [Test]
+    public void BuildParameters_ExposesStableTexelAndModeContract()
+    {
+        var settings = new ShadowSettings
+        {
+            RequestedDirectionalShadowMode = DirectionalShadowMode.HybridContact,
+            DirectionalFilterMode = DirectionalShadowFilterMode.TentPcf,
+            DirectionalBiasMode = DirectionalShadowBiasMode.WorldTexelScaled,
+            NormalBias = 0.08f,
+            DirectionalContactShadowDistance = 4.5f
+        };
+        var diagnostics = new DirectionalShadowCascadeFitDiagnostics[ShadowSettings.MaxDirectionalCascades];
+        for (int cascade = 0; cascade < diagnostics.Length; cascade++)
+            diagnostics[cascade] = new DirectionalShadowCascadeFitDiagnostics(
+                cascade, default, default, default,
+                0f, 0f, 0f, 0f, 1f, 0.25f * (cascade + 1), 2f,
+                -1f, 1f, -1f, 1f,
+                DirectionalShadowStabilizationResetReason.None);
+
+        GPUDirectionalShadowParameters parameters = DirectionalShadowDataBuilder.BuildParameters(
+            settings,
+            diagnostics,
+            DirectionalShadowMode.Cascaded);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parameters.CascadeWorldTexelSizes.X, Is.EqualTo(0.25f));
+            Assert.That(parameters.CascadeWorldTexelSizes.W, Is.EqualTo(1f));
+            Assert.That(parameters.FilterAndBias.X, Is.EqualTo((float)DirectionalShadowFilterMode.TentPcf));
+            Assert.That(parameters.FilterAndBias.Y, Is.EqualTo((float)DirectionalShadowBiasMode.WorldTexelScaled));
+            Assert.That(parameters.FilterAndBias.W, Is.EqualTo(0.08f));
+            Assert.That(parameters.ModeAndRayDistance.X, Is.EqualTo((float)DirectionalShadowMode.HybridContact));
+            Assert.That(parameters.ModeAndRayDistance.Y, Is.EqualTo((float)DirectionalShadowMode.Cascaded));
+            Assert.That(parameters.ModeAndRayDistance.Z, Is.EqualTo(4.5f));
+        });
+    }
+
+    [Test]
     public void ShadowSettings_ClampToSupportedRanges()
     {
         var settings = new ShadowSettings
@@ -555,6 +775,9 @@ public sealed class DirectionalShadowDataBuilderTests
             DirectionalShadowPreviewCascade = 99,
             MaxShadowDistance = -1f,
             DirectionalCascadeBlendFraction = 2f,
+            DirectionalCascadeSplitLambda = 2f,
+            DirectionalCasterExtrusionDistance = -1f,
+            DirectionalContactShadowDistance = 200f,
             NormalBias = 2f,
             SlopeScaledDepthBias = 99f,
             ConstantDepthBias = 1f,
@@ -568,6 +791,9 @@ public sealed class DirectionalShadowDataBuilderTests
             Assert.That(settings.DirectionalShadowPreviewCascade, Is.EqualTo(ShadowSettings.MaxDirectionalCascades - 1));
             Assert.That(settings.MaxShadowDistance, Is.EqualTo(1f));
             Assert.That(settings.DirectionalCascadeBlendFraction, Is.EqualTo(0.30f));
+            Assert.That(settings.DirectionalCascadeSplitLambda, Is.EqualTo(1f));
+            Assert.That(settings.DirectionalCasterExtrusionDistance, Is.EqualTo(1f));
+            Assert.That(settings.DirectionalContactShadowDistance, Is.EqualTo(1f));
             Assert.That(settings.NormalBias, Is.EqualTo(1f));
             Assert.That(settings.SlopeScaledDepthBias, Is.EqualTo(16f));
             Assert.That(settings.ConstantDepthBias, Is.EqualTo(0.1f));
@@ -594,6 +820,15 @@ public sealed class DirectionalShadowDataBuilderTests
         {
             for (int column = 0; column < 4; column++)
                 Assert.That(float.IsFinite(matrix[row, column]), Is.True, $"matrix[{row},{column}]");
+        }
+    }
+
+    private static void AssertMatrixEqual(CoreMatrix4x4 expected, CoreMatrix4x4 actual)
+    {
+        for (int row = 0; row < 4; row++)
+        {
+            for (int column = 0; column < 4; column++)
+                Assert.That(actual[row, column], Is.EqualTo(expected[row, column]));
         }
     }
 

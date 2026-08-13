@@ -127,6 +127,8 @@ namespace Njulf.Rendering
         private HiZDepthPyramid? _hizDepthPyramid;
         private RenderTargetManager? _renderTargets;
         private DirectionalShadowResources? _directionalShadowResources;
+        private readonly DirectionalShadowStabilizationState
+            _directionalShadowStabilizationState = new();
         private SpotShadowAtlas? _spotShadowAtlas;
         private PointShadowCubemapArray? _pointShadowCubemapArray;
         private EnvironmentManager? _environmentManager;
@@ -371,6 +373,7 @@ namespace Njulf.Rendering
         private SceneOpaqueCompactionPass _sceneOpaqueCompactionPass = null!;
         private ForwardVisibilityCompactionPass _forwardVisibilityCompactionPass = null!;
         private DirectionalShadowPass? _directionalShadowPass;
+        private DirectionalRayShadowPass? _directionalRayShadowPass;
 
         // State
         private int _currentFrame = 0;
@@ -1333,8 +1336,8 @@ namespace Njulf.Rendering
                     _advancedGiPrerequisiteManifest.Evaluate(
                         AdvancedGiPrerequisiteFeature.ReceiverFeedback));
             RegisterGraphResources();
-            bool motionVectorTargetEnabled = NeedsMotionVectors(Settings) ||
-                _advancedGiGraphModes.UsesNearFieldHiZResidual;
+            bool motionVectorTargetEnabled =
+                ResolveSurfaceHistoryConsumers().RequiresMotionVectors();
             _renderTargets = new RenderTargetManager(
                 _context,
                 sceneRenderExtent,
@@ -1607,7 +1610,7 @@ namespace Njulf.Rendering
                 _bufferManager,
                 _foliageManager);
             _directionalShadowPass = directionalShadowPass;
-            _sceneOpaqueCompactionPass.SetDirectionalStaticShadowRefreshQuery(directionalShadowPass.NeedsStaticCacheRefresh);
+            _sceneOpaqueCompactionPass.SetDirectionalStaticShadowRefreshQuery(directionalShadowPass.GetStaticCacheRefreshMask);
             AddPassInstance(directionalShadowPass);
 
             var spotShadowPass = new SpotShadowPass(
@@ -1646,12 +1649,25 @@ namespace Njulf.Rendering
                 Settings,
                 _foliagePipeline,
                 _bufferManager,
-                _foliageManager);
+                _foliageManager,
+                ResolveSurfaceHistoryConsumers);
             AddPassInstance(motionVectorPass);
 
             var hizBuildPass = new HiZBuildPass(
                 _context, _swapchain, _bindlessHeap, _hizDepthPyramid!, _renderTargets!);
             AddPassInstance(hizBuildPass);
+
+            var directionalRayShadowPass = new DirectionalRayShadowPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings.Shadows,
+                _bufferManager,
+                _accelerationStructureManager!,
+                _giPipelineCacheService);
+            _directionalRayShadowPass = directionalRayShadowPass;
+            AddPassInstance(directionalRayShadowPass);
 
             AddPassInstance(_forwardVisibilityCompactionPass);
 
@@ -3902,6 +3918,10 @@ namespace Njulf.Rendering
             // Publish the new TLAS/metadata transaction before DDGI chooses a
             // trace backend or records any ray-query consumer.
             RecordAccelerationStructures(sceneData);
+            ResolveDirectionalShadowFramePlan(
+                sceneData,
+                lightSnapshot,
+                directionalShadowsEnabled);
             PrepareDdgiProbeVolumes(
                 scene,
                 camera,
@@ -4977,7 +4997,12 @@ namespace Njulf.Rendering
                     shadowLight.Direction,
                     shadowSettings,
                     lightIndex,
-                    shadowLight.ShadowStrength)
+                    shadowLight.ShadowStrength,
+                    _directionalShadowStabilizationState,
+                    lightIndex >= 0 && lightIndex < lightSnapshot.StableIdentities.Length
+                        ? lightSnapshot.StableIdentities.Span[lightIndex]
+                        : 0UL,
+                    _directionalShadowResources.ResourceGeneration)
                 : DirectionalShadowDataBuilder.Build(
                     camera,
                     new System.Numerics.Vector3(0f, -1f, 0f),
@@ -5027,7 +5052,16 @@ namespace Njulf.Rendering
                 return;
 
             ShadowSettings shadowSettings = Settings.Shadows;
-            _directionalShadowResources.UploadShadowData(_stagingRing, _currentCommandBuffer, shadowData);
+            GPUDirectionalShadowParameters shadowParameters =
+                DirectionalShadowDataBuilder.BuildParameters(
+                    shadowSettings,
+                    _directionalShadowStabilizationState.Diagnostics,
+                    DirectionalShadowMode.Cascaded);
+            _directionalShadowResources.UploadShadowData(
+                _stagingRing,
+                _currentCommandBuffer,
+                shadowData,
+                shadowParameters);
 
             sceneData.DirectionalShadowPassEnabled = enabled;
             ulong recordSignature = CreateDirectionalShadowRecordSignature(sceneData, shadowData, enabled, shadowSettings);
@@ -5055,6 +5089,15 @@ namespace Njulf.Rendering
             sceneData.ShadowSlopeScaledDepthBias = shadowSettings.SlopeScaledDepthBias;
             sceneData.DirectionalShadowPcfRadius = shadowSettings.PcfRadius;
             sceneData.ShadowData = shadowData;
+            sceneData.DirectionalShadowParameters = shadowParameters;
+            sceneData.DirectionalShadowLightDirection = enabled
+                ? lightDirection
+                : Vector3.Zero;
+            if (enabled)
+            {
+                _directionalShadowStabilizationState.Diagnostics.CopyTo(
+                    sceneData.DirectionalShadowCascadeFitDiagnostics);
+            }
             int frameIndex = sceneData.FrameIndex;
             if ((uint)frameIndex < (uint)_directionalShadowCasterFrameCaptures.Length &&
                 enabled &&
@@ -5103,6 +5146,132 @@ namespace Njulf.Rendering
                 _pointShadowCubemapArray.Register(_bindlessHeap, _swapchain.DepthImageView);
                 _hasUploadedPointShadows = false;
             }
+        }
+
+        private void ResolveDirectionalShadowFramePlan(
+            SceneRenderingData sceneData,
+            LightFrameSnapshot lightSnapshot,
+            bool cascadedShadowsAvailable)
+        {
+            ShadowSettings settings = Settings.Shadows;
+            RaySceneReadinessSnapshot readiness = _accelerationStructureManager?.ReadinessSnapshot ??
+                RaySceneReadinessSnapshot.Unavailable(
+                    RaySceneRequirement.ForDirectionalShadows(settings).Consumers,
+                    "the shared acceleration-structure manager is unavailable");
+            sceneData.RaySceneReadiness = readiness;
+
+            DirectionalShadowMode requestedMode =
+                settings.RequestedDirectionalShadowMode;
+            bool rayMaskAvailable = requestedMode == DirectionalShadowMode.Cascaded;
+            if (cascadedShadowsAvailable &&
+                requestedMode is (DirectionalShadowMode.HybridContact or
+                    DirectionalShadowMode.RayQueryHard))
+            {
+                uint maskWidth = _renderTargets?.SceneDepth.Extent.Width ??
+                    sceneData.ScreenWidth;
+                uint maskHeight = _renderTargets?.SceneDepth.Extent.Height ??
+                    sceneData.ScreenHeight;
+                rayMaskAvailable = _directionalRayShadowPass?.EnsureResources(
+                    maskWidth,
+                    maskHeight,
+                    sceneData.DdgiFrameSerial) == true;
+            }
+
+            var resolved = DirectionalShadowModeResolver.Resolve(
+                settings,
+                lightSnapshot.HasShadowCastingDirectionalLight,
+                _context.RayQuerySupported &&
+                    _accelerationStructureManager?.Supported == true,
+                readiness,
+                rayMaskAvailable,
+                softRayAvailable: false);
+            if (requestedMode != DirectionalShadowMode.Cascaded &&
+                !rayMaskAvailable &&
+                resolved.Reason ==
+                    DirectionalShadowFallbackReason.RequiredReceiverResourceUnavailable &&
+                _directionalRayShadowPass != null)
+            {
+                string failureDetail = _directionalRayShadowPass.FailureDetail;
+                resolved = (
+                    DirectionalShadowMode.Cascaded,
+                    failureDetail.Contains(
+                        "allocation failed",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? DirectionalShadowFallbackReason.ResourceAllocationFailed
+                        : resolved.Reason,
+                    string.IsNullOrWhiteSpace(failureDetail)
+                        ? resolved.Detail
+                        : failureDetail);
+            }
+            if (!cascadedShadowsAvailable &&
+                settings.DirectionalShadowsEnabled &&
+                lightSnapshot.HasShadowCastingDirectionalLight)
+            {
+                resolved = (
+                    DirectionalShadowMode.Cascaded,
+                    DirectionalShadowFallbackReason.ResourceAllocationFailed,
+                    "the universal directional cascade fallback resources are unavailable");
+            }
+
+            int cascadeCount = Math.Clamp(
+                sceneData.DirectionalShadowCascadeCount,
+                0,
+                ShadowSettings.MaxDirectionalCascades);
+            uint activeCascadeMask = cascadeCount == 0
+                ? 0u
+                : (1u << cascadeCount) - 1u;
+            ulong stableLightIdentity = 0UL;
+            int lightIndex = sceneData.ShadowedDirectionalLightIndex;
+            if ((uint)lightIndex < (uint)lightSnapshot.StableIdentities.Length)
+                stableLightIdentity = lightSnapshot.StableIdentities.Span[lightIndex];
+            RaySceneConsumer rayConsumer = settings.RequestedDirectionalShadowMode switch
+            {
+                DirectionalShadowMode.HybridContact => RaySceneConsumer.DirectionalContact,
+                DirectionalShadowMode.RayQueryHard => RaySceneConsumer.DirectionalFull,
+                _ => RaySceneConsumer.None
+            };
+            SurfaceHistoryConsumer historyConsumers = SurfaceHistoryPolicy.Resolve(
+                Settings,
+                _advancedGiGraphModes.UsesNearFieldHiZResidual,
+                directionalRaySoftActive:
+                    resolved.Effective == DirectionalShadowMode.RayQuerySoft);
+            bool layeredReceiverFallbackRequired =
+                (resolved.Effective is DirectionalShadowMode.RayQueryHard or
+                    DirectionalShadowMode.RayQuerySoft) &&
+                (sceneData.TransparentPassEnabled &&
+                    sceneData.TransparentReceiveShadows &&
+                    sceneData.TransparentMeshletCount > 0 ||
+                 sceneData.GeometryDecalsEnabled &&
+                    sceneData.DecalReceiveShadows &&
+                    sceneData.GeometryDecalMeshletCount > 0 ||
+                 settings.DebugView != ShadowDebugView.None);
+            sceneData.DirectionalShadowFramePlan = new DirectionalShadowFramePlan(
+                stableLightIdentity,
+                settings.RequestedDirectionalShadowMode,
+                resolved.Effective,
+                resolved.Reason,
+                resolved.Detail,
+                layeredReceiverFallbackRequired,
+                activeCascadeMask,
+                0u,
+                0u,
+                activeCascadeMask,
+                rayConsumer,
+                historyConsumers,
+                readiness.ResourceGeneration,
+                readiness.ContentEpoch);
+
+            GPUDirectionalShadowParameters parameters =
+                DirectionalShadowDataBuilder.BuildParameters(
+                    settings,
+                    sceneData.DirectionalShadowCascadeFitDiagnostics,
+                    resolved.Effective);
+            sceneData.DirectionalShadowParameters = parameters;
+            _directionalShadowResources?.UploadShadowData(
+                _stagingRing,
+                _currentCommandBuffer,
+                sceneData.ShadowData,
+                parameters);
         }
 
         private void PrepareLocalShadows(
@@ -7403,6 +7572,8 @@ namespace Njulf.Rendering
                 GpuBloomDownsampleMicroseconds = sceneData.GpuBloomDownsampleMicroseconds,
                 GpuBloomUpsampleMicroseconds = sceneData.GpuBloomUpsampleMicroseconds,
                 GpuDirectionalShadowMicroseconds = sceneData.GpuDirectionalShadowMicroseconds,
+                GpuDirectionalRayShadowMicroseconds =
+                    sceneData.GpuDirectionalRayShadowMicroseconds,
                 GpuSpotShadowMicroseconds = sceneData.GpuSpotShadowMicroseconds,
                 GpuPointShadowMicroseconds = sceneData.GpuPointShadowMicroseconds,
                 DirectionalShadowRecordSkipped = sceneData.DirectionalShadowRecordSkipped ? 1 : 0,
@@ -9742,6 +9913,12 @@ namespace Njulf.Rendering
                 coreBuffers,
                 farFieldBuffers,
                 simpleDdgiBuffers,
+                new DirectionalRayShadowAsyncBufferIdentity(
+                    _directionalRayShadowPass?.GetMaskBuffer(0) ??
+                        BufferHandle.Invalid,
+                    _directionalRayShadowPass?.GetMaskBuffer(1) ??
+                        BufferHandle.Invalid,
+                    _directionalRayShadowPass?.ResourceGeneration ?? 0u),
                 new CausticAsyncBufferIdentity(
                     causticBuffers.Tasks,
                     causticBuffers.Photons,
@@ -9907,6 +10084,20 @@ namespace Njulf.Rendering
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.RayQueryInstanceMetadata, "Ray-query instance metadata",
                 _accelerationStructureManager?.RayQueryInstanceMetadataBuffer ?? BufferHandle.Invalid,
                 queueFamilies, graphicsFamily);
+            for (int frameIndex = 0;
+                 frameIndex < FramesInFlight;
+                 frameIndex++)
+            {
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.DirectionalRayShadowMask,
+                    $"Directional ray-shadow mask frame {frameIndex}",
+                    _directionalRayShadowPass?.GetMaskBuffer(frameIndex) ??
+                        BufferHandle.Invalid,
+                    queueFamilies,
+                    graphicsFamily,
+                    frameIndex: frameIndex);
+            }
 
             AddAsyncComputeBufferBinding(bindings, RenderGraphResourceId.MeshGeometryBuffers, "Mesh vertex positions",
                 _meshManager.VertexPositionBuffer, queueFamilies, graphicsFamily);
@@ -10717,9 +10908,15 @@ namespace Njulf.Rendering
             AsyncCoreBufferIdentity CoreBuffers,
             FarFieldAsyncBufferIdentity FarFieldBuffers,
             SimpleDdgiAsyncBufferIdentity SimpleDdgiBuffers,
+            DirectionalRayShadowAsyncBufferIdentity DirectionalRayShadowBuffers,
             CausticAsyncBufferIdentity CausticBuffers,
             GuidingAsyncBufferIdentity GuidingBuffers,
             NearFieldResidualAsyncBufferIdentity NearFieldResidualBuffers);
+
+        private readonly record struct DirectionalRayShadowAsyncBufferIdentity(
+            BufferHandle Frame0,
+            BufferHandle Frame1,
+            uint ResourceGeneration);
 
         private readonly record struct CausticAsyncBufferIdentity(
             BufferHandle Tasks,
@@ -10985,6 +11182,7 @@ namespace Njulf.Rendering
         {
             return sceneData.GpuDepthPrePassMicroseconds +
                 sceneData.GpuDirectionalShadowMicroseconds +
+                sceneData.GpuDirectionalRayShadowMicroseconds +
                 sceneData.GpuSpotShadowMicroseconds +
                 sceneData.GpuPointShadowMicroseconds +
                 sceneData.GpuHiZBuildMicroseconds +
@@ -11081,6 +11279,8 @@ namespace Njulf.Rendering
         {
             sceneData.GpuSkinningMicroseconds = timings.GetGpuMicrosecondsOrZero("SkinningPass");
             sceneData.GpuDirectionalShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("DirectionalShadowPass");
+            sceneData.GpuDirectionalRayShadowMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("DirectionalRayShadowPass");
             sceneData.GpuSpotShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("SpotShadowPass");
             sceneData.GpuPointShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("PointShadowPass");
             sceneData.GpuReflectionProbeCaptureMicroseconds =
@@ -12068,13 +12268,13 @@ namespace Njulf.Rendering
                 _advancedGiTransientBufferArena;
             SimpleDdgiGuidingFrameConfiguration guidingArenaConfiguration =
                 _simpleDdgiGuidingFrameConfiguration;
-            if (!_simpleDdgiGuidingAppliedArenaConfiguration.Equals(
-                    guidingArenaConfiguration) &&
-                _simpleDdgiGuidingAppliedArenaConfiguration.IsEnabled)
+            if (_simpleDdgiGuidingAppliedArenaConfiguration.IsEnabled)
             {
-                // Slot 202 may name the old arena generation. Publish all C3
-                // fallbacks and retire its persistent sidecar/banks before an
-                // arena replacement can destroy that physical buffer.
+                // A B1 configuration change can resize the shared arena even
+                // when C3's logical configuration is unchanged. Slot 202 and
+                // the coordinator workspace would then name the retired arena
+                // generation. Publish all C3 fallbacks and drain its frame
+                // transactions before either owner can reconcile the arena.
                 if (_simpleDdgiGuidingFrameCoordinator is null ||
                     !_simpleDdgiGuidingFrameCoordinator.TryConfigure(
                         SimpleDdgiGuidingFrameConfiguration.Disabled,
@@ -16908,8 +17108,22 @@ namespace Njulf.Rendering
                 opacityContentAdmitted
                     ? null
                     : _advancedGiRuntimeContentState.Reason);
-            bool enabled = gi.Enabled &&
-                           gi.EffectiveUseRayQueryBackend;
+            bool ddgiRaySceneEnabled = gi.Enabled &&
+                                       gi.EffectiveUseRayQueryBackend;
+            RaySceneRequirement requirement = ddgiRaySceneEnabled
+                ? new RaySceneRequirement(
+                    RaySceneConsumer.Ddgi,
+                    ResolveDdgiRaySceneCategories(gi),
+                    Settings.Shadows.MaxShadowDistance,
+                    gi.EffectiveDdgiSkinnedGeometryMode == DdgiSkinnedGeometryMode.CurrentPose)
+                : RaySceneRequirement.None;
+            RaySceneRequirement directionalRequirement =
+                sceneData.DirectionalShadowPassEnabled
+                    ? RaySceneRequirement.ForDirectionalShadows(Settings.Shadows)
+                    : RaySceneRequirement.None;
+            requirement = requirement.Union(directionalRequirement);
+            bool enabled = requirement.Enabled;
+            bool directionalRaySceneRequested = directionalRequirement.Enabled;
             bool qualityAllowsStaticStreaming = gi.DdgiQualityTier is
                 DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
             bool farFieldCoverageReady = qualityAllowsStaticStreaming &&
@@ -16929,23 +17143,53 @@ namespace Njulf.Rendering
                         ? gi.GiAccelerationStructureMaximumStaticInstances
                         : int.MaxValue,
                     gi.GiAccelerationStructureEvictionGraceFrames,
-                    AllowStaticMemoryCulling: farFieldCoverageReady),
+                    AllowStaticMemoryCulling:
+                        farFieldCoverageReady && !directionalRaySceneRequested),
                 new DdgiDynamicRayScenePolicy(
-                    gi.EffectiveDdgiSkinnedGeometryMode,
-                    gi.EffectiveDdgiTransparentGeometryMode,
-                    gi.EffectiveDdgiFoliageGeometryMode,
+                    directionalRaySceneRequested
+                        ? DdgiSkinnedGeometryMode.CurrentPose
+                        : gi.EffectiveDdgiSkinnedGeometryMode,
+                    ddgiRaySceneEnabled
+                        ? gi.EffectiveDdgiTransparentGeometryMode
+                        : DdgiTransparentGeometryMode.MaskOnly,
+                    directionalRaySceneRequested
+                        ? DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
+                        : gi.EffectiveDdgiFoliageGeometryMode,
                     GeometryDecalsEnabled:
                         Settings.Decals.GeometryDecalsEnabled &&
                         (gi.ActiveContentDependentFeatures &
                             DdgiContentFeature.TransparentGeometry) != 0,
-                    AlphaMaskedTransportEnabled: gi.DdgiAlphaMaskedTransportEnabled,
+                    AlphaMaskedTransportEnabled:
+                        directionalRaySceneRequested ||
+                        gi.DdgiAlphaMaskedTransportEnabled,
                     DynamicStorageBudgetBytes: gi.DdgiDynamicBlasMemoryBudgetBytes,
                     DynamicScratchBudgetBytes: gi.DdgiDynamicBlasScratchBudgetBytes,
                     MaximumBuildsPerFrame: gi.DdgiDynamicBlasBuildsPerFrame,
                     MaximumPrimitivesPerFrame: gi.DdgiDynamicBlasPrimitivesPerFrame,
                     DecalCandidateLimit: gi.DdgiDecalCandidateLimit),
                 sceneContentRevision: sceneData.SceneContentRevision,
-                foliageProxyFrame: _ddgiFoliageProxyFrame);
+                foliageProxyFrame: _ddgiFoliageProxyFrame,
+                requirement: requirement);
+        }
+
+        private static RaySceneGeometryCategory ResolveDdgiRaySceneCategories(
+            GlobalIlluminationSettings settings)
+        {
+            RaySceneGeometryCategory categories =
+                RaySceneGeometryCategory.StaticOpaque |
+                RaySceneGeometryCategory.DynamicOpaque |
+                RaySceneGeometryCategory.AlphaTested |
+                RaySceneGeometryCategory.DoubleSided;
+            if (settings.EffectiveDdgiSkinnedGeometryMode == DdgiSkinnedGeometryMode.CurrentPose)
+                categories |= RaySceneGeometryCategory.SkinnedCurrentPose;
+            if (settings.EffectiveDdgiFoliageGeometryMode != DdgiFoliageGeometryMode.Excluded)
+                categories |= RaySceneGeometryCategory.FoliageOpaque |
+                    RaySceneGeometryCategory.FoliageAlphaTested;
+            if (settings.EffectiveDdgiTransparentGeometryMode != DdgiTransparentGeometryMode.MaskOnly)
+                categories |= RaySceneGeometryCategory.ThinTransmission;
+            if (settings.EffectiveDdgiTransparentGeometryMode == DdgiTransparentGeometryMode.StochasticBlend)
+                categories |= RaySceneGeometryCategory.AlphaBlend;
+            return categories;
         }
 
         private void PrepareDdgiFoliageProxies(
@@ -16954,11 +17198,15 @@ namespace Njulf.Rendering
         {
             GlobalIlluminationSettings gi = Settings.GlobalIllumination;
             DdgiFoliageGeometryMode mode =
-                gi.EffectiveUseDdgi &&
-                gi.EffectiveUseRayQueryBackend &&
-                Settings.Foliage.Enabled &&
-                _context.RayQuerySupported
-                    ? gi.EffectiveDdgiFoliageGeometryMode
+                Settings.Foliage.Enabled && _context.RayQuerySupported
+                    ? sceneData.DirectionalShadowPassEnabled &&
+                      Settings.Shadows.RequestedDirectionalShadowMode is
+                          DirectionalShadowMode.HybridContact or
+                          DirectionalShadowMode.RayQueryHard
+                        ? DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
+                        : gi.EffectiveUseDdgi && gi.EffectiveUseRayQueryBackend
+                            ? gi.EffectiveDdgiFoliageGeometryMode
+                            : DdgiFoliageGeometryMode.Excluded
                     : DdgiFoliageGeometryMode.Excluded;
             sceneData.DdgiFoliageGeometryMode = mode;
             if (_ddgiFoliageProxyManager == null ||
@@ -18593,7 +18841,39 @@ namespace Njulf.Rendering
             {
                 CacheLayerProvenance = CopyDirectionalShadowCacheLayerProvenance(
                     sceneData.DirectionalShadowCacheLayerProvenance),
-                CasterDiagnostics = sceneData.DirectionalShadowCasterDiagnosticReadback
+                CasterDiagnostics = sceneData.DirectionalShadowCasterDiagnosticReadback,
+                CascadeFitDiagnostics =
+                    (DirectionalShadowCascadeFitDiagnostics[])
+                    sceneData.DirectionalShadowCascadeFitDiagnostics.Clone(),
+                RequestedMode =
+                    sceneData.DirectionalShadowFramePlan.RequestedMode,
+                EffectiveMode =
+                    sceneData.DirectionalShadowFramePlan.EffectiveMode,
+                FallbackReason =
+                    sceneData.DirectionalShadowFramePlan.FallbackReason,
+                FallbackDetail =
+                    sceneData.DirectionalShadowFramePlan.FallbackDetail,
+                RayMaskEnabled = sceneData.DirectionalRayShadowPassEnabled
+                    ? 1
+                    : 0,
+                CascadedReceiverFallbackRequired =
+                    sceneData.DirectionalShadowFramePlan
+                        .CascadedReceiverFallbackRequired
+                        ? 1
+                        : 0,
+                RayMaskFormat = sceneData.DirectionalRayShadowPassEnabled
+                    ? "PackedR8UnormStorageBuffer"
+                    : string.Empty,
+                RayMaskWidth = sceneData.DirectionalRayShadowMaskWidth,
+                RayMaskHeight = sceneData.DirectionalRayShadowMaskHeight,
+                RayMaskBytes = sceneData.DirectionalRayShadowMaskBytes,
+                RayMaskResourceGeneration =
+                    sceneData.DirectionalRayShadowResourceGeneration,
+                RaySceneResourceGeneration =
+                    sceneData.DirectionalShadowFramePlan
+                        .RaySceneResourceGeneration,
+                RaySceneContentEpoch =
+                    sceneData.DirectionalShadowFramePlan.RaySceneContentEpoch
             };
         }
 
@@ -18860,8 +19140,8 @@ namespace Njulf.Rendering
             bool aoEnabled = Settings.AmbientOcclusion.Enabled;
             float ambientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
             AntiAliasingMode aaMode = Settings.AntiAliasing.EffectiveMode;
-            bool motionVectorTargetEnabled = NeedsMotionVectors(Settings) ||
-                _advancedGiGraphModes.UsesNearFieldHiZResidual;
+            bool motionVectorTargetEnabled =
+                ResolveSurfaceHistoryConsumers().RequiresMotionVectors();
             int bloomMipCount = Settings.Bloom.MipCount;
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
             bool weightedOitTargetEnabled = IsWeightedOitTargetEnabled(Settings);
@@ -18907,8 +19187,8 @@ namespace Njulf.Rendering
                 _context.WaitIdle);
             DisableGiCausticForIncompatibleExtent(sceneRenderExtent);
             DisableNearFieldResidualForIncompatibleExtent(sceneRenderExtent);
-            motionVectorTargetEnabled = NeedsMotionVectors(Settings) ||
-                _advancedGiGraphModes.UsesNearFieldHiZResidual;
+            motionVectorTargetEnabled =
+                ResolveSurfaceHistoryConsumers().RequiresMotionVectors();
             _renderTargets.Recreate(
                 sceneRenderExtent,
                 _swapchain.Extent,
@@ -19128,8 +19408,7 @@ namespace Njulf.Rendering
                 Settings.Bloom.MipCount,
                 Settings.AmbientOcclusion.Enabled,
                 Settings.AntiAliasing.EffectiveMode,
-                NeedsMotionVectors(Settings) ||
-                    _advancedGiGraphModes.UsesNearFieldHiZResidual,
+                ResolveSurfaceHistoryConsumers().RequiresMotionVectors(),
                 IsFogTargetEnabled(Settings),
                 IsWeightedOitTargetEnabled(Settings),
                 IsMaterialTransportProvenanceTargetEnabled(Settings));
@@ -19147,8 +19426,8 @@ namespace Njulf.Rendering
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAmbientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
-            _lastMotionVectorTargetEnabled = NeedsMotionVectors(Settings) ||
-                _advancedGiGraphModes.UsesNearFieldHiZResidual;
+            _lastMotionVectorTargetEnabled =
+                ResolveSurfaceHistoryConsumers().RequiresMotionVectors();
             _lastTransparencyTargetMode = Settings.Transparency.Mode;
             _lastBloomTargetMipCount = Settings.Bloom.MipCount;
             _lastFogTargetEnabled = IsFogTargetEnabled(Settings);
@@ -19320,10 +19599,10 @@ namespace Njulf.Rendering
                    GlobalIlluminationDebugView.MaterialTransportHitProvenance;
         }
 
-        private static bool NeedsMotionVectors(RenderSettings settings)
-        {
-            return settings.AntiAliasing.EffectiveMode == AntiAliasingMode.Taa;
-        }
+        private SurfaceHistoryConsumer ResolveSurfaceHistoryConsumers() =>
+            SurfaceHistoryPolicy.Resolve(
+                Settings,
+                _advancedGiGraphModes.UsesNearFieldHiZResidual);
 
         private void RegisterBloomTextures()
         {

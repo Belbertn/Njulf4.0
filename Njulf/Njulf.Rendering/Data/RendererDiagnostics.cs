@@ -970,6 +970,7 @@ namespace Njulf.Rendering.Data
         public long GpuBloomDownsampleMicroseconds { get; init; }
         public long GpuBloomUpsampleMicroseconds { get; init; }
         public long GpuDirectionalShadowMicroseconds { get; init; }
+        public long GpuDirectionalRayShadowMicroseconds { get; init; }
         public long GpuSpotShadowMicroseconds { get; init; }
         public long GpuPointShadowMicroseconds { get; init; }
         public int DirectionalShadowRecordSkipped { get; init; }

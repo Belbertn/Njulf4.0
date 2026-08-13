@@ -150,5 +150,26 @@ namespace Njulf.Rendering.Data
         /// <summary>Bounded GPU caster attribution readback for this completed frame.</summary>
         public DirectionalShadowCasterDiagnostics CasterDiagnostics { get; init; } =
             DirectionalShadowCasterDiagnostics.Empty;
+
+        /// <summary>Same-frame deterministic cascade fitter state.</summary>
+        public IReadOnlyList<DirectionalShadowCascadeFitDiagnostics> CascadeFitDiagnostics { get; init; } =
+            Array.Empty<DirectionalShadowCascadeFitDiagnostics>();
+
+        public DirectionalShadowMode RequestedMode { get; init; } =
+            DirectionalShadowMode.Cascaded;
+        public DirectionalShadowMode EffectiveMode { get; init; } =
+            DirectionalShadowMode.Cascaded;
+        public DirectionalShadowFallbackReason FallbackReason { get; init; } =
+            DirectionalShadowFallbackReason.None;
+        public string FallbackDetail { get; init; } = string.Empty;
+        public int RayMaskEnabled { get; init; }
+        public int CascadedReceiverFallbackRequired { get; init; }
+        public string RayMaskFormat { get; init; } = string.Empty;
+        public uint RayMaskWidth { get; init; }
+        public uint RayMaskHeight { get; init; }
+        public ulong RayMaskBytes { get; init; }
+        public uint RayMaskResourceGeneration { get; init; }
+        public uint RaySceneResourceGeneration { get; init; }
+        public ulong RaySceneContentEpoch { get; init; }
     }
 }

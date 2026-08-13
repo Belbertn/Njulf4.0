@@ -1,0 +1,276 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : require
+
+#include "common.glsl"
+
+layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
+
+#include "ray_scene_alpha.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform DirectionalRayShadowPushBlock
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndReceiverDistance;
+    vec4 RayDirectionAndMaximumDistance;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint OutputBufferIndex;
+    uint InstanceMask;
+    uint OutputMode;
+} pc;
+
+const uint DIRECTIONAL_RAY_SHADOW_PIXELS_PER_WORD = 4u;
+const uint DIRECTIONAL_RAY_SHADOW_MAX_ALPHA_CANDIDATES = 64u;
+
+bool DirectionalRayShadowFinite(float value)
+{
+    return !isnan(value) && !isinf(value);
+}
+
+bool DirectionalRayShadowFinite(vec3 value)
+{
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+bool ReconstructDirectionalRayShadowReceiver(
+    ivec2 pixel,
+    out vec3 worldPosition,
+    out float receiverDepth)
+{
+    worldPosition = vec3(0.0);
+    receiverDepth = 0.0;
+    if (any(lessThan(pixel, ivec2(0))) ||
+        any(greaterThanEqual(pixel, ivec2(pc.ScreenWidth, pc.ScreenHeight))))
+    {
+        return false;
+    }
+
+    receiverDepth = texelFetch(
+        BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
+        pixel,
+        0).r;
+    // Scene depth is reverse-Z and clears to zero. Invalid/background pixels
+    // stay explicitly lit and launch no query.
+    if (!DirectionalRayShadowFinite(receiverDepth) ||
+        receiverDepth <= 0.0 || receiverDepth > 1.0)
+        return false;
+
+    vec2 uv = (vec2(pixel) + vec2(0.5)) /
+        max(vec2(pc.ScreenWidth, pc.ScreenHeight), vec2(1.0));
+    vec4 clip = vec4(uv * 2.0 - vec2(1.0), receiverDepth, 1.0);
+    vec4 world = MulRowMajor(clip, pc.InverseViewProjectionMatrix);
+    if (any(isnan(world)) || any(isinf(world)) || abs(world.w) <= 1.0e-7)
+        return false;
+    worldPosition = world.xyz / world.w;
+    return DirectionalRayShadowFinite(worldPosition);
+}
+
+vec3 SelectClosestDepthDerivative(
+    vec3 center,
+    vec3 negativePosition,
+    bool negativeValid,
+    vec3 positivePosition,
+    bool positiveValid)
+{
+    vec3 positiveDerivative = positivePosition - center;
+    vec3 negativeDerivative = center - negativePosition;
+    if (positiveValid && negativeValid)
+    {
+        return dot(positiveDerivative, positiveDerivative) <=
+                dot(negativeDerivative, negativeDerivative)
+            ? positiveDerivative
+            : negativeDerivative;
+    }
+    if (positiveValid)
+        return positiveDerivative;
+    if (negativeValid)
+        return negativeDerivative;
+    return vec3(0.0);
+}
+
+bool ReconstructDirectionalRayShadowGeometricNormal(
+    ivec2 pixel,
+    vec3 center,
+    out vec3 geometricNormal)
+{
+    vec3 leftPosition;
+    vec3 rightPosition;
+    vec3 upperPosition;
+    vec3 lowerPosition;
+    float ignoredDepth;
+    bool leftValid = ReconstructDirectionalRayShadowReceiver(
+        pixel + ivec2(-1, 0), leftPosition, ignoredDepth);
+    bool rightValid = ReconstructDirectionalRayShadowReceiver(
+        pixel + ivec2(1, 0), rightPosition, ignoredDepth);
+    bool upperValid = ReconstructDirectionalRayShadowReceiver(
+        pixel + ivec2(0, -1), upperPosition, ignoredDepth);
+    bool lowerValid = ReconstructDirectionalRayShadowReceiver(
+        pixel + ivec2(0, 1), lowerPosition, ignoredDepth);
+    vec3 derivativeX = SelectClosestDepthDerivative(
+        center, leftPosition, leftValid, rightPosition, rightValid);
+    vec3 derivativeY = SelectClosestDepthDerivative(
+        center, upperPosition, upperValid, lowerPosition, lowerValid);
+    geometricNormal = cross(derivativeX, derivativeY);
+    float normalLengthSquared = dot(geometricNormal, geometricNormal);
+    if (!DirectionalRayShadowFinite(geometricNormal) ||
+        normalLengthSquared <= 1.0e-12)
+    {
+        geometricNormal = vec3(0.0);
+        return false;
+    }
+
+    geometricNormal *= inversesqrt(normalLengthSquared);
+    vec3 towardCamera = pc.CameraPositionAndReceiverDistance.xyz - center;
+    if (dot(geometricNormal, towardCamera) < 0.0)
+        geometricNormal = -geometricNormal;
+    return true;
+}
+
+void WriteDirectionalRayShadowResult(
+    uint pixelIndex,
+    float visibility)
+{
+    uint wordIndex = pixelIndex / DIRECTIONAL_RAY_SHADOW_PIXELS_PER_WORD;
+    uint byteShift =
+        (pixelIndex % DIRECTIONAL_RAY_SHADOW_PIXELS_PER_WORD) * 8u;
+    uint packedVisibility =
+        uint(round(clamp(visibility, 0.0, 1.0) * 255.0)) << byteShift;
+    // The transfer clear already represents fully occluded. Avoid contended
+    // atomics for zero-valued hard/contact hits.
+    if (packedVisibility != 0u)
+    {
+        atomicOr(
+            BindlessStorageBuffers[nonuniformEXT(pc.OutputBufferIndex)]
+                .Words[wordIndex],
+            packedVisibility);
+    }
+}
+
+void main()
+{
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.x >= pc.ScreenWidth || pixel.y >= pc.ScreenHeight)
+        return;
+
+    uint pixelIndex = pixel.y * pc.ScreenWidth + pixel.x;
+    float maximumRayDistance = pc.RayDirectionAndMaximumDistance.w;
+    vec3 worldPosition;
+    float receiverDepth;
+    vec3 rayDirection = pc.RayDirectionAndMaximumDistance.xyz;
+    float directionLengthSquared = dot(rayDirection, rayDirection);
+    if (!ReconstructDirectionalRayShadowReceiver(
+            ivec2(pixel), worldPosition, receiverDepth) ||
+        !DirectionalRayShadowFinite(rayDirection) ||
+        directionLengthSquared <= 1.0e-8 ||
+        !DirectionalRayShadowFinite(maximumRayDistance) ||
+        maximumRayDistance <= 0.0)
+    {
+        WriteDirectionalRayShadowResult(pixelIndex, 1.0);
+        return;
+    }
+
+    float receiverDistance = length(
+        worldPosition - pc.CameraPositionAndReceiverDistance.xyz);
+    if (!DirectionalRayShadowFinite(receiverDistance) ||
+        receiverDistance > pc.CameraPositionAndReceiverDistance.w)
+    {
+        WriteDirectionalRayShadowResult(pixelIndex, 1.0);
+        return;
+    }
+
+    rayDirection *= inversesqrt(directionLengthSquared);
+    vec3 geometricNormal;
+    bool geometricNormalValid =
+        ReconstructDirectionalRayShadowGeometricNormal(
+            ivec2(pixel), worldPosition, geometricNormal);
+    if (geometricNormalValid && dot(geometricNormal, rayDirection) < -0.25)
+    {
+        // The visible geometric face cannot receive this sun. The conservative
+        // threshold avoids classifying silhouette derivatives as back-facing.
+        WriteDirectionalRayShadowResult(pixelIndex, 1.0);
+        return;
+    }
+    if (!geometricNormalValid)
+        geometricNormal = rayDirection;
+    else if (dot(geometricNormal, rayDirection) < 0.0)
+        geometricNormal = -geometricNormal;
+
+    float coordinateScale = max(
+        max(abs(worldPosition.x), max(abs(worldPosition.y), abs(worldPosition.z))),
+        1.0);
+    float normalEpsilon = clamp(coordinateScale * 1.0e-7, 0.0005, 0.02);
+    float rayEpsilon = clamp(max(0.0005, maximumRayDistance * 1.0e-6),
+        0.0005, 0.01);
+    vec3 rayOrigin = worldPosition +
+        geometricNormal * normalEpsilon + rayDirection * rayEpsilon;
+    rayQueryEXT query;
+    rayQueryInitializeEXT(
+        query,
+        SceneTlas,
+        gl_RayFlagsTerminateOnFirstHitEXT,
+        pc.InstanceMask & 0xffu,
+        rayOrigin,
+        rayEpsilon,
+        rayDirection,
+        maximumRayDistance);
+
+    uint alphaCandidateCount = 0u;
+    while (rayQueryProceedEXT(query))
+    {
+        if (rayQueryGetIntersectionTypeEXT(query, false) !=
+            gl_RayQueryCandidateIntersectionTriangleEXT)
+        {
+            continue;
+        }
+
+        ++alphaCandidateCount;
+        if (alphaCandidateCount > DIRECTIONAL_RAY_SHADOW_MAX_ALPHA_CANDIDATES)
+        {
+            // Candidate overflow fails closed. An unexpectedly dense alpha
+            // segment cannot turn into an unshadowed flash.
+            rayQueryConfirmIntersectionEXT(query);
+            rayQueryTerminateEXT(query);
+            break;
+        }
+
+        uint instanceIndex =
+            rayQueryGetIntersectionInstanceCustomIndexEXT(query, false);
+        uint primitiveIndex =
+            rayQueryGetIntersectionPrimitiveIndexEXT(query, false);
+        vec2 barycentrics =
+            rayQueryGetIntersectionBarycentricsEXT(query, false);
+        bool frontFacing =
+            rayQueryGetIntersectionFrontFaceEXT(query, false);
+        if (RaySceneCandidateBlocksDirectionalShadow(
+                instanceIndex,
+                primitiveIndex,
+                barycentrics,
+                frontFacing))
+        {
+            rayQueryConfirmIntersectionEXT(query);
+            rayQueryTerminateEXT(query);
+            break;
+        }
+    }
+
+    bool blocked = rayQueryGetIntersectionTypeEXT(query, true) !=
+        gl_RayQueryCommittedIntersectionNoneEXT;
+    float hitDistance = blocked
+        ? rayQueryGetIntersectionTEXT(query, true)
+        : maximumRayDistance;
+    float visibility = blocked ? 0.0 : 1.0;
+    if (blocked && pc.OutputMode == 1u)
+    {
+        // Fade the final 20% of the bounded contact segment so an occluder
+        // crossing the query radius cannot draw a visible ring.
+        visibility = smoothstep(
+            maximumRayDistance * 0.8,
+            maximumRayDistance,
+            clamp(hitDistance, 0.0, maximumRayDistance));
+    }
+    WriteDirectionalRayShadowResult(pixelIndex, visibility);
+}

@@ -12,6 +12,38 @@ namespace Njulf.Tests;
 public sealed unsafe class AccelerationStructureManagerTests
 {
     [Test]
+    public void DirectionalReadiness_RejectsPartialResidentAndProxyCoverage()
+    {
+        var requirement = new RaySceneRequirement(
+            RaySceneConsumer.DirectionalFull,
+            RaySceneGeometryCategory.DirectionalShadowDefault,
+            80f,
+            RequiresCurrentPose: true);
+
+        string complete = AccelerationStructureManager
+            .BuildRaySceneCoverageFailureDetail(
+                requirement, 0, 0, 0, 0, 0);
+        string incomplete = AccelerationStructureManager
+            .BuildRaySceneCoverageFailureDetail(
+                requirement,
+                staticCulledCount: 2,
+                blasBudgetRejectedCount: 1,
+                dynamicProxyFallbackCount: 3,
+                dynamicExcludedCount: 4,
+                dynamicBudgetDeferredCount: 5);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(complete, Is.Empty);
+            Assert.That(incomplete, Does.Contain("not resident"));
+            Assert.That(incomplete, Does.Contain("budget-rejected"));
+            Assert.That(incomplete, Does.Contain("conservative proxies"));
+            Assert.That(incomplete, Does.Contain("foliage"));
+            Assert.That(incomplete, Does.Contain("budget-deferred"));
+        });
+    }
+
+    [Test]
     public void PreparedSceneReuse_IsSuppressedWhileOpacityMicromapWorkCanAdvance()
     {
         Assert.Multiple(() =>
@@ -437,6 +469,65 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(bounded.MaximumStaticInstances, Is.EqualTo(256));
             Assert.That(bounded.EvictionGraceFrames, Is.EqualTo(3));
             Assert.That(bounded.AllowStaticMemoryCulling, Is.True);
+        });
+    }
+
+    [Test]
+    public void SharedInstanceMask_ExcludesNonBlockingLayeredGeometryFromDirectionalQueries()
+    {
+        var opaque = new AccelerationStructureManager.StaticOpaqueInstance(
+            new MeshHandle(1, 1),
+            new MeshInfo(),
+            0u,
+            Matrix4x4.Identity);
+        var alphaMask = opaque with
+        {
+            GeometryFlags = DdgiRayGeometryFlags.AlphaMask
+        };
+        var thin = opaque with
+        {
+            GeometryFlags = DdgiRayGeometryFlags.ThinTransmission
+        };
+        var blend = opaque with
+        {
+            GeometryFlags = DdgiRayGeometryFlags.AlphaBlend
+        };
+        var decal = opaque with
+        {
+            GeometryClass = DdgiRayGeometryClass.DecalOverlay,
+            GeometryFlags = DdgiRayGeometryFlags.DecalOverlay
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AccelerationStructureManager.ResolveSharedInstanceMask(opaque),
+                Is.EqualTo(AccelerationStructureManager.SharedLightingInstanceMask));
+            Assert.That(AccelerationStructureManager.ResolveSharedInstanceMask(alphaMask),
+                Is.EqualTo(AccelerationStructureManager.SharedLightingInstanceMask));
+            Assert.That(AccelerationStructureManager.ResolveSharedInstanceMask(thin),
+                Is.EqualTo(AccelerationStructureManager.StaticOpaqueInstanceMask));
+            Assert.That(AccelerationStructureManager.ResolveSharedInstanceMask(blend),
+                Is.EqualTo(AccelerationStructureManager.StaticOpaqueInstanceMask));
+            Assert.That(AccelerationStructureManager.ResolveSharedInstanceMask(decal),
+                Is.EqualTo(AccelerationStructureManager.StaticOpaqueInstanceMask));
+        });
+    }
+
+    [Test]
+    public void SharedLightingInstanceMask_IsAStableUnionOfGiAndDirectionalConsumers()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                AccelerationStructureManager.StaticOpaqueInstanceMask &
+                AccelerationStructureManager.DirectionalShadowInstanceMask,
+                Is.Zero);
+            Assert.That(
+                AccelerationStructureManager.SharedLightingInstanceMask,
+                Is.EqualTo(
+                    AccelerationStructureManager.StaticOpaqueInstanceMask |
+                    AccelerationStructureManager
+                        .DirectionalShadowInstanceMask));
         });
     }
 
