@@ -196,6 +196,10 @@ public sealed class ForwardNearFieldDirectSourceContractTests
             Assert.That(forwardPass,
                 Does.Contain("TryResolveCombinedAdvancedGiPipeline"));
             Assert.That(forwardPass,
+                Does.Contain("CombinedAdvancedGiAttachmentEnabled"));
+            Assert.That(forwardPass,
+                Does.Contain("CombinedAdvancedGiFailureReason"));
+            Assert.That(forwardPass,
                 Does.Contain("colorAttachments[3]"));
 
             foreach (string artifact in new[]

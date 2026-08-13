@@ -122,7 +122,7 @@ namespace Microsoft.Extensions.DependencyInjection
         {
             get;
             set;
-        }
+        } = AdvancedGiRuntimeContentBinding.Empty;
 
         public string AdvancedGiStartupProfileStatus { get; private set; } =
             "not-configured";
@@ -139,7 +139,8 @@ namespace Microsoft.Extensions.DependencyInjection
                 // A named startup transaction is authoritative. Never combine
                 // a rejected/torn profile with ambient manifests or partially
                 // configured modes from a different launch mechanism.
-                AdvancedGiContentBinding = default;
+                AdvancedGiContentBinding =
+                    AdvancedGiRuntimeContentBinding.Empty;
                 _advancedGiPrerequisiteManifestPath = null;
                 _advancedGiQualificationManifestPath = null;
                 _advancedGiRuntimeEvidenceBundlePath = null;

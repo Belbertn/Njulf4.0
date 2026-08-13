@@ -204,6 +204,62 @@ public sealed class SimpleDdgiGuidingVulkanRuntimeTests
         });
     }
 
+    [Test]
+    public void C3NativeInterfaces_UseFrozenWordAddressingAndDivisionFreeOverflowChecks()
+    {
+        string pass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "SimpleDdgiGuidingGpuPass.cs");
+        string runtime = ReadRepoText(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiGuidingVulkanRuntime.cs");
+        string arithmetic = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_guiding_arithmetic.glsl");
+        string build = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_guiding_build.comp");
+        string sample = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_guiding_sample.comp");
+        string validate = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_guiding_validate.comp");
+        string prepare = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_guiding_prepare.comp");
+        string extract = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_guiding_extract.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(arithmetic, Does.Contain("umulExtended"));
+            Assert.That(build, Does.Contain("guidingBuildWorkItems.words"));
+            Assert.That(sample, Does.Contain("guidingSampleRequests.words"));
+            Assert.That(sample, Does.Contain("guidingSamplePayloads.words"));
+            Assert.That(validate, Does.Contain("guidingValidatePublication.words"));
+            Assert.That(prepare, Does.Contain("guidingPrepareBuildWork.words"));
+            Assert.That(prepare, Does.Contain("readBankIndex == 0xffffffffu"));
+            Assert.That(prepare, Does.Contain(
+                "guidingPreparePc.physicalProbeCapacity > params.physicalProbeCapacity"));
+            Assert.That(prepare, Does.Not.Contain(
+                "params.physicalProbeCapacity != guidingPreparePc.physicalProbeCapacity"));
+            Assert.That(extract, Does.Contain(
+                "guidingExtractPc.physicalProbeCapacity <=\n            params.physicalProbeCapacity"));
+            Assert.That(extract, Does.Not.Contain(
+                "params.physicalProbeCapacity ==\n            guidingExtractPc.physicalProbeCapacity"));
+            Assert.That(runtime, Does.Contain(
+                "guiding-gpu-preparation-produced-no-eligible-work"));
+            Assert.That(runtime, Does.Contain(
+                "SimpleDdgiGuidingPublicationFailure.EmptyPublication"));
+            Assert.That(pass, Does.Not.Contain("private PipelineCache _pipelineCache"));
+            Assert.That(pass, Does.Not.Contain("CreatePipelineCache();"));
+        });
+    }
+
     private static SimpleDdgiGuidingSourceCacheHandshake CreateValidHandshake() =>
         new(
             IsAvailable: true,
@@ -266,6 +322,13 @@ public sealed class SimpleDdgiGuidingVulkanRuntimeTests
                     index: 7,
                     count: 2u,
                     stride: checked((uint)SimpleDdgiMemoryPlan.ProbeUpdateBytes)))
+            {
+                GuidingTracePayloadScratch = CreateBuffer(
+                    index: 6,
+                    count: 128u,
+                    stride: checked((uint)SimpleDdgiMemoryPlan
+                        .GuidingTraceDirectionRecordBytes))
+            }
         };
 
     private static SimpleDdgiGuidingExternalBuffer CreateBuffer(

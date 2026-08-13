@@ -16,6 +16,11 @@ public readonly record struct AdvancedGiRuntimeContentBinding(
     string ContentProfileId,
     string SceneAssetSha256)
 {
+    public static AdvancedGiRuntimeContentBinding Empty { get; } = new(
+        string.Empty,
+        string.Empty,
+        string.Empty);
+
     public bool IsWellFormed =>
         AdvancedGiQualificationContract.NormalizeSha256(CorpusSha256).Length == 64 &&
         AdvancedGiQualificationContract.IsCanonicalToken(ContentProfileId, 256) &&
@@ -41,7 +46,7 @@ public readonly record struct AdvancedGiRuntimeContentState(
     string Reason)
 {
     public static AdvancedGiRuntimeContentState Unconfigured { get; } = new(
-        default,
+        AdvancedGiRuntimeContentBinding.Empty,
         string.Empty,
         string.Empty,
         false,

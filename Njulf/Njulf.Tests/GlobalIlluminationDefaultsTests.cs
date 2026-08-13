@@ -74,6 +74,37 @@ public sealed class GlobalIlluminationDefaultsTests
     }
 
     [Test]
+    public void ExplicitAdvancedGiModesDoNotRequirePromotionManifest()
+    {
+        AdvancedGiPrerequisiteGateResult missing =
+            AdvancedGiPrerequisiteGateResult.Missing("not-configured");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AdvancedGiActivationPolicy.PrerequisitesSatisfied(
+                SimpleDdgiReceiverFeedbackMode.ExactCompacted,
+                missing), Is.True);
+            Assert.That(AdvancedGiActivationPolicy.PrerequisitesSatisfied(
+                DdgiOpacityMicromapMode.ExtFourStateExperiment,
+                missing), Is.True);
+            Assert.That(AdvancedGiActivationPolicy.PrerequisitesSatisfied(
+                SimpleDdgiDirectionalGuidingMode
+                    .PerProbeHistogramExperiment,
+                missing), Is.True);
+            Assert.That(AdvancedGiActivationPolicy.PrerequisitesSatisfied(
+                GiCausticMode.WorldCacheExperiment,
+                missing), Is.True);
+            Assert.That(AdvancedGiActivationPolicy.PrerequisitesSatisfied(
+                SimpleDdgiNearFieldResidualMode
+                    .HiZHalfResolutionExperiment,
+                missing), Is.True);
+            Assert.That(AdvancedGiActivationPolicy.PrerequisitesSatisfied(
+                GiCausticMode.AutoQualified,
+                missing), Is.False);
+        });
+    }
+
+    [Test]
     public void NewGlobalIlluminationSettings_PreserveLowEnergyTransportPropagation()
     {
         var settings = new GlobalIlluminationSettings();

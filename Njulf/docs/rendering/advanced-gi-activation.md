@@ -1,47 +1,44 @@
-# Advanced GI activation and qualification
+# Advanced GI controls and qualification
 
-Advanced GI is enabled through a cold-start transaction, not by mutating the
-live renderer. B1, C1, C3, C4, and C5 can change optional Vulkan features,
-immutable render-graph branches, descriptor inventory, and persistent memory.
-The editor therefore keeps a detached next-start draft and always shows
-requested, effective, and authoritative runtime state separately.
+The editor exposes ordinary on/off switches for B1, C1, C3, C4, and C5.
+Changing one automatically performs a clean renderer restart because these
+features can change optional Vulkan features, immutable render-graph branches,
+descriptor inventory, and persistent memory. The switch path does not create,
+save, or load an Advanced GI profile, manifest, or evidence file.
 
-## Activation paths
+## Switch behavior
 
 There are two deliberately different activation levels:
 
-- Explicit experiment modes run a bounded measurement candidate. B1, C1, and
-  C3 require the complete frozen-prerequisite manifest. C4 and C5 additionally
-  require an exact candidate profile because their safe resource layouts are
-  content-dependent. Candidate authorization is never promotion evidence.
+- **Enabled** selects the explicit bounded implementation. It requires no
+  qualification artifacts. Hardware support, Vulkan limits, exact ABI/layout,
+  independent memory budgets, allocation success, and runtime resource
+  completeness are still enforced. C1 therefore remains unavailable on a
+  device without `VK_EXT_opacity_micromap`, and C4 produces visible work only
+  when the scene contains an eligible authored hero and light source.
 - `AutoQualified` requires the frozen prerequisites, an authenticated
   schema-v3 qualification entry for the exact feature ID, exact build/shader/
   settings/corpus/content/scene identity, a matching device/driver rule, and
   C4/C5 runtime evidence where applicable.
 
-Any missing or mismatched input resolves to canonical DDGI. A rejected startup
-profile is authoritative and cannot be combined with ambient manifests or
-command-line mode overrides.
+Missing promotion input can disable `AutoQualified`; it never disables an
+explicit Enabled switch. Profiles are an optional automation facility and are
+not part of the editor switch path.
 
 ## Editor workflow
 
-Open **Global Illumination > Advanced GI activation (next cold start)**.
+Open **Global Illumination > Advanced GI features**.
 
-1. Select each next-start mode. Use explicit experiment modes while collecting
-   evidence; use `AutoQualified` only after the corresponding qualification
-   manifest has been reviewed and pinned.
-2. Supply the exact corpus hash, runtime content-profile ID, observed scene
-   asset hash, prerequisite manifest, and any qualification/runtime/candidate
-   files needed by the selected modes.
-3. Choose **Validate startup draft**. Every non-device check must pass.
-4. Choose **Save and restart renderer**. The editor writes a content-addressed
-   render-settings snapshot, records its complete persistence SHA-256 in the
-   schema-v2 startup profile, atomically publishes the profile, reads it back,
-   fully tears down the old device/window/services, and reconstructs the host
-   from that profile.
-5. Inspect requested-to-effective mode, fallback detail, allocation, and
-   authoritative publication state after restart. Editor preflight does not
-   predict physical-device support; startup admission remains authoritative.
+Toggle an individual feature or **Enable all Advanced GI features**. The host
+fully tears down the old renderer/device and reconstructs it with the explicit
+selection, then reopens the editor. Inspect requested-to-effective mode,
+fallback detail, allocation, and authoritative publication state in the status
+section. A switch can be on while its effective state is unavailable for a
+real hardware, memory, content, or resource reason; the tooltip reports that
+reason.
+
+The remaining sections describe the separate qualification-automation path.
+Normal editor use does not require it.
 
 The standalone launch equivalent is:
 
@@ -109,10 +106,10 @@ dotnet run --project Njulf.AssetTool -- advanced-gi verify-qualification \
 ```
 
 Build/shader identity is mandatory when the selected settings contain an
-`AutoQualified` feature or an explicit C4/C5 candidate; preflight fails without
-it. The runtime always repeats those checks using its own binary identity and
-additionally checks Vulkan capability, device/driver rules, memory headroom,
-scene identity, and resource completeness.
+`AutoQualified` feature or when a qualification run explicitly supplies a
+C4/C5 candidate profile. The runtime always repeats those checks using its own
+binary identity and additionally checks Vulkan capability, device/driver rules,
+memory headroom, scene identity, and resource completeness.
 
 ## Evidence boundary
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Resources;
 
@@ -49,6 +50,118 @@ public enum SimpleDdgiNearFieldResidualMode : uint
     Reference = 1,
     HiZHalfResolutionExperiment = 2,
     AutoQualified = 3
+}
+
+/// <summary>
+/// The five user-facing Advanced GI switches.  This is deliberately a small,
+/// persistence-free command model: an editor host can carry it across a cold
+/// renderer restart without manufacturing a qualification profile.
+/// </summary>
+public readonly record struct AdvancedGiFeatureSelection(
+    bool ReceiverFeedbackEnabled,
+    bool OpacityMicromapsEnabled,
+    bool DirectionalGuidingEnabled,
+    bool TaggedCausticsEnabled,
+    bool NearFieldResidualEnabled)
+{
+    public static AdvancedGiFeatureSelection AllEnabled { get; } = new(
+        ReceiverFeedbackEnabled: true,
+        OpacityMicromapsEnabled: true,
+        DirectionalGuidingEnabled: true,
+        TaggedCausticsEnabled: true,
+        NearFieldResidualEnabled: true);
+
+    public bool AreAllEnabled =>
+        ReceiverFeedbackEnabled &&
+        OpacityMicromapsEnabled &&
+        DirectionalGuidingEnabled &&
+        TaggedCausticsEnabled &&
+        NearFieldResidualEnabled;
+
+    public static AdvancedGiFeatureSelection From(
+        GlobalIlluminationSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return new AdvancedGiFeatureSelection(
+            settings.SimpleDdgiReceiverFeedbackMode !=
+                SimpleDdgiReceiverFeedbackMode.Off,
+            settings.DdgiOpacityMicromapMode != DdgiOpacityMicromapMode.Off,
+            settings.SimpleDdgiDirectionalGuidingMode !=
+                SimpleDdgiDirectionalGuidingMode.Off,
+            settings.GiCausticMode != GiCausticMode.Off,
+            settings.SimpleDdgiNearFieldResidualMode !=
+                SimpleDdgiNearFieldResidualMode.Off);
+    }
+
+    /// <summary>
+    /// Applies ordinary explicit modes.  AutoQualified remains available to
+    /// automation through the existing settings/profile APIs, but is never
+    /// selected implicitly by a UI checkbox.
+    /// </summary>
+    public void ApplyTo(GlobalIlluminationSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        settings.SimpleDdgiReceiverFeedbackMode = ReceiverFeedbackEnabled
+            ? SimpleDdgiReceiverFeedbackMode.ExactCompacted
+            : SimpleDdgiReceiverFeedbackMode.Off;
+        settings.DdgiOpacityMicromapMode = OpacityMicromapsEnabled
+            ? DdgiOpacityMicromapMode.ExtFourStateExperiment
+            : DdgiOpacityMicromapMode.Off;
+        settings.SimpleDdgiDirectionalGuidingMode = DirectionalGuidingEnabled
+            ? SimpleDdgiDirectionalGuidingMode.PerProbeHistogramExperiment
+            : SimpleDdgiDirectionalGuidingMode.Off;
+        settings.GiCausticMode = TaggedCausticsEnabled
+            ? GiCausticMode.WorldCacheExperiment
+            : GiCausticMode.Off;
+        settings.SimpleDdgiNearFieldResidualMode = NearFieldResidualEnabled
+            ? SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment
+            : SimpleDdgiNearFieldResidualMode.Off;
+
+        // A normal switch never inherits promotion credentials from a prior
+        // AutoQualified run.
+        settings.SimpleDdgiReceiverFeedbackQualificationId = string.Empty;
+        settings.DdgiOpacityMicromapQualificationId = string.Empty;
+        settings.SimpleDdgiDirectionalGuidingQualificationId = string.Empty;
+        settings.GiCausticQualificationId = string.Empty;
+        settings.SimpleDdgiNearFieldResidualQualificationId = string.Empty;
+    }
+}
+
+/// <summary>
+/// Separates explicit user intent from automatic promotion policy.  Explicit
+/// modes still pass every hardware, Vulkan-limit, memory, ABI, allocation and
+/// resource-completeness check; only AutoQualified consumes manifest gates.
+/// </summary>
+public static class AdvancedGiActivationPolicy
+{
+    public static bool RequiresQualification<TMode>(TMode mode)
+        where TMode : struct, Enum =>
+        ModeTraits<TMode>.HasAutoQualified &&
+        EqualityComparer<TMode>.Default.Equals(
+            mode,
+            ModeTraits<TMode>.AutoQualified);
+
+    public static bool PrerequisitesSatisfied<TMode>(
+        TMode mode,
+        in AdvancedGiPrerequisiteGateResult gate)
+        where TMode : struct, Enum =>
+        !RequiresQualification(mode) || gate.Passed;
+
+    private static class ModeTraits<TMode>
+        where TMode : struct, Enum
+    {
+        public static readonly bool HasAutoQualified;
+        public static readonly TMode AutoQualified;
+
+        static ModeTraits()
+        {
+            HasAutoQualified = Enum.TryParse(
+                "AutoQualified",
+                ignoreCase: false,
+                out TMode mode);
+            AutoQualified = mode;
+        }
+    }
 }
 
 /// <summary>
@@ -182,10 +295,7 @@ public static class GiExperimentModeResolver
         }
 
         bool requiresQualification = evaluation.RequiresQualification ||
-            string.Equals(
-                requestedMode.ToString(),
-                "AutoQualified",
-                StringComparison.Ordinal);
+            AdvancedGiActivationPolicy.RequiresQualification(requestedMode);
         if (requiresQualification && qualificationId.Length == 0)
         {
             return Fallback(

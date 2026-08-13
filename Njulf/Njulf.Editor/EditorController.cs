@@ -28,6 +28,8 @@ public sealed class EditorController
     private readonly VulkanRenderer? _renderer;
     private readonly AdvancedGiEditorStartupContext _advancedGiStartup;
     private readonly Action<string>? _requestAdvancedGiRestart;
+    private readonly Action<AdvancedGiFeatureSelection>?
+        _requestAdvancedGiFeatureRestart;
     private bool _previousDebugEnabled;
     private bool _previousCpuSnapshotsEnabled;
 
@@ -40,7 +42,9 @@ public sealed class EditorController
         VulkanRenderer? renderer = null,
         FirstPersonCamera? camera = null,
         AdvancedGiEditorStartupContext? advancedGiStartup = null,
-        Action<string>? requestAdvancedGiRestart = null)
+        Action<string>? requestAdvancedGiRestart = null,
+        Action<AdvancedGiFeatureSelection>?
+            requestAdvancedGiFeatureRestart = null)
     {
         _scene = scene ?? throw new ArgumentNullException(nameof(scene));
         _content = content ?? throw new ArgumentNullException(nameof(content));
@@ -51,6 +55,8 @@ public sealed class EditorController
         _advancedGiStartup = advancedGiStartup ??
             AdvancedGiEditorStartupContext.Unconfigured;
         _requestAdvancedGiRestart = requestAdvancedGiRestart;
+        _requestAdvancedGiFeatureRestart =
+            requestAdvancedGiFeatureRestart;
         Camera = camera;
         _lightStore = new LightManagerSceneLightStore(_lightManager);
         _materialStore = new MaterialManagerSceneMaterialOverrideStore(_materialManager);
@@ -73,6 +79,8 @@ public sealed class EditorController
         _renderer?.AdvancedGiCandidateProfileStatus ?? "renderer-unavailable";
     public bool CanRestartForAdvancedGi =>
         _requestAdvancedGiRestart is not null;
+    public bool CanRestartAdvancedGiFeatures =>
+        _requestAdvancedGiFeatureRestart is not null;
     public bool SuppressGameInput => Enabled && (_overlay?.WantCaptureKeyboard == true || _overlay?.WantCaptureMouse == true);
 
     public event Action<EditorSelection>? SelectionChanged;
@@ -352,6 +360,26 @@ public sealed class EditorController
         RenderSettings settings = RendererSettings ??
             throw new InvalidOperationException("A Vulkan renderer is required to save live render settings.");
         settings.Save(path);
+    }
+
+    /// <summary>
+    /// Requests a clean renderer reconstruction with ordinary explicit
+    /// Advanced GI modes. No startup profile or evidence file is created or
+    /// loaded by this path.
+    /// </summary>
+    public void RestartAdvancedGiFeatures(
+        in AdvancedGiFeatureSelection selection)
+    {
+        if (_renderer is null)
+        {
+            throw new InvalidOperationException(
+                "A Vulkan renderer is required to change Advanced GI features.");
+        }
+        Action<AdvancedGiFeatureSelection> restart =
+            _requestAdvancedGiFeatureRestart ??
+            throw new InvalidOperationException(
+                "This editor host does not provide a renderer restart callback.");
+        restart(selection);
     }
 
     public AdvancedGiStartupProfilePreflightResult

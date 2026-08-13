@@ -49,27 +49,6 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
     private string _filter = string.Empty;
     private string _settingsPath = string.Empty;
     private string? _lastError;
-    private bool _advancedGiDraftInitialized;
-    private string _advancedGiProfilePath = string.Empty;
-    private string _advancedGiCorpusSha256 = string.Empty;
-    private string _advancedGiContentProfileId = string.Empty;
-    private string _advancedGiSceneAssetSha256 = string.Empty;
-    private string _advancedGiPrerequisitePath = string.Empty;
-    private string _advancedGiQualificationPath = string.Empty;
-    private string _advancedGiRuntimeEvidencePath = string.Empty;
-    private string _advancedGiCandidatePath = string.Empty;
-    private SimpleDdgiReceiverFeedbackMode _receiverFeedbackMode;
-    private DdgiOpacityMicromapMode _opacityMicromapMode;
-    private SimpleDdgiDirectionalGuidingMode _directionalGuidingMode;
-    private GiCausticMode _causticMode;
-    private SimpleDdgiNearFieldResidualMode _nearFieldResidualMode;
-    private string _receiverFeedbackQualificationId = string.Empty;
-    private string _opacityMicromapQualificationId = string.Empty;
-    private string _directionalGuidingQualificationId = string.Empty;
-    private string _causticQualificationId = string.Empty;
-    private string _nearFieldResidualQualificationId = string.Empty;
-    private AdvancedGiStartupProfilePreflightResult? _advancedGiPreflight;
-    private string? _advancedGiActionStatus;
 
     internal static IReadOnlyList<PropertyInfo> EditableProperties => PropertyEditors
         .Where(static editor => editor.Editable)
@@ -107,7 +86,7 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         ImGui.InputText("Filter settings", ref _filter, (nuint)256);
         ImGui.TextDisabled(
             $"{PropertyEditors.Count(static item => item.Editable && item.Group != "Advanced GI startup")} " +
-            "live GI settings; Advanced GI modes are staged separately for restart.");
+            "live GI settings; Advanced GI uses the switches above.");
         RenderScalarSettings(settings);
         RenderLayeredReceiverSettings(renderSettings, editor.RendererDiagnostics);
         RenderSimpleDdgiAuthoredVolumes(editor, settings);
@@ -297,7 +276,7 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         GiRoadmapExperimentDiagnostics roadmap =
             diagnostics.GiRoadmapExperiments;
         if (!ImGui.CollapsingHeader(
-                "Advanced GI experiments",
+                "Advanced GI status",
                 ImGuiTreeNodeFlags.DefaultOpen))
         {
             return;
@@ -382,9 +361,6 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         if (!ImGui.IsItemHovered())
             return;
 
-        string qualification = string.IsNullOrWhiteSpace(mode.QualificationId)
-            ? "none"
-            : mode.QualificationId;
         string reason = string.IsNullOrWhiteSpace(runtimeReason)
             ? "none"
             : runtimeReason.Trim();
@@ -392,7 +368,6 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
             $"Supported: {mode.SupportedMode}\n" +
             $"Admitted: {mode.AdmittedMode}\n" +
             $"Fallback: {mode.FallbackReason} ({mode.FallbackDetail})\n" +
-            $"Qualification ID: {qualification}\n" +
             $"Runtime: {reason}");
     }
 
@@ -414,310 +389,110 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         EditorController editor,
         GlobalIlluminationSettings liveSettings)
     {
-        InitializeAdvancedGiDraft(editor, liveSettings);
         if (!ImGui.CollapsingHeader(
-                "Advanced GI activation (next cold start)",
+                "Advanced GI features",
                 ImGuiTreeNodeFlags.DefaultOpen))
         {
             return;
         }
 
         ImGui.TextWrapped(
-            "B1/C1/C3/C4/C5 admission is selected before Vulkan optional " +
-            "features and immutable graph resources are created. These fields " +
-            "edit a detached startup draft; they never claim to enable the " +
-            "current renderer.");
+            "These are normal on/off switches. A change automatically " +
+            "restarts the renderer because these features alter Vulkan device " +
+            "features and render-graph resources. No profile, manifest, or " +
+            "evidence file is needed for Enabled.");
 
-        AdvancedGiEditorStartupContext startup = editor.AdvancedGiStartup;
-        AdvancedGiRuntimeContentState content =
-            editor.AdvancedGiRuntimeContentState;
-        ImGui.TextDisabled(
-            $"Current startup profile: " +
-            $"{(string.IsNullOrWhiteSpace(startup.StartupProfilePath) ? "none" : startup.StartupProfilePath)} " +
-            $"({startup.StartupProfileStatus})");
-        ImGui.TextDisabled(
-            $"Current runtime content: {(content.Matched ? "matched" : "not matched")} " +
-            $"({content.Reason})");
-        ImGui.TextDisabled(
-            $"Observed content profile: " +
-            $"{(string.IsNullOrWhiteSpace(content.ObservedContentProfileId) ? "unavailable" : content.ObservedContentProfileId)}");
-        ImGui.TextDisabled(
-            $"Observed scene asset SHA-256: " +
-            $"{(string.IsNullOrWhiteSpace(content.ObservedSceneAssetSha256) ? "unavailable" : content.ObservedSceneAssetSha256)}");
-        ImGui.TextDisabled(
-            $"Candidate authorization: {editor.AdvancedGiCandidateProfileStatus}");
-
-        bool draftChanged = RenderAdvancedGiModeCombo(
-            "B1 exact receiver feedback",
-            ref _receiverFeedbackMode);
-        draftChanged |= RenderAdvancedGiModeCombo(
-            "C1 opacity micromaps",
-            ref _opacityMicromapMode);
-        draftChanged |= RenderAdvancedGiModeCombo(
-            "C3 directional guiding",
-            ref _directionalGuidingMode);
-        draftChanged |= RenderAdvancedGiModeCombo(
-            "C4 tagged caustic cache",
-            ref _causticMode);
-        draftChanged |= RenderAdvancedGiModeCombo(
-            "C5 near-field residual",
-            ref _nearFieldResidualMode);
-
-        if (UsesAutoQualification())
-        {
-            ImGui.SeparatorText("AutoQualified IDs");
-            if (_receiverFeedbackMode ==
-                SimpleDdgiReceiverFeedbackMode.AutoQualified)
-            {
-                draftChanged |= InputPath(
-                    "B1 qualification ID",
-                    ref _receiverFeedbackQualificationId,
-                    256);
-            }
-            if (_opacityMicromapMode ==
-                DdgiOpacityMicromapMode.AutoQualified)
-            {
-                draftChanged |= InputPath(
-                    "C1 qualification ID",
-                    ref _opacityMicromapQualificationId,
-                    256);
-            }
-            if (_directionalGuidingMode ==
-                SimpleDdgiDirectionalGuidingMode.AutoQualified)
-            {
-                draftChanged |= InputPath(
-                    "C3 qualification ID",
-                    ref _directionalGuidingQualificationId,
-                    256);
-            }
-            if (_causticMode == GiCausticMode.AutoQualified)
-            {
-                draftChanged |= InputPath(
-                    "C4 qualification ID",
-                    ref _causticQualificationId,
-                    256);
-            }
-            if (_nearFieldResidualMode ==
-                SimpleDdgiNearFieldResidualMode.AutoQualified)
-            {
-                draftChanged |= InputPath(
-                    "C5 qualification ID",
-                    ref _nearFieldResidualQualificationId,
-                    256);
-            }
-        }
-
-        ImGui.SeparatorText("Exact startup binding");
-        draftChanged |= InputPath(
-            "Startup profile", ref _advancedGiProfilePath);
-        draftChanged |= InputPath(
-            "Corpus SHA-256", ref _advancedGiCorpusSha256);
-        draftChanged |= InputPath(
-            "Content profile ID", ref _advancedGiContentProfileId, 256);
-        draftChanged |= InputPath(
-            "Scene asset SHA-256", ref _advancedGiSceneAssetSha256);
-        draftChanged |= InputPath(
-            "Prerequisite manifest", ref _advancedGiPrerequisitePath);
-        draftChanged |= InputPath(
-            "Qualification manifest", ref _advancedGiQualificationPath);
-        draftChanged |= InputPath(
-            "C4/C5 runtime evidence", ref _advancedGiRuntimeEvidencePath);
-        draftChanged |= InputPath(
-            "C4/C5 candidate profile", ref _advancedGiCandidatePath);
-        if (draftChanged)
-        {
-            _advancedGiPreflight = null;
-            _advancedGiActionStatus = null;
-        }
-
-        if (ImGui.Button("Validate startup draft"))
-            RunAdvancedGiAction(() =>
-                _advancedGiPreflight = editor
-                    .PreflightAdvancedGiStartupProfile(CreateAdvancedGiDraft()));
-        ImGui.SameLine();
-        if (ImGui.Button("Save startup profile"))
-        {
-            RunAdvancedGiAction(() =>
-            {
-                _advancedGiPreflight = editor.SaveAdvancedGiStartupProfile(
-                    CreateAdvancedGiDraft(), restart: false);
-                _advancedGiActionStatus =
-                    "Profile saved and verified. Restart is still required.";
-            });
-        }
-        ImGui.SameLine();
-        bool canRestart = editor.CanRestartForAdvancedGi;
+        AdvancedGiFeatureSelection selection =
+            AdvancedGiFeatureSelection.From(liveSettings);
+        bool canRestart = editor.CanRestartAdvancedGiFeatures;
         if (!canRestart)
             ImGui.BeginDisabled();
-        if (ImGui.Button("Save and restart renderer"))
+        bool changed = false;
+        bool allEnabled = selection.AreAllEnabled;
+        if (ImGui.Checkbox("Enable all Advanced GI features", ref allEnabled))
         {
-            RunAdvancedGiAction(() =>
+            selection = allEnabled
+                ? AdvancedGiFeatureSelection.AllEnabled
+                : default;
+            changed = true;
+        }
+        ImGui.Separator();
+
+        bool receiverFeedback = selection.ReceiverFeedbackEnabled;
+        if (ImGui.Checkbox("B1 exact receiver feedback", ref receiverFeedback))
+        {
+            selection = selection with
             {
-                _advancedGiPreflight = editor.SaveAdvancedGiStartupProfile(
-                    CreateAdvancedGiDraft(), restart: true);
-                _advancedGiActionStatus = "Restart requested.";
-            });
+                ReceiverFeedbackEnabled = receiverFeedback
+            };
+            changed = true;
+        }
+        bool opacityMicromaps = selection.OpacityMicromapsEnabled;
+        if (ImGui.Checkbox("C1 opacity micromaps", ref opacityMicromaps))
+        {
+            selection = selection with
+            {
+                OpacityMicromapsEnabled = opacityMicromaps
+            };
+            changed = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "Enabled when VK_EXT_opacity_micromap is supported by the selected GPU and driver.");
+        }
+        bool directionalGuiding = selection.DirectionalGuidingEnabled;
+        if (ImGui.Checkbox("C3 directional guiding", ref directionalGuiding))
+        {
+            selection = selection with
+            {
+                DirectionalGuidingEnabled = directionalGuiding
+            };
+            changed = true;
+        }
+        bool taggedCaustics = selection.TaggedCausticsEnabled;
+        if (ImGui.Checkbox("C4 tagged caustic cache", ref taggedCaustics))
+        {
+            selection = selection with
+            {
+                TaggedCausticsEnabled = taggedCaustics
+            };
+            changed = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "The subsystem is enabled immediately; visible output requires an authored caustic hero material and an eligible light source.");
+        }
+        bool nearFieldResidual = selection.NearFieldResidualEnabled;
+        if (ImGui.Checkbox("C5 near-field residual", ref nearFieldResidual))
+        {
+            selection = selection with
+            {
+                NearFieldResidualEnabled = nearFieldResidual
+            };
+            changed = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "Uses the highest complete half-, quarter-, or eighth-resolution profile that fits the independent memory budget.");
         }
         if (!canRestart)
             ImGui.EndDisabled();
 
-        RenderAdvancedGiPreflight();
-        if (!string.IsNullOrWhiteSpace(_advancedGiActionStatus))
+        if (!canRestart)
         {
-            ImGui.TextColored(
-                new System.Numerics.Vector4(0.35f, 0.9f, 0.45f, 1f),
-                _advancedGiActionStatus);
+            ImGui.TextDisabled(
+                "This host cannot restart the renderer, so these switches are read-only.");
         }
+        if (changed && canRestart)
+        {
+            Run(() => editor.RestartAdvancedGiFeatures(selection));
+        }
+        ImGui.TextDisabled("Changes apply through an automatic clean restart.");
         ImGui.Separator();
     }
-
-    private void InitializeAdvancedGiDraft(
-        EditorController editor,
-        GlobalIlluminationSettings live)
-    {
-        if (_advancedGiDraftInitialized)
-            return;
-
-        AdvancedGiEditorStartupContext startup = editor.AdvancedGiStartup;
-        AdvancedGiRuntimeContentBinding binding = startup.ContentBinding;
-        AdvancedGiRuntimeContentState observed =
-            editor.AdvancedGiRuntimeContentState;
-        _advancedGiProfilePath = startup.StartupProfilePath ?? Path.Combine(
-            Environment.CurrentDirectory,
-            "advanced-gi.startup-profile.json");
-        _advancedGiCorpusSha256 = binding.CorpusSha256;
-        _advancedGiContentProfileId = binding.IsWellFormed
-            ? binding.ContentProfileId
-            : observed.ObservedContentProfileId;
-        _advancedGiSceneAssetSha256 = binding.IsWellFormed
-            ? binding.SceneAssetSha256
-            : observed.ObservedSceneAssetSha256;
-        _advancedGiPrerequisitePath = startup.PrerequisiteManifestPath ??
-            string.Empty;
-        _advancedGiQualificationPath = startup.QualificationManifestPath ??
-            string.Empty;
-        _advancedGiRuntimeEvidencePath = startup.RuntimeEvidenceBundlePath ??
-            string.Empty;
-        _advancedGiCandidatePath = startup.CandidateProfilePath ?? string.Empty;
-        _receiverFeedbackMode = live.SimpleDdgiReceiverFeedbackMode;
-        _opacityMicromapMode = live.DdgiOpacityMicromapMode;
-        _directionalGuidingMode = live.SimpleDdgiDirectionalGuidingMode;
-        _causticMode = live.GiCausticMode;
-        _nearFieldResidualMode = live.SimpleDdgiNearFieldResidualMode;
-        _receiverFeedbackQualificationId =
-            live.SimpleDdgiReceiverFeedbackQualificationId;
-        _opacityMicromapQualificationId =
-            live.DdgiOpacityMicromapQualificationId;
-        _directionalGuidingQualificationId =
-            live.SimpleDdgiDirectionalGuidingQualificationId;
-        _causticQualificationId = live.GiCausticQualificationId;
-        _nearFieldResidualQualificationId =
-            live.SimpleDdgiNearFieldResidualQualificationId;
-        _advancedGiDraftInitialized = true;
-    }
-
-    private AdvancedGiEditorActivationDraft CreateAdvancedGiDraft() => new(
-        new AdvancedGiStartupProfileInputs(
-            _advancedGiProfilePath.Trim(),
-            new AdvancedGiRuntimeContentBinding(
-                _advancedGiCorpusSha256.Trim(),
-                _advancedGiContentProfileId.Trim(),
-                _advancedGiSceneAssetSha256.Trim()),
-            EmptyToNull(_advancedGiPrerequisitePath),
-            EmptyToNull(_advancedGiQualificationPath),
-            EmptyToNull(_advancedGiRuntimeEvidencePath),
-            EmptyToNull(_advancedGiCandidatePath)),
-        _receiverFeedbackMode,
-        _opacityMicromapMode,
-        _directionalGuidingMode,
-        _causticMode,
-        _nearFieldResidualMode,
-        _receiverFeedbackQualificationId.Trim(),
-        _opacityMicromapQualificationId.Trim(),
-        _directionalGuidingQualificationId.Trim(),
-        _causticQualificationId.Trim(),
-        _nearFieldResidualQualificationId.Trim());
-
-    private void RenderAdvancedGiPreflight()
-    {
-        if (_advancedGiPreflight is null)
-            return;
-        ImGui.TextColored(
-            _advancedGiPreflight.Ready
-                ? new System.Numerics.Vector4(0.35f, 0.9f, 0.45f, 1f)
-                : new System.Numerics.Vector4(1f, 0.55f, 0.2f, 1f),
-            _advancedGiPreflight.Ready
-                ? "Preflight ready: device admission will be rechecked on startup."
-                : "Preflight blocked: resolve every failed item before restart.");
-        foreach (AdvancedGiStartupProfileCheck check in
-                 _advancedGiPreflight.Checks)
-        {
-            ImGui.TextColored(
-                check.Passed
-                    ? new System.Numerics.Vector4(0.55f, 0.85f, 0.6f, 1f)
-                    : new System.Numerics.Vector4(1f, 0.45f, 0.25f, 1f),
-                $"{(check.Passed ? "PASS" : "FAIL")} {check.Id}: {check.Detail}");
-        }
-    }
-
-    private bool UsesAutoQualification() =>
-        _receiverFeedbackMode == SimpleDdgiReceiverFeedbackMode.AutoQualified ||
-        _opacityMicromapMode == DdgiOpacityMicromapMode.AutoQualified ||
-        _directionalGuidingMode ==
-            SimpleDdgiDirectionalGuidingMode.AutoQualified ||
-        _causticMode == GiCausticMode.AutoQualified ||
-        _nearFieldResidualMode ==
-            SimpleDdgiNearFieldResidualMode.AutoQualified;
-
-    private static bool RenderAdvancedGiModeCombo<TMode>(
-        string label,
-        ref TMode mode)
-        where TMode : struct, Enum
-    {
-        if (!ImGui.BeginCombo(label, mode.ToString()))
-            return false;
-        bool changed = false;
-        foreach (TMode candidate in Enum.GetValues<TMode>())
-        {
-            bool selected = EqualityComparer<TMode>.Default.Equals(
-                candidate, mode);
-            if (ImGui.Selectable(candidate.ToString(), selected))
-            {
-                mode = candidate;
-                changed = true;
-            }
-            if (selected)
-                ImGui.SetItemDefaultFocus();
-        }
-        ImGui.EndCombo();
-        return changed;
-    }
-
-    private static bool InputPath(
-        string label,
-        ref string value,
-        uint capacity = 2_048)
-    {
-        ImGui.SetNextItemWidth(560f);
-        return ImGui.InputText(label, ref value, capacity);
-    }
-
-    private void RunAdvancedGiAction(Action action)
-    {
-        try
-        {
-            action();
-            _lastError = null;
-        }
-        catch (Exception error)
-        {
-            _advancedGiActionStatus = null;
-            _lastError = error.Message;
-        }
-    }
-
-    private static string? EmptyToNull(string value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private void RenderPersistence(EditorController editor)
     {

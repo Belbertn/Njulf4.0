@@ -685,7 +685,11 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         images[0] = Sampled(_targets.NearFieldResidualRaw!, _bindlessHeap.ScreenSampler);
         images[1] = Sampled(historyRead, _bindlessHeap.ScreenSampler);
         images[2] = Sampled(momentsRead, _bindlessHeap.ScreenSampler);
-        images[3] = Sampled(validityRead, _bindlessHeap.ScreenSampler);
+        // R32_UINT validity is fetched with texelFetch in the shader and is
+        // not a linearly filterable format. Keep a nearest sampler in the
+        // combined descriptor so validation and implementations that inspect
+        // sampler state never see an illegal linear-filter pairing.
+        images[3] = Sampled(validityRead, _bindlessHeap.HiZSampler);
         images[4] = Storage(historyWrite);
         images[5] = Storage(momentsWrite);
         images[6] = Storage(validityWrite);
@@ -693,7 +697,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         images[8] = Sampled(_targets.NearFieldReceiverPayload!, _bindlessHeap.HiZSampler);
         images[9] = Sampled(normalRead, _bindlessHeap.ScreenSampler);
         images[10] = Storage(normalWrite);
-        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[3];
+        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[4];
         buffers[0] = BufferInfo(_buffers.HitMetadata);
         buffers[1] = BufferInfo(_buffers.HistoryMetadata(readBank));
         buffers[2] = BufferInfo(_buffers.HistoryMetadata(writeBank));

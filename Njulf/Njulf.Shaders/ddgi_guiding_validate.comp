@@ -15,7 +15,9 @@ layout(std430, set = 0, binding = 0) buffer GuidingValidateBankBuffer
 
 layout(std430, set = 0, binding = 1) readonly buffer GuidingValidateWorkItemsBuffer
 {
-    SimpleDdgiGuidingBuildWorkItem workItems[];
+    // Word-addressed access preserves the frozen 48-byte ABI while avoiding
+    // a native NVIDIA compiler defect in runtime arrays of this struct.
+    uint words[];
 } guidingValidateWorkItems;
 
 layout(std430, set = 0, binding = 2) buffer GuidingValidateCountersBuffer
@@ -23,21 +25,75 @@ layout(std430, set = 0, binding = 2) buffer GuidingValidateCountersBuffer
     uint counters[];
 } guidingValidateCounters;
 
-struct SimpleDdgiGuidingPublicationRecord
-{
-    uint physicalProbeIndex;
-    uint virtualProbeId;
-    uint pageGeneration;
-    uint status;
-    SimpleDdgiGuidingDistributionHeader header;
-};
-
 layout(std430, set = 0, binding = 3) buffer GuidingValidatePublicationBuffer
 {
-    SimpleDdgiGuidingPublicationRecord records[];
+    // Publication remains byte-for-byte compatible with the managed record;
+    // status is the final word published by the shader transaction.
+    uint words[];
 } guidingValidatePublication;
 
 shared uint invalidHierarchy;
+
+bool SimpleDdgiGuidingValidateLoadBuildWorkItem(
+    uint workItemIndex,
+    out SimpleDdgiGuidingBuildWorkItem workItem)
+{
+    uint wordCount = uint(guidingValidateWorkItems.words.length());
+    if (workItemIndex >=
+        wordCount / SIMPLE_DDGI_GUIDING_BUILD_WORK_ITEM_WORDS)
+    {
+        return false;
+    }
+
+    uint baseWord = workItemIndex *
+        SIMPLE_DDGI_GUIDING_BUILD_WORK_ITEM_WORDS;
+    workItem.physicalProbeIndex = guidingValidateWorkItems.words[baseWord + 0u];
+    workItem.virtualProbeId = guidingValidateWorkItems.words[baseWord + 1u];
+    workItem.pageGeneration = guidingValidateWorkItems.words[baseWord + 2u];
+    workItem.previousDistributionGeneration =
+        guidingValidateWorkItems.words[baseWord + 3u];
+    workItem.targetDistributionGeneration =
+        guidingValidateWorkItems.words[baseWord + 4u];
+    workItem.targetProposalEpoch =
+        guidingValidateWorkItems.words[baseWord + 5u];
+    workItem.partialOffset = guidingValidateWorkItems.words[baseWord + 6u];
+    workItem.partialCount = guidingValidateWorkItems.words[baseWord + 7u];
+    workItem.sampleCountAndAge = guidingValidateWorkItems.words[baseWord + 8u];
+    workItem.expectedContentRevision =
+        guidingValidateWorkItems.words[baseWord + 9u];
+    workItem.flags = guidingValidateWorkItems.words[baseWord + 10u];
+    workItem.reserved = guidingValidateWorkItems.words[baseWord + 11u];
+    return true;
+}
+
+void SimpleDdgiGuidingValidateStorePublication(
+    uint workItemIndex,
+    SimpleDdgiGuidingBuildWorkItem workItem,
+    SimpleDdgiGuidingDistributionHeader header)
+{
+    uint baseWord = workItemIndex *
+        SIMPLE_DDGI_GUIDING_PUBLICATION_RECORD_WORDS;
+    guidingValidatePublication.words[baseWord + 3u] = 0u;
+    guidingValidatePublication.words[baseWord + 0u] =
+        workItem.physicalProbeIndex;
+    guidingValidatePublication.words[baseWord + 1u] = workItem.virtualProbeId;
+    guidingValidatePublication.words[baseWord + 2u] = workItem.pageGeneration;
+    guidingValidatePublication.words[baseWord + 4u] = header.abiVersion;
+    guidingValidatePublication.words[baseWord + 5u] = header.virtualProbeId;
+    guidingValidatePublication.words[baseWord + 6u] = header.pageGeneration;
+    guidingValidatePublication.words[baseWord + 7u] =
+        header.distributionGeneration;
+    guidingValidatePublication.words[baseWord + 8u] =
+        header.directionProposalEpoch;
+    guidingValidatePublication.words[baseWord + 9u] = header.sampleCountAndAge;
+    guidingValidatePublication.words[baseWord + 10u] =
+        floatBitsToUint(header.totalIncidentEnergy);
+    guidingValidatePublication.words[baseWord + 11u] =
+        header.packedLeafResolutionAndFlags;
+    memoryBarrierBuffer();
+    guidingValidatePublication.words[baseWord + 3u] =
+        SIMPLE_DDGI_GUIDING_ABI_VERSION;
+}
 
 SimpleDdgiGuidingDistributionHeader SimpleDdgiGuidingValidateReadHeader(uint baseWord)
 {
@@ -65,20 +121,23 @@ void main()
     uint workItemIndex = gl_WorkGroupID.x;
     bool gpuGenerated = (guidingPc.flags &
         SIMPLE_DDGI_GUIDING_PUSH_GPU_GENERATED_WORK) != 0u;
-    uint effectiveDispatchCount = gpuGenerated &&
-            uint(guidingValidateCounters.counters.length()) >=
-                SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT
+    uint counterLength = uint(guidingValidateCounters.counters.length());
+    if (counterLength < SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT)
+        return;
+    uint effectiveDispatchCount = gpuGenerated
         ? guidingValidateCounters.counters[
             SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT]
         : guidingPc.dispatchCount;
+    uint publicationCapacity =
+        uint(guidingValidatePublication.words.length()) /
+            SIMPLE_DDGI_GUIDING_PUBLICATION_RECORD_WORDS;
     if (workItemIndex >= effectiveDispatchCount ||
         effectiveDispatchCount > guidingPc.dispatchCount ||
         (gpuGenerated &&
             (guidingValidateCounters.counters[
                 SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS] !=
                     SIMPLE_DDGI_GUIDING_ABI_VERSION ||
-             workItemIndex >=
-                uint(guidingValidatePublication.records.length()))))
+             workItemIndex >= publicationCapacity)))
         return;
 
     uint lane = gl_LocalInvocationIndex;
@@ -102,8 +161,18 @@ void main()
     }
     barrier();
 
-    SimpleDdgiGuidingBuildWorkItem workItem =
-        guidingValidateWorkItems.workItems[workItemIndex];
+    SimpleDdgiGuidingBuildWorkItem workItem;
+    if (!SimpleDdgiGuidingValidateLoadBuildWorkItem(
+            workItemIndex,
+            workItem))
+    {
+        if (lane == 0u)
+        {
+            atomicAdd(guidingValidateCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+        }
+        return;
+    }
     uint leafResolution = guidingPc.leafResolution;
     bool supportedLeafResolution =
         SimpleDdgiGuidingSupportedLeafResolution(leafResolution);
@@ -111,12 +180,14 @@ void main()
         supportedLeafResolution
             ? SimpleDdgiGuidingHierarchyWeightCount(leafResolution)
             : 0u;
+    uint baseWord;
+    bool baseWordFits = SimpleDdgiGuidingTryMultiplyU32(
+        workItem.physicalProbeIndex,
+        guidingPc.bankStrideWords,
+        baseWord);
     bool safePhysical = workItem.physicalProbeIndex < guidingPc.physicalProbeCapacity &&
         guidingPc.bankStrideWords != 0u &&
-        workItem.physicalProbeIndex <= 0xffffffffu / guidingPc.bankStrideWords;
-    uint baseWord = safePhysical
-        ? SimpleDdgiGuidingBankBaseWord(workItem.physicalProbeIndex)
-        : 0u;
+        baseWordFits;
     bool validLayout = guidingPc.abiVersion == SIMPLE_DDGI_GUIDING_ABI_VERSION &&
         supportedLeafResolution &&
         guidingPc.hierarchyWeightCount == hierarchyWeightCount &&
@@ -229,18 +300,10 @@ void main()
             // back to the lifecycle manager. Status is written last after the
             // validated bank header is visible; zero-filled records remain
             // unambiguously unpublished.
-            memoryBarrierBuffer();
-            SimpleDdgiGuidingPublicationRecord publication;
-            publication.physicalProbeIndex = workItem.physicalProbeIndex;
-            publication.virtualProbeId = workItem.virtualProbeId;
-            publication.pageGeneration = workItem.pageGeneration;
-            publication.status = 0u;
-            publication.header =
-                SimpleDdgiGuidingValidateReadHeader(baseWord);
-            guidingValidatePublication.records[workItemIndex] = publication;
-            memoryBarrierBuffer();
-            guidingValidatePublication.records[workItemIndex].status =
-                SIMPLE_DDGI_GUIDING_ABI_VERSION;
+            SimpleDdgiGuidingValidateStorePublication(
+                workItemIndex,
+                workItem,
+                SimpleDdgiGuidingValidateReadHeader(baseWord));
         }
     }
 }

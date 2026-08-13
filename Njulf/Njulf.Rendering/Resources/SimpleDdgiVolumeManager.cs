@@ -659,6 +659,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private int _previousVolumeCount;
         private readonly Vector3[] _ringOrigins = new Vector3[3];
         private readonly bool[] _ringHasOrigins = new bool[3];
+        private readonly bool _directionalGuidingTraceStagingEnabled;
 
         private BufferHandle _paramsBuffer;
         private BufferHandle _irradianceAtlasBuffer;
@@ -961,6 +962,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private bool _capacityKeyValid;
         private SimpleDdgiCapacityKey _capacityKey;
         private SimpleDdgiMemoryPlan _capacityPlan;
+        private uint _publishedDirectionalGuidingPhysicalProbeCapacity;
+        private int _publishedDirectionalGuidingDirectionSlotsPerProbe;
         private bool _uploadCapacityStableKeyHit;
         private long _uploadCapacityCpuProbeStateMicroseconds;
         private long _uploadCapacityPlanCreationMicroseconds;
@@ -1120,7 +1123,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             BufferManager bufferManager,
             RenderSettings settings,
             Action<RuntimeStallReason, string, Action> recordRuntimeStall,
-            Func<ulong> waitForBindlessDescriptorReaders)
+            Func<ulong> waitForBindlessDescriptorReaders,
+            bool directionalGuidingTraceStagingEnabled = false)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
@@ -1131,6 +1135,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 waitForBindlessDescriptorReaders ??
                 throw new ArgumentNullException(
                     nameof(waitForBindlessDescriptorReaders));
+            _directionalGuidingTraceStagingEnabled =
+                directionalGuidingTraceStagingEnabled;
             _gpuScheduler = new SimpleDdgiGpuScheduler(_context, _bufferManager);
             _probePageCache = new SimpleDdgiProbePageCache(
                 _context,
@@ -1170,6 +1176,37 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public ulong FrameSerial => _frameSerial;
         public uint FrameIndex => _frameIndex;
         public SimpleDdgiGpuScheduler GpuScheduler => _gpuScheduler;
+
+        public void SetPublishedDirectionalGuidingSourceCache(
+            uint physicalProbeCapacity,
+            int directionSlotsPerProbe)
+        {
+            if (physicalProbeCapacity >
+                GlobalIlluminationSettings.MaxSimpleDdgiTotalProbeCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(physicalProbeCapacity));
+            }
+            if (directionSlotsPerProbe < 0 ||
+                directionSlotsPerProbe >
+                    GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe ||
+                (physicalProbeCapacity == 0u) !=
+                    (directionSlotsPerProbe == 0))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(directionSlotsPerProbe));
+            }
+
+            _publishedDirectionalGuidingPhysicalProbeCapacity =
+                physicalProbeCapacity;
+            _publishedDirectionalGuidingDirectionSlotsPerProbe =
+                directionSlotsPerProbe;
+        }
+
+        private uint EffectivePublishedDirectionalGuidingPhysicalProbeCapacity =>
+            _publishedDirectionalGuidingDirectionSlotsPerProbe == _raysPerProbe
+                ? _publishedDirectionalGuidingPhysicalProbeCapacity
+                : 0u;
 
         /// <summary>
         /// Exposes only the immutable resident-scheduler ABI needed by C3.
@@ -1668,6 +1705,19 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         /// <summary>Total atlas allocation across SSBO writer and optional images.</summary>
         public ulong AtlasBytes => checked(AtlasBufferBytes + SampledAtlasImageBytes);
         public ulong RayScratchBytes => _rayScratchBytes;
+        public ulong GuidingTraceDirectionScratchBytes =>
+            _capacityPlan.GuidingTraceDirectionScratchBytes;
+        /// <summary>
+        /// Number of stable physical-probe records addressable by C3's compact
+        /// trace payload tail. The tail is sized from the ordinary update
+        /// capacity, so admission must never expose a larger guided prefix.
+        /// </summary>
+        public int GuidingTraceDirectionScratchProbeCapacity =>
+            _capacityPlan.GuidingTraceDirectionScratchBytes == 0UL
+                ? 0
+                : _capacityPlan.UpdateRequestCapacity;
+        public uint GuidingTraceDirectionScratchOffsetWords => checked((uint)
+            _capacityPlan.GuidingTraceDirectionScratchOffsetWords);
         public ulong ProbeStateBytes => _probeStateBytes;
         public ulong ReceiverProbeBytes => _receiverProbeBytes;
         public ulong DirectionalRadianceBytes => _directionalRadianceBytes;
@@ -4982,7 +5032,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     // W scales only the environment complement for missing probe
                     // ownership (at receivers and bounce hit points). Valid probe
                     // transport, including trace misses, is intentionally unaffected.
-                    ProbeUpdateRange = new Vector4(_updateStartProbe, _probesToUpdate, _volumeCount, gi.EnvironmentFallbackIntensity),
+                    ProbeUpdateRange = new Vector4(
+                        PackHeaderWord(
+                            EffectivePublishedDirectionalGuidingPhysicalProbeCapacity),
+                        _probesToUpdate,
+                        PackHeaderWord(
+                            GuidingTraceDirectionScratchOffsetWords),
+                        gi.EnvironmentFallbackIntensity),
                     DebugAndBias = new Vector4(ResolveSimpleDdgiDebugViewMode(gi.DebugView), gi.DdgiSelfShadowBiasScale, gi.IndirectIntensity, gi.FarFieldMaxTraceSteps),
                     RotationQuaternion = BuildFrameRotation(_frameIndex),
                     BiasAndPadding = new Vector4(gi.SimpleDdgiNormalBias, gi.SimpleDdgiViewBias, gi.SimpleDdgiHysteresisChangeThreshold, gi.SimpleDdgiHysteresisStepThreshold),
@@ -5027,9 +5083,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     // params header must not retain a previous CPU queue range
                     // that a consumer could accidentally dispatch.
                     _lastParams.ProbeUpdateRange = new Vector4(
+                        PackHeaderWord(
+                            EffectivePublishedDirectionalGuidingPhysicalProbeCapacity),
                         0.0f,
-                        0.0f,
-                        _volumeCount,
+                        PackHeaderWord(
+                            GuidingTraceDirectionScratchOffsetWords),
                         gi.EnvironmentFallbackIntensity);
                     for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
                     {
@@ -11334,7 +11392,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     glossyTransportMode:
                         gi.EffectiveSimpleDdgiGlossyTransportMode,
                     directionalRadianceBudgetBytes:
-                        gi.SimpleDdgiDirectionalRadianceMemoryBudgetBytes);
+                        gi.SimpleDdgiDirectionalRadianceMemoryBudgetBytes,
+                    directionalGuidingTraceStaging:
+                        _directionalGuidingTraceStagingEnabled);
 
                 if (!string.IsNullOrEmpty(prerequisiteFallbackReason) &&
                     string.IsNullOrEmpty(_cachedLayoutReport.ResidencyFallbackReason))
@@ -12649,9 +12709,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 // A zero range is deliberate.  GPU consumers use the resident
                 // queue/bucket ABI and must not observe a prior CPU range.
                 ProbeUpdateRange = new Vector4(
+                    PackHeaderWord(
+                        EffectivePublishedDirectionalGuidingPhysicalProbeCapacity),
                     0.0f,
-                    0.0f,
-                    _volumeCount,
+                    PackHeaderWord(
+                        GuidingTraceDirectionScratchOffsetWords),
                     gi.EnvironmentFallbackIntensity),
                 DebugAndBias = new Vector4(
                     ResolveSimpleDdgiDebugViewMode(gi.DebugView),
@@ -13955,7 +14017,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         .EffectiveSimpleDdgiGlossyTransportMode,
                 directionalRadianceBudgetBytes:
                     _settings.GlobalIllumination
-                        .SimpleDdgiDirectionalRadianceMemoryBudgetBytes);
+                        .SimpleDdgiDirectionalRadianceMemoryBudgetBytes,
+                directionalGuidingTraceStaging:
+                    _directionalGuidingTraceStagingEnabled);
             long sampledBudgetStart = Stopwatch.GetTimestamp();
             bool sampledAtlasAdmitted = sampledAtlasCandidate &&
                 (requiredKey.SampledAtlasBudgetBytes == 0UL ||
@@ -14004,7 +14068,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                             .EffectiveSimpleDdgiGlossyTransportMode,
                     directionalRadianceBudgetBytes:
                         _settings.GlobalIllumination
-                            .SimpleDdgiDirectionalRadianceMemoryBudgetBytes);
+                            .SimpleDdgiDirectionalRadianceMemoryBudgetBytes,
+                    directionalGuidingTraceStaging:
+                        _directionalGuidingTraceStagingEnabled);
             }
             _uploadCapacitySampledAtlasBudgetMicroseconds +=
                 ElapsedMicroseconds(sampledBudgetStart);
@@ -14169,7 +14235,48 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             }
             _transportSourceCacheRayCapacity = sourceCacheRayCapacity;
             buffersChanged |= sourceCacheReallocated;
-            buffersChanged |= EnsureBuffer(ref _rayResultScratchBuffer, ref _rayScratchBytes, rayBytes, "Simple DDGI Ray Scratch", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: destroyPreviousImmediately, forceRecreate: storageContractChanged);
+            bool rayScratchReallocated = EnsureBuffer(
+                ref _rayResultScratchBuffer,
+                ref _rayScratchBytes,
+                rayBytes,
+                "Simple DDGI Ray Scratch",
+                invalidateAtlas: false,
+                commandBuffer: commandBuffer,
+                preserveContents: false,
+                destroyPreviousImmediately: destroyPreviousImmediately,
+                forceRecreate: storageContractChanged);
+            buffersChanged |= rayScratchReallocated;
+            if (rayScratchReallocated &&
+                allocationPlan.GuidingTraceDirectionScratchBytes > 0UL)
+            {
+                // The compact C3 tail persists by stable physical-probe slot.
+                // Device-local allocations have undefined initial contents, so
+                // clear every release marker before the first sample can be
+                // consumed. Subsequent frames deliberately retain the payload
+                // until the same owner replaces it.
+                ulong guidingOffsetBytes = checked(
+                    allocationPlan.GuidingTraceDirectionScratchOffsetWords *
+                    sizeof(uint));
+                Silk.NET.Vulkan.Buffer rayScratch =
+                    _bufferManager.GetBuffer(_rayResultScratchBuffer);
+                _context.Api.CmdFillBuffer(
+                    commandBuffer,
+                    rayScratch,
+                    guidingOffsetBytes,
+                    allocationPlan.GuidingTraceDirectionScratchBytes,
+                    0u);
+                BufferMemoryBarrier2 guidingClearBarrier =
+                    BarrierBuilder.BufferBarrier(
+                        rayScratch,
+                        PipelineStageFlags2.TransferBit,
+                        AccessFlags2.TransferWriteBit,
+                        PipelineStageFlags2.ComputeShaderBit,
+                        AccessFlags2.ShaderStorageReadBit |
+                            AccessFlags2.ShaderStorageWriteBit,
+                        guidingOffsetBytes,
+                        allocationPlan.GuidingTraceDirectionScratchBytes);
+                ExecuteBufferBarrier(commandBuffer, guidingClearBarrier);
+            }
             if (EnsureBuffer(ref _probeStateBuffer, ref _probeStateBytes, probeStateBytes, "Simple DDGI Probe State", invalidateAtlas: false, commandBuffer: commandBuffer, preserveContents: false, destroyPreviousImmediately: destroyPreviousImmediately))
             {
                 _probeStateUploadRequired = true;

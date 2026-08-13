@@ -8,13 +8,14 @@
 // large per-ray request expansion is parallel and status is published in a
 // separate final dispatch.
 #include "common.glsl"
+#include "ddgi_guiding_arithmetic.glsl"
 #define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
 #define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
 #include "ddgi_simple_shared.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-const uint SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION = 0x43330007u;
+const uint SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION = 0x43330008u;
 const uint SIMPLE_DDGI_GUIDING_PREPARE_BUILD_WORK = 1u << 0u;
 const uint SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_WORK = 1u << 1u;
 const uint SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_EXPAND = 1u << 2u;
@@ -29,6 +30,9 @@ const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS = 31u;
 const uint SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE = 0u;
 const uint SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE = 1u;
 const uint SIMPLE_DDGI_GUIDING_MINIMUM_MAINTENANCE_RAYS = 8u;
+const uint SIMPLE_DDGI_GUIDING_TRAINING_WORK_ITEM_WORDS = 14u;
+const uint SIMPLE_DDGI_GUIDING_BUILD_WORK_ITEM_WORDS = 12u;
+const uint SIMPLE_DDGI_GUIDING_SAMPLE_REQUEST_WORDS = 14u;
 
 struct SimpleDdgiGuidingTrainingWorkItem
 {
@@ -79,28 +83,136 @@ struct SimpleDdgiGuidingSampleRequest
     float requestedUniformFraction;
     uint randomIntraLeafUBits;
     uint randomIntraLeafVBits;
-    uint reserved;
+    uint traceRayIndex;
 };
 
 layout(std430, set = 2, binding = 0) buffer GuidingPrepareTrainingWorkBuffer
 {
-    SimpleDdgiGuidingTrainingWorkItem items[];
+    // Raw-word SSBOs retain the managed struct ABI and avoid a native NVIDIA
+    // compiler defect triggered by several runtime arrays of structs.
+    uint words[];
 } guidingPrepareTrainingWork;
 
 layout(std430, set = 2, binding = 1) buffer GuidingPrepareBuildWorkBuffer
 {
-    SimpleDdgiGuidingBuildWorkItem items[];
+    uint words[];
 } guidingPrepareBuildWork;
 
 layout(std430, set = 2, binding = 2) buffer GuidingPrepareSampleRequestBuffer
 {
-    SimpleDdgiGuidingSampleRequest requests[];
+    uint words[];
 } guidingPrepareSampleRequests;
 
 layout(std430, set = 2, binding = 3) buffer GuidingPrepareCounterBuffer
 {
     uint counters[];
 } guidingPrepareCounters;
+
+SimpleDdgiGuidingTrainingWorkItem GuidingPrepareLoadTrainingWorkItem(
+    uint itemIndex)
+{
+    uint baseWord = itemIndex *
+        SIMPLE_DDGI_GUIDING_TRAINING_WORK_ITEM_WORDS;
+    SimpleDdgiGuidingTrainingWorkItem item;
+    item.physicalProbeIndex = guidingPrepareTrainingWork.words[baseWord + 0u];
+    item.virtualProbeId = guidingPrepareTrainingWork.words[baseWord + 1u];
+    item.pageGeneration = guidingPrepareTrainingWork.words[baseWord + 2u];
+    item.sourceDistributionGeneration =
+        guidingPrepareTrainingWork.words[baseWord + 3u];
+    item.directionProposalEpoch =
+        guidingPrepareTrainingWork.words[baseWord + 4u];
+    item.recordOffset = guidingPrepareTrainingWork.words[baseWord + 5u];
+    item.recordCount = guidingPrepareTrainingWork.words[baseWord + 6u];
+    item.partialOffset = guidingPrepareTrainingWork.words[baseWord + 7u];
+    item.expectedContentRevision =
+        guidingPrepareTrainingWork.words[baseWord + 8u];
+    item.queueOffset = guidingPrepareTrainingWork.words[baseWord + 9u];
+    item.rayResultBaseIndex =
+        guidingPrepareTrainingWork.words[baseWord + 10u];
+    item.directionSlotsPerProbe =
+        guidingPrepareTrainingWork.words[baseWord + 11u];
+    item.sourceEpoch = guidingPrepareTrainingWork.words[baseWord + 12u];
+    item.sourceLightingGeneration =
+        guidingPrepareTrainingWork.words[baseWord + 13u];
+    return item;
+}
+
+void GuidingPrepareStoreTrainingWorkItem(
+    uint itemIndex,
+    SimpleDdgiGuidingTrainingWorkItem item)
+{
+    uint baseWord = itemIndex *
+        SIMPLE_DDGI_GUIDING_TRAINING_WORK_ITEM_WORDS;
+    guidingPrepareTrainingWork.words[baseWord + 0u] = item.physicalProbeIndex;
+    guidingPrepareTrainingWork.words[baseWord + 1u] = item.virtualProbeId;
+    guidingPrepareTrainingWork.words[baseWord + 2u] = item.pageGeneration;
+    guidingPrepareTrainingWork.words[baseWord + 3u] =
+        item.sourceDistributionGeneration;
+    guidingPrepareTrainingWork.words[baseWord + 4u] =
+        item.directionProposalEpoch;
+    guidingPrepareTrainingWork.words[baseWord + 5u] = item.recordOffset;
+    guidingPrepareTrainingWork.words[baseWord + 6u] = item.recordCount;
+    guidingPrepareTrainingWork.words[baseWord + 7u] = item.partialOffset;
+    guidingPrepareTrainingWork.words[baseWord + 8u] =
+        item.expectedContentRevision;
+    guidingPrepareTrainingWork.words[baseWord + 9u] = item.queueOffset;
+    guidingPrepareTrainingWork.words[baseWord + 10u] =
+        item.rayResultBaseIndex;
+    guidingPrepareTrainingWork.words[baseWord + 11u] =
+        item.directionSlotsPerProbe;
+    guidingPrepareTrainingWork.words[baseWord + 12u] = item.sourceEpoch;
+    guidingPrepareTrainingWork.words[baseWord + 13u] =
+        item.sourceLightingGeneration;
+}
+
+void GuidingPrepareStoreBuildWorkItem(
+    uint itemIndex,
+    SimpleDdgiGuidingBuildWorkItem item)
+{
+    uint baseWord = itemIndex * SIMPLE_DDGI_GUIDING_BUILD_WORK_ITEM_WORDS;
+    guidingPrepareBuildWork.words[baseWord + 0u] = item.physicalProbeIndex;
+    guidingPrepareBuildWork.words[baseWord + 1u] = item.virtualProbeId;
+    guidingPrepareBuildWork.words[baseWord + 2u] = item.pageGeneration;
+    guidingPrepareBuildWork.words[baseWord + 3u] =
+        item.previousDistributionGeneration;
+    guidingPrepareBuildWork.words[baseWord + 4u] =
+        item.targetDistributionGeneration;
+    guidingPrepareBuildWork.words[baseWord + 5u] = item.targetProposalEpoch;
+    guidingPrepareBuildWork.words[baseWord + 6u] = item.partialOffset;
+    guidingPrepareBuildWork.words[baseWord + 7u] = item.partialCount;
+    guidingPrepareBuildWork.words[baseWord + 8u] = item.sampleCountAndAge;
+    guidingPrepareBuildWork.words[baseWord + 9u] =
+        item.expectedContentRevision;
+    guidingPrepareBuildWork.words[baseWord + 10u] = item.flags;
+    guidingPrepareBuildWork.words[baseWord + 11u] = item.reserved;
+}
+
+void GuidingPrepareStoreSampleRequest(
+    uint requestIndex,
+    SimpleDdgiGuidingSampleRequest request)
+{
+    uint baseWord = requestIndex * SIMPLE_DDGI_GUIDING_SAMPLE_REQUEST_WORDS;
+    guidingPrepareSampleRequests.words[baseWord + 0u] =
+        request.physicalProbeIndex;
+    guidingPrepareSampleRequests.words[baseWord + 1u] = request.virtualProbeId;
+    guidingPrepareSampleRequests.words[baseWord + 2u] = request.pageGeneration;
+    guidingPrepareSampleRequests.words[baseWord + 3u] =
+        request.expectedDistributionGeneration;
+    guidingPrepareSampleRequests.words[baseWord + 4u] =
+        request.expectedProposalEpoch;
+    guidingPrepareSampleRequests.words[baseWord + 5u] = request.stableProbeIdLow;
+    guidingPrepareSampleRequests.words[baseWord + 6u] = request.stableProbeIdHigh;
+    guidingPrepareSampleRequests.words[baseWord + 7u] = request.slotIndex;
+    guidingPrepareSampleRequests.words[baseWord + 8u] = request.technique;
+    guidingPrepareSampleRequests.words[baseWord + 9u] = request.randomBranchBits;
+    guidingPrepareSampleRequests.words[baseWord + 10u] =
+        floatBitsToUint(request.requestedUniformFraction);
+    guidingPrepareSampleRequests.words[baseWord + 11u] =
+        request.randomIntraLeafUBits;
+    guidingPrepareSampleRequests.words[baseWord + 12u] =
+        request.randomIntraLeafVBits;
+    guidingPrepareSampleRequests.words[baseWord + 13u] = request.traceRayIndex;
+}
 
 layout(push_constant) uniform SimpleDdgiGuidingPreparePushConstants
 {
@@ -189,7 +301,8 @@ bool GuidingPrepareReadGuide(
 {
     distributionGeneration = 0u;
     proposalEpoch = 0u;
-    if (update.physicalProbeIndex >= guidingPreparePc.physicalProbeCapacity ||
+    if (guidingPreparePc.readBankIndex > 1u ||
+        update.physicalProbeIndex >= guidingPreparePc.physicalProbeCapacity ||
         guidingPreparePc.bankStrideWords < SIMPLE_DDGI_GUIDING_HEADER_WORDS)
     {
         return false;
@@ -230,9 +343,17 @@ void main()
         SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_FINALIZE;
     bool samplePhase = sampleCompact || sampleExpand || sampleFinalize;
     uint counterLength = uint(guidingPrepareCounters.counters.length());
-    uint trainingCapacity = uint(guidingPrepareTrainingWork.items.length());
-    uint buildCapacity = uint(guidingPrepareBuildWork.items.length());
-    uint sampleCapacity = uint(guidingPrepareSampleRequests.requests.length());
+    uint trainingCapacity = uint(guidingPrepareTrainingWork.words.length()) /
+        SIMPLE_DDGI_GUIDING_TRAINING_WORK_ITEM_WORDS;
+    uint buildCapacity = uint(guidingPrepareBuildWork.words.length()) /
+        SIMPLE_DDGI_GUIDING_BUILD_WORK_ITEM_WORDS;
+    uint sampleCapacity = uint(guidingPrepareSampleRequests.words.length()) /
+        SIMPLE_DDGI_GUIDING_SAMPLE_REQUEST_WORDS;
+    uint scheduledRequestCapacity;
+    bool scheduledRequestCapacityFits = SimpleDdgiGuidingTryMultiplyU32(
+        guidingPreparePc.scheduledProbeCapacity,
+        guidingPreparePc.directionSlotsPerProbe,
+        scheduledRequestCapacity);
     bool valid = guidingPreparePc.abiVersion ==
             SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION &&
         (build || samplePhase) &&
@@ -244,20 +365,18 @@ void main()
          guidingPreparePc.leafResolution == 8u ||
          guidingPreparePc.leafResolution == 16u) &&
         guidingPreparePc.schedulerRequestCapacity != 0u &&
-        guidingPreparePc.readBankIndex <= 1u &&
+        (guidingPreparePc.readBankIndex <= 1u ||
+            (build && guidingPreparePc.readBankIndex == 0xffffffffu)) &&
         guidingPreparePc.bankStrideWords >= SIMPLE_DDGI_GUIDING_HEADER_WORDS &&
         guidingPreparePc.scheduledProbeCapacity <= trainingCapacity &&
         guidingPreparePc.scheduledProbeCapacity <= buildCapacity &&
-        guidingPreparePc.scheduledProbeCapacity <=
-            0xffffffffu / guidingPreparePc.directionSlotsPerProbe &&
+        scheduledRequestCapacityFits &&
         counterLength >= 32u;
     float uniformFraction = uintBitsToFloat(
         guidingPreparePc.uniformMixtureFractionBits);
     if (samplePhase)
     {
-        valid = valid && sampleCapacity >=
-                guidingPreparePc.scheduledProbeCapacity *
-                    guidingPreparePc.directionSlotsPerProbe &&
+        valid = valid && sampleCapacity >= scheduledRequestCapacity &&
             !isnan(uniformFraction) && !isinf(uniformFraction) &&
             uniformFraction >= 0.1 && uniformFraction <= 1.0;
     }
@@ -303,7 +422,7 @@ void main()
         uint slot = requestIndex - workIndex *
             guidingPreparePc.directionSlotsPerProbe;
         SimpleDdgiGuidingTrainingWorkItem work =
-            guidingPrepareTrainingWork.items[workIndex];
+            GuidingPrepareLoadTrainingWorkItem(workIndex);
         SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(
             uint(SIMPLE_DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX),
             work.queueOffset);
@@ -341,8 +460,17 @@ void main()
             generation,
             work.directionProposalEpoch,
             slot ^ 0xb5297a4du);
-        request.reserved = 0u;
-        guidingPrepareSampleRequests.requests[requestIndex] = request;
+        uint traceRayBase;
+        if (!SimpleDdgiGuidingTryMultiplyU32(
+                work.physicalProbeIndex,
+                guidingPreparePc.directionSlotsPerProbe,
+                traceRayBase) ||
+            slot > 0xffffffffu - traceRayBase)
+        {
+            return;
+        }
+        request.traceRayIndex = traceRayBase + slot;
+        GuidingPrepareStoreSampleRequest(requestIndex, request);
         return;
     }
 
@@ -386,7 +514,10 @@ void main()
         guidingPreparePc.schedulerRequestCapacity);
     SimpleDdgiParams params = ReadSimpleDdgiParams(
         uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
-    if (params.physicalProbeCapacity != guidingPreparePc.physicalProbeCapacity ||
+    // C3 deliberately admits a bounded physical prefix under its independent
+    // memory budget.  The source DDGI allocation may therefore be larger; it
+    // is unsafe only when the admitted C3 prefix exceeds that source.
+    if (guidingPreparePc.physicalProbeCapacity > params.physicalProbeCapacity ||
         params.raysPerProbe != guidingPreparePc.directionSlotsPerProbe)
     {
         return;
@@ -458,7 +589,7 @@ void main()
         trainingItem.sourceEpoch = update.sourceEpoch;
         trainingItem.sourceLightingGeneration =
             update.sourceLightingGeneration;
-        guidingPrepareTrainingWork.items[selectedCount] = trainingItem;
+        GuidingPrepareStoreTrainingWorkItem(selectedCount, trainingItem);
 
         if (build)
         {
@@ -479,7 +610,7 @@ void main()
             buildItem.expectedContentRevision = contentRevision;
             buildItem.flags = 0u;
             buildItem.reserved = 0u;
-            guidingPrepareBuildWork.items[selectedCount] = buildItem;
+            GuidingPrepareStoreBuildWorkItem(selectedCount, buildItem);
         }
 
         ++selectedCount;

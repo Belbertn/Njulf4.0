@@ -620,6 +620,44 @@ public sealed class PerformanceSnapshotWriterTests
     }
 
     [Test]
+    public void DirectionalGuidingTelemetry_RetainsPriorCompletionWhileNewFrameHasNoSamples()
+    {
+        SimpleDdgiDirectionalGuidingDiagnostics completed =
+            CreateDirectionalGuidingTelemetry();
+        SimpleDdgiDirectionalGuidingDiagnostics pending = completed with
+        {
+            State = SimpleDdgiGuidingTelemetryState.PendingGpuReadback,
+            Frame = completed.Frame with
+            {
+                FramePrepared = true,
+                FrameSerial = completed.Frame.FrameSerial + 1UL,
+                GuidedProbeCount = 0,
+                TrainingRecordCount = 0U,
+                SampleRequestCount = 0,
+                State = "prepared-gpu-resident"
+            },
+            Reason = "prepared-gpu-resident"
+        };
+
+        SimpleDdgiDirectionalGuidingDiagnostics normalized =
+            pending.NormalizeForPersistence();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(normalized.State,
+                Is.EqualTo(SimpleDdgiGuidingTelemetryState.PendingGpuReadback));
+            Assert.That(normalized.Reason,
+                Is.EqualTo("prepared-gpu-resident"));
+            Assert.That(normalized.Frame.CompletedFrameSerial,
+                Is.EqualTo(completed.Frame.CompletedFrameSerial));
+            Assert.That(normalized.Frame.CompletedSampleCount,
+                Is.EqualTo(completed.Frame.CompletedSampleCount));
+            Assert.That(normalized.Frame.SampleRequestCount, Is.Zero);
+            Assert.That(normalized.Frame.SampleReadbackValid, Is.True);
+        });
+    }
+
+    [Test]
     public void SnapshotReader_MigratesSchemaSevenDirectionalGuidingTelemetryToDisabled()
     {
         RendererDiagnostics diagnostics = RendererDiagnostics.Empty with

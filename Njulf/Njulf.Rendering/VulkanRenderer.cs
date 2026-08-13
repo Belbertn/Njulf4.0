@@ -104,7 +104,8 @@ namespace Njulf.Rendering
         // create an entry.
         private AdvancedGiQualificationManifest _advancedGiQualificationManifest =
             AdvancedGiQualificationManifest.Empty;
-        private AdvancedGiRuntimeContentBinding _advancedGiRuntimeContentBinding;
+        private AdvancedGiRuntimeContentBinding _advancedGiRuntimeContentBinding =
+            AdvancedGiRuntimeContentBinding.Empty;
         private AdvancedGiRuntimeContentState _advancedGiRuntimeContentState =
             AdvancedGiRuntimeContentState.Unconfigured;
         private string _advancedGiSettingsFingerprint = string.Empty;
@@ -167,9 +168,9 @@ namespace Njulf.Rendering
                 SimpleDdgiGuidingFrameConfiguration.Disabled;
         private string _simpleDdgiGuidingConfigurationReason =
             "directional-guiding-disabled";
-        // C4 is an independently admitted authored-hero experiment. Its
-        // graph and allocations exist only when immutable evidence binds the
-        // exact content/device/source/layout tuple selected at initialization.
+        // C4 is an independently admitted authored-hero feature. Explicit
+        // mode validates a bounded technical layout; AutoQualified additionally
+        // binds immutable content/device/source evidence.
         private bool _hasGiCausticEvidence;
         private GiCausticQualificationEvidence _giCausticEvidence;
         private GiCausticAdmissionContext _giCausticAdmissionContext;
@@ -189,10 +190,8 @@ namespace Njulf.Rendering
         private bool _giCausticRuntimeConfigured;
         private bool _giCausticFrameAvailable;
         private bool _giCausticUsesCandidateAuthorization;
-        // C5 is admitted only from a caller-supplied immutable post-B3
-        // measurement artifact. The default records are intentionally absent,
-        // which keeps its graph, MRT variants, images, buffers, and pipelines
-        // at zero cost.
+        // C5 explicit mode admits a complete bounded technical layout.
+        // AutoQualified additionally requires an immutable post-B3 artifact.
         private bool _hasSimpleDdgiNearFieldResidualEvidence;
         private SimpleDdgiNearFieldResidualQualificationEvidence
             _simpleDdgiNearFieldResidualEvidence;
@@ -690,7 +689,7 @@ namespace Njulf.Rendering
             }
             _advancedGiRuntimeContentBinding = binding.IsWellFormed
                 ? binding.Normalize()
-                : default;
+                : AdvancedGiRuntimeContentBinding.Empty;
             _advancedGiRuntimeContentState =
                 _advancedGiRuntimeContentBinding.IsWellFormed
                     ? new AdvancedGiRuntimeContentState(
@@ -1311,11 +1310,12 @@ namespace Njulf.Rendering
                     opacityPrerequisite,
                     opacityPreflightSupported,
                     giSettings.DdgiOpacityMicromapQualificationId);
-            bool enableOpacityMicromapRuntime = opacityPrerequisite.Passed &&
+            bool enableOpacityMicromapRuntime = opacityPreflightSupported &&
                 (giSettings.DdgiOpacityMicromapMode ==
                     DdgiOpacityMicromapMode.ExtFourStateExperiment ||
                  giSettings.DdgiOpacityMicromapMode ==
                     DdgiOpacityMicromapMode.AutoQualified &&
+                 opacityPrerequisite.Passed &&
                  opacityQualification.Passed);
             _accelerationStructureManager = new AccelerationStructureManager(
                 _context,
@@ -1387,7 +1387,9 @@ namespace Njulf.Rendering
                 _bufferManager,
                 Settings,
                 RecordDeviceWaitIdle,
-                WaitForSimpleDdgiBindlessDescriptorReaders);
+                WaitForSimpleDdgiBindlessDescriptorReaders,
+                directionalGuidingTraceStagingEnabled:
+                    _advancedGiGraphModes.UsesDirectionalGuiding);
             _simpleDdgiLightTreeResources = new SimpleDdgiLightTreeGpuResources(
                 _context,
                 _bufferManager,
@@ -1413,7 +1415,11 @@ namespace Njulf.Rendering
                 new SimpleDdgiGuidingSourceCacheSidecar(
                     _context,
                     _bufferManager,
-                    () => { WaitForSimpleDdgiBindlessDescriptorReaders(); });
+                    () => { WaitForSimpleDdgiBindlessDescriptorReaders(); },
+                    buffer => _deleter.QueueBufferDeletion(
+                        _sync.GetInFlightFence(_currentFrame),
+                        buffer,
+                        _bufferManager));
             _simpleDdgiGuidingFrameCoordinator =
                 new SimpleDdgiGuidingFrameCoordinator(
                     _context,
@@ -1467,8 +1473,13 @@ namespace Njulf.Rendering
                         _hizDepthPyramid!,
                         _simpleDdgiNearFieldResidualPlan.Layout,
                         _simpleDdgiNearFieldResidualGpuConfiguration,
-                        _simpleDdgiNearFieldResidualAdmissionContext
-                            .B3QualificationRevision,
+                        Settings.GlobalIllumination
+                                .SimpleDdgiNearFieldResidualMode ==
+                            SimpleDdgiNearFieldResidualMode
+                                .HiZHalfResolutionExperiment
+                            ? SimpleDdgiNearFieldResidualEvidenceAbi.Version
+                            : _simpleDdgiNearFieldResidualAdmissionContext
+                                .B3QualificationRevision,
                         SimpleDdgiNearFieldResidualExperimentBudgetBytes);
             }
 
@@ -1556,11 +1567,13 @@ namespace Njulf.Rendering
                 in AdvancedGiPrerequisiteGateResult prerequisiteGate)
         {
             ArgumentNullException.ThrowIfNull(settings);
-            return prerequisiteGate.Passed &&
-                settings.EffectiveUseDdgi &&
-                settings.SimpleDdgiReceiverFeedbackMode is
-                    SimpleDdgiReceiverFeedbackMode.ExactCompacted or
-                    SimpleDdgiReceiverFeedbackMode.AutoQualified;
+            if (!settings.EffectiveUseDdgi)
+                return false;
+            return settings.SimpleDdgiReceiverFeedbackMode ==
+                    SimpleDdgiReceiverFeedbackMode.ExactCompacted ||
+                settings.SimpleDdgiReceiverFeedbackMode ==
+                    SimpleDdgiReceiverFeedbackMode.AutoQualified &&
+                prerequisiteGate.Passed;
         }
 
         private void InitializeRenderGraph()
@@ -2142,8 +2155,7 @@ namespace Njulf.Rendering
                 (gi.SimpleDdgiNearFieldResidualMode ==
                     SimpleDdgiNearFieldResidualMode.AutoQualified
                     ? _simpleDdgiNearFieldResidualRequestedProfile
-                    : SimpleDdgiNearFieldResidualProfile
-                        .HalfResolutionReference);
+                    : ResolveExplicitNearFieldProfile(sceneRenderExtent));
             AdvancedGiPrerequisiteGateResult nearFieldGate =
                 _advancedGiPrerequisiteManifest.Evaluate(
                     AdvancedGiPrerequisiteFeature.NearFieldResidual);
@@ -2217,7 +2229,20 @@ namespace Njulf.Rendering
                             nearFieldConfiguration,
                             nearFieldPrerequisites,
                             admissionContext,
-                            _advancedGiCandidateProfile!.Authorization);
+                        _advancedGiCandidateProfile!.Authorization);
+            }
+            else if (gi.SimpleDdgiNearFieldResidualMode ==
+                     SimpleDdgiNearFieldResidualMode
+                         .HiZHalfResolutionExperiment)
+            {
+                _simpleDdgiNearFieldResidualAdmissionContext = default;
+                _simpleDdgiNearFieldResidualRequestedProfile =
+                    nearFieldProfile;
+                _simpleDdgiNearFieldResidualPlan =
+                    SimpleDdgiNearFieldResidualExperiment
+                        .CreateExplicitPlan(
+                            nearFieldConfiguration,
+                            nearFieldPrerequisites);
             }
             else
             {
@@ -2374,10 +2399,13 @@ namespace Njulf.Rendering
                         ? candidate.Configuration with { Enabled = gpuRequested }
                     : new GiTaggedCausticCacheConfiguration(
                         Enabled: gpuRequested,
-                        HeroMaterialCount: 0,
-                        PhotonTaskCapacity: 1,
-                        MaximumWorldCells: 1,
-                        MaximumPhotonsPerCell: 1,
+                        // Explicit activation reserves the bounded production
+                        // layout up front. Actual authored heroes are still
+                        // discovered and validated every frame.
+                        HeroMaterialCount: gpuRequested ? 1 : 0,
+                        PhotonTaskCapacity: 4_096,
+                        MaximumWorldCells: 4_096,
+                        MaximumPhotonsPerCell: 8,
                         MemoryBudgetBytes: GiCausticExperimentBudgetBytes,
                         ScreenResolveProfile: new GiCausticScreenResolveProfile(
                             checked((int)sceneRenderExtent.Width),
@@ -2397,6 +2425,15 @@ namespace Njulf.Rendering
                         configuration,
                         context,
                         _advancedGiCandidateProfile!.Authorization);
+            }
+            else if (gi.GiCausticMode ==
+                     GiCausticMode.WorldCacheExperiment)
+            {
+                _giCausticRequestedConfiguration = configuration;
+                _giCausticAdmissionContext = default;
+                _giCausticPlan =
+                    GiTaggedCausticCacheExperiment.CreateExplicitPlan(
+                        configuration);
             }
             else
             {
@@ -2525,6 +2562,39 @@ namespace Njulf.Rendering
 
             failure = "valid";
             return true;
+        }
+
+        private static SimpleDdgiNearFieldResidualProfile
+            ResolveExplicitNearFieldProfile(Extent2D sceneRenderExtent)
+        {
+            ReadOnlySpan<SimpleDdgiNearFieldResidualProfile> profiles =
+            [
+                SimpleDdgiNearFieldResidualProfile.HalfResolutionReference,
+                SimpleDdgiNearFieldResidualProfile
+                    .QuarterResolutionPerformance,
+                SimpleDdgiNearFieldResidualProfile
+                    .EighthResolutionMemoryBound
+            ];
+            int width = checked((int)sceneRenderExtent.Width);
+            int height = checked((int)sceneRenderExtent.Height);
+            foreach (SimpleDdgiNearFieldResidualProfile profile in profiles)
+            {
+                if (SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
+                        width,
+                        height,
+                        profile,
+                        SimpleDdgiNearFieldResidualExperimentBudgetBytes)
+                    .IsValid)
+                {
+                    return profile;
+                }
+            }
+
+            // Return the smallest complete profile so the normal plan compiler
+            // produces one authoritative memory/capability failure rather than
+            // constructing a partial layout.
+            return SimpleDdgiNearFieldResidualProfile
+                .EighthResolutionMemoryBound;
         }
 
         private bool TryValidateNearFieldRuntimePreflight(
@@ -11429,6 +11499,8 @@ namespace Njulf.Rendering
                     SimpleDdgiReceiverFeedbackGpuSchedulingBinding.Disabled(
                         "receiver-feedback-simple-ddgi-disabled"),
                     sceneData.DdgiFrameSerial);
+                _simpleDdgiVolumeManager?
+                    .SetPublishedDirectionalGuidingSourceCache(0u, 0);
                 _simpleDdgiVolumeManager?.EnsureDisabled(_stagingRing, _currentCommandBuffer);
                 ResetDdgiDynamicTracking();
                 UploadDdgiEmissiveSources(scene, sceneData, ddgiRayUpdateActive: false);
@@ -11531,6 +11603,7 @@ namespace Njulf.Rendering
                     simpleDdgiActive,
                     out _simpleDdgiGuidingConfigurationReason);
             ReconcileSimpleDdgiReceiverFeedback(simpleDdgiActive: true);
+            SynchronizePublishedDirectionalGuidingSourceCache();
             SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime =
                 _simpleDdgiReceiverFeedbackRuntime;
             SimpleDdgiReceiverFeedbackGpuSchedulingBinding receiverFeedbackBinding =
@@ -11579,6 +11652,13 @@ namespace Njulf.Rendering
                 CompileSimpleDdgiGuidingFrameConfiguration(
                     simpleDdgiActive,
                     out _simpleDdgiGuidingConfigurationReason);
+            // The first reconciliation happens before Upload so last frame's
+            // immutable B1 summary can feed this frame's scheduling decision.
+            // Upload establishes the initial physical probe domain, however,
+            // so reconcile once more before any advanced-GI commands are
+            // recorded. This makes ordinary explicit switches effective on
+            // the first renderable frame instead of waiting for frame two.
+            ReconcileSimpleDdgiReceiverFeedback(simpleDdgiActive: true);
             if (_simpleDdgiGuidingFrameConfiguration.IsEnabled &&
                 _simpleDdgiGuidingFrameConfiguration.Equals(
                     _simpleDdgiGuidingAppliedArenaConfiguration))
@@ -11652,7 +11732,12 @@ namespace Njulf.Rendering
             AdvancedGiPrerequisiteGateResult gate =
                 _advancedGiPrerequisiteManifest.Evaluate(
                     AdvancedGiPrerequisiteFeature.DirectionalGuiding);
-            if (!gate.Passed)
+            bool prerequisitesSatisfied =
+                AdvancedGiActivationPolicy.PrerequisitesSatisfied(
+                    Settings.GlobalIllumination
+                        .SimpleDdgiDirectionalGuidingMode,
+                    gate);
+            if (!prerequisitesSatisfied)
             {
                 reason = string.IsNullOrWhiteSpace(gate.FailureDetail)
                     ? "guiding-global-prerequisite-gate-rejected"
@@ -11684,6 +11769,34 @@ namespace Njulf.Rendering
                 reason = "guiding-ddgi-frame-ray-budget-admits-no-probes";
                 return SimpleDdgiGuidingFrameConfiguration.Disabled;
             }
+            int compactTraceCapacity =
+                manager.GuidingTraceDirectionScratchProbeCapacity;
+            if (compactTraceCapacity <= 0)
+            {
+                reason = "guiding-compact-trace-payload-capacity-unavailable";
+                return SimpleDdgiGuidingFrameConfiguration.Disabled;
+            }
+
+            // C3 settings are renderer-lifetime settings. Once its central
+            // arena and persistent prefix have been admitted, their own live
+            // allocations must not be charged against a later free-memory
+            // snapshot and resized every frame. Reuse the allocation while it
+            // remains a valid prefix of the current DDGI domain and workload.
+            // A genuine layout or cardinality change still takes the normal
+            // transactional reconciliation path below.
+            SimpleDdgiGuidingFrameConfiguration applied =
+                _simpleDdgiGuidingAppliedArenaConfiguration;
+            if (IsCompatibleLiveSimpleDdgiGuidingConfiguration(
+                    applied,
+                    totalPhysical,
+                    requestedScheduled,
+                    compactTraceCapacity,
+                    directionSlots,
+                    manager.StoragePackingMode))
+            {
+                reason = "guiding-existing-renderer-lifetime-allocation-reused";
+                return applied;
+            }
 
             MemoryHeapBudgetSnapshot heapBudget =
                 _context.GetMemoryHeapBudgetSnapshot();
@@ -11698,7 +11811,10 @@ namespace Njulf.Rendering
             }
 
             int low = 1;
-            int high = totalPhysical;
+            // Compact payloads are addressed by stable physical probe, not by
+            // the frame-local queue ordinal. This prevents a queue reorder
+            // from inheriting another probe's direction/PDF transaction.
+            int high = Math.Min(totalPhysical, compactTraceCapacity);
             SimpleDdgiGuidingFrameConfiguration best =
                 SimpleDdgiGuidingFrameConfiguration.Disabled;
             while (low <= high)
@@ -11710,7 +11826,7 @@ namespace Njulf.Rendering
                         Math.Min(requestedScheduled, candidate),
                         directionSlots,
                         memoryHeadroom,
-                        gate.Passed,
+                        prerequisitesSatisfied,
                         out SimpleDdgiGuidingFrameConfiguration compiled))
                 {
                     best = compiled;
@@ -11731,6 +11847,59 @@ namespace Njulf.Rendering
                 ? "guiding-admitted-deterministic-physical-probe-prefix"
                 : "guiding-full-physical-probe-domain-admitted";
             return best;
+        }
+
+        private static bool IsCompatibleLiveSimpleDdgiGuidingConfiguration(
+            in SimpleDdgiGuidingFrameConfiguration configuration,
+            int totalPhysicalProbeCapacity,
+            int requestedScheduledProbeCapacity,
+            int compactTraceProbeCapacity,
+            int directionSlotsPerProbe,
+            SimpleDdgiStoragePackingMode storagePackingMode)
+        {
+            if (!configuration.IsEnabled)
+                return false;
+
+            SimpleDdgiGuidingLayout layout =
+                configuration.RuntimeRequest.Layout;
+            SimpleDdgiGuidingSourceCacheLayout source =
+                configuration.SourceCacheLayout;
+            return layout.PhysicalProbeCapacity > 0 &&
+                layout.PhysicalProbeCapacity <= totalPhysicalProbeCapacity &&
+                layout.PhysicalProbeCapacity <= compactTraceProbeCapacity &&
+                layout.ScheduledGuidedProbeCapacity > 0 &&
+                layout.ScheduledGuidedProbeCapacity <=
+                    requestedScheduledProbeCapacity &&
+                layout.DirectionSlotsPerProbe == directionSlotsPerProbe &&
+                source.AdmittedGuidedPhysicalProbeCapacity ==
+                    layout.PhysicalProbeCapacity &&
+                source.DirectionSlotsPerProbe == directionSlotsPerProbe &&
+                configuration.RuntimeRequest.SourceStoragePackingMode ==
+                    storagePackingMode;
+        }
+
+        private void SynchronizePublishedDirectionalGuidingSourceCache()
+        {
+            SimpleDdgiVolumeManager? manager = _simpleDdgiVolumeManager;
+            SimpleDdgiGuidingSourceCacheSnapshot snapshot =
+                _simpleDdgiGuidingSourceCacheSidecar?.Snapshot ??
+                SimpleDdgiGuidingSourceCacheSnapshot.Disabled;
+            if (manager is null)
+                return;
+
+            SimpleDdgiGuidingSourceCacheLayout layout = snapshot.Layout;
+            if (!snapshot.IsReady || !snapshot.PayloadDescriptorPublished ||
+                !layout.IsAdmitted ||
+                layout.AdmittedGuidedPhysicalProbeCapacity <= 0 ||
+                layout.DirectionSlotsPerProbe <= 0)
+            {
+                manager.SetPublishedDirectionalGuidingSourceCache(0u, 0);
+                return;
+            }
+
+            manager.SetPublishedDirectionalGuidingSourceCache(
+                checked((uint)layout.AdmittedGuidedPhysicalProbeCapacity),
+                layout.DirectionSlotsPerProbe);
         }
 
         private bool TryCompileSimpleDdgiGuidingCandidate(
@@ -11833,6 +12002,10 @@ namespace Njulf.Rendering
             AdvancedGiPrerequisiteGateResult gate =
                 _advancedGiPrerequisiteManifest.Evaluate(
                     AdvancedGiPrerequisiteFeature.ReceiverFeedback);
+            bool prerequisitesSatisfied =
+                AdvancedGiActivationPolicy.PrerequisitesSatisfied(
+                    requestedMode,
+                    gate);
             AdvancedGiQualificationGateResult qualification =
                 EvaluateAdvancedGiQualification(
                     AdvancedGiPrerequisiteFeature.ReceiverFeedback,
@@ -11868,7 +12041,7 @@ namespace Njulf.Rendering
                 producerWorkload,
                 pageGeneration,
                 maximumStorageBufferRange,
-                gate.Passed,
+                prerequisitesSatisfied,
                 gate.QualificationId,
                 qualification.Passed,
                 qualification.QualificationId,
@@ -11928,6 +12101,14 @@ namespace Njulf.Rendering
             {
                 // C3 is independently optional. Preserve an otherwise valid
                 // B1 transaction by retrying the central arena without C3.
+                // Keep the original C3 rejection visible. The retry below can
+                // succeed for B1 and overwrite arenaFailure with an unrelated
+                // success detail, while the C3 runtime remains intentionally
+                // untouched in its zero-resource state.
+                _simpleDdgiGuidingConfigurationReason =
+                    string.IsNullOrWhiteSpace(arenaFailure)
+                        ? "directional-guiding-transient-arena-rejected"
+                        : arenaFailure;
                 guidingArenaConfiguration =
                     SimpleDdgiGuidingFrameConfiguration.Disabled;
                 arenaReady = transientArena is not null &&
@@ -11944,7 +12125,7 @@ namespace Njulf.Rendering
 
             if (!runtime.TryConfigureOwned(
                     plan,
-                    gate.Passed,
+                    prerequisitesSatisfied,
                     out string runtimeFailure) && plan.UsesExactCompacted)
             {
                 plan = RejectReceiverFeedbackForTransientArena(
@@ -11952,7 +12133,10 @@ namespace Njulf.Rendering
                     string.IsNullOrWhiteSpace(runtimeFailure)
                         ? "receiver-feedback-owned-runtime-rejected"
                         : runtimeFailure);
-                _ = runtime.TryConfigureOwned(plan, gate.Passed, out _);
+                _ = runtime.TryConfigureOwned(
+                    plan,
+                    prerequisitesSatisfied,
+                    out _);
             }
             _simpleDdgiReceiverFeedbackPlan = plan;
             _simpleDdgiReceiverFeedbackConfigurationKey = key;
@@ -12127,7 +12311,11 @@ namespace Njulf.Rendering
                             physicalProbeCapacity > 0 &&
                             producerWorkload.SourceScreenTileCount > 0UL &&
                             maximumStorageBufferRange > 0UL,
-                        PrerequisitesSatisfied: prerequisiteGate.Passed,
+                        PrerequisitesSatisfied:
+                            AdvancedGiActivationPolicy
+                                .PrerequisitesSatisfied(
+                                    requestedMode,
+                                    prerequisiteGate),
                         ExactQualificationPassed: qualificationGate.Passed,
                         QualificationId:
                             AdvancedGiQualificationContract.NormalizeSha256(
@@ -13288,9 +13476,9 @@ namespace Njulf.Rendering
                      causticMemory.AllocatedBytes == 0UL)
             {
                 state = GiCausticTelemetryState.ResourceIncomplete;
-                reason = string.IsNullOrWhiteSpace(mode.FallbackDetail)
-                    ? runtime.Detail
-                    : mode.FallbackDetail;
+                reason = string.IsNullOrWhiteSpace(runtime.Detail)
+                    ? mode.FallbackDetail
+                    : runtime.Detail;
             }
             else if (runtime.Resource.HasReadableCache &&
                      runtime.Publication.Available)
@@ -13508,26 +13696,6 @@ namespace Njulf.Rendering
                 };
             }
 
-            GiExperimentModeState<GiCausticMode> causticMode =
-                _giCausticMode;
-            bool causticGpuEffective = causticMode.EffectiveMode is
-                GiCausticMode.WorldCacheExperiment or
-                GiCausticMode.AutoQualified;
-            GiCausticVulkanRuntimeDiagnostics liveCausticRuntime =
-                _giCausticRuntime?.Diagnostics ??
-                GiCausticVulkanRuntimeDiagnostics.Disabled;
-            if (causticGpuEffective &&
-                (!_giCausticRuntimeConfigured ||
-                 !liveCausticRuntime.Resource.IsEffectivelyEnabled))
-            {
-                causticMode = causticMode with
-                {
-                    EffectiveMode = GiCausticMode.Off,
-                    FallbackReason = GiExperimentFallbackReason.ResourceIncomplete,
-                    FallbackDetail = liveCausticRuntime.Detail
-                };
-            }
-
             var modes = new GiRoadmapExperimentModeDiagnostics(
                 receiverFeedbackMode,
                 ResolveAdvancedGiMode(
@@ -13548,7 +13716,7 @@ namespace Njulf.Rendering
                     resourcesComplete: guidingResourcesReady,
                     gi.SimpleDdgiDirectionalGuidingQualificationId,
                     guidingDetail),
-                causticMode,
+                _giCausticMode,
                 nearFieldMode);
             return new GiRoadmapExperimentDiagnostics(
                 directionalFog,
@@ -13575,10 +13743,13 @@ namespace Njulf.Rendering
             string? resourceFailureDetail = null)
             where TMode : struct, Enum
         {
-            bool isAutoQualified = string.Equals(
-                requestedMode.ToString(),
-                "AutoQualified",
-                StringComparison.Ordinal);
+            bool isAutoQualified =
+                AdvancedGiActivationPolicy.RequiresQualification(
+                    requestedMode);
+            bool prerequisitesSatisfied =
+                AdvancedGiActivationPolicy.PrerequisitesSatisfied(
+                    requestedMode,
+                    prerequisiteGate);
             // Auto mode must name the authenticated feature-qualification ID explicitly. An
             // ordinary experimental mode may still carry the prerequisite ID diagnostically,
             // but that prerequisite hash is never substituted as promotion evidence.
@@ -13592,13 +13763,14 @@ namespace Njulf.Rendering
                 offMode,
                 new GiExperimentModeEvaluation(
                     Supported: supported,
-                    PrerequisitesSatisfied: prerequisiteGate.Passed,
-                    MemoryAdmitted: prerequisiteGate.Passed,
+                    PrerequisitesSatisfied: prerequisitesSatisfied,
+                    MemoryAdmitted: prerequisitesSatisfied,
                     ResourcesComplete: resourcesComplete,
                     RequiresQualification: isAutoQualified,
                     QualificationPassed: !isAutoQualified || qualificationGate.Passed,
                     QualificationId: qualificationId,
-                    FailureDetail: !prerequisiteGate.Passed
+                    FailureDetail: isAutoQualified &&
+                        !prerequisiteGate.Passed
                         ? prerequisiteGate.FailureDetail
                         : isAutoQualified && !qualificationGate.Passed
                             ? qualificationGate.FailureDetail
@@ -16481,14 +16653,19 @@ namespace Njulf.Rendering
             ulong punctualRevision = lightSnapshot.ContentRevision;
             ulong emissiveRevision = _ddgiEmissiveSourceRevision;
             GiCausticAdmissionContext context = _giCausticAdmissionContext;
+            bool requiresQualifiedIdentity =
+                Settings.GlobalIllumination.GiCausticMode ==
+                    GiCausticMode.AutoQualified ||
+                _giCausticUsesCandidateAuthorization;
             if (!heroIdentity.IsValid ||
-                heroSnapshot.SceneContentRevision != context.ContentRevision ||
-                punctualRevision != context.LightDistributionRevision ||
-                emissiveRevision != context.EmissiveDistributionRevision ||
-                heroIdentity.AggregateSourceRevision !=
+                requiresQualifiedIdentity &&
+                (heroSnapshot.SceneContentRevision != context.ContentRevision ||
+                 punctualRevision != context.LightDistributionRevision ||
+                 emissiveRevision != context.EmissiveDistributionRevision ||
+                 heroIdentity.AggregateSourceRevision !=
                     context.HeroSourceRevision ||
-                heroSnapshot.TopLevelInstanceSignature !=
-                    context.CurrentPoseTlasSignature)
+                 heroSnapshot.TopLevelInstanceSignature !=
+                    context.CurrentPoseTlasSignature))
             {
                 RejectGiCausticFrame(
                     "caustic-live-content-or-source-revision-does-not-match-qualified-evidence");
@@ -16550,13 +16727,22 @@ namespace Njulf.Rendering
                         DedicatedBindlessSlotsAvailable: true,
                         ScreenResolvePipelineIntegrated: true,
                         ScreenResolveResourcesAvailable: true));
-                var qualification = new GiCausticGpuPipelineQualification(
-                    TaggedFirstDiffuseTraceQualified:
-                        _giCausticEvidence.CpuGpuPdfAndThroughputParity &&
-                        _giCausticEvidence.MirrorAndDielectricEnergyConservation &&
-                        _giCausticEvidence.DifferentialReferencePassed,
-                    DeterministicParallelCacheBuildQualified:
-                        _giCausticEvidence.BottomKUnbiasednessPassed);
+                GiCausticGpuPipelineQualification qualification =
+                    Settings.GlobalIllumination.GiCausticMode ==
+                        GiCausticMode.WorldCacheExperiment
+                        ? GiCausticGpuPipelineQualification
+                            .IntegratedExplicit
+                        : new GiCausticGpuPipelineQualification(
+                            TaggedFirstDiffuseTraceQualified:
+                                _giCausticEvidence
+                                    .CpuGpuPdfAndThroughputParity &&
+                                _giCausticEvidence
+                                    .MirrorAndDielectricEnergyConservation &&
+                                _giCausticEvidence
+                                    .DifferentialReferencePassed,
+                            DeterministicParallelCacheBuildQualified:
+                                _giCausticEvidence
+                                    .BottomKUnbiasednessPassed);
                 if (!_giCausticRuntime.TryConfigure(
                         request,
                         qualification,
@@ -18687,6 +18873,8 @@ namespace Njulf.Rendering
             DynamicResolutionScaleDecision scaleDecision = ResolveSceneResolutionScaleDecision();
             float effectiveResolutionScale = scaleDecision.CommittedScale;
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, effectiveResolutionScale);
+            sceneRenderExtent = PreserveExtentBoundAdvancedGiSceneExtent(
+                sceneRenderExtent);
             bool featureTargetsChanged =
                 _lastAmbientOcclusionTargetEnabled != aoEnabled ||
                 MathF.Abs(_lastAmbientOcclusionResolutionScale - ambientOcclusionResolutionScale) > 0.0001f ||
@@ -18927,6 +19115,8 @@ namespace Njulf.Rendering
             _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
             float sceneResolutionScale = ResolveSceneResolutionScale();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
+            sceneRenderExtent = PreserveExtentBoundAdvancedGiSceneExtent(
+                sceneRenderExtent);
             DisableGiCausticForIncompatibleExtent(sceneRenderExtent);
             DisableNearFieldResidualForIncompatibleExtent(sceneRenderExtent);
             _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
@@ -19062,7 +19252,41 @@ namespace Njulf.Rendering
             long frameMicroseconds = _lastDiagnostics.GpuTimingValid != 0
                 ? _lastDiagnostics.GpuFrameMicroseconds
                 : _lastDiagnostics.CpuTotalDrawSceneMicroseconds;
-            return _dynamicResolutionScaleController.Resolve(Settings, frameMicroseconds);
+            DynamicResolutionScaleDecision decision =
+                _dynamicResolutionScaleController.Resolve(
+                    Settings,
+                    frameMicroseconds);
+            if (!_isInitialized ||
+                !_advancedGiGraphModes.UsesCausticWorldCache &&
+                !_advancedGiGraphModes.UsesNearFieldHiZResidual)
+            {
+                return decision;
+            }
+
+            // C4/C5 own extent-shaped immutable layouts and runtimes. Keep
+            // their internal scene extent stable for this renderer lifetime;
+            // the existing final composite still scales it to a resized
+            // swapchain. A feature toggle reconstructs the renderer and picks
+            // a fresh optimal extent.
+            return new DynamicResolutionScaleDecision(
+                decision.RequestedScale,
+                _lastEffectiveResolutionScale,
+                CommittedScaleChanged: false,
+                CommitReason: string.Empty);
+        }
+
+        private Extent2D PreserveExtentBoundAdvancedGiSceneExtent(
+            Extent2D proposed)
+        {
+            if (!_isInitialized ||
+                !_advancedGiGraphModes.UsesCausticWorldCache &&
+                !_advancedGiGraphModes.UsesNearFieldHiZResidual ||
+                _lastSceneRenderExtent.Width == 0u ||
+                _lastSceneRenderExtent.Height == 0u)
+            {
+                return proposed;
+            }
+            return _lastSceneRenderExtent;
         }
 
         private static Extent2D CreateSceneRenderExtent(Extent2D swapchainExtent, float resolutionScale)

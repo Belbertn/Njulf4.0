@@ -167,6 +167,7 @@ namespace Njulf.Rendering.Resources
                 SimpleDdgiVolumeManager.VisibilityTexelsPerProbe) * 4UL;
         public const ulong LegacyRayResultBytes = 32;
         public const ulong RayResultBytes = 20;
+        public const ulong GuidingTraceDirectionRecordBytes = 32;
         public const uint TransportRayCacheAbiVersion =
             (uint)SimpleDdgiStorageAbiVersion.Packed;
         public const ulong TransportRayCacheBytes = 36;
@@ -198,6 +199,8 @@ namespace Njulf.Rendering.Resources
         public int TransportSourceCacheCompact28RayCount { get; init; }
         public int TransportSourceCacheCompact24RayCount { get; init; }
         public ulong RayResultStrideBytes { get; init; }
+        public ulong GuidingTraceDirectionScratchOffsetWords { get; init; }
+        public ulong GuidingTraceDirectionScratchBytes { get; init; }
         public SimpleDdgiSampledAtlasCoverageMode SampledAtlasCoverageMode { get; init; }
         public int SampledAtlasRequestedProbeCount { get; init; }
         public int SampledAtlasEligibleProbeCount { get; init; }
@@ -343,7 +346,8 @@ namespace Njulf.Rendering.Resources
                 SimpleDdgiDirectionalRadianceMode.Off,
             SimpleDdgiGlossyTransportMode glossyTransportMode =
                 SimpleDdgiGlossyTransportMode.Off,
-            ulong directionalRadianceBudgetBytes = 0UL)
+            ulong directionalRadianceBudgetBytes = 0UL,
+            bool directionalGuidingTraceStaging = false)
         {
             int probes = Math.Clamp(
                 probeCount,
@@ -495,8 +499,16 @@ namespace Njulf.Rendering.Resources
             ulong rayResultStrideBytes = resolvedPackingMode.UsesDirectionFreeScratch()
                 ? RayResultBytes
                 : LegacyRayResultBytes;
+            ulong primaryRayScratchBytes = checked(
+                updateCount64 * rayCount64 * rayResultStrideBytes);
+            ulong guidingTraceDirectionScratchBytes =
+                directionalGuidingTraceStaging
+                    ? checked(updateCount64 * rayCount64 *
+                        GuidingTraceDirectionRecordBytes)
+                    : 0UL;
             ulong rayScratchBytes = AtLeastOneAllocation(checked(
-                updateCount64 * rayCount64 * rayResultStrideBytes));
+                primaryRayScratchBytes +
+                guidingTraceDirectionScratchBytes));
             ulong sampledIrradianceBytes = sampledAtlasRequested
                 ? sampledAtlasLayout?.IrradianceImageBytes ?? checked(
                     (ulong)sampledCapacity * IrradianceBytesPerProbe)
@@ -674,6 +686,12 @@ namespace Njulf.Rendering.Resources
                     ? storageLayout?.Compact24RayCount ?? 0
                     : 0,
                 RayResultStrideBytes = rayResultStrideBytes,
+                GuidingTraceDirectionScratchOffsetWords =
+                    directionalGuidingTraceStaging
+                        ? primaryRayScratchBytes / sizeof(uint)
+                        : 0UL,
+                GuidingTraceDirectionScratchBytes =
+                    guidingTraceDirectionScratchBytes,
                 SampledAtlasCoverageMode = sampledAtlasRequested
                     ? resolvedCoverageMode
                     : SimpleDdgiSampledAtlasCoverageMode.Disabled,
@@ -985,7 +1003,8 @@ namespace Njulf.Rendering.Resources
                 SimpleDdgiDirectionalRadianceMode.Off,
             SimpleDdgiGlossyTransportMode glossyTransportMode =
                 SimpleDdgiGlossyTransportMode.Off,
-            ulong directionalRadianceBudgetBytes = 0UL)
+            ulong directionalRadianceBudgetBytes = 0UL,
+            bool directionalGuidingTraceStaging = false)
         {
             if (requests == null)
                 throw new ArgumentNullException(nameof(requests));
@@ -1222,7 +1241,13 @@ namespace Njulf.Rendering.Resources
                         resolvedSampledCoverageMode,
                         useHotColdSourceCacheLayout,
                         nearVisibilitySidecarRequested,
-                        nearVisibilitySidecarBudgetBytes);
+                        nearVisibilitySidecarBudgetBytes,
+                        directionalRadianceMode: directionalRadianceMode,
+                        glossyTransportMode: glossyTransportMode,
+                        directionalRadianceBudgetBytes:
+                            directionalRadianceBudgetBytes,
+                        directionalGuidingTraceStaging:
+                            directionalGuidingTraceStaging);
                     return denseFallback with
                     {
                         ResidencyFallbackReason = fallbackReason
@@ -1540,7 +1565,8 @@ namespace Njulf.Rendering.Resources
                         nearVisibilitySidecarAdmissionBudgetBytes,
                         directionalRadianceMode,
                         glossyTransportMode,
-                        directionalRadianceBudgetBytes);
+                        directionalRadianceBudgetBytes,
+                        directionalGuidingTraceStaging);
             }
         }
     }

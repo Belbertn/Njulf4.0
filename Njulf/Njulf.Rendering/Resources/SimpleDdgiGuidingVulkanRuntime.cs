@@ -132,6 +132,13 @@ public readonly record struct SimpleDdgiGuidingTraceTrainingSource(
     SimpleDdgiGuidingExternalBuffer RayResultScratch,
     SimpleDdgiGuidingExternalBuffer ProbeUpdateQueue)
 {
+    /// <summary>
+    /// Compact, authenticated C3 trace payloads stored in the reserved tail of
+    /// the ordinary DDGI ray scratch allocation. The sample pass publishes one
+    /// fixed-size record per scheduled ray for the later DDGI consumers.
+    /// </summary>
+    public SimpleDdgiGuidingExternalBuffer GuidingTracePayloadScratch { get; init; }
+
     public uint RayResultStrideBytes => StoragePackingMode ==
             SimpleDdgiStoragePackingMode.Packed
         ? 20u
@@ -172,6 +179,11 @@ public readonly record struct SimpleDdgiGuidingTraceTrainingSource(
                 checked((uint)SimpleDdgiMemoryPlan.ProbeUpdateBytes),
                 1u,
                 "trace-probe-updates",
+                out reason) ||
+            !GuidingTracePayloadScratch.TryValidate(
+                checked((uint)SimpleDdgiMemoryPlan.GuidingTraceDirectionRecordBytes),
+                1u,
+                "guiding-trace-payload-scratch",
                 out reason))
         {
             return false;
@@ -559,9 +571,12 @@ public readonly record struct SimpleDdgiGuidingSampleWorkload(
         {
             return false;
         }
+        if (!TraceTrainingSource.TryValidate(out reason))
+        {
+            return false;
+        }
         if (gpuGenerated &&
-            (!TraceTrainingSource.TryValidate(out reason) ||
-             !TrainingWorkItems.TryValidate(
+            (!TrainingWorkItems.TryValidate(
                  SimpleDdgiGuidingGpuAbi.TrainingWorkItemByteCount,
                  1u,
                  "sample-prepare-training-work-items",
@@ -896,6 +911,13 @@ public readonly record struct SimpleDdgiGuidingGpuRuntimeDiagnostics(
     SimpleDdgiGuidingRuntimeSnapshot Resource,
     string Detail)
 {
+    /// <summary>
+    /// Result of the most recently consumed fence-complete transaction.  This
+    /// remains available while a newer frame is pending so asynchronous
+    /// failures cannot be hidden by the next submission.
+    /// </summary>
+    public string LastCompletionDetail { get; init; } = "none";
+
     public static SimpleDdgiGuidingGpuRuntimeDiagnostics Disabled { get; } =
         new(
             SimpleDdgiGuidingGpuCapabilityReason.SourceCacheSidecarUnavailable,
@@ -953,6 +975,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
         new PendingReadback?[RenderingConstants.FramesInFlight];
     private readonly PendingSampleReadback?[] _pendingSampleReadbacks =
         new PendingSampleReadback?[RenderingConstants.FramesInFlight];
+    private string _lastCompletionDetail = "none";
     private readonly PendingStagedBuild?[] _stagedBuilds =
         new PendingStagedBuild?[RenderingConstants.FramesInFlight];
     // One descriptor instance exists per (fence-reclaimed frame slot, pass
@@ -1281,7 +1304,15 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
             }
             catch (Exception exception)
             {
-                reason = "guiding-pipeline-unavailable:" + exception.GetType().Name;
+                // Preserve the failing shader name carried by VulkanException.
+                // A type-only reason made a driver compilation rejection
+                // impossible to diagnose and encouraged repeated blind retries.
+                string pipelineFailure = exception.Message
+                    .Replace('\r', ' ')
+                    .Replace('\n', ' ')
+                    .Trim();
+                reason = "guiding-pipeline-unavailable:" +
+                    exception.GetType().Name + ":" + pipelineFailure;
                 DisableAtSafeTransitionNoLock(
                     SimpleDdgiGuidingGpuCapabilityReason.PipelineUnavailable,
                     reason,
@@ -1699,7 +1730,24 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                     out sampleCompletion);
             }
 
-            if (pendingBuild.HasValue && !publication.Published)
+            _lastCompletionDetail = pendingBuild.HasValue
+                ? publication.Reason
+                : sampleCompletion.Reason;
+            if (pendingBuild.HasValue && pendingSample.HasValue)
+            {
+                _lastCompletionDetail += ";" + sampleCompletion.Reason;
+            }
+
+            if (pendingBuild.HasValue &&
+                publication.Failure ==
+                    SimpleDdgiGuidingPublicationFailure.EmptyPublication)
+            {
+                UpdateDiagnosticsNoLock(
+                    SimpleDdgiGuidingGpuCapabilityReason.None,
+                    publication.Reason,
+                    sourceCacheHandshakeAvailable: _configuredHandshake.HasValue);
+            }
+            else if (pendingBuild.HasValue && !publication.Published)
             {
                 UpdateDiagnosticsNoLock(
                     SimpleDdgiGuidingGpuCapabilityReason.HeaderReadbackRejected,
@@ -2000,7 +2048,8 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
             catch (Exception exception)
             {
                 reason = "guiding-staged-build-recording-failed:" +
-                    exception.GetType().Name;
+                    requiredState + ":" + exception.GetType().Name + ":" +
+                    exception.Message;
                 AbortStagedBuildNoLock(frameIndex, pending, reason);
                 UpdateDiagnosticsNoLock(
                     SimpleDdgiGuidingGpuCapabilityReason.BuildRecordingRejected,
@@ -2415,27 +2464,58 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                 SimpleDdgiGuidingGpuAbi.CounterGpuWorkItemCount];
             uint trainingRecordCount = counters[
                 SimpleDdgiGuidingGpuAbi.CounterGpuTrainingRecordCount];
-            bool countersValid =
+            bool preparationValid =
                 counters[SimpleDdgiGuidingGpuAbi.CounterInvalidRecords] == 0u &&
                 counters[SimpleDdgiGuidingGpuAbi.CounterInvalidHeaders] == 0u &&
                 counters[SimpleDdgiGuidingGpuAbi.CounterInvalidPdfs] == 0u &&
                 counters[SimpleDdgiGuidingGpuAbi.CounterPublicationRejections] == 0u &&
                 counters[SimpleDdgiGuidingGpuAbi.CounterGpuSampleRequestCount] == 0u &&
                 counters[SimpleDdgiGuidingGpuAbi.CounterGpuPreparationStatus] ==
-                    SimpleDdgiGuidingGpuAbi.Version &&
+                    SimpleDdgiGuidingGpuAbi.Version;
+            if (preparationValid && actualCount == 0u && trainingRecordCount == 0u)
+            {
+                const string NoWorkReason =
+                    "guiding-gpu-preparation-produced-no-eligible-work";
+                _manager.AbortBuild(expected.Token, NoWorkReason);
+                publication = new(
+                    false,
+                    SimpleDdgiGuidingPublicationFailure.EmptyPublication,
+                    NoWorkReason);
+                return;
+            }
+
+            bool countersValid = preparationValid &&
                 actualCount is > 0u && actualCount <= expected.GpuCapacity &&
                 trainingRecordCount is > 0u &&
                 trainingRecordCount <= checked(actualCount *
                     (uint)layout.DirectionSlotsPerProbe);
             if (!countersValid)
             {
+                string counterReason =
+                    "guiding-gpu-publication-counters-invalid:" +
+                    "invalidRecords=" + counters[
+                        SimpleDdgiGuidingGpuAbi.CounterInvalidRecords] +
+                    ",invalidHeaders=" + counters[
+                        SimpleDdgiGuidingGpuAbi.CounterInvalidHeaders] +
+                    ",invalidPdfs=" + counters[
+                        SimpleDdgiGuidingGpuAbi.CounterInvalidPdfs] +
+                    ",publicationRejections=" + counters[
+                        SimpleDdgiGuidingGpuAbi.CounterPublicationRejections] +
+                    ",sampleRequests=" + counters[
+                        SimpleDdgiGuidingGpuAbi.CounterGpuSampleRequestCount] +
+                    ",preparationStatus=0x" + counters[
+                        SimpleDdgiGuidingGpuAbi.CounterGpuPreparationStatus]
+                        .ToString("x8") +
+                    ",workItems=" + actualCount +
+                    ",trainingRecords=" + trainingRecordCount +
+                    ",capacity=" + expected.GpuCapacity;
                 _manager.AbortBuild(
                     expected.Token,
-                    "guiding-gpu-publication-counters-invalid");
+                    counterReason);
                 publication = new(
                     false,
                     SimpleDdgiGuidingPublicationFailure.HeaderInvalid,
-                    "guiding-gpu-publication-counters-invalid");
+                    counterReason);
                 return;
             }
 
@@ -2919,7 +2999,10 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
             _allocator.HasDescriptorContext,
             HasPendingReadbackNoLock(),
             _manager.Snapshot,
-            string.IsNullOrWhiteSpace(detail) ? "unknown" : detail.Trim());
+            string.IsNullOrWhiteSpace(detail) ? "unknown" : detail.Trim())
+        {
+            LastCompletionDetail = _lastCompletionDetail
+        };
     }
 
     private bool HasPendingReadbackNoLock()

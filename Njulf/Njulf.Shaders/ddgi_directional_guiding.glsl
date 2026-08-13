@@ -1,11 +1,18 @@
 #ifndef NJULF_DDGI_DIRECTIONAL_GUIDING_GLSL
 #define NJULF_DDGI_DIRECTIONAL_GUIDING_GLSL
 
+#include "ddgi_guiding_arithmetic.glsl"
+
 // C3 persistent/dispatched payload ABI.  Keep this in lock-step with
 // SimpleDdgiGuidingGpuContracts.cs.  A header/payload revision mismatch is a
 // hard fallback, never an opportunity to reinterpret old learned data.
-const uint SIMPLE_DDGI_GUIDING_ABI_VERSION = 0x43330007u;
+const uint SIMPLE_DDGI_GUIDING_ABI_VERSION = 0x43330008u;
 const uint SIMPLE_DDGI_GUIDING_HEADER_WORDS = 8u;
+const uint SIMPLE_DDGI_GUIDING_TRAINING_WORK_ITEM_WORDS = 14u;
+const uint SIMPLE_DDGI_GUIDING_BUILD_WORK_ITEM_WORDS = 12u;
+const uint SIMPLE_DDGI_GUIDING_SAMPLE_REQUEST_WORDS = 14u;
+const uint SIMPLE_DDGI_GUIDING_SAMPLE_PAYLOAD_WORDS = 16u;
+const uint SIMPLE_DDGI_GUIDING_PUBLICATION_RECORD_WORDS = 12u;
 const uint SIMPLE_DDGI_GUIDING_MAX_LEAF_RESOLUTION = 16u;
 const uint SIMPLE_DDGI_GUIDING_MAX_LEAF_COUNT = 256u;
 const uint SIMPLE_DDGI_GUIDING_MAX_HIERARCHY_WEIGHT_COUNT = 341u;
@@ -39,6 +46,8 @@ const uint SIMPLE_DDGI_GUIDING_SAMPLE_MIXTURE_UNIFORM_BRANCH = 1u << 1u;
 const uint SIMPLE_DDGI_GUIDING_SAMPLE_MIXTURE_GUIDED_BRANCH = 1u << 2u;
 const uint SIMPLE_DDGI_GUIDING_SAMPLE_UNIFORM_FALLBACK = 1u << 3u;
 const uint SIMPLE_DDGI_GUIDING_SAMPLE_INVALID_DISTRIBUTION = 1u << 4u;
+
+#include "ddgi_guiding_payload_identity.glsl"
 
 uint SimpleDdgiGuidingMaintenanceRayCount(uint totalRayCount)
 {
@@ -158,7 +167,7 @@ struct SimpleDdgiGuidingSampleRequest
     float requestedUniformFraction;
     uint randomIntraLeafUBits;
     uint randomIntraLeafVBits;
-    uint reserved;
+    uint traceRayIndex;
 };
 
 struct SimpleDdgiGuidingSamplePayload
@@ -178,7 +187,7 @@ struct SimpleDdgiGuidingSamplePayload
     uint packedDirectionOct32;
     uint generationTimePdfBits;
     uint flags;
-    uint reserved;
+    uint traceOwnershipTag;
 };
 
 layout(push_constant) uniform SimpleDdgiGuidingPushConstants

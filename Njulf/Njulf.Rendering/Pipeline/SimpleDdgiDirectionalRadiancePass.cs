@@ -15,11 +15,18 @@ namespace Njulf.Rendering.Pipeline;
 public sealed unsafe class SimpleDdgiDirectionalRadiancePass :
     SimpleDdgiComputePass
 {
+    private const string BaselinePrepareShader =
+        "ddgi_simple_directional_prepare.comp.spv";
     private const string BaselineProjectShader =
         "ddgi_simple_directional_project.comp.spv";
     private const string GuidedProjectShader =
         "ddgi_simple_directional_project_guided.comp.spv";
+    private const string LegacyGuidedStageShader =
+        "ddgi_simple_directional_stage_guided_legacy.comp.spv";
+    private const string PackedGuidedStageShader =
+        "ddgi_simple_directional_stage_guided_packed.comp.spv";
     private readonly bool _directionalGuidingTransport;
+    private readonly RenderSettings _directionalSettings;
 
     public SimpleDdgiDirectionalRadiancePass(
         VulkanContext context,
@@ -44,6 +51,7 @@ public sealed unsafe class SimpleDdgiDirectionalRadiancePass :
             pipelineCacheService)
     {
         _directionalGuidingTransport = directionalGuidingTransport;
+        _directionalSettings = settings;
     }
 
     internal static string ResolveProjectShaderName(
@@ -51,6 +59,19 @@ public sealed unsafe class SimpleDdgiDirectionalRadiancePass :
         directionalGuidingTransport
             ? GuidedProjectShader
             : BaselineProjectShader;
+
+    internal static string ResolvePrepareShaderName(
+        bool directionalGuidingTransport,
+        SimpleDdgiStoragePackingMode storagePackingMode)
+    {
+        if (!directionalGuidingTransport)
+            return BaselinePrepareShader;
+
+        return storagePackingMode.Sanitize() ==
+                SimpleDdgiStoragePackingMode.Packed
+            ? PackedGuidedStageShader
+            : LegacyGuidedStageShader;
+    }
 
     protected override uint CalculateGroupCount(SceneRenderingData sceneData) =>
         checked((uint)Math.Max(1, VolumeManager.ProbesToUpdate));
@@ -60,7 +81,10 @@ public sealed unsafe class SimpleDdgiDirectionalRadiancePass :
     protected override string ResolveShaderName(int dispatchIndex) =>
         dispatchIndex switch
         {
-            0 => "ddgi_simple_directional_prepare.comp.spv",
+            0 => ResolvePrepareShaderName(
+                _directionalGuidingTransport,
+                _directionalSettings.GlobalIllumination
+                    .SimpleDdgiStoragePackingMode),
             1 => ResolveProjectShaderName(_directionalGuidingTransport),
             2 => "ddgi_simple_directional_publish.comp.spv",
             _ => throw new ArgumentOutOfRangeException(nameof(dispatchIndex))

@@ -1357,6 +1357,11 @@ namespace Njulf.Rendering.Data
         public Vector4 AtlasTexelsAndRayCount;
         public Vector4 HysteresisFrameAndFlags;
         public Vector4 EnvironmentRadianceAndIntensity;
+        // X = bit-preserving C3 source-cache physical-probe capacity. Y = CPU
+        // update count, Z = bit-preserving C3 trace-direction scratch offset
+        // in uint words, W = environment fallback intensity.
+        // The retired CPU update-start value is carried by each volume/queue
+        // record and was never consumed from this header slot.
         public Vector4 ProbeUpdateRange;
         public Vector4 DebugAndBias;
         public Vector4 RotationQuaternion;

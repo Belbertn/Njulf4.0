@@ -631,9 +631,12 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
                     frame.BuildToken,
                     publication.Reason);
                 _epochController!.Abort(frame.EpochPlan);
-                state = frame.BuildFailed
-                    ? "guiding-build-failed"
-                    : "guiding-build-not-published";
+                state = publication.Failure ==
+                        SimpleDdgiGuidingPublicationFailure.EmptyPublication
+                    ? "guiding-idle-no-eligible-training-work"
+                    : frame.BuildFailed
+                        ? "guiding-build-failed"
+                        : "guiding-build-not-published";
             }
 
             if (frame.SampleRecorded && !frame.BuildWorkload.UsesGpuResidentWork)
@@ -744,6 +747,8 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
             map.ValidationCountersBytes,
             SimpleDdgiGuidingGpuAbi.ValidationCounterWordCount,
             sizeof(uint));
+        SimpleDdgiGuidingTraceTrainingSource traceSource =
+            CreateTraceTrainingSourceNoLock();
 
         var buildWorkload = new SimpleDdgiGuidingBuildWorkload(
             token.TargetProposalEpoch,
@@ -767,7 +772,8 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
                 DestinationsAreUnique = true,
                 ExpectedCommits = _sampleCommits.AsMemory(
                     0,
-                    counts.SampleCommitCount)
+                    counts.SampleCommitCount),
+                TraceTrainingSource = traceSource
             };
         }
 
@@ -959,6 +965,19 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
             : 32u;
         ulong paramsBytes = _bufferManager.GetBufferSize(_volumeManager.ParamsBuffer);
         ulong rayBytes = _volumeManager.RayScratchBytes;
+        ulong guidingScratchBytes =
+            _volumeManager.GuidingTraceDirectionScratchBytes;
+        ulong guidingScratchOffsetBytes = checked(
+            (ulong)_volumeManager.GuidingTraceDirectionScratchOffsetWords *
+            sizeof(uint));
+        if (guidingScratchBytes == 0UL ||
+            guidingScratchOffsetBytes > rayBytes ||
+            checked(guidingScratchOffsetBytes + guidingScratchBytes) > rayBytes)
+        {
+            throw new InvalidOperationException(
+                "C3 guiding trace scratch is not provisioned in the DDGI ray allocation.");
+        }
+        ulong primaryRayBytes = guidingScratchOffsetBytes;
         ulong queueBytes = _volumeManager.ProbeUpdateQueueBytes;
         return new SimpleDdgiGuidingTraceTrainingSource(
             IsAvailable: true,
@@ -978,8 +997,8 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
             new SimpleDdgiGuidingExternalBuffer(
                 _volumeManager.RayResultScratchBuffer,
                 0UL,
-                rayBytes,
-                ToElementCount(rayBytes, rayStride),
+                primaryRayBytes,
+                ToElementCount(primaryRayBytes, rayStride),
                 rayStride,
                 PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.ShaderStorageWriteBit),
@@ -994,7 +1013,21 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
                 PipelineStageFlags2.TransferBit |
                     PipelineStageFlags2.ComputeShaderBit,
                 AccessFlags2.TransferWriteBit |
-                    AccessFlags2.ShaderStorageWriteBit));
+                    AccessFlags2.ShaderStorageWriteBit))
+        {
+            GuidingTracePayloadScratch = new SimpleDdgiGuidingExternalBuffer(
+                _volumeManager.RayResultScratchBuffer,
+                guidingScratchOffsetBytes,
+                guidingScratchBytes,
+                ToElementCount(
+                    guidingScratchBytes,
+                    checked((uint)SimpleDdgiMemoryPlan
+                        .GuidingTraceDirectionRecordBytes)),
+                checked((uint)SimpleDdgiMemoryPlan
+                    .GuidingTraceDirectionRecordBytes),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit)
+        };
     }
 
     private SimpleDdgiGuidingExternalBuffer CreateArenaRange(
@@ -1050,6 +1083,7 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
 
     private void UpdateDiagnosticsNoLock(PendingFrame frame, string state)
     {
+        SimpleDdgiGuidingFrameCoordinatorDiagnostics previous = Diagnostics;
         Diagnostics = new(
             true,
             true,
@@ -1063,7 +1097,19 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
             frame.Counts.SampleRequestCount,
             frame.UploadedBytes,
             _workspace.Bytes,
-            string.IsNullOrWhiteSpace(state) ? "unknown" : state.Trim());
+            string.IsNullOrWhiteSpace(state) ? "unknown" : state.Trim())
+        {
+            // Preparing the next ring slot must not erase the most recently
+            // fence-complete result.  Consumers use these fields to
+            // distinguish active GPU work from a publication/readback stall.
+            CompletedFrameSerial = previous.CompletedFrameSerial,
+            SampleReadbackValid = previous.SampleReadbackValid,
+            CompletedSampleCount = previous.CompletedSampleCount,
+            SampleValidationCounters = previous.SampleValidationCounters,
+            SampleTelemetry = previous.SampleTelemetry,
+            DistributionPublicationSucceeded =
+                previous.DistributionPublicationSucceeded
+        };
     }
 
     private bool TryValidateConfiguration(

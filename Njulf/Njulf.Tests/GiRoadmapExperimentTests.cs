@@ -302,6 +302,58 @@ public sealed class GiRoadmapExperimentTests
     }
 
     [Test]
+    public void C4_ExplicitSelectionBuildsBoundedPlanWithoutEvidenceFiles()
+    {
+        var configuration = new GiTaggedCausticCacheConfiguration(
+            true,
+            HeroMaterialCount: 1,
+            PhotonTaskCapacity: 1_024,
+            MaximumWorldCells: 1_024,
+            MaximumPhotonsPerCell: 8,
+            MemoryBudgetBytes: 8UL * 1024UL * 1024UL,
+            ScreenResolveProfile: new(64, 64));
+
+        GiTaggedCausticCachePlan plan =
+            GiTaggedCausticCacheExperiment.CreateExplicitPlan(configuration);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Active, Is.True, plan.Status);
+            Assert.That(plan.Status, Is.EqualTo("active-explicit-selection"));
+            Assert.That(plan.AllocatedBytes, Is.GreaterThan(0UL));
+            Assert.That(plan.EvidenceValidation.Accepted, Is.True);
+            Assert.That(plan.EvidenceValidation.EvidenceId, Is.Empty);
+            Assert.That(plan.EvidenceValidation.BindingFingerprint,
+                Is.Not.Zero);
+        });
+    }
+
+    [Test]
+    public void C4_DefaultInteractiveExplicitLayoutFitsIndependentBudget()
+    {
+        var configuration = new GiTaggedCausticCacheConfiguration(
+            true,
+            HeroMaterialCount: 1,
+            PhotonTaskCapacity: 4_096,
+            MaximumWorldCells: 4_096,
+            MaximumPhotonsPerCell: 8,
+            MemoryBudgetBytes: 96UL * 1024UL * 1024UL,
+            ScreenResolveProfile: new(1_600, 900));
+
+        GiTaggedCausticCachePlan plan =
+            GiTaggedCausticCacheExperiment.CreateExplicitPlan(configuration);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Active, Is.True, plan.Status);
+            Assert.That(plan.AllocatedBytes,
+                Is.LessThanOrEqualTo(configuration.MemoryBudgetBytes));
+            Assert.That(plan.GpuLayout.ScreenResolve.Width, Is.EqualTo(1_600));
+            Assert.That(plan.GpuLayout.ScreenResolve.Height, Is.EqualTo(900));
+        });
+    }
+
+    [Test]
     public void C4_QualifiedTaggedCompositeDoesNotClampAgainstDiffuseBaseline()
     {
         var configuration = new GiTaggedCausticCacheConfiguration(
@@ -426,6 +478,38 @@ public sealed class GiRoadmapExperimentTests
             Assert.That(plan.Active, Is.False);
             Assert.That(plan.Status, Is.EqualTo("disabled"));
             Assert.That(plan.Memory.AllCategoriesZero, Is.True);
+        });
+    }
+
+    [Test]
+    public void C5_ExplicitSelectionRequiresTechnicalContractsButNotPromotionEvidence()
+    {
+        SimpleDdgiNearFieldResidualConfiguration configuration =
+            ResidualConfiguration(enabled: true);
+        var technicalPrerequisites =
+            new SimpleDdgiNearFieldResidualPrerequisites(
+                RefinementBricksActive: false,
+                RefinementQualityGatePassed: false,
+                RemainingContactScaleErrorMeasured: false,
+                SourceOwnershipImplemented: true,
+                DisocclusionRejectionImplemented: true,
+                CameraAndScreenEdgeStabilityPassed: false,
+                ReferenceErrorPerMillisecondImproved: false,
+                NoDoubleCountingOrFalseDarkening: false);
+
+        SimpleDdgiNearFieldResidualPlan plan =
+            SimpleDdgiNearFieldResidualExperiment.CreateExplicitPlan(
+                configuration,
+                technicalPrerequisites);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Active, Is.True, plan.Status);
+            Assert.That(plan.Status, Is.EqualTo("active-explicit-selection"));
+            Assert.That(plan.AllocatedBytes, Is.GreaterThan(0UL));
+            Assert.That(plan.EvidenceValidation.Accepted, Is.True);
+            Assert.That(plan.EvidenceId, Is.Empty);
+            Assert.That(plan.EvidenceBindingFingerprint, Is.Not.Zero);
         });
     }
 

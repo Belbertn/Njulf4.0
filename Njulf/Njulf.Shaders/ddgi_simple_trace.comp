@@ -23,13 +23,11 @@
 #include "farfield_clipmap.glsl"
 #include "ddgi_light_tree.glsl"
 #endif
-
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 #if SIMPLE_DDGI_TRACE_SHADER_ROLE != SIMPLE_DDGI_TRACE_SHADER_ROLE_REUSE
 layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #endif
-
 layout(push_constant) uniform SimpleDdgiPushBlock
 {
     uint ParamsBufferIndex;
@@ -771,32 +769,27 @@ void main()
     // falling back only that ray would mix proposal families without a valid
     // balance denominator and bias the published irradiance.
 #if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
-    uvec2 guidingExpectedStableProbeId = uvec2(
-        probeIndex,
-        update.expectedGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK);
-    bool guidingProbeBacked =
-        SimpleDdgiGuidingTransportProbeHasCompleteBacking(
-            update.physicalProbeIndex,
-            probeIndex,
-            update.pageMappingGeneration,
-            guidingExpectedStableProbeId,
-            params.raysPerProbe);
+    bool guidingRecordPresent = false;
     SimpleDdgiGuidingTransportPayload guidingPayload;
-    bool guidingPayloadValid = TryReadSimpleDdgiGuidingTransportPayload(
+    bool guidingPayloadValid = TryReadSimpleDdgiGuidingTracePayload(
+        pc.RayResultScratchBufferIndex,
+        params.guidingTraceDirectionScratchOffsetWords,
         update.physicalProbeIndex,
-        probeIndex,
+        update.probeIndex,
         update.pageMappingGeneration,
-        guidingExpectedStableProbeId,
+        simpleDdgiCurrentWorldProbeStableKey,
         directionRayIndex,
         params.raysPerProbe,
+        params.guidingPhysicalProbeCapacity,
+        guidingRecordPresent,
         guidingPayload);
-    if (guidingProbeBacked && !guidingPayloadValid)
+    if (guidingRecordPresent && !guidingPayloadValid)
     {
         SimpleDdgiSchedulerFailOutcome(
             pc.SchedulerArenaBufferIndex,
             pc.SchedulerOutcomesOffsetWords,
             update.outcomeIndex,
-            1u << 2u);
+            1u << 1u);
         return;
     }
     if (guidingPayloadValid)

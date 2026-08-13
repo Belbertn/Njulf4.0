@@ -16,6 +16,9 @@
 
     <ItemGroup>
       <ShaderSource Include="*.task;*.mesh;*.vert;*.frag;*.comp" />
+      <!-- C3's directional staging kernel is storage-specialized below. The
+           dynamic union is intentionally not emitted or embedded. -->
+      <ShaderSource Remove="ddgi_simple_directional_stage.comp" />
       <!-- NVIDIA's native compiler rejects the fully unoptimized Debug IR for
            the directional prepare/project/publish sequence even though SPIR-V
            validation succeeds. Optimize only these isolated modules in Debug
@@ -229,12 +232,23 @@
       </SimpleDdgiTransportShaderVariant>
       <SimpleDdgiGuidedShaderVariant Include="ddgi_simple_blend_guided.comp">
         <Source>ddgi_simple_blend.comp</Source>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
       </SimpleDdgiGuidedShaderVariant>
       <SimpleDdgiGuidedShaderVariant Include="ddgi_simple_relocate_classify_guided.comp">
         <Source>ddgi_simple_relocate_classify.comp</Source>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiGuidedShaderVariant>
+      <SimpleDdgiGuidedShaderVariant Include="ddgi_simple_directional_stage_guided_legacy.comp">
+        <Source>ddgi_simple_directional_stage.comp</Source>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1 -DSIMPLE_DDGI_STORAGE_SHADER_MODE=1</Defines>
+      </SimpleDdgiGuidedShaderVariant>
+      <SimpleDdgiGuidedShaderVariant Include="ddgi_simple_directional_stage_guided_packed.comp">
+        <Source>ddgi_simple_directional_stage.comp</Source>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1 -DSIMPLE_DDGI_STORAGE_SHADER_MODE=2</Defines>
       </SimpleDdgiGuidedShaderVariant>
       <SimpleDdgiGuidedShaderVariant Include="ddgi_simple_directional_project_guided.comp">
         <Source>ddgi_simple_directional_project.comp</Source>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION=1</Defines>
       </SimpleDdgiGuidedShaderVariant>
       <SimpleDdgiGuidingExtractShaderVariant Include="ddgi_guiding_extract_legacy.comp">
         <Source>ddgi_guiding_extract.comp</Source>
@@ -496,7 +510,7 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) -DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1 -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiGuidedShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiGuidedShaderVariant.Source)&quot;"
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(SimpleDdgiGuidedShaderVariant.Defines) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiGuidedShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiGuidedShaderVariant.Source)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 

@@ -215,6 +215,23 @@ public sealed class SimpleDdgiTraceVariantTests
                 SimpleDdgiDirectionalRadiancePass.ResolveProjectShaderName(true),
                 Is.EqualTo(
                     "ddgi_simple_directional_project_guided.comp.spv"));
+            Assert.That(
+                SimpleDdgiDirectionalRadiancePass.ResolvePrepareShaderName(
+                    directionalGuidingTransport: false,
+                    storagePackingMode: SimpleDdgiStoragePackingMode.Packed),
+                Is.EqualTo("ddgi_simple_directional_prepare.comp.spv"));
+            Assert.That(
+                SimpleDdgiDirectionalRadiancePass.ResolvePrepareShaderName(
+                    directionalGuidingTransport: true,
+                    storagePackingMode: SimpleDdgiStoragePackingMode.Validate),
+                Is.EqualTo(
+                    "ddgi_simple_directional_stage_guided_legacy.comp.spv"));
+            Assert.That(
+                SimpleDdgiDirectionalRadiancePass.ResolvePrepareShaderName(
+                    directionalGuidingTransport: true,
+                    storagePackingMode: SimpleDdgiStoragePackingMode.Packed),
+                Is.EqualTo(
+                    "ddgi_simple_directional_stage_guided_packed.comp.spv"));
         });
     }
 
@@ -232,9 +249,14 @@ public sealed class SimpleDdgiTraceVariantTests
             "ddgi_simple_trace.comp",
             "ddgi_simple_transport.comp",
             "ddgi_simple_blend.comp",
-            "ddgi_simple_relocate_classify.comp",
-            "ddgi_simple_directional_project.comp"
+            "ddgi_simple_relocate_classify.comp"
         ];
+        string directionalStage = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_directional_stage.comp");
+        string directionalProject = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_directional_project.comp");
 
         Assert.Multiple(() =>
         {
@@ -259,11 +281,22 @@ public sealed class SimpleDdgiTraceVariantTests
                         "#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT"),
                     consumer);
             }
+            Assert.That(
+                directionalStage,
+                Does.Contain("TryReadSimpleDdgiGuidingTracePayload"));
+            Assert.That(
+                directionalProject,
+                Does.Not.Contain("SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT"));
+            Assert.That(
+                directionalProject,
+                Does.Contain("SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION"));
 
             foreach (string artifact in new[]
                      {
                          "ddgi_simple_blend_guided.comp",
                          "ddgi_simple_relocate_classify_guided.comp",
+                         "ddgi_simple_directional_stage_guided_legacy.comp",
+                         "ddgi_simple_directional_stage_guided_packed.comp",
                          "ddgi_simple_directional_project_guided.comp",
                          "ddgi_simple_transport_guided_legacy.comp",
                          "ddgi_simple_transport_guided_validate.comp",
@@ -279,7 +312,7 @@ public sealed class SimpleDdgiTraceVariantTests
     }
 
     [Test]
-    public void DirectionalGuiding_EmbeddedBaselineSpirvHasNoSidecarLengthReads()
+    public void DirectionalGuiding_EmbeddedSpirvAvoidsDriverRejectedSidecarLengthReads()
     {
         const ushort opArrayLength = 68;
         (string Baseline, string Guided)[] shaderPairs =
@@ -310,9 +343,23 @@ public sealed class SimpleDdgiTraceVariantTests
                     "length read from the C3 sidecar ABI.");
                 Assert.That(
                     CountSpirvOpcode(guided, opArrayLength),
-                    Is.GreaterThan(0),
-                    $"Guided shader '{guided}' no longer validates its " +
-                    "source-cache sidecar bounds.");
+                    Is.Zero,
+                    $"Guided shader '{guided}' reintroduced a runtime-array " +
+                    "length query rejected by the NVIDIA native compiler; C3 " +
+                    "bounds must use the published params-header capacity.");
+            }
+            foreach (string guidedStage in new[]
+                     {
+                         "ddgi_simple_directional_stage_guided_legacy.comp",
+                         "ddgi_simple_directional_stage_guided_packed.comp"
+                     })
+            {
+                Assert.That(
+                    CountSpirvOpcode(guidedStage, opArrayLength),
+                    Is.Zero,
+                    $"Guided stage '{guidedStage}' reintroduced a " +
+                    "runtime-array length query rejected by the NVIDIA " +
+                    "native compiler.");
             }
         });
     }

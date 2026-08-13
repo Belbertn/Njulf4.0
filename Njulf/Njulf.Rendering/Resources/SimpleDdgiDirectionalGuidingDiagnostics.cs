@@ -186,16 +186,30 @@ public sealed record SimpleDdgiDirectionalGuidingDiagnostics
     }
 
     private static bool IsFrameSane(
-        in SimpleDdgiGuidingFrameCoordinatorDiagnostics frame) =>
-        frame.GuidedProbeCount >= 0 && frame.SampleRequestCount >= 0 &&
-        frame.CompletedSampleCount >= 0 &&
-        frame.CompletedSampleCount <= frame.SampleRequestCount &&
-        frame.UploadedBytes <= frame.WorkspaceBytes &&
-        (!frame.SampleReadbackValid ||
-         frame.CompletedFrameSerial != 0UL &&
-         frame.SampleTelemetry.RequestCount == frame.SampleRequestCount &&
-         frame.SampleTelemetry.IsConsistent(
-             frame.SampleValidationCounters));
+        in SimpleDdgiGuidingFrameCoordinatorDiagnostics frame)
+    {
+        if (frame.GuidedProbeCount < 0 || frame.SampleRequestCount < 0 ||
+            frame.CompletedSampleCount < 0 ||
+            frame.UploadedBytes > frame.WorkspaceBytes)
+        {
+            return false;
+        }
+
+        if (!frame.SampleReadbackValid)
+            return true;
+
+        // Current-frame work and the most recent fence-complete result are
+        // intentionally reported together. Once the next ring slot is
+        // prepared, SampleRequestCount belongs to that newer frame and may be
+        // zero (or simply different); validate the retained completion against
+        // its own immutable telemetry instead.
+        return frame.CompletedFrameSerial != 0UL &&
+            frame.SampleTelemetry.RequestCount <= int.MaxValue &&
+            frame.CompletedSampleCount ==
+                (int)frame.SampleTelemetry.RequestCount &&
+            frame.SampleTelemetry.IsConsistent(
+                frame.SampleValidationCounters);
+    }
 
     private static string NormalizeReason(string? value, string fallback)
     {

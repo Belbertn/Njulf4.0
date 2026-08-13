@@ -15,7 +15,7 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
 {
     [Test]
-    public void GraphicsVariants_RequireExactModeAndPassedPrerequisiteGate()
+    public void GraphicsVariants_ExplicitModeBypassesPromotionGateButAutoRequiresIt()
     {
         var settings = new GlobalIlluminationSettings
         {
@@ -45,7 +45,22 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
                     .ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
                         settings,
                         rejected),
+                Is.True);
+
+            settings.SimpleDdgiReceiverFeedbackMode =
+                SimpleDdgiReceiverFeedbackMode.AutoQualified;
+            Assert.That(
+                VulkanRenderer
+                    .ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
+                        settings,
+                        rejected),
                 Is.False);
+            Assert.That(
+                VulkanRenderer
+                    .ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
+                        settings,
+                        passed),
+                Is.True);
 
             settings.UseDdgi = false;
             Assert.That(
@@ -413,6 +428,10 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
                 Does.Contain("survivingCoverage"));
             Assert.That(surfaceProducer,
                 Does.Contain("subgroupExclusiveAdd(localOwnerCount)"));
+            Assert.That(surfaceProducer,
+                Does.Contain("umulExtended"));
+            Assert.That(surfaceProducer,
+                Does.Not.Contain("0xffffffffu /"));
             Assert.That(meshPipeline,
                 Does.Contain("AlphaMaskReceiverFeedbackPipelinesAvailable"));
             Assert.That(meshPipeline,
@@ -423,6 +442,13 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
                 Does.Contain("AlphaMaskOrFoliage"));
             Assert.That(forwardPass,
                 Does.Contain("receiver-feedback-alpha-foliage-completion-failed"));
+            Assert.That(forwardPass,
+                Does.Contain("receiverGatherRequired = receiverCacheEligible ||"));
+            Assert.That(forwardPass,
+                Does.Contain(
+                    "_simpleDdgiReceiverFeedbackRuntime?.IsOwnedCaptureReady == true"));
+            Assert.That(forwardPass,
+                Does.Contain("receiverCacheEligible && receiverGatherRecorded"));
         });
     }
 

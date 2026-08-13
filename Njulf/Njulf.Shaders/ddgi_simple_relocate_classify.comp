@@ -139,18 +139,6 @@ void main()
     uint visibilityRayCount = 0u;
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
     uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);
-#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
-    uvec2 guidingExpectedStableProbeId = uvec2(
-        probeIndex,
-        update.expectedGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK);
-    bool guidingProbeBacked =
-        SimpleDdgiGuidingTransportProbeHasCompleteBacking(
-            update.physicalProbeIndex,
-            probeIndex,
-            update.pageMappingGeneration,
-            guidingExpectedStableProbeId,
-            params.raysPerProbe);
-#endif
     float nearestHitDistance = 3.402823466e+38;
     float nearestBackfaceDistance = 3.402823466e+38;
     vec3 nearestBackfaceDirection = vec3(0.0);
@@ -189,16 +177,23 @@ void main()
             return;
         }
 #if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
+        bool guidingRecordPresent = false;
         SimpleDdgiGuidingTransportPayload guidingPayload;
-        bool guidingPayloadValid = TryReadSimpleDdgiGuidingTransportPayload(
+        bool guidingPayloadValid = TryReadSimpleDdgiGuidingTracePayload(
+            pc.RayResultScratchBufferIndex,
+            params.guidingTraceDirectionScratchOffsetWords,
             update.physicalProbeIndex,
-            probeIndex,
+            update.probeIndex,
             update.pageMappingGeneration,
-            guidingExpectedStableProbeId,
+            uvec2(update.probeIndex, SimpleDdgiProbeGeneration(previous)),
             directionRayIndex,
             params.raysPerProbe,
+            params.guidingPhysicalProbeCapacity,
+            guidingRecordPresent,
             guidingPayload);
-        if (guidingProbeBacked && !guidingPayloadValid)
+        bool guidingRecordValid = !guidingRecordPresent ||
+            guidingPayloadValid;
+        if (guidingRecordPresent && !guidingRecordValid)
         {
             SimpleDdgiSchedulerFailOutcome(
                 pc.SchedulerArenaBufferIndex,
@@ -207,9 +202,10 @@ void main()
                 1u << 1u);
             return;
         }
-        if (guidingPayloadValid)
+        if (guidingRecordPresent)
         {
-            if (!SimpleDdgiGuidingPayloadOwnsVisibility(guidingPayload))
+            if (guidingPayload.technique !=
+                SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE)
                 continue;
             direction = guidingPayload.direction;
         }

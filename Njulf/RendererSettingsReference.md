@@ -300,15 +300,16 @@ Authored Simple-DDGI volumes are optional standalone local overrides, not requir
 
 Content-dependent modes have separate requested and effective state. Quality presets configure requested modes and budgets; `DdgiContentRolloutPolicy` independently admits reviewed features for the current device/profile. `ConfiguredContentDependentFeatures` therefore describes intent, while `ActiveContentDependentFeatures` and the effective mode properties describe what shaders and resource managers may use. Validation-only reference modes additionally require explicit conformance authorization. The `ContentDependentDdgi` runtime/performance snapshot records both sides plus the fallback reason, so a copied settings file cannot silently promote an unqualified feature.
 
-### Advanced GI experiments
+### Advanced GI features
 
-The remaining advanced-GI settings are versioned mode selections rather than
-activation booleans. Their legacy boolean aliases remain readable in saved
-settings, but new tools should write the mode properties below. A requested
-mode is never proof that GPU work is enabled: every frame records separately
-requested, supported, admitted, effective, qualification, and fallback state.
-An `AutoQualified` request additionally requires a current evidence identifier
-for the selected device, driver, shader ABI, content revision, and profile.
+The editor presents B1, C1, C3, C4, and C5 as ordinary on/off switches. Turning
+a switch on selects the feature's explicit production implementation; it does
+not load a profile and does not require a qualification identifier. Internally,
+the switches map to versioned modes so saved settings remain migratable and
+automation can still select reference or `AutoQualified` modes. Every frame
+records requested, supported, effective, and fallback state so a real hardware,
+memory, ABI, allocation, or resource failure remains visible instead of being
+misreported as active.
 
 | Setting | Values and behavior |
 | --- | --- |
@@ -318,23 +319,24 @@ for the selected device, driver, shader ABI, content revision, and profile.
 | `GiCausticMode` | `Off`, `PhotonReference`, `WorldCacheExperiment`, or `AutoQualified`. It is a separate hero-specular/refractive path; caustic flux never becomes DDGI source/transport data. |
 | `SimpleDdgiNearFieldResidualMode` | `Off`, `Reference`, `HiZHalfResolutionExperiment`, or `AutoQualified`. It requires measured post-B3 evidence and an exact direct-diffuse-plus-emissive source contract; it never samples final scene color. |
 
-New settings request every completed advanced-GI production path in every
+New settings turn on every completed advanced-GI production path in every
 preset: B1 `ExactCompacted`, C1 `ExtFourStateExperiment`, C3
 `PerProbeHistogramExperiment`, C4 `WorldCacheExperiment`, and C5
-`HiZHalfResolutionExperiment`. These are intent defaults, not qualification or
-unconditional activation. Existing saved settings retain their persisted mode.
-Unsupported, inadmissible, rejected, or resource-incomplete modes allocate no
-persistent resources, bind no optional descriptors, and contribute no
-render-graph passes. A transition, resize, content reload, device loss, ABI
-mismatch, evidence mismatch, or failed publication falls back transactionally
-to the canonical DDGI path without changing the persisted requested mode.
+`HiZHalfResolutionExperiment`. Explicit modes need no promotion evidence and
+enter their production graph/resource paths whenever their real prerequisites
+are available. Existing saved settings retain their persisted mode. Unsupported
+hardware, an exceeded memory or Vulkan limit, an ABI mismatch, allocation
+failure, or incomplete runtime resources still falls back transactionally to
+canonical DDGI without changing the switch. `AutoQualified` remains a separate
+automation-only policy and is the only path gated by qualification artifacts.
 
-Advanced-GI graph inventory is immutable for a renderer instance. Applications
-must set startup modes and qualification IDs through
-`RenderingOptions.InitialSettings.GlobalIllumination` before resolving
-`VulkanRenderer`; changing those values after `Initialize()` cannot add a graph
-branch or enable an optional Vulkan device extension. The sample exposes the
-same startup contract through these command-line options:
+Advanced-GI graph inventory is immutable for a renderer instance. The editor
+therefore applies a switch by automatically performing a clean renderer/device
+restart with the new selection; no separate Apply, profile, or evidence-loading
+step is required. Applications that configure the renderer directly must set
+startup modes through `RenderingOptions.InitialSettings.GlobalIllumination`
+before resolving `VulkanRenderer`. The sample also exposes the startup contract
+through these command-line options for automation:
 
 | Command-line option | Environment variable |
 | --- | --- |
@@ -353,9 +355,10 @@ same startup contract through these command-line options:
 | `--gi-caustic-qualification-id=<id>` | `NJULF_GI_CAUSTIC_QUALIFICATION_ID` |
 | `--simple-ddgi-near-field-residual-qualification-id=<id>` | `NJULF_SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_QUALIFICATION_ID` |
 
-Startup is intentionally ordered: the application first supplies requested
-modes, then the frozen prerequisite manifest, the per-device qualification
-manifest, and finally the scene/layout-bound C4/C5 runtime-evidence bundle.
+When automation selects `AutoQualified`, startup is intentionally ordered: the
+application first supplies requested modes, then the frozen prerequisite
+manifest, the per-device qualification manifest, and finally the
+scene/layout-bound C4/C5 runtime-evidence bundle.
 `RenderingOptions.ConfigureAdvancedGiEvidence` runs last for applications that
 already own strongly typed evidence. Each document is bounded, strict-schema,
 and revalidated against the production planner. A missing, malformed, stale, or

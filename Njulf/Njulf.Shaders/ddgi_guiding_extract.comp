@@ -13,7 +13,7 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-const uint SIMPLE_DDGI_GUIDING_EXTRACT_ABI_VERSION = 0x43330007u;
+const uint SIMPLE_DDGI_GUIDING_EXTRACT_ABI_VERSION = 0x43330008u;
 const uint SIMPLE_DDGI_GUIDING_TRAINING_FINITE_INCIDENT_RADIANCE = 1u << 0u;
 const uint SIMPLE_DDGI_GUIDING_TRAINING_CONTENT_REVISION_MATCHED = 1u << 1u;
 const uint SIMPLE_DDGI_GUIDING_TRAINING_RADIOMETRIC_TRANSPORT = 1u << 2u;
@@ -161,10 +161,12 @@ void main()
 
     SimpleDdgiGuidingTrainingWorkItem workItem =
         guidingExtractWorkItems.workItems[workItemIndex];
-    bool baseIndexMatches = workItem.queueOffset <=
-            0xffffffffu / guidingExtractPc.directionSlotsPerProbe &&
-        workItem.rayResultBaseIndex == workItem.queueOffset *
-            guidingExtractPc.directionSlotsPerProbe;
+    uint expectedRayResultBaseIndex;
+    bool baseIndexMatches = SimpleDdgiGuidingTryMultiplyU32(
+            workItem.queueOffset,
+            guidingExtractPc.directionSlotsPerProbe,
+            expectedRayResultBaseIndex) &&
+        workItem.rayResultBaseIndex == expectedRayResultBaseIndex;
     bool recordRangeValid = workItem.recordOffset <=
             guidingExtractPc.trainingRecordCapacity &&
         workItem.recordCount <= guidingExtractPc.trainingRecordCapacity -
@@ -204,8 +206,11 @@ void main()
         guidingExtractPc.probeUpdateQueueBufferIndex,
         workItem.queueOffset);
     uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
-    bool sourceIdentityValid = params.physicalProbeCapacity ==
-            guidingExtractPc.physicalProbeCapacity &&
+    // C3 owns only its admitted prefix of the source allocation.  Requiring
+    // equality would reject every valid record whenever the independently
+    // budgeted guiding capacity is smaller than the live DDGI capacity.
+    bool sourceIdentityValid = guidingExtractPc.physicalProbeCapacity <=
+            params.physicalProbeCapacity &&
         params.raysPerProbe == guidingExtractPc.directionSlotsPerProbe &&
         update.probeIndex == workItem.virtualProbeId &&
         update.physicalProbeIndex == workItem.physicalProbeIndex &&
@@ -271,15 +276,18 @@ void main()
                 workItem.virtualProbeId,
                 workItem.pageGeneration,
                 expectedStableProbeId,
-                guidingExtractPc.directionSlotsPerProbe);
+                guidingExtractPc.directionSlotsPerProbe,
+                params.guidingPhysicalProbeCapacity);
         SimpleDdgiGuidingTransportPayload payload;
-        bool payloadValid = TryReadSimpleDdgiGuidingTransportPayload(
+        bool payloadValid = sidecarBacked &&
+            TryReadSimpleDdgiGuidingTransportPayload(
             workItem.physicalProbeIndex,
             workItem.virtualProbeId,
             workItem.pageGeneration,
             expectedStableProbeId,
             directionRayIndex,
             guidingExtractPc.directionSlotsPerProbe,
+            params.guidingPhysicalProbeCapacity,
             payload);
         if (payloadValid)
             direction = payload.direction;

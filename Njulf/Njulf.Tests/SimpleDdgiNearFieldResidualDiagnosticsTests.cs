@@ -69,6 +69,43 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
     }
 
     [Test]
+    public void NewSubmission_PreservesLastFenceValidCounterWitness()
+    {
+        var witness = new SimpleDdgiNearFieldResidualCompletionWitness(
+            CompletedFrameSerial: 17UL,
+            Trace: SimpleDdgiNearFieldResidualTraceTelemetry.Empty,
+            History: SimpleDdgiNearFieldResidualHistoryTelemetry.Empty,
+            ResidualEnergy: SimpleDdgiNearFieldResidualEnergyTelemetry.Empty,
+            Tiles: SimpleDdgiNearFieldResidualTileTelemetry.Empty,
+            TotalTraceSteps: 0UL,
+            TotalMipVisits: 0UL,
+            TotalRefinementVisits: 0UL,
+            MaximumTraceDistance: 0.0f,
+            MaximumTraceStepCount: 0U,
+            MaximumMipVisitCount: 0U);
+        var memory = new SimpleDdgiNearFieldResidualMemoryTelemetry(
+            1_024UL, 1_024UL, 992UL, 992UL, 0UL);
+
+        SimpleDdgiNearFieldResidualDiagnostics telemetry =
+            SimpleDdgiNearFieldResidualVulkanRuntime
+                .CreatePendingReadbackDiagnostics(
+                    witness,
+                    memory,
+                    pendingFrameSerial: 20UL);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(telemetry.Readback.State,
+                Is.EqualTo(SimpleDdgiNearFieldResidualReadbackState.PendingGpuReadback));
+            Assert.That(telemetry.Readback.CounterReadbackValid, Is.True);
+            Assert.That(telemetry.Readback.TimingReadbackValid, Is.False);
+            Assert.That(telemetry.Readback.CompletedFrameSerial, Is.EqualTo(17UL));
+            Assert.That(telemetry.Readback.AgeFrames, Is.EqualTo(3U));
+            Assert.That(telemetry.Memory.AllocatedBytes, Is.EqualTo(992UL));
+        });
+    }
+
+    [Test]
     public void FenceCompletionValidator_RequiresExactTileCoverageAndHeaderSums()
     {
         SimpleDdgiNearFieldResidualLayout layout =

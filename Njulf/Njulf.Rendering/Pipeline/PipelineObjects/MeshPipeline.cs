@@ -180,6 +180,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public ForwardGiCausticReceiverPipelineConfiguration
             GiCausticReceiverConfiguration => _giCausticReceiverConfiguration;
         public bool CombinedAdvancedGiAttachmentEnabled { get; private set; }
+        public string CombinedAdvancedGiFailureReason { get; private set; } =
+            "combined-advanced-GI-disabled";
 
         /// <summary>
         /// Releases the optional C5 MRT variants during a renderer-controlled
@@ -189,7 +191,6 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         internal void DisableNearFieldDirectSourceAfterDeviceIdle(string reason)
         {
             DestroyNearFieldDirectSourcePipelines();
-            bool combinedWasEnabled = CombinedAdvancedGiAttachmentEnabled;
             DestroyCombinedAdvancedGiPipelines();
             _nearFieldDirectSourceConfiguration =
                 ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
@@ -197,19 +198,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             NearFieldDirectSourceFailureReason = string.IsNullOrWhiteSpace(reason)
                 ? "near-field-direct-source-disabled"
                 : reason;
-            if (combinedWasEnabled)
-            {
-                _giCausticReceiverConfiguration =
-                    ForwardGiCausticReceiverPipelineConfiguration.Disabled;
-                GiCausticReceiverAttachmentEnabled = false;
-                GiCausticReceiverFailureReason = NearFieldDirectSourceFailureReason;
-            }
+            CombinedAdvancedGiFailureReason =
+                "combined-advanced-GI-C5-disabled";
         }
 
         internal void DisableGiCausticReceiverAfterDeviceIdle(string reason)
         {
             DestroyGiCausticReceiverPipelines();
-            bool combinedWasEnabled = CombinedAdvancedGiAttachmentEnabled;
             DestroyCombinedAdvancedGiPipelines();
             _giCausticReceiverConfiguration =
                 ForwardGiCausticReceiverPipelineConfiguration.Disabled;
@@ -217,13 +212,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             GiCausticReceiverFailureReason = string.IsNullOrWhiteSpace(reason)
                 ? "caustic-forward-receiver-disabled"
                 : reason;
-            if (combinedWasEnabled)
-            {
-                _nearFieldDirectSourceConfiguration =
-                    ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
-                NearFieldDirectSourceAttachmentEnabled = false;
-                NearFieldDirectSourceFailureReason = GiCausticReceiverFailureReason;
-            }
+            CombinedAdvancedGiFailureReason =
+                "combined-advanced-GI-C4-disabled";
         }
 
         public VkPipeline ResolveOpaqueSpecializedPipeline(
@@ -597,6 +587,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             GiCausticReceiverFailureReason =
                 "caustic-forward-receiver-disabled";
             CombinedAdvancedGiAttachmentEnabled = false;
+            CombinedAdvancedGiFailureReason =
+                "combined-advanced-GI-disabled";
             string provenanceSuffix =
                 materialTransportProvenanceEnabled ? "_provenance" : string.Empty;
             string forwardOpaqueFragmentShaderName =
@@ -752,23 +744,26 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 materialTransportProvenanceFormat: materialTransportProvenanceFormat);
             _context.SetDebugName(_forwardCompactedSimpleFullInputPipeline.Handle, ObjectType.Pipeline, "Compacted Simple Full-Input Opaque Forward Plus Mesh Pipeline");
 
-            if (_nearFieldDirectSourceConfiguration.IsC5EffectivelyEnabled &&
-                _giCausticReceiverConfiguration.IsC4EffectivelyEnabled)
+            // C4 and C5 can independently have zero work on any frame. Build
+            // each semantic MRT set even when both features are configured so
+            // a missing C4 hero source cannot make C5 select a nonexistent
+            // standalone pipeline (and vice versa). The combined four-target
+            // set is an additional fast path, not a replacement for either
+            // independently valid producer contract.
+            CreateNearFieldDirectSourcePipelines(
+                colorFormat,
+                depthFormat,
+                forwardTaskShaderName,
+                materialTransportProvenanceEnabled);
+            CreateGiCausticReceiverPipelines(
+                colorFormat,
+                depthFormat,
+                forwardTaskShaderName,
+                materialTransportProvenanceEnabled);
+            if (NearFieldDirectSourceAttachmentEnabled &&
+                GiCausticReceiverAttachmentEnabled)
             {
                 CreateCombinedAdvancedGiPipelines(
-                    colorFormat,
-                    depthFormat,
-                    forwardTaskShaderName,
-                    materialTransportProvenanceEnabled);
-            }
-            else
-            {
-                CreateNearFieldDirectSourcePipelines(
-                    colorFormat,
-                    depthFormat,
-                    forwardTaskShaderName,
-                    materialTransportProvenanceEnabled);
-                CreateGiCausticReceiverPipelines(
                     colorFormat,
                     depthFormat,
                     forwardTaskShaderName,
@@ -1015,7 +1010,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 DestroyNearFieldDirectSourcePipelines();
                 NearFieldDirectSourceAttachmentEnabled = false;
                 NearFieldDirectSourceFailureReason =
-                    "near-field-direct-source-pipeline-creation-failed";
+                    "near-field-direct-source-pipeline-creation-failed:" +
+                    ex.GetType().Name + ":" + ex.Message;
                 System.Diagnostics.Debug.WriteLine(
                     $"C5 direct-source pipeline unavailable: {ex.GetType().Name}: {ex.Message}");
             }
@@ -1085,7 +1081,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 DestroyGiCausticReceiverPipelines();
                 GiCausticReceiverAttachmentEnabled = false;
                 GiCausticReceiverFailureReason =
-                    "caustic-forward-receiver-pipeline-creation-failed";
+                    "caustic-forward-receiver-pipeline-creation-failed:" +
+                    ex.GetType().Name + ":" + ex.Message;
                 System.Diagnostics.Debug.WriteLine(
                     $"C4 receiver pipeline unavailable: {ex.GetType().Name}: {ex.Message}");
             }
@@ -1099,10 +1096,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             if (materialTransportProvenanceEnabled)
             {
-                NearFieldDirectSourceFailureReason =
+                CombinedAdvancedGiFailureReason =
                     "combined-advanced-GI-material-provenance-conflict";
-                GiCausticReceiverFailureReason =
-                    NearFieldDirectSourceFailureReason;
                 return;
             }
             if (!ForwardAdvancedGiCombinedContract
@@ -1111,8 +1106,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         _nearFieldDirectSourceConfiguration,
                         out string failure))
             {
-                NearFieldDirectSourceFailureReason = failure;
-                GiCausticReceiverFailureReason = failure;
+                CombinedAdvancedGiFailureReason = failure;
                 return;
             }
 
@@ -1148,28 +1142,20 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline.Handle == 0)
                 {
                     DestroyCombinedAdvancedGiPipelines();
-                    NearFieldDirectSourceFailureReason =
+                    CombinedAdvancedGiFailureReason =
                         "combined-advanced-GI-pipeline-variant-incomplete";
-                    GiCausticReceiverFailureReason =
-                        NearFieldDirectSourceFailureReason;
                     return;
                 }
 
                 CombinedAdvancedGiAttachmentEnabled = true;
-                NearFieldDirectSourceAttachmentEnabled = true;
-                GiCausticReceiverAttachmentEnabled = true;
-                NearFieldDirectSourceFailureReason = "valid";
-                GiCausticReceiverFailureReason = "valid";
+                CombinedAdvancedGiFailureReason = "valid";
             }
             catch (Exception ex)
             {
                 DestroyCombinedAdvancedGiPipelines();
-                NearFieldDirectSourceAttachmentEnabled = false;
-                GiCausticReceiverAttachmentEnabled = false;
-                NearFieldDirectSourceFailureReason =
-                    "combined-advanced-GI-pipeline-creation-failed";
-                GiCausticReceiverFailureReason =
-                    NearFieldDirectSourceFailureReason;
+                CombinedAdvancedGiFailureReason =
+                    "combined-advanced-GI-pipeline-creation-failed:" +
+                    ex.GetType().Name + ":" + ex.Message;
                 System.Diagnostics.Debug.WriteLine(
                     $"Combined C4/C5 forward pipeline unavailable: {ex.GetType().Name}: {ex.Message}");
             }
@@ -1386,6 +1372,16 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     quaternaryColorFormat: quaternaryColorFormat,
                     materialTransportProvenanceFormat:
                         materialTransportProvenanceFormat);
+            }
+            catch (Exception exception)
+            {
+                string detail =
+                    "Failed to create graphics pipeline " +
+                    $"(task='{taskShaderName ?? "none"}', " +
+                    $"mesh='{meshShaderName}', " +
+                    $"fragment='{fragmentShaderName ?? "none"}'): " +
+                    $"{exception.GetType().Name}: {exception.Message}";
+                throw new InvalidOperationException(detail, exception);
             }
             finally
             {

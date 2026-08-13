@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using Silk.NET.Vulkan;
 
 namespace Njulf.Tests;
 
@@ -42,6 +43,42 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(SimpleDdgiNearFieldResidualGpuAllocation.ExpectedDescriptorCount(
                 CreateLayout()), Is.EqualTo(19u));
         });
+    }
+
+    [Test]
+    public void PhysicalIntegrationAcceptsTheRendererHalfResolutionHiZContract()
+    {
+        SimpleDdgiNearFieldResidualLayout layout = CreateLayout();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiNearFieldResidualVulkanRuntime.IsCompatibleHiZExtent(
+                    layout,
+                    width: 320,
+                    height: 180),
+                Is.True);
+            Assert.That(
+                SimpleDdgiNearFieldResidualVulkanRuntime.IsCompatibleHiZExtent(
+                    layout,
+                    width: 640,
+                    height: 360),
+                Is.False);
+            Assert.That(
+                SimpleDdgiNearFieldResidualVulkanRuntime.IsCompatibleHiZExtent(
+                    layout,
+                    width: 320,
+                    height: 179),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void ValidityRenderTargetUsesTheFourByteR32UintAccountingContract()
+    {
+        Assert.That(
+            RenderTarget.CalculateByteSize(320, 180, Format.R32Uint),
+            Is.EqualTo(320UL * 180UL * 4UL));
     }
 
     [Test]
@@ -479,6 +516,10 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             "ddgi_near_field_residual_temporal.comp"));
         string reset = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_reset.comp"));
+        string passSource = File.ReadAllText(Path.Combine(
+            FindRepoDirectory("Njulf.Rendering"),
+            "Pipeline",
+            "SimpleDdgiNearFieldResidualPasses.cs"));
 
         Assert.Multiple(() =>
         {
@@ -497,6 +538,8 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(reset, Does.Contain("ResetHitMetadataBuffer"));
             Assert.That(reset, Does.Contain("ResetTileRecordsBuffer"));
             Assert.That(reset, Does.Contain("SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION"));
+            Assert.That(passSource, Does.Contain(
+                "images[3] = Sampled(validityRead, _bindlessHeap.HiZSampler)"));
         });
     }
 

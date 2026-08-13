@@ -11,7 +11,9 @@ layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) readonly buffer GuidingBuildWorkItemsBuffer
 {
-    SimpleDdgiGuidingBuildWorkItem workItems[];
+    // Raw words preserve the frozen 48-byte CPU ABI and avoid a native
+    // compiler defect in runtime arrays of this struct.
+    uint words[];
 } guidingBuildWorkItems;
 
 layout(std430, set = 0, binding = 1) readonly buffer GuidingBuildPartialScratchBuffer
@@ -28,6 +30,38 @@ layout(std430, set = 0, binding = 3) buffer GuidingBuildCountersBuffer
 {
     uint counters[];
 } guidingBuildCounters;
+
+bool SimpleDdgiGuidingLoadBuildWorkItem(
+    uint workItemIndex,
+    out SimpleDdgiGuidingBuildWorkItem workItem)
+{
+    uint wordCount = uint(guidingBuildWorkItems.words.length());
+    if (workItemIndex >=
+        wordCount / SIMPLE_DDGI_GUIDING_BUILD_WORK_ITEM_WORDS)
+    {
+        return false;
+    }
+
+    uint baseWord = workItemIndex *
+        SIMPLE_DDGI_GUIDING_BUILD_WORK_ITEM_WORDS;
+    workItem.physicalProbeIndex = guidingBuildWorkItems.words[baseWord + 0u];
+    workItem.virtualProbeId = guidingBuildWorkItems.words[baseWord + 1u];
+    workItem.pageGeneration = guidingBuildWorkItems.words[baseWord + 2u];
+    workItem.previousDistributionGeneration =
+        guidingBuildWorkItems.words[baseWord + 3u];
+    workItem.targetDistributionGeneration =
+        guidingBuildWorkItems.words[baseWord + 4u];
+    workItem.targetProposalEpoch =
+        guidingBuildWorkItems.words[baseWord + 5u];
+    workItem.partialOffset = guidingBuildWorkItems.words[baseWord + 6u];
+    workItem.partialCount = guidingBuildWorkItems.words[baseWord + 7u];
+    workItem.sampleCountAndAge = guidingBuildWorkItems.words[baseWord + 8u];
+    workItem.expectedContentRevision =
+        guidingBuildWorkItems.words[baseWord + 9u];
+    workItem.flags = guidingBuildWorkItems.words[baseWord + 10u];
+    workItem.reserved = guidingBuildWorkItems.words[baseWord + 11u];
+    return true;
+}
 
 shared float hierarchy[SIMPLE_DDGI_GUIDING_MAX_HIERARCHY_WEIGHT_COUNT];
 shared float totalIncidentEnergy;
@@ -62,9 +96,10 @@ void main()
     uint workItemIndex = gl_WorkGroupID.x;
     bool gpuGenerated = (guidingPc.flags &
         SIMPLE_DDGI_GUIDING_PUSH_GPU_GENERATED_WORK) != 0u;
-    uint effectiveDispatchCount = gpuGenerated &&
-            uint(guidingBuildCounters.counters.length()) >=
-                SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT
+    uint counterLength = uint(guidingBuildCounters.counters.length());
+    if (counterLength < SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT)
+        return;
+    uint effectiveDispatchCount = gpuGenerated
         ? guidingBuildCounters.counters[
             SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT]
         : guidingPc.dispatchCount;
@@ -74,6 +109,17 @@ void main()
             SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS] !=
                 SIMPLE_DDGI_GUIDING_ABI_VERSION))
         return;
+
+    SimpleDdgiGuidingBuildWorkItem workItem;
+    if (!SimpleDdgiGuidingLoadBuildWorkItem(workItemIndex, workItem))
+    {
+        if (gl_LocalInvocationIndex == 0u)
+        {
+            atomicAdd(guidingBuildCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+        }
+        return;
+    }
 
     uint lane = gl_LocalInvocationIndex;
     if (lane == 0u)
@@ -85,8 +131,6 @@ void main()
     }
     barrier();
 
-    SimpleDdgiGuidingBuildWorkItem workItem =
-        guidingBuildWorkItems.workItems[workItemIndex];
     uint leafResolution = guidingPc.leafResolution;
     bool supportedLeafResolution =
         SimpleDdgiGuidingSupportedLeafResolution(leafResolution);
@@ -97,14 +141,15 @@ void main()
         supportedLeafResolution
             ? SimpleDdgiGuidingHierarchyWeightCount(leafResolution)
             : 0u;
+    uint bankBase;
+    bool bankBaseFits = SimpleDdgiGuidingTryMultiplyU32(
+        workItem.physicalProbeIndex,
+        guidingPc.bankStrideWords,
+        bankBase);
     bool safePhysicalProbeIndex = workItem.physicalProbeIndex <
             guidingPc.physicalProbeCapacity &&
         guidingPc.bankStrideWords != 0u &&
-        workItem.physicalProbeIndex <=
-            0xffffffffu / guidingPc.bankStrideWords;
-    uint bankBase = safePhysicalProbeIndex
-        ? SimpleDdgiGuidingBankBaseWord(workItem.physicalProbeIndex)
-        : 0u;
+        bankBaseFits;
     bool workItemValid = guidingPc.abiVersion == SIMPLE_DDGI_GUIDING_ABI_VERSION &&
         supportedLeafResolution &&
         guidingPc.hierarchyWeightCount == hierarchyWeightCount &&

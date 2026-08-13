@@ -19,7 +19,8 @@ public sealed record AdvancedGiStartupProfileDocument
     public string RenderSettingsPath { get; init; } = string.Empty;
     public string RenderSettingsSha256 { get; init; } = string.Empty;
     public string SettingsFingerprintSha256 { get; init; } = string.Empty;
-    public AdvancedGiRuntimeContentBinding ContentBinding { get; init; }
+    public AdvancedGiRuntimeContentBinding ContentBinding { get; init; } =
+        AdvancedGiRuntimeContentBinding.Empty;
     public string? PrerequisiteManifestPath { get; init; }
     public string? QualificationManifestPath { get; init; }
     public string? RuntimeEvidenceBundlePath { get; init; }

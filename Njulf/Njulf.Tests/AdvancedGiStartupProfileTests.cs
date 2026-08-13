@@ -194,7 +194,8 @@ public sealed class AdvancedGiStartupProfileTests
             Assert.That(options.AdvancedGiQualificationManifestPath, Is.Null);
             Assert.That(options.AdvancedGiRuntimeEvidenceBundlePath, Is.Null);
             Assert.That(options.AdvancedGiCandidateProfilePath, Is.Null);
-            Assert.That(options.AdvancedGiContentBinding.IsWellFormed, Is.False);
+            Assert.That(options.AdvancedGiContentBinding,
+                Is.EqualTo(AdvancedGiRuntimeContentBinding.Empty));
             Assert.That(options.InitialSettings.GlobalIllumination.GiCausticMode,
                 Is.EqualTo(GiCausticMode.Off));
         });

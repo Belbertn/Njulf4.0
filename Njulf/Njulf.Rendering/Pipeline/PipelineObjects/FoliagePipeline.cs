@@ -521,8 +521,21 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     null,
                     out VkPipeline pipeline);
                 if (result != Result.Success)
-                    throw new VulkanException("Failed to create foliage graphics pipeline", result);
+                {
+                    throw new VulkanException(
+                        "Failed to create foliage graphics pipeline",
+                        result);
+                }
                 return pipeline;
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    "Failed to create foliage graphics pipeline " +
+                    $"(task='{taskShaderName}', mesh='{meshShaderName}', " +
+                    $"fragment='{fragmentShaderName}'): " +
+                    $"{exception.GetType().Name}: {exception.Message}",
+                    exception);
             }
             finally
             {

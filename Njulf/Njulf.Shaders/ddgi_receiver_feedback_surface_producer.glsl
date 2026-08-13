@@ -39,6 +39,20 @@ float SimpleDdgiCubemapTexelSolidAngle(
     return max(solidAngle, 0.0);
 }
 
+// Avoid UINT_MAX / dynamicStride overflow guards. Some NVIDIA native shader
+// compilers reject that otherwise valid SPIR-V pattern in the larger B1
+// graphics programs. The extended multiply proves the same condition without
+// introducing a speculative integer division.
+bool SimpleDdgiSurfaceFeedbackTryMultiplyU32(
+    uint left,
+    uint right,
+    out uint product)
+{
+    uint highWord;
+    umulExtended(left, right, highWord, product);
+    return highWord == 0u;
+}
+
 bool SimpleDdgiTryComputeCubemapTileNamespace(
     uint cubemapArrayLayer,
     vec2 faceDimensions,
@@ -49,18 +63,20 @@ bool SimpleDdgiTryComputeCubemapTileNamespace(
     uvec2 tileExtent = (extent +
         uvec2(SIMPLE_DDGI_RECEIVER_FEEDBACK_SURFACE_TILE_SCALE - 1u)) /
         SIMPLE_DDGI_RECEIVER_FEEDBACK_SURFACE_TILE_SCALE;
-    if (tileExtent.y != 0u &&
-        tileExtent.x > 0xffffffffu / tileExtent.y)
-        return false;
-
-    uint faceTileCount = tileExtent.x * tileExtent.y;
-    if (faceTileCount == 0u ||
-        cubemapArrayLayer > 0xffffffffu / faceTileCount)
+    uint faceTileCount;
+    if (!SimpleDdgiSurfaceFeedbackTryMultiplyU32(
+            tileExtent.x,
+            tileExtent.y,
+            faceTileCount) ||
+        faceTileCount == 0u ||
+        !SimpleDdgiSurfaceFeedbackTryMultiplyU32(
+            cubemapArrayLayer,
+            faceTileCount,
+            tileNamespaceBase))
     {
         return false;
     }
 
-    tileNamespaceBase = cubemapArrayLayer * faceTileCount;
     return true;
 }
 
@@ -95,8 +111,11 @@ void EmitSimpleDdgiSurfaceReceiverFeedbackCore(
         SIMPLE_DDGI_RECEIVER_FEEDBACK_SURFACE_TILE_SCALE;
     uvec2 tile = pixel /
         SIMPLE_DDGI_RECEIVER_FEEDBACK_SURFACE_TILE_SCALE;
-    bool tileOrdinalValid = tileGrid.y != 0u &&
-        tileGrid.x <= 0xffffffffu / tileGrid.y;
+    uint tileCount;
+    bool tileOrdinalValid = SimpleDdgiSurfaceFeedbackTryMultiplyU32(
+        tileGrid.x,
+        tileGrid.y,
+        tileCount);
     uint localTileId = tileOrdinalValid
         ? tile.y * tileGrid.x + tile.x
         : 0u;

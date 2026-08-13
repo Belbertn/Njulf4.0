@@ -24,6 +24,14 @@ public readonly record struct GiCausticGpuPipelineQualification(
     bool TaggedFirstDiffuseTraceQualified,
     bool DeterministicParallelCacheBuildQualified)
 {
+    /// <summary>
+    /// The checked-in shader pair used by an explicit user selection. This is
+    /// an implementation-availability assertion, not promotion evidence.
+    /// </summary>
+    public static GiCausticGpuPipelineQualification IntegratedExplicit { get; } = new(
+        TaggedFirstDiffuseTraceQualified: true,
+        DeterministicParallelCacheBuildQualified: true);
+
     public static GiCausticGpuPipelineQualification CheckedInShadersFailClosed { get; } = new(
         TaggedFirstDiffuseTraceQualified: false,
         DeterministicParallelCacheBuildQualified: true);

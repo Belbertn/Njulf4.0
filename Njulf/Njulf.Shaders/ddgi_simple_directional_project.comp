@@ -6,6 +6,14 @@
 #include "ddgi_simple_shared.glsl"
 #include "ddgi_simple_directional_scratch.glsl"
 
+#ifndef SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
+#define SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION 0
+#endif
+
+#if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
+#include "ddgi_simple_directional_stage.glsl"
+#endif
+
 // Probe work remains parallel across workgroups. A single invocation performs
 // each probe's bounded FP32 projection, matching the proven serial SH builder
 // used by the diffuse fallback while avoiding native-driver barrier lowering.
@@ -142,13 +150,54 @@ void main()
         params,
         volume,
         localProbeOffset);
+#if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
+    // The preceding C3-only dispatch has consumed the independent source
+    // cache and written a layout-independent, preweighted projection record
+    // into the now-dead ordinary ray scratch. Consume it with the proven V1
+    // transaction ordering so every record is read before SH overwrites the
+    // allocation prefix.
+    bool transportV2 = false;
+    uint stagedFirstMetadataWord =
+        localProbeOffset * params.raysPerProbe *
+            SimpleDdgiRayResultStrideWords(volume) +
+        SIMPLE_DDGI_DIRECTIONAL_STAGE_METADATA_WORD;
+    uint stagedFirstMetadata = ReadStorageWordUniform(
+        pc.RayResultScratchBufferIndex,
+        stagedFirstMetadataWord);
+    if (stagedFirstMetadata == SIMPLE_DDGI_DIRECTIONAL_STAGE_NO_WORK)
+    {
+        WriteStorageWordUniform(
+            pc.RayResultScratchBufferIndex,
+            scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_WORD,
+            SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_EMPTY);
+        return;
+    }
+    if (stagedFirstMetadata == SIMPLE_DDGI_DIRECTIONAL_STAGE_FAILED ||
+        !SimpleDdgiDirectionalStageMetadataIsValid(
+            stagedFirstMetadata,
+            update.sourceEpoch))
+    {
+        MarkSimpleDdgiDirectionalProjectionFailure(
+            scratchBaseWord,
+            SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_PROJECTING,
+            SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FAILURE_SOURCE);
+        return;
+    }
+    bool stagedGuidingActive =
+        SimpleDdgiDirectionalStageMetadataIsGuided(stagedFirstMetadata);
+#else
     bool transportV2 =
         (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u;
+#endif
     uint status = SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_PROJECTING;
     uint rayCount = min(
+#if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
+        SimpleDdgiUpdateSourceRayCount(update, params),
+#else
         transportV2
             ? SimpleDdgiUpdateSourceRayCount(update, params)
             : SimpleDdgiUpdateRayCount(update, params),
+#endif
         SIMPLE_DDGI_MAX_RAYS_PER_PROBE);
     uint slotGeneration = SimpleDdgiDirectionalPublicationGeneration(
         update,
@@ -219,71 +268,6 @@ void main()
     uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);
     uint validCount = 0u;
     bool projectionFailed = false;
-#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
-    uvec2 guidingExpectedStableProbeId = uvec2(
-        probeIndex,
-        update.expectedGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK);
-    bool guidingActive =
-        SimpleDdgiGuidingTransportProbeHasCompleteBacking(
-            update.physicalProbeIndex,
-            probeIndex,
-            update.pageMappingGeneration,
-            guidingExpectedStableProbeId,
-            params.raysPerProbe);
-    uint guidingMaintenanceCount = 0u;
-    uint guidingMixtureCount = 0u;
-    // A probe may retain multiple proposal epochs while bounded slot rotation
-    // is in progress. Only stable probe ownership is required to match across
-    // the set; every slot carries and validates its own immutable PDF.
-    uvec2 guidingStableProbeId = uvec2(0u);
-    if (guidingActive)
-    {
-        for (uint ray = 0u; ray < rayCount; ray++)
-        {
-            uint directionRayIndex = SimpleDdgiUpdateDirectionRayIndex(
-                ray,
-                rayCount,
-                sourceRayCount,
-                params);
-            SimpleDdgiGuidingTransportPayload payload;
-            if (!TryReadSimpleDdgiGuidingTransportPayload(
-                    update.physicalProbeIndex,
-                    probeIndex,
-                    update.pageMappingGeneration,
-                    guidingExpectedStableProbeId,
-                    directionRayIndex,
-                    params.raysPerProbe,
-                    payload))
-            {
-                projectionFailed = true;
-                break;
-            }
-            if (ray == 0u)
-                guidingStableProbeId = payload.stableProbeId;
-            else if (any(notEqual(
-                    payload.stableProbeId,
-                    guidingStableProbeId)))
-            {
-                projectionFailed = true;
-                break;
-            }
-            if (payload.technique ==
-                SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE)
-            {
-                guidingMaintenanceCount++;
-            }
-            else
-            {
-                guidingMixtureCount++;
-            }
-        }
-        if (guidingMaintenanceCount + guidingMixtureCount != rayCount ||
-            guidingMaintenanceCount == 0u)
-        {
-            projectionFailed = true;
-        }
-    }
-#endif
 
     for (uint ray = 0u; ray < rayCount; ray++)
     {
@@ -345,6 +329,36 @@ void main()
         {
             uint rayResultIndex =
                 localProbeOffset * params.raysPerProbe + ray;
+#if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
+            uint stagedBaseWord = rayResultIndex *
+                SimpleDdgiRayResultStrideWords(volume);
+            sourceRadiance = vec3(
+                ReadStorageFloatUniform(
+                    pc.RayResultScratchBufferIndex,
+                    stagedBaseWord),
+                ReadStorageFloatUniform(
+                    pc.RayResultScratchBufferIndex,
+                    stagedBaseWord + 1u),
+                ReadStorageFloatUniform(
+                    pc.RayResultScratchBufferIndex,
+                    stagedBaseWord + 2u));
+            sourceDirection = UnpackSimpleDdgiTransportOctDirection(
+                ReadStorageWordUniform(
+                    pc.RayResultScratchBufferIndex,
+                    stagedBaseWord +
+                        SIMPLE_DDGI_DIRECTIONAL_STAGE_DIRECTION_WORD));
+            uint stagedMetadata = ReadStorageWordUniform(
+                pc.RayResultScratchBufferIndex,
+                stagedBaseWord +
+                    SIMPLE_DDGI_DIRECTIONAL_STAGE_METADATA_WORD);
+            valid = SimpleDdgiDirectionalStageMetadataIsValid(
+                stagedMetadata,
+                update.sourceEpoch) &&
+                SimpleDdgiDirectionalStageMetadataIsGuided(
+                    stagedMetadata) == stagedGuidingActive;
+            hitKind = float(stagedMetadata &
+                SIMPLE_DDGI_DIRECTIONAL_STAGE_HIT_KIND_MASK);
+#else
             vec4 radianceDistance;
             vec2 visibilityHit;
             uint directionEpoch;
@@ -362,37 +376,10 @@ void main()
                 directionEpoch);
             sourceRadiance = radianceDistance.rgb;
             hitKind = visibilityHit.y;
+#endif
         }
 
         float sampleWeight = 1.0;
-#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
-        if (guidingActive)
-        {
-            SimpleDdgiGuidingTransportPayload payload;
-            bool payloadValid = TryReadSimpleDdgiGuidingTransportPayload(
-                update.physicalProbeIndex,
-                probeIndex,
-                update.pageMappingGeneration,
-                guidingExpectedStableProbeId,
-                directionRayIndex,
-                params.raysPerProbe,
-                payload);
-            float denominator = payloadValid
-                ? SimpleDdgiGuidingBalanceDenominator(
-                    guidingMaintenanceCount,
-                    guidingMixtureCount,
-                    payload.generationTimeMixturePdf)
-                : 0.0;
-            if (!payloadValid || denominator <= 0.0 ||
-                isnan(denominator) || isinf(denominator))
-            {
-                projectionFailed = true;
-                continue;
-            }
-            sourceDirection = payload.direction;
-            sampleWeight = 1.0 / denominator;
-        }
-#endif
 
         float directionLengthSquared = dot(sourceDirection, sourceDirection);
         bool finiteSource =
@@ -448,8 +435,8 @@ void main()
     // the independently certified diffuse result can commit. The packed sample
     // count remains zero and makes every directional receiver fall through to
     // the next reflection source.
-#if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
-    float normalization = guidingActive
+#if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
+    float normalization = stagedGuidingActive
         ? 1.0
         : validCount > 0u
             ? (4.0 * SIMPLE_DDGI_PI) / float(validCount)

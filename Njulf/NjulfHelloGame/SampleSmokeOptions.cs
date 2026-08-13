@@ -72,6 +72,12 @@ public sealed record SampleSmokeOptions(
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
 
+    /// <summary>
+    /// Reopens the editor after an editor-initiated renderer reconstruction.
+    /// It is host state, not a command-line smoke-test input.
+    /// </summary>
+    public bool OpenEditorOnStartup { get; init; }
+
     public bool Enabled =>
         Mode != SampleSmokeMode.None ||
         FrameCount > 0 ||

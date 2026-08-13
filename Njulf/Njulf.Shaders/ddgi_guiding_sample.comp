@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "ddgi_directional_guiding.glsl"
+#include "ddgi_guiding_trace_stage.glsl"
 
 // Samples the published read bank only.  The write bank is never bound here;
 // a frame therefore cannot observe a partially trained distribution.  Each
@@ -15,18 +16,150 @@ layout(std430, set = 0, binding = 0) readonly buffer GuidingSampleReadBankBuffer
 
 layout(std430, set = 0, binding = 1) readonly buffer GuidingSampleRequestsBuffer
 {
-    SimpleDdgiGuidingSampleRequest requests[];
+    // Raw words retain the frozen 56-byte request ABI and avoid a native
+    // NVIDIA compiler defect in runtime arrays of this struct.
+    uint words[];
 } guidingSampleRequests;
 
 layout(std430, set = 0, binding = 2) buffer GuidingSamplePayloadsBuffer
 {
-    SimpleDdgiGuidingSamplePayload payloads[];
+    // The trace sidecar is already word-addressed; keep this staging payload
+    // word-addressed as well so both interfaces have identical ABI behavior.
+    uint words[];
 } guidingSamplePayloads;
 
 layout(std430, set = 0, binding = 3) buffer GuidingSampleCountersBuffer
 {
     uint counters[];
 } guidingSampleCounters;
+
+layout(std430, set = 0, binding = 4) buffer GuidingSampleTracePayloadBuffer
+{
+    uint words[];
+} guidingSampleTracePayloads;
+
+bool SimpleDdgiGuidingLoadSampleRequest(
+    uint requestIndex,
+    out SimpleDdgiGuidingSampleRequest request)
+{
+    uint wordCount = uint(guidingSampleRequests.words.length());
+    if (requestIndex >= wordCount / SIMPLE_DDGI_GUIDING_SAMPLE_REQUEST_WORDS)
+        return false;
+
+    uint baseWord = requestIndex * SIMPLE_DDGI_GUIDING_SAMPLE_REQUEST_WORDS;
+    request.physicalProbeIndex = guidingSampleRequests.words[baseWord + 0u];
+    request.virtualProbeId = guidingSampleRequests.words[baseWord + 1u];
+    request.pageGeneration = guidingSampleRequests.words[baseWord + 2u];
+    request.expectedDistributionGeneration =
+        guidingSampleRequests.words[baseWord + 3u];
+    request.expectedProposalEpoch =
+        guidingSampleRequests.words[baseWord + 4u];
+    request.stableProbeIdLow = guidingSampleRequests.words[baseWord + 5u];
+    request.stableProbeIdHigh = guidingSampleRequests.words[baseWord + 6u];
+    request.slotIndex = guidingSampleRequests.words[baseWord + 7u];
+    request.technique = guidingSampleRequests.words[baseWord + 8u];
+    request.randomBranchBits = guidingSampleRequests.words[baseWord + 9u];
+    request.requestedUniformFraction = uintBitsToFloat(
+        guidingSampleRequests.words[baseWord + 10u]);
+    request.randomIntraLeafUBits =
+        guidingSampleRequests.words[baseWord + 11u];
+    request.randomIntraLeafVBits =
+        guidingSampleRequests.words[baseWord + 12u];
+    request.traceRayIndex = guidingSampleRequests.words[baseWord + 13u];
+    return true;
+}
+
+void SimpleDdgiGuidingStoreSamplePayload(
+    uint payloadIndex,
+    SimpleDdgiGuidingSamplePayload payload)
+{
+    uint baseWord = payloadIndex * SIMPLE_DDGI_GUIDING_SAMPLE_PAYLOAD_WORDS;
+    guidingSamplePayloads.words[baseWord + 0u] = payload.abiVersion;
+    guidingSamplePayloads.words[baseWord + 1u] = payload.stableProbeIdLow;
+    guidingSamplePayloads.words[baseWord + 2u] = payload.stableProbeIdHigh;
+    guidingSamplePayloads.words[baseWord + 3u] = payload.physicalProbeIndex;
+    guidingSamplePayloads.words[baseWord + 4u] = payload.virtualProbeId;
+    guidingSamplePayloads.words[baseWord + 5u] = payload.pageGeneration;
+    guidingSamplePayloads.words[baseWord + 6u] =
+        payload.distributionGeneration;
+    guidingSamplePayloads.words[baseWord + 7u] =
+        payload.directionProposalEpoch;
+    guidingSamplePayloads.words[baseWord + 8u] = payload.slotIndex;
+    guidingSamplePayloads.words[baseWord + 9u] = payload.techniqueAndBranch;
+    guidingSamplePayloads.words[baseWord + 10u] = payload.leafIndex;
+    guidingSamplePayloads.words[baseWord + 11u] = payload.intraLeafSampleBits;
+    guidingSamplePayloads.words[baseWord + 12u] = payload.packedDirectionOct32;
+    guidingSamplePayloads.words[baseWord + 13u] =
+        payload.generationTimePdfBits;
+    guidingSamplePayloads.words[baseWord + 14u] = payload.flags;
+    guidingSamplePayloads.words[baseWord + 15u] = payload.traceOwnershipTag;
+}
+
+bool SimpleDdgiGuidingResolveTracePayload(
+    SimpleDdgiGuidingSampleRequest request,
+    out uint firstWord)
+{
+    firstWord = 0u;
+    if (!SimpleDdgiGuidingTryMultiplyU32(
+            request.traceRayIndex,
+            SIMPLE_DDGI_GUIDING_TRACE_STAGE_WORDS,
+            firstWord))
+    {
+        return false;
+    }
+    uint wordCount = uint(guidingSampleTracePayloads.words.length());
+    return firstWord <= wordCount &&
+        SIMPLE_DDGI_GUIDING_TRACE_STAGE_WORDS <= wordCount - firstWord;
+}
+
+void SimpleDdgiGuidingInvalidateTracePayload(
+    SimpleDdgiGuidingSampleRequest request)
+{
+    uint firstWord;
+    if (!SimpleDdgiGuidingResolveTracePayload(request, firstWord))
+        return;
+    guidingSampleTracePayloads.words[
+        firstWord + SIMPLE_DDGI_GUIDING_TRACE_MARKER_WORD] = 0u;
+}
+
+void SimpleDdgiGuidingPublishTracePayload(
+    SimpleDdgiGuidingSampleRequest request,
+    SimpleDdgiGuidingSamplePayload payload)
+{
+    uint firstWord;
+    if (!SimpleDdgiGuidingResolveTracePayload(request, firstWord))
+        return;
+
+    // Invalidate first so an interrupted or rejected publication cannot retain
+    // a marker from another physical-slot owner. The authenticated fields are written
+    // before the release marker and validated again by every consumer.
+    guidingSampleTracePayloads.words[
+        firstWord + SIMPLE_DDGI_GUIDING_TRACE_MARKER_WORD] = 0u;
+    guidingSampleTracePayloads.words[
+        firstWord + SIMPLE_DDGI_GUIDING_TRACE_DIRECTION_WORD] =
+            payload.packedDirectionOct32;
+    guidingSampleTracePayloads.words[
+        firstWord + SIMPLE_DDGI_GUIDING_TRACE_PDF_WORD] =
+            payload.generationTimePdfBits;
+    guidingSampleTracePayloads.words[
+        firstWord + SIMPLE_DDGI_GUIDING_TRACE_TECHNIQUE_WORD] =
+            payload.techniqueAndBranch;
+    guidingSampleTracePayloads.words[
+        firstWord + SIMPLE_DDGI_GUIDING_TRACE_FLAGS_WORD] = payload.flags;
+    guidingSampleTracePayloads.words[
+        firstWord + SIMPLE_DDGI_GUIDING_TRACE_STABLE_LOW_WORD] =
+            payload.stableProbeIdLow;
+    guidingSampleTracePayloads.words[
+        firstWord + SIMPLE_DDGI_GUIDING_TRACE_STABLE_HIGH_WORD] =
+            payload.stableProbeIdHigh;
+    guidingSampleTracePayloads.words[
+        firstWord + SIMPLE_DDGI_GUIDING_TRACE_OWNERSHIP_TAG_WORD] =
+            payload.traceOwnershipTag;
+    memoryBarrierBuffer();
+    guidingSampleTracePayloads.words[
+        firstWord + SIMPLE_DDGI_GUIDING_TRACE_MARKER_WORD] =
+            SIMPLE_DDGI_GUIDING_TRACE_STAGE_VALID;
+}
 
 SimpleDdgiGuidingDistributionHeader SimpleDdgiGuidingReadHeader(uint baseWord)
 {
@@ -224,8 +357,9 @@ void SimpleDdgiGuidingWriteInvalidPayload(
     payload.packedDirectionOct32 = 0u;
     payload.generationTimePdfBits = 0u;
     payload.flags = SIMPLE_DDGI_GUIDING_SAMPLE_INVALID_DISTRIBUTION;
-    payload.reserved = 0u;
-    guidingSamplePayloads.payloads[payloadIndex] = payload;
+    payload.traceOwnershipTag = 0u;
+    SimpleDdgiGuidingStoreSamplePayload(payloadIndex, payload);
+    SimpleDdgiGuidingInvalidateTracePayload(request);
 }
 
 bool SimpleDdgiGuidingResolvePayloadIndex(
@@ -235,16 +369,23 @@ bool SimpleDdgiGuidingResolvePayloadIndex(
     payloadIndex = 0u;
     uint slotsPerProbe = guidingPc.reserved;
     if (slotsPerProbe == 0u || request.slotIndex >= slotsPerProbe ||
-        request.physicalProbeIndex >= guidingPc.physicalProbeCapacity ||
-        request.physicalProbeIndex > 0xffffffffu / slotsPerProbe)
+        request.physicalProbeIndex >= guidingPc.physicalProbeCapacity)
     {
         return false;
     }
-    uint probeBase = request.physicalProbeIndex * slotsPerProbe;
+    uint probeBase;
+    if (!SimpleDdgiGuidingTryMultiplyU32(
+            request.physicalProbeIndex,
+            slotsPerProbe,
+            probeBase))
+    {
+        return false;
+    }
     if (request.slotIndex > 0xffffffffu - probeBase)
         return false;
     payloadIndex = probeBase + request.slotIndex;
-    return payloadIndex < uint(guidingSamplePayloads.payloads.length());
+    return payloadIndex < uint(guidingSamplePayloads.words.length()) /
+        SIMPLE_DDGI_GUIDING_SAMPLE_PAYLOAD_WORDS;
 }
 
 void SimpleDdgiGuidingRecordSampleTelemetry(
@@ -298,37 +439,46 @@ void main()
     uint requestIndex = gl_GlobalInvocationID.x;
     bool gpuGenerated = (guidingPc.flags &
         SIMPLE_DDGI_GUIDING_PUSH_GPU_GENERATED_WORK) != 0u;
-    uint effectiveDispatchCount = gpuGenerated &&
-            uint(guidingSampleCounters.counters.length()) >=
-                SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT
+    uint counterLength = uint(guidingSampleCounters.counters.length());
+    if (counterLength < SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT)
+        return;
+    uint effectiveDispatchCount = gpuGenerated
         ? guidingSampleCounters.counters[
             SIMPLE_DDGI_GUIDING_COUNTER_GPU_SAMPLE_REQUEST_COUNT]
         : guidingPc.dispatchCount;
-    if (uint(guidingSampleCounters.counters.length()) <
-            SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT ||
-        requestIndex >= effectiveDispatchCount ||
+    if (requestIndex >= effectiveDispatchCount ||
         effectiveDispatchCount > guidingPc.dispatchCount ||
         (gpuGenerated && guidingSampleCounters.counters[
             SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS] !=
-                SIMPLE_DDGI_GUIDING_ABI_VERSION) ||
-        requestIndex >= uint(guidingSampleRequests.requests.length()))
+                SIMPLE_DDGI_GUIDING_ABI_VERSION))
     {
         return;
     }
 
-    SimpleDdgiGuidingSampleRequest request =
-        guidingSampleRequests.requests[requestIndex];
-    uint payloadIndex;
-    if (!SimpleDdgiGuidingResolvePayloadIndex(request, payloadIndex))
+    SimpleDdgiGuidingSampleRequest request;
+    if (!SimpleDdgiGuidingLoadSampleRequest(requestIndex, request))
     {
         atomicAdd(guidingSampleCounters.counters[
             SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
         return;
     }
+    uint payloadIndex;
+    if (!SimpleDdgiGuidingResolvePayloadIndex(request, payloadIndex))
+    {
+        SimpleDdgiGuidingInvalidateTracePayload(request);
+        atomicAdd(guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS], 1u);
+        return;
+    }
+    uint baseWord;
+    bool baseWordFits = SimpleDdgiGuidingTryMultiplyU32(
+        request.physicalProbeIndex,
+        guidingPc.bankStrideWords,
+        baseWord);
     bool safePhysicalProbeIndex = request.physicalProbeIndex <
             guidingPc.physicalProbeCapacity &&
         guidingPc.bankStrideWords != 0u &&
-        request.physicalProbeIndex <= 0xffffffffu / guidingPc.bankStrideWords;
+        baseWordFits;
     bool baseValid = guidingPc.abiVersion == SIMPLE_DDGI_GUIDING_ABI_VERSION &&
         safePhysicalProbeIndex &&
         request.technique <= SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE &&
@@ -342,9 +492,6 @@ void main()
         ? SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE
         : SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE;
     baseValid = baseValid && request.technique == expectedTechnique;
-    uint baseWord = baseValid
-        ? SimpleDdgiGuidingBankBaseWord(request.physicalProbeIndex)
-        : 0u;
     baseValid = baseValid && baseWord <= uint(guidingSampleReadBank.words.length()) &&
         guidingPc.bankStrideWords <=
             uint(guidingSampleReadBank.words.length()) - baseWord;
@@ -465,8 +612,15 @@ void main()
     {
         payload.flags |= SIMPLE_DDGI_GUIDING_SAMPLE_UNIFORM_FALLBACK;
     }
-    payload.reserved = 0u;
-    guidingSamplePayloads.payloads[payloadIndex] = payload;
+    payload.traceOwnershipTag = SimpleDdgiGuidingTraceOwnershipTag(
+        uvec2(payload.stableProbeIdLow, payload.stableProbeIdHigh),
+        payload.physicalProbeIndex,
+        payload.virtualProbeId,
+        payload.pageGeneration,
+        payload.slotIndex,
+        payload.packedDirectionOct32);
+    SimpleDdgiGuidingStoreSamplePayload(payloadIndex, payload);
+    SimpleDdgiGuidingPublishTracePayload(request, payload);
     SimpleDdgiGuidingRecordSampleTelemetry(
         generationTimePdf,
         request.technique,

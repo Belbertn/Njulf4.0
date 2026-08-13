@@ -214,6 +214,47 @@ public sealed class SimpleDdgiLayoutCompilerTests
     }
 
     [Test]
+    public void MemoryPlan_DirectionalGuidingReservesAuthenticatedTracePayloadTail()
+    {
+        const int updates = 37;
+        const int rays = 128;
+        SimpleDdgiMemoryPlan baseline = SimpleDdgiMemoryPlan.Create(
+            probeCount: 512,
+            updateRequestCapacity: updates,
+            rayCapacity: rays,
+            sampledAtlasRequested: false,
+            concreteTransportBuffers: true,
+            readbackBufferCount: 0);
+        SimpleDdgiMemoryPlan guided = SimpleDdgiMemoryPlan.Create(
+            probeCount: 512,
+            updateRequestCapacity: updates,
+            rayCapacity: rays,
+            sampledAtlasRequested: false,
+            concreteTransportBuffers: true,
+            readbackBufferCount: 0,
+            directionalGuidingTraceStaging: true);
+
+        ulong expectedTailBytes = checked(
+            (ulong)updates * rays *
+            SimpleDdgiMemoryPlan.GuidingTraceDirectionRecordBytes);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiMemoryPlan.GuidingTraceDirectionRecordBytes,
+                Is.EqualTo(32UL));
+            Assert.That(guided.GuidingTraceDirectionScratchBytes,
+                Is.EqualTo(expectedTailBytes));
+            Assert.That(
+                guided.GuidingTraceDirectionScratchOffsetWords,
+                Is.EqualTo(baseline.RayScratchBytes / sizeof(uint)));
+            Assert.That(guided.RayScratchBytes,
+                Is.EqualTo(checked(baseline.RayScratchBytes +
+                    expectedTailBytes)));
+            Assert.That(baseline.GuidingTraceDirectionScratchBytes, Is.Zero);
+        });
+    }
+
+    [Test]
     public void MemoryPlan_ReportsSparsePageAndSampledAtlasPadding()
     {
         SimpleDdgiMemoryPlan plan = SimpleDdgiMemoryPlan.Create(

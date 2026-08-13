@@ -667,21 +667,6 @@ internal sealed class ProductionRenderPipelineDeclaration
 
         if (modes.UsesDirectionalGuiding)
         {
-            int traceIndex = declarations.FindIndex(static declaration =>
-                declaration.PassName == "SimpleDdgiTracePass");
-            if (traceIndex < 0)
-                throw new InvalidOperationException("SimpleDdgiTracePass declaration is required for C3.");
-
-            RenderGraphPassResourceDeclaration trace = declarations[traceIndex];
-            var traceUsages = new List<RenderGraphResourceUsage>(trace.Usages)
-            {
-                ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingDirectionPayloadSidecar)
-            };
-            declarations[traceIndex] = trace with { Usages = traceUsages.ToArray() };
-        }
-
-        if (modes.UsesDirectionalGuiding)
-        {
             declarations.AddRange([
                 Pass(SimpleDdgiGuidingGpuPassNames.Sample,
                     ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),

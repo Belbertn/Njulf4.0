@@ -61,7 +61,13 @@ public static class GiTaggedCausticCacheExperiment
     public static GiTaggedCausticCachePlan CreatePlan(
         in GiTaggedCausticCacheConfiguration configuration,
         in GiTaggedCausticCacheQualification qualification) =>
-        CreatePlanCore(configuration, qualification, default, default, null);
+        CreatePlanCore(
+            configuration,
+            qualification,
+            default,
+            default,
+            null,
+            explicitSelection: false);
 
     /// <summary>
     /// Compiles C4 only from a complete two-generation GPU layout and an
@@ -79,7 +85,28 @@ public static class GiTaggedCausticCacheExperiment
             qualification,
             evidence,
             admissionContext,
-            null);
+            null,
+            explicitSelection: false);
+
+    /// <summary>
+    /// Compiles the bounded, technically validated C4 implementation for an
+    /// explicit user selection. This does not claim promotion evidence;
+    /// AutoQualified continues to use the evidence-bound overload above.
+    /// </summary>
+    public static GiTaggedCausticCachePlan CreateExplicitPlan(
+        in GiTaggedCausticCacheConfiguration configuration) =>
+        CreatePlanCore(
+            configuration,
+            new GiTaggedCausticCacheQualification(
+                SeparateOwnershipImplemented: true,
+                DiffuseTransportFeedDisabled: true,
+                ReferenceParityPassed: false,
+                StabilityProofPassed: false,
+                QualityPerMillisecondImproved: false),
+            default,
+            default,
+            null,
+            explicitSelection: true);
 
     /// <summary>
     /// Compiles a bounded C4 measurement candidate without claiming promotion
@@ -99,14 +126,16 @@ public static class GiTaggedCausticCacheExperiment
                 QualityPerMillisecondImproved: false),
             default,
             admissionContext,
-            authorization);
+            authorization,
+            explicitSelection: false);
 
     private static GiTaggedCausticCachePlan CreatePlanCore(
         in GiTaggedCausticCacheConfiguration configuration,
         in GiTaggedCausticCacheQualification qualification,
         in GiCausticQualificationEvidence evidence,
         in GiCausticAdmissionContext admissionContext,
-        AdvancedGiCandidateAuthorization? candidateAuthorization)
+        AdvancedGiCandidateAuthorization? candidateAuthorization,
+        bool explicitSelection)
     {
         if (!configuration.Enabled)
         {
@@ -217,7 +246,28 @@ public static class GiTaggedCausticCacheExperiment
 
         bool candidate = candidateAuthorization.HasValue;
         GiCausticEvidenceValidation evidenceValidation;
-        if (candidate)
+        if (explicitSelection)
+        {
+            ulong configurationFingerprint =
+                GiCausticQualificationEvidenceEvaluator
+                    .ComputeConfigurationFingerprint(configuration);
+            ulong layoutFingerprint =
+                GiCausticQualificationEvidenceEvaluator
+                    .ComputeLayoutFingerprint(gpuLayout);
+            ulong activationFingerprint = unchecked(
+                configurationFingerprint * 1099511628211UL ^
+                layoutFingerprint);
+            if (activationFingerprint == 0UL)
+                activationFingerprint = 1UL;
+            evidenceValidation = new GiCausticEvidenceValidation(
+                Accepted: true,
+                GiExperimentFallbackReason.None,
+                "active-explicit-selection",
+                string.Empty,
+                activationFingerprint,
+                MaskedErrorReduction: 0.0);
+        }
+        else if (candidate)
         {
             AdvancedGiCandidateAuthorization authorization =
                 candidateAuthorization!.Value;
@@ -285,6 +335,11 @@ public static class GiTaggedCausticCacheExperiment
         SimpleDdgiAdvancedExperimentMemoryPlan memory =
             SimpleDdgiAdvancedExperimentMemoryPlan.CreateCaustic(requirements);
 
+        string activeStatus = explicitSelection
+            ? "active-explicit-selection"
+            : candidate
+                ? "active-candidate-experiment"
+                : "active-qualified-experiment";
         var admission = new GiExperimentAdmission(
             "C4",
             true,
@@ -292,9 +347,7 @@ public static class GiTaggedCausticCacheExperiment
             true,
             GiExperimentStage.Active,
             memory.AllocatedBytes,
-            candidate
-                ? "active-candidate-experiment"
-                : "active-qualified-experiment");
+            activeStatus);
         return new GiTaggedCausticCachePlan(
             true,
             true,
@@ -492,7 +545,13 @@ public static class SimpleDdgiNearFieldResidualExperiment
     public static SimpleDdgiNearFieldResidualPlan CreatePlan(
         in SimpleDdgiNearFieldResidualConfiguration configuration,
         in SimpleDdgiNearFieldResidualPrerequisites prerequisites) =>
-        CreatePlanCore(configuration, prerequisites, default, default, null);
+        CreatePlanCore(
+            configuration,
+            prerequisites,
+            default,
+            default,
+            null,
+            explicitSelection: false);
 
     /// <summary>
     /// Creates an admitted C5 resource plan only after technical prerequisites,
@@ -508,7 +567,24 @@ public static class SimpleDdgiNearFieldResidualExperiment
             prerequisites,
             evidence,
             admissionContext,
-            null);
+            null,
+            explicitSelection: false);
+
+    /// <summary>
+    /// Compiles C5 for an explicit user selection after validating source
+    /// ownership, disocclusion, exact layout and memory limits. Post-B3
+    /// measurement evidence remains mandatory only for AutoQualified.
+    /// </summary>
+    public static SimpleDdgiNearFieldResidualPlan CreateExplicitPlan(
+        in SimpleDdgiNearFieldResidualConfiguration configuration,
+        in SimpleDdgiNearFieldResidualPrerequisites prerequisites) =>
+        CreatePlanCore(
+            configuration,
+            prerequisites,
+            default,
+            default,
+            null,
+            explicitSelection: true);
 
     /// <summary>
     /// Compiles a bounded C5 measurement candidate after implementation and
@@ -525,14 +601,16 @@ public static class SimpleDdgiNearFieldResidualExperiment
             prerequisites,
             default,
             admissionContext,
-            authorization);
+            authorization,
+            explicitSelection: false);
 
     private static SimpleDdgiNearFieldResidualPlan CreatePlanCore(
         in SimpleDdgiNearFieldResidualConfiguration configuration,
         in SimpleDdgiNearFieldResidualPrerequisites prerequisites,
         in SimpleDdgiNearFieldResidualQualificationEvidence evidence,
         in SimpleDdgiNearFieldResidualAdmissionContext admissionContext,
-        AdvancedGiCandidateAuthorization? candidateAuthorization)
+        AdvancedGiCandidateAuthorization? candidateAuthorization,
+        bool explicitSelection)
     {
         bool candidate = candidateAuthorization.HasValue;
         if (!configuration.Enabled)
@@ -544,8 +622,9 @@ public static class SimpleDdgiNearFieldResidualExperiment
                 GiExperimentFallbackReason.None,
                 SimpleDdgiNearFieldResidualEvidenceValidation.Missing("disabled"));
         }
-        if (!prerequisites.RefinementBricksActive ||
-            !prerequisites.RefinementQualityGatePassed)
+        if (!explicitSelection &&
+            (!prerequisites.RefinementBricksActive ||
+             !prerequisites.RefinementQualityGatePassed))
         {
             return Empty(
                 requested: true,
@@ -556,7 +635,8 @@ public static class SimpleDdgiNearFieldResidualExperiment
                 SimpleDdgiNearFieldResidualEvidenceValidation.Missing(
                     "B3-refinement-qualification-required"));
         }
-        if (!candidate && !prerequisites.RemainingContactScaleErrorMeasured)
+        if (!explicitSelection && !candidate &&
+            !prerequisites.RemainingContactScaleErrorMeasured)
         {
             return Empty(
                 requested: true,
@@ -604,7 +684,7 @@ public static class SimpleDdgiNearFieldResidualExperiment
             prerequisites.CameraAndScreenEdgeStabilityPassed &&
             prerequisites.ReferenceErrorPerMillisecondImproved &&
             prerequisites.NoDoubleCountingOrFalseDarkening;
-        if (!candidate && !qualityQualified)
+        if (!explicitSelection && !candidate && !qualityQualified)
         {
             string reason = !prerequisites.CameraAndScreenEdgeStabilityPassed
                 ? "camera-or-screen-edge-stability-failed"
@@ -670,7 +750,23 @@ public static class SimpleDdgiNearFieldResidualExperiment
         }
 
         SimpleDdgiNearFieldResidualEvidenceValidation evidenceValidation;
-        if (candidate)
+        if (explicitSelection)
+        {
+            ulong activationFingerprint =
+                SimpleDdgiNearFieldResidualEvidenceEvaluator
+                    .ComputeLayoutFingerprint(layout);
+            if (activationFingerprint == 0UL)
+                activationFingerprint = 1UL;
+            evidenceValidation = new(
+                Accepted: true,
+                GiExperimentFallbackReason.None,
+                "active-explicit-selection",
+                string.Empty,
+                activationFingerprint,
+                SimpleDdgiNearFieldResidualDecision.No(
+                    "explicit-selection-does-not-claim-promotion-evidence"));
+        }
+        else if (candidate)
         {
             AdvancedGiCandidateAuthorization authorization =
                 candidateAuthorization!.Value;
@@ -742,6 +838,11 @@ public static class SimpleDdgiNearFieldResidualExperiment
                 evidenceValidation);
         }
 
+        string activeStatus = explicitSelection
+            ? "active-explicit-selection"
+            : candidate
+                ? "active-candidate-experiment"
+                : "active-qualified-experiment";
         var admission = new GiExperimentAdmission(
             "C5",
             true,
@@ -749,9 +850,7 @@ public static class SimpleDdgiNearFieldResidualExperiment
             true,
             GiExperimentStage.Active,
             memory.AllocatedBytes,
-            candidate
-                ? "active-candidate-experiment"
-                : "active-qualified-experiment");
+            activeStatus);
         return new SimpleDdgiNearFieldResidualPlan(
             true,
             true,

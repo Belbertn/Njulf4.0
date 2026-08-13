@@ -708,7 +708,10 @@ public sealed class SimpleDdgiGuidingWorkloadPlanner
                     stableLow, stableHigh, proposalEpoch, slotIndex ^ 0x6d2b_79f5u),
                 RandomIntraLeafVBits = StableHash32(
                     stableLow, stableHigh, proposalEpoch, slotIndex ^ 0xb529_7a4du),
-                Reserved = 0u
+                TraceRayIndex = checked(
+                    probe.PhysicalProbeIndex *
+                        checked((uint)_layout.DirectionSlotsPerProbe) +
+                    slotIndex)
             };
         }
     }

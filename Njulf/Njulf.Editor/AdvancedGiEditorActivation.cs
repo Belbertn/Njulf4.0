@@ -19,7 +19,7 @@ public sealed record AdvancedGiEditorStartupContext(
     public static AdvancedGiEditorStartupContext Unconfigured { get; } = new(
         null,
         "not-configured",
-        default,
+        AdvancedGiRuntimeContentBinding.Empty,
         null,
         null,
         null,

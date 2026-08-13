@@ -295,6 +295,30 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         }
     }
 
+    internal static SimpleDdgiNearFieldResidualDiagnostics
+        CreatePendingReadbackDiagnostics(
+            in SimpleDdgiNearFieldResidualCompletionWitness lastCompleted,
+            SimpleDdgiNearFieldResidualMemoryTelemetry memory,
+            ulong pendingFrameSerial)
+    {
+        if (lastCompleted.CompletedFrameSerial == 0UL)
+        {
+            return SimpleDdgiNearFieldResidualDiagnostics.PendingGpuReadback(
+                memory,
+                "C5 commands are recorded and awaiting the frame-slot fence.");
+        }
+
+        ulong age = pendingFrameSerial > lastCompleted.CompletedFrameSerial
+            ? pendingFrameSerial - lastCompleted.CompletedFrameSerial
+            : 0UL;
+        return SimpleDdgiNearFieldResidualDiagnostics.CreateCounterReadbackPending(
+            lastCompleted,
+            memory,
+            checked((uint)Math.Min(age, uint.MaxValue)),
+            "C5 has a fence-valid counter stream; a newer frame is awaiting " +
+            "readback and exclusive timings remain pending.");
+    }
+
     public SimpleDdgiNearFieldResidualCompletionWitness LastCompletedWitness
     {
         get
@@ -763,8 +787,12 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 sceneData.ScreenHeight,
                 checked((uint)_renderTargets.ResizeCount + 1u)),
             HiZRevision: NonZeroHash(
-                checked((uint)_hiZ.Image.Handle),
-                checked((uint)(_hiZ.Image.Handle >> 32)),
+                // Vulkan non-dispatchable handles are opaque 64-bit values.
+                // Hash their two words; narrowing either half is intentional
+                // bit extraction and must not throw when the low word exceeds
+                // Int32/UInt32 arithmetic ranges.
+                unchecked((uint)_hiZ.Image.Handle),
+                unchecked((uint)(_hiZ.Image.Handle >> 32)),
                 _hiZ.MipLevels),
             TraceSourceAbiRevision: _configuration.TraceSourceContract.AbiRevision,
             EffectiveModeRevision: SimpleDdgiNearFieldResidualGpuAbi.Version,
@@ -891,9 +919,10 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         _pendingReadbacks[frameIndex] = new PendingReadback(
             token,
             completedFrameSerial);
-        _diagnostics = SimpleDdgiNearFieldResidualDiagnostics.PendingGpuReadback(
+        _diagnostics = CreatePendingReadbackDiagnostics(
+            _lastCompletedWitness,
             CreateMemoryTelemetry(),
-            "C5 commands are recorded and awaiting the frame-slot fence.");
+            completedFrameSerial);
     }
 
     private void ExecuteBufferBarrier(
@@ -998,10 +1027,13 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 "C5 image dimensions exceed VkPhysicalDeviceLimits.maxImageDimension2D.");
         }
         if (hiZ.Image.Handle == 0 || hiZ.FullView.Handle == 0 ||
-            hiZ.Extent.Width != (uint)layout.SourceWidth ||
-            hiZ.Extent.Height != (uint)layout.SourceHeight)
+            !IsCompatibleHiZExtent(
+                layout,
+                hiZ.Extent.Width,
+                hiZ.Extent.Height))
         {
-            throw new InvalidOperationException("C5 requires a current full-resolution Hi-Z pyramid.");
+            throw new InvalidOperationException(
+                "C5 requires the current scene-aligned half-resolution Hi-Z pyramid.");
         }
         if (targets.MotionVectors.Extent.Width != (uint)layout.SourceWidth ||
             targets.MotionVectors.Extent.Height != (uint)layout.SourceHeight)
@@ -1009,6 +1041,15 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             throw new InvalidOperationException("C5 requires full-resolution motion vectors.");
         }
     }
+
+    internal static bool IsCompatibleHiZExtent(
+        in SimpleDdgiNearFieldResidualLayout layout,
+        uint width,
+        uint height) =>
+        layout.SourceWidth > 0 &&
+        layout.SourceHeight > 0 &&
+        width == Math.Max(1u, checked((uint)layout.SourceWidth) / 2u) &&
+        height == Math.Max(1u, checked((uint)layout.SourceHeight) / 2u);
 
     private static SimpleDdgiNearFieldResidualGpuIntegrationCapabilities
         CreateIntegratedCapabilities(in SimpleDdgiNearFieldResidualLayout layout) => new(

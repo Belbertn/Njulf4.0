@@ -678,6 +678,7 @@ namespace Njulf.Rendering.Pipeline
             }
 
             bool receiverFeedbackCaptureOpen = false;
+            bool exactOpaqueProducerCompleted = false;
             SimpleDdgiReceiverFeedbackCaptureProducerContract
                 receiverFeedbackProducer =
                     SimpleDdgiReceiverFeedbackCaptureProducerContract.Unavailable;
@@ -703,23 +704,43 @@ namespace Njulf.Rendering.Pipeline
                     renderExtent,
                     materialTransportProvenanceEnabled,
                     out giCausticReceiverBinding);
-            bool receiverCacheEligible = !nearFieldDirectSourceEnabled &&
-                !giCausticReceiverEnabled &&
+            if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled &&
+                !_meshPipeline.CombinedAdvancedGiAttachmentEnabled)
+            {
+                // Keep the C5 source contract live if the optional combined
+                // four-target pipeline failed to materialize. C4 remains
+                // independently admitted and retries on the next clean
+                // renderer lifetime, but cannot consume an incomplete MRT
+                // payload from this frame.
+                giCausticReceiverEnabled = false;
+                giCausticReceiverBinding = null;
+                GiCausticReceiverFailureReason =
+                    _meshPipeline.CombinedAdvancedGiFailureReason;
+            }
+            bool receiverGatherDispatchable =
                 ShouldDispatchSimpleDdgiReceiverCache(
                     frameIndex,
                     sceneData,
                     renderExtent,
                     materialTransportProvenanceEnabled);
+            bool receiverCacheEligible = !nearFieldDirectSourceEnabled &&
+                !giCausticReceiverEnabled && receiverGatherDispatchable;
+            // B1 owns an exact opaque receiver producer in this compute
+            // gather. C4/C5 attachment output changes how Forward+ consumes
+            // GI, but must not suppress an independently enabled B1 capture.
+            bool receiverGatherRequired = receiverCacheEligible ||
+                (receiverGatherDispatchable &&
+                 _simpleDdgiReceiverFeedbackRuntime?.IsOwnedCaptureReady == true);
             if (sceneData.GlobalIlluminationDdgiActive != 0 ||
                 sceneData.SimpleDdgiActive != 0)
             {
                 PublishComputeStorageToFragment(
                     cmd,
-                    includeComputeReceiver: receiverCacheEligible);
+                    includeComputeReceiver: receiverGatherRequired);
             }
 
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
-            if (receiverCacheEligible)
+            if (receiverGatherRequired)
             {
                 receiverFeedbackCaptureOpen =
                     TryBeginSimpleDdgiReceiverFeedbackCapture(
@@ -733,25 +754,31 @@ namespace Njulf.Rendering.Pipeline
                     "SimpleDdgiReceiverCachePass");
                 try
                 {
-                    _simpleDdgiReceiverCacheAvailableForCurrentView =
+                    bool receiverGatherRecorded =
                         DispatchSimpleDdgiReceiverCache(
                             cmd,
                             frameIndex,
                             sceneData,
                             renderExtent,
                             receiverFeedbackProducer);
+                    _simpleDdgiReceiverCacheAvailableForCurrentView =
+                        receiverCacheEligible && receiverGatherRecorded;
                     if (receiverFeedbackCaptureOpen &&
-                        _simpleDdgiReceiverCacheAvailableForCurrentView &&
-                        !_simpleDdgiReceiverFeedbackRuntime!
-                            .TryRecordOwnedProducerCompletion(
-                                cmd,
-                                frameIndex,
-                                SimpleDdgiReceiverFeedbackProducer.OpaqueForward,
-                                out string completionReason))
+                        receiverGatherRecorded)
                     {
-                        _simpleDdgiReceiverFeedbackRuntime.AbortCapture(
-                            completionReason);
-                        receiverFeedbackCaptureOpen = false;
+                        exactOpaqueProducerCompleted =
+                            _simpleDdgiReceiverFeedbackRuntime!
+                                .TryRecordOwnedProducerCompletion(
+                                    cmd,
+                                    frameIndex,
+                                    SimpleDdgiReceiverFeedbackProducer.OpaqueForward,
+                                    out string completionReason);
+                        if (!exactOpaqueProducerCompleted)
+                        {
+                            _simpleDdgiReceiverFeedbackRuntime.AbortCapture(
+                                completionReason);
+                            receiverFeedbackCaptureOpen = false;
+                        }
                     }
                 }
                 finally
@@ -1085,8 +1112,6 @@ namespace Njulf.Rendering.Pipeline
                     alphaCompletionReason);
                 receiverFeedbackCaptureOpen = false;
             }
-            bool exactOpaqueProducerCompleted =
-                _simpleDdgiReceiverCacheAvailableForCurrentView;
             _simpleDdgiReceiverCacheAvailableForCurrentView = false;
             _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView = false;
             _simpleDdgiFoliageFeedbackRequiredForCurrentView = false;

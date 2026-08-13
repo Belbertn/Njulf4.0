@@ -16,19 +16,29 @@ public static class SimpleDdgiGuidingGpuAbi
     /// stable sampling payload meaning changes.  The value is written into
     /// every persistent distribution header and every sampled-ray payload.
     /// </summary>
-    public const uint Version = 0x4333_0007u;
+    public const uint Version = 0x4333_0008u;
 
     public const uint HeaderWordCount = 8u;
     public const uint HeaderByteCount = HeaderWordCount * sizeof(uint);
     public const uint TrainingRecordByteCount = 40u;
     public const uint TrainingWorkItemByteCount = 56u;
+    public const uint TrainingWorkItemWordCount =
+        TrainingWorkItemByteCount / sizeof(uint);
     public const uint BuildWorkItemByteCount = 48u;
+    public const uint BuildWorkItemWordCount =
+        BuildWorkItemByteCount / sizeof(uint);
     public const uint SampleRequestByteCount = 56u;
+    public const uint SampleRequestWordCount =
+        SampleRequestByteCount / sizeof(uint);
     public const uint SamplePayloadByteCount = 64u;
+    public const uint SamplePayloadWordCount =
+        SamplePayloadByteCount / sizeof(uint);
     public const uint PushConstantByteCount = 48u;
     public const uint ExtractPushConstantByteCount = 48u;
     public const uint PreparePushConstantByteCount = 64u;
     public const uint PublicationRecordByteCount = 48u;
+    public const uint PublicationRecordWordCount =
+        PublicationRecordByteCount / sizeof(uint);
     public const uint ValidationCounterWordCount = 32u;
     public const uint ValidationCounterByteCount =
         ValidationCounterWordCount * sizeof(uint);
@@ -97,7 +107,8 @@ public static class SimpleDdgiGuidingGpuAbi
             SampleRequestByteCount,
             (nameof(GPUSimpleDdgiGuidingSampleRequest.PhysicalProbeIndex), 0),
             (nameof(GPUSimpleDdgiGuidingSampleRequest.StableProbeIdLow), 20),
-            (nameof(GPUSimpleDdgiGuidingSampleRequest.RequestedUniformFraction), 40));
+            (nameof(GPUSimpleDdgiGuidingSampleRequest.RequestedUniformFraction), 40),
+            (nameof(GPUSimpleDdgiGuidingSampleRequest.TraceRayIndex), 52));
         Verify<GPUSimpleDdgiGuidingSamplePayload>(
             SamplePayloadByteCount,
             (nameof(GPUSimpleDdgiGuidingSamplePayload.AbiVersion), 0),
@@ -178,6 +189,35 @@ public static class SimpleDdgiGuidingGpuAbi
         uint packedLeafResolutionAndFlags) =>
         (SimpleDdgiGuidingGpuDistributionFlags)(packedLeafResolutionAndFlags &
             ~0xffu);
+
+    /// <summary>
+    /// Computes the compact ownership tag stored beside a sampled direction.
+    /// It is a stale-slot guard for the trace hot path, not a cryptographic
+    /// authenticator; full transport consumers validate the complete payload.
+    /// </summary>
+    public static uint ComputeTraceOwnershipTag(
+        uint stableProbeIdLow,
+        uint stableProbeIdHigh,
+        uint physicalProbeIndex,
+        uint virtualProbeId,
+        uint pageGeneration,
+        uint slotIndex,
+        uint packedDirectionOct32)
+    {
+        unchecked
+        {
+            uint tag = 0x4333_5447u;
+            tag = (tag ^ stableProbeIdLow) * 16_777_619u;
+            tag = (tag ^ stableProbeIdHigh) * 16_777_619u;
+            tag = (tag ^ physicalProbeIndex) * 16_777_619u;
+            tag = (tag ^ virtualProbeId) * 16_777_619u;
+            tag = (tag ^ pageGeneration) * 16_777_619u;
+            tag = (tag ^ slotIndex) * 16_777_619u;
+            tag = (tag ^ packedDirectionOct32) * 16_777_619u;
+            tag ^= tag >> 16;
+            return tag == 0u ? 1u : tag;
+        }
+    }
 
     private static void Verify<T>(
         uint expectedSize,
@@ -366,7 +406,11 @@ public struct GPUSimpleDdgiGuidingSampleRequest
     public float RequestedUniformFraction;
     public uint RandomIntraLeafUBits;
     public uint RandomIntraLeafVBits;
-    public uint Reserved;
+    /// <summary>
+    /// Stable physical-slot ray identity used to publish the compact,
+    /// authenticated trace payload into the DDGI ray-scratch sidecar.
+    /// </summary>
+    public uint TraceRayIndex;
 }
 
 /// <summary>
@@ -395,7 +439,7 @@ public struct GPUSimpleDdgiGuidingSamplePayload
     public uint PackedDirectionOct32;
     public uint GenerationTimePdfBits;
     public SimpleDdgiGuidingSamplePayloadFlags Flags;
-    public uint Reserved;
+    public uint TraceOwnershipTag;
 }
 
 /// <summary>

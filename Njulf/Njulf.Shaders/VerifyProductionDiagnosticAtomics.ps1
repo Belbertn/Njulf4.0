@@ -118,14 +118,18 @@ $algorithmicAtomicCounts = @{
     # equivalent fail-closed probe-state path without this global atomic.
     'ddgi_simple_blend.comp.spv' = 9
     'ddgi_simple_blend_guided.comp.spv' = 9
-    # Directional prepare/project each inline the sparse live-address and
+    # Directional prepare/stage/project each inline the sparse live-address and
     # generation validation contract: stale-resource, two distinct out-of-range
     # branches, stale-mapping, and stale-virtual attribution. Publication has
     # the same five sites plus five inlined CPU-scheduler failure revalidation
     # paths. These bounded integrity counters are functional transaction
-    # evidence, not optional renderer diagnostics. Project no longer owns a
-    # per-ray completion add after the native-safe one-lane-per-probe split.
+    # evidence, not optional renderer diagnostics. The two storage-specialized
+    # stage modules deliberately retain the same five sites. Project no longer
+    # owns a per-ray completion add after the native-safe one-lane-per-probe
+    # split.
     'ddgi_simple_directional_prepare.comp.spv' = 5
+    'ddgi_simple_directional_stage_guided_legacy.comp.spv' = 5
+    'ddgi_simple_directional_stage_guided_packed.comp.spv' = 5
     'ddgi_simple_directional_project.comp.spv' = 5
     'ddgi_simple_directional_project_guided.comp.spv' = 5
     'ddgi_simple_directional_publish.comp.spv' = 10

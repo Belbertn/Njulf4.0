@@ -35,6 +35,16 @@ public sealed class SimpleDdgiGuidingGpuIntegrationTests
                 Is.EqualTo(56));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiGuidingSamplePayload>(),
                 Is.EqualTo(64));
+            Assert.That(SimpleDdgiGuidingGpuAbi.TrainingWorkItemWordCount,
+                Is.EqualTo(14u));
+            Assert.That(SimpleDdgiGuidingGpuAbi.BuildWorkItemWordCount,
+                Is.EqualTo(12u));
+            Assert.That(SimpleDdgiGuidingGpuAbi.SampleRequestWordCount,
+                Is.EqualTo(14u));
+            Assert.That(SimpleDdgiGuidingGpuAbi.SamplePayloadWordCount,
+                Is.EqualTo(16u));
+            Assert.That(SimpleDdgiGuidingGpuAbi.PublicationRecordWordCount,
+                Is.EqualTo(12u));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiGuidingPushConstants>(),
                 Is.EqualTo(48));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiGuidingExtractPushConstants>(),
@@ -59,6 +69,58 @@ public sealed class SimpleDdgiGuidingGpuIntegrationTests
         Assert.That(() => SimpleDdgiGuidingGpuAbi.PackLeafResolutionAndFlags(
             8u, (SimpleDdgiGuidingGpuDistributionFlags)1u),
             Throws.TypeOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void TraceOwnershipTag_IsDeterministicNonZeroAndBindsEveryInput()
+    {
+        const uint stableLow = 0x1020_3040u;
+        const uint stableHigh = 0x5060_7080u;
+        const uint physical = 17u;
+        const uint virtualProbe = 271u;
+        const uint page = 9u;
+        const uint slot = 31u;
+        const uint direction = 0xa5a5_5a5au;
+
+        uint expected = SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(
+            stableLow,
+            stableHigh,
+            physical,
+            virtualProbe,
+            page,
+            slot,
+            direction);
+        uint[] mutations =
+        {
+            SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow + 1u,
+                stableHigh, physical, virtualProbe, page, slot, direction),
+            SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
+                stableHigh + 1u, physical, virtualProbe, page, slot, direction),
+            SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
+                stableHigh, physical + 1u, virtualProbe, page, slot, direction),
+            SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
+                stableHigh, physical, virtualProbe + 1u, page, slot, direction),
+            SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
+                stableHigh, physical, virtualProbe, page + 1u, slot, direction),
+            SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
+                stableHigh, physical, virtualProbe, page, slot + 1u, direction),
+            SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
+                stableHigh, physical, virtualProbe, page, slot, direction + 1u)
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(expected, Is.Not.Zero);
+            Assert.That(SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(
+                stableLow,
+                stableHigh,
+                physical,
+                virtualProbe,
+                page,
+                slot,
+                direction), Is.EqualTo(expected));
+            Assert.That(mutations, Has.None.EqualTo(expected));
+        });
     }
 
     [Test]

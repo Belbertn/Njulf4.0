@@ -69,6 +69,7 @@ public sealed unsafe class SimpleDdgiGuidingSourceCacheSidecar : IDisposable
     private readonly VulkanContext _context;
     private readonly BufferManager _bufferManager;
     private readonly Action _waitForDescriptorReaders;
+    private readonly Action<BufferHandle> _retireBuffer;
     private BindlessHeap? _bindlessHeap;
     private BufferHandle _fallbackBuffer;
     private ulong _fallbackBufferBytes;
@@ -82,13 +83,19 @@ public sealed unsafe class SimpleDdgiGuidingSourceCacheSidecar : IDisposable
     public SimpleDdgiGuidingSourceCacheSidecar(
         VulkanContext context,
         BufferManager bufferManager,
-        Action waitForDescriptorReaders)
+        Action waitForDescriptorReaders,
+        Action<BufferHandle> retireBuffer)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bufferManager = bufferManager ??
             throw new ArgumentNullException(nameof(bufferManager));
         _waitForDescriptorReaders = waitForDescriptorReaders ??
             throw new ArgumentNullException(nameof(waitForDescriptorReaders));
+        // Waiting existing descriptor readers does not cover commands already
+        // recorded into the current, as-yet-unsubmitted frame. Retirement must
+        // therefore be tied to that frame's completion fence.
+        _retireBuffer = retireBuffer ??
+            throw new ArgumentNullException(nameof(retireBuffer));
         Snapshot = SimpleDdgiGuidingSourceCacheSnapshot.Disabled;
     }
 
@@ -222,7 +229,7 @@ public sealed unsafe class SimpleDdgiGuidingSourceCacheSidecar : IDisposable
             catch (Exception exception)
             {
                 if (candidate.IsValid)
-                    _bufferManager.DestroyBuffer(candidate);
+                    _retireBuffer(candidate);
                 reason = "guiding-source-cache-sidecar-allocation-or-publication-failed:" +
                     exception.GetType().Name;
                 FailClosedNoLock(reason);
@@ -238,13 +245,13 @@ public sealed unsafe class SimpleDdgiGuidingSourceCacheSidecar : IDisposable
             {
                 _buffer = previous;
                 _layout = SimpleDdgiGuidingSourceCacheLayout.Disabled;
-                _bufferManager.DestroyBuffer(candidate);
+                _retireBuffer(candidate);
                 reason = fallbackReason;
                 FailClosedNoLock(reason);
                 return false;
             }
             if (previous.IsValid)
-                _bufferManager.DestroyBuffer(previous);
+                _retireBuffer(previous);
             Snapshot = new(
                 SimpleDdgiGuidingSourceCacheState.Ready,
                 _layout,
@@ -413,7 +420,7 @@ public sealed unsafe class SimpleDdgiGuidingSourceCacheSidecar : IDisposable
         _waitForDescriptorReaders();
         _ = TryPublishFallbackNoLock(out string fallbackReason);
         if (_buffer.IsValid)
-            _bufferManager.DestroyBuffer(_buffer);
+            _retireBuffer(_buffer);
         _buffer = BufferHandle.Invalid;
         _layout = SimpleDdgiGuidingSourceCacheLayout.Disabled;
         _payloadDescriptorPublished = false;

@@ -568,6 +568,8 @@ struct SimpleDdgiParams
     vec3 environmentRadiance;
     float environmentIntensity;
     float environmentFallbackIntensity;
+    uint guidingPhysicalProbeCapacity;
+    uint guidingTraceDirectionScratchOffsetWords;
     uint probesToUpdate;
     float selfShadowBiasScale;
     float indirectIntensity;
@@ -1591,6 +1593,9 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     p.environmentRadiance = max(environment.xyz, vec3(0.0));
     p.environmentIntensity = max(environment.w, 0.0);
     p.environmentFallbackIntensity = clamp(updateRange.w, 0.0, 4.0);
+    p.guidingPhysicalProbeCapacity = floatBitsToUint(updateRange.x);
+    p.guidingTraceDirectionScratchOffsetWords =
+        floatBitsToUint(updateRange.z);
     p.probesToUpdate = uint(max(updateRange.y, 0.0));
     p.debugView = uint(max(debugAndBias.x, 0.0));
     p.selfShadowBiasScale = max(debugAndBias.y, 0.0);
@@ -1601,7 +1606,8 @@ SimpleDdgiParams ReadSimpleDdgiParams(uint bufferIndex)
     p.viewBias = max(bias.y, 0.0);
     p.hysteresisChangeThreshold = max(bias.z, 0.001);
     p.hysteresisStepThreshold = max(max(bias.w, 0.001), p.hysteresisChangeThreshold);
-    p.volumeCount = min(uint(max(max(reserved.x, updateRange.z), 0.0)), SIMPLE_DDGI_MAX_VOLUME_COUNT);
+    p.volumeCount = min(uint(max(reserved.x, 0.0)),
+        SIMPLE_DDGI_MAX_VOLUME_COUNT);
     p.sampledAtlasLayersPerTexture = uint(max(reserved.y, 0.0));
     p.sampledAtlasTextureGroupCount = uint(max(reserved.z, 0.0));
     p.sampledAtlasEnabled = uint(max(reserved.w, 0.0));

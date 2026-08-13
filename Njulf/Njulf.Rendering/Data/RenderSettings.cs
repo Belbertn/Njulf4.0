@@ -1855,9 +1855,9 @@ namespace Njulf.Rendering.Data
         public const ulong MaxDdgiDynamicAccelerationStructureBudgetBytes = 8UL * 1024UL * 1024UL * 1024UL;
         public const ulong MaxSimpleDdgiDirectionalRadianceBudgetBytes = 2UL * 1024UL * 1024UL * 1024UL;
         // New settings request every completed advanced-GI production path.
-        // These are intent defaults only: prerequisite, qualification,
-        // capability, memory, content, and resource-completeness gates remain
-        // authoritative and may resolve any request to Off without mutating it.
+        // These are explicit user defaults. Hardware capability, memory, ABI,
+        // allocation and resource-completeness gates remain authoritative;
+        // manifests and promotion evidence apply only to AutoQualified.
         public const SimpleDdgiReceiverFeedbackMode
             DefaultSimpleDdgiReceiverFeedbackMode =
                 SimpleDdgiReceiverFeedbackMode.ExactCompacted;
@@ -2024,8 +2024,9 @@ namespace Njulf.Rendering.Data
         private int _giAccelerationStructureMaximumStaticInstances = 8_192;
         private int _giAccelerationStructureEvictionGraceFrames = 120;
         private GlobalIlluminationDebugView _debugView;
-        // Versioned advanced-GI intent.  These values are persisted, but their
-        // runtime admission remains device/content/evidence dependent.
+        // Versioned advanced-GI intent. These values are persisted; explicit
+        // modes are ordinary feature requests and remain bounded only by real
+        // device, memory, ABI, allocation, and content requirements.
         private SimpleDdgiReceiverFeedbackMode _simpleDdgiReceiverFeedbackMode =
             DefaultSimpleDdgiReceiverFeedbackMode;
         private DdgiOpacityMicromapMode _ddgiOpacityMicromapMode =

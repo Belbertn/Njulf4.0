@@ -75,6 +75,10 @@ public sealed class SimpleDdgiGuidingWorkloadPlannerTests
             Assert.That(first.Counts.SampleCommitCount, Is.EqualTo(1));
             Assert.That(buffers.Samples.Take(64).Select(x => x.SlotIndex),
                 Is.EqualTo(Enumerable.Range(0, 64).Select(x => (uint)x)));
+            Assert.That(buffers.Samples.Take(64).Select(x => x.TraceRayIndex),
+                Is.EqualTo(Enumerable.Range(64, 64).Select(x => (uint)x)),
+                "Compact trace payloads must be keyed by stable physical " +
+                "probe, never by the frame-local queue position.");
             Assert.That(buffers.Samples.Take(64).Count(x =>
                     x.Technique == (uint)SimpleDdgiDirectionSamplingTechnique
                         .UniformMaintenance),

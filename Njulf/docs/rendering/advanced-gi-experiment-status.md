@@ -12,11 +12,12 @@ The production code paths for B1, C1, C3, C4, and the bounded C5 prototype are
 present. New settings request B1 `ExactCompacted`, C1
 `ExtFourStateExperiment`, C3 `PerProbeHistogramExperiment`, C4
 `WorldCacheExperiment`, and C5 `HiZHalfResolutionExperiment` by default.
-Requested mode is only persisted intent: capability, prerequisite, content,
-memory, and resource-completeness gates remain authoritative, and
-`AutoQualified` remains evidence-gated. Existing saved settings retain their
-persisted mode. C2/SER is intentionally excluded and owns no runtime code or
-resources under this plan.
+Requested mode is persisted intent: real hardware capability, content,
+memory, ABI, allocation, and resource-completeness gates remain authoritative.
+Explicit modes do not require promotion artifacts; prerequisite manifests and
+qualification evidence gate only `AutoQualified`. Existing saved settings
+retain their persisted mode. C2/SER is intentionally excluded and owns no
+runtime code or resources under this plan.
 
 Requested, supported, admitted, effective, and qualified modes are separate.
 The editor shows those states together with live resource/publication status,
@@ -29,7 +30,7 @@ complete prerequisite and per-feature qualification manifest is supplied for
 the exact device, driver, shader bundle, content, source ABI, and profile, the
 corresponding automatic promotion stays fail-closed.
 
-## Startup and evidence loading
+## Runtime selection and optional qualification automation
 
 Advanced-GI selection happens before `VulkanRenderer.Initialize()` because the
 effective modes determine immutable render-graph resources, shader variants,
@@ -43,7 +44,8 @@ equivalent `--simple-ddgi-receiver-feedback-mode`,
 ID arguments and environment variables documented in
 `RendererSettingsReference.md`.
 
-The startup evidence sources are applied in this order:
+When automation explicitly selects `AutoQualified`, startup evidence sources
+are applied in this order:
 
 1. `AdvancedGiStartupProfileCodec`, when configured, atomically selects the
    content-addressed render settings and all remaining evidence paths before
@@ -58,11 +60,11 @@ The startup evidence sources are applied in this order:
 5. `RenderingOptions.ConfigureAdvancedGiEvidence`, when supplied, may install
    application-owned strongly typed C4/C5 evidence under the same validators.
 
-The ImGui editor exposes a detached next-start activation draft with per-input
-preflight, atomic save/readback, and a full renderer/device/window restart. The
-same transaction is available through `--advanced-gi-startup-profile`. Corpus
-pinning and headless startup/qualification verification are provided by
-`Njulf.AssetTool advanced-gi`; see
+The ImGui editor exposes five normal switches and performs the required full
+renderer/device/window restart directly, without a profile or evidence file.
+The qualification transaction remains available to automation through
+`--advanced-gi-startup-profile`. Corpus pinning and headless
+startup/qualification verification are provided by `Njulf.AssetTool advanced-gi`; see
 [`advanced-gi-activation.md`](advanced-gi-activation.md).
 
 The runtime bundle is schema-versioned, bounded to 512 KiB, rejects comments,
@@ -85,9 +87,9 @@ runtime-owned and fence-retired, avoiding duplicate graph/resource ownership.
 | --- | --- | --- |
 | B1 exact receiver feedback | Real 48-byte all-producer capture; bounded local reservations; exact 32-byte V2 records; deterministic GPU radix/reduce; two publication banks; previous-frame scheduler binding; strict overflow/generation fallback; fence readback; per-stage timings and schema-10 counters/memory telemetry. | Equal-work transient-error, liveness, total-time, capacity, and long-run target-device evidence before declaring the path release-qualified or removing the legacy reference. |
 | C1 opacity micromaps | Deterministic pinned NVIDIA CPU bake bridge; optional checksummed cooked payload; multi-submesh runtime partitioning; EXT device enablement; build/compaction; OMM-attached static-BLAS variants; cache/lease/retirement; ordinary-candidate fallback; lifecycle/content/memory diagnostics. | RTX 3060, Ada+, extension-disabled, and non-EXT same-ray/image conformance plus amortized total-GI performance evidence. KHR and SER remain out of scope. |
-| C3 directional guiding | Equal-area hierarchy/PDF/MIS oracle; GPU-resident scheduler compaction into train/sample work; GPU train/build/sample/validate; double publication banks; compact status-last publication; central scratch; source-cache-owned slot-203 direction/PDF sidecar; generation-time PDF propagation into trace/projection/audits; maintenance rays; readback/statistical qualification contracts. | Archived multi-seed convergence, quality-per-time, cache-pressure, long-run, and device-matrix evidence for automatic promotion. |
+| C3 directional guiding | Equal-area hierarchy/PDF/MIS oracle; GPU-resident scheduler compaction into train/sample work; GPU train/build/sample/validate; double publication banks; compact status-last publication; central scratch; physical-probe-owned direction/PDF payloads in the ordinary ray-scratch tail; staged directional projection; generation-time PDF propagation into trace/transport/blend/relocation/projection; maintenance rays; readback/statistical qualification contracts. | Archived multi-seed convergence, quality-per-time, cache-pressure, long-run, and device-matrix evidence for automatic promotion. |
 | C4 caustics | Authored hero validation; analytic/path-reference contracts; tagged light/receiver producer; ray-query trace; deterministic radix/bottom-K world cache; coherent two-bank publication; screen resolve/composite; resize/revision/fence handling; isolated memory and diagnostics. | Archived analytic/path-traced energy, motion/reload/origin, ordinary-content zero-work, total-time, and target-device qualification evidence. |
-| C5 near-field residual | Evidence-bound post-B3 admission; dedicated direct-diffuse-plus-emissive opaque/masked MRT; bounded Hi-Z trace; typed ray/PDF and hit/source identity; banked history/normal/metadata; reset, temporal rejection/moments, filtering, composite, counters/timestamps, and schema-versioned diagnostics. | A signed go decision and archived post-B3 equal-cost reference captures proving error reduction, edge/motion stability, energy ownership, long-run memory, and target-device cost. |
+| C5 near-field residual | Explicit post-B3 admission with a dedicated direct-diffuse-plus-emissive opaque/masked MRT; bounded Hi-Z trace; typed ray/PDF and hit/source identity; banked history/normal/metadata; reset, temporal rejection/moments, filtering, composite, counters/timestamps, and schema-versioned diagnostics. `AutoQualified` additionally consumes scene-bound evidence. | A signed go decision and archived post-B3 equal-cost reference captures proving error reduction, edge/motion stability, energy ownership, long-run memory, and target-device cost before automatic promotion. |
 
 All optional allocations are transactional and independently budgeted. A
 disabled or rejected feature binds only safe fallback descriptors where the
@@ -105,11 +107,12 @@ The source audit against Phases 0–12 reached the following boundary on
 | Phases 1–11 | Shared admission/memory contracts and the B1, C1, C3, C4, and bounded C5 production paths, fallbacks, diagnostics, shaders, and deterministic tests are implemented. | Each feature still requires the plan's equal-work, rendered-reference, long-run, and target-device measurements before promotion. |
 | Phase 12 | Integrated source validation, documentation, settings, schema migration, shader verification, and manifest authentication are implemented. | Ada-or-newer NVIDIA and non-NVIDIA/fallback runs, 30–60 minute traversals, supported feature combinations, and archived qualification IDs remain outstanding. |
 
-This is the intended production handoff boundary. Product policy now requests
-the completed B1/C1/C3/C4/C5 production experiments in new settings, while
-admission and effective activation remain fail-closed. This default request
-does not manufacture qualification evidence, authorize `AutoQualified`, or
-weaken any fallback gate.
+This is the intended production handoff boundary. New settings turn on the
+completed B1/C1/C3/C4/C5 production implementations. Explicit modes are not
+evidence-gated; they become effective whenever their actual hardware, content,
+memory, ABI, allocation, and resource prerequisites are satisfied.
+`AutoQualified` remains fail-closed and does not infer promotion evidence from
+these defaults.
 
 ## Source-validation snapshot (2026-08-11)
 
@@ -144,16 +147,11 @@ The final local source validation used Release binaries and the primary RTX
   ineffective, and the complete advanced-GI allocation was 0 bytes. Its
   SHA-256 is
   `aa0e89cd407bbfde9f4d3747ed2208e742cf67d9b69d3f173d356c8e041de5cd`.
-- A second 12-frame RTX Vulkan startup supplied no advanced-GI command-line or
-  environment selectors and no evidence manifests. Its health options contain
-  null overrides, while runtime diagnostics record the new defaults exactly:
-  B1 `ExactCompacted`, C1 `ExtFourStateExperiment`, C3
-  `PerProbeHistogramExperiment`, C4 `WorldCacheExperiment`, and C5
-  `HiZHalfResolutionExperiment`. The report passed with zero Vulkan validation
-  warnings/errors and zero GI errors. Every request failed closed at the
-  missing frozen prerequisite, canonical DDGI remained active, and advanced-GI
-  allocation stayed at 0 bytes. Its SHA-256 is
-  `071eb7e3d17539ff141976bd0e4c379602db6ecf692902f64b75b3b30ebc729d`.
+- A second 12-frame RTX Vulkan startup captured the original fail-closed
+  experiment-default behavior. That historical result predates the ordinary
+  explicit-switch policy and is retained only as a regression record for the
+  `AutoQualified` path; it must not be used to infer current explicit-mode
+  behavior.
 - The locally installed `AMD Radeon(TM) Graphics` ICD was isolated for a
   non-NVIDIA attempt, but it is not an eligible matrix device: baseline device
   selection rejected it before renderer initialization because it lacks
@@ -178,10 +176,10 @@ captures, equal-work measurements, or signed promotion records.
 - Performance snapshots preserve C5, C1, C3, C4, and B1 telemetry through
   schema versions 5–10 with explicit legacy migrations that never infer live
   work from a mode bit.
-- The Global Illumination editor panel exposes requested/effective mode,
-  fallback, qualification ID, live bytes, runtime state, and whether the last
-  observation is authoritative. Startup-only controls are staged separately,
-  preflighted, saved, and applied only after a complete cold restart.
+- The Global Illumination editor panel exposes five ordinary switches plus
+  requested/effective state, fallback, live bytes, runtime state, and whether
+  the last observation is authoritative. A switch change automatically applies
+  the new selection through a complete clean renderer restart.
 
 Rendered captures, 30–60 minute traversals, and the required physical device
 matrix are release evidence, not unit-test fixtures. They must be generated on
@@ -195,8 +193,9 @@ claimed by this source implementation.
   residency, visibility, or allocation.
 - C1 falls back to the unchanged shader candidate path for every unsupported
   or ambiguous alpha case.
-- C3 retains a nonzero uniform proposal and keeps slot 203 owned by the source
-  cache rather than the guiding allocation.
+- C3 retains a nonzero uniform proposal. Its hot-path direction/PDF payload is
+  stored in a bounded physical-probe slot in the ordinary ray-scratch tail;
+  legacy source-cache slot 203 remains source-cache-owned.
 - C4 flux/cache data never enters DDGI transport, source, irradiance, or
   publication resources.
 - C5 reads only its validated direct-diffuse-plus-emissive attachment; invalid

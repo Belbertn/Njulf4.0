@@ -1767,4 +1767,49 @@ public sealed class SampleSmokeOptionsParserTests
             Throws.ArgumentException.With.Message.Contains(
                 "NJULF_RENDERER_FAIL_ON_VALIDATION_MESSAGE requires a boolean value"));
     }
+
+    [Test]
+    public void EditorAdvancedGiSwitchesRestartWithoutProfileOrManifestInputs()
+    {
+        SampleSmokeOptions source = SampleSmokeOptionsParser.Parse([]) with
+        {
+            AdvancedGiStartupProfilePath = "old-profile.json",
+            AdvancedGiPrerequisiteManifestPath = "old-prerequisites.json",
+            AdvancedGiQualificationManifestPath = "old-qualification.json",
+            AdvancedGiRuntimeEvidenceBundlePath = "old-evidence.json",
+            GiCausticQualificationId = "old-c4-id"
+        };
+        var selection = new AdvancedGiFeatureSelection(
+            ReceiverFeedbackEnabled: true,
+            OpacityMicromapsEnabled: false,
+            DirectionalGuidingEnabled: true,
+            TaggedCausticsEnabled: true,
+            NearFieldResidualEnabled: false);
+
+        SampleSmokeOptions restarted =
+            Program.PrepareAdvancedGiFeatureRestartOptions(
+                source,
+                selection);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(restarted.AdvancedGiStartupProfilePath, Is.Null);
+            Assert.That(restarted.AdvancedGiPrerequisiteManifestPath, Is.Null);
+            Assert.That(restarted.AdvancedGiQualificationManifestPath, Is.Null);
+            Assert.That(restarted.AdvancedGiRuntimeEvidenceBundlePath, Is.Null);
+            Assert.That(restarted.SimpleDdgiReceiverFeedbackModeOverride,
+                Is.EqualTo(SimpleDdgiReceiverFeedbackMode.ExactCompacted));
+            Assert.That(restarted.DdgiOpacityMicromapModeOverride,
+                Is.EqualTo(DdgiOpacityMicromapMode.Off));
+            Assert.That(restarted.SimpleDdgiDirectionalGuidingModeOverride,
+                Is.EqualTo(SimpleDdgiDirectionalGuidingMode
+                    .PerProbeHistogramExperiment));
+            Assert.That(restarted.GiCausticModeOverride,
+                Is.EqualTo(GiCausticMode.WorldCacheExperiment));
+            Assert.That(restarted.SimpleDdgiNearFieldResidualModeOverride,
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+            Assert.That(restarted.GiCausticQualificationId, Is.Null);
+            Assert.That(restarted.OpenEditorOnStartup, Is.True);
+        });
+    }
 }

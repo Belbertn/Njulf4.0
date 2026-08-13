@@ -152,6 +152,10 @@ public sealed class AdvancedGiRenderGraphModesTests
             Assert.That(declarations["SimpleDdgiTracePass"].Usages.Any(usage =>
                     usage.Resource == RenderGraphResourceId.SimpleDdgiGuidingDirectionPayloadSidecar &&
                     usage.Access == RenderGraphResourceAccess.Read),
+                Is.False);
+            Assert.That(declarations["SimpleDdgiTracePass"].Usages.Any(usage =>
+                    usage.Resource == RenderGraphResourceId.SimpleDdgiRayScratch &&
+                    usage.Access == RenderGraphResourceAccess.ReadWrite),
                 Is.True);
             Assert.That(declarations[SimpleDdgiGuidingGpuPassNames.Sample].Usages.Any(
                     usage => usage.Resource == RenderGraphResourceId.SimpleDdgiScheduler &&
@@ -160,6 +164,10 @@ public sealed class AdvancedGiRenderGraphModesTests
             Assert.That(declarations[SimpleDdgiGuidingGpuPassNames.Sample].Usages.Any(
                     usage => usage.Resource == RenderGraphResourceId.SimpleDdgiParameters &&
                         usage.Access == RenderGraphResourceAccess.Read),
+                Is.True);
+            Assert.That(declarations[SimpleDdgiGuidingGpuPassNames.Sample].Usages.Any(
+                    usage => usage.Resource == RenderGraphResourceId.SimpleDdgiRayScratch &&
+                        usage.Access == RenderGraphResourceAccess.ReadWrite),
                 Is.True);
             Assert.That(declarations[SimpleDdgiGuidingGpuPassNames.Train].Usages.Any(
                     usage => usage.Resource == RenderGraphResourceId.SimpleDdgiScheduler &&
@@ -288,7 +296,7 @@ public sealed class AdvancedGiRenderGraphModesTests
     }
 
     [Test]
-    public void NearFieldGraph_RequiresAnExplicitSupportedProfile()
+    public void NearFieldGraph_AcceptsSupportedAdaptiveProfiles()
     {
         var unbound = new AdvancedGiRenderGraphModes(
             SimpleDdgiReceiverFeedbackMode.Off,
@@ -296,7 +304,7 @@ public sealed class AdvancedGiRenderGraphModesTests
             SimpleDdgiDirectionalGuidingMode.Off,
             GiCausticMode.Off,
             SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment);
-        var unsupported = new AdvancedGiRenderGraphModes(
+        var quarter = new AdvancedGiRenderGraphModes(
             SimpleDdgiReceiverFeedbackMode.Off,
             DdgiOpacityMicromapMode.Off,
             SimpleDdgiDirectionalGuidingMode.Off,
@@ -306,6 +314,14 @@ public sealed class AdvancedGiRenderGraphModesTests
                 ResolutionScale: 0.25f,
                 SourceFormat: SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat,
                 FilterIterationCount: 2));
+        var unsupported = quarter with
+        {
+            NearFieldProfile = new AdvancedGiNearFieldGraphProfile(
+                ResolutionScale: 0.3f,
+                SourceFormat:
+                    SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat,
+                FilterIterationCount: 2)
+        };
         var supported = new AdvancedGiRenderGraphModes(
             SimpleDdgiReceiverFeedbackMode.Off,
             DdgiOpacityMicromapMode.Off,
@@ -313,7 +329,7 @@ public sealed class AdvancedGiRenderGraphModesTests
             GiCausticMode.Off,
             SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
             AdvancedGiNearFieldGraphProfile.HalfResolutionReference);
-        var autoQuarter = unsupported with
+        var autoQuarter = quarter with
         {
             NearFieldResidual = SimpleDdgiNearFieldResidualMode.AutoQualified
         };
@@ -322,6 +338,7 @@ public sealed class AdvancedGiRenderGraphModesTests
         {
             Assert.That(unbound.UsesNearFieldHiZResidual, Is.False);
             Assert.That(unsupported.UsesNearFieldHiZResidual, Is.False);
+            Assert.That(quarter.UsesNearFieldHiZResidual, Is.True);
             Assert.That(supported.UsesNearFieldHiZResidual, Is.True);
             Assert.That(autoQuarter.UsesNearFieldHiZResidual, Is.True);
             Assert.That(autoQuarter.NearFieldProfile.TraceSizePolicy,

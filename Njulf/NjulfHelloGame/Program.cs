@@ -66,11 +66,22 @@ internal static class Program
             while (true)
             {
                 string? requestedProfilePath;
+                AdvancedGiFeatureSelection? requestedFeatures;
                 using (var game = new HelloGame(options, args))
                 {
                     game.Run();
                     requestedProfilePath =
                         game.RequestedAdvancedGiStartupProfilePath;
+                    requestedFeatures =
+                        game.RequestedAdvancedGiFeatureSelection;
+                }
+                if (requestedFeatures is { } features)
+                {
+                    options = PrepareAdvancedGiFeatureRestartOptions(
+                        options,
+                        features);
+                    Environment.ExitCode = 0;
+                    continue;
                 }
                 if (requestedProfilePath is not { } profilePath)
                 {
@@ -120,7 +131,44 @@ internal static class Program
         DdgiOpacityMicromapQualificationId = null,
         SimpleDdgiDirectionalGuidingQualificationId = null,
         GiCausticQualificationId = null,
-        SimpleDdgiNearFieldResidualQualificationId = null
+        SimpleDdgiNearFieldResidualQualificationId = null,
+        OpenEditorOnStartup = true
+    };
+
+    internal static SampleSmokeOptions PrepareAdvancedGiFeatureRestartOptions(
+        SampleSmokeOptions source,
+        in AdvancedGiFeatureSelection selection) => source with
+    {
+        AdvancedGiStartupProfilePath = null,
+        AdvancedGiPrerequisiteManifestPath = null,
+        AdvancedGiQualificationManifestPath = null,
+        AdvancedGiRuntimeEvidenceBundlePath = null,
+        SimpleDdgiReceiverFeedbackModeOverride =
+            selection.ReceiverFeedbackEnabled
+                ? SimpleDdgiReceiverFeedbackMode.ExactCompacted
+                : SimpleDdgiReceiverFeedbackMode.Off,
+        DdgiOpacityMicromapModeOverride = selection.OpacityMicromapsEnabled
+            ? DdgiOpacityMicromapMode.ExtFourStateExperiment
+            : DdgiOpacityMicromapMode.Off,
+        SimpleDdgiDirectionalGuidingModeOverride =
+            selection.DirectionalGuidingEnabled
+                ? SimpleDdgiDirectionalGuidingMode
+                    .PerProbeHistogramExperiment
+                : SimpleDdgiDirectionalGuidingMode.Off,
+        GiCausticModeOverride = selection.TaggedCausticsEnabled
+            ? GiCausticMode.WorldCacheExperiment
+            : GiCausticMode.Off,
+        SimpleDdgiNearFieldResidualModeOverride =
+            selection.NearFieldResidualEnabled
+                ? SimpleDdgiNearFieldResidualMode
+                    .HiZHalfResolutionExperiment
+                : SimpleDdgiNearFieldResidualMode.Off,
+        SimpleDdgiReceiverFeedbackQualificationId = null,
+        DdgiOpacityMicromapQualificationId = null,
+        SimpleDdgiDirectionalGuidingQualificationId = null,
+        GiCausticQualificationId = null,
+        SimpleDdgiNearFieldResidualQualificationId = null,
+        OpenEditorOnStartup = true
     };
 }
 
@@ -171,6 +219,8 @@ internal sealed class HelloGame : Game
     // editor-only restart callback is the sole writer when that feature is
     // compiled in.
     private string? _requestedAdvancedGiStartupProfilePath = null;
+    private AdvancedGiFeatureSelection?
+        _requestedAdvancedGiFeatureSelection = null;
 #if NJULF_EDITOR
     private ImGuiEditorOverlayHost? _editorHost;
     private EditorInputBridge? _editorInput;
@@ -209,6 +259,9 @@ internal sealed class HelloGame : Game
 
     internal string? RequestedAdvancedGiStartupProfilePath =>
         _requestedAdvancedGiStartupProfilePath;
+    internal AdvancedGiFeatureSelection?
+        RequestedAdvancedGiFeatureSelection =>
+            _requestedAdvancedGiFeatureSelection;
 
     protected override void ConfigureServices(IServiceCollection services)
     {
@@ -341,10 +394,17 @@ internal sealed class HelloGame : Game
             renderer,
             camera,
             advancedGiStartup,
-            RequestAdvancedGiRestart);
+            requestAdvancedGiRestart: RequestAdvancedGiRestart,
+            requestAdvancedGiFeatureRestart:
+                RequestAdvancedGiFeatureRestart);
         _editorPanels = new EditorImGuiPanels();
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
             _editorController.SetScenePath(Path.Combine(AppContext.BaseDirectory, "Scenes", "SampleScene.njscene.json"));
+        if (_smokeOptions.OpenEditorOnStartup)
+        {
+            _editorController.SetEnabled(true);
+            input.SetCursorMode(CursorMode.Normal);
+        }
 #endif
         if (_smokeOptions.KhronosMaterialGiRenderedGate is not null)
         {
@@ -712,6 +772,11 @@ internal sealed class HelloGame : Game
             settings.GlobalIllumination.SimpleDdgiSchedulerMode =
                 _smokeOptions.SimpleDdgiSchedulerModeOverride.Value;
         }
+        if (_smokeOptions.SimpleDdgiStoragePackingModeOverride.HasValue)
+        {
+            settings.GlobalIllumination.SimpleDdgiStoragePackingMode =
+                _smokeOptions.SimpleDdgiStoragePackingModeOverride.Value;
+        }
         ApplyAdvancedGiSettings(settings.GlobalIllumination);
     }
 
@@ -1050,12 +1115,27 @@ internal sealed class HelloGame : Game
     private void RequestAdvancedGiRestart(string profilePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profilePath);
-        if (_requestedAdvancedGiStartupProfilePath is not null)
+        if (_requestedAdvancedGiStartupProfilePath is not null ||
+            _requestedAdvancedGiFeatureSelection.HasValue)
             return;
         _requestedAdvancedGiStartupProfilePath = Path.GetFullPath(profilePath);
         Console.WriteLine(
             $"Advanced GI cold restart requested: " +
             _requestedAdvancedGiStartupProfilePath);
+        Exit();
+    }
+
+    private void RequestAdvancedGiFeatureRestart(
+        AdvancedGiFeatureSelection selection)
+    {
+        if (_requestedAdvancedGiFeatureSelection.HasValue ||
+            _requestedAdvancedGiStartupProfilePath is not null)
+        {
+            return;
+        }
+        _requestedAdvancedGiFeatureSelection = selection;
+        Console.WriteLine(
+            "Advanced GI feature change requested; rebuilding the renderer.");
         Exit();
     }
 

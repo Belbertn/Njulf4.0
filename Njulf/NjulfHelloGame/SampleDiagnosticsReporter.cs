@@ -577,11 +577,11 @@ internal sealed class SampleDiagnosticsReporter
             $"Frame diagnostics GI gated roadmap: " +
             $"B1={FormatExperimentMode(experiments.Modes.ReceiverFeedback)}, " +
             $"B5={FormatExperiment(experiments.DirectionalFog)}, " +
-            $"C1={FormatExperiment(experiments.OpacityMicromap)}, " +
+            $"C1={FormatExperimentMode(experiments.Modes.OpacityMicromap)}, " +
             $"C2={FormatExperiment(experiments.RayTracingInvocationReorder)}, " +
-            $"C3={FormatExperiment(experiments.DirectionalRayGuiding)}, " +
-            $"C4={FormatExperiment(experiments.TaggedCausticCache)}, " +
-            $"C5={FormatExperiment(experiments.NearFieldResidual)}, " +
+            $"C3={FormatExperimentMode(experiments.Modes.DirectionalGuiding)}, " +
+            $"C4={FormatExperimentMode(experiments.Modes.Caustic)}, " +
+            $"C5={FormatExperimentMode(experiments.Modes.NearFieldResidual)}, " +
             $"allocated={experiments.AllocatedBytes}.");
         SimpleDdgiReceiverFeedbackDiagnostics receiverFeedback =
             experiments.ReceiverFeedbackRuntime;

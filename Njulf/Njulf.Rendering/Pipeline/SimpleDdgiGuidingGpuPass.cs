@@ -42,7 +42,6 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
     private PipelineLayout _pipelineLayout;
     private PipelineLayout _extractPipelineLayout;
     private PipelineLayout _preparePipelineLayout;
-    private PipelineCache _pipelineCache;
     private VkPipeline _trainPipeline;
     private VkPipeline _buildPipeline;
     private VkPipeline _samplePipeline;
@@ -76,7 +75,6 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
                 (uint)Marshal.SizeOf<GPUSimpleDdgiGuidingPreparePushConstants>());
             CreateDescriptorSetLayout();
             CreateDescriptorPoolAndSets();
-            CreatePipelineCache();
             CreatePipelineLayout();
             CreateExtractPipelineLayout();
             CreatePreparePipelineLayout();
@@ -465,17 +463,23 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             handshake.DirectionPdfSidecar,
             handshake.DirectionPdfSidecarOffsetBytes,
             handshake.DirectionPdfSidecarBytes);
+        var tracePayloadScratch = new StorageRange(
+            workload.TraceTrainingSource.GuidingTracePayloadScratch);
         // Slot 203 stays source-cache-owned.  The owner supplies the exact
         // preceding access for this range, whether that was a prior payload
         // consumer or a source-cache write.  C3 neither infers a stage from
         // the global bindless slot nor publishes a replacement descriptor.
         RecordSidecarReuseBarrier(commandBuffer, sidecar, handshake);
+        RecordExternalInputBarrier(
+            commandBuffer,
+            workload.TraceTrainingSource.GuidingTracePayloadScratch);
         WriteStorageSet(
             DescriptorSetFor(frameIndex, SimpleDdgiGuidingPassKind.Sample),
             StorageRange.ForWholeBuffer(readBank, _bufferManager),
             new StorageRange(workload.SampleRequests),
             sidecar,
-            new StorageRange(workload.ValidationCounters));
+            new StorageRange(workload.ValidationCounters),
+            tracePayloadScratch);
         Dispatch(
             commandBuffer,
             _samplePipeline,
@@ -491,6 +495,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             DivideRoundUp(workload.SampleRequests.ElementCount,
                 TrainAndSampleWorkgroupSize));
 
+        RecordComputeStorageBarrier(commandBuffer, tracePayloadScratch);
         RecordSidecarConsumerBarrier(commandBuffer, sidecar, handshake);
     }
 
@@ -701,7 +706,9 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             layout.PhysicalProbeCapacity <= 0 ||
             layout.ScheduledGuidedProbeCapacity <= 0 ||
             layout.DirectionSlotsPerProbe <= 0 ||
-            layout.LeafResolution <= 0 || readBankIndex is < 0 or > 1)
+            layout.LeafResolution <= 0 || readBankIndex is < -1 or > 1 ||
+            (flags != SimpleDdgiGuidingPrepareFlags.BuildWork &&
+                readBankIndex < 0))
         {
             throw new ArgumentOutOfRangeException(nameof(layout));
         }
@@ -722,7 +729,12 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
                 source.SchedulerCountersOffsetWords,
             SchedulerAcceptedCounterWord =
                 source.SchedulerAcceptedCounterWord,
-            ReadBankIndex = checked((uint)readBankIndex),
+            // The first build intentionally has no published read bank. The
+            // shader treats UINT_MAX as "no prior guide" and seeds uniform
+            // work; sampling still requires a real bank index above.
+            ReadBankIndex = readBankIndex < 0
+                ? uint.MaxValue
+                : checked((uint)readBankIndex),
             BankStrideWords = checked((uint)(
                 layout.PersistentBankStrideBytes / sizeof(uint))),
             TargetDistributionGeneration = targetDistributionGeneration,
@@ -876,6 +888,26 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         for (int index = 0; index < 4; index++)
             writes[index].DstSet = descriptorSet;
         _context.Api.UpdateDescriptorSets(_context.Device, 4u, writes, 0u, null);
+    }
+
+    private void WriteStorageSet(
+        DescriptorSet descriptorSet,
+        in StorageRange first,
+        in StorageRange second,
+        in StorageRange third,
+        in StorageRange fourth,
+        in StorageRange fifth)
+    {
+        DescriptorBufferInfo* infos = stackalloc DescriptorBufferInfo[5];
+        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[5];
+        WriteStorageDescriptor(0u, first, &infos[0], &writes[0]);
+        WriteStorageDescriptor(1u, second, &infos[1], &writes[1]);
+        WriteStorageDescriptor(2u, third, &infos[2], &writes[2]);
+        WriteStorageDescriptor(3u, fourth, &infos[3], &writes[3]);
+        WriteStorageDescriptor(4u, fifth, &infos[4], &writes[4]);
+        for (int index = 0; index < 5; index++)
+            writes[index].DstSet = descriptorSet;
+        _context.Api.UpdateDescriptorSets(_context.Device, 5u, writes, 0u, null);
     }
 
     private void WriteStorageDescriptor(
@@ -1117,6 +1149,19 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
 
     private void RecordComputeStorageBarrier(
         CommandBuffer commandBuffer,
+        in StorageRange range)
+    {
+        BufferMemoryBarrier2 barrier = CreateComputeStorageBarrier(
+            _bufferManager.GetBuffer(range.Buffer),
+            range.OffsetBytes,
+            range.RangeBytes);
+        Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[1];
+        barriers[0] = barrier;
+        ExecuteBufferBarriers(commandBuffer, barriers);
+    }
+
+    private void RecordComputeStorageBarrier(
+        CommandBuffer commandBuffer,
         in StorageRange first,
         in SimpleDdgiGuidingExternalBuffer second)
     {
@@ -1242,8 +1287,8 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
 
     private void CreateDescriptorSetLayout()
     {
-        DescriptorSetLayoutBinding* bindings = stackalloc DescriptorSetLayoutBinding[4];
-        for (int binding = 0; binding < 4; binding++)
+        DescriptorSetLayoutBinding* bindings = stackalloc DescriptorSetLayoutBinding[5];
+        for (int binding = 0; binding < 5; binding++)
         {
             bindings[binding] = new DescriptorSetLayoutBinding
             {
@@ -1256,7 +1301,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         var info = new DescriptorSetLayoutCreateInfo
         {
             SType = StructureType.DescriptorSetLayoutCreateInfo,
-            BindingCount = 4u,
+            BindingCount = 5u,
             PBindings = bindings
         };
         Result result = _context.Api.CreateDescriptorSetLayout(
@@ -1277,7 +1322,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         var poolSize = new DescriptorPoolSize
         {
             Type = DescriptorType.StorageBuffer,
-            DescriptorCount = checked((uint)(DescriptorSetCount * 4))
+            DescriptorCount = checked((uint)(DescriptorSetCount * 5))
         };
         var poolInfo = new DescriptorPoolCreateInfo
         {
@@ -1310,21 +1355,6 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             throw new VulkanException("Failed to allocate C3 guiding descriptor sets.", result);
         for (int index = 0; index < DescriptorSetCount; index++)
             _descriptorSets[index] = sets[index];
-    }
-
-    private void CreatePipelineCache()
-    {
-        var info = new PipelineCacheCreateInfo
-        {
-            SType = StructureType.PipelineCacheCreateInfo
-        };
-        Result result = _context.Api.CreatePipelineCache(
-            _context.Device,
-            &info,
-            null,
-            out _pipelineCache);
-        if (result != Result.Success)
-            throw new VulkanException("Failed to create C3 guiding pipeline cache.", result);
     }
 
     private void CreatePipelineLayout()
@@ -1456,7 +1486,10 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             };
             Result result = _context.Api.CreateComputePipelines(
                 _context.Device,
-                _pipelineCache,
+                // This short-lived pass-local cache never persisted useful
+                // data and sharing it across the six optional C3 programs can
+                // propagate a failed native compilation on affected drivers.
+                default,
                 1u,
                 &info,
                 null,
@@ -1508,8 +1541,6 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             _context.Api.DestroyDescriptorPool(_context.Device, _descriptorPool, null);
         if (_descriptorSetLayout.Handle != 0)
             _context.Api.DestroyDescriptorSetLayout(_context.Device, _descriptorSetLayout, null);
-        if (_pipelineCache.Handle != 0)
-            _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_entryPointName != 0)
             SilkMarshal.Free(_entryPointName);
         _trainPipeline = default;
@@ -1523,7 +1554,6 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         _preparePipelineLayout = default;
         _descriptorPool = default;
         _descriptorSetLayout = default;
-        _pipelineCache = default;
     }
 
     private void DestroyPipeline(VkPipeline pipeline)
