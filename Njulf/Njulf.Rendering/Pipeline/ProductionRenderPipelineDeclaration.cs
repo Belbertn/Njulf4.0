@@ -684,12 +684,16 @@ internal sealed class ProductionRenderPipelineDeclaration
         {
             declarations.AddRange([
                 Pass(SimpleDdgiGuidingGpuPassNames.Sample,
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
                     ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
                     ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
                     ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingDistributions),
                     ReadWriteComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
                     WriteComputeBuffer(RenderGraphResourceId.SimpleDdgiGuidingDirectionPayloadSidecar)),
                 Pass(SimpleDdgiGuidingGpuPassNames.Train,
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiScheduler),
+                    ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
                     ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiRayScratch),
                     ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiUpdateQueue),
                     ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),

@@ -11,7 +11,13 @@ public enum SimpleDdgiReceiverFeedbackMode : uint
 {
     Off = 0,
     LegacyPackedReference = 1,
-    ExactCompacted = 2
+    ExactCompacted = 2,
+    /// <summary>
+    /// Selects the exact compacted producer only when the complete B1
+    /// qualification binding matches this build, device, settings, corpus,
+    /// content profile, and scene asset. A mismatch retains canonical Off.
+    /// </summary>
+    AutoQualified = 3
 }
 
 public enum DdgiOpacityMicromapMode : uint

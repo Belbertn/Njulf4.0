@@ -99,6 +99,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
     private ulong _peakAllocationBytes;
     private bool _resourcesReleased;
     private bool _active;
+    private bool _frameAdmission = true;
     private bool _disposed;
 
     public SimpleDdgiNearFieldResidualVulkanRuntime(
@@ -308,7 +309,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         get
         {
             lock (_sync)
-                return !_disposed && _active;
+                return !_disposed && _active && _frameAdmission;
         }
     }
 
@@ -319,10 +320,30 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         ArgumentNullException.ThrowIfNull(sceneData);
         lock (_sync)
         {
-            return !_disposed && _active &&
+            return !_disposed && _active && _frameAdmission &&
                 sceneData.ScreenWidth == (uint)_layout.SourceWidth &&
                 sceneData.ScreenHeight == (uint)_layout.SourceHeight &&
                 HasExactTargetExtents();
+        }
+    }
+
+    internal void SetFrameAdmission(bool admitted, string? reason)
+    {
+        lock (_sync)
+        {
+            if (_disposed || !_active)
+                return;
+            _frameAdmission = admitted;
+            if (!admitted)
+            {
+                _recordedStage =
+                    SimpleDdgiNearFieldResidualRecordedStage.Idle;
+                _recordedFrameIndex = -1;
+                _diagnostics = SimpleDdgiNearFieldResidualDiagnostics.Disabled(
+                    string.IsNullOrWhiteSpace(reason)
+                        ? "near-field-runtime-content-binding-rejected"
+                        : reason.Trim());
+            }
         }
     }
 

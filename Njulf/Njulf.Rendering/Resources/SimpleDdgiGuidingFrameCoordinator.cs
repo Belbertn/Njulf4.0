@@ -333,12 +333,19 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
                 reason = "guiding-frame-slot-not-fence-reclaimed";
                 return false;
             }
-            if (_volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident ||
-                _volumeManager.RaysPerProbe !=
+            if (_volumeManager.RaysPerProbe !=
                     _configuration.RuntimeRequest.Layout.DirectionSlotsPerProbe)
             {
-                reason = "guiding-frame-ddgi-scheduler-or-ray-layout-incompatible";
+                reason = "guiding-frame-ddgi-ray-layout-incompatible";
                 return false;
+            }
+            if (_volumeManager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident)
+            {
+                return TryPrepareGpuResidentFrameNoLock(
+                    frameIndex,
+                    frameSerial,
+                    commandBuffer,
+                    out reason);
             }
             if (!_volumeManager.TryCopyGuidingFrameProbes(
                     _frameProbes,
@@ -449,7 +456,8 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
         RenderingConstants.ValidateFrameIndex(frameIndex);
         lock (_sync)
             return !_disposed && _frames[frameIndex] is { } frame &&
-                frame.Counts.SampleRequestCount > 0 && !frame.SampleRecorded;
+                frame.Counts.SampleRequestCount > 0 && !frame.SampleRecorded &&
+                _runtime.Diagnostics.Resource.HasReadableDistribution;
     }
 
     public bool CanExecuteTrain(int frameIndex)
@@ -628,7 +636,7 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
                     : "guiding-build-not-published";
             }
 
-            if (frame.SampleRecorded)
+            if (frame.SampleRecorded && !frame.BuildWorkload.UsesGpuResidentWork)
             {
                 bool committed = _workloadPlanner!.TryCommitSamples(
                     sampleCompletion.Commits.Span,
@@ -649,7 +657,7 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
                     sampleCompletion.ReadbackValid,
                 CompletedSampleCount = frame.SampleRecorded &&
                     sampleCompletion.ReadbackValid
-                        ? sampleCompletion.Commits.Length
+                        ? checked((int)sampleCompletion.Telemetry.RequestCount)
                         : 0,
                 SampleValidationCounters = frame.SampleRecorded
                     ? sampleCompletion.ValidationCounters
@@ -775,6 +783,173 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
             uploadedBytes);
     }
 
+    private bool TryPrepareGpuResidentFrameNoLock(
+        int frameIndex,
+        ulong frameSerial,
+        CommandBuffer commandBuffer,
+        out string reason)
+    {
+        if (!_volumeManager.TryGetGuidingGpuResidentWorkSource(
+                out SimpleDdgiGuidingGpuResidentWorkSource source,
+                out reason))
+        {
+            return false;
+        }
+
+        SimpleDdgiGuidingLayout layout = _configuration.RuntimeRequest.Layout;
+        if (!source.TryValidate(layout, out reason))
+            return false;
+
+        ulong sourceSignature = source.SceneContentRevision;
+        float variation = _publishedSourceSignature != 0UL &&
+            _publishedSourceSignature != sourceSignature
+                ? 1.0f
+                : 0.0f;
+        if (!_epochController!.TryPlan(
+                frameSerial,
+                variation,
+                out SimpleDdgiGuidingProposalEpochPlan epochPlan,
+                out reason))
+        {
+            return false;
+        }
+        if (!_runtime.TryReserveBuild(
+                epochPlan.TargetEpoch,
+                out SimpleDdgiGuidingBuildToken token,
+                out SimpleDdgiGuidingLayout runtimeLayout,
+                out reason))
+        {
+            _epochController.Abort(epochPlan);
+            return false;
+        }
+        if (!runtimeLayout.Equals(layout))
+        {
+            _runtime.AbortReservedBuild(
+                token,
+                "guiding-runtime-layout-changed-during-gpu-prepare");
+            _epochController.Abort(epochPlan);
+            reason = "guiding-runtime-layout-changed-during-gpu-prepare";
+            return false;
+        }
+
+        try
+        {
+            int scheduled = layout.ScheduledGuidedProbeCapacity;
+            int sampleCapacity = checked(
+                scheduled * layout.DirectionSlotsPerProbe);
+            uint recordCapacity = checked((uint)sampleCapacity);
+            SimpleDdgiGuidingTransientWorkspace map = layout.TransientWorkspace;
+            var records = CreateArenaRange(
+                map.TrainingRecordsOffsetBytes,
+                checked((ulong)recordCapacity *
+                    SimpleDdgiGuidingGpuAbi.TrainingRecordByteCount),
+                recordCapacity,
+                SimpleDdgiGuidingGpuAbi.TrainingRecordByteCount,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit);
+            var trainingItems = CreateArenaRange(
+                map.TrainingWorkItemsOffsetBytes,
+                checked((ulong)scheduled *
+                    SimpleDdgiGuidingGpuAbi.TrainingWorkItemByteCount),
+                checked((uint)scheduled),
+                SimpleDdgiGuidingGpuAbi.TrainingWorkItemByteCount,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit);
+            var buildItems = CreateArenaRange(
+                map.BuildWorkItemsOffsetBytes,
+                checked((ulong)scheduled *
+                    SimpleDdgiGuidingGpuAbi.BuildWorkItemByteCount),
+                checked((uint)scheduled),
+                SimpleDdgiGuidingGpuAbi.BuildWorkItemByteCount,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit);
+            var counters = CreateArenaRange(
+                map.ValidationCountersOffsetBytes,
+                map.ValidationCountersBytes,
+                SimpleDdgiGuidingGpuAbi.ValidationCounterWordCount,
+                sizeof(uint),
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageWriteBit);
+            SimpleDdgiGuidingTraceTrainingSource traceSource =
+                CreateTraceTrainingSourceNoLock();
+            var buildWorkload = new SimpleDdgiGuidingBuildWorkload(
+                token.TargetProposalEpoch,
+                records,
+                trainingItems,
+                buildItems,
+                counters,
+                ReadOnlyMemory<SimpleDdgiGuidingExpectedProbeHeader>.Empty)
+            {
+                TraceTrainingSource = traceSource,
+                GpuResidentSource = source
+            };
+            var sampleWorkload = new SimpleDdgiGuidingSampleWorkload(
+                CreateArenaRange(
+                    map.SampleRequestsOffsetBytes,
+                    checked((ulong)sampleCapacity *
+                        SimpleDdgiGuidingGpuAbi.SampleRequestByteCount),
+                    checked((uint)sampleCapacity),
+                    SimpleDdgiGuidingGpuAbi.SampleRequestByteCount,
+                    PipelineStageFlags2.ComputeShaderBit,
+                    AccessFlags2.ShaderStorageWriteBit),
+                counters)
+            {
+                DestinationsAreUnique = true,
+                ExpectedCommits =
+                    ReadOnlyMemory<SimpleDdgiGuidingSampleCommit>.Empty,
+                GpuResidentSource = source,
+                UniformMixtureFraction =
+                    _configuration.ProposalPolicy.UniformMixtureFraction,
+                TraceTrainingSource = traceSource,
+                TrainingWorkItems = trainingItems,
+                BuildWorkItems = buildItems
+            };
+            var counts = new SimpleDdgiGuidingWorkloadCounts(
+                scheduled,
+                recordCapacity,
+                scheduled,
+                scheduled,
+                0,
+                sampleCapacity,
+                0,
+                0,
+                0);
+            if (!buildWorkload.TryValidate(layout, out reason) ||
+                !sampleWorkload.TryValidate(
+                    _sourceCacheSidecar.CreateHandshake(),
+                    out reason) ||
+                !_sourceCacheSidecar.TryPublishForSampling(out reason))
+            {
+                _runtime.AbortReservedBuild(token, reason);
+                _epochController.Abort(epochPlan);
+                return false;
+            }
+
+            var pending = new PendingFrame(
+                frameIndex,
+                frameSerial,
+                token,
+                epochPlan,
+                sourceSignature,
+                counts,
+                buildWorkload,
+                sampleWorkload,
+                0UL);
+            _frames[frameIndex] = pending;
+            UpdateDiagnosticsNoLock(pending, "prepared-gpu-resident");
+            reason = "guiding-gpu-resident-workloads-prepared";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            reason = "guiding-gpu-resident-workload-prepare-failed:" +
+                exception.GetType().Name;
+            _runtime.AbortReservedBuild(token, reason);
+            _epochController.Abort(epochPlan);
+            return false;
+        }
+    }
+
     private SimpleDdgiGuidingTraceTrainingSource CreateTraceTrainingSourceNoLock()
     {
         SimpleDdgiStoragePackingMode packing =
@@ -826,7 +1001,9 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
         ulong relativeOffset,
         ulong bytes,
         uint elementCount,
-        uint stride)
+        uint stride,
+        PipelineStageFlags2 lastWriterStage = PipelineStageFlags2.TransferBit,
+        AccessFlags2 lastWriterAccess = TransferWriteAccess)
     {
         ulong absoluteOffset = checked(_workspace.Offset + relativeOffset);
         ulong end = checked(absoluteOffset + bytes);
@@ -839,8 +1016,8 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
             bytes,
             elementCount,
             stride,
-            PipelineStageFlags2.TransferBit,
-            TransferWriteAccess);
+            lastWriterStage,
+            lastWriterAccess);
     }
 
     private ulong Upload<T>(
@@ -908,7 +1085,7 @@ internal sealed class SimpleDdgiGuidingFrameCoordinator : IDisposable
                 layout.DirectionPdfSidecarBytes ==
                     configuration.SourceCacheLayout.AllocatedBytes &&
                 layout.DirectionPayloadCapacity <= int.MaxValue &&
-                _volumeManager.SchedulerMode != SimpleDdgiSchedulerMode.GpuResident;
+                layout.DirectionSlotsPerProbe == _volumeManager.RaysPerProbe;
             reason = valid
                 ? string.Empty
                 : "guiding-frame-configuration-layout-mismatch";

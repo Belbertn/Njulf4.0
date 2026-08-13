@@ -29,6 +29,7 @@ public static class SampleSmokeOptionsParser
         "--advanced-gi-prerequisite-manifest",
         "--advanced-gi-qualification-manifest",
         "--advanced-gi-runtime-evidence-bundle",
+        "--advanced-gi-startup-profile",
         "--simple-ddgi-receiver-feedback-mode",
         "--ddgi-opacity-micromap-mode",
         "--simple-ddgi-directional-guiding-mode",
@@ -130,6 +131,10 @@ public static class SampleSmokeOptionsParser
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
                     "NJULF_ADVANCED_GI_RUNTIME_EVIDENCE_BUNDLE"));
+        string? advancedGiStartupProfilePath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_ADVANCED_GI_STARTUP_PROFILE"));
         SimpleDdgiReceiverFeedbackMode? receiverFeedbackModeOverride =
             ParseOptionalEnum<SimpleDdgiReceiverFeedbackMode>(
                 Environment.GetEnvironmentVariable(
@@ -435,6 +440,10 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--advanced-gi-runtime-evidence-bundle":
                     advancedGiRuntimeEvidenceBundlePath =
+                        RequirePath(value, optionName);
+                    break;
+                case "--advanced-gi-startup-profile":
+                    advancedGiStartupProfilePath =
                         RequirePath(value, optionName);
                     break;
                 case "--simple-ddgi-receiver-feedback-mode":
@@ -1200,7 +1209,8 @@ public static class SampleSmokeOptionsParser
                      nearFieldResidualModeOverride.HasValue ||
                      !string.IsNullOrWhiteSpace(advancedGiPrerequisiteManifestPath) ||
                      !string.IsNullOrWhiteSpace(advancedGiQualificationManifestPath) ||
-                     !string.IsNullOrWhiteSpace(advancedGiRuntimeEvidenceBundlePath)) &&
+                     !string.IsNullOrWhiteSpace(advancedGiRuntimeEvidenceBundlePath) ||
+                     !string.IsNullOrWhiteSpace(advancedGiStartupProfilePath)) &&
                     !smokeModeSpecified)
                 {
                     mode = SampleSmokeMode.Startup;
@@ -1361,7 +1371,8 @@ public static class SampleSmokeOptionsParser
             directionalGuidingQualificationId,
             giCausticQualificationId,
             nearFieldResidualQualificationId,
-            advancedGiRuntimeEvidenceBundlePath);
+            advancedGiRuntimeEvidenceBundlePath,
+            advancedGiStartupProfilePath);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)

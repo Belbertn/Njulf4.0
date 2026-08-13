@@ -23,6 +23,20 @@ layout(std430, set = 0, binding = 2) buffer GuidingValidateCountersBuffer
     uint counters[];
 } guidingValidateCounters;
 
+struct SimpleDdgiGuidingPublicationRecord
+{
+    uint physicalProbeIndex;
+    uint virtualProbeId;
+    uint pageGeneration;
+    uint status;
+    SimpleDdgiGuidingDistributionHeader header;
+};
+
+layout(std430, set = 0, binding = 3) buffer GuidingValidatePublicationBuffer
+{
+    SimpleDdgiGuidingPublicationRecord records[];
+} guidingValidatePublication;
+
 shared uint invalidHierarchy;
 
 SimpleDdgiGuidingDistributionHeader SimpleDdgiGuidingValidateReadHeader(uint baseWord)
@@ -49,7 +63,22 @@ float SimpleDdgiGuidingValidateWeight(uint baseWord, uint weightIndex)
 void main()
 {
     uint workItemIndex = gl_WorkGroupID.x;
-    if (workItemIndex >= guidingPc.dispatchCount)
+    bool gpuGenerated = (guidingPc.flags &
+        SIMPLE_DDGI_GUIDING_PUSH_GPU_GENERATED_WORK) != 0u;
+    uint effectiveDispatchCount = gpuGenerated &&
+            uint(guidingValidateCounters.counters.length()) >=
+                SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT
+        ? guidingValidateCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT]
+        : guidingPc.dispatchCount;
+    if (workItemIndex >= effectiveDispatchCount ||
+        effectiveDispatchCount > guidingPc.dispatchCount ||
+        (gpuGenerated &&
+            (guidingValidateCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS] !=
+                    SIMPLE_DDGI_GUIDING_ABI_VERSION ||
+             workItemIndex >=
+                uint(guidingValidatePublication.records.length()))))
         return;
 
     uint lane = gl_LocalInvocationIndex;
@@ -193,6 +222,25 @@ void main()
                     SIMPLE_DDGI_GUIDING_DISTRIBUTION_INVALID);
             atomicAdd(guidingValidateCounters.counters[
                 SIMPLE_DDGI_GUIDING_COUNTER_PUBLICATION_REJECTIONS], 1u);
+        }
+        else if (gpuGenerated)
+        {
+            // The compact record is the only GPU-authored identity crossing
+            // back to the lifecycle manager. Status is written last after the
+            // validated bank header is visible; zero-filled records remain
+            // unambiguously unpublished.
+            memoryBarrierBuffer();
+            SimpleDdgiGuidingPublicationRecord publication;
+            publication.physicalProbeIndex = workItem.physicalProbeIndex;
+            publication.virtualProbeId = workItem.virtualProbeId;
+            publication.pageGeneration = workItem.pageGeneration;
+            publication.status = 0u;
+            publication.header =
+                SimpleDdgiGuidingValidateReadHeader(baseWord);
+            guidingValidatePublication.records[workItemIndex] = publication;
+            memoryBarrierBuffer();
+            guidingValidatePublication.records[workItemIndex].status =
+                SIMPLE_DDGI_GUIDING_ABI_VERSION;
         }
     }
 }

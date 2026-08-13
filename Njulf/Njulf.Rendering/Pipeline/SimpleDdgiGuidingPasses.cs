@@ -83,6 +83,7 @@ public static class SimpleDdgiGuidingGpuPassNames
     public const string BuildShader = "ddgi_guiding_build.comp.spv";
     public const string SampleShader = "ddgi_guiding_sample.comp.spv";
     public const string ValidateShader = "ddgi_guiding_validate.comp.spv";
+    public const string PrepareShader = "ddgi_guiding_prepare.comp.spv";
     public const string ExtractLegacyShader =
         "ddgi_guiding_extract_legacy.comp.spv";
     public const string ExtractValidateShader =
@@ -100,7 +101,11 @@ public enum SimpleDdgiGuidingPassKind : byte
     // Folded into the graph's Train node after DDGI trace. Kept as a distinct
     // private descriptor-ring identity so in-flight Train and Extract sets can
     // never be updated through the same Vulkan descriptor object.
-    Extract = 4
+    Extract = 4,
+    // Folded into Sample/Train, but isolated because ordinary Vulkan
+    // descriptor sets cannot be rewritten while an older frame references one.
+    PrepareSample = 5,
+    PrepareBuild = 6
 }
 
 public enum SimpleDdgiGuidingResourceAccess : byte

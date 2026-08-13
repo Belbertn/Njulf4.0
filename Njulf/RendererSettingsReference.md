@@ -312,7 +312,7 @@ for the selected device, driver, shader ABI, content revision, and profile.
 
 | Setting | Values and behavior |
 | --- | --- |
-| `SimpleDdgiReceiverFeedbackMode` | `Off`, `LegacyPackedReference`, or `ExactCompacted`. `ExactCompacted` is the versioned B1 receiver-feedback ABI. It remains a one-frame-late scheduler priority signal and never controls probe liveness, residency, or visibility. |
+| `SimpleDdgiReceiverFeedbackMode` | `Off`, `LegacyPackedReference`, `ExactCompacted`, or `AutoQualified`. `ExactCompacted` is the versioned B1 receiver-feedback ABI. It remains a one-frame-late scheduler priority signal and never controls probe liveness, residency, or visibility. |
 | `DdgiOpacityMicromapMode` | `Off`, `ExtFourStateExperiment`, or `AutoQualified`. The production experiment is four-state only; unsupported, dynamic, or ambiguous alpha content uses the unchanged candidate-confirmation path. |
 | `SimpleDdgiDirectionalGuidingMode` | `Off`, `CpuOracle`, `PerProbeHistogramExperiment`, or `AutoQualified`. Guiding retains a nonzero uniform proposal and an independent uniform-maintenance subset. |
 | `GiCausticMode` | `Off`, `PhotonReference`, `WorldCacheExperiment`, or `AutoQualified`. It is a separate hero-specular/refractive path; caustic flux never becomes DDGI source/transport data. |
@@ -341,6 +341,7 @@ same startup contract through these command-line options:
 | `--advanced-gi-prerequisite-manifest=<path>` | `NJULF_ADVANCED_GI_PREREQUISITE_MANIFEST` |
 | `--advanced-gi-qualification-manifest=<path>` | `NJULF_ADVANCED_GI_QUALIFICATION_MANIFEST` |
 | `--advanced-gi-runtime-evidence-bundle=<path>` | `NJULF_ADVANCED_GI_RUNTIME_EVIDENCE_BUNDLE` |
+| `--advanced-gi-startup-profile=<path>` | `NJULF_ADVANCED_GI_STARTUP_PROFILE` |
 | `--simple-ddgi-receiver-feedback-mode=<mode>` | `NJULF_RENDERER_SIMPLE_DDGI_RECEIVER_FEEDBACK_MODE` |
 | `--ddgi-opacity-micromap-mode=<mode>` | `NJULF_RENDERER_DDGI_OPACITY_MICROMAP_MODE` |
 | `--simple-ddgi-directional-guiding-mode=<mode>` | `NJULF_RENDERER_SIMPLE_DDGI_DIRECTIONAL_GUIDING_MODE` |

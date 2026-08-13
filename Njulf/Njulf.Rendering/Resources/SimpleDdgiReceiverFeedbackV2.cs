@@ -209,10 +209,9 @@ public static class SimpleDdgiReceiverFeedbackPlanner
             PrerequisitesSatisfied: prerequisites.PrerequisitesSatisfied,
             MemoryAdmitted: true,
             ResourcesComplete: prerequisites.ResourcesComplete,
-            // ExactCompacted is an explicit developer/reference selection, not
-            // an AutoQualified mode.  Qualification evidence remains visible
-            // in diagnostics, but only an AutoQualified selection may require
-            // a qualification ID under the shared mode contract.
+            // ExactCompacted remains the explicit developer/reference
+            // selection. The shared resolver recognizes AutoQualified by its
+            // stable enum name and requires the B1 qualification result.
             RequiresQualification: false,
             QualificationPassed: prerequisites.ExactQualificationPassed,
             QualificationId: prerequisites.QualificationId);

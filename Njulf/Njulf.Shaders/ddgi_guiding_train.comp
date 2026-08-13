@@ -39,7 +39,19 @@ shared uint stagedValid[64];
 void main()
 {
     uint workItemIndex = gl_WorkGroupID.x;
-    if (workItemIndex >= guidingPc.dispatchCount ||
+    bool gpuGenerated = (guidingPc.flags &
+        SIMPLE_DDGI_GUIDING_PUSH_GPU_GENERATED_WORK) != 0u;
+    uint effectiveDispatchCount = gpuGenerated &&
+            uint(guidingTrainingCounters.counters.length()) >=
+                SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT
+        ? guidingTrainingCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT]
+        : guidingPc.dispatchCount;
+    if (workItemIndex >= effectiveDispatchCount ||
+        effectiveDispatchCount > guidingPc.dispatchCount ||
+        (gpuGenerated && guidingTrainingCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS] !=
+                SIMPLE_DDGI_GUIDING_ABI_VERSION) ||
         guidingPc.abiVersion != SIMPLE_DDGI_GUIDING_ABI_VERSION ||
         !SimpleDdgiGuidingSupportedLeafResolution(guidingPc.leafResolution))
     {

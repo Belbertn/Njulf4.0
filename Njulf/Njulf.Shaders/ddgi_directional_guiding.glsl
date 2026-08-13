@@ -4,7 +4,7 @@
 // C3 persistent/dispatched payload ABI.  Keep this in lock-step with
 // SimpleDdgiGuidingGpuContracts.cs.  A header/payload revision mismatch is a
 // hard fallback, never an opportunity to reinterpret old learned data.
-const uint SIMPLE_DDGI_GUIDING_ABI_VERSION = 0x43330006u;
+const uint SIMPLE_DDGI_GUIDING_ABI_VERSION = 0x43330007u;
 const uint SIMPLE_DDGI_GUIDING_HEADER_WORDS = 8u;
 const uint SIMPLE_DDGI_GUIDING_MAX_LEAF_RESOLUTION = 16u;
 const uint SIMPLE_DDGI_GUIDING_MAX_LEAF_COUNT = 256u;
@@ -77,6 +77,11 @@ const uint SIMPLE_DDGI_GUIDING_COUNTER_MAXIMUM_PDF_BITS = 10u;
 const uint SIMPLE_DDGI_GUIDING_COUNTER_INVERSE_PDF_HISTOGRAM_BASE = 12u;
 const uint SIMPLE_DDGI_GUIDING_INVERSE_PDF_HISTOGRAM_BIN_COUNT = 16u;
 const uint SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT = 32u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT = 28u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_TRAINING_RECORD_COUNT = 29u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_SAMPLE_REQUEST_COUNT = 30u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS = 31u;
+const uint SIMPLE_DDGI_GUIDING_PUSH_GPU_GENERATED_WORK = 1u << 0u;
 
 struct SimpleDdgiGuidingDistributionHeader
 {

@@ -104,6 +104,12 @@ namespace Njulf.Rendering
         // create an entry.
         private AdvancedGiQualificationManifest _advancedGiQualificationManifest =
             AdvancedGiQualificationManifest.Empty;
+        private AdvancedGiRuntimeContentBinding _advancedGiRuntimeContentBinding;
+        private AdvancedGiRuntimeContentState _advancedGiRuntimeContentState =
+            AdvancedGiRuntimeContentState.Unconfigured;
+        private string _advancedGiSettingsFingerprint = string.Empty;
+        private AdvancedGiCandidateProfileDocument? _advancedGiCandidateProfile;
+        private string _advancedGiCandidateProfileStatus = "not-configured";
         private AdvancedGiRenderGraphModes _advancedGiGraphModes =
             AdvancedGiRenderGraphModes.Disabled;
         // Captured after pipeline creation, when the effective shader assets have been loaded.
@@ -182,6 +188,7 @@ namespace Njulf.Rendering
         private ulong _giCausticProducerRevisionFingerprint;
         private bool _giCausticRuntimeConfigured;
         private bool _giCausticFrameAvailable;
+        private bool _giCausticUsesCandidateAuthorization;
         // C5 is admitted only from a caller-supplied immutable post-B3
         // measurement artifact. The default records are intentionally absent,
         // which keeps its graph, MRT variants, images, buffers, and pipelines
@@ -206,6 +213,7 @@ namespace Njulf.Rendering
                 ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
         private SimpleDdgiNearFieldResidualVulkanRuntime?
             _simpleDdgiNearFieldResidualRuntime;
+        private bool _nearFieldResidualUsesCandidateAuthorization;
         private FarFieldClipmapManager? _farFieldClipmapManager;
         private AccelerationStructureManager? _accelerationStructureManager;
         private DdgiFoliageProxyManager? _ddgiFoliageProxyManager;
@@ -641,6 +649,12 @@ namespace Njulf.Rendering
         public bool EnableMeshletDebugView { get; set; }
         public RenderSettings Settings { get; }
 
+        public AdvancedGiRuntimeContentState AdvancedGiRuntimeContentState =>
+            _advancedGiRuntimeContentState;
+
+        public string AdvancedGiCandidateProfileStatus =>
+            _advancedGiCandidateProfileStatus;
+
         /// <summary>
         /// Installs the independently reviewed prerequisite evidence used when
         /// the renderer is next initialized. Advanced graph variants are
@@ -658,6 +672,34 @@ namespace Njulf.Rendering
                     "Advanced GI prerequisite evidence can only change before renderer initialization; restart to rebuild graph resources transactionally.");
             }
             _advancedGiPrerequisiteManifest = manifest;
+        }
+
+        /// <summary>
+        /// Installs the expected corpus/profile/scene identity before renderer
+        /// initialization. An absent or invalid binding is accepted as the
+        /// fail-closed state so explicit experiment modes remain usable while
+        /// AutoQualified selections are rejected.
+        /// </summary>
+        public void ConfigureAdvancedGiRuntimeContentBinding(
+            in AdvancedGiRuntimeContentBinding binding)
+        {
+            if (_isInitialized)
+            {
+                throw new InvalidOperationException(
+                    "Advanced GI runtime content binding can only change before renderer initialization; restart to select another qualified profile.");
+            }
+            _advancedGiRuntimeContentBinding = binding.IsWellFormed
+                ? binding.Normalize()
+                : default;
+            _advancedGiRuntimeContentState =
+                _advancedGiRuntimeContentBinding.IsWellFormed
+                    ? new AdvancedGiRuntimeContentState(
+                        _advancedGiRuntimeContentBinding,
+                        string.Empty,
+                        string.Empty,
+                        false,
+                        "advanced-gi-runtime-content-awaiting-first-scene-frame")
+                    : AdvancedGiRuntimeContentState.Unconfigured;
         }
 
         /// <summary>
@@ -878,6 +920,50 @@ namespace Njulf.Rendering
 
             _advancedGiQualificationManifest = manifest;
             return true;
+        }
+
+        public bool TryConfigureAdvancedGiCandidateProfileFile(
+            string path,
+            out string failureDetail)
+        {
+            if (_isInitialized)
+            {
+                throw new InvalidOperationException(
+                    "Advanced GI candidate authorization can only change before renderer initialization; restart to rebuild graph resources transactionally.");
+            }
+            if (!AdvancedGiCandidateProfileCodec.TryLoad(
+                    path,
+                    out AdvancedGiCandidateProfileDocument? profile,
+                    out failureDetail) || profile is null)
+            {
+                _advancedGiCandidateProfile = null;
+                _advancedGiCandidateProfileStatus = "rejected:" + failureDetail;
+                return false;
+            }
+            _advancedGiCandidateProfile = profile;
+            _advancedGiCandidateProfileStatus = "loaded:runtime-binding-pending";
+            return true;
+        }
+
+        private bool TryAuthorizeAdvancedGiCandidate(out string reason)
+        {
+            AdvancedGiCandidateProfileDocument? profile =
+                _advancedGiCandidateProfile;
+            if (profile is null)
+            {
+                reason = "advanced-gi-candidate-profile-not-configured";
+                return false;
+            }
+            bool accepted = profile.Authorization.MatchesRuntime(
+                ResolvePerformanceCaptureCommit(),
+                _captureShaderBundleHash,
+                _advancedGiSettingsFingerprint,
+                _advancedGiRuntimeContentBinding,
+                out reason);
+            _advancedGiCandidateProfileStatus = accepted
+                ? "accepted:" + profile.Authorization.AuthorizationId
+                : "rejected:" + reason;
+            return accepted;
         }
 
         /// <summary>
@@ -1204,6 +1290,9 @@ namespace Njulf.Rendering
             // bytes before any optional backend or immutable graph inventory is selected; doing
             // this later would make startup admission compare against a placeholder identity.
             _captureShaderBundleHash = ResolvePerformanceCaptureShaderBundleHash();
+            _advancedGiSettingsFingerprint =
+                AdvancedGiSettingsFingerprint.Compute(
+                    Settings.GlobalIllumination);
 
             bool fogTargetEnabled = IsFogTargetEnabled(Settings);
             bool materialTransportProvenanceTargetEnabled =
@@ -1469,8 +1558,9 @@ namespace Njulf.Rendering
             ArgumentNullException.ThrowIfNull(settings);
             return prerequisiteGate.Passed &&
                 settings.EffectiveUseDdgi &&
-                settings.SimpleDdgiReceiverFeedbackMode ==
-                    SimpleDdgiReceiverFeedbackMode.ExactCompacted;
+                settings.SimpleDdgiReceiverFeedbackMode is
+                    SimpleDdgiReceiverFeedbackMode.ExactCompacted or
+                    SimpleDdgiReceiverFeedbackMode.AutoQualified;
         }
 
         private void InitializeRenderGraph()
@@ -2009,8 +2099,10 @@ namespace Njulf.Rendering
             AdvancedGiPrerequisiteGateResult guidingGate =
                 _advancedGiPrerequisiteManifest.Evaluate(
                     AdvancedGiPrerequisiteFeature.DirectionalGuiding);
-            bool guidingRuntimeSupported =
-                gi.SimpleDdgiSchedulerMode != SimpleDdgiSchedulerMode.GpuResident;
+            // Both scheduler backends now have an authoritative C3 work
+            // source.  GpuResident is compacted by ddgi_guiding_prepare.comp;
+            // CpuReference retains the bounded upload/oracle path.
+            bool guidingRuntimeSupported = true;
             AdvancedGiQualificationGateResult guidingQualification =
                 EvaluateAdvancedGiQualification(
                     AdvancedGiPrerequisiteFeature.DirectionalGuiding,
@@ -2029,17 +2121,29 @@ namespace Njulf.Rendering
                     // after the DDGI physical layout is known.
                     resourcesComplete: guidingRuntimeSupported,
                     gi.SimpleDdgiDirectionalGuidingQualificationId,
-                    guidingRuntimeSupported
-                        ? "guiding-frame-integration-available"
-                        : "guiding-requires-cpu-authoritative-scheduler");
+                    "guiding-frame-integration-available");
 
             ResolveInitialGiCausticMode(sceneRenderExtent);
 
-            SimpleDdgiNearFieldResidualProfile nearFieldProfile =
+            bool nearFieldCandidateAuthorized =
                 gi.SimpleDdgiNearFieldResidualMode ==
+                    SimpleDdgiNearFieldResidualMode
+                        .HiZHalfResolutionExperiment &&
+                _advancedGiCandidateProfile?.NearFieldResidual is not null &&
+                TryAuthorizeAdvancedGiCandidate(out _);
+            AdvancedGiNearFieldCandidateDocument? nearFieldCandidate =
+                nearFieldCandidateAuthorized
+                    ? _advancedGiCandidateProfile!.NearFieldResidual
+                    : null;
+            _nearFieldResidualUsesCandidateAuthorization =
+                nearFieldCandidate is not null;
+            SimpleDdgiNearFieldResidualProfile nearFieldProfile =
+                nearFieldCandidate?.Configuration.Profile ??
+                (gi.SimpleDdgiNearFieldResidualMode ==
                     SimpleDdgiNearFieldResidualMode.AutoQualified
                     ? _simpleDdgiNearFieldResidualRequestedProfile
-                    : SimpleDdgiNearFieldResidualProfile.HalfResolutionReference;
+                    : SimpleDdgiNearFieldResidualProfile
+                        .HalfResolutionReference);
             AdvancedGiPrerequisiteGateResult nearFieldGate =
                 _advancedGiPrerequisiteManifest.Evaluate(
                     AdvancedGiPrerequisiteFeature.NearFieldResidual);
@@ -2056,14 +2160,21 @@ namespace Njulf.Rendering
                 _hasSimpleDdgiNearFieldResidualEvidence
                     ? _simpleDdgiNearFieldResidualEvidence.Binding
                         .TraceSourceContract
+                    : nearFieldCandidate is not null
+                        ? nearFieldCandidate.Configuration.SourceContract
                     : preliminaryLayout.IsValid
                         ? SimpleDdgiNearFieldTraceSourceContract
                             .CreatePreDdgiDirectDiffuseAndEmissive(
                                 preliminaryLayout,
                                 nearFieldProfile)
                         : default;
-            var nearFieldConfiguration =
-                new SimpleDdgiNearFieldResidualConfiguration(
+            SimpleDdgiNearFieldResidualConfiguration nearFieldConfiguration =
+                nearFieldCandidate is not null
+                    ? nearFieldCandidate.Configuration with
+                    {
+                        Enabled = gpuNearFieldRequested
+                    }
+                    : new SimpleDdgiNearFieldResidualConfiguration(
                     Enabled: gpuNearFieldRequested,
                     Width: checked((int)sceneRenderExtent.Width),
                     Height: checked((int)sceneRenderExtent.Height),
@@ -2078,7 +2189,7 @@ namespace Njulf.Rendering
             SimpleDdgiNearFieldResidualAdmissionContext admissionContext =
                 _hasSimpleDdgiNearFieldResidualEvidence
                     ? _simpleDdgiNearFieldResidualAdmissionContext
-                    : default;
+                    : nearFieldCandidate?.AdmissionContext ?? default;
             var nearFieldPrerequisites =
                 new SimpleDdgiNearFieldResidualPrerequisites(
                     RefinementBricksActive: nearFieldGate.Passed,
@@ -2094,12 +2205,29 @@ namespace Njulf.Rendering
                     NoDoubleCountingOrFalseDarkening:
                         evidence.SignedResidualEnergyVerified &&
                         evidence.TraceSourceIndependenceVerified);
-            _simpleDdgiNearFieldResidualPlan =
-                SimpleDdgiNearFieldResidualExperiment.CreatePlan(
-                    nearFieldConfiguration,
-                    nearFieldPrerequisites,
-                    evidence,
-                    admissionContext);
+            if (nearFieldCandidate is not null)
+            {
+                _simpleDdgiNearFieldResidualAdmissionContext =
+                    admissionContext;
+                _simpleDdgiNearFieldResidualRequestedProfile =
+                    nearFieldProfile;
+                _simpleDdgiNearFieldResidualPlan =
+                    SimpleDdgiNearFieldResidualExperiment
+                        .CreateCandidatePlan(
+                            nearFieldConfiguration,
+                            nearFieldPrerequisites,
+                            admissionContext,
+                            _advancedGiCandidateProfile!.Authorization);
+            }
+            else
+            {
+                _simpleDdgiNearFieldResidualPlan =
+                    SimpleDdgiNearFieldResidualExperiment.CreatePlan(
+                        nearFieldConfiguration,
+                        nearFieldPrerequisites,
+                        evidence,
+                        admissionContext);
+            }
 
             bool nearFieldRuntimeSupported =
                 TryValidateNearFieldRuntimePreflight(
@@ -2227,6 +2355,14 @@ namespace Njulf.Rendering
             bool gpuRequested = gi.GiCausticMode is
                 GiCausticMode.WorldCacheExperiment or
                 GiCausticMode.AutoQualified;
+            bool candidateAuthorized =
+                gi.GiCausticMode == GiCausticMode.WorldCacheExperiment &&
+                _advancedGiCandidateProfile?.Caustics is not null &&
+                TryAuthorizeAdvancedGiCandidate(out _);
+            AdvancedGiCausticCandidateDocument? candidate = candidateAuthorized
+                ? _advancedGiCandidateProfile!.Caustics
+                : null;
+            _giCausticUsesCandidateAuthorization = candidate is not null;
 
             GiTaggedCausticCacheConfiguration configuration =
                 _hasGiCausticEvidence
@@ -2234,6 +2370,8 @@ namespace Njulf.Rendering
                     {
                         Enabled = gpuRequested
                     }
+                    : candidate is not null
+                        ? candidate.Configuration with { Enabled = gpuRequested }
                     : new GiTaggedCausticCacheConfiguration(
                         Enabled: gpuRequested,
                         HeroMaterialCount: 0,
@@ -2249,20 +2387,33 @@ namespace Njulf.Rendering
                 : default;
             GiCausticAdmissionContext context = _hasGiCausticEvidence
                 ? _giCausticAdmissionContext
-                : default;
-            _giCausticPlan = GiTaggedCausticCacheExperiment.CreatePlan(
-                configuration,
-                new GiTaggedCausticCacheQualification(
-                    SeparateOwnershipImplemented: true,
-                    DiffuseTransportFeedDisabled: true,
-                    ReferenceParityPassed:
-                        evidence.CpuGpuPdfAndThroughputParity,
-                    StabilityProofPassed:
-                        evidence.PublicationAndMotionStabilityPassed,
-                    QualityPerMillisecondImproved:
-                        evidence.QualityPerMillisecondImproved),
-                evidence,
-                context);
+                : candidate?.AdmissionContext ?? default;
+            if (candidate is not null)
+            {
+                _giCausticRequestedConfiguration = configuration;
+                _giCausticAdmissionContext = context;
+                _giCausticPlan =
+                    GiTaggedCausticCacheExperiment.CreateCandidatePlan(
+                        configuration,
+                        context,
+                        _advancedGiCandidateProfile!.Authorization);
+            }
+            else
+            {
+                _giCausticPlan = GiTaggedCausticCacheExperiment.CreatePlan(
+                    configuration,
+                    new GiTaggedCausticCacheQualification(
+                        SeparateOwnershipImplemented: true,
+                        DiffuseTransportFeedDisabled: true,
+                        ReferenceParityPassed:
+                            evidence.CpuGpuPdfAndThroughputParity,
+                        StabilityProofPassed:
+                            evidence.PublicationAndMotionStabilityPassed,
+                        QualityPerMillisecondImproved:
+                            evidence.QualityPerMillisecondImproved),
+                    evidence,
+                    context);
+            }
 
             string preflightFailure = _giCausticPlan.Status;
             bool runtimeSupported = gpuRequested &&
@@ -2483,7 +2634,12 @@ namespace Njulf.Rendering
                 properties.ApiVersion,
                 supported,
                 _captureShaderBundleHash,
-                AdvancedGiQualificationContract.SettingsContractSha256);
+                AdvancedGiQualificationContract.SettingsContractSha256,
+                ResolvePerformanceCaptureCommit(),
+                _advancedGiSettingsFingerprint,
+                _advancedGiRuntimeContentBinding.CorpusSha256,
+                _advancedGiRuntimeContentBinding.ContentProfileId,
+                _advancedGiRuntimeContentBinding.SceneAssetSha256);
             return _advancedGiQualificationManifest.Evaluate(
                 feature,
                 context,
@@ -3310,6 +3466,16 @@ namespace Njulf.Rendering
                 _completedMaterialGiCounters.EstimatedFarFieldTransportHitCount;
             sceneData.CaptureSceneName = string.IsNullOrWhiteSpace(scene.Name) ? "unknown-scene" : scene.Name;
             sceneData.CaptureScenario = CaptureScenario;
+            UpdateAdvancedGiRuntimeContentState(sceneData);
+            bool nearFieldRequiresContentMatch =
+                AdvancedGiRuntimeContentPolicy.RequiresExactMatch(
+                    Settings.GlobalIllumination
+                        .SimpleDdgiNearFieldResidualMode,
+                    _nearFieldResidualUsesCandidateAuthorization);
+            _simpleDdgiNearFieldResidualRuntime?.SetFrameAdmission(
+                !nearFieldRequiresContentMatch ||
+                    _advancedGiRuntimeContentState.Matched,
+                _advancedGiRuntimeContentState.Reason);
             if (_captureSceneRevision != sceneData.SceneContentRevision)
             {
                 _captureSceneRevision = sceneData.SceneContentRevision;
@@ -7728,6 +7894,63 @@ namespace Njulf.Rendering
             return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
         }
 
+        private void UpdateAdvancedGiRuntimeContentState(
+            SceneRenderingData sceneData)
+        {
+            string observedProfile = ResolveCaptureScenario(
+                sceneData.CaptureScenario);
+            string observedScene = ComputePerformanceCaptureSceneAssetHash(
+                sceneData);
+            if (!_advancedGiRuntimeContentBinding.IsWellFormed)
+            {
+                _advancedGiRuntimeContentState = new(
+                    default,
+                    observedProfile,
+                    observedScene,
+                    false,
+                    "advanced-gi-runtime-content-binding-not-configured");
+                return;
+            }
+
+            bool settingsMatch = HashTextEquals(
+                AdvancedGiSettingsFingerprint.Compute(
+                    Settings.GlobalIllumination),
+                _advancedGiSettingsFingerprint);
+            bool profileMatch = string.Equals(
+                observedProfile,
+                _advancedGiRuntimeContentBinding.ContentProfileId,
+                StringComparison.Ordinal);
+            bool sceneMatch = HashTextEquals(
+                observedScene,
+                _advancedGiRuntimeContentBinding.SceneAssetSha256);
+            string reason = !settingsMatch
+                ? "advanced-gi-runtime-settings-changed-restart-required"
+                : !profileMatch
+                    ? "advanced-gi-runtime-content-profile-mismatch"
+                    : !sceneMatch
+                        ? "advanced-gi-runtime-scene-asset-mismatch"
+                        : "advanced-gi-runtime-content-binding-matched";
+            _advancedGiRuntimeContentState = new(
+                _advancedGiRuntimeContentBinding,
+                observedProfile,
+                observedScene,
+                settingsMatch && profileMatch && sceneMatch,
+                reason);
+        }
+
+        private static bool HashTextEquals(string? left, string? right)
+        {
+            string normalizedLeft =
+                AdvancedGiQualificationContract.NormalizeSha256(left);
+            string normalizedRight =
+                AdvancedGiQualificationContract.NormalizeSha256(right);
+            return normalizedLeft.Length == 64 &&
+                normalizedRight.Length == 64 &&
+                CryptographicOperations.FixedTimeEquals(
+                    Convert.FromHexString(normalizedLeft),
+                    Convert.FromHexString(normalizedRight));
+        }
+
         internal static SimpleDdgiTransportConvergenceTelemetry
             AttributeSimpleDdgiTransportRingTimings(
                 SimpleDdgiTransportConvergenceTelemetry telemetry,
@@ -10459,6 +10682,9 @@ namespace Njulf.Rendering
                 ulong MaximumStorageBufferRange,
                 bool PrerequisiteGatePassed,
                 string PrerequisiteQualificationId,
+                bool QualificationPassed,
+                string QualificationId,
+                bool RuntimeContentMatched,
                 bool ExperimentBudgetHeadroomAvailable);
 
         private readonly record struct AsyncCoreBufferIdentity(
@@ -11414,6 +11640,15 @@ namespace Njulf.Rendering
                 return SimpleDdgiGuidingFrameConfiguration.Disabled;
             }
 
+            if (Settings.GlobalIllumination
+                    .SimpleDdgiDirectionalGuidingMode ==
+                    SimpleDdgiDirectionalGuidingMode.AutoQualified &&
+                !_advancedGiRuntimeContentState.Matched)
+            {
+                reason = _advancedGiRuntimeContentState.Reason;
+                return SimpleDdgiGuidingFrameConfiguration.Disabled;
+            }
+
             AdvancedGiPrerequisiteGateResult gate =
                 _advancedGiPrerequisiteManifest.Evaluate(
                     AdvancedGiPrerequisiteFeature.DirectionalGuiding);
@@ -11424,12 +11659,6 @@ namespace Njulf.Rendering
                     : gate.FailureDetail;
                 return SimpleDdgiGuidingFrameConfiguration.Disabled;
             }
-            if (manager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident)
-            {
-                reason = "guiding-requires-cpu-authoritative-scheduler";
-                return SimpleDdgiGuidingFrameConfiguration.Disabled;
-            }
-
             int totalPhysical = manager.PhysicalProbeCapacity;
             int directionSlots = manager.RaysPerProbe;
             if (totalPhysical <= 0 || directionSlots is <= 0 or >
@@ -11604,6 +11833,21 @@ namespace Njulf.Rendering
             AdvancedGiPrerequisiteGateResult gate =
                 _advancedGiPrerequisiteManifest.Evaluate(
                     AdvancedGiPrerequisiteFeature.ReceiverFeedback);
+            AdvancedGiQualificationGateResult qualification =
+                EvaluateAdvancedGiQualification(
+                    AdvancedGiPrerequisiteFeature.ReceiverFeedback,
+                    gate,
+                    physicalProbeCapacity > 0,
+                    Settings.GlobalIllumination
+                        .SimpleDdgiReceiverFeedbackQualificationId);
+            if (requestedMode ==
+                    SimpleDdgiReceiverFeedbackMode.AutoQualified &&
+                !_advancedGiRuntimeContentState.Matched)
+            {
+                qualification = AdvancedGiQualificationGateResult.Reject(
+                    _advancedGiRuntimeContentState.Reason,
+                    qualification.QualificationId);
+            }
             MemoryHeapBudgetSnapshot heapBudget =
                 _context.GetMemoryHeapBudgetSnapshot();
             ulong memoryHeadroom = heapBudget.IsAvailable &&
@@ -11626,6 +11870,9 @@ namespace Njulf.Rendering
                 maximumStorageBufferRange,
                 gate.Passed,
                 gate.QualificationId,
+                qualification.Passed,
+                qualification.QualificationId,
+                _advancedGiRuntimeContentState.Matched,
                 memoryHeadroom >= SimpleDdgiReceiverFeedbackExperimentBudgetBytes);
             if (_simpleDdgiReceiverFeedbackConfigurationKey == key &&
                 _simpleDdgiGuidingAppliedArenaConfiguration.Equals(
@@ -11640,7 +11887,10 @@ namespace Njulf.Rendering
                     pageGeneration,
                     maximumStorageBufferRange,
                     memoryHeadroom,
-                    gate);
+                    gate,
+                    qualification,
+                    Settings.GlobalIllumination
+                        .SimpleDdgiReceiverFeedbackQualificationId);
             AdvancedGiTransientBufferArena? transientArena =
                 _advancedGiTransientBufferArena;
             SimpleDdgiGuidingFrameConfiguration guidingArenaConfiguration =
@@ -11792,7 +12042,9 @@ namespace Njulf.Rendering
                 uint maximumPagePublicationGeneration,
                 ulong maximumStorageBufferRange,
                 ulong rendererMemoryHeadroom,
-                in AdvancedGiPrerequisiteGateResult prerequisiteGate)
+                in AdvancedGiPrerequisiteGateResult prerequisiteGate,
+                in AdvancedGiQualificationGateResult qualificationGate,
+                string? configuredQualificationId)
         {
             if (requestedMode is SimpleDdgiReceiverFeedbackMode.Off or
                 SimpleDdgiReceiverFeedbackMode.LegacyPackedReference)
@@ -11876,8 +12128,10 @@ namespace Njulf.Rendering
                             producerWorkload.SourceScreenTileCount > 0UL &&
                             maximumStorageBufferRange > 0UL,
                         PrerequisitesSatisfied: prerequisiteGate.Passed,
-                        ExactQualificationPassed: false,
-                        QualificationId: prerequisiteGate.QualificationId,
+                        ExactQualificationPassed: qualificationGate.Passed,
+                        QualificationId:
+                            AdvancedGiQualificationContract.NormalizeSha256(
+                                configuredQualificationId),
                         ResourcesComplete: true));
                 if (lastPlan.UsesExactCompacted ||
                     lastPlan.Mode.FallbackReason is not (
@@ -12800,8 +13054,9 @@ namespace Njulf.Rendering
                         .ReduceAndFinalize),
                 availableStages);
 
-            bool exactRequested = mode.RequestedMode ==
-                SimpleDdgiReceiverFeedbackMode.ExactCompacted;
+            bool exactRequested = mode.RequestedMode is
+                SimpleDdgiReceiverFeedbackMode.ExactCompacted or
+                SimpleDdgiReceiverFeedbackMode.AutoQualified;
             bool resourcesComplete = runtime.Resource.IsEffectivelyEnabled &&
                 feedbackMemory.AllocatedBytes != 0UL &&
                 runtime.Resource.AllocatedBytes == feedbackMemory.AllocatedBytes;
@@ -13194,13 +13449,15 @@ namespace Njulf.Rendering
                 EvaluateAdvancedGiQualification(
                     AdvancedGiPrerequisiteFeature.DirectionalGuiding,
                     guidingGate,
-                    supported: gi.SimpleDdgiSchedulerMode !=
-                        SimpleDdgiSchedulerMode.GpuResident,
+                    supported: true,
                     gi.SimpleDdgiDirectionalGuidingQualificationId);
             bool residualRuntimeReady =
                 _simpleDdgiNearFieldResidualRuntime is { IsActive: true };
-            bool guidingRuntimeSupported = gi.SimpleDdgiSchedulerMode !=
-                SimpleDdgiSchedulerMode.GpuResident;
+            // Both scheduler backends have an authoritative work source. The
+            // GPU-resident path is compacted by ddgi_guiding_prepare.comp and
+            // therefore must use the same qualification/runtime diagnostics
+            // as the CPU reference path.
+            const bool guidingRuntimeSupported = true;
             SimpleDdgiGuidingGpuRuntimeDiagnostics guidingRuntime =
                 _simpleDdgiGuidingRuntime?.Diagnostics ??
                 SimpleDdgiGuidingGpuRuntimeDiagnostics.Disabled;
@@ -13223,8 +13480,9 @@ namespace Njulf.Rendering
             SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics feedbackRuntime =
                 _simpleDdgiReceiverFeedbackRuntime?.Diagnostics ??
                 SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics.Disabled;
-            if (receiverFeedbackMode.EffectiveMode ==
-                    SimpleDdgiReceiverFeedbackMode.ExactCompacted &&
+            if (receiverFeedbackMode.EffectiveMode is
+                    (SimpleDdgiReceiverFeedbackMode.ExactCompacted or
+                     SimpleDdgiReceiverFeedbackMode.AutoQualified) &&
                 !feedbackRuntime.Resource.IsEffectivelyEnabled)
             {
                 receiverFeedbackMode = receiverFeedbackMode with
@@ -16190,6 +16448,16 @@ namespace Njulf.Rendering
             {
                 return;
             }
+            bool requiresContentMatch =
+                AdvancedGiRuntimeContentPolicy.RequiresExactMatch(
+                    Settings.GlobalIllumination.GiCausticMode,
+                    _giCausticUsesCandidateAuthorization);
+            if (requiresContentMatch &&
+                !_advancedGiRuntimeContentState.Matched)
+            {
+                RejectGiCausticFrame(_advancedGiRuntimeContentState.Reason);
+                return;
+            }
 
             GiCausticHeroExtractionProfile extractionProfile =
                 GiCausticHeroExtractionProfile.Reference with
@@ -16445,6 +16713,15 @@ namespace Njulf.Rendering
                 return;
 
             GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            bool opacityContentAdmitted =
+                gi.DdgiOpacityMicromapMode !=
+                    DdgiOpacityMicromapMode.AutoQualified ||
+                _advancedGiRuntimeContentState.Matched;
+            _accelerationStructureManager.SetOpacityMicromapRuntimeAdmission(
+                opacityContentAdmitted,
+                opacityContentAdmitted
+                    ? null
+                    : _advancedGiRuntimeContentState.Reason);
             bool enabled = gi.Enabled &&
                            gi.EffectiveUseRayQueryBackend;
             bool qualityAllowsStaticStreaming = gi.DdgiQualityTier is

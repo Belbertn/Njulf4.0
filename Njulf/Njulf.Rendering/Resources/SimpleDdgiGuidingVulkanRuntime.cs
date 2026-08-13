@@ -183,6 +183,67 @@ public readonly record struct SimpleDdgiGuidingTraceTrainingSource(
 }
 
 /// <summary>
+/// Immutable bridge from the GPU-resident DDGI scheduler to C3. The accepted
+/// count and public update queue stay device-owned; managed code supplies only
+/// frozen offsets, capacities, and the scene revision needed to reproduce the
+/// CPU reference identities in the preparation shader.
+/// </summary>
+public readonly record struct SimpleDdgiGuidingGpuResidentWorkSource(
+    bool IsAvailable,
+    uint SchedulerArenaBufferIndex,
+    uint SchedulerCountersOffsetWords,
+    uint SchedulerAcceptedCounterWord,
+    uint SchedulerRequestCapacity,
+    ulong SceneContentRevision,
+    BufferHandle SchedulerArenaBuffer,
+    ulong SchedulerArenaBytes)
+{
+    public bool TryValidate(out string reason)
+    {
+        if (!IsAvailable ||
+            SchedulerArenaBufferIndex !=
+                (uint)BindlessIndex.SimpleDdgiSchedulerArenaBuffer ||
+            SchedulerAcceptedCounterWord != 2u ||
+            SchedulerRequestCapacity == 0u ||
+            SceneContentRevision == 0UL || !SchedulerArenaBuffer.IsValid ||
+            SchedulerArenaBytes == 0UL)
+        {
+            reason = "guiding-gpu-resident-work-source-invalid";
+            return false;
+        }
+
+        try
+        {
+            _ = checked(SchedulerCountersOffsetWords +
+                SchedulerAcceptedCounterWord);
+        }
+        catch (OverflowException)
+        {
+            reason = "guiding-gpu-resident-counter-offset-overflow";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    public bool TryValidate(
+        in SimpleDdgiGuidingLayout layout,
+        out string reason)
+    {
+        if (!TryValidate(out reason) ||
+            SchedulerRequestCapacity <
+                checked((uint)layout.ScheduledGuidedProbeCapacity))
+        {
+            if (string.IsNullOrEmpty(reason))
+                reason = "guiding-gpu-resident-work-source-capacity-insufficient";
+            return false;
+        }
+        return true;
+    }
+}
+
+/// <summary>
 /// Frozen ownership handshake for the C3 direction/PDF sidecar.  Slot 203 is
 /// source-cache-owned: this runtime validates that ownership and may reference
 /// the supplied buffer through its private compute descriptor set, but it
@@ -343,6 +404,15 @@ public readonly record struct SimpleDdgiGuidingBuildWorkload(
     /// </summary>
     public SimpleDdgiGuidingTraceTrainingSource TraceTrainingSource { get; init; }
 
+    /// <summary>
+    /// Present only when work items are compacted on device from the resident
+    /// scheduler queue. An unavailable/default value selects the audited CPU
+    /// reference compiler.
+    /// </summary>
+    public SimpleDdgiGuidingGpuResidentWorkSource GpuResidentSource { get; init; }
+
+    public bool UsesGpuResidentWork => GpuResidentSource.IsAvailable;
+
     public bool TryValidate(
         in SimpleDdgiGuidingLayout layout,
         out string reason)
@@ -359,17 +429,35 @@ public readonly record struct SimpleDdgiGuidingBuildWorkload(
             reason = "guiding-workload-layout-capacity-overflow";
             return false;
         }
+        bool gpuGenerated = UsesGpuResidentWork;
+        uint requiredTrainingRecordCapacity;
+        try
+        {
+            requiredTrainingRecordCapacity = checked(scheduledCapacity *
+                (uint)layout.DirectionSlotsPerProbe);
+        }
+        catch (OverflowException)
+        {
+            reason = "guiding-build-workload-training-capacity-overflow";
+            return false;
+        }
         if (TargetProposalEpoch == 0u || scheduledCapacity == 0u ||
-            ExpectedHeaders.IsEmpty ||
-            ExpectedHeaders.Length > scheduledCapacity ||
-            BuildWorkItems.ElementCount != (uint)ExpectedHeaders.Length ||
-            TrainingWorkItems.ElementCount == 0u ||
-            TrainingWorkItems.ElementCount > scheduledCapacity)
+            (gpuGenerated
+                ? (!ExpectedHeaders.IsEmpty ||
+                   BuildWorkItems.ElementCount != scheduledCapacity ||
+                   TrainingWorkItems.ElementCount != scheduledCapacity ||
+                   TrainingRecords.ElementCount < requiredTrainingRecordCapacity)
+                : (ExpectedHeaders.IsEmpty ||
+                   ExpectedHeaders.Length > scheduledCapacity ||
+                   BuildWorkItems.ElementCount != (uint)ExpectedHeaders.Length ||
+                   TrainingWorkItems.ElementCount == 0u ||
+                   TrainingWorkItems.ElementCount > scheduledCapacity)))
         {
             reason = "guiding-build-workload-count-invalid";
             return false;
         }
-        if (!TraceTrainingSource.TryValidate(out reason) ||
+        if ((gpuGenerated && !GpuResidentSource.TryValidate(layout, out reason)) ||
+            !TraceTrainingSource.TryValidate(out reason) ||
             !TrainingRecords.TryValidate(
                 SimpleDdgiGuidingGpuAbi.TrainingRecordByteCount,
                 0u,
@@ -433,11 +521,31 @@ public readonly record struct SimpleDdgiGuidingSampleWorkload(
     /// </summary>
     public ReadOnlyMemory<SimpleDdgiGuidingSampleCommit> ExpectedCommits { get; init; }
 
+    /// <summary>Device-owned scheduler bridge for GPU-compacted requests.</summary>
+    public SimpleDdgiGuidingGpuResidentWorkSource GpuResidentSource { get; init; }
+
+    public float UniformMixtureFraction { get; init; } =
+        SimpleDdgiGuidingProposalPolicy.ProductionBaseline.UniformMixtureFraction;
+
+    public SimpleDdgiGuidingTraceTrainingSource TraceTrainingSource { get; init; }
+
+    public SimpleDdgiGuidingExternalBuffer TrainingWorkItems { get; init; }
+
+    public SimpleDdgiGuidingExternalBuffer BuildWorkItems { get; init; }
+
+    public bool UsesGpuResidentWork => GpuResidentSource.IsAvailable;
+
     public bool TryValidate(
         in SimpleDdgiGuidingSourceCacheHandshake handshake,
         out string reason)
     {
-        if (!DestinationsAreUnique || ExpectedCommits.IsEmpty ||
+        bool gpuGenerated = UsesGpuResidentWork;
+        if (!DestinationsAreUnique ||
+            (gpuGenerated ? !ExpectedCommits.IsEmpty : ExpectedCommits.IsEmpty) ||
+            !float.IsFinite(UniformMixtureFraction) ||
+            UniformMixtureFraction <
+                SimpleDdgiDirectionalGuidingExperiment.MinimumUniformFraction ||
+            UniformMixtureFraction > 1.0f ||
             SampleRequests.ElementCount == 0u ||
             SampleRequests.ElementCount > handshake.DirectionPdfSidecarCapacity ||
             ExpectedCommits.Length > SampleRequests.ElementCount ||
@@ -445,6 +553,25 @@ public readonly record struct SimpleDdgiGuidingSampleWorkload(
                 SimpleDdgiGuidingGpuAbi.ValidationCounterWordCount)
         {
             reason = "guiding-sample-workload-count-invalid";
+            return false;
+        }
+        if (gpuGenerated && !GpuResidentSource.TryValidate(out reason))
+        {
+            return false;
+        }
+        if (gpuGenerated &&
+            (!TraceTrainingSource.TryValidate(out reason) ||
+             !TrainingWorkItems.TryValidate(
+                 SimpleDdgiGuidingGpuAbi.TrainingWorkItemByteCount,
+                 1u,
+                 "sample-prepare-training-work-items",
+                 out reason) ||
+             !BuildWorkItems.TryValidate(
+                 SimpleDdgiGuidingGpuAbi.BuildWorkItemByteCount,
+                 1u,
+                 "sample-prepare-build-work-items",
+                 out reason)))
+        {
             return false;
         }
         if (!SampleRequests.TryValidate(
@@ -639,11 +766,12 @@ public readonly record struct SimpleDdgiGuidingSampleTelemetry(
         uint requestCount,
         in SimpleDdgiGuidingValidationCounters validation,
         out SimpleDdgiGuidingSampleTelemetry telemetry,
-        out string reason)
+        out string reason,
+        bool gpuGenerated = false)
     {
         telemetry = default;
         if (words.Length < SimpleDdgiGuidingGpuAbi.ValidationCounterWordCount ||
-            requestCount == 0U)
+            (requestCount == 0U && !gpuGenerated))
         {
             reason = "guiding-sample-telemetry-range-invalid";
             return false;
@@ -667,11 +795,15 @@ public readonly record struct SimpleDdgiGuidingSampleTelemetry(
         ulong invalid = (ulong)validation.InvalidRecords +
             validation.InvalidHeaders + validation.InvalidPdfs;
         ulong branchTotal = (ulong)maintenance + mixtureUniform + mixtureGuided;
-        bool reservedZero = words[11] == 0U && words[28] == 0U &&
-            words[29] == 0U && words[30] == 0U && words[31] == 0U;
+        bool reservedValid = gpuGenerated
+            ? words[11] == 0U && words[28] == 0U && words[29] == 0U &&
+                words[30] == requestCount &&
+                words[31] == SimpleDdgiGuidingGpuAbi.Version
+            : words[11] == 0U && words[28] == 0U && words[29] == 0U &&
+                words[30] == 0U && words[31] == 0U;
         if ((ulong)valid + invalid != requestCount || branchTotal != valid ||
             histogram.Total != valid || uniformFallback > valid ||
-            validation.PublicationRejections != 0U || !reservedZero)
+            validation.PublicationRejections != 0U || !reservedValid)
         {
             reason = "guiding-sample-telemetry-count-mismatch";
             return false;
@@ -744,7 +876,7 @@ public readonly record struct SimpleDdgiGuidingSampleCompletion(
         SimpleDdgiGuidingSampleTelemetry.Empty;
 
     public bool Succeeded => FenceCompleted && ReadbackValid &&
-        ValidationCounters.AreZero && !Commits.IsEmpty;
+        ValidationCounters.AreZero;
 
     public static SimpleDdgiGuidingSampleCompletion None { get; } = new(
         false,
@@ -827,7 +959,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
     // kind).  A claimed instance must not be updated again until the caller
     // reports that frame slot fence-complete through TryReadCompletedFrame.
     private readonly bool[,] _privateDescriptorSetsClaimed =
-        new bool[RenderingConstants.FramesInFlight, 5];
+        new bool[RenderingConstants.FramesInFlight, 7];
 
     private SimpleDdgiGuidingGpuPass? _pass;
     private SimpleDdgiGuidingSourceCacheHandshake? _configuredHandshake;
@@ -1457,7 +1589,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                     begin.Token,
                     layout,
                     nativeAllocation,
-                    workload.ExpectedHeaders);
+                    workload);
             }
             catch (Exception exception)
             {
@@ -1648,7 +1780,11 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                     workload.ValidationCounters.OffsetBytes,
                     workload.ValidationCounters.RangeBytes,
                     "validation-counters",
-                    out reason))
+                    out reason) ||
+                (workload.UsesGpuResidentWork &&
+                    !TryValidateGpuSamplePreparationPhysicalRanges(
+                        workload,
+                        out reason)))
             {
                 UpdateDiagnosticsNoLock(
                     SimpleDdgiGuidingGpuCapabilityReason.WorkloadRejected,
@@ -1672,6 +1808,21 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                     SimpleDdgiGuidingPassKind.Sample,
                     out reason))
             {
+                UpdateDiagnosticsNoLock(
+                    SimpleDdgiGuidingGpuCapabilityReason.SampleRecordingRejected,
+                    reason,
+                    sourceCacheHandshakeAvailable: true);
+                return false;
+            }
+            if (workload.UsesGpuResidentWork &&
+                !TryClaimDescriptorSetNoLock(
+                    frameIndex,
+                    SimpleDdgiGuidingPassKind.PrepareSample,
+                    out reason))
+            {
+                _privateDescriptorSetsClaimed[
+                    frameIndex,
+                    (int)SimpleDdgiGuidingPassKind.Sample] = false;
                 UpdateDiagnosticsNoLock(
                     SimpleDdgiGuidingGpuCapabilityReason.SampleRecordingRejected,
                     reason,
@@ -1704,6 +1855,9 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                 _privateDescriptorSetsClaimed[
                     frameIndex,
                     (int)SimpleDdgiGuidingPassKind.Sample] = false;
+                _privateDescriptorSetsClaimed[
+                    frameIndex,
+                    (int)SimpleDdgiGuidingPassKind.PrepareSample] = false;
                 UpdateDiagnosticsNoLock(
                     SimpleDdgiGuidingGpuCapabilityReason.SampleRecordingRejected,
                     reason,
@@ -1836,7 +1990,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                             pending.Token,
                             layout,
                             nativeAllocation,
-                            pending.Workload.ExpectedHeaders);
+                            pending.Workload);
                         break;
                     default:
                         throw new InvalidOperationException(
@@ -1903,8 +2057,21 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
         in SimpleDdgiGuidingBuildToken token,
         in SimpleDdgiGuidingLayout layout,
         SimpleDdgiGuidingNativeAllocation nativeAllocation,
-        ReadOnlyMemory<SimpleDdgiGuidingExpectedProbeHeader> expectedHeaders)
+        in SimpleDdgiGuidingBuildWorkload workload)
     {
+        ReadOnlyMemory<SimpleDdgiGuidingExpectedProbeHeader> expectedHeaders =
+            workload.ExpectedHeaders;
+        if (workload.UsesGpuResidentWork)
+        {
+            RecordGpuResidentPublicationReadback(
+                commandBuffer,
+                frameIndex,
+                allocationId,
+                token,
+                nativeAllocation,
+                workload);
+            return;
+        }
         if (expectedHeaders.IsEmpty)
             throw new ArgumentException("C3 header readback requires expected probe identities.",
                 nameof(expectedHeaders));
@@ -1969,7 +2136,119 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
         _pendingReadbacks[frameIndex] = new PendingReadback(
             allocationId,
             token,
-            identities);
+            identities,
+            GpuGenerated: false,
+            GpuCapacity: 0u);
+    }
+
+    private void RecordGpuResidentPublicationReadback(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        ulong allocationId,
+        in SimpleDdgiGuidingBuildToken token,
+        SimpleDdgiGuidingNativeAllocation nativeAllocation,
+        in SimpleDdgiGuidingBuildWorkload workload)
+    {
+        uint capacity = workload.BuildWorkItems.ElementCount;
+        ulong publicationBytes = checked(
+            (ulong)capacity *
+            SimpleDdgiGuidingGpuAbi.PublicationRecordByteCount);
+        ulong totalBytes = checked(publicationBytes +
+            SimpleDdgiGuidingGpuAbi.ValidationCounterByteCount);
+        if (capacity == 0u || publicationBytes >
+                workload.TrainingRecords.RangeBytes)
+        {
+            throw new InvalidOperationException(
+                "C3 GPU publication readback range is invalid.");
+        }
+
+        BufferHandle readback = nativeAllocation.HeaderReadbacks[frameIndex];
+        if (!readback.IsValid ||
+            _bufferManager.GetBufferSize(readback) < totalBytes)
+        {
+            throw new InvalidOperationException(
+                "C3 GPU publication readback storage is unavailable.");
+        }
+        if (!TryValidateTransferSourceRange(
+                workload.TrainingRecords.Buffer,
+                "gpu-publication-records",
+                out string publicationReason))
+        {
+            throw new InvalidOperationException(publicationReason);
+        }
+        if (!TryValidateTransferSourceRange(
+                workload.ValidationCounters.Buffer,
+                "gpu-publication-counters",
+                out string counterReason))
+        {
+            throw new InvalidOperationException(counterReason);
+        }
+
+        VkBuffer publicationSource = _bufferManager.GetBuffer(
+            workload.TrainingRecords.Buffer);
+        VkBuffer counterSource = _bufferManager.GetBuffer(
+            workload.ValidationCounters.Buffer);
+        VkBuffer destination = _bufferManager.GetBuffer(readback);
+        Span<BufferMemoryBarrier2> sourceBarriers =
+            stackalloc BufferMemoryBarrier2[2];
+        sourceBarriers[0] = BarrierBuilder.BufferBarrier(
+            publicationSource,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferReadBit,
+            workload.TrainingRecords.OffsetBytes,
+            publicationBytes);
+        sourceBarriers[1] = BarrierBuilder.BufferBarrier(
+            counterSource,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferReadBit,
+            workload.ValidationCounters.OffsetBytes,
+            SimpleDdgiGuidingGpuAbi.ValidationCounterByteCount);
+        ExecuteBufferBarriers(commandBuffer, sourceBarriers);
+
+        var publicationCopy = new BufferCopy
+        {
+            SrcOffset = workload.TrainingRecords.OffsetBytes,
+            DstOffset = 0UL,
+            Size = publicationBytes
+        };
+        _context.Api.CmdCopyBuffer(
+            commandBuffer,
+            publicationSource,
+            destination,
+            1u,
+            &publicationCopy);
+        var counterCopy = new BufferCopy
+        {
+            SrcOffset = workload.ValidationCounters.OffsetBytes,
+            DstOffset = publicationBytes,
+            Size = SimpleDdgiGuidingGpuAbi.ValidationCounterByteCount
+        };
+        _context.Api.CmdCopyBuffer(
+            commandBuffer,
+            counterSource,
+            destination,
+            1u,
+            &counterCopy);
+
+        BufferMemoryBarrier2 afterCopy = BarrierBuilder.BufferBarrier(
+            destination,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferWriteBit,
+            PipelineStageFlags2.HostBit,
+            AccessFlags2.HostReadBit,
+            0UL,
+            totalBytes);
+        ExecuteBufferBarrier(commandBuffer, afterCopy);
+        _pendingReadbacks[frameIndex] = new PendingReadback(
+            allocationId,
+            token,
+            [],
+            GpuGenerated: true,
+            GpuCapacity: capacity);
     }
 
     private void RecordSampleValidationReadback(
@@ -2026,7 +2305,8 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
         _pendingSampleReadbacks[frameIndex] = new PendingSampleReadback(
             allocationId,
             commits,
-            workload.SampleRequests.ElementCount);
+            workload.SampleRequests.ElementCount,
+            workload.UsesGpuResidentWork);
     }
 
     private void CompleteBuildReadbackNoLock(
@@ -2036,7 +2316,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
     {
         if (!_manager.TryGetActiveAllocation(
                 out SimpleDdgiGuidingGpuAllocation allocation,
-                out _) ||
+                out SimpleDdgiGuidingLayout layout) ||
             allocation.AllocationId != expected.AllocationId ||
             !_allocator.TryGetNativeAllocation(
                 expected.AllocationId,
@@ -2049,6 +2329,17 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                 false,
                 SimpleDdgiGuidingPublicationFailure.NotEnabled,
                 "guiding-header-readback-allocation-no-longer-current");
+            return;
+        }
+
+        if (expected.GpuGenerated)
+        {
+            CompleteGpuResidentBuildReadbackNoLock(
+                frameIndex,
+                expected,
+                layout,
+                nativeAllocation,
+                out publication);
             return;
         }
 
@@ -2096,6 +2387,111 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
         }
     }
 
+    private void CompleteGpuResidentBuildReadbackNoLock(
+        int frameIndex,
+        in PendingReadback expected,
+        in SimpleDdgiGuidingLayout layout,
+        SimpleDdgiGuidingNativeAllocation nativeAllocation,
+        out SimpleDdgiGuidingPublicationResult publication)
+    {
+        try
+        {
+            ulong publicationBytes = checked(
+                (ulong)expected.GpuCapacity *
+                SimpleDdgiGuidingGpuAbi.PublicationRecordByteCount);
+            ulong totalBytes = checked(publicationBytes +
+                SimpleDdgiGuidingGpuAbi.ValidationCounterByteCount);
+            BufferHandle readback = nativeAllocation.HeaderReadbacks[frameIndex];
+            _bufferManager.InvalidateBuffer(readback, 0UL, totalBytes);
+            byte* baseAddress = (byte*)_bufferManager.GetMappedPointer(readback);
+            if (baseAddress == null)
+            {
+                throw new InvalidOperationException(
+                    "Guiding GPU publication readback mapping is null.");
+            }
+
+            uint* counters = (uint*)(baseAddress + checked((int)publicationBytes));
+            uint actualCount = counters[
+                SimpleDdgiGuidingGpuAbi.CounterGpuWorkItemCount];
+            uint trainingRecordCount = counters[
+                SimpleDdgiGuidingGpuAbi.CounterGpuTrainingRecordCount];
+            bool countersValid =
+                counters[SimpleDdgiGuidingGpuAbi.CounterInvalidRecords] == 0u &&
+                counters[SimpleDdgiGuidingGpuAbi.CounterInvalidHeaders] == 0u &&
+                counters[SimpleDdgiGuidingGpuAbi.CounterInvalidPdfs] == 0u &&
+                counters[SimpleDdgiGuidingGpuAbi.CounterPublicationRejections] == 0u &&
+                counters[SimpleDdgiGuidingGpuAbi.CounterGpuSampleRequestCount] == 0u &&
+                counters[SimpleDdgiGuidingGpuAbi.CounterGpuPreparationStatus] ==
+                    SimpleDdgiGuidingGpuAbi.Version &&
+                actualCount is > 0u && actualCount <= expected.GpuCapacity &&
+                trainingRecordCount is > 0u &&
+                trainingRecordCount <= checked(actualCount *
+                    (uint)layout.DirectionSlotsPerProbe);
+            if (!countersValid)
+            {
+                _manager.AbortBuild(
+                    expected.Token,
+                    "guiding-gpu-publication-counters-invalid");
+                publication = new(
+                    false,
+                    SimpleDdgiGuidingPublicationFailure.HeaderInvalid,
+                    "guiding-gpu-publication-counters-invalid");
+                return;
+            }
+
+            var headers = new SimpleDdgiGuidingPublishedProbeHeader[
+                checked((int)actualCount)];
+            for (int index = 0; index < headers.Length; index++)
+            {
+                GPUSimpleDdgiGuidingPublicationRecord record =
+                    *(GPUSimpleDdgiGuidingPublicationRecord*)(
+                        baseAddress + checked(index *
+                            (int)SimpleDdgiGuidingGpuAbi
+                                .PublicationRecordByteCount));
+                if (record.Status != SimpleDdgiGuidingGpuAbi.Version ||
+                    record.PhysicalProbeIndex >=
+                        (uint)layout.PhysicalProbeCapacity ||
+                    record.VirtualProbeId != record.Header.VirtualProbeId ||
+                    record.PageGeneration != record.Header.PageGeneration)
+                {
+                    _manager.AbortBuild(
+                        expected.Token,
+                        "guiding-gpu-publication-record-invalid");
+                    publication = new(
+                        false,
+                        SimpleDdgiGuidingPublicationFailure.HeaderInvalid,
+                        "guiding-gpu-publication-record-invalid");
+                    return;
+                }
+                headers[index] = new SimpleDdgiGuidingPublishedProbeHeader(
+                    record.PhysicalProbeIndex,
+                    record.VirtualProbeId,
+                    record.PageGeneration,
+                    record.Header);
+            }
+            Array.Sort(
+                headers,
+                static (left, right) => left.PhysicalProbeIndex.CompareTo(
+                    right.PhysicalProbeIndex));
+            publication = _manager.CompleteBuild(
+                expected.Token,
+                gpuWorkCompleted: true,
+                headers);
+        }
+        catch (Exception exception)
+        {
+            _manager.AbortBuild(
+                expected.Token,
+                "guiding-gpu-publication-readback-failed:" +
+                    exception.GetType().Name);
+            publication = new(
+                false,
+                SimpleDdgiGuidingPublicationFailure.GpuWorkIncomplete,
+                "guiding-gpu-publication-readback-failed:" +
+                    exception.GetType().Name);
+        }
+    }
+
     private void CompleteSampleReadbackNoLock(
         int frameIndex,
         in PendingSampleReadback expected,
@@ -2140,12 +2536,27 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                 counters,
                 checked((int)SimpleDdgiGuidingGpuAbi
                     .ValidationCounterWordCount));
+            uint requestCount = expected.GpuGenerated
+                ? counters[SimpleDdgiGuidingGpuAbi
+                    .CounterGpuSampleRequestCount]
+                : expected.RequestCount;
+            if (requestCount > expected.RequestCount)
+            {
+                completion = new SimpleDdgiGuidingSampleCompletion(
+                    true,
+                    false,
+                    values,
+                    expected.Commits,
+                    "guiding-sample-gpu-request-count-exceeds-capacity");
+                return;
+            }
             if (!SimpleDdgiGuidingSampleTelemetry.TryCreate(
                     words,
-                    expected.RequestCount,
+                    requestCount,
                     values,
                     out SimpleDdgiGuidingSampleTelemetry telemetry,
-                    out string telemetryReason))
+                    out string telemetryReason,
+                    expected.GpuGenerated))
             {
                 completion = new SimpleDdgiGuidingSampleCompletion(
                     true,
@@ -2261,6 +2672,47 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
             workload.TraceTrainingSource.ProbeUpdateQueue.OffsetBytes,
             workload.TraceTrainingSource.ProbeUpdateQueue.RangeBytes,
             "trace-probe-updates",
+            out reason) &&
+        (!workload.UsesGpuResidentWork ||
+            TryValidatePhysicalRange(
+                workload.GpuResidentSource.SchedulerArenaBuffer,
+                0UL,
+                workload.GpuResidentSource.SchedulerArenaBytes,
+                "gpu-resident-scheduler-arena",
+                out reason));
+
+    private bool TryValidateGpuSamplePreparationPhysicalRanges(
+        in SimpleDdgiGuidingSampleWorkload workload,
+        out string reason) =>
+        TryValidatePhysicalRange(
+            workload.TrainingWorkItems.Buffer,
+            workload.TrainingWorkItems.OffsetBytes,
+            workload.TrainingWorkItems.RangeBytes,
+            "sample-prepare-training-work-items",
+            out reason) &&
+        TryValidatePhysicalRange(
+            workload.BuildWorkItems.Buffer,
+            workload.BuildWorkItems.OffsetBytes,
+            workload.BuildWorkItems.RangeBytes,
+            "sample-prepare-build-work-items",
+            out reason) &&
+        TryValidatePhysicalRange(
+            workload.TraceTrainingSource.Params.Buffer,
+            workload.TraceTrainingSource.Params.OffsetBytes,
+            workload.TraceTrainingSource.Params.RangeBytes,
+            "sample-prepare-params",
+            out reason) &&
+        TryValidatePhysicalRange(
+            workload.TraceTrainingSource.ProbeUpdateQueue.Buffer,
+            workload.TraceTrainingSource.ProbeUpdateQueue.OffsetBytes,
+            workload.TraceTrainingSource.ProbeUpdateQueue.RangeBytes,
+            "sample-prepare-update-queue",
+            out reason) &&
+        TryValidatePhysicalRange(
+            workload.GpuResidentSource.SchedulerArenaBuffer,
+            0UL,
+            workload.GpuResidentSource.SchedulerArenaBytes,
+            "sample-prepare-scheduler-arena",
             out reason);
 
     private bool TryValidatePhysicalRange(
@@ -2382,10 +2834,13 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
         const int Build = (int)SimpleDdgiGuidingPassKind.Build;
         const int Validate = (int)SimpleDdgiGuidingPassKind.Validate;
         const int Extract = (int)SimpleDdgiGuidingPassKind.Extract;
+        const int PrepareBuild =
+            (int)SimpleDdgiGuidingPassKind.PrepareBuild;
         if (_privateDescriptorSetsClaimed[frameIndex, Train] ||
             _privateDescriptorSetsClaimed[frameIndex, Build] ||
             _privateDescriptorSetsClaimed[frameIndex, Validate] ||
-            _privateDescriptorSetsClaimed[frameIndex, Extract])
+            _privateDescriptorSetsClaimed[frameIndex, Extract] ||
+            _privateDescriptorSetsClaimed[frameIndex, PrepareBuild])
         {
             reason = "guiding-private-descriptor-build-slot-not-fence-reclaimed";
             return false;
@@ -2395,6 +2850,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
         _privateDescriptorSetsClaimed[frameIndex, Build] = true;
         _privateDescriptorSetsClaimed[frameIndex, Validate] = true;
         _privateDescriptorSetsClaimed[frameIndex, Extract] = true;
+        _privateDescriptorSetsClaimed[frameIndex, PrepareBuild] = true;
         reason = string.Empty;
         return true;
     }
@@ -2406,7 +2862,7 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
     {
         RenderingConstants.ValidateFrameIndex(frameIndex);
         int kindIndex = (int)kind;
-        if ((uint)kindIndex >= 5u)
+        if ((uint)kindIndex >= 7u)
             throw new ArgumentOutOfRangeException(nameof(kind));
         if (_privateDescriptorSetsClaimed[frameIndex, kindIndex])
         {
@@ -2434,12 +2890,15 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
         _privateDescriptorSetsClaimed[
             frameIndex,
             (int)SimpleDdgiGuidingPassKind.Validate] = false;
+        _privateDescriptorSetsClaimed[
+            frameIndex,
+            (int)SimpleDdgiGuidingPassKind.PrepareBuild] = false;
     }
 
     private void ClearFrameDescriptorClaimsNoLock(int frameIndex)
     {
         RenderingConstants.ValidateFrameIndex(frameIndex);
-        for (int kindIndex = 0; kindIndex < 5; kindIndex++)
+        for (int kindIndex = 0; kindIndex < 7; kindIndex++)
             _privateDescriptorSetsClaimed[frameIndex, kindIndex] = false;
     }
 
@@ -2522,6 +2981,24 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
         _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
     }
 
+    private void ExecuteBufferBarriers(
+        CommandBuffer commandBuffer,
+        ReadOnlySpan<BufferMemoryBarrier2> barriers)
+    {
+        if (barriers.IsEmpty)
+            return;
+        fixed (BufferMemoryBarrier2* pointer = barriers)
+        {
+            var dependency = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = checked((uint)barriers.Length),
+                PBufferMemoryBarriers = pointer
+            };
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
+        }
+    }
+
     private void ThrowIfDisposed()
     {
         if (_disposed)
@@ -2531,12 +3008,15 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
     private readonly record struct PendingReadback(
         ulong AllocationId,
         SimpleDdgiGuidingBuildToken Token,
-        SimpleDdgiGuidingExpectedProbeHeader[] ExpectedHeaders);
+        SimpleDdgiGuidingExpectedProbeHeader[] ExpectedHeaders,
+        bool GpuGenerated,
+        uint GpuCapacity);
 
     private readonly record struct PendingSampleReadback(
         ulong AllocationId,
         SimpleDdgiGuidingSampleCommit[] Commits,
-        uint RequestCount);
+        uint RequestCount,
+        bool GpuGenerated);
 
     private enum StagedBuildState : byte
     {
@@ -2629,7 +3109,9 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                 layout.TrainingScratchBytes == 0UL ||
                 layout.ScheduledGuidedProbeCapacity <= 0 ||
                 (ulong)layout.ScheduledGuidedProbeCapacity >
-                    (ulong)int.MaxValue / HeaderBytes)
+                    ((ulong)int.MaxValue -
+                        SimpleDdgiGuidingGpuAbi.ValidationCounterByteCount) /
+                    SimpleDdgiGuidingGpuAbi.PublicationRecordByteCount)
             {
                 throw new ArgumentException("C3 Vulkan allocation requires a complete exact layout.",
                     nameof(layout));
@@ -2711,8 +3193,15 @@ public sealed unsafe class SimpleDdgiGuidingVulkanRuntime : IDisposable
                         "Simple DDGI Guiding Validation Reference");
                 }
 
-                ulong headerReadbackBytes = checked(
+                ulong cpuHeaderReadbackBytes = checked(
                     (ulong)layout.ScheduledGuidedProbeCapacity * HeaderBytes);
+                ulong gpuPublicationReadbackBytes = checked(
+                    (ulong)layout.ScheduledGuidedProbeCapacity *
+                        SimpleDdgiGuidingGpuAbi.PublicationRecordByteCount +
+                    SimpleDdgiGuidingGpuAbi.ValidationCounterByteCount);
+                ulong headerReadbackBytes = Math.Max(
+                    cpuHeaderReadbackBytes,
+                    gpuPublicationReadbackBytes);
                 for (int frameIndex = 0; frameIndex < headerReadbacks.Length; frameIndex++)
                 {
                     headerReadbacks[frameIndex] = _bufferManager.CreateBuffer(

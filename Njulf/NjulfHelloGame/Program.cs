@@ -63,8 +63,29 @@ internal static class Program
                 : null;
         try
         {
-            using var game = new HelloGame(options, args);
-            game.Run();
+            while (true)
+            {
+                string? requestedProfilePath;
+                using (var game = new HelloGame(options, args))
+                {
+                    game.Run();
+                    requestedProfilePath =
+                        game.RequestedAdvancedGiStartupProfilePath;
+                }
+                if (requestedProfilePath is not { } profilePath)
+                {
+                    break;
+                }
+
+                // The old renderer, service provider, Vulkan device, input,
+                // and window are now fully disposed. The reconstructed host
+                // consumes this profile before optional device features and
+                // immutable graph branches are selected.
+                options = PrepareAdvancedGiRestartOptions(
+                    options,
+                    profilePath);
+                Environment.ExitCode = 0;
+            }
         }
         catch (Exception exception) when (options.KhronosMaterialGiRenderedGate is not null)
         {
@@ -81,6 +102,26 @@ internal static class Program
         }
         return Environment.ExitCode;
     }
+
+    private static SampleSmokeOptions PrepareAdvancedGiRestartOptions(
+        SampleSmokeOptions source,
+        string profilePath) => source with
+    {
+        AdvancedGiStartupProfilePath = Path.GetFullPath(profilePath),
+        AdvancedGiPrerequisiteManifestPath = null,
+        AdvancedGiQualificationManifestPath = null,
+        AdvancedGiRuntimeEvidenceBundlePath = null,
+        SimpleDdgiReceiverFeedbackModeOverride = null,
+        DdgiOpacityMicromapModeOverride = null,
+        SimpleDdgiDirectionalGuidingModeOverride = null,
+        GiCausticModeOverride = null,
+        SimpleDdgiNearFieldResidualModeOverride = null,
+        SimpleDdgiReceiverFeedbackQualificationId = null,
+        DdgiOpacityMicromapQualificationId = null,
+        SimpleDdgiDirectionalGuidingQualificationId = null,
+        GiCausticQualificationId = null,
+        SimpleDdgiNearFieldResidualQualificationId = null
+    };
 }
 
 internal sealed class HelloGame : Game
@@ -126,6 +167,10 @@ internal sealed class HelloGame : Game
     private (int Width, int Height)? _pendingSmokeResize;
     private PendingSmokeWindowMutation? _observingSmokeWindowMutation;
     private long _framebufferResizeRevision;
+    // Explicit initialization keeps non-editor builds warning-clean; the
+    // editor-only restart callback is the sole writer when that feature is
+    // compiled in.
+    private string? _requestedAdvancedGiStartupProfilePath = null;
 #if NJULF_EDITOR
     private ImGuiEditorOverlayHost? _editorHost;
     private EditorInputBridge? _editorInput;
@@ -162,6 +207,9 @@ internal sealed class HelloGame : Game
                    _smokeOptions.Benchmark.DisableVSync));
     }
 
+    internal string? RequestedAdvancedGiStartupProfilePath =>
+        _requestedAdvancedGiStartupProfilePath;
+
     protected override void ConfigureServices(IServiceCollection services)
     {
         if (Window == null)
@@ -185,6 +233,8 @@ internal sealed class HelloGame : Game
                 _smokeOptions.AdvancedGiQualificationManifestPath;
             options.AdvancedGiRuntimeEvidenceBundlePath =
                 _smokeOptions.AdvancedGiRuntimeEvidenceBundlePath;
+            options.AdvancedGiStartupProfilePath =
+                _smokeOptions.AdvancedGiStartupProfilePath;
             ApplyPreInitializationRenderSettings(options.InitialSettings);
             if (_smokeOptions.DdgiOpacityMicromapModeOverride is
                 DdgiOpacityMicromapMode.ExtFourStateExperiment or
@@ -272,7 +322,26 @@ internal sealed class HelloGame : Game
 #if NJULF_EDITOR
         _editorHost = new ImGuiEditorOverlayHost();
         _editorInput = new EditorInputBridge(input, _editorHost);
-        _editorController = new EditorController(Scene, Content!, lightManager, materialManager, _editorHost, renderer, camera);
+        RenderingOptions renderingOptions =
+            services.GetRequiredService<RenderingOptions>();
+        var advancedGiStartup = new AdvancedGiEditorStartupContext(
+            renderingOptions.AdvancedGiStartupProfilePath,
+            renderingOptions.AdvancedGiStartupProfileStatus,
+            renderingOptions.AdvancedGiContentBinding,
+            renderingOptions.AdvancedGiPrerequisiteManifestPath,
+            renderingOptions.AdvancedGiQualificationManifestPath,
+            renderingOptions.AdvancedGiRuntimeEvidenceBundlePath,
+            renderingOptions.AdvancedGiCandidateProfilePath);
+        _editorController = new EditorController(
+            Scene,
+            Content!,
+            lightManager,
+            materialManager,
+            _editorHost,
+            renderer,
+            camera,
+            advancedGiStartup,
+            RequestAdvancedGiRestart);
         _editorPanels = new EditorImGuiPanels();
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
             _editorController.SetScenePath(Path.Combine(AppContext.BaseDirectory, "Scenes", "SampleScene.njscene.json"));
@@ -978,6 +1047,18 @@ internal sealed class HelloGame : Game
     }
 
 #if NJULF_EDITOR
+    private void RequestAdvancedGiRestart(string profilePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profilePath);
+        if (_requestedAdvancedGiStartupProfilePath is not null)
+            return;
+        _requestedAdvancedGiStartupProfilePath = Path.GetFullPath(profilePath);
+        Console.WriteLine(
+            $"Advanced GI cold restart requested: " +
+            _requestedAdvancedGiStartupProfilePath);
+        Exit();
+    }
+
     private void UpdateEditor(float deltaTime)
     {
         if (Input is not InputManager input || _editorController == null || _editorHost == null || _editorPanels == null)

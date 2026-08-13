@@ -67,7 +67,8 @@ public sealed record SampleSmokeOptions(
     string? SimpleDdgiDirectionalGuidingQualificationId = null,
     string? GiCausticQualificationId = null,
     string? SimpleDdgiNearFieldResidualQualificationId = null,
-    string? AdvancedGiRuntimeEvidenceBundlePath = null)
+    string? AdvancedGiRuntimeEvidenceBundlePath = null,
+    string? AdvancedGiStartupProfilePath = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
 
@@ -100,6 +101,7 @@ public sealed record SampleSmokeOptions(
         !string.IsNullOrWhiteSpace(AdvancedGiPrerequisiteManifestPath) ||
         !string.IsNullOrWhiteSpace(AdvancedGiQualificationManifestPath) ||
         !string.IsNullOrWhiteSpace(AdvancedGiRuntimeEvidenceBundlePath) ||
+        !string.IsNullOrWhiteSpace(AdvancedGiStartupProfilePath) ||
         SimpleDdgiReceiverFeedbackModeOverride.HasValue ||
         DdgiOpacityMicromapModeOverride.HasValue ||
         SimpleDdgiDirectionalGuidingModeOverride.HasValue ||

@@ -1,0 +1,504 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+// Bounded bridge from the device-owned resident scheduler queue to C3's
+// transient work buffers. Stable-order filtering stays serial because the
+// scheduler already guarantees one accepted record per probe; the potentially
+// large per-ray request expansion is parallel and status is published in a
+// separate final dispatch.
+#include "common.glsl"
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+#define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
+#include "ddgi_simple_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+const uint SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION = 0x43330007u;
+const uint SIMPLE_DDGI_GUIDING_PREPARE_BUILD_WORK = 1u << 0u;
+const uint SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_WORK = 1u << 1u;
+const uint SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_EXPAND = 1u << 2u;
+const uint SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_FINALIZE = 1u << 3u;
+const uint SIMPLE_DDGI_GUIDING_HEADER_WORDS = 8u;
+const uint SIMPLE_DDGI_GUIDING_BUILD_COMPLETE = 1u << 9u;
+const uint SIMPLE_DDGI_GUIDING_INVALID = 1u << 11u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT = 28u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_TRAINING_RECORD_COUNT = 29u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_SAMPLE_REQUEST_COUNT = 30u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS = 31u;
+const uint SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE = 0u;
+const uint SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE = 1u;
+const uint SIMPLE_DDGI_GUIDING_MINIMUM_MAINTENANCE_RAYS = 8u;
+
+struct SimpleDdgiGuidingTrainingWorkItem
+{
+    uint physicalProbeIndex;
+    uint virtualProbeId;
+    uint pageGeneration;
+    uint sourceDistributionGeneration;
+    uint directionProposalEpoch;
+    uint recordOffset;
+    uint recordCount;
+    uint partialOffset;
+    uint expectedContentRevision;
+    uint queueOffset;
+    uint rayResultBaseIndex;
+    uint directionSlotsPerProbe;
+    uint sourceEpoch;
+    uint sourceLightingGeneration;
+};
+
+struct SimpleDdgiGuidingBuildWorkItem
+{
+    uint physicalProbeIndex;
+    uint virtualProbeId;
+    uint pageGeneration;
+    uint previousDistributionGeneration;
+    uint targetDistributionGeneration;
+    uint targetProposalEpoch;
+    uint partialOffset;
+    uint partialCount;
+    uint sampleCountAndAge;
+    uint expectedContentRevision;
+    uint flags;
+    uint reserved;
+};
+
+struct SimpleDdgiGuidingSampleRequest
+{
+    uint physicalProbeIndex;
+    uint virtualProbeId;
+    uint pageGeneration;
+    uint expectedDistributionGeneration;
+    uint expectedProposalEpoch;
+    uint stableProbeIdLow;
+    uint stableProbeIdHigh;
+    uint slotIndex;
+    uint technique;
+    uint randomBranchBits;
+    float requestedUniformFraction;
+    uint randomIntraLeafUBits;
+    uint randomIntraLeafVBits;
+    uint reserved;
+};
+
+layout(std430, set = 2, binding = 0) buffer GuidingPrepareTrainingWorkBuffer
+{
+    SimpleDdgiGuidingTrainingWorkItem items[];
+} guidingPrepareTrainingWork;
+
+layout(std430, set = 2, binding = 1) buffer GuidingPrepareBuildWorkBuffer
+{
+    SimpleDdgiGuidingBuildWorkItem items[];
+} guidingPrepareBuildWork;
+
+layout(std430, set = 2, binding = 2) buffer GuidingPrepareSampleRequestBuffer
+{
+    SimpleDdgiGuidingSampleRequest requests[];
+} guidingPrepareSampleRequests;
+
+layout(std430, set = 2, binding = 3) buffer GuidingPrepareCounterBuffer
+{
+    uint counters[];
+} guidingPrepareCounters;
+
+layout(push_constant) uniform SimpleDdgiGuidingPreparePushConstants
+{
+    uint abiVersion;
+    uint physicalProbeCapacity;
+    uint scheduledProbeCapacity;
+    uint directionSlotsPerProbe;
+    uint leafResolution;
+    uint schedulerRequestCapacity;
+    uint schedulerCountersOffsetWords;
+    uint schedulerAcceptedCounterWord;
+    uint readBankIndex;
+    uint bankStrideWords;
+    uint targetDistributionGeneration;
+    uint targetProposalEpoch;
+    uint uniformMixtureFractionBits;
+    uint flags;
+    uint sceneContentRevisionHigh;
+    uint sceneContentRevisionLow;
+} guidingPreparePc;
+
+uint GuidingPrepareRotateLeft(uint value, uint amount)
+{
+    return (value << amount) | (value >> (32u - amount));
+}
+
+uint GuidingPrepareAvalanche(uint value)
+{
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
+
+uint GuidingPrepareHash(uint a, uint b, uint c, uint d)
+{
+    return GuidingPrepareAvalanche(
+        a ^ GuidingPrepareRotateLeft(b, 7u) ^
+        GuidingPrepareRotateLeft(c, 17u) ^ d);
+}
+
+uint GuidingPrepareContentRevision(
+    uint sourceLightingGeneration,
+    uint sourceEpoch)
+{
+    uint value = guidingPreparePc.sceneContentRevisionLow ^
+        GuidingPrepareRotateLeft(
+            guidingPreparePc.sceneContentRevisionHigh,
+            11u) ^
+        GuidingPrepareRotateLeft(sourceLightingGeneration, 19u) ^
+        sourceEpoch ^ SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION;
+    value = GuidingPrepareAvalanche(value);
+    return value == 0u ? 1u : value;
+}
+
+uint GuidingPrepareMaintenanceRayCount(uint totalRayCount)
+{
+    uint fractional = (totalRayCount + 3u) / 4u;
+    return min(totalRayCount, max(
+        SIMPLE_DDGI_GUIDING_MINIMUM_MAINTENANCE_RAYS,
+        fractional));
+}
+
+bool GuidingPrepareIsMaintenanceSlot(uint slotIndex, uint totalRayCount)
+{
+    uint maintenanceCount = GuidingPrepareMaintenanceRayCount(totalRayCount);
+    uint rank = (slotIndex * maintenanceCount + totalRayCount - 1u) /
+        totalRayCount;
+    return slotIndex == rank * totalRayCount / maintenanceCount;
+}
+
+uint GuidingPrepareReadBankWord(uint physicalProbeIndex, uint relativeWord)
+{
+    uint bufferIndex = guidingPreparePc.readBankIndex == 0u
+        ? uint(SIMPLE_DDGI_GUIDING_DISTRIBUTION_BANK0_BUFFER_INDEX)
+        : uint(SIMPLE_DDGI_GUIDING_DISTRIBUTION_BANK1_BUFFER_INDEX);
+    return BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+        physicalProbeIndex * guidingPreparePc.bankStrideWords + relativeWord];
+}
+
+bool GuidingPrepareReadGuide(
+    SimpleDdgiProbeUpdate update,
+    out uint distributionGeneration,
+    out uint proposalEpoch)
+{
+    distributionGeneration = 0u;
+    proposalEpoch = 0u;
+    if (update.physicalProbeIndex >= guidingPreparePc.physicalProbeCapacity ||
+        guidingPreparePc.bankStrideWords < SIMPLE_DDGI_GUIDING_HEADER_WORDS)
+    {
+        return false;
+    }
+    uint abi = GuidingPrepareReadBankWord(update.physicalProbeIndex, 0u);
+    uint virtualProbe = GuidingPrepareReadBankWord(update.physicalProbeIndex, 1u);
+    uint pageGeneration = GuidingPrepareReadBankWord(update.physicalProbeIndex, 2u);
+    distributionGeneration =
+        GuidingPrepareReadBankWord(update.physicalProbeIndex, 3u);
+    proposalEpoch = GuidingPrepareReadBankWord(update.physicalProbeIndex, 4u);
+    uint packedFlags = GuidingPrepareReadBankWord(update.physicalProbeIndex, 7u);
+    uint leafResolution = packedFlags & 0xffu;
+    uint flags = packedFlags & ~0xffu;
+    bool valid = abi == SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION &&
+        virtualProbe == update.probeIndex &&
+        pageGeneration == update.pageMappingGeneration &&
+        distributionGeneration != 0u && proposalEpoch != 0u &&
+        leafResolution == guidingPreparePc.leafResolution &&
+        (flags & SIMPLE_DDGI_GUIDING_BUILD_COMPLETE) != 0u &&
+        (flags & SIMPLE_DDGI_GUIDING_INVALID) == 0u;
+    if (!valid)
+    {
+        distributionGeneration = 0u;
+        proposalEpoch = 0u;
+    }
+    return valid;
+}
+
+void main()
+{
+    bool build = guidingPreparePc.flags ==
+        SIMPLE_DDGI_GUIDING_PREPARE_BUILD_WORK;
+    bool sampleCompact = guidingPreparePc.flags ==
+        SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_WORK;
+    bool sampleExpand = guidingPreparePc.flags ==
+        SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_EXPAND;
+    bool sampleFinalize = guidingPreparePc.flags ==
+        SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_FINALIZE;
+    bool samplePhase = sampleCompact || sampleExpand || sampleFinalize;
+    uint counterLength = uint(guidingPrepareCounters.counters.length());
+    uint trainingCapacity = uint(guidingPrepareTrainingWork.items.length());
+    uint buildCapacity = uint(guidingPrepareBuildWork.items.length());
+    uint sampleCapacity = uint(guidingPrepareSampleRequests.requests.length());
+    bool valid = guidingPreparePc.abiVersion ==
+            SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION &&
+        (build || samplePhase) &&
+        guidingPreparePc.physicalProbeCapacity != 0u &&
+        guidingPreparePc.scheduledProbeCapacity != 0u &&
+        guidingPreparePc.directionSlotsPerProbe != 0u &&
+        guidingPreparePc.directionSlotsPerProbe <= SIMPLE_DDGI_MAX_RAYS_PER_PROBE &&
+        (guidingPreparePc.leafResolution == 4u ||
+         guidingPreparePc.leafResolution == 8u ||
+         guidingPreparePc.leafResolution == 16u) &&
+        guidingPreparePc.schedulerRequestCapacity != 0u &&
+        guidingPreparePc.readBankIndex <= 1u &&
+        guidingPreparePc.bankStrideWords >= SIMPLE_DDGI_GUIDING_HEADER_WORDS &&
+        guidingPreparePc.scheduledProbeCapacity <= trainingCapacity &&
+        guidingPreparePc.scheduledProbeCapacity <= buildCapacity &&
+        guidingPreparePc.scheduledProbeCapacity <=
+            0xffffffffu / guidingPreparePc.directionSlotsPerProbe &&
+        counterLength >= 32u;
+    float uniformFraction = uintBitsToFloat(
+        guidingPreparePc.uniformMixtureFractionBits);
+    if (samplePhase)
+    {
+        valid = valid && sampleCapacity >=
+                guidingPreparePc.scheduledProbeCapacity *
+                    guidingPreparePc.directionSlotsPerProbe &&
+            !isnan(uniformFraction) && !isinf(uniformFraction) &&
+            uniformFraction >= 0.1 && uniformFraction <= 1.0;
+    }
+    if (build)
+    {
+        valid = valid && guidingPreparePc.targetDistributionGeneration != 0u &&
+            guidingPreparePc.targetProposalEpoch != 0u;
+    }
+
+    uint schedulerBufferIndex =
+        uint(SIMPLE_DDGI_SCHEDULER_ARENA_BUFFER_INDEX);
+    uint schedulerCounterIndex = guidingPreparePc.schedulerCountersOffsetWords +
+        guidingPreparePc.schedulerAcceptedCounterWord;
+    uint schedulerWordCount = uint(BindlessStorageBuffers[
+        nonuniformEXT(schedulerBufferIndex)].Words.length());
+    valid = valid && schedulerCounterIndex < schedulerWordCount;
+    if (!valid)
+        return;
+
+    // Expand the compacted, stable scheduler order in parallel. Each lane
+    // owns one unique (work item, ray slot) destination, so this phase needs
+    // neither atomics nor an order-dependent append.
+    if (sampleExpand)
+    {
+        if (guidingPrepareCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_GPU_TRAINING_RECORD_COUNT] !=
+            SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION)
+        {
+            return;
+        }
+        uint selectedCount = min(
+            guidingPrepareCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT],
+            guidingPreparePc.scheduledProbeCapacity);
+        uint requestCount = selectedCount *
+            guidingPreparePc.directionSlotsPerProbe;
+        uint requestIndex = gl_GlobalInvocationID.x;
+        if (requestIndex >= requestCount || requestIndex >= sampleCapacity)
+            return;
+
+        uint workIndex = requestIndex /
+            guidingPreparePc.directionSlotsPerProbe;
+        uint slot = requestIndex - workIndex *
+            guidingPreparePc.directionSlotsPerProbe;
+        SimpleDdgiGuidingTrainingWorkItem work =
+            guidingPrepareTrainingWork.items[workIndex];
+        SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(
+            uint(SIMPLE_DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX),
+            work.queueOffset);
+        uint generation = update.expectedGeneration &
+            SIMPLE_DDGI_UPDATE_GENERATION_MASK;
+
+        SimpleDdgiGuidingSampleRequest request;
+        request.physicalProbeIndex = work.physicalProbeIndex;
+        request.virtualProbeId = work.virtualProbeId;
+        request.pageGeneration = work.pageGeneration;
+        request.expectedDistributionGeneration =
+            work.sourceDistributionGeneration;
+        request.expectedProposalEpoch = work.directionProposalEpoch;
+        request.stableProbeIdLow = work.virtualProbeId;
+        request.stableProbeIdHigh = generation;
+        request.slotIndex = slot;
+        request.technique = GuidingPrepareIsMaintenanceSlot(
+                slot,
+                guidingPreparePc.directionSlotsPerProbe)
+            ? SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE
+            : SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE;
+        request.randomBranchBits = GuidingPrepareHash(
+            work.virtualProbeId,
+            generation,
+            work.directionProposalEpoch,
+            slot ^ 0x19b47a31u);
+        request.requestedUniformFraction = uniformFraction;
+        request.randomIntraLeafUBits = GuidingPrepareHash(
+            work.virtualProbeId,
+            generation,
+            work.directionProposalEpoch,
+            slot ^ 0x6d2b79f5u);
+        request.randomIntraLeafVBits = GuidingPrepareHash(
+            work.virtualProbeId,
+            generation,
+            work.directionProposalEpoch,
+            slot ^ 0xb5297a4du);
+        request.reserved = 0u;
+        guidingPrepareSampleRequests.requests[requestIndex] = request;
+        return;
+    }
+
+    // Publish the ABI-valid status only in a separate post-expansion
+    // dispatch. The sample consumer can never see a complete status while
+    // request records from this transaction are still being written.
+    if (sampleFinalize)
+    {
+        if (gl_GlobalInvocationID.x != 0u)
+            return;
+        if (guidingPrepareCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_GPU_TRAINING_RECORD_COUNT] !=
+            SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION)
+        {
+            return;
+        }
+        uint selectedCount = min(
+            guidingPrepareCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT],
+            guidingPreparePc.scheduledProbeCapacity);
+        guidingPrepareCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_TRAINING_RECORD_COUNT] = 0u;
+        guidingPrepareCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_SAMPLE_REQUEST_COUNT] =
+                selectedCount * guidingPreparePc.directionSlotsPerProbe;
+        memoryBarrierBuffer();
+        guidingPrepareCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT] = 0u;
+        guidingPrepareCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS] =
+                SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION;
+        return;
+    }
+
+    if (gl_GlobalInvocationID.x != 0u)
+        return;
+
+    uint acceptedCount = min(
+        BindlessStorageBuffers[nonuniformEXT(schedulerBufferIndex)].Words[
+            schedulerCounterIndex],
+        guidingPreparePc.schedulerRequestCapacity);
+    SimpleDdgiParams params = ReadSimpleDdgiParams(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if (params.physicalProbeCapacity != guidingPreparePc.physicalProbeCapacity ||
+        params.raysPerProbe != guidingPreparePc.directionSlotsPerProbe)
+    {
+        return;
+    }
+
+    uint selectedCount = 0u;
+    uint trainingRecordCount = 0u;
+    uint leafCount = guidingPreparePc.leafResolution *
+        guidingPreparePc.leafResolution;
+    for (uint queueOffset = 0u;
+         queueOffset < acceptedCount &&
+            selectedCount < guidingPreparePc.scheduledProbeCapacity;
+         ++queueOffset)
+    {
+        SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(
+            uint(SIMPLE_DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX),
+            queueOffset);
+        uint generation = update.expectedGeneration &
+            SIMPLE_DDGI_UPDATE_GENERATION_MASK;
+        uint activeRayCount = SimpleDdgiUpdateRayCount(update, params);
+        bool sourceValid = update.probeIndex < 0xffffffffu &&
+            update.physicalProbeIndex < guidingPreparePc.physicalProbeCapacity &&
+            update.pageMappingGeneration != 0u && generation != 0u &&
+            update.sourceEpoch != 0u &&
+            update.sourceLightingGeneration != 0u &&
+            activeRayCount != 0u &&
+            activeRayCount <= guidingPreparePc.directionSlotsPerProbe &&
+            SimpleDdgiUpdateRequiresSourceRefresh(update) &&
+            SimpleDdgiUpdateSourceRefreshMode(update) ==
+                SIMPLE_DDGI_SOURCE_MODE_FULL_TRACE &&
+            SimpleDdgiUpdateMatchesLiveAddress(params, update);
+        if (!sourceValid)
+            continue;
+
+        uint readableGeneration;
+        uint readableEpoch;
+        bool readable = GuidingPrepareReadGuide(
+            update,
+            readableGeneration,
+            readableEpoch);
+        if (sampleCompact && !readable)
+            continue;
+        uint contentRevision = GuidingPrepareContentRevision(
+            update.sourceLightingGeneration,
+            update.sourceEpoch);
+        uint recordOffset = selectedCount *
+            guidingPreparePc.directionSlotsPerProbe;
+        uint partialOffset = selectedCount * leafCount;
+
+        SimpleDdgiGuidingTrainingWorkItem trainingItem;
+        trainingItem.physicalProbeIndex = update.physicalProbeIndex;
+        trainingItem.virtualProbeId = update.probeIndex;
+        trainingItem.pageGeneration = update.pageMappingGeneration;
+        trainingItem.sourceDistributionGeneration = readable
+            ? readableGeneration
+            : 1u;
+        trainingItem.directionProposalEpoch = readable
+            ? readableEpoch
+            : max(guidingPreparePc.targetProposalEpoch, 1u);
+        trainingItem.recordOffset = recordOffset;
+        trainingItem.recordCount = activeRayCount;
+        trainingItem.partialOffset = partialOffset;
+        trainingItem.expectedContentRevision = contentRevision;
+        trainingItem.queueOffset = queueOffset;
+        trainingItem.rayResultBaseIndex = queueOffset *
+            guidingPreparePc.directionSlotsPerProbe;
+        trainingItem.directionSlotsPerProbe =
+            guidingPreparePc.directionSlotsPerProbe;
+        trainingItem.sourceEpoch = update.sourceEpoch;
+        trainingItem.sourceLightingGeneration =
+            update.sourceLightingGeneration;
+        guidingPrepareTrainingWork.items[selectedCount] = trainingItem;
+
+        if (build)
+        {
+            SimpleDdgiGuidingBuildWorkItem buildItem;
+            buildItem.physicalProbeIndex = update.physicalProbeIndex;
+            buildItem.virtualProbeId = update.probeIndex;
+            buildItem.pageGeneration = update.pageMappingGeneration;
+            buildItem.previousDistributionGeneration = readable
+                ? readableGeneration
+                : 0u;
+            buildItem.targetDistributionGeneration =
+                guidingPreparePc.targetDistributionGeneration;
+            buildItem.targetProposalEpoch =
+                guidingPreparePc.targetProposalEpoch;
+            buildItem.partialOffset = partialOffset;
+            buildItem.partialCount = 1u;
+            buildItem.sampleCountAndAge = min(activeRayCount, 0x00ffffffu);
+            buildItem.expectedContentRevision = contentRevision;
+            buildItem.flags = 0u;
+            buildItem.reserved = 0u;
+            guidingPrepareBuildWork.items[selectedCount] = buildItem;
+        }
+
+        ++selectedCount;
+        trainingRecordCount += activeRayCount;
+    }
+
+    memoryBarrierBuffer();
+    guidingPrepareCounters.counters[
+        SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT] = selectedCount;
+    guidingPrepareCounters.counters[
+        SIMPLE_DDGI_GUIDING_COUNTER_GPU_TRAINING_RECORD_COUNT] = build
+            ? trainingRecordCount
+            : SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION;
+    guidingPrepareCounters.counters[
+        SIMPLE_DDGI_GUIDING_COUNTER_GPU_SAMPLE_REQUEST_COUNT] = 0u;
+    if (build)
+    {
+        guidingPrepareCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS] =
+                SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION;
+    }
+}

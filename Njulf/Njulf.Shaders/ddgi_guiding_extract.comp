@@ -13,11 +13,15 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-const uint SIMPLE_DDGI_GUIDING_EXTRACT_ABI_VERSION = 0x43330006u;
+const uint SIMPLE_DDGI_GUIDING_EXTRACT_ABI_VERSION = 0x43330007u;
 const uint SIMPLE_DDGI_GUIDING_TRAINING_FINITE_INCIDENT_RADIANCE = 1u << 0u;
 const uint SIMPLE_DDGI_GUIDING_TRAINING_CONTENT_REVISION_MATCHED = 1u << 1u;
 const uint SIMPLE_DDGI_GUIDING_TRAINING_RADIOMETRIC_TRANSPORT = 1u << 2u;
 const uint SIMPLE_DDGI_GUIDING_COUNTER_INVALID_RECORDS = 0u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT = 28u;
+const uint SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS = 31u;
+const uint SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT = 32u;
+const uint SIMPLE_DDGI_GUIDING_PUSH_GPU_GENERATED_WORK = 1u << 0u;
 
 struct SimpleDdgiGuidingTrainingRecord
 {
@@ -120,6 +124,14 @@ void main()
     uint workItemIndex = gl_WorkGroupID.x;
     uint recordBufferLength = uint(guidingExtractTrainingRecords.records.length());
     uint workItemBufferLength = uint(guidingExtractWorkItems.workItems.length());
+    uint counterLength = uint(guidingExtractCounters.counters.length());
+    bool gpuGenerated = (guidingExtractPc.flags &
+        SIMPLE_DDGI_GUIDING_PUSH_GPU_GENERATED_WORK) != 0u;
+    uint effectiveWorkItemCount = gpuGenerated && counterLength >=
+            SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT
+        ? guidingExtractCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_WORK_ITEM_COUNT]
+        : guidingExtractPc.trainingWorkItemCount;
     if (guidingExtractPc.abiVersion != SIMPLE_DDGI_GUIDING_EXTRACT_ABI_VERSION ||
         guidingExtractPc.abiVersion !=
             SIMPLE_DDGI_GUIDING_TRANSPORT_ABI_VERSION ||
@@ -127,6 +139,12 @@ void main()
             uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX) ||
         guidingExtractPc.trainingWorkItemCount == 0u ||
         guidingExtractPc.trainingWorkItemCount > workItemBufferLength ||
+        effectiveWorkItemCount > guidingExtractPc.trainingWorkItemCount ||
+        (gpuGenerated &&
+            (counterLength < SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT ||
+             guidingExtractCounters.counters[
+                SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS] !=
+                    SIMPLE_DDGI_GUIDING_EXTRACT_ABI_VERSION)) ||
         guidingExtractPc.trainingRecordCapacity == 0u ||
         guidingExtractPc.trainingRecordCapacity > recordBufferLength ||
         guidingExtractPc.leafResolution < 4u ||
@@ -136,7 +154,7 @@ void main()
         guidingExtractPc.directionSlotsPerProbe == 0u ||
         guidingExtractPc.directionSlotsPerProbe >
             SIMPLE_DDGI_MAX_RAYS_PER_PROBE ||
-        workItemIndex >= guidingExtractPc.trainingWorkItemCount)
+        workItemIndex >= effectiveWorkItemCount)
     {
         return;
     }

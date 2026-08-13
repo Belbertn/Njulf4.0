@@ -296,9 +296,21 @@ void SimpleDdgiGuidingRecordSampleTelemetry(
 void main()
 {
     uint requestIndex = gl_GlobalInvocationID.x;
+    bool gpuGenerated = (guidingPc.flags &
+        SIMPLE_DDGI_GUIDING_PUSH_GPU_GENERATED_WORK) != 0u;
+    uint effectiveDispatchCount = gpuGenerated &&
+            uint(guidingSampleCounters.counters.length()) >=
+                SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT
+        ? guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_SAMPLE_REQUEST_COUNT]
+        : guidingPc.dispatchCount;
     if (uint(guidingSampleCounters.counters.length()) <
             SIMPLE_DDGI_GUIDING_VALIDATION_COUNTER_WORD_COUNT ||
-        requestIndex >= guidingPc.dispatchCount ||
+        requestIndex >= effectiveDispatchCount ||
+        effectiveDispatchCount > guidingPc.dispatchCount ||
+        (gpuGenerated && guidingSampleCounters.counters[
+            SIMPLE_DDGI_GUIDING_COUNTER_GPU_PREPARATION_STATUS] !=
+                SIMPLE_DDGI_GUIDING_ABI_VERSION) ||
         requestIndex >= uint(guidingSampleRequests.requests.length()))
     {
         return;

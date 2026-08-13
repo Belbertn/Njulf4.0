@@ -1172,6 +1172,46 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public SimpleDdgiGpuScheduler GpuScheduler => _gpuScheduler;
 
         /// <summary>
+        /// Exposes only the immutable resident-scheduler ABI needed by C3.
+        /// The accepted count and update records remain GPU-owned and are
+        /// never mirrored through the CPU reference queue.
+        /// </summary>
+        public bool TryGetGuidingGpuResidentWorkSource(
+            out SimpleDdgiGuidingGpuResidentWorkSource source,
+            out string reason)
+        {
+            source = default;
+            SimpleDdgiGpuSchedulerLayout? layout = _gpuScheduler.Layout;
+            if (_schedulerMode != SimpleDdgiSchedulerMode.GpuResident ||
+                !_gpuScheduler.IsReady || !_gpuSchedulerFrameExecutionAvailable ||
+                layout is null || !_gpuScheduler.ArenaBuffer.IsValid ||
+                layout.RequestCapacity <= 0)
+            {
+                reason = "guiding-gpu-resident-scheduler-source-unavailable";
+                return false;
+            }
+
+            source = new SimpleDdgiGuidingGpuResidentWorkSource(
+                IsAvailable: true,
+                SchedulerArenaBufferIndex:
+                    (uint)BindlessIndex.SimpleDdgiSchedulerArenaBuffer,
+                SchedulerCountersOffsetWords: layout.Counters.OffsetWords,
+                SchedulerAcceptedCounterWord: 2u,
+                SchedulerRequestCapacity: checked((uint)layout.RequestCapacity),
+                SceneContentRevision: _guidingSceneContentRevision,
+                SchedulerArenaBuffer: _gpuScheduler.ArenaBuffer,
+                SchedulerArenaBytes: _gpuScheduler.ArenaBytes);
+            if (!source.TryValidate(out reason))
+            {
+                source = default;
+                return false;
+            }
+
+            reason = "guiding-gpu-resident-scheduler-source-ready";
+            return true;
+        }
+
+        /// <summary>
         /// Copies the current CPU-authoritative full-source-trace subset into
         /// caller-owned storage. GPU-resident scheduling is rejected because
         /// its queue is produced on device and the CPU scratch is not an

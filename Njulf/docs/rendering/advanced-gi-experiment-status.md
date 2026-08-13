@@ -45,15 +45,25 @@ ID arguments and environment variables documented in
 
 The startup evidence sources are applied in this order:
 
-1. `AdvancedGiPrerequisiteManifestCodec` freezes the prerequisite contracts and
+1. `AdvancedGiStartupProfileCodec`, when configured, atomically selects the
+   content-addressed render settings and all remaining evidence paths before
+   Vulkan device creation.
+2. `AdvancedGiPrerequisiteManifestCodec` freezes the prerequisite contracts and
    corpus identity.
-2. `AdvancedGiQualificationManifestCodec` authenticates the exact
+3. `AdvancedGiQualificationManifestCodec` authenticates the exact
    device/driver/shader/settings qualification records.
-3. `AdvancedGiRuntimeEvidenceBundleCodec` supplies the scene-, source-,
+4. `AdvancedGiRuntimeEvidenceBundleCodec` supplies the scene-, source-,
    profile-, and layout-bound C4/C5 evidence that cannot be represented by the
    common device manifest.
-4. `RenderingOptions.ConfigureAdvancedGiEvidence`, when supplied, may install
+5. `RenderingOptions.ConfigureAdvancedGiEvidence`, when supplied, may install
    application-owned strongly typed C4/C5 evidence under the same validators.
+
+The ImGui editor exposes a detached next-start activation draft with per-input
+preflight, atomic save/readback, and a full renderer/device/window restart. The
+same transaction is available through `--advanced-gi-startup-profile`. Corpus
+pinning and headless startup/qualification verification are provided by
+`Njulf.AssetTool advanced-gi`; see
+[`advanced-gi-activation.md`](advanced-gi-activation.md).
 
 The runtime bundle is schema-versioned, bounded to 512 KiB, rejects comments,
 trailing commas, duplicate or unknown properties, and must contain at least one
@@ -75,7 +85,7 @@ runtime-owned and fence-retired, avoiding duplicate graph/resource ownership.
 | --- | --- | --- |
 | B1 exact receiver feedback | Real 48-byte all-producer capture; bounded local reservations; exact 32-byte V2 records; deterministic GPU radix/reduce; two publication banks; previous-frame scheduler binding; strict overflow/generation fallback; fence readback; per-stage timings and schema-10 counters/memory telemetry. | Equal-work transient-error, liveness, total-time, capacity, and long-run target-device evidence before declaring the path release-qualified or removing the legacy reference. |
 | C1 opacity micromaps | Deterministic pinned NVIDIA CPU bake bridge; optional checksummed cooked payload; multi-submesh runtime partitioning; EXT device enablement; build/compaction; OMM-attached static-BLAS variants; cache/lease/retirement; ordinary-candidate fallback; lifecycle/content/memory diagnostics. | RTX 3060, Ada+, extension-disabled, and non-EXT same-ray/image conformance plus amortized total-GI performance evidence. KHR and SER remain out of scope. |
-| C3 directional guiding | Equal-area hierarchy/PDF/MIS oracle; GPU train/build/sample/validate; double publication banks; central scratch; source-cache-owned slot-203 direction/PDF sidecar; generation-time PDF propagation into trace/projection/audits; maintenance rays; readback/statistical qualification contracts. | Archived multi-seed convergence, quality-per-time, cache-pressure, long-run, and device-matrix evidence for automatic promotion. |
+| C3 directional guiding | Equal-area hierarchy/PDF/MIS oracle; GPU-resident scheduler compaction into train/sample work; GPU train/build/sample/validate; double publication banks; compact status-last publication; central scratch; source-cache-owned slot-203 direction/PDF sidecar; generation-time PDF propagation into trace/projection/audits; maintenance rays; readback/statistical qualification contracts. | Archived multi-seed convergence, quality-per-time, cache-pressure, long-run, and device-matrix evidence for automatic promotion. |
 | C4 caustics | Authored hero validation; analytic/path-reference contracts; tagged light/receiver producer; ray-query trace; deterministic radix/bottom-K world cache; coherent two-bank publication; screen resolve/composite; resize/revision/fence handling; isolated memory and diagnostics. | Archived analytic/path-traced energy, motion/reload/origin, ordinary-content zero-work, total-time, and target-device qualification evidence. |
 | C5 near-field residual | Evidence-bound post-B3 admission; dedicated direct-diffuse-plus-emissive opaque/masked MRT; bounded Hi-Z trace; typed ray/PDF and hit/source identity; banked history/normal/metadata; reset, temporal rejection/moments, filtering, composite, counters/timestamps, and schema-versioned diagnostics. | A signed go decision and archived post-B3 equal-cost reference captures proving error reduction, edge/motion stability, energy ownership, long-run memory, and target-device cost. |
 
@@ -170,7 +180,8 @@ captures, equal-work measurements, or signed promotion records.
   work from a mode bit.
 - The Global Illumination editor panel exposes requested/effective mode,
   fallback, qualification ID, live bytes, runtime state, and whether the last
-  observation is authoritative.
+  observation is authoritative. Startup-only controls are staged separately,
+  preflighted, saved, and applied only after a complete cold restart.
 
 Rendered captures, 30–60 minute traversals, and the required physical device
 matrix are release evidence, not unit-test fixtures. They must be generated on

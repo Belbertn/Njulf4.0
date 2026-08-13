@@ -49,6 +49,9 @@ public sealed class SampleSmokeOptionsParserTests
             "NJULF_ADVANCED_GI_RUNTIME_EVIDENCE_BUNDLE",
             null);
         Environment.SetEnvironmentVariable(
+            "NJULF_ADVANCED_GI_STARTUP_PROFILE",
+            null);
+        Environment.SetEnvironmentVariable(
             "NJULF_RENDERER_SIMPLE_DDGI_RECEIVER_FEEDBACK_MODE",
             null);
         Environment.SetEnvironmentVariable(
@@ -1494,6 +1497,26 @@ public sealed class SampleSmokeOptionsParserTests
                 Is.EqualTo("c4-qid"));
             Assert.That(options.SimpleDdgiNearFieldResidualQualificationId,
                 Is.EqualTo("c5-qid"));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+            Assert.That(options.FrameCount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void ParsesAdvancedGiAtomicStartupProfile()
+    {
+        string profile = Path.Combine(
+            Path.GetTempPath(), "advanced-gi-startup-profile.json");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--advanced-gi-startup-profile", profile
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.AdvancedGiStartupProfilePath,
+                Is.EqualTo(Path.GetFullPath(profile)));
             Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
             Assert.That(options.FrameCount, Is.EqualTo(3));
         });

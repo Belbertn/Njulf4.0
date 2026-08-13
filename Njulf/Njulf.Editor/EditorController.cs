@@ -26,10 +26,21 @@ public sealed class EditorController
     private readonly SceneDocumentWriter _writer = new();
     private readonly IEditorOverlayHost? _overlay;
     private readonly VulkanRenderer? _renderer;
+    private readonly AdvancedGiEditorStartupContext _advancedGiStartup;
+    private readonly Action<string>? _requestAdvancedGiRestart;
     private bool _previousDebugEnabled;
     private bool _previousCpuSnapshotsEnabled;
 
-    public EditorController(Scene scene, IContentManager content, LightManager lightManager, MaterialManager materialManager, IEditorOverlayHost? overlay = null, VulkanRenderer? renderer = null, FirstPersonCamera? camera = null)
+    public EditorController(
+        Scene scene,
+        IContentManager content,
+        LightManager lightManager,
+        MaterialManager materialManager,
+        IEditorOverlayHost? overlay = null,
+        VulkanRenderer? renderer = null,
+        FirstPersonCamera? camera = null,
+        AdvancedGiEditorStartupContext? advancedGiStartup = null,
+        Action<string>? requestAdvancedGiRestart = null)
     {
         _scene = scene ?? throw new ArgumentNullException(nameof(scene));
         _content = content ?? throw new ArgumentNullException(nameof(content));
@@ -37,6 +48,9 @@ public sealed class EditorController
         _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
         _overlay = overlay;
         _renderer = renderer;
+        _advancedGiStartup = advancedGiStartup ??
+            AdvancedGiEditorStartupContext.Unconfigured;
+        _requestAdvancedGiRestart = requestAdvancedGiRestart;
         Camera = camera;
         _lightStore = new LightManagerSceneLightStore(_lightManager);
         _materialStore = new MaterialManagerSceneMaterialOverrideStore(_materialManager);
@@ -50,6 +64,15 @@ public sealed class EditorController
     public FirstPersonCamera? Camera { get; set; }
     public RenderSettings? RendererSettings => _renderer?.Settings;
     public RendererDiagnostics? RendererDiagnostics => _renderer?.LastDiagnostics;
+    public AdvancedGiEditorStartupContext AdvancedGiStartup =>
+        _advancedGiStartup;
+    public AdvancedGiRuntimeContentState AdvancedGiRuntimeContentState =>
+        _renderer?.AdvancedGiRuntimeContentState ??
+        AdvancedGiRuntimeContentState.Unconfigured;
+    public string AdvancedGiCandidateProfileStatus =>
+        _renderer?.AdvancedGiCandidateProfileStatus ?? "renderer-unavailable";
+    public bool CanRestartForAdvancedGi =>
+        _requestAdvancedGiRestart is not null;
     public bool SuppressGameInput => Enabled && (_overlay?.WantCaptureKeyboard == true || _overlay?.WantCaptureMouse == true);
 
     public event Action<EditorSelection>? SelectionChanged;
@@ -329,6 +352,61 @@ public sealed class EditorController
         RenderSettings settings = RendererSettings ??
             throw new InvalidOperationException("A Vulkan renderer is required to save live render settings.");
         settings.Save(path);
+    }
+
+    public AdvancedGiStartupProfilePreflightResult
+        PreflightAdvancedGiStartupProfile(
+            AdvancedGiEditorActivationDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        RenderSettings live = RendererSettings ??
+            throw new InvalidOperationException(
+                "A Vulkan renderer is required to stage Advanced GI settings.");
+        RenderSettings snapshot = draft.CreateSettingsSnapshot(live);
+        return AdvancedGiStartupProfilePreflight.Evaluate(
+            snapshot,
+            draft.Profile,
+            ResolveAdvancedGiRuntimeBuildIdentity());
+    }
+
+    public AdvancedGiStartupProfilePreflightResult
+        SaveAdvancedGiStartupProfile(
+            AdvancedGiEditorActivationDraft draft,
+            bool restart)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        if (restart && _requestAdvancedGiRestart is null)
+        {
+            throw new InvalidOperationException(
+                "This editor host does not provide a renderer restart callback.");
+        }
+
+        RenderSettings live = RendererSettings ??
+            throw new InvalidOperationException(
+                "A Vulkan renderer is required to stage Advanced GI settings.");
+        RenderSettings snapshot = draft.CreateSettingsSnapshot(live);
+        AdvancedGiStartupProfilePreflightResult result =
+            AdvancedGiStartupProfilePreflight.SaveValidated(
+                snapshot,
+                draft.Profile,
+                ResolveAdvancedGiRuntimeBuildIdentity());
+
+        string profilePath = Path.GetFullPath(draft.Profile.ProfilePath);
+        if (restart)
+            _requestAdvancedGiRestart!(profilePath);
+        return result;
+    }
+
+    private AdvancedGiRuntimeBuildIdentity?
+        ResolveAdvancedGiRuntimeBuildIdentity()
+    {
+        RendererDiagnostics? diagnostics = RendererDiagnostics;
+        if (diagnostics is null)
+            return null;
+        var identity = new AdvancedGiRuntimeBuildIdentity(
+            diagnostics.CaptureRun.Commit,
+            diagnostics.CaptureRun.ShaderBundleHash);
+        return identity.IsWellFormed ? identity : null;
     }
 
     public RenderObject AddObjectAtCamera(SceneAssetReference reference, float forwardDistance = 3f)

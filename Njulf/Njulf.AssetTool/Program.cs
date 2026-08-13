@@ -32,6 +32,7 @@ internal static class Program
                 "alpha-visibility-gate" => AlphaVisibilityGateCommand.Run(args[1..]),
                 "material-gi-test-matrix" => MaterialGiTestMatrixCommand.Run(args[1..]),
                 "material-gi-evidence" => MaterialGiEvidenceCommand.Run(args[1..]),
+                "advanced-gi" => AdvancedGiQualificationCommand.Run(args[1..]),
                 "--child-import" => await RunChildImport(args[1..]).ConfigureAwait(false),
                 _ => UnknownCommand(args[0])
             };
@@ -623,5 +624,10 @@ internal static class Program
         Console.WriteLine("  Njulf.AssetTool material-gi-evidence assemble --root <folder> --request <json> --bundle <relative-json>");
         Console.WriteLine("  Njulf.AssetTool material-gi-evidence pin-manifest --root <folder> --manifest <relative-json> --bundle <relative-json> --alpha-report <relative-json> --alpha-evidence <relative-bin> --approval-id <id> --approved-at-utc <timestamp> --qualified-device <id> [--qualified-device <id> ...]");
         Console.WriteLine("  Njulf.AssetTool material-gi-evidence verify-manifest --manifest <json> [--evaluation-date <yyyy-MM-dd>]");
+        Console.WriteLine("  Njulf.AssetTool advanced-gi pin-corpus --root <folder> --request <json> --out <json>");
+        Console.WriteLine("  Njulf.AssetTool advanced-gi verify-corpus --manifest <json>");
+        Console.WriteLine("  Njulf.AssetTool advanced-gi create-startup --profile <json> --settings <json> --corpus-sha256 <sha256> --content-profile <id> --scene-sha256 <sha256> [--prerequisite <json>] [--qualification <json>] [--runtime-evidence <json>] [--candidate <json>] [--build-commit <sha> --shader-bundle-sha256 <sha256>]");
+        Console.WriteLine("  Njulf.AssetTool advanced-gi verify-startup --profile <json> [--build-commit <sha> --shader-bundle-sha256 <sha256>]");
+        Console.WriteLine("  Njulf.AssetTool advanced-gi verify-qualification --manifest <json>");
     }
 }

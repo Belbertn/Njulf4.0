@@ -153,6 +153,22 @@ public sealed class AdvancedGiRenderGraphModesTests
                     usage.Resource == RenderGraphResourceId.SimpleDdgiGuidingDirectionPayloadSidecar &&
                     usage.Access == RenderGraphResourceAccess.Read),
                 Is.True);
+            Assert.That(declarations[SimpleDdgiGuidingGpuPassNames.Sample].Usages.Any(
+                    usage => usage.Resource == RenderGraphResourceId.SimpleDdgiScheduler &&
+                        usage.Access == RenderGraphResourceAccess.Read),
+                Is.True);
+            Assert.That(declarations[SimpleDdgiGuidingGpuPassNames.Sample].Usages.Any(
+                    usage => usage.Resource == RenderGraphResourceId.SimpleDdgiParameters &&
+                        usage.Access == RenderGraphResourceAccess.Read),
+                Is.True);
+            Assert.That(declarations[SimpleDdgiGuidingGpuPassNames.Train].Usages.Any(
+                    usage => usage.Resource == RenderGraphResourceId.SimpleDdgiScheduler &&
+                        usage.Access == RenderGraphResourceAccess.Read),
+                Is.True);
+            Assert.That(declarations[SimpleDdgiGuidingGpuPassNames.Train].Usages.Any(
+                    usage => usage.Resource == RenderGraphResourceId.SimpleDdgiParameters &&
+                        usage.Access == RenderGraphResourceAccess.Read),
+                Is.True);
         });
     }
 

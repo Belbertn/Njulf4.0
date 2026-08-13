@@ -24,7 +24,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
     private const uint TrainAndSampleWorkgroupSize = 64u;
     private const ulong ValidationCounterByteCount =
         SimpleDdgiGuidingGpuAbi.ValidationCounterByteCount;
-    private const int PassKindCount = 5;
+    private const int PassKindCount = 7;
     private const int DescriptorSetCount =
         RenderingConstants.FramesInFlight * PassKindCount;
 
@@ -41,12 +41,14 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
     private readonly DescriptorSet[] _descriptorSets = new DescriptorSet[DescriptorSetCount];
     private PipelineLayout _pipelineLayout;
     private PipelineLayout _extractPipelineLayout;
+    private PipelineLayout _preparePipelineLayout;
     private PipelineCache _pipelineCache;
     private VkPipeline _trainPipeline;
     private VkPipeline _buildPipeline;
     private VkPipeline _samplePipeline;
     private VkPipeline _validatePipeline;
     private VkPipeline _extractPipeline;
+    private VkPipeline _preparePipeline;
     private bool _disposed;
 
     public SimpleDdgiGuidingGpuPass(
@@ -70,11 +72,14 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
                 (uint)Marshal.SizeOf<GPUSimpleDdgiGuidingPushConstants>());
             ValidatePushConstantRange(
                 (uint)Marshal.SizeOf<GPUSimpleDdgiGuidingExtractPushConstants>());
+            ValidatePushConstantRange(
+                (uint)Marshal.SizeOf<GPUSimpleDdgiGuidingPreparePushConstants>());
             CreateDescriptorSetLayout();
             CreateDescriptorPoolAndSets();
             CreatePipelineCache();
             CreatePipelineLayout();
             CreateExtractPipelineLayout();
+            CreatePreparePipelineLayout();
             _trainPipeline = CreatePipeline(
                 SimpleDdgiGuidingGpuPassNames.TrainShader,
                 "Simple DDGI Guiding Train",
@@ -95,6 +100,10 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
                 ResolveExtractShader(storagePackingMode),
                 "Simple DDGI Guiding Trace Training Extract",
                 _extractPipelineLayout);
+            _preparePipeline = CreatePipeline(
+                SimpleDdgiGuidingGpuPassNames.PrepareShader,
+                "Simple DDGI Guiding GPU Resident Prepare",
+                _preparePipelineLayout);
         }
         catch
         {
@@ -159,8 +168,32 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             workload.TrainingRecords.OffsetBytes,
             workload.TrainingRecords.RangeBytes,
             0u);
-        RecordExtractInputBarriers(commandBuffer, workload);
-        ResetValidationCounters(commandBuffer, workload.ValidationCounters);
+        if (workload.UsesGpuResidentWork)
+        {
+            RecordTransferToComputeBarrier(
+                commandBuffer,
+                new StorageRange(workload.TrainingRecords));
+            RecordGpuResidentPrepare(
+                commandBuffer,
+                frameIndex,
+                layout,
+                token.ReadBankIndex,
+                token.CandidateBankGeneration,
+                token.TargetProposalEpoch,
+                SimpleDdgiGuidingPrepareFlags.BuildWork,
+                uniformMixtureFraction: 0.0f,
+                workload.GpuResidentSource,
+                workload.TraceTrainingSource,
+                workload.TrainingWorkItems,
+                workload.BuildWorkItems,
+                workload.ValidationCounters,
+                workload.ValidationCounters);
+        }
+        else
+        {
+            RecordExtractInputBarriers(commandBuffer, workload);
+            ResetValidationCounters(commandBuffer, workload.ValidationCounters);
+        }
         WriteStorageSet(
             DescriptorSetFor(frameIndex, SimpleDdgiGuidingPassKind.Extract),
             new StorageRange(workload.TrainingRecords),
@@ -206,7 +239,8 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
                 token.WriteBankIndex,
                 token.CandidateBankGeneration,
                 token.TargetProposalEpoch,
-                workload.TrainingWorkItems.ElementCount),
+                workload.TrainingWorkItems.ElementCount,
+                workload.UsesGpuResidentWork),
             workload.TrainingWorkItems.ElementCount);
         RecordComputeStorageBarrier(
             commandBuffer,
@@ -233,6 +267,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         BufferHandle writeBank = token.WriteBankIndex == 0
             ? buffers.DistributionBank0
             : buffers.DistributionBank1;
+
         RecordExternalInputBarrier(commandBuffer, workload.BuildWorkItems);
         _context.Api.CmdFillBuffer(
             commandBuffer,
@@ -260,7 +295,8 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
                 token.WriteBankIndex,
                 token.CandidateBankGeneration,
                 token.TargetProposalEpoch,
-                workload.BuildWorkItems.ElementCount),
+                workload.BuildWorkItems.ElementCount,
+                workload.UsesGpuResidentWork),
             workload.BuildWorkItems.ElementCount);
         RecordComputeStorageBarrier(
             commandBuffer,
@@ -289,6 +325,41 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             ? buffers.DistributionBank0
             : buffers.DistributionBank1;
 
+        SimpleDdgiGuidingExternalBuffer publicationRecords =
+            workload.ValidationCounters;
+        if (workload.UsesGpuResidentWork)
+        {
+            ulong publicationBytes = checked(
+                (ulong)workload.BuildWorkItems.ElementCount *
+                SimpleDdgiGuidingGpuAbi.PublicationRecordByteCount);
+            if (publicationBytes > workload.TrainingRecords.RangeBytes)
+            {
+                throw new InvalidOperationException(
+                    "C3 GPU publication records exceed transient storage.");
+            }
+            publicationRecords = workload.TrainingRecords with
+            {
+                RangeBytes = publicationBytes,
+                ElementCount = workload.BuildWorkItems.ElementCount,
+                ElementStrideBytes =
+                    SimpleDdgiGuidingGpuAbi.PublicationRecordByteCount,
+                LastWriterStageMask = PipelineStageFlags2.TransferBit,
+                LastWriterAccessMask = AccessFlags2.TransferWriteBit
+            };
+            RecordComputeReadToTransferWriteBarrier(
+                commandBuffer,
+                publicationRecords);
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                _bufferManager.GetBuffer(publicationRecords.Buffer),
+                publicationRecords.OffsetBytes,
+                publicationRecords.RangeBytes,
+                0u);
+            RecordTransferToComputeBarrier(
+                commandBuffer,
+                new StorageRange(publicationRecords));
+        }
+
         // Validation is mandatory for this runtime boundary.  A validation
         // failure clears BuildComplete/set Invalid in the same candidate bank;
         // header readback then rejects the whole publication transaction.
@@ -297,7 +368,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             StorageRange.ForWholeBuffer(writeBank, _bufferManager),
             new StorageRange(workload.BuildWorkItems),
             new StorageRange(workload.ValidationCounters),
-            new StorageRange(workload.ValidationCounters));
+            new StorageRange(publicationRecords));
         Dispatch(
             commandBuffer,
             _validatePipeline,
@@ -308,12 +379,24 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
                 token.WriteBankIndex,
                 token.CandidateBankGeneration,
                 token.TargetProposalEpoch,
-                workload.BuildWorkItems.ElementCount),
+                workload.BuildWorkItems.ElementCount,
+                workload.UsesGpuResidentWork),
             workload.BuildWorkItems.ElementCount);
-        RecordComputeStorageBarrier(
-            commandBuffer,
-            StorageRange.ForWholeBuffer(writeBank, _bufferManager),
-            workload.ValidationCounters);
+        if (workload.UsesGpuResidentWork)
+        {
+            RecordComputeStorageBarrier(
+                commandBuffer,
+                writeBank,
+                workload.ValidationCounters,
+                publicationRecords);
+        }
+        else
+        {
+            RecordComputeStorageBarrier(
+                commandBuffer,
+                StorageRange.ForWholeBuffer(writeBank, _bufferManager),
+                workload.ValidationCounters);
+        }
     }
 
     /// <summary>
@@ -350,11 +433,32 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         BufferHandle readBank = readBankIndex == 0
             ? buffers.DistributionBank0
             : buffers.DistributionBank1;
-        RecordSampleInputBarriers(
-            commandBuffer,
-            workload.SampleRequests,
-            workload.ValidationCounters);
-        ResetValidationCounters(commandBuffer, workload.ValidationCounters);
+        if (workload.UsesGpuResidentWork)
+        {
+            RecordGpuResidentPrepare(
+                commandBuffer,
+                frameIndex,
+                layout,
+                readBankIndex,
+                targetDistributionGeneration: 0u,
+                targetProposalEpoch: 0u,
+                SimpleDdgiGuidingPrepareFlags.SampleWork,
+                workload.UniformMixtureFraction,
+                workload.GpuResidentSource,
+                workload.TraceTrainingSource,
+                workload.TrainingWorkItems,
+                workload.BuildWorkItems,
+                workload.SampleRequests,
+                workload.ValidationCounters);
+        }
+        else
+        {
+            RecordSampleInputBarriers(
+                commandBuffer,
+                workload.SampleRequests,
+                workload.ValidationCounters);
+            ResetValidationCounters(commandBuffer, workload.ValidationCounters);
+        }
         RecordComputeStorageBarrier(commandBuffer, readBank);
 
         var sidecar = new StorageRange(
@@ -382,7 +486,8 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
                 writeBankIndex: -1,
                 targetDistributionGeneration: readBankGeneration,
                 targetProposalEpoch: 0u,
-                dispatchCount: workload.SampleRequests.ElementCount),
+                dispatchCount: workload.SampleRequests.ElementCount,
+                workload.UsesGpuResidentWork),
             DivideRoundUp(workload.SampleRequests.ElementCount,
                 TrainAndSampleWorkgroupSize));
 
@@ -419,7 +524,8 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         int writeBankIndex,
         uint targetDistributionGeneration,
         uint targetProposalEpoch,
-        uint dispatchCount)
+        uint dispatchCount,
+        bool gpuGeneratedWork)
     {
         if (layout.PersistentBankStrideBytes % sizeof(uint) != 0UL ||
             layout.PhysicalProbeCapacity <= 0 || layout.LeafResolution <= 0 ||
@@ -439,7 +545,9 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             WriteBankIndex = writeBankIndex < 0 ? uint.MaxValue : checked((uint)writeBankIndex),
             TargetDistributionGeneration = targetDistributionGeneration,
             TargetProposalEpoch = targetProposalEpoch,
-            Flags = 0u,
+            Flags = gpuGeneratedWork
+                ? (uint)SimpleDdgiGuidingPushFlags.GpuGeneratedWork
+                : 0u,
             // Sample uses this as the exact persistent sidecar stride. Other
             // passes keep the field inert while sharing the frozen push ABI.
             Reserved = checked((uint)Math.Max(0, layout.DirectionSlotsPerProbe))
@@ -477,7 +585,154 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             LeafResolution = checked((uint)layout.LeafResolution),
             DirectionSlotsPerProbe =
                 checked((uint)layout.DirectionSlotsPerProbe),
-            Flags = 0u
+            Flags = workload.UsesGpuResidentWork
+                ? (uint)SimpleDdgiGuidingPushFlags.GpuGeneratedWork
+                : 0u
+        };
+    }
+
+    private void RecordGpuResidentPrepare(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        in SimpleDdgiGuidingLayout layout,
+        int readBankIndex,
+        uint targetDistributionGeneration,
+        uint targetProposalEpoch,
+        SimpleDdgiGuidingPrepareFlags flags,
+        float uniformMixtureFraction,
+        in SimpleDdgiGuidingGpuResidentWorkSource source,
+        in SimpleDdgiGuidingTraceTrainingSource traceSource,
+        in SimpleDdgiGuidingExternalBuffer trainingWorkItems,
+        in SimpleDdgiGuidingExternalBuffer buildWorkItems,
+        in SimpleDdgiGuidingExternalBuffer sampleRequests,
+        in SimpleDdgiGuidingExternalBuffer counters)
+    {
+        if (!source.TryValidate(layout, out string sourceReason))
+        {
+            throw new ArgumentException(
+                "C3 GPU-resident preparation source is invalid: " +
+                sourceReason,
+                nameof(source));
+        }
+        if (!traceSource.TryValidate(out string traceReason))
+        {
+            throw new ArgumentException(
+                "C3 GPU-resident trace source is invalid: " + traceReason,
+                nameof(traceSource));
+        }
+        if (flags is not (SimpleDdgiGuidingPrepareFlags.BuildWork or
+                SimpleDdgiGuidingPrepareFlags.SampleWork))
+        {
+            throw new ArgumentOutOfRangeException(nameof(flags));
+        }
+
+        RecordGpuResidentPrepareInputBarriers(
+            commandBuffer,
+            source,
+            traceSource);
+        ResetValidationCounters(commandBuffer, counters);
+        SimpleDdgiGuidingPassKind prepareKind = flags ==
+                SimpleDdgiGuidingPrepareFlags.SampleWork
+            ? SimpleDdgiGuidingPassKind.PrepareSample
+            : SimpleDdgiGuidingPassKind.PrepareBuild;
+        DescriptorSet set = DescriptorSetFor(frameIndex, prepareKind);
+        WriteStorageSet(
+            set,
+            new StorageRange(trainingWorkItems),
+            new StorageRange(buildWorkItems),
+            new StorageRange(sampleRequests),
+            new StorageRange(counters));
+        GPUSimpleDdgiGuidingPreparePushConstants pushConstants =
+            CreatePreparePushConstants(
+                layout,
+                readBankIndex,
+                targetDistributionGeneration,
+                targetProposalEpoch,
+                flags,
+                uniformMixtureFraction,
+                source);
+        DispatchPrepare(commandBuffer, set, pushConstants, 1u);
+        if (flags == SimpleDdgiGuidingPrepareFlags.SampleWork)
+        {
+            RecordGpuResidentPrepareOutputBarriers(
+                commandBuffer,
+                trainingWorkItems,
+                buildWorkItems,
+                sampleRequests,
+                counters);
+            pushConstants.Flags =
+                SimpleDdgiGuidingPrepareFlags.SampleExpand;
+            DispatchPrepare(
+                commandBuffer,
+                set,
+                pushConstants,
+                DivideRoundUp(
+                    sampleRequests.ElementCount,
+                    TrainAndSampleWorkgroupSize));
+            RecordGpuResidentPrepareOutputBarriers(
+                commandBuffer,
+                trainingWorkItems,
+                buildWorkItems,
+                sampleRequests,
+                counters);
+            pushConstants.Flags =
+                SimpleDdgiGuidingPrepareFlags.SampleFinalize;
+            DispatchPrepare(commandBuffer, set, pushConstants, 1u);
+        }
+        RecordGpuResidentPrepareOutputBarriers(
+            commandBuffer,
+            trainingWorkItems,
+            buildWorkItems,
+            sampleRequests,
+            counters);
+    }
+
+    private static GPUSimpleDdgiGuidingPreparePushConstants
+        CreatePreparePushConstants(
+            in SimpleDdgiGuidingLayout layout,
+            int readBankIndex,
+            uint targetDistributionGeneration,
+            uint targetProposalEpoch,
+            SimpleDdgiGuidingPrepareFlags flags,
+            float uniformMixtureFraction,
+            in SimpleDdgiGuidingGpuResidentWorkSource source)
+    {
+        if (layout.PersistentBankStrideBytes % sizeof(uint) != 0UL ||
+            layout.PhysicalProbeCapacity <= 0 ||
+            layout.ScheduledGuidedProbeCapacity <= 0 ||
+            layout.DirectionSlotsPerProbe <= 0 ||
+            layout.LeafResolution <= 0 || readBankIndex is < 0 or > 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(layout));
+        }
+        uint mixtureBits = flags == SimpleDdgiGuidingPrepareFlags.SampleWork
+            ? BitConverter.SingleToUInt32Bits(uniformMixtureFraction)
+            : 0u;
+        return new GPUSimpleDdgiGuidingPreparePushConstants
+        {
+            AbiVersion = SimpleDdgiGuidingGpuAbi.Version,
+            PhysicalProbeCapacity = checked((uint)layout.PhysicalProbeCapacity),
+            ScheduledProbeCapacity =
+                checked((uint)layout.ScheduledGuidedProbeCapacity),
+            DirectionSlotsPerProbe =
+                checked((uint)layout.DirectionSlotsPerProbe),
+            LeafResolution = checked((uint)layout.LeafResolution),
+            SchedulerRequestCapacity = source.SchedulerRequestCapacity,
+            SchedulerCountersOffsetWords =
+                source.SchedulerCountersOffsetWords,
+            SchedulerAcceptedCounterWord =
+                source.SchedulerAcceptedCounterWord,
+            ReadBankIndex = checked((uint)readBankIndex),
+            BankStrideWords = checked((uint)(
+                layout.PersistentBankStrideBytes / sizeof(uint))),
+            TargetDistributionGeneration = targetDistributionGeneration,
+            TargetProposalEpoch = targetProposalEpoch,
+            UniformMixtureFractionBits = mixtureBits,
+            Flags = flags,
+            SceneContentRevisionHigh =
+                checked((uint)(source.SceneContentRevision >> 32)),
+            SceneContentRevisionLow =
+                unchecked((uint)source.SceneContentRevision)
         };
     }
 
@@ -551,6 +806,46 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             0u,
             (uint)Marshal.SizeOf<GPUSimpleDdgiGuidingExtractPushConstants>(),
             &localPushConstants);
+        _context.Api.CmdDispatch(commandBuffer, groupCountX, 1u, 1u);
+    }
+
+    private void DispatchPrepare(
+        CommandBuffer commandBuffer,
+        DescriptorSet descriptorSet,
+        in GPUSimpleDdgiGuidingPreparePushConstants pushConstants,
+        uint groupCountX)
+    {
+        if (_preparePipeline.Handle == 0 || groupCountX == 0u)
+        {
+            throw new InvalidOperationException(
+                "C3 GPU-resident preparation pipeline is unavailable.");
+        }
+
+        _context.Api.CmdBindPipeline(
+            commandBuffer,
+            PipelineBindPoint.Compute,
+            _preparePipeline);
+        DescriptorSet* sets = stackalloc DescriptorSet[3];
+        sets[0] = _bindlessHeap.StorageBufferSet;
+        sets[1] = _bindlessHeap.TextureSamplerSet;
+        sets[2] = descriptorSet;
+        _context.Api.CmdBindDescriptorSets(
+            commandBuffer,
+            PipelineBindPoint.Compute,
+            _preparePipelineLayout,
+            0u,
+            3u,
+            sets,
+            0u,
+            null);
+        GPUSimpleDdgiGuidingPreparePushConstants local = pushConstants;
+        _context.Api.CmdPushConstants(
+            commandBuffer,
+            _preparePipelineLayout,
+            ShaderStageFlags.ComputeBit,
+            0u,
+            (uint)Marshal.SizeOf<GPUSimpleDdgiGuidingPreparePushConstants>(),
+            &local);
         _context.Api.CmdDispatch(commandBuffer, groupCountX, 1u, 1u);
     }
 
@@ -634,6 +929,52 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         ExecuteBufferBarriers(commandBuffer, barriers);
     }
 
+    private void RecordGpuResidentPrepareInputBarriers(
+        CommandBuffer commandBuffer,
+        in SimpleDdgiGuidingGpuResidentWorkSource source,
+        in SimpleDdgiGuidingTraceTrainingSource traceSource)
+    {
+        Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[3];
+        barriers[0] = BarrierBuilder.BufferBarrier(
+            _bufferManager.GetBuffer(source.SchedulerArenaBuffer),
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit,
+            0UL,
+            source.SchedulerArenaBytes);
+        barriers[1] = CreateExternalInputBarrier(traceSource.Params);
+        barriers[2] = CreateExternalInputBarrier(traceSource.ProbeUpdateQueue);
+        ExecuteBufferBarriers(commandBuffer, barriers);
+    }
+
+    private void RecordGpuResidentPrepareOutputBarriers(
+        CommandBuffer commandBuffer,
+        in SimpleDdgiGuidingExternalBuffer trainingWorkItems,
+        in SimpleDdgiGuidingExternalBuffer buildWorkItems,
+        in SimpleDdgiGuidingExternalBuffer sampleRequests,
+        in SimpleDdgiGuidingExternalBuffer counters)
+    {
+        Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[4];
+        barriers[0] = CreateComputeStorageBarrier(
+            _bufferManager.GetBuffer(trainingWorkItems.Buffer),
+            trainingWorkItems.OffsetBytes,
+            trainingWorkItems.RangeBytes);
+        barriers[1] = CreateComputeStorageBarrier(
+            _bufferManager.GetBuffer(buildWorkItems.Buffer),
+            buildWorkItems.OffsetBytes,
+            buildWorkItems.RangeBytes);
+        barriers[2] = CreateComputeStorageBarrier(
+            _bufferManager.GetBuffer(sampleRequests.Buffer),
+            sampleRequests.OffsetBytes,
+            sampleRequests.RangeBytes);
+        barriers[3] = CreateComputeStorageBarrier(
+            _bufferManager.GetBuffer(counters.Buffer),
+            counters.OffsetBytes,
+            counters.RangeBytes);
+        ExecuteBufferBarriers(commandBuffer, barriers);
+    }
+
     private void RecordSampleInputBarriers(
         CommandBuffer commandBuffer,
         in SimpleDdgiGuidingExternalBuffer sampleRequests,
@@ -710,6 +1051,24 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         in StorageRange range)
     {
         BufferMemoryBarrier2 barrier = CreateTransferToComputeBarrier(range);
+        Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[1];
+        barriers[0] = barrier;
+        ExecuteBufferBarriers(commandBuffer, barriers);
+    }
+
+    private void RecordComputeReadToTransferWriteBarrier(
+        CommandBuffer commandBuffer,
+        in SimpleDdgiGuidingExternalBuffer range)
+    {
+        BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
+            _bufferManager.GetBuffer(range.Buffer),
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferWriteBit,
+            range.OffsetBytes,
+            range.RangeBytes);
         Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[1];
         barriers[0] = barrier;
         ExecuteBufferBarriers(commandBuffer, barriers);
@@ -1035,6 +1394,43 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             "Simple DDGI Guiding Trace Extract Pipeline Layout");
     }
 
+    private void CreatePreparePipelineLayout()
+    {
+        DescriptorSetLayout* layouts = stackalloc DescriptorSetLayout[3];
+        layouts[0] = _bindlessHeap.StorageBufferSetLayout;
+        layouts[1] = _bindlessHeap.TextureSamplerSetLayout;
+        layouts[2] = _descriptorSetLayout;
+        var pushRange = new PushConstantRange
+        {
+            StageFlags = ShaderStageFlags.ComputeBit,
+            Offset = 0u,
+            Size = (uint)Marshal.SizeOf<GPUSimpleDdgiGuidingPreparePushConstants>()
+        };
+        var info = new PipelineLayoutCreateInfo
+        {
+            SType = StructureType.PipelineLayoutCreateInfo,
+            SetLayoutCount = 3u,
+            PSetLayouts = layouts,
+            PushConstantRangeCount = 1u,
+            PPushConstantRanges = &pushRange
+        };
+        Result result = _context.Api.CreatePipelineLayout(
+            _context.Device,
+            &info,
+            null,
+            out _preparePipelineLayout);
+        if (result != Result.Success)
+        {
+            throw new VulkanException(
+                "Failed to create C3 GPU-resident preparation pipeline layout.",
+                result);
+        }
+        _context.SetDebugName(
+            _preparePipelineLayout.Handle,
+            ObjectType.PipelineLayout,
+            "Simple DDGI Guiding GPU Resident Prepare Pipeline Layout");
+    }
+
     private VkPipeline CreatePipeline(
         string shaderName,
         string debugName,
@@ -1091,6 +1487,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         DestroyPipeline(_samplePipeline);
         DestroyPipeline(_validatePipeline);
         DestroyPipeline(_extractPipeline);
+        DestroyPipeline(_preparePipeline);
         if (_extractPipelineLayout.Handle != 0)
         {
             _context.Api.DestroyPipelineLayout(
@@ -1100,6 +1497,13 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         }
         if (_pipelineLayout.Handle != 0)
             _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
+        if (_preparePipelineLayout.Handle != 0)
+        {
+            _context.Api.DestroyPipelineLayout(
+                _context.Device,
+                _preparePipelineLayout,
+                null);
+        }
         if (_descriptorPool.Handle != 0)
             _context.Api.DestroyDescriptorPool(_context.Device, _descriptorPool, null);
         if (_descriptorSetLayout.Handle != 0)
@@ -1113,8 +1517,10 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         _samplePipeline = default;
         _validatePipeline = default;
         _extractPipeline = default;
+        _preparePipeline = default;
         _pipelineLayout = default;
         _extractPipelineLayout = default;
+        _preparePipelineLayout = default;
         _descriptorPool = default;
         _descriptorSetLayout = default;
         _pipelineCache = default;

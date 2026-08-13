@@ -16,7 +16,7 @@ public static class SimpleDdgiGuidingGpuAbi
     /// stable sampling payload meaning changes.  The value is written into
     /// every persistent distribution header and every sampled-ray payload.
     /// </summary>
-    public const uint Version = 0x4333_0006u;
+    public const uint Version = 0x4333_0007u;
 
     public const uint HeaderWordCount = 8u;
     public const uint HeaderByteCount = HeaderWordCount * sizeof(uint);
@@ -27,6 +27,8 @@ public static class SimpleDdgiGuidingGpuAbi
     public const uint SamplePayloadByteCount = 64u;
     public const uint PushConstantByteCount = 48u;
     public const uint ExtractPushConstantByteCount = 48u;
+    public const uint PreparePushConstantByteCount = 64u;
+    public const uint PublicationRecordByteCount = 48u;
     public const uint ValidationCounterWordCount = 32u;
     public const uint ValidationCounterByteCount =
         ValidationCounterWordCount * sizeof(uint);
@@ -44,6 +46,10 @@ public static class SimpleDdgiGuidingGpuAbi
     public const uint CounterMaximumPdfBits = 10u;
     public const uint CounterInversePdfHistogramBase = 12u;
     public const uint InversePdfHistogramBinCount = 16u;
+    public const uint CounterGpuWorkItemCount = 28u;
+    public const uint CounterGpuTrainingRecordCount = 29u;
+    public const uint CounterGpuSampleRequestCount = 30u;
+    public const uint CounterGpuPreparationStatus = 31u;
 
     public const uint MinimumLeafResolution = 4u;
     public const uint MaximumLeafResolution = 16u;
@@ -112,6 +118,17 @@ public static class SimpleDdgiGuidingGpuAbi
             (nameof(GPUSimpleDdgiGuidingExtractPushConstants.TrainingWorkItemCount), 16),
             (nameof(GPUSimpleDdgiGuidingExtractPushConstants.RayResultCapacity), 28),
             (nameof(GPUSimpleDdgiGuidingExtractPushConstants.DirectionSlotsPerProbe), 40));
+        Verify<GPUSimpleDdgiGuidingPreparePushConstants>(
+            PreparePushConstantByteCount,
+            (nameof(GPUSimpleDdgiGuidingPreparePushConstants.AbiVersion), 0),
+            (nameof(GPUSimpleDdgiGuidingPreparePushConstants.ScheduledProbeCapacity), 8),
+            (nameof(GPUSimpleDdgiGuidingPreparePushConstants.SchedulerCountersOffsetWords), 24),
+            (nameof(GPUSimpleDdgiGuidingPreparePushConstants.TargetDistributionGeneration), 40),
+            (nameof(GPUSimpleDdgiGuidingPreparePushConstants.SceneContentRevisionHigh), 56));
+        Verify<GPUSimpleDdgiGuidingPublicationRecord>(
+            PublicationRecordByteCount,
+            (nameof(GPUSimpleDdgiGuidingPublicationRecord.PhysicalProbeIndex), 0),
+            (nameof(GPUSimpleDdgiGuidingPublicationRecord.Header), 16));
     }
 
     public static bool IsSupportedLeafResolution(uint leafResolution) =>
@@ -423,6 +440,64 @@ public struct GPUSimpleDdgiGuidingExtractPushConstants
     public uint LeafResolution;
     public uint DirectionSlotsPerProbe;
     public uint Flags;
+}
+
+[Flags]
+public enum SimpleDdgiGuidingPrepareFlags : uint
+{
+    None = 0u,
+    BuildWork = 1u << 0,
+    SampleWork = 1u << 1,
+    SampleExpand = 1u << 2,
+    SampleFinalize = 1u << 3
+}
+
+[Flags]
+public enum SimpleDdgiGuidingPushFlags : uint
+{
+    None = 0u,
+    GpuGeneratedWork = 1u << 0
+}
+
+/// <summary>
+/// GPU-resident C3 bridge. The scheduler accepted count and canonical public
+/// update queue remain device-owned; this block supplies only immutable
+/// capacity/offset and candidate-generation facts.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 64)]
+public struct GPUSimpleDdgiGuidingPreparePushConstants
+{
+    public uint AbiVersion;
+    public uint PhysicalProbeCapacity;
+    public uint ScheduledProbeCapacity;
+    public uint DirectionSlotsPerProbe;
+    public uint LeafResolution;
+    public uint SchedulerRequestCapacity;
+    public uint SchedulerCountersOffsetWords;
+    public uint SchedulerAcceptedCounterWord;
+    public uint ReadBankIndex;
+    public uint BankStrideWords;
+    public uint TargetDistributionGeneration;
+    public uint TargetProposalEpoch;
+    public uint UniformMixtureFractionBits;
+    public SimpleDdgiGuidingPrepareFlags Flags;
+    public uint SceneContentRevisionHigh;
+    public uint SceneContentRevisionLow;
+}
+
+/// <summary>
+/// Fence-read compact publication record emitted by the validate stage for a
+/// GPU-generated work item. The leading padding keeps the embedded header
+/// naturally 16-byte aligned and reserves an ABI word for future status.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 48)]
+public struct GPUSimpleDdgiGuidingPublicationRecord
+{
+    public uint PhysicalProbeIndex;
+    public uint VirtualProbeId;
+    public uint PageGeneration;
+    public uint Status;
+    public GPUSimpleDdgiGuidingDistributionHeader Header;
 }
 
 /// <summary>Validation result used before a GPU header becomes readable.</summary>

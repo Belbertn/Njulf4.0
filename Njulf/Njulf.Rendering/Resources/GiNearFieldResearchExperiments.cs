@@ -61,7 +61,7 @@ public static class GiTaggedCausticCacheExperiment
     public static GiTaggedCausticCachePlan CreatePlan(
         in GiTaggedCausticCacheConfiguration configuration,
         in GiTaggedCausticCacheQualification qualification) =>
-        CreatePlan(configuration, qualification, default, default);
+        CreatePlanCore(configuration, qualification, default, default, null);
 
     /// <summary>
     /// Compiles C4 only from a complete two-generation GPU layout and an
@@ -74,6 +74,39 @@ public static class GiTaggedCausticCacheExperiment
         in GiTaggedCausticCacheQualification qualification,
         in GiCausticQualificationEvidence evidence,
         in GiCausticAdmissionContext admissionContext)
+        => CreatePlanCore(
+            configuration,
+            qualification,
+            evidence,
+            admissionContext,
+            null);
+
+    /// <summary>
+    /// Compiles a bounded C4 measurement candidate without claiming promotion
+    /// evidence. Only explicit WorldCacheExperiment may consume this plan.
+    /// </summary>
+    public static GiTaggedCausticCachePlan CreateCandidatePlan(
+        in GiTaggedCausticCacheConfiguration configuration,
+        in GiCausticAdmissionContext admissionContext,
+        in AdvancedGiCandidateAuthorization authorization) =>
+        CreatePlanCore(
+            configuration,
+            new GiTaggedCausticCacheQualification(
+                SeparateOwnershipImplemented: true,
+                DiffuseTransportFeedDisabled: true,
+                ReferenceParityPassed: false,
+                StabilityProofPassed: false,
+                QualityPerMillisecondImproved: false),
+            default,
+            admissionContext,
+            authorization);
+
+    private static GiTaggedCausticCachePlan CreatePlanCore(
+        in GiTaggedCausticCacheConfiguration configuration,
+        in GiTaggedCausticCacheQualification qualification,
+        in GiCausticQualificationEvidence evidence,
+        in GiCausticAdmissionContext admissionContext,
+        AdvancedGiCandidateAuthorization? candidateAuthorization)
     {
         if (!configuration.Enabled)
         {
@@ -182,12 +215,53 @@ public static class GiTaggedCausticCacheExperiment
                 GiCausticEvidenceValidation.Missing(gpuLayout.FailureReason));
         }
 
-        GiCausticEvidenceValidation evidenceValidation =
-            GiCausticQualificationEvidenceEvaluator.ValidateForAdmission(
-                evidence,
-                admissionContext,
-                configuration,
-                gpuLayout);
+        bool candidate = candidateAuthorization.HasValue;
+        GiCausticEvidenceValidation evidenceValidation;
+        if (candidate)
+        {
+            AdvancedGiCandidateAuthorization authorization =
+                candidateAuthorization!.Value;
+            bool contextValid = admissionContext.TryValidate(
+                out string contextReason);
+            if (!authorization.IsWellFormed || !contextValid ||
+                !AdvancedGiCandidateAuthorization.HashEquals(
+                    admissionContext.CorpusId,
+                    authorization.ContentBinding.CorpusSha256))
+            {
+                string reason = !authorization.IsWellFormed
+                    ? "caustic-candidate-authorization-invalid"
+                    : !contextValid
+                        ? contextReason
+                        : "caustic-candidate-corpus-binding-mismatch";
+                return Empty(
+                    requested: true,
+                    GiExperimentAdmission.Missing("C4", reason, true),
+                    reason,
+                    GiExperimentFallbackReason.EvidenceBindingMismatch,
+                    GiCausticEvidenceValidation.Missing(reason));
+            }
+            GiCausticEvidenceBinding binding =
+                GiCausticEvidenceBinding.Create(
+                    admissionContext,
+                    configuration,
+                    gpuLayout);
+            evidenceValidation = new GiCausticEvidenceValidation(
+                Accepted: true,
+                GiExperimentFallbackReason.None,
+                "active-candidate-experiment",
+                authorization.AuthorizationId,
+                binding.Fingerprint,
+                MaskedErrorReduction: 0.0);
+        }
+        else
+        {
+            evidenceValidation =
+                GiCausticQualificationEvidenceEvaluator.ValidateForAdmission(
+                    evidence,
+                    admissionContext,
+                    configuration,
+                    gpuLayout);
+        }
         if (!evidenceValidation.Accepted)
         {
             GiExperimentStage stage = evidenceValidation.FallbackReason ==
@@ -218,7 +292,9 @@ public static class GiTaggedCausticCacheExperiment
             true,
             GiExperimentStage.Active,
             memory.AllocatedBytes,
-            "active-qualified-experiment");
+            candidate
+                ? "active-candidate-experiment"
+                : "active-qualified-experiment");
         return new GiTaggedCausticCachePlan(
             true,
             true,
@@ -416,7 +492,7 @@ public static class SimpleDdgiNearFieldResidualExperiment
     public static SimpleDdgiNearFieldResidualPlan CreatePlan(
         in SimpleDdgiNearFieldResidualConfiguration configuration,
         in SimpleDdgiNearFieldResidualPrerequisites prerequisites) =>
-        CreatePlan(configuration, prerequisites, default, default);
+        CreatePlanCore(configuration, prerequisites, default, default, null);
 
     /// <summary>
     /// Creates an admitted C5 resource plan only after technical prerequisites,
@@ -427,7 +503,38 @@ public static class SimpleDdgiNearFieldResidualExperiment
         in SimpleDdgiNearFieldResidualPrerequisites prerequisites,
         in SimpleDdgiNearFieldResidualQualificationEvidence evidence,
         in SimpleDdgiNearFieldResidualAdmissionContext admissionContext)
+        => CreatePlanCore(
+            configuration,
+            prerequisites,
+            evidence,
+            admissionContext,
+            null);
+
+    /// <summary>
+    /// Compiles a bounded C5 measurement candidate after implementation and
+    /// B3 ownership prerequisites, without treating candidate authorization as
+    /// quality evidence. AutoQualified cannot consume this result.
+    /// </summary>
+    public static SimpleDdgiNearFieldResidualPlan CreateCandidatePlan(
+        in SimpleDdgiNearFieldResidualConfiguration configuration,
+        in SimpleDdgiNearFieldResidualPrerequisites prerequisites,
+        in SimpleDdgiNearFieldResidualAdmissionContext admissionContext,
+        in AdvancedGiCandidateAuthorization authorization) =>
+        CreatePlanCore(
+            configuration,
+            prerequisites,
+            default,
+            admissionContext,
+            authorization);
+
+    private static SimpleDdgiNearFieldResidualPlan CreatePlanCore(
+        in SimpleDdgiNearFieldResidualConfiguration configuration,
+        in SimpleDdgiNearFieldResidualPrerequisites prerequisites,
+        in SimpleDdgiNearFieldResidualQualificationEvidence evidence,
+        in SimpleDdgiNearFieldResidualAdmissionContext admissionContext,
+        AdvancedGiCandidateAuthorization? candidateAuthorization)
     {
+        bool candidate = candidateAuthorization.HasValue;
         if (!configuration.Enabled)
         {
             return Empty(
@@ -449,7 +556,7 @@ public static class SimpleDdgiNearFieldResidualExperiment
                 SimpleDdgiNearFieldResidualEvidenceValidation.Missing(
                     "B3-refinement-qualification-required"));
         }
-        if (!prerequisites.RemainingContactScaleErrorMeasured)
+        if (!candidate && !prerequisites.RemainingContactScaleErrorMeasured)
         {
             return Empty(
                 requested: true,
@@ -497,7 +604,7 @@ public static class SimpleDdgiNearFieldResidualExperiment
             prerequisites.CameraAndScreenEdgeStabilityPassed &&
             prerequisites.ReferenceErrorPerMillisecondImproved &&
             prerequisites.NoDoubleCountingOrFalseDarkening;
-        if (!qualityQualified)
+        if (!candidate && !qualityQualified)
         {
             string reason = !prerequisites.CameraAndScreenEdgeStabilityPassed
                 ? "camera-or-screen-edge-stability-failed"
@@ -562,12 +669,55 @@ public static class SimpleDdgiNearFieldResidualExperiment
                     sourceContractFailure));
         }
 
-        SimpleDdgiNearFieldResidualEvidenceValidation evidenceValidation =
-            SimpleDdgiNearFieldResidualEvidenceEvaluator.ValidateForAdmission(
-                evidence,
-                admissionContext,
-                configuration,
-                layout);
+        SimpleDdgiNearFieldResidualEvidenceValidation evidenceValidation;
+        if (candidate)
+        {
+            AdvancedGiCandidateAuthorization authorization =
+                candidateAuthorization!.Value;
+            bool contextValid = admissionContext.TryValidate(
+                out string contextReason);
+            if (!authorization.IsWellFormed || !contextValid ||
+                !AdvancedGiCandidateAuthorization.HashEquals(
+                    admissionContext.CorpusId,
+                    authorization.ContentBinding.CorpusSha256))
+            {
+                string reason = !authorization.IsWellFormed
+                    ? "near-field-candidate-authorization-invalid"
+                    : !contextValid
+                        ? contextReason
+                        : "near-field-candidate-corpus-binding-mismatch";
+                return Empty(
+                    requested: true,
+                    GiExperimentAdmission.Missing("C5", reason, true),
+                    reason,
+                    GiExperimentFallbackReason.EvidenceBindingMismatch,
+                    SimpleDdgiNearFieldResidualEvidenceValidation.Missing(
+                        reason));
+            }
+            SimpleDdgiNearFieldResidualEvidenceBinding binding =
+                SimpleDdgiNearFieldResidualEvidenceBinding.Create(
+                    admissionContext,
+                    configuration,
+                    layout);
+            evidenceValidation = new(
+                Accepted: true,
+                GiExperimentFallbackReason.None,
+                "active-candidate-experiment",
+                authorization.AuthorizationId,
+                binding.Fingerprint,
+                SimpleDdgiNearFieldResidualDecision.No(
+                    "candidate-measurement-pending"));
+        }
+        else
+        {
+            evidenceValidation =
+                SimpleDdgiNearFieldResidualEvidenceEvaluator
+                    .ValidateForAdmission(
+                        evidence,
+                        admissionContext,
+                        configuration,
+                        layout);
+        }
         if (!evidenceValidation.Accepted)
         {
             return Empty(
@@ -599,7 +749,9 @@ public static class SimpleDdgiNearFieldResidualExperiment
             true,
             GiExperimentStage.Active,
             memory.AllocatedBytes,
-            "active-qualified-experiment");
+            candidate
+                ? "active-candidate-experiment"
+                : "active-qualified-experiment");
         return new SimpleDdgiNearFieldResidualPlan(
             true,
             true,

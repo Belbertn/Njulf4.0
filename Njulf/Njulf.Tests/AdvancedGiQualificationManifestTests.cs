@@ -45,7 +45,12 @@ public sealed class AdvancedGiQualificationManifestTests
             ApiVersion: 1u,
             FeatureSupported: true,
             ShaderBundleSha256: document.ShaderBundleSha256,
-            SettingsContractSha256: AdvancedGiQualificationContract.SettingsContractSha256);
+            SettingsContractSha256: AdvancedGiQualificationContract.SettingsContractSha256,
+            BuildCommit: document.BuildCommit,
+            SettingsFingerprintSha256: document.SettingsFingerprintSha256,
+            CorpusSha256: document.CorpusSha256,
+            ContentProfileId: document.ContentProfileId,
+            SceneAssetSha256: document.SceneAssetSha256);
         AdvancedGiQualificationGateResult admitted = manifest.Evaluate(
             AdvancedGiPrerequisiteFeature.OpacityMicromaps,
             exactContext,
@@ -95,7 +100,12 @@ public sealed class AdvancedGiQualificationManifestTests
             1u,
             true,
             document.ShaderBundleSha256,
-            AdvancedGiQualificationContract.SettingsContractSha256);
+            AdvancedGiQualificationContract.SettingsContractSha256,
+            document.BuildCommit,
+            document.SettingsFingerprintSha256,
+            document.CorpusSha256,
+            document.ContentProfileId,
+            document.SceneAssetSha256);
 
         AdvancedGiQualificationGateResult missing = manifest.Evaluate(
             AdvancedGiPrerequisiteFeature.OpacityMicromaps,
@@ -211,7 +221,12 @@ public sealed class AdvancedGiQualificationManifestTests
             ApiVersion: 1u,
             FeatureSupported: false,
             ShaderBundleSha256: document.ShaderBundleSha256,
-            SettingsContractSha256: AdvancedGiQualificationContract.SettingsContractSha256);
+            SettingsContractSha256: AdvancedGiQualificationContract.SettingsContractSha256,
+            BuildCommit: document.BuildCommit,
+            SettingsFingerprintSha256: document.SettingsFingerprintSha256,
+            CorpusSha256: document.CorpusSha256,
+            ContentProfileId: document.ContentProfileId,
+            SceneAssetSha256: document.SceneAssetSha256);
 
         AdvancedGiQualificationGateResult result = manifest.Evaluate(
             AdvancedGiPrerequisiteFeature.OpacityMicromaps,
@@ -300,6 +315,9 @@ public sealed class AdvancedGiQualificationManifestTests
         string prerequisite = Hex('b');
         string shader = Hex('c');
         string corpus = Hex('d');
+        string settingsFingerprint = Hex('1');
+        string sceneAsset = Hex('2');
+        const string ContentProfile = "sponza-production-v1";
         string build = new('e', 40);
         AdvancedGiQualificationDeviceRule[] rules =
         [
@@ -354,7 +372,10 @@ public sealed class AdvancedGiQualificationManifestTests
             PrerequisiteQualificationId = prerequisite,
             ShaderBundleSha256 = shader,
             SettingsContractSha256 = AdvancedGiQualificationContract.SettingsContractSha256,
+            SettingsFingerprintSha256 = settingsFingerprint,
             CorpusSha256 = corpus,
+            ContentProfileId = ContentProfile,
+            SceneAssetSha256 = sceneAsset,
             BuildCommit = build,
             ApprovalId = "reviewed-c1-qualification-20260801",
             ApprovedAtUtc = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero),
@@ -380,7 +401,10 @@ public sealed class AdvancedGiQualificationManifestTests
                     BuildCommit = build,
                     ShaderBundleSha256 = shader,
                     SettingsContractSha256 = feature.SettingsContractSha256,
+                    SettingsFingerprintSha256 = settingsFingerprint,
                     CorpusSha256 = corpus,
+                    ContentProfileId = ContentProfile,
+                    SceneAssetSha256 = sceneAsset,
                     PrerequisiteQualificationId = prerequisite,
                     PassedChecks = AdvancedGiQualificationContract.GetRequiredChecks(role).ToArray(),
                     Measurements = CreateMeasurements(role, candidateP95Milliseconds),

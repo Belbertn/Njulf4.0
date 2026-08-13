@@ -83,7 +83,7 @@ public readonly record struct SimpleDdgiDirectionSampleIdentity(
     /// Increment when field meaning, bit packing, or hash inputs change. This
     /// value belongs in persisted/source-cache ABI validation, not settings.
     /// </summary>
-    public const uint AbiVersion = 0x4333_0006u;
+    public const uint AbiVersion = 0x4333_0007u;
 
     public const int IntraLeafComponentBitCount = 16;
     public const uint IntraLeafComponentMask = 0xffffu;

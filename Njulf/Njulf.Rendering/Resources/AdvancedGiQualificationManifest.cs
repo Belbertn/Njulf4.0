@@ -40,11 +40,11 @@ public enum AdvancedGiQualificationEvidenceRole : byte
 /// </summary>
 public static class AdvancedGiQualificationContract
 {
-    public const uint ManifestSchemaRevision = 2u;
-    public const uint EvidenceReportSchemaRevision = 2u;
+    public const uint ManifestSchemaRevision = 3u;
+    public const uint EvidenceReportSchemaRevision = 3u;
     public const int MaximumManifestBytes = 256 * 1024;
     public const int MaximumEvidenceArtifactBytes = 16 * 1024 * 1024;
-    public const int MaximumFeatures = 4;
+    public const int MaximumFeatures = 5;
     public const int MaximumDeviceRulesPerFeature = 8;
     public const int MaximumArtifactsPerFeature = 64;
     public const int MinimumIndependentRuns = 3;
@@ -108,9 +108,20 @@ public static class AdvancedGiQualificationContract
         "generation-time-pdf-identity"
     ];
 
+    private static readonly string[] ReceiverFeedbackCorrectnessChecks =
+    [
+        "feature-isolation",
+        "integrated-parity",
+        "reference-quality",
+        "all-required-producers",
+        "exact-compaction-reference-parity",
+        "generation-and-viewport-publication"
+    ];
+
     public static string SettingsContractSha256 { get; } = ComputeSettingsContractSha256();
 
     public static bool IsQualifiableFeature(AdvancedGiPrerequisiteFeature feature) => feature is
+        AdvancedGiPrerequisiteFeature.ReceiverFeedback or
         AdvancedGiPrerequisiteFeature.OpacityMicromaps or
         AdvancedGiPrerequisiteFeature.DirectionalGuiding or
         AdvancedGiPrerequisiteFeature.TaggedCaustics or
@@ -118,6 +129,8 @@ public static class AdvancedGiQualificationContract
 
     public static uint GetFeatureAbiRevision(AdvancedGiPrerequisiteFeature feature) => feature switch
     {
+        AdvancedGiPrerequisiteFeature.ReceiverFeedback =>
+            SimpleDdgiReceiverFeedbackGpuSortAbi.Version,
         AdvancedGiPrerequisiteFeature.OpacityMicromaps => OpacityMicromapRuntimeAbi.Version,
         AdvancedGiPrerequisiteFeature.DirectionalGuiding => SimpleDdgiGuidingGpuAbi.Version,
         AdvancedGiPrerequisiteFeature.TaggedCaustics => GiCausticGpuAbi.Version,
@@ -127,6 +140,8 @@ public static class AdvancedGiQualificationContract
 
     public static string GetAlgorithmRevision(AdvancedGiPrerequisiteFeature feature) => feature switch
     {
+        AdvancedGiPrerequisiteFeature.ReceiverFeedback =>
+            "b1-exact-multi-producer-compaction/v1",
         AdvancedGiPrerequisiteFeature.OpacityMicromaps => "c1-ext-four-state-static-blas/v1",
         AdvancedGiPrerequisiteFeature.DirectionalGuiding => "c3-equal-area-mis-guiding/v2",
         AdvancedGiPrerequisiteFeature.TaggedCaustics => "c4-tagged-world-photon-cache/v1",
@@ -145,10 +160,16 @@ public static class AdvancedGiQualificationContract
     public static IReadOnlyList<string> GetRequiredChecks(
         AdvancedGiPrerequisiteFeature feature,
         AdvancedGiQualificationEvidenceRole role) =>
-        feature == AdvancedGiPrerequisiteFeature.DirectionalGuiding &&
-        role == AdvancedGiQualificationEvidenceRole.Correctness
-            ? DirectionalGuidingCorrectnessChecks
-            : GetRequiredChecks(role);
+        role != AdvancedGiQualificationEvidenceRole.Correctness
+            ? GetRequiredChecks(role)
+            : feature switch
+            {
+                AdvancedGiPrerequisiteFeature.ReceiverFeedback =>
+                    ReceiverFeedbackCorrectnessChecks,
+                AdvancedGiPrerequisiteFeature.DirectionalGuiding =>
+                    DirectionalGuidingCorrectnessChecks,
+                _ => GetRequiredChecks(role)
+            };
 
     internal static string NormalizeSha256(string? value)
     {
@@ -185,7 +206,7 @@ public static class AdvancedGiQualificationContract
     private static string ComputeSettingsContractSha256()
     {
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, "advanced-gi-settings-contract/v1");
+        Append(hash, "advanced-gi-settings-contract/v2");
         AppendEnum<SimpleDdgiReceiverFeedbackMode>(hash);
         AppendEnum<DdgiOpacityMicromapMode>(hash);
         AppendEnum<SimpleDdgiDirectionalGuidingMode>(hash);
@@ -196,6 +217,7 @@ public static class AdvancedGiQualificationContract
         Append(hash, $"frames={MinimumReferenceFrames.ToString(CultureInfo.InvariantCulture)}");
         Append(hash, $"soak={MinimumLongRunSeconds.ToString(CultureInfo.InvariantCulture)}");
         Append(hash, "c1-floor=max(0.05ms,3pct-total-gi)");
+        Append(hash, "b1-floor=exact-producer-parity-and-no-total-time-regression");
         Append(hash, "c3-floor=20pct-error-or-10pct-time");
         Append(hash,
             $"c3-statistical-cases={MinimumDirectionalGuidingStatisticalCases.ToString(CultureInfo.InvariantCulture)}");
@@ -209,6 +231,8 @@ public static class AdvancedGiQualificationContract
             $"c3-maintenance-floor={MinimumDirectionalGuidingMaintenanceFraction.ToString("R", CultureInfo.InvariantCulture)}");
         foreach (string check in DirectionalGuidingCorrectnessChecks)
             Append(hash, "c3-check=" + check);
+        foreach (string check in ReceiverFeedbackCorrectnessChecks)
+            Append(hash, "b1-check=" + check);
         Append(hash, "c4-floor=20pct-mask-error");
         Append(hash, "c5-floor=20pct-post-b3-and-beat-equal-cost-b3");
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
@@ -309,6 +333,14 @@ public sealed record AdvancedGiQualificationMeasurements
     public ulong DirectionalGuidingDirectionPdfIdentityMismatchCount { get; init; }
     public ulong DirectionalGuidingIndependentAuditFailureCount { get; init; }
     public ulong DirectionalGuidingUniformMaintenanceFailureCount { get; init; }
+    /// <summary>Required B1 producer mask observed in every qualified run.</summary>
+    public uint ReceiverFeedbackRequiredProducerMask { get; init; }
+    /// <summary>Union of producers with fence-complete authoritative output.</summary>
+    public uint ReceiverFeedbackObservedProducerMask { get; init; }
+    /// <summary>Exact compacted records that differed from the CPU/reference oracle.</summary>
+    public ulong ReceiverFeedbackReferenceMismatchCount { get; init; }
+    /// <summary>Published summaries rejected for generation, viewport, or producer identity.</summary>
+    public ulong ReceiverFeedbackPublicationRejectionCount { get; init; }
 }
 
 public sealed record AdvancedGiQualificationEvidenceReport
@@ -324,7 +356,10 @@ public sealed record AdvancedGiQualificationEvidenceReport
     public string BuildCommit { get; init; } = string.Empty;
     public string ShaderBundleSha256 { get; init; } = string.Empty;
     public string SettingsContractSha256 { get; init; } = string.Empty;
+    public string SettingsFingerprintSha256 { get; init; } = string.Empty;
     public string CorpusSha256 { get; init; } = string.Empty;
+    public string ContentProfileId { get; init; } = string.Empty;
+    public string SceneAssetSha256 { get; init; } = string.Empty;
     public string PrerequisiteQualificationId { get; init; } = string.Empty;
     public string[] PassedChecks { get; init; } = Array.Empty<string>();
     public AdvancedGiQualificationMeasurements Measurements { get; init; } = new();
@@ -339,7 +374,10 @@ public sealed record AdvancedGiFeatureQualificationDocument
     public string PrerequisiteQualificationId { get; init; } = string.Empty;
     public string ShaderBundleSha256 { get; init; } = string.Empty;
     public string SettingsContractSha256 { get; init; } = string.Empty;
+    public string SettingsFingerprintSha256 { get; init; } = string.Empty;
     public string CorpusSha256 { get; init; } = string.Empty;
+    public string ContentProfileId { get; init; } = string.Empty;
+    public string SceneAssetSha256 { get; init; } = string.Empty;
     public string BuildCommit { get; init; } = string.Empty;
     public string ApprovalId { get; init; } = string.Empty;
     public DateTimeOffset ApprovedAtUtc { get; init; }
@@ -363,12 +401,26 @@ public readonly record struct AdvancedGiRuntimeQualificationContext(
     uint ApiVersion,
     bool FeatureSupported,
     string ShaderBundleSha256,
-    string SettingsContractSha256)
+    string SettingsContractSha256,
+    string BuildCommit,
+    string SettingsFingerprintSha256,
+    string CorpusSha256,
+    string ContentProfileId,
+    string SceneAssetSha256)
 {
     public bool IsWellFormed => VendorId != 0u && DeviceId != 0u &&
         DriverVersion != 0u && ApiVersion != 0u &&
         AdvancedGiQualificationContract.NormalizeSha256(ShaderBundleSha256).Length == 64 &&
-        AdvancedGiQualificationContract.NormalizeSha256(SettingsContractSha256).Length == 64;
+        AdvancedGiQualificationContract.NormalizeSha256(SettingsContractSha256).Length == 64 &&
+        IsCommit(BuildCommit) &&
+        AdvancedGiQualificationContract.NormalizeSha256(SettingsFingerprintSha256).Length == 64 &&
+        AdvancedGiQualificationContract.NormalizeSha256(CorpusSha256).Length == 64 &&
+        AdvancedGiQualificationContract.IsCanonicalToken(ContentProfileId, 256) &&
+        AdvancedGiQualificationContract.NormalizeSha256(SceneAssetSha256).Length == 64;
+
+    private static bool IsCommit(string? value) => value is { Length: >= 40 and <= 64 } &&
+        string.Equals(value, value.ToLowerInvariant(), StringComparison.Ordinal) &&
+        value.All(Uri.IsHexDigit);
 }
 
 public readonly record struct AdvancedGiQualificationGateResult(
@@ -385,6 +437,16 @@ public readonly record struct AdvancedGiQualificationGateResult(
             string.IsNullOrWhiteSpace(detail) ? "advanced-gi-qualification-rejected" : detail,
             string.Empty);
 }
+
+public readonly record struct AdvancedGiAuthenticatedQualificationBinding(
+    string QualificationId,
+    string PrerequisiteQualificationId,
+    string BuildCommit,
+    string ShaderBundleSha256,
+    string SettingsFingerprintSha256,
+    string CorpusSha256,
+    string ContentProfileId,
+    string SceneAssetSha256);
 
 /// <summary>
 /// Immutable, load-authenticated qualification set. There is intentionally no public mutation
@@ -405,6 +467,49 @@ public sealed class AdvancedGiQualificationManifest
             new Dictionary<AdvancedGiPrerequisiteFeature, AuthenticatedEntry>()));
 
     public int Count => _entries.Count;
+
+    /// <summary>
+    /// Reports whether the authenticated manifest contains a pinned entry for
+    /// a feature. This does not imply that the current device/runtime context
+    /// passes that entry; <see cref="Evaluate"/> remains authoritative.
+    /// </summary>
+    public bool Contains(AdvancedGiPrerequisiteFeature feature) =>
+        AdvancedGiQualificationContract.IsQualifiableFeature(feature) &&
+        _entries.ContainsKey(feature);
+
+    public bool TryGetQualificationId(
+        AdvancedGiPrerequisiteFeature feature,
+        out string qualificationId)
+    {
+        if (_entries.TryGetValue(feature, out AuthenticatedEntry? entry))
+        {
+            qualificationId = "sha256:" + entry.QualificationId;
+            return true;
+        }
+        qualificationId = string.Empty;
+        return false;
+    }
+
+    public bool TryGetBinding(
+        AdvancedGiPrerequisiteFeature feature,
+        out AdvancedGiAuthenticatedQualificationBinding binding)
+    {
+        if (!_entries.TryGetValue(feature, out AuthenticatedEntry? entry))
+        {
+            binding = default;
+            return false;
+        }
+        binding = new AdvancedGiAuthenticatedQualificationBinding(
+            "sha256:" + entry.QualificationId,
+            "sha256:" + entry.PrerequisiteQualificationId,
+            entry.BuildCommit,
+            "sha256:" + entry.ShaderBundleSha256,
+            "sha256:" + entry.SettingsFingerprintSha256,
+            "sha256:" + entry.CorpusSha256,
+            entry.ContentProfileId,
+            "sha256:" + entry.SceneAssetSha256);
+        return true;
+    }
 
     public AdvancedGiQualificationGateResult Evaluate(
         AdvancedGiPrerequisiteFeature feature,
@@ -441,6 +546,41 @@ public sealed class AdvancedGiQualificationManifest
             return AdvancedGiQualificationGateResult.Reject("advanced-gi-shader-bundle-evidence-mismatch", entry.QualificationId);
         if (!FixedSha256Equals(context.SettingsContractSha256, entry.SettingsContractSha256))
             return AdvancedGiQualificationGateResult.Reject("advanced-gi-settings-contract-evidence-mismatch", entry.QualificationId);
+        if (!string.Equals(context.BuildCommit, entry.BuildCommit,
+                StringComparison.Ordinal))
+        {
+            return AdvancedGiQualificationGateResult.Reject(
+                "advanced-gi-build-commit-evidence-mismatch",
+                entry.QualificationId);
+        }
+        if (!FixedSha256Equals(
+                context.SettingsFingerprintSha256,
+                entry.SettingsFingerprintSha256))
+        {
+            return AdvancedGiQualificationGateResult.Reject(
+                "advanced-gi-settings-fingerprint-evidence-mismatch",
+                entry.QualificationId);
+        }
+        if (!FixedSha256Equals(context.CorpusSha256, entry.CorpusSha256))
+        {
+            return AdvancedGiQualificationGateResult.Reject(
+                "advanced-gi-corpus-evidence-mismatch",
+                entry.QualificationId);
+        }
+        if (!string.Equals(context.ContentProfileId, entry.ContentProfileId,
+                StringComparison.Ordinal))
+        {
+            return AdvancedGiQualificationGateResult.Reject(
+                "advanced-gi-content-profile-evidence-mismatch",
+                entry.QualificationId);
+        }
+        if (!FixedSha256Equals(context.SceneAssetSha256,
+                entry.SceneAssetSha256))
+        {
+            return AdvancedGiQualificationGateResult.Reject(
+                "advanced-gi-scene-asset-evidence-mismatch",
+                entry.QualificationId);
+        }
 
         foreach (AdvancedGiQualificationDeviceRule rule in entry.DeviceRules)
         {
@@ -488,7 +628,12 @@ public sealed class AdvancedGiQualificationManifest
             PrerequisiteQualificationId = document.PrerequisiteQualificationId.ToLowerInvariant();
             ShaderBundleSha256 = document.ShaderBundleSha256.ToLowerInvariant();
             SettingsContractSha256 = document.SettingsContractSha256.ToLowerInvariant();
+            SettingsFingerprintSha256 =
+                document.SettingsFingerprintSha256.ToLowerInvariant();
             CorpusSha256 = document.CorpusSha256.ToLowerInvariant();
+            ContentProfileId = document.ContentProfileId;
+            SceneAssetSha256 = document.SceneAssetSha256.ToLowerInvariant();
+            BuildCommit = document.BuildCommit;
             BindingId = bindingId;
             QualificationId = document.QualificationId.ToLowerInvariant();
             DeviceRules = rules;
@@ -500,7 +645,11 @@ public sealed class AdvancedGiQualificationManifest
         public string PrerequisiteQualificationId { get; }
         public string ShaderBundleSha256 { get; }
         public string SettingsContractSha256 { get; }
+        public string SettingsFingerprintSha256 { get; }
         public string CorpusSha256 { get; }
+        public string ContentProfileId { get; }
+        public string SceneAssetSha256 { get; }
+        public string BuildCommit { get; }
         public string BindingId { get; }
         public string QualificationId { get; }
         public IReadOnlyList<AdvancedGiQualificationDeviceRule> DeviceRules { get; }
@@ -530,14 +679,17 @@ public static class AdvancedGiQualificationManifestCodec
     {
         ArgumentNullException.ThrowIfNull(document);
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AdvancedGiQualificationContract.Append(hash, "advanced-gi-feature-binding/v1");
+        AdvancedGiQualificationContract.Append(hash, "advanced-gi-feature-binding/v2");
         AdvancedGiQualificationContract.Append(hash, ((byte)document.Feature).ToString(CultureInfo.InvariantCulture));
         AdvancedGiQualificationContract.Append(hash, document.FeatureAbiRevision.ToString(CultureInfo.InvariantCulture));
         AdvancedGiQualificationContract.Append(hash, document.AlgorithmRevision ?? string.Empty);
         AdvancedGiQualificationContract.Append(hash, document.PrerequisiteQualificationId?.ToLowerInvariant() ?? string.Empty);
         AdvancedGiQualificationContract.Append(hash, document.ShaderBundleSha256?.ToLowerInvariant() ?? string.Empty);
         AdvancedGiQualificationContract.Append(hash, document.SettingsContractSha256?.ToLowerInvariant() ?? string.Empty);
+        AdvancedGiQualificationContract.Append(hash, document.SettingsFingerprintSha256?.ToLowerInvariant() ?? string.Empty);
         AdvancedGiQualificationContract.Append(hash, document.CorpusSha256?.ToLowerInvariant() ?? string.Empty);
+        AdvancedGiQualificationContract.Append(hash, document.ContentProfileId ?? string.Empty);
+        AdvancedGiQualificationContract.Append(hash, document.SceneAssetSha256?.ToLowerInvariant() ?? string.Empty);
         AdvancedGiQualificationContract.Append(hash, document.BuildCommit?.ToLowerInvariant() ?? string.Empty);
         foreach (AdvancedGiQualificationDeviceRule rule in (document.DeviceRules ?? [])
                      .OrderBy(static rule => rule.RuleId, StringComparer.Ordinal))
@@ -560,7 +712,7 @@ public static class AdvancedGiQualificationManifestCodec
     {
         string bindingId = ComputeBindingId(document);
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AdvancedGiQualificationContract.Append(hash, "advanced-gi-feature-qualification/v1");
+        AdvancedGiQualificationContract.Append(hash, "advanced-gi-feature-qualification/v2");
         AdvancedGiQualificationContract.Append(hash, bindingId);
         AdvancedGiQualificationContract.Append(hash, document.ApprovalId ?? string.Empty);
         AdvancedGiQualificationContract.Append(hash, document.ApprovedAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
@@ -775,7 +927,9 @@ public static class AdvancedGiQualificationManifestCodec
         if (AdvancedGiQualificationContract.NormalizeSha256(document.PrerequisiteQualificationId).Length != 64 ||
             AdvancedGiQualificationContract.NormalizeSha256(document.ShaderBundleSha256).Length != 64 ||
             AdvancedGiQualificationContract.NormalizeSha256(document.SettingsContractSha256).Length != 64 ||
+            AdvancedGiQualificationContract.NormalizeSha256(document.SettingsFingerprintSha256).Length != 64 ||
             AdvancedGiQualificationContract.NormalizeSha256(document.CorpusSha256).Length != 64 ||
+            AdvancedGiQualificationContract.NormalizeSha256(document.SceneAssetSha256).Length != 64 ||
             AdvancedGiQualificationContract.NormalizeSha256(document.QualificationId).Length != 64)
         {
             throw Invalid("advanced-gi-qualification-feature-hash-invalid");
@@ -787,6 +941,8 @@ public static class AdvancedGiQualificationManifestCodec
             throw Invalid("advanced-gi-qualification-settings-contract-stale");
         }
         if (!IsCommit(document.BuildCommit) ||
+            !AdvancedGiQualificationContract.IsCanonicalToken(
+                document.ContentProfileId, 256) ||
             !AdvancedGiQualificationContract.IsCanonicalToken(document.ApprovalId, 256))
         {
             throw Invalid("advanced-gi-qualification-build-or-approval-identity-invalid");
@@ -924,7 +1080,13 @@ public static class AdvancedGiQualificationManifestCodec
             !string.Equals(report.BuildCommit, feature.BuildCommit, StringComparison.Ordinal) ||
             !HashTextEquals(report.ShaderBundleSha256, feature.ShaderBundleSha256) ||
             !HashTextEquals(report.SettingsContractSha256, feature.SettingsContractSha256) ||
+            !HashTextEquals(report.SettingsFingerprintSha256,
+                feature.SettingsFingerprintSha256) ||
             !HashTextEquals(report.CorpusSha256, feature.CorpusSha256) ||
+            !string.Equals(report.ContentProfileId, feature.ContentProfileId,
+                StringComparison.Ordinal) ||
+            !HashTextEquals(report.SceneAssetSha256,
+                feature.SceneAssetSha256) ||
             !HashTextEquals(report.PrerequisiteQualificationId, feature.PrerequisiteQualificationId))
         {
             throw Invalid("advanced-gi-qualification-evidence-binding-mismatch");
@@ -973,7 +1135,28 @@ public static class AdvancedGiQualificationManifestCodec
                 }
                 double baseline = measurements.BaselineReferenceError;
                 double candidate = measurements.CandidateReferenceError;
-                if (feature == AdvancedGiPrerequisiteFeature.OpacityMicromaps)
+                if (feature == AdvancedGiPrerequisiteFeature.ReceiverFeedback)
+                {
+                    uint required =
+                        measurements.ReceiverFeedbackRequiredProducerMask;
+                    uint observed =
+                        measurements.ReceiverFeedbackObservedProducerMask;
+                    if (!SimpleDdgiReceiverFeedbackCaptureSourceAbi
+                            .IsValidProducerMask(required) ||
+                        !SimpleDdgiReceiverFeedbackCaptureSourceAbi
+                            .IsValidProducerMask(observed) ||
+                        (observed & required) != required ||
+                        measurements.ReceiverFeedbackReferenceMismatchCount !=
+                            0UL ||
+                        measurements
+                            .ReceiverFeedbackPublicationRejectionCount != 0UL ||
+                        candidate > baseline + 1e-9)
+                    {
+                        throw Invalid(
+                            "advanced-gi-qualification-B1-exact-producer-parity-failed");
+                    }
+                }
+                else if (feature == AdvancedGiPrerequisiteFeature.OpacityMicromaps)
                 {
                     if (candidate > baseline + 1e-9)
                         throw Invalid("advanced-gi-qualification-C1-quality-neutrality-failed");
@@ -1009,6 +1192,12 @@ public static class AdvancedGiQualificationManifestCodec
                 double saved = measurements.BaselineTotalGiP95Milliseconds -
                     measurements.CandidateTotalGiP95Milliseconds;
                 double fraction = saved / measurements.BaselineTotalGiP95Milliseconds;
+                if (feature == AdvancedGiPrerequisiteFeature.ReceiverFeedback &&
+                    saved < 0.0)
+                {
+                    throw Invalid(
+                        "advanced-gi-qualification-B1-total-time-regressed");
+                }
                 if (feature == AdvancedGiPrerequisiteFeature.OpacityMicromaps &&
                     (saved < 0.05 || fraction < 0.03))
                 {
@@ -1090,7 +1279,29 @@ public static class AdvancedGiQualificationManifestCodec
             : root + Path.DirectorySeparatorChar;
         if (!resolved.StartsWith(rootPrefix, PathComparison))
             throw Invalid("advanced-gi-qualification-artifact-path-escapes-manifest-directory");
+        RejectLinkedArtifactSegments(root, resolved);
         return resolved;
+    }
+
+    private static void RejectLinkedArtifactSegments(
+        string root,
+        string artifact)
+    {
+        string relative = Path.GetRelativePath(root, artifact);
+        string current = root;
+        foreach (string segment in relative.Split(
+                     Path.DirectorySeparatorChar,
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if (!File.Exists(current) && !Directory.Exists(current))
+                return;
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw Invalid(
+                    "advanced-gi-qualification-artifact-linked-path-rejected");
+            }
+        }
     }
 
     private static bool IsCanonicalRelativePath(string? path)

@@ -4927,16 +4927,7 @@ namespace Njulf.Rendering.Data
             if (string.IsNullOrWhiteSpace(path))
                 throw new ArgumentException("Render settings path cannot be null or empty.", nameof(path));
 
-            var options = CreateJsonOptions();
-            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
-                RenderSettingsFile.FromSettings(this),
-                options);
-            if (payload.Length > MaximumSettingsFileBytes)
-            {
-                throw new InvalidOperationException(
-                    $"Render settings output contains {payload.Length} bytes, exceeding " +
-                    $"the {MaximumSettingsFileBytes}-byte limit.");
-            }
+            byte[] payload = SerializePersistencePayload();
 
             string fullPath = Path.GetFullPath(path);
             string directory =
@@ -4979,6 +4970,33 @@ namespace Njulf.Rendering.Data
                 if (File.Exists(temporaryPath))
                     File.Delete(temporaryPath);
             }
+        }
+
+        /// <summary>
+        /// Creates a detached, persistence-equivalent settings snapshot.
+        /// Renderer-owned callbacks and mutable child objects are deliberately
+        /// not shared with the source instance, making the result safe to edit
+        /// as a cold-start transaction while the live renderer keeps running.
+        /// </summary>
+        public RenderSettings CreateSnapshot()
+        {
+            var snapshot = new RenderSettings();
+            RenderSettingsFile.FromSettings(this).ApplyTo(snapshot);
+            return snapshot;
+        }
+
+        /// <summary>
+        /// Hashes the complete deterministic persisted document, including
+        /// non-GI settings. Advanced-GI qualification uses its narrower GI
+        /// fingerprint, while startup transaction integrity uses this hash so
+        /// an older profile cannot observe a different settings snapshot.
+        /// </summary>
+        public string ComputePersistenceSha256()
+        {
+            byte[] payload = SerializePersistencePayload();
+            return "sha256:" + Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(payload))
+                .ToLowerInvariant();
         }
 
         public static RenderSettings Load(string path)
@@ -5045,6 +5063,20 @@ namespace Njulf.Rendering.Data
             };
             options.Converters.Add(new JsonStringEnumConverter());
             return options;
+        }
+
+        private byte[] SerializePersistencePayload()
+        {
+            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
+                RenderSettingsFile.FromSettings(this),
+                CreateJsonOptions());
+            if (payload.Length > MaximumSettingsFileBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Render settings output contains {payload.Length} bytes, exceeding " +
+                    $"the {MaximumSettingsFileBytes}-byte limit.");
+            }
+            return payload;
         }
 
         private static float ClampScale(float value)

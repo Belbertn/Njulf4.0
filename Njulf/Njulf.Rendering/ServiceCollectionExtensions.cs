@@ -34,6 +34,10 @@ namespace Microsoft.Extensions.DependencyInjection
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
                     "NJULF_ADVANCED_GI_RUNTIME_EVIDENCE_BUNDLE"));
+        private string? _advancedGiStartupProfilePath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_ADVANCED_GI_STARTUP_PROFILE"));
 
         public bool EnableValidation
         {
@@ -100,7 +104,76 @@ namespace Microsoft.Extensions.DependencyInjection
         /// mutating the live renderer after <c>Initialize</c> cannot retroactively
         /// create an omitted graph branch.
         /// </summary>
-        public RenderSettings InitialSettings { get; } = new();
+        public RenderSettings InitialSettings { get; internal set; } = new();
+
+        /// <summary>
+        /// Optional cold-start profile. It is resolved immediately after the
+        /// application configuration callback, before Vulkan optional-device
+        /// features are requested.
+        /// </summary>
+        public string? AdvancedGiStartupProfilePath
+        {
+            get => _advancedGiStartupProfilePath;
+            set => _advancedGiStartupProfilePath =
+                RendererValidationSettings.NormalizeOptionalPath(value);
+        }
+
+        public AdvancedGiRuntimeContentBinding AdvancedGiContentBinding
+        {
+            get;
+            set;
+        }
+
+        public string AdvancedGiStartupProfileStatus { get; private set; } =
+            "not-configured";
+
+        internal void ResolveAdvancedGiStartupProfile()
+        {
+            if (_advancedGiStartupProfilePath is not { } path)
+                return;
+            if (!AdvancedGiStartupProfileCodec.TryLoad(
+                    path,
+                    out AdvancedGiStartupProfile? profile,
+                    out string detail) || profile is null)
+            {
+                // A named startup transaction is authoritative. Never combine
+                // a rejected/torn profile with ambient manifests or partially
+                // configured modes from a different launch mechanism.
+                AdvancedGiContentBinding = default;
+                _advancedGiPrerequisiteManifestPath = null;
+                _advancedGiQualificationManifestPath = null;
+                _advancedGiRuntimeEvidenceBundlePath = null;
+                AdvancedGiCandidateProfilePath = null;
+                GlobalIlluminationSettings gi =
+                    InitialSettings.GlobalIllumination;
+                gi.SimpleDdgiReceiverFeedbackMode =
+                    SimpleDdgiReceiverFeedbackMode.Off;
+                gi.DdgiOpacityMicromapMode = DdgiOpacityMicromapMode.Off;
+                gi.SimpleDdgiDirectionalGuidingMode =
+                    SimpleDdgiDirectionalGuidingMode.Off;
+                gi.GiCausticMode = GiCausticMode.Off;
+                gi.SimpleDdgiNearFieldResidualMode =
+                    SimpleDdgiNearFieldResidualMode.Off;
+                gi.SimpleDdgiReceiverFeedbackQualificationId = string.Empty;
+                gi.DdgiOpacityMicromapQualificationId = string.Empty;
+                gi.SimpleDdgiDirectionalGuidingQualificationId = string.Empty;
+                gi.GiCausticQualificationId = string.Empty;
+                gi.SimpleDdgiNearFieldResidualQualificationId = string.Empty;
+                AdvancedGiStartupProfileStatus = "rejected:" + detail;
+                return;
+            }
+
+            InitialSettings = profile.Settings;
+            AdvancedGiContentBinding = profile.ContentBinding;
+            _advancedGiPrerequisiteManifestPath =
+                profile.PrerequisiteManifestPath;
+            _advancedGiQualificationManifestPath =
+                profile.QualificationManifestPath;
+            _advancedGiRuntimeEvidenceBundlePath =
+                profile.RuntimeEvidenceBundlePath;
+            AdvancedGiCandidateProfilePath = profile.CandidateProfilePath;
+            AdvancedGiStartupProfileStatus = "accepted:valid";
+        }
 
         /// <summary>
         /// Optional Phase-0 frozen-contract manifest. Invalid input is rejected
@@ -136,6 +209,12 @@ namespace Microsoft.Extensions.DependencyInjection
             set => _advancedGiRuntimeEvidenceBundlePath =
                 RendererValidationSettings.NormalizeOptionalPath(value);
         }
+
+        /// <summary>
+        /// Optional bounded candidate authorization used only by explicit C4
+        /// and C5 experiment modes. AutoQualified never consumes this input.
+        /// </summary>
+        public string? AdvancedGiCandidateProfilePath { get; set; }
 
         /// <summary>
         /// Optional strongly typed configuration hook for C4/C5 evidence whose
@@ -232,6 +311,7 @@ namespace Microsoft.Extensions.DependencyInjection
 
             var options = new RenderingOptions();
             configure?.Invoke(options);
+            options.ResolveAdvancedGiStartupProfile();
 
             services.AddSingleton(options);
             services.AddSingleton<IWindow>(window);
@@ -326,6 +406,20 @@ namespace Microsoft.Extensions.DependencyInjection
             RenderingOptions options,
             RendererStartupLog? startupLog)
         {
+            const string profileStep = "AdvancedGI.StartupProfile";
+            if (options.AdvancedGiStartupProfilePath is not null)
+            {
+                startupLog?.StepStarted(
+                    profileStep,
+                    options.AdvancedGiStartupProfilePath);
+                startupLog?.StepSucceeded(
+                    profileStep,
+                    options.AdvancedGiStartupProfileStatus);
+            }
+
+            renderer.ConfigureAdvancedGiRuntimeContentBinding(
+                options.AdvancedGiContentBinding);
+
             const string prerequisiteStep =
                 "AdvancedGI.PrerequisiteManifest";
             if (options.AdvancedGiPrerequisiteManifestPath is { } prerequisitePath)
@@ -375,6 +469,21 @@ namespace Microsoft.Extensions.DependencyInjection
                     accepted
                         ? $"accepted:{detail}"
                         : $"rejected:{detail};C4-C5-canonical-fallback-retained");
+            }
+
+            const string candidateStep = "AdvancedGI.CandidateProfile";
+            if (options.AdvancedGiCandidateProfilePath is { } candidatePath)
+            {
+                startupLog?.StepStarted(candidateStep, candidatePath);
+                bool accepted = renderer
+                    .TryConfigureAdvancedGiCandidateProfileFile(
+                        candidatePath,
+                        out string detail);
+                startupLog?.StepSucceeded(
+                    candidateStep,
+                    accepted
+                        ? $"loaded:{detail};runtime-binding-pending"
+                        : $"rejected:{detail};candidate-modes-retain-fallback");
             }
 
             options.ConfigureAdvancedGiEvidence?.Invoke(renderer);

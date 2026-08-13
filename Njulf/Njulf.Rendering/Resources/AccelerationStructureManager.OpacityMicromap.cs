@@ -132,6 +132,42 @@ public sealed unsafe partial class AccelerationStructureManager
                 : ResolveOpacityMicromapGpuRuntimeUnsupportedDetail();
     }
 
+    /// <summary>
+    /// Applies the frame-safe content latch for AutoQualified C1. Revocation
+    /// immediately returns future BLAS selection to the ordinary path and
+    /// retires optional variants through the existing fence-aware lifecycle.
+    /// </summary>
+    public void SetOpacityMicromapRuntimeAdmission(
+        bool admitted,
+        string? rejectionDetail = null)
+    {
+        bool enabled = _opacityMicromapGpuRuntimeRequested && admitted &&
+            IsOpacityMicromapGpuRuntimeSupported();
+        if (_opacityMicromapGpuRuntimeEnabled == enabled)
+        {
+            if (!enabled && !string.IsNullOrWhiteSpace(rejectionDetail))
+                _opacityMicromapGpuRuntimeDetail = rejectionDetail.Trim();
+            return;
+        }
+
+        _opacityMicromapGpuRuntimeEnabled = enabled;
+        if (!enabled)
+        {
+            CancelAllOpacityMicromapGpuVariants(
+                string.IsNullOrWhiteSpace(rejectionDetail)
+                    ? "opacity-micromap-runtime-admission-revoked"
+                    : rejectionDetail.Trim());
+            _opacityMicromapRetryStates.Clear();
+            _opacityMicromapGpuRuntimeDetail =
+                string.IsNullOrWhiteSpace(rejectionDetail)
+                    ? "opacity-micromap-runtime-admission-revoked"
+                    : rejectionDetail.Trim();
+            return;
+        }
+
+        _opacityMicromapGpuRuntimeDetail = "opacity-micromap-runtime-ready";
+    }
+
     private bool IsOpacityMicromapGpuRuntimeSupported()
     {
         OpacityMicromapRuntimeCapabilities capabilities =
