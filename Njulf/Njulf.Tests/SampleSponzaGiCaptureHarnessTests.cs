@@ -23,8 +23,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             GlobalIlluminationEnabled = 1,
             GlobalIlluminationDdgiActive = 1,
             SimpleDdgiActive = 1,
-            DdgiProbeCount = 15_368,
-            DdgiActiveProbeCount = 15_368,
+            DdgiProbeCount = 16_122,
+            DdgiActiveProbeCount = 16_122,
             SimpleDdgiProbeResidency = new SimpleDdgiProbeResidencyTelemetry(
                 true,
                 SimpleDdgiProbeResidencyMode.SparseNearRing,
@@ -57,8 +57,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             GlobalIlluminationEnabled = 1,
             GlobalIlluminationDdgiActive = 1,
             SimpleDdgiActive = 1,
-            DdgiProbeCount = 15_368,
-            DdgiActiveProbeCount = 15_368,
+            DdgiProbeCount = 16_122,
+            DdgiActiveProbeCount = 16_122,
             SimpleDdgiProbeResidency = new SimpleDdgiProbeResidencyTelemetry(
                 true,
                 SimpleDdgiProbeResidencyMode.SparseNearRing,
@@ -105,11 +105,11 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
             Assert.That(contract.MotionTraversalFrameCount, Is.EqualTo(300));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v15"));
-            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_158));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v17"));
+            Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_164));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
-            Assert.That(contract.LowBookmark.Pitch, Is.EqualTo(0.38493663f));
+            Assert.That(contract.LowBookmark.Pitch, Is.EqualTo(-0.16f));
             Assert.That(contract.HighBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeHigh"));
             Assert.That(
                 SampleSponzaGiCaptureContract.VerticalTraversalName,
@@ -130,11 +130,13 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "outdoor-reference-patch",
                 "curtain-lit-side-floor",
                 "curtain-shadow-side-receiver",
-                "curtain-adjacent-bounce"
+                "curtain-adjacent-bounce",
+                "former-plaza-transition-strip"
             }));
             Assert.That(contract.Outputs.Select(static output => output.Name), Is.EquivalentTo(new[]
             {
                 "beauty",
+                "beauty-no-indirect-specular",
                 "direct-only",
                 "final-indirect",
                 "irradiance-log",
@@ -165,10 +167,18 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             SampleSponzaGiCaptureOutput directOnly = contract.Outputs.Single(static output => output.Name == "direct-only");
             Assert.That(directOnly.DisableGlobalIllumination, Is.True);
             Assert.That(directOnly.DisableEnvironmentLighting, Is.True);
+            SampleSponzaGiCaptureOutput noIndirectSpecular = contract.Outputs.Single(static output =>
+                output.Name == "beauty-no-indirect-specular");
+            Assert.That(noIndirectSpecular.DisableIndirectSpecularLighting, Is.True);
+            Assert.That(noIndirectSpecular.DisableGlobalIllumination, Is.False);
+            Assert.That(noIndirectSpecular.DisableEnvironmentLighting, Is.False);
             Assert.That(contract.Outputs[^1], Is.SameAs(directOnly));
             Assert.That(
                 contract.Outputs.Where(static output => output.Name != "direct-only"),
                 Has.None.Matches<SampleSponzaGiCaptureOutput>(static output => output.DisableEnvironmentLighting));
+            Assert.That(
+                contract.Outputs.Where(static output => output.Name != "beauty-no-indirect-specular"),
+                Has.None.Matches<SampleSponzaGiCaptureOutput>(static output => output.DisableIndirectSpecularLighting));
             Assert.That(contract.Outputs.Single(static output => output.Name == "ownership").DebugView,
                 Is.EqualTo(GlobalIlluminationDebugView.DdgiEffectiveWeight));
             Assert.That(contract.ReceiverRois, Has.All.Matches<SampleSponzaGiReceiverRoi>(roi => roi.RequireCoarserFallback));

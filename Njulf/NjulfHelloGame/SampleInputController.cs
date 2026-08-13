@@ -1502,7 +1502,9 @@ internal sealed class SampleInputController
 
         bool presentationFrame =
             _sponzaGiCaptureMode == SampleSponzaGiCaptureMode.PresentationReview &&
-            (output == null || string.Equals(output.Name, "beauty", StringComparison.Ordinal));
+            (output == null ||
+             string.Equals(output.Name, "beauty", StringComparison.Ordinal) ||
+             string.Equals(output.Name, "beauty-no-indirect-specular", StringComparison.Ordinal));
         if (presentationFrame)
             SampleSponzaGlobalIlluminationProfile.ApplyPresentationOverlay(_renderer.Settings);
         else if (_sponzaGiCaptureMode == SampleSponzaGiCaptureMode.PresentationReview)
@@ -1513,10 +1515,13 @@ internal sealed class SampleInputController
         gi.Enabled = output is { DisableGlobalIllumination: true } ? false : normalGiEnabled;
         gi.DebugView = output?.DebugView ?? GlobalIlluminationDebugView.None;
         bool disableEnvironmentLighting = output is { DisableEnvironmentLighting: true };
+        bool disableIndirectSpecularLighting =
+            output is { DisableIndirectSpecularLighting: true };
         _renderer.Settings.Environment.DiffuseIntensity = disableEnvironmentLighting
             ? 0.0f
             : _sponzaGiCaptureRestoreState?.EnvironmentDiffuseIntensity ?? 1.0f;
-        _renderer.Settings.Environment.SpecularIntensity = disableEnvironmentLighting
+        _renderer.Settings.Environment.SpecularIntensity =
+            disableEnvironmentLighting || disableIndirectSpecularLighting
             ? 0.0f
             : _sponzaGiCaptureRestoreState?.EnvironmentSpecularIntensity ?? 1.0f;
         _renderer.Settings.Debug.Enabled = true;
@@ -2181,7 +2186,10 @@ internal sealed class SampleInputController
             $"{prefix}: auto={(auto.Enabled ? "enabled" : "disabled")}, manual={_renderer.Settings.Exposure:F2}, " +
             $"effective={diagnostics.Exposure:F2}, avgLum={diagnostics.AutoExposureAverageLuminance:F4}, " +
             $"target={diagnostics.AutoExposureTargetExposure:F2}, key={auto.TargetLuminance:F2}, " +
-            $"range={auto.MinExposure:F2}-{auto.MaxExposure:F2}, speed={auto.AdaptationSpeed:F2}, stride={auto.SamplingStride}");
+            $"range={auto.MinExposure:F2}-{auto.MaxExposure:F2}, " +
+            $"percentiles={auto.LowPercentile:F0}-{auto.HighPercentile:F0}, " +
+            $"speed={auto.DarkToLightAdaptationSpeed:F2}/{auto.LightToDarkAdaptationSpeed:F2}, " +
+            $"stride={auto.SamplingStride}");
     }
 
     private void PrintBloomSettings(string prefix)

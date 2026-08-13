@@ -51,7 +51,10 @@ public sealed class SimpleDdgiReceiverCoverageValidatorTests
             Assert.That(
                 report.Layout.Volumes.Single(static volume => volume.Request.Id == "ring-2").Request.Spacing,
                 Is.EqualTo(11.25f).Within(0.0001f));
-            Assert.That(report.ExpectedRingRecenterEvents, Is.GreaterThan(0));
+            // The plaza-tuned near lattice now contains the complete locked
+            // low/high camera trajectory. A recenter here would reintroduce a
+            // temporal ownership change into the presentation sweep.
+            Assert.That(report.ExpectedRingRecenterEvents, Is.Zero);
         });
     }
 

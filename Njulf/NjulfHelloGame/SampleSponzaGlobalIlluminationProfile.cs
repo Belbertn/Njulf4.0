@@ -7,9 +7,10 @@ namespace NjulfHelloGame;
 
 /// <summary>
 /// Applies the production DDGI preset and Sponza's presentation settings.
-/// Sponza deliberately has no scene-specific probe layout: it exercises the
-/// same camera-relative rings used by arbitrary interiors and large worlds.
-/// Authored volumes remain an explicit, opt-in local quality control.
+/// Sponza deliberately has no authored probe volume: it exercises the same
+/// camera-relative rings used by arbitrary interiors and large worlds. The
+/// near-ring aspect ratio is tuned to the plaza's architectural footprint so
+/// a clipmap ownership boundary cannot bisect the default view.
 /// </summary>
 public static class SampleSponzaGlobalIlluminationProfile
 {
@@ -23,15 +24,16 @@ public static class SampleSponzaGlobalIlluminationProfile
     public const int DefaultDayOfYear = 172;
     public const float DefaultNorthOffsetDegrees = -115.0f;
     public const float DefaultTimeScale = 60.0f;
-    public const float DefaultTurbidity = 2.0f;
+    public const float DefaultTurbidity = 5.0f;
     public const float DefaultGroundAlbedo = 0.16f;
-    public const float DefaultAtmosphereIntensity = 0.14f;
+    public const float DefaultAtmosphereIntensity = 0.10f;
     public const float DefaultSolarIrradianceScale = 34.0f;
+    public const float DefaultIndirectIntensity = 1.15f;
 
     /// <summary>
-    /// Restores the generic DdgiHigh camera-relative layout. Reapplying the
-    /// profile is idempotent and cannot retain authored coverage from another
-    /// scene or a previous validation run.
+    /// Restores the bounded DdgiHigh camera-relative plaza layout. Reapplying
+    /// the profile is idempotent and cannot retain authored coverage from
+    /// another scene or a previous validation run.
     /// </summary>
     public static void Configure(RenderSettings settings)
     {
@@ -44,6 +46,21 @@ public static class SampleSponzaGlobalIlluminationProfile
         gi.EmergencyGiFallbackEnabled = false;
         gi.SimpleDdgiLayoutAdmissionMode = SimpleDdgiLayoutAdmissionMode.Degrade;
         gi.SimpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
+        // The former 28x14x28 near field ended at X ~= -7.4 in the default
+        // right-wall view. Its handoff to the much coarser mid field landed in
+        // the middle of the plaza floor and produced a coherent light stripe.
+        // Reallocate, rather than increase, the DdgiHigh probe budget: at the
+        // 0.95 density scale this lattice has 1.1875 m spacing and a
+        // 39.19x16.63x26.13 m core, fully containing Sponza's 38x25 m plan.
+        gi.SimpleDdgiAutomaticProbeDensityScale = 0.95f;
+        gi.SimpleDdgiNearRingGridSizeX = 34;
+        gi.SimpleDdgiNearRingGridSizeY = 15;
+        gi.SimpleDdgiNearRingGridSizeZ = 23;
+        // Once the coarse-ring leak is removed, shaded galleries expose the
+        // real fine-field transport instead of the previous artificial lift.
+        // A small physical receiver multiplier restores readable stone and
+        // curtain bounce while preserving the direct-only shadow structure.
+        gi.IndirectIntensity = DefaultIndirectIntensity;
         gi.SimpleDdgiAuthoredVolumes.Clear();
 
         ConfigureReferenceOutput(settings);
@@ -110,10 +127,11 @@ public static class SampleSponzaGlobalIlluminationProfile
         environment.NorthOffsetDegrees = DefaultNorthOffsetDegrees;
         environment.TimeScale = DefaultTimeScale;
 
-        // Clear maritime summer air. Hosek-Wilkie's RGB sky radiance and the
-        // directional solar irradiance use independent scales. Keep horizontal
-        // diffuse skylight near one tenth of direct sunlight so sky misses do
-        // not dominate every probe and flatten the courtyard.
+        // Mild coastal haze keeps the open-sky fill from becoming an artificial
+        // saturated-blue wash in the covered galleries. Hosek-Wilkie's RGB sky
+        // radiance and directional solar irradiance remain independent physical
+        // inputs. Keep diffuse daylight below one fifth of the horizontal sun
+        // so shadowed stone is readable without flattening contact shadows.
         environment.Turbidity = DefaultTurbidity;
         environment.GroundAlbedo = new Vector3(DefaultGroundAlbedo);
         environment.SunAngularDiameterDegrees = 0.53f;
@@ -170,18 +188,18 @@ public static class SampleSponzaGlobalIlluminationProfile
         if (settings == null)
             throw new ArgumentNullException(nameof(settings));
 
-        // Interactive presentation follows the camera into shaded galleries.
-        // ApplyValidationOverlay disables presentation processing for diagnostic
-        // outputs but now retains this same sun at a frozen clock. The procedural
-        // daylight calibration is intentionally bright in HDR. Keep the key
-        // below middle gray and allow the open courtyard to settle below 0.5
-        // exposure so sunlit stone retains contrast without crushing the
-        // DDGI-lit galleries.
+        // Meter the upper-middle of the histogram so deep shade remains shade
+        // instead of being lifted toward gray. The 12.5% key follows reflected
+        // light-meter calibration, while the daylight clamp preserves a useful
+        // separation between the open courtyard and the covered galleries.
         settings.AutoExposure.Enabled = true;
-        settings.AutoExposure.TargetLuminance = 0.05f;
-        settings.AutoExposure.MinExposure = 0.35f;
-        settings.AutoExposure.MaxExposure = 8.0f;
-        settings.AutoExposure.AdaptationSpeed = 2.0f;
+        settings.AutoExposure.TargetLuminance = 0.125f;
+        settings.AutoExposure.MinExposure = 0.25f;
+        settings.AutoExposure.MaxExposure = 2.0f;
+        settings.AutoExposure.LowPercentile = 70.0f;
+        settings.AutoExposure.HighPercentile = 95.0f;
+        settings.AutoExposure.DarkToLightAdaptationSpeed = 3.0f;
+        settings.AutoExposure.LightToDarkAdaptationSpeed = 1.0f;
         settings.Bloom.Enabled = true;
         settings.Bloom.MipCount = 6;
         settings.Fog.Enabled = false;

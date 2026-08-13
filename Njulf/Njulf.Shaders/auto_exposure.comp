@@ -17,9 +17,12 @@ layout(push_constant) uniform AutoExposurePushBlock
     float TargetLuminance;
     float PreviousExposure;
     float DeltaTime;
-    float AdaptationSpeed;
+    float DarkToLightAdaptationSpeed;
+    float LightToDarkAdaptationSpeed;
     float MinExposure;
     float MaxExposure;
+    float LowPercentile;
+    float HighPercentile;
     uint Mode;
     uint SamplingStride;
     uint HistogramBinCount;
@@ -68,26 +71,43 @@ void ReduceHistogram()
 
     uint binCount = max(pc.HistogramBinCount, 2u);
     uint sampleCount = 0u;
+
+    for (uint bin = 1u; bin < binCount; bin++)
+        sampleCount += ReadStorageWord(pc.HistogramBufferIndex, bin);
+
+    float lowPercentile = clamp(pc.LowPercentile * 0.01, 0.0, 0.9999);
+    float highPercentile = clamp(pc.HighPercentile * 0.01, lowPercentile + 0.0001, 1.0);
+    float lowRank = float(sampleCount) * lowPercentile;
+    float highRank = float(sampleCount) * highPercentile;
+    float acceptedSampleCount = max(highRank - lowRank, 0.0);
+    float cumulativeCount = 0.0;
     float weightedLogLuminance = 0.0;
 
     for (uint bin = 1u; bin < binCount; bin++)
     {
-        uint count = ReadStorageWord(pc.HistogramBufferIndex, bin);
-        sampleCount += count;
+        float count = float(ReadStorageWord(pc.HistogramBufferIndex, bin));
+        float nextCumulativeCount = cumulativeCount + count;
+        float acceptedCount = max(
+            min(nextCumulativeCount, highRank) - max(cumulativeCount, lowRank),
+            0.0);
         float t = (float(bin) - 0.5) / float(binCount - 1u);
         float binLogLuminance = pc.MinLogLuminance + t * pc.LogLuminanceRange;
-        weightedLogLuminance += float(count) * binLogLuminance;
+        weightedLogLuminance += acceptedCount * binLogLuminance;
+        cumulativeCount = nextCumulativeCount;
     }
 
-    float averageLuminance = sampleCount > 0u
-        ? exp2(weightedLogLuminance / float(sampleCount))
+    float averageLuminance = acceptedSampleCount > 0.0
+        ? exp2(weightedLogLuminance / acceptedSampleCount)
         : max(pc.TargetLuminance, 0.001);
     float targetExposure = clamp(
         pc.TargetLuminance / max(averageLuminance, 0.0001),
         pc.MinExposure,
         pc.MaxExposure);
     float previousExposure = clamp(pc.PreviousExposure, pc.MinExposure, pc.MaxExposure);
-    float adaptationAlpha = clamp(1.0 - exp(-max(pc.AdaptationSpeed, 0.0) * max(pc.DeltaTime, 0.0)), 0.0, 1.0);
+    float adaptationSpeed = targetExposure < previousExposure
+        ? pc.DarkToLightAdaptationSpeed
+        : pc.LightToDarkAdaptationSpeed;
+    float adaptationAlpha = clamp(1.0 - exp(-max(adaptationSpeed, 0.0) * max(pc.DeltaTime, 0.0)), 0.0, 1.0);
     float exposure = mix(previousExposure, targetExposure, adaptationAlpha);
 
     WriteStorageFloat(pc.ExposureStateBufferIndex, 0u, exposure);

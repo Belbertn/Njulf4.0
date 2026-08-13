@@ -1258,7 +1258,7 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(shared, Does.Contain(
-                    "float selectedTransitionOwnership = selected.validSupport * edgeWeight;"));
+                    "SimpleDdgiRadiometricOwnership(selected) * edgeWeight;"));
                 Assert.That(shared, Does.Contain(
                     "float selectedGatherWeight = edgeWeight;"));
                 Assert.That(shared, Does.Contain(
@@ -1272,14 +1272,14 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void SecondVolumeGather_EarlyOutRequiresCompleteTransitionOwnership()
+        public void SecondVolumeGather_UsesReceiverAvailabilityAuthorityAndPreservesEdgeTransitions()
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
 
             Assert.Multiple(() =>
             {
                 Assert.That(shared, Does.Contain(
-                    "float selectedTransitionOwnership = selected.validSupport * edgeWeight;"));
+                    "SimpleDdgiRadiometricOwnership(selected) * edgeWeight;"));
                 Assert.That(shared, Does.Contain(
                     "1.0 - selectedTransitionOwnership <= 0.00001"));
                 Assert.That(shared, Does.Contain("selected.transitionWeight = edgeWeight;"));

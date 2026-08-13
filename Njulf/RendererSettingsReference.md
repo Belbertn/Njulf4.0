@@ -50,10 +50,13 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | Setting | Purpose |
 | --- | --- |
 | `Enabled` | Enables auto exposure. |
-| `TargetLuminance` | Target average luminance. |
+| `TargetLuminance` | Display-linear gray value assigned to the metered luminance. The default is the reflected-light-meter value `0.125`. |
 | `MinExposure` | Minimum computed exposure. |
 | `MaxExposure` | Maximum computed exposure. |
-| `AdaptationSpeed` | Exposure adaptation speed. |
+| `LowPercentile` | Darkest histogram percentile excluded from metering. The default `70` keeps deep shade from pulling the whole frame toward gray. |
+| `HighPercentile` | Brightest histogram percentile included in metering. The default `95` rejects small highlight outliers. |
+| `DarkToLightAdaptationSpeed` | Adaptation speed when moving from a dark view into a bright one. |
+| `LightToDarkAdaptationSpeed` | Adaptation speed when moving from a bright view into a dark one; slower by default to mimic eye adaptation. |
 | `MinLogLuminance` | Lower log-luminance range for sampling. |
 | `MaxLogLuminance` | Upper log-luminance range for sampling. |
 | `SamplingStride` | Sampling stride for luminance reads. |

@@ -261,10 +261,13 @@ namespace Njulf.Rendering.Data
 
     public sealed class AutoExposureSettings
     {
-        private float _targetLuminance = 0.18f;
-        private float _minExposure = 0.05f;
-        private float _maxExposure = 16.0f;
-        private float _adaptationSpeed = 3.0f;
+        private float _targetLuminance = 0.125f;
+        private float _minExposure = 0.25f;
+        private float _maxExposure = 4.0f;
+        private float _lowPercentile = 70.0f;
+        private float _highPercentile = 95.0f;
+        private float _darkToLightAdaptationSpeed = 3.0f;
+        private float _lightToDarkAdaptationSpeed = 1.0f;
         private float _minLogLuminance = -10.0f;
         private float _maxLogLuminance = 4.0f;
         private int _samplingStride = 4;
@@ -294,10 +297,33 @@ namespace Njulf.Rendering.Data
             set => _maxExposure = Clamp(value, _minExposure, 1024.0f);
         }
 
-        public float AdaptationSpeed
+        public float LowPercentile
         {
-            get => _adaptationSpeed;
-            set => _adaptationSpeed = Clamp(value, 0.0f, 30.0f);
+            get => _lowPercentile;
+            set
+            {
+                _lowPercentile = Clamp(value, 0.0f, 99.99f);
+                if (_highPercentile <= _lowPercentile)
+                    _highPercentile = Math.Min(100.0f, _lowPercentile + 0.01f);
+            }
+        }
+
+        public float HighPercentile
+        {
+            get => _highPercentile;
+            set => _highPercentile = Clamp(value, _lowPercentile + 0.01f, 100.0f);
+        }
+
+        public float DarkToLightAdaptationSpeed
+        {
+            get => _darkToLightAdaptationSpeed;
+            set => _darkToLightAdaptationSpeed = Clamp(value, 0.0f, 30.0f);
+        }
+
+        public float LightToDarkAdaptationSpeed
+        {
+            get => _lightToDarkAdaptationSpeed;
+            set => _lightToDarkAdaptationSpeed = Clamp(value, 0.0f, 30.0f);
         }
 
         public float MinLogLuminance

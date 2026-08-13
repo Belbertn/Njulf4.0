@@ -6048,9 +6048,15 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     // every interior receiver sample a coarser ring as well. A second gather is
     // still required at a ring edge, after a bias-domain crossing, or when the
     // primary field lacks any representable fraction of valid probe data.
-    // A normalized fine estimate must not receive full authority while even a
-    // small trilinear corner mass is missing.
-    float selectedTransitionOwnership = selected.validSupport * edgeWeight;
+    // Probe lifecycle holes are not geometric ring edges. Apply the same
+    // availability authority used by final receiver composition before deciding
+    // whether to open a coarser field. Otherwise a single unavailable fine-ring
+    // corner can mix unobstructed coarse irradiance into an interior receiver,
+    // even though the normalized fine estimate already has full radiometric
+    // authority. The explicit edge weight remains outside that authority so
+    // actual clipmap transitions still gather and cross-fade to the outer ring.
+    float selectedTransitionOwnership =
+        SimpleDdgiRadiometricOwnership(selected) * edgeWeight;
     if (!selectedBiasOutsideSelectionDomain &&
         1.0 - selectedTransitionOwnership <= 0.00001)
     {

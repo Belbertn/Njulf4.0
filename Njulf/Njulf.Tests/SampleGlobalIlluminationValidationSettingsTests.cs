@@ -1,4 +1,5 @@
 using Njulf.Core.Math;
+using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
@@ -38,20 +39,27 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
         ulong persistentBytes = SimpleDdgiLayoutCompiler.EstimatePersistentBytes(
             ringProbeCount,
             gi.SimpleDdgiSampledAtlasEnabled);
+        float nearSpacing = gi.SimpleDdgiRingBaseSpacing *
+            gi.SimpleDdgiAutomaticProbeDensityScale;
+        float nearExtentX = (gi.SimpleDdgiNearRingGridSizeX - 1) * nearSpacing;
+        float nearExtentZ = (gi.SimpleDdgiNearRingGridSizeZ - 1) * nearSpacing;
 
         Assert.Multiple(() =>
         {
             Assert.That(gi.GiAccelerationStructureMemoryBudgetBytes, Is.EqualTo(DdgiHighAccelerationStructureBudgetBytes));
-            Assert.That(gi.IndirectIntensity, Is.EqualTo(1.0f));
+            Assert.That(
+                gi.IndirectIntensity,
+                Is.EqualTo(SampleSponzaGlobalIlluminationProfile.DefaultIndirectIntensity));
             Assert.That(gi.EnvironmentFallbackIntensity, Is.EqualTo(1.0f));
             Assert.That(gi.SimpleDdgiAuthoredVolumes, Is.Empty);
             Assert.That(gi.SimpleDdgiRingCount, Is.EqualTo(3));
             Assert.That(gi.SimpleDdgiRingBaseSpacing, Is.EqualTo(1.25f));
             Assert.That(gi.SimpleDdgiRingSpacingMultiplier, Is.EqualTo(3.0f));
+            Assert.That(gi.SimpleDdgiAutomaticProbeDensityScale, Is.EqualTo(0.95f));
             Assert.That(gi.SimpleDdgiVerticalRingPolicy, Is.EqualTo(SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis));
-            Assert.That(gi.SimpleDdgiNearRingGridSizeX, Is.EqualTo(28));
-            Assert.That(gi.SimpleDdgiNearRingGridSizeY, Is.EqualTo(14));
-            Assert.That(gi.SimpleDdgiNearRingGridSizeZ, Is.EqualTo(28));
+            Assert.That(gi.SimpleDdgiNearRingGridSizeX, Is.EqualTo(34));
+            Assert.That(gi.SimpleDdgiNearRingGridSizeY, Is.EqualTo(15));
+            Assert.That(gi.SimpleDdgiNearRingGridSizeZ, Is.EqualTo(23));
             Assert.That(gi.SimpleDdgiMidRingGridSizeX, Is.EqualTo(18));
             Assert.That(gi.SimpleDdgiMidRingGridSizeY, Is.EqualTo(10));
             Assert.That(gi.SimpleDdgiMidRingGridSizeZ, Is.EqualTo(18));
@@ -63,11 +71,41 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(gi.SimpleDdgiReducedBlendEnabled, Is.False);
             Assert.That(gi.FarFieldClipmapEnabled, Is.True);
             Assert.That(gi.FarFieldPagedEnabled, Is.True);
-            Assert.That(ringProbeCount, Is.EqualTo(15_368));
+            Assert.That(ringProbeCount, Is.EqualTo(16_122));
             Assert.That(ringProbeCount, Is.LessThanOrEqualTo(tierBudget.ProbeBudget));
             Assert.That(persistentBytes, Is.LessThanOrEqualTo(tierBudget.PersistentMemoryBudgetBytes));
+            Assert.That(nearSpacing, Is.EqualTo(1.1875f));
+            Assert.That(nearExtentX, Is.GreaterThanOrEqualTo(38.0f));
+            Assert.That(nearExtentZ, Is.GreaterThanOrEqualTo(25.0f));
             Assert.That(settings.AutoExposure.Enabled, Is.True);
             Assert.That(settings.Reflections.Enabled, Is.True);
+        });
+    }
+
+    [Test]
+    public void SponzaReflectionFallback_MainInfluenceContainsTheCompleteSceneAtFullAuthority()
+    {
+        var scene = new Scene();
+        SampleReflectionProbes.Configure(scene);
+
+        ReflectionProbe main = scene.ReflectionProbes.Single(static probe =>
+            probe.Name == "SampleRoomCenter");
+        var sceneMin = new Vector3(-17.0f, -1.0f, -10.0f);
+        var sceneMax = new Vector3(21.0f, 20.0f, 15.0f);
+        Vector3 fullAuthorityMin = main.Position - main.BoxExtents + new Vector3(main.BlendDistance);
+        Vector3 fullAuthorityMax = main.Position + main.BoxExtents - new Vector3(main.BlendDistance);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(main.Position, Is.EqualTo(new Vector3(0.0f, 2.0f, 0.0f)));
+            Assert.That(main.BoxExtents, Is.EqualTo(new Vector3(24.0f, 21.0f, 18.0f)));
+            Assert.That(main.BlendDistance, Is.EqualTo(3.0f));
+            Assert.That(fullAuthorityMin.X, Is.LessThanOrEqualTo(sceneMin.X));
+            Assert.That(fullAuthorityMin.Y, Is.LessThanOrEqualTo(sceneMin.Y));
+            Assert.That(fullAuthorityMin.Z, Is.LessThanOrEqualTo(sceneMin.Z));
+            Assert.That(fullAuthorityMax.X, Is.GreaterThanOrEqualTo(sceneMax.X));
+            Assert.That(fullAuthorityMax.Y, Is.GreaterThanOrEqualTo(sceneMax.Y));
+            Assert.That(fullAuthorityMax.Z, Is.GreaterThanOrEqualTo(sceneMax.Z));
         });
     }
 
@@ -150,9 +188,13 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.Environment.SpecularIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.AutoExposure.Enabled, Is.True);
-            Assert.That(settings.AutoExposure.TargetLuminance, Is.EqualTo(0.05f));
-            Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.35f));
-            Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(8.0f));
+            Assert.That(settings.AutoExposure.TargetLuminance, Is.EqualTo(0.125f));
+            Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.25f));
+            Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(2.0f));
+            Assert.That(settings.AutoExposure.LowPercentile, Is.EqualTo(70.0f));
+            Assert.That(settings.AutoExposure.HighPercentile, Is.EqualTo(95.0f));
+            Assert.That(settings.AutoExposure.DarkToLightAdaptationSpeed, Is.EqualTo(3.0f));
+            Assert.That(settings.AutoExposure.LightToDarkAdaptationSpeed, Is.EqualTo(1.0f));
             Assert.That(settings.Reflections.Enabled, Is.True);
             Assert.That(settings.Reflections.Mode, Is.EqualTo(ReflectionMode.StaticProbes));
             Assert.That(settings.Reflections.Intensity, Is.EqualTo(0.45f));
@@ -208,7 +250,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
     }
 
     [Test]
-    public void SponzaProfile_DefaultAtmosphereIsClearBlueSummerDay()
+    public void SponzaProfile_DefaultAtmosphereProvidesBoundedCoastalDaylightFill()
     {
         var settings = new RenderSettings();
         SampleSponzaGlobalIlluminationProfile.Configure(settings);
@@ -239,10 +281,10 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
         Assert.Multiple(() =>
         {
             Assert.That(settings.Environment.DayOfYear, Is.InRange(152, 243));
-            Assert.That(settings.Environment.Turbidity, Is.LessThanOrEqualTo(2.0f));
-            Assert.That(zenith.Z, Is.GreaterThan(zenith.X * 3.0f));
-            Assert.That(frame.SunRadiance.Z, Is.GreaterThan(frame.SunRadiance.X * 0.75f));
-            Assert.That(dynamicDiffuseToDirect, Is.InRange(0.08f, 0.15f));
+            Assert.That(settings.Environment.Turbidity, Is.InRange(4.0f, 6.0f));
+            Assert.That(zenith.Z, Is.InRange(zenith.X * 1.75f, zenith.X * 2.5f));
+            Assert.That(frame.SunRadiance.Z, Is.GreaterThan(frame.SunRadiance.X * 0.65f));
+            Assert.That(dynamicDiffuseToDirect, Is.InRange(0.15f, 0.19f));
         });
     }
 

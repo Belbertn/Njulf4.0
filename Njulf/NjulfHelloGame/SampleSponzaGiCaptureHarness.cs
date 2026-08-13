@@ -43,8 +43,9 @@ public sealed record SampleSponzaGiReceiverRoi(
 /// <summary>
 /// One image that must be emitted at each endpoint. <see cref="DisableGlobalIllumination"/>
 /// and <see cref="DisableEnvironmentLighting"/> give the direct-only reference
-/// a concrete, reversible definition rather than relying on a post-processing
-/// interpretation of a beauty image.
+/// a concrete, reversible definition. <see cref="DisableIndirectSpecularLighting"/>
+/// isolates the common local-probe, directional-DDGI, and sky-reflection path
+/// without perturbing diffuse transport.
 /// </summary>
 public sealed record SampleSponzaGiCaptureOutput(
     string Name,
@@ -52,7 +53,8 @@ public sealed record SampleSponzaGiCaptureOutput(
     GlobalIlluminationDebugView DebugView,
     bool DisableGlobalIllumination,
     string Description,
-    bool DisableEnvironmentLighting = false);
+    bool DisableEnvironmentLighting = false,
+    bool DisableIndirectSpecularLighting = false);
 
 public enum SampleSponzaGiCaptureStage : byte
 {
@@ -143,7 +145,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v15";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v17";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1600;
@@ -489,8 +491,14 @@ public sealed class SampleSponzaGiCaptureContract
         }
         if (!settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled)
             violations.Add("Thin-surface transmission must be enabled for the curtain qualification capture.");
-        if (!NearlyEqual(settings.GlobalIllumination.IndirectIntensity, 1.0f))
-            violations.Add("Sponza physical indirect intensity must be 1.0.");
+        if (!NearlyEqual(
+                settings.GlobalIllumination.IndirectIntensity,
+                SampleSponzaGlobalIlluminationProfile.DefaultIndirectIntensity))
+        {
+            violations.Add(
+                $"Sponza physical indirect intensity must be " +
+                $"{SampleSponzaGlobalIlluminationProfile.DefaultIndirectIntensity:0.00}.");
+        }
         if (!NearlyEqual(settings.GlobalIllumination.EnvironmentFallbackIntensity, 1.0f))
             violations.Add("Sponza environment fallback intensity must be 1.0.");
 
@@ -1084,12 +1092,12 @@ public sealed class SampleSponzaGiCaptureContract
         ValidateBookmark(HighBookmark, nameof(HighBookmark));
         ValidateBounds(SceneBounds, nameof(SceneBounds));
 
-        if (ReceiverRois.Count != 10)
+        if (ReceiverRois.Count != 11)
             throw new InvalidOperationException(
-                "The closure capture requires the established coverage ROIs plus lit-side, shadowed-side, and adjacent curtain transport ROIs.");
-        if (Outputs.Count != 27)
+                "The closure capture requires the established coverage ROIs plus the former clipmap/reflection transition strip.");
+        if (Outputs.Count != 28)
             throw new InvalidOperationException(
-                "The closure capture requires the twenty-seven locked beauty/direct/GI and sparse-residency attribution outputs.");
+                "The closure capture requires the twenty-eight locked beauty/A-B/direct/GI and sparse-residency attribution outputs.");
 
         ValidateDistinctNames(ReceiverRois.Select(static roi => roi.Name), "receiver ROI");
         ValidateDistinctNames(Outputs.Select(static output => output.Name), "output");
@@ -1124,13 +1132,31 @@ public sealed class SampleSponzaGiCaptureContract
         }
         if (Outputs.Any(static output => output.Name != "direct-only" && output.DisableEnvironmentLighting))
             throw new InvalidOperationException("Only the direct-only output may disable environment surface lighting.");
+        SampleSponzaGiCaptureOutput noIndirectSpecular =
+            Outputs.Single(static output => output.Name == "beauty-no-indirect-specular");
+        if (!noIndirectSpecular.DisableIndirectSpecularLighting ||
+            noIndirectSpecular.DisableEnvironmentLighting ||
+            noIndirectSpecular.DisableGlobalIllumination ||
+            noIndirectSpecular.DebugView != GlobalIlluminationDebugView.None)
+        {
+            throw new InvalidOperationException(
+                "The indirect-specular A/B output must preserve diffuse GI and disable only indirect specular lighting.");
+        }
+        if (Outputs.Any(static output =>
+                output.Name != "beauty-no-indirect-specular" &&
+                output.DisableIndirectSpecularLighting))
+        {
+            throw new InvalidOperationException(
+                "Only the beauty-no-indirect-specular output may disable indirect specular lighting.");
+        }
 
         string[] requiredReceiverRois =
         [
             "central-upper-facade", "right-upper-wall", "left-gallery-interior",
             "right-gallery-interior", "arcade-interior", "outdoor-reference-patch",
             "curtain-lit-side-floor", "curtain-shadow-side-receiver",
-            "curtain-adjacent-bounce", "upper-gallery-hotspot-pair"
+            "curtain-adjacent-bounce", "upper-gallery-hotspot-pair",
+            "former-plaza-transition-strip"
         ];
         if (!ReceiverRois.Select(static roi => roi.Name).OrderBy(static value => value, StringComparer.Ordinal).SequenceEqual(
                 requiredReceiverRois.OrderBy(static value => value, StringComparer.Ordinal), StringComparer.Ordinal))
@@ -1140,7 +1166,7 @@ public sealed class SampleSponzaGiCaptureContract
 
         string[] requiredOutputs =
         [
-            "beauty", "direct-only", "final-indirect", "irradiance-log", "sampled-irradiance", "final-diffuse",
+            "beauty", "beauty-no-indirect-specular", "direct-only", "final-indirect", "irradiance-log", "sampled-irradiance", "final-diffuse",
             "volume-contributor", "gather-clipmap", "gather-blend-weight", "gather-fallback",
             "spatial-coverage", "support", "visibility", "ownership", "fallback",
             "data-confidence", "directional-support", "confidence-chain",
@@ -1182,7 +1208,10 @@ public sealed class SampleSponzaGiCaptureContract
                 "SponzaPlazaUpperFacadeLow",
                 new Vector3(6.0f, 1.35f, 0.0f),
                 -MathF.PI * 0.5f,
-                0.38493663f,
+                // Exact low-plaza viewpoint from the Sponza right-wall preset.
+                // Capture diagnostics extract view pitch with the opposite sign,
+                // so the supplied +0.16 snapshot corresponds to camera -0.16.
+                -0.16f,
                 fov,
                 0.05f,
                 250.0f),
@@ -1260,10 +1289,23 @@ public sealed class SampleSponzaGiCaptureContract
                     new BoundingBox(new Vector3(-6.5f, -0.25f, 2.25f), new Vector3(6.5f, 4.5f, 3.75f)),
                     3.75f,
                     "Adjacent wall/floor strip expected to retain the authored colored curtain bounce.",
+                    RequireCoarserFallback: true),
+                new SampleSponzaGiReceiverRoi(
+                    "former-plaza-transition-strip",
+                    new BoundingBox(new Vector3(-10.0f, -0.35f, -7.5f), new Vector3(-4.0f, 2.5f, 12.5f)),
+                    1.25f,
+                    "Plaza floor and lower receivers spanning the former X ~= -8 DDGI/reflection ownership boundary.",
                     RequireCoarserFallback: true)
             ],
             [
                 new SampleSponzaGiCaptureOutput("beauty", "beauty", GlobalIlluminationDebugView.None, false, "Full reference beauty image."),
+                new SampleSponzaGiCaptureOutput(
+                    "beauty-no-indirect-specular",
+                    "beauty-no-indirect-specular",
+                    GlobalIlluminationDebugView.None,
+                    false,
+                    "Presentation beauty with local-probe, directional-DDGI, and global indirect specular disabled.",
+                    DisableIndirectSpecularLighting: true),
                 new SampleSponzaGiCaptureOutput("final-indirect", "final-indirect", GlobalIlluminationDebugView.FinalIndirect, false, "Final indirect debug output."),
                 new SampleSponzaGiCaptureOutput("irradiance-log", "irradiance-log", GlobalIlluminationDebugView.DdgiIrradiance, false, "Log-normalized structured-gather irradiance; exact zero remains black while low nonzero energy stays visible."),
                 new SampleSponzaGiCaptureOutput("sampled-irradiance", "sampled-irradiance", GlobalIlluminationDebugView.DdgiSampledIrradiance, false, "Sampled DDGI irradiance before final diffuse composition."),
@@ -1342,6 +1384,7 @@ public sealed class SampleSponzaGiCaptureContract
         Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultGroundAlbedo);
         Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultAtmosphereIntensity);
         Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultSolarIrradianceScale);
+        Append(builder, SampleSponzaGlobalIlluminationProfile.DefaultIndirectIntensity);
         AppendVector(builder, DirectionalLightDirection);
         AppendVector(builder, DirectionalLightColor);
         Append(builder, DirectionalLightIntensity);
@@ -1366,6 +1409,7 @@ public sealed class SampleSponzaGiCaptureContract
             Append(builder, output.DebugView.ToString());
             Append(builder, output.DisableGlobalIllumination ? 1 : 0);
             Append(builder, output.DisableEnvironmentLighting ? 1 : 0);
+            Append(builder, output.DisableIndirectSpecularLighting ? 1 : 0);
             Append(builder, output.Description);
         }
 

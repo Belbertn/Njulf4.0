@@ -166,9 +166,12 @@ namespace Njulf.Rendering.Pipeline
                 TargetLuminance = settings.TargetLuminance,
                 PreviousExposure = _autoExposure.PreviousExposure,
                 DeltaTime = GetDeltaSeconds(),
-                AdaptationSpeed = settings.AdaptationSpeed,
+                DarkToLightAdaptationSpeed = settings.DarkToLightAdaptationSpeed,
+                LightToDarkAdaptationSpeed = settings.LightToDarkAdaptationSpeed,
                 MinExposure = settings.MinExposure,
                 MaxExposure = settings.MaxExposure,
+                LowPercentile = settings.LowPercentile,
+                HighPercentile = settings.HighPercentile,
                 Mode = mode,
                 SamplingStride = (uint)settings.SamplingStride,
                 HistogramBinCount = AutoExposureManager.HistogramBinCount

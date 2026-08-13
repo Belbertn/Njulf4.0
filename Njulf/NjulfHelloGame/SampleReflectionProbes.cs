@@ -16,8 +16,12 @@ internal static class SampleReflectionProbes
             Name = "SampleRoomCenter",
             Position = new Vector3(0.0f, 2.0f, 0.0f),
             Shape = ReflectionProbeShape.Box,
-            BoxExtents = new Vector3(8.0f, 4.0f, 8.0f),
-            BlendDistance = 1.5f,
+            // Keep the capture point at human height, but place the influence
+            // boundary beyond the complete Sponza scene. The old X = +/-8
+            // boundary faded at the same world position as the near-DDGI ring
+            // and amplified its diffuse transition with an IBL source swap.
+            BoxExtents = new Vector3(24.0f, 21.0f, 18.0f),
+            BlendDistance = 3.0f,
             Intensity = 1.0f,
             Priority = 0,
             BoxProjection = true

@@ -2527,9 +2527,12 @@ namespace Njulf.Rendering.Data
         public float TargetLuminance;
         public float PreviousExposure;
         public float DeltaTime;
-        public float AdaptationSpeed;
+        public float DarkToLightAdaptationSpeed;
+        public float LightToDarkAdaptationSpeed;
         public float MinExposure;
         public float MaxExposure;
+        public float LowPercentile;
+        public float HighPercentile;
         public uint Mode;
         public uint SamplingStride;
         public uint HistogramBinCount;
