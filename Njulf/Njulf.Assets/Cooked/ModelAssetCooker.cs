@@ -700,7 +700,10 @@ public sealed class ModelAssetCooker : IDisposable
             processed.SubMeshes.Select((subMesh, index) => new CookedModelSubObject(
                 subMesh.Name, index, subMesh.MaterialSlot, subMesh.NodeIndex, subMesh.SkinIndex, subMesh.SkinningBindTransform)).ToArray(),
             processed.BoundingBox,
-            processed.BoundingSphere);
+            processed.BoundingSphere)
+        {
+            Lights = model.Lights.ToArray()
+        };
         CookedOpacityMicromapModelChunk? opacityMicromapChunk =
             TryProduceOpacityMicromapChunk(
                 options,

@@ -54,8 +54,8 @@ public sealed class SimpleDdgiLayoutCompilerTests
             // fixed 16-byte double-banked receiver-contribution record for
             // every virtual probe (15,368 * 16 = 245,888 bytes), the 256-byte
             // params-header ABI, and the current transport-audit summary.
-            Assert.That(dense.LiveBytes, Is.EqualTo(135_143_408UL));
-            Assert.That(sparse.LiveBytes, Is.EqualTo(108_234_496UL));
+            Assert.That(dense.LiveBytes, Is.EqualTo(135_143_512UL));
+            Assert.That(sparse.LiveBytes, Is.EqualTo(108_234_600UL));
             Assert.That(dense.LiveBytes - sparse.LiveBytes,
                 Is.EqualTo(26_908_912UL));
             Assert.That(sparse.VirtualProbeCount, Is.EqualTo(15_368));

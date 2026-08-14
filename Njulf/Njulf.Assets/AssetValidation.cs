@@ -119,6 +119,12 @@ public sealed record AssetValidationMetrics(
     IReadOnlyList<string> UsedExtensions,
     IReadOnlyList<string> RequiredExtensions)
 {
+    public int LightCount { get; init; }
+    public int PointLightCount { get; init; }
+    public int DirectionalLightCount { get; init; }
+    public int SpotLightCount { get; init; }
+    public int SkippedLightCount { get; init; }
+
     public static AssetValidationMetrics Empty { get; } = new(
         MeshCount: 0,
         SubMeshCount: 0,
@@ -740,7 +746,11 @@ public sealed class AssetValidator
             AssetImportMessageCode.FoliageBlendAlphaWarning or
             AssetImportMessageCode.FoliageAlphaCutoffWarning or
             AssetImportMessageCode.FoliageDoubleSidedWarning or
-            AssetImportMessageCode.UnsupportedTranslucencyWarning;
+            AssetImportMessageCode.UnsupportedTranslucencyWarning or
+            AssetImportMessageCode.UnsupportedLightType or
+            AssetImportMessageCode.LightNodeMissing or
+            AssetImportMessageCode.LightRangeClamped or
+            AssetImportMessageCode.AnimatedLightUnsupported;
     }
 
     private static bool IsUnsupportedFeatureResult(ModelImportResult result)
@@ -839,7 +849,17 @@ public sealed class AssetValidator
             UsedExtensionCount: usedExtensions.Count,
             RequiredExtensionCount: requiredExtensions.Count,
             UsedExtensions: usedExtensions,
-            RequiredExtensions: requiredExtensions);
+            RequiredExtensions: requiredExtensions)
+        {
+            LightCount = mesh.Lights.Count,
+            PointLightCount = mesh.Lights.Count(static light =>
+                light.Type == Njulf.Core.Scene.ModelLightType.Point),
+            DirectionalLightCount = mesh.Lights.Count(static light =>
+                light.Type == Njulf.Core.Scene.ModelLightType.Directional),
+            SpotLightCount = mesh.Lights.Count(static light =>
+                light.Type == Njulf.Core.Scene.ModelLightType.Spot),
+            SkippedLightCount = mesh.ImportDiagnostics.SkippedLightCount
+        };
     }
 
     private static IEnumerable<ModelTextureSource> GetTextureSources(ModelMesh mesh)
@@ -1076,6 +1096,7 @@ public sealed class AssetValidator
     private static void ValidateOptions(
         AssetValidationOptions options)
     {
+        ModelLightImportUtilities.ValidateOptions(options.ImporterOptions);
         if (options.Timeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(
@@ -1134,7 +1155,12 @@ public sealed class AssetValidator
             GlobalScale = source.GlobalScale,
             FlipWindingOrder = source.FlipWindingOrder,
             PreferredFormat = source.PreferredFormat,
-            Backend = source.Backend
+            Backend = source.Backend,
+            ImportLights = source.ImportLights,
+            DefaultImportedLightRange = source.DefaultImportedLightRange,
+            MaximumImportedLightRange = source.MaximumImportedLightRange,
+            ImportedLightAttenuationCutoff =
+                source.ImportedLightAttenuationCutoff
         };
     }
 }

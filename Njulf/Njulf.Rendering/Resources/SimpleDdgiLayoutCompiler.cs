@@ -194,6 +194,7 @@ namespace Njulf.Rendering.Resources
         public ulong TransportSourceCacheLegacyBytes { get; init; }
         public ulong TransportSourceCacheCompact28Bytes { get; init; }
         public ulong TransportSourceCacheCompact24Bytes { get; init; }
+        public ulong TransportSourceCacheGlossyMaterialSidecarBytes { get; init; }
         public ulong TransportSourceCacheAlignmentBytes { get; init; }
         public int TransportSourceCacheLegacyRayCount { get; init; }
         public int TransportSourceCacheCompact28RayCount { get; init; }
@@ -609,7 +610,7 @@ namespace Njulf.Rendering.Resources
                 physicalProbeCount64 * directionalRecordBytes);
             bool directionalParityRequested = requestedGlossyMode is
                 SimpleDdgiGlossyTransportMode.OneBounce or
-                SimpleDdgiGlossyTransportMode.RecursiveExperimental;
+                SimpleDdgiGlossyTransportMode.RecursiveCertified;
             ulong directionalParityRequired = directionalParityRequested
                 ? directionalCanonicalRequired
                 : 0UL;
@@ -619,6 +620,23 @@ namespace Njulf.Rendering.Resources
                     SimpleDdgiDirectionalRadianceMode.Off &&
                 physicalProbeCapacity > 0 &&
                 directionalRequired <= directionalRadianceBudgetBytes;
+            bool recursiveGlossySidecarAdmitted =
+                requestedGlossyMode !=
+                    SimpleDdgiGlossyTransportMode.RecursiveCertified ||
+                storageLayout is { Regions.Count: > 0 } &&
+                storageLayout.Regions.All(static region =>
+                    region.UsesRecursiveGlossySidecar &&
+                    region.GlossyMaterialSidecarBytes == checked(
+                        (ulong)(uint)region.PhysicalProbeCount *
+                        (ulong)(uint)region.RaysPerProbe * sizeof(uint)));
+            SimpleDdgiGlossyTransportMode admittedGlossyMode =
+                directionalAdmitted
+                    ? requestedGlossyMode ==
+                            SimpleDdgiGlossyTransportMode.RecursiveCertified &&
+                        !recursiveGlossySidecarAdmitted
+                        ? SimpleDdgiGlossyTransportMode.OneBounce
+                        : requestedGlossyMode
+                    : SimpleDdgiGlossyTransportMode.Off;
 
             return new SimpleDdgiMemoryPlan(
                 probes,
@@ -664,6 +682,10 @@ namespace Njulf.Rendering.Resources
                 TransportSourceCacheCompact24Bytes = concreteTransportBuffers
                     ? storageLayout?.Compact24Bytes ?? 0UL
                     : 0UL,
+                TransportSourceCacheGlossyMaterialSidecarBytes =
+                    concreteTransportBuffers
+                        ? storageLayout?.GlossyMaterialSidecarBytes ?? 0UL
+                        : 0UL,
                 TransportSourceCacheAlignmentBytes = concreteTransportBuffers
                     ? storageLayout?.AlignmentPaddingBytes ?? 0UL
                     // The immutable graph retains a descriptor-safe placeholder
@@ -720,9 +742,7 @@ namespace Njulf.Rendering.Resources
                 DirectionalRadianceAdmittedMode = directionalAdmitted
                     ? requestedDirectionalMode
                     : SimpleDdgiDirectionalRadianceMode.Off,
-                GlossyTransportMode = directionalAdmitted
-                    ? requestedGlossyMode
-                    : SimpleDdgiGlossyTransportMode.Off,
+                GlossyTransportMode = admittedGlossyMode,
                 DirectionalRadianceAbiVersion = directionalAdmitted
                     ? DdgiDirectionalRadianceAbi.ForMode(requestedDirectionalMode)
                     : DdgiDirectionalRadianceAbi.Off,
@@ -738,9 +758,12 @@ namespace Njulf.Rendering.Resources
                         ? "disabled"
                         : physicalProbeCapacity == 0
                             ? "no-physical-probes"
-                            : directionalAdmitted
+                            : directionalAdmitted &&
+                                recursiveGlossySidecarAdmitted
                                 ? string.Empty
-                                : "independent-memory-budget"
+                                : !directionalAdmitted
+                                    ? "independent-memory-budget"
+                                    : "recursive-glossy-sidecar-unavailable"
             };
         }
 
@@ -1490,7 +1513,13 @@ namespace Njulf.Rendering.Resources
                     {
                         MaximumTraceDistance = request.MaximumTraceDistance,
                         UseHotColdLayout = useHotColdSourceCacheLayout &&
-                            resolvedStoragePackingMode.UsesPackedCache()
+                            resolvedStoragePackingMode.UsesPackedCache(),
+                        UseRecursiveGlossySidecar =
+                            glossyTransportMode ==
+                                SimpleDdgiGlossyTransportMode
+                                    .RecursiveCertified &&
+                            directionalRadianceMode !=
+                                SimpleDdgiDirectionalRadianceMode.Off
                     });
                     mirrorRequests.Add(new SimpleDdgiSampledAtlasRangeRequest(
                         selectedOrder,

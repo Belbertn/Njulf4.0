@@ -323,6 +323,12 @@ public sealed class PerformanceSnapshotWriterTests
                 Assert.That(snapshot.GlobalIllumination.SimpleDdgiNearFieldResidual
                         .Tiles.CompactedTileCount,
                     Is.EqualTo(7U));
+                Assert.That(snapshot.GlobalIllumination.SimpleDdgiNearFieldResidual
+                        .AdaptiveResolution.ActiveExtent.Scale,
+                    Is.EqualTo(SimpleDdgiNearFieldResidualExecutionScale.Quarter));
+                Assert.That(snapshot.GlobalIllumination.SimpleDdgiNearFieldResidual
+                        .AdaptiveResolution.LastP95Microseconds,
+                    Is.EqualTo(400UL));
             });
         }
         finally
@@ -1292,5 +1298,31 @@ public sealed class PerformanceSnapshotWriterTests
             tiles: new SimpleDdgiNearFieldResidualTileTelemetry(
                 16U, 12U, 7U, 5U, 0U, 112UL),
             captureIdentifiers: new SimpleDdgiNearFieldResidualCaptureIdentifiers(
-                "c5-debug-capture", "c5-reference-capture"));
+                "c5-debug-capture", "c5-reference-capture"))
+        with
+        {
+            AdaptiveResolution =
+                new SimpleDdgiNearFieldResidualAdaptiveResolutionTelemetry(
+                    SampledExtent:
+                        new SimpleDdgiNearFieldResidualExecutionExtent(
+                            480,
+                            270,
+                            SimpleDdgiNearFieldResidualExecutionScale.Quarter,
+                            1U),
+                    ActiveExtent:
+                        new SimpleDdgiNearFieldResidualExecutionExtent(
+                            480,
+                            270,
+                            SimpleDdgiNearFieldResidualExecutionScale.Quarter,
+                            1U),
+                    MaximumScale:
+                        SimpleDdgiNearFieldResidualExecutionScale.Half,
+                    LastP95Microseconds: 400UL,
+                    AuthoritativeTimingSampleCount: 240UL,
+                    WindowSampleCount: 120U,
+                    PromotionWindowStreak: 2U,
+                    PromotionCount: 0U,
+                    DemotionCount: 0U,
+                    ResolutionChangedAfterSample: false)
+        };
 }

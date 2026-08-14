@@ -21,7 +21,7 @@ public sealed class EditorController
     private readonly IContentManager _content;
     private readonly LightManager _lightManager;
     private readonly MaterialManager _materialManager;
-    private readonly ISceneLightStore _lightStore;
+    private readonly IMutableSceneLightStore _lightStore;
     private readonly ISceneMaterialOverrideStore _materialStore;
     private readonly SceneDocumentWriter _writer = new();
     private readonly IEditorOverlayHost? _overlay;
@@ -60,6 +60,7 @@ public sealed class EditorController
         Camera = camera;
         _lightStore = new LightManagerSceneLightStore(_lightManager);
         _materialStore = new MaterialManagerSceneMaterialOverrideStore(_materialManager);
+        ModelLightRuntimeController.Attach(_scene, _content, _lightStore);
     }
 
     public bool Enabled { get; private set; }
@@ -130,7 +131,7 @@ public sealed class EditorController
             Select(EditorSelection.ForEntity(EditorSelectionKind.Object, objectHit!.Id));
             return true;
         }
-        foreach (LightRecord light in _lightManager.GetLightRecords())
+        foreach (LightRecord light in GetLights())
         {
             var sphere = new BoundingSphere(new Vector3(light.Light.Position.X, light.Light.Position.Y, light.Light.Position.Z), 0.35f);
             if (!ray.Intersects(sphere, out float distance) || distance >= nearest)
@@ -191,7 +192,9 @@ public sealed class EditorController
 
     public bool UpdateSelectedLight(in Light light)
     {
-        if (Selection.Kind != EditorSelectionKind.Light || !_lightManager.UpdateLight(Selection.LightHandle, light))
+        if (Selection.Kind != EditorSelectionKind.Light ||
+            IsImportedModelLight(Selection.Id) ||
+            !_lightManager.UpdateLight(Selection.LightHandle, light))
             return false;
         IsDirty = true;
         return true;
@@ -199,16 +202,49 @@ public sealed class EditorController
 
     public bool SetSelectedLightName(string name)
     {
-        if (Selection.Kind != EditorSelectionKind.Light || !_lightManager.SetLightName(Selection.LightHandle, name)) return false;
+        if (Selection.Kind != EditorSelectionKind.Light ||
+            IsImportedModelLight(Selection.Id) ||
+            !_lightManager.SetLightName(Selection.LightHandle, name)) return false;
         IsDirty = true;
         return true;
     }
 
-    public IReadOnlyList<LightRecord> GetLights() => _lightManager.GetLightRecords();
+    /// <summary>Returns authored lights only; model-imported lights are aggregate runtime state.</summary>
+    public IReadOnlyList<LightRecord> GetLights()
+    {
+        IReadOnlyList<LightRecord> lights = _lightManager.GetLightRecords();
+        ModelLightRuntimeController? imported =
+            _scene.GetComponent<ModelLightRuntimeController>();
+        if (imported == null || imported.ActiveLightCount == 0)
+            return lights;
+        return lights.Where(light => !imported.IsImportedLight(light.Id)).ToArray();
+    }
+
+    public ImportedModelLightEditorStatus GetImportedModelLightStatus()
+    {
+        ModelLightRuntimeController controller = GetImportedModelLightController();
+        return new ImportedModelLightEditorStatus(
+            controller.ImportedModelLightsEnabled,
+            controller.ModelPlacementCount,
+            controller.ModelPlacementsWithLightsCount,
+            controller.ImportedLightDefinitionCount,
+            controller.ActiveLightCount,
+            controller.LastError);
+    }
+
+    public void SetImportedModelLightsEnabled(bool enabled)
+    {
+        ModelLightRuntimeController controller = GetImportedModelLightController();
+        if (controller.ImportedModelLightsEnabled == enabled)
+            return;
+        controller.SetImportedModelLightsEnabled(enabled);
+        IsDirty = true;
+    }
 
     public bool TryGetSelectedLight(out Light light)
     {
-        if (Selection.Kind == EditorSelectionKind.Light)
+        if (Selection.Kind == EditorSelectionKind.Light &&
+            !IsImportedModelLight(Selection.Id))
             return _lightManager.TryGetLight(Selection.LightHandle, out light);
         light = default;
         return false;
@@ -504,6 +540,7 @@ public sealed class EditorController
         _scene.Id = document.Id;
         _lightStore.Clear();
         new SceneDocumentLoader(_content).Populate(document, _scene, _lightStore, materials: _materialStore);
+        ModelLightRuntimeController.Attach(_scene, _content, _lightStore);
         IsDirty = false;
         Select(EditorSelection.None);
     }
@@ -526,7 +563,8 @@ public sealed class EditorController
     {
         if (kind == EditorSelectionKind.Light)
         {
-            if (!_lightManager.TryGetLightHandle(id, out LightHandle handle))
+            if (IsImportedModelLight(id) ||
+                !_lightManager.TryGetLightHandle(id, out LightHandle handle))
                 return false;
             Select(EditorSelection.ForLight(id, handle));
             return true;
@@ -559,6 +597,13 @@ public sealed class EditorController
         SelectionChanged?.Invoke(selection);
     }
 
+    private ModelLightRuntimeController GetImportedModelLightController() =>
+        _scene.GetComponent<ModelLightRuntimeController>() ??
+        ModelLightRuntimeController.Attach(_scene, _content, _lightStore);
+
+    private bool IsImportedModelLight(Guid id) =>
+        _scene.GetComponent<ModelLightRuntimeController>()?.IsImportedLight(id) == true;
+
     private static RenderObject? SelectOne(Model model, string selector)
     {
         if (selector == "*")
@@ -579,3 +624,11 @@ public sealed class EditorController
         return true;
     }
 }
+
+public readonly record struct ImportedModelLightEditorStatus(
+    bool Enabled,
+    int ModelPlacementCount,
+    int ModelPlacementsWithLightsCount,
+    int ImportedLightDefinitionCount,
+    int ActiveLightCount,
+    string? Error);

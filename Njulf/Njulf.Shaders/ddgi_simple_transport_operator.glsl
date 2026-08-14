@@ -15,22 +15,27 @@ bool SimpleDdgiTransportTryNormalizeLobes(
     SimpleDdgiParams params,
     vec3 reflectedInput,
     vec3 transmittedInput,
+    vec3 glossyInput,
     bool transmissionEnabled,
     out vec3 reflected,
     out vec3 transmitted,
+    out vec3 glossy,
     out float maximumBeforeNormalization,
-    out float scale)
+    out vec3 scale)
 {
     reflected = vec3(0.0);
     transmitted = vec3(0.0);
+    glossy = vec3(0.0);
     maximumBeforeNormalization = 0.0;
-    scale = 1.0;
+    scale = vec3(1.0);
 
     float q = params.transportAlbedoClamp;
     if (!SimpleDdgiTransportFinite(reflectedInput) ||
         !SimpleDdgiTransportFinite(transmittedInput) ||
+        !SimpleDdgiTransportFinite(glossyInput) ||
         any(lessThan(reflectedInput, vec3(0.0))) ||
         any(lessThan(transmittedInput, vec3(0.0))) ||
+        any(lessThan(glossyInput, vec3(0.0))) ||
         isnan(q) || isinf(q) || q < 0.0 || q >= 1.0 ||
         q > SIMPLE_DDGI_TRANSPORT_MAX_CERTIFIED_Q)
     {
@@ -42,16 +47,18 @@ bool SimpleDdgiTransportTryNormalizeLobes(
     // and could change the reflected/transmitted ratio.
     reflected = reflectedInput;
     transmitted = transmissionEnabled ? transmittedInput : vec3(0.0);
+    glossy = glossyInput;
+    vec3 total = reflected + transmitted + glossy;
     maximumBeforeNormalization = max(
-        reflected.r + transmitted.r,
-        max(reflected.g + transmitted.g, reflected.b + transmitted.b));
-    if (maximumBeforeNormalization > q && maximumBeforeNormalization > 0.0)
-    {
-        scale = q / maximumBeforeNormalization;
-        reflected *= scale;
-        transmitted *= scale;
-    }
-    return SimpleDdgiTransportFinite(reflected) && SimpleDdgiTransportFinite(transmitted);
+        total.r,
+        max(total.g, total.b));
+    scale = min(vec3(1.0), vec3(q) / max(total, vec3(0.000001)));
+    reflected *= scale;
+    transmitted *= scale;
+    glossy *= scale;
+    return SimpleDdgiTransportFinite(reflected) &&
+        SimpleDdgiTransportFinite(transmitted) &&
+        SimpleDdgiTransportFinite(glossy);
 }
 
 // Evaluates F(x)'s cached recursive bounce for one source-cache entry. The
@@ -68,7 +75,7 @@ vec3 EvaluateSimpleDdgiCachedRecursiveBounce(
     out float solverOwnershipSum,
     out float solverFallbackWeightSum,
     out bool invalid,
-    out float enforcedThroughput)
+    out vec3 enforcedThroughput)
 {
     reflectedBounceRadiance = vec3(0.0);
     transmittedBounceRadiance = vec3(0.0);
@@ -76,7 +83,7 @@ vec3 EvaluateSimpleDdgiCachedRecursiveBounce(
     solverOwnershipSum = 0.0;
     solverFallbackWeightSum = 0.0;
     invalid = false;
-    enforcedThroughput = 0.0;
+    enforcedThroughput = vec3(0.0);
 
     // Intermediate red/black colors are published to the canonical SSBO but
     // the sampled-image mirror is intentionally updated only after the final
@@ -106,52 +113,136 @@ vec3 EvaluateSimpleDdgiCachedRecursiveBounce(
     vec3 normal = hitKind > 1.5 ? -canonicalNormal : canonicalNormal;
     bool transmissionEnabled =
         (params.flags & SIMPLE_DDGI_FLAG_THIN_SURFACE_TRANSMISSION) != 0u;
+    bool recursiveGlossy =
+        SimpleDdgiGlossyTransportMode(params.residencyFlags) ==
+            SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_RECURSIVE_CERTIFIED;
+    vec3 glossyInput = vec3(0.0);
+    float roughnessWeight = 0.0;
+    float nDotV = 0.0;
+    if (recursiveGlossy)
+    {
+        if (!SimpleDdgiTransportFinite(source.specularF0) ||
+            any(lessThan(source.specularF0, vec3(0.0))) ||
+            isnan(source.roughness) || isinf(source.roughness) ||
+            source.roughness < 0.0 || source.roughness > 1.0)
+        {
+            invalid = true;
+            return vec3(0.0);
+        }
+
+        roughnessWeight = SimpleDdgiRoughSpecularWeight(
+            params.residencyFlags,
+            source.roughness);
+        nDotV = max(dot(normal, -normalize(source.direction)), 0.0);
+        if (roughnessWeight > 0.0 && nDotV > 0.0 &&
+            max(source.specularF0.r,
+                max(source.specularF0.g, source.specularF0.b)) > 0.0)
+        {
+            GPUEnvironmentData environment = ReadGiEnvironmentData();
+            if (environment.BrdfLutTextureIndex < 0)
+            {
+                invalid = true;
+                return vec3(0.0);
+            }
+            vec2 brdf = texture(
+                BindlessTextures[nonuniformEXT(
+                    environment.BrdfLutTextureIndex)],
+                vec2(nDotV, source.roughness)).rg;
+            vec3 f0 = clamp(source.specularF0, vec3(0.0), vec3(1.0));
+            vec3 fresnel = f0 +
+                (max(vec3(1.0 - source.roughness), f0) - f0) *
+                pow(clamp(1.0 - nDotV, 0.0, 1.0), 5.0);
+            glossyInput = max(
+                fresnel * brdf.x + vec3(brdf.y),
+                vec3(0.0)) *
+                max(environment.SpecularIntensity, 0.0) *
+                roughnessWeight *
+                clamp(source.materialOcclusion, 0.0, 1.0);
+        }
+    }
     vec3 reflected;
     vec3 transmitted;
+    vec3 glossy;
     float ignoredMaximum;
-    float ignoredScale;
+    vec3 ignoredScale;
     if (!SimpleDdgiTransportTryNormalizeLobes(
             params,
             source.diffuseReflectance,
             source.transmittedDiffuseReflectance,
+            glossyInput,
             transmissionEnabled,
             reflected,
             transmitted,
+            glossy,
             ignoredMaximum,
             ignoredScale))
     {
         invalid = true;
         return vec3(0.0);
     }
-    enforcedThroughput = max(
-        reflected.r + transmitted.r,
-        max(reflected.g + transmitted.g, reflected.b + transmitted.b));
+    // Preserve the full diagonal RGB gain. The legacy scalar contraction is
+    // its maximum component, but audit certification can now pair each
+    // channel's fixed-point defect with the gain that actually affects it.
+    enforcedThroughput = reflected + transmitted + glossy;
 
     vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) +
         probeState.relocation;
     vec3 hitPosition = probePosition + source.direction * source.distance;
     float surfaceOffset = max(0.03, volume.spacing * 0.02);
-    if (max(reflected.r, max(reflected.g, reflected.b)) > 0.0)
+    if (recursiveGlossy &&
+        max(glossy.r, max(glossy.g, glossy.b)) > 0.0)
+    {
+        vec3 reflectionDirection = reflect(
+            source.direction,
+            normal);
+        SetSimpleDdgiDirectionalRadianceQuery(
+            reflectionDirection,
+            source.roughness);
+        SetSimpleDdgiDirectionalRadianceQueryBuffer(
+            uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_PARITY_BUFFER_INDEX));
+    }
+    else
+    {
+        SetSimpleDdgiDirectionalRadianceQueryBuffer(0u);
+    }
+
+    if (max(reflected.r, max(reflected.g, reflected.b)) > 0.0 ||
+        max(glossy.r, max(glossy.g, glossy.b)) > 0.0)
     {
         float ownership;
         float fallbackWeight;
-        vec3 bouncedIrradiance = SampleSimpleDdgiSolverBounceIrradiance(
+        SimpleDdgiGatherResult reflectedGather;
+        vec3 bouncedIrradiance =
+            SampleSimpleDdgiSolverBounceIrradianceDetailed(
             params,
             hitPosition + normal * surfaceOffset,
             normal,
             -source.direction,
             ownership,
-            fallbackWeight);
+            fallbackWeight,
+            reflectedGather);
         solverGatherCount++;
         solverOwnershipSum += ownership;
         solverFallbackWeightSum += fallbackWeight;
         reflectedBounceRadiance = EvaluateGiDiffuseFromIrradiance(
             bouncedIrradiance,
             reflected);
+        if (max(glossy.r, max(glossy.g, glossy.b)) > 0.0)
+        {
+            float confidence = clamp(
+                reflectedGather.directionalRadianceSupport * ownership *
+                SimpleDdgiLeakAttenuation(reflectedGather, params),
+                0.0,
+                1.0);
+            reflectedBounceRadiance += max(
+                reflectedGather.directionalRadiance,
+                vec3(0.0)) * glossy * confidence;
+        }
     }
 
     if (max(transmitted.r, max(transmitted.g, transmitted.b)) > 0.0)
     {
+        SetSimpleDdgiDirectionalRadianceQueryBuffer(0u);
         float ownership;
         float fallbackWeight;
         vec3 transmittedIrradiance = SampleSimpleDdgiSolverBounceIrradiance(

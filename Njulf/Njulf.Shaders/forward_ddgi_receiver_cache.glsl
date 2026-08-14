@@ -20,11 +20,16 @@ struct ForwardDdgiReceiverCacheSample
 
 ForwardDdgiReceiverCacheSample SampleForwardDdgiReceiverCache(
     vec2 fragmentCoordinate,
-    uint cacheWidth)
+    vec2 screenDimensions)
 {
     // Cache scale is a compile-time power of two. Spell out the shift because
     // glslc otherwise retains an OpUDiv in this per-fragment hot path.
     uvec2 cacheCoordinate = uvec2(fragmentCoordinate) >> uvec2(1u);
+    // Derive the half-resolution row stride from the existing screen extent.
+    // This leaves the push-constant Time word available to C5's independent
+    // temporal sample seed when the cache and SSGI MRT are active together.
+    uint fullWidth = uint(max(round(screenDimensions.x), 1.0));
+    uint cacheWidth = (fullWidth + FORWARD_DDGI_RECEIVER_CACHE_SCALE - 1u) >> 1u;
     uint entryIndex = cacheCoordinate.y * cacheWidth + cacheCoordinate.x;
     // Sixteen-byte entries deliberately produce one naturally aligned vector
     // load. Only the FP16 payload lanes are consumed, allowing the driver to

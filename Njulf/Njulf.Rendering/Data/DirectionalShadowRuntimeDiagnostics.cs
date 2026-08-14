@@ -94,6 +94,45 @@ namespace Njulf.Rendering.Data
             UnresolvedCount: 0);
     }
 
+    /// <summary>Fence-complete traversal and denoiser counters for one frame slot.</summary>
+    public readonly record struct DirectionalShadowRayCounters(
+        int ReadbackValid,
+        uint OpaqueRaysIssued,
+        uint OpaqueRaysSkipped,
+        uint OpaqueHits,
+        uint OpaqueMisses,
+        uint OpaqueCandidateCount,
+        uint OpaqueAlphaSampleCount,
+        uint OpaqueCandidateCapHits,
+        uint InvalidReceiverCount,
+        uint BoundsRejectionCount,
+        uint TemporalAcceptedCount,
+        uint TemporalRejectedCount,
+        uint SpatialFilteredPixelCount,
+        uint TransparentRaysIssued,
+        uint TransparentHits,
+        uint TransparentMisses,
+        uint TransparentCandidateCount,
+        uint TransparentAlphaSampleCount,
+        uint TransparentCandidateCapHits,
+        uint TransparentBoundsRejectionCount)
+    {
+        public static DirectionalShadowRayCounters Empty { get; } = default;
+
+        public float OpaqueHitRate => OpaqueRaysIssued == 0u
+            ? 0f
+            : (float)OpaqueHits / OpaqueRaysIssued;
+        public float TransparentHitRate => TransparentRaysIssued == 0u
+            ? 0f
+            : (float)TransparentHits / TransparentRaysIssued;
+        public float AverageOpaqueCandidates => OpaqueRaysIssued == 0u
+            ? 0f
+            : (float)OpaqueCandidateCount / OpaqueRaysIssued;
+        public float AverageTransparentCandidates => TransparentRaysIssued == 0u
+            ? 0f
+            : (float)TransparentCandidateCount / TransparentRaysIssued;
+    }
+
     /// <summary>
     /// Capture-facing state for the directional-shadow transport path. This is deliberately
     /// grouped so snapshots keep the cascade configuration, cache state, caster coverage, and
@@ -171,5 +210,32 @@ namespace Njulf.Rendering.Data
         public uint RayMaskResourceGeneration { get; init; }
         public uint RaySceneResourceGeneration { get; init; }
         public ulong RaySceneContentEpoch { get; init; }
+        public DirectionalShadowQualificationLevel QualificationLevel { get; init; }
+        public string QualificationId { get; init; } = string.Empty;
+        public string QualificationDetail { get; init; } = string.Empty;
+        public string QualificationDeviceRuleId { get; init; } = string.Empty;
+        public string QualificationTrackId { get; init; } = string.Empty;
+        public double QualifiedGpuBudgetMicroseconds { get; init; }
+        public ulong QualifiedMemoryBudgetBytes { get; init; }
+        public DirectionalShadowReceiverPolicy OpaqueReceiverPolicy { get; init; }
+        public DirectionalShadowReceiverPolicy TransparentReceiverPolicy { get; init; }
+        public DirectionalShadowReceiverPolicy DecalReceiverPolicy { get; init; }
+        public int CsmTemporalEnabled { get; init; }
+        public int SoftTemporalEnabled { get; init; }
+        public int SoftSpatialEnabled { get; init; }
+        public int HistoryValid { get; init; }
+        public DirectionalShadowHistoryResetReason HistoryResetReason { get; init; }
+        public ulong HistoryBytes { get; init; }
+        public long GpuCsmMicroseconds { get; init; }
+        public long GpuRayTraceMicroseconds { get; init; }
+        public long GpuTemporalMicroseconds { get; init; }
+        public long GpuSpatialMicroseconds { get; init; }
+        public RaySceneGeometryCategory RaySceneExactCategories { get; init; }
+        public RaySceneGeometryCategory RaySceneProxyCategories { get; init; }
+        public RaySceneGeometryCategory RaySceneCompleteCategories { get; init; }
+        public Njulf.Core.Math.Vector3 RaySceneCoverageMinimum { get; init; }
+        public Njulf.Core.Math.Vector3 RaySceneCoverageMaximum { get; init; }
+        public DirectionalShadowRayCounters RayCounters { get; init; } =
+            DirectionalShadowRayCounters.Empty;
     }
 }

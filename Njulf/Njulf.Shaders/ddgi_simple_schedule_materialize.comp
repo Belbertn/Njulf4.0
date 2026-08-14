@@ -57,10 +57,14 @@ void main()
             1u,
             SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
     uint sourceRayCount = SchedulerTransportV2()
-        ? requiredSourceRayCount
+        ? SchedulerResolveAdaptiveSourceRayCount(
+            probeIndex,
+            volumeIndex,
+            candidateReasons,
+            sourceWork)
         : (sourceWork ? requiredSourceRayCount : 0u);
     if (SchedulerTransportV2() || sourceWork)
-        activeRayCount = requiredSourceRayCount;
+        activeRayCount = sourceRayCount;
 
     uint flags = activeRayCount << SIMPLE_DDGI_SCHEDULER_UPDATE_RAY_SHIFT;
     if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_FRESH) != 0u)

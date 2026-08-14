@@ -1636,9 +1636,11 @@ bool TryBuildSelectedDdgiLocalLightContribution(
     if (nDotL <= 0.0)
         return false;
 
-    attenuation = EvaluateNjulfPunctualRangeAttenuation(distanceToLight, light.Range);
+    attenuation = EvaluateNjulfLightDistanceAttenuation(
+        light,
+        distanceToLight);
     if (light.Type == 2)
-        attenuation *= EvaluateNjulfSpotAttenuation(light.Direction, lightDirection, light.SpotAngle);
+        attenuation *= EvaluateNjulfSpotAttenuation(light, lightDirection);
 
     attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);
     return attenuation > 0.0;
@@ -1766,15 +1768,14 @@ bool DdgiTryBuildLocalLightContribution(
     if (nDotL <= 0.0)
         return false;
 
-    attenuation = EvaluateNjulfPunctualRangeAttenuation(
-        distanceToLight,
-        light.Range);
+    attenuation = EvaluateNjulfLightDistanceAttenuation(
+        light,
+        distanceToLight);
     if (light.Type == 2)
     {
         attenuation *= EvaluateNjulfSpotAttenuation(
-            light.Direction,
-            lightDirection,
-            light.SpotAngle);
+            light,
+            lightDirection);
     }
     return attenuation > 0.0 && !isnan(attenuation) && !isinf(attenuation);
 }
@@ -2958,9 +2959,11 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
         if (nDotL <= 0.0)
             continue;
 
-        float attenuation = EvaluateNjulfPunctualRangeAttenuation(distanceToLight, light.Range);
+        float attenuation = EvaluateNjulfLightDistanceAttenuation(
+            light,
+            distanceToLight);
         if (light.Type == 2)
-            attenuation *= EvaluateNjulfSpotAttenuation(light.Direction, lightDirection, light.SpotAngle);
+            attenuation *= EvaluateNjulfSpotAttenuation(light, lightDirection);
         float importance = DdgiHitLuminance(max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0)) * attenuation * nDotL;
         if (importance <= 0.000001)
             continue;

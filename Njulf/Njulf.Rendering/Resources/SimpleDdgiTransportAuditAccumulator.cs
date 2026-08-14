@@ -33,6 +33,10 @@ public sealed class SimpleDdgiTransportAuditAccumulator
     private float _fixedPointDefect;
     private float _fieldMagnitude;
     private float _observedContractionBound;
+    private uint _channelEvidenceVersion = uint.MaxValue;
+    private SimpleDdgiTransportRgbBounds _fixedPointDefectChannels;
+    private SimpleDdgiTransportRgbBounds _fieldMagnitudeChannels;
+    private SimpleDdgiTransportRgbBounds _observedContractionChannels;
     private ulong _auditMicroseconds;
     private ulong _finalFrameSerial;
     private bool _overflowed;
@@ -73,6 +77,16 @@ public sealed class SimpleDdgiTransportAuditAccumulator
     /// </summary>
     public bool TryAddChunk(SimpleDdgiTransportAuditChunk chunk)
     {
+        if (!TryResolveChunkChannelEvidence(
+                chunk,
+                out uint channelEvidenceVersion,
+                out SimpleDdgiTransportRgbBounds defectChannels,
+                out SimpleDdgiTransportRgbBounds fieldChannels,
+                out SimpleDdgiTransportRgbBounds contractionChannels))
+        {
+            return false;
+        }
+
         if (_overflowed ||
             chunk.AuditEpoch != _auditEpoch ||
             chunk.Generations != _generations ||
@@ -84,6 +98,11 @@ public sealed class SimpleDdgiTransportAuditAccumulator
             !IsFiniteNonNegative(chunk.FieldMagnitude) ||
             !IsFiniteNonNegative(chunk.ObservedContractionBound) ||
             chunk.ObservedContractionBound > _configuredContractionBound)
+        {
+            return false;
+        }
+        if (_channelEvidenceVersion != uint.MaxValue &&
+            _channelEvidenceVersion != channelEvidenceVersion)
         {
             return false;
         }
@@ -108,6 +127,16 @@ public sealed class SimpleDdgiTransportAuditAccumulator
         _observedContractionBound = MathF.Max(
             _observedContractionBound,
             chunk.ObservedContractionBound);
+        _channelEvidenceVersion = channelEvidenceVersion;
+        _fixedPointDefectChannels = SimpleDdgiTransportRgbBounds.Max(
+            _fixedPointDefectChannels,
+            defectChannels);
+        _fieldMagnitudeChannels = SimpleDdgiTransportRgbBounds.Max(
+            _fieldMagnitudeChannels,
+            fieldChannels);
+        _observedContractionChannels = SimpleDdgiTransportRgbBounds.Max(
+            _observedContractionChannels,
+            contractionChannels);
         _finalFrameSerial = Math.Max(_finalFrameSerial, chunk.FinalFrameSerial);
         _nextChunkIndex++;
         return true;
@@ -120,6 +149,35 @@ public sealed class SimpleDdgiTransportAuditAccumulator
     /// </summary>
     public bool TryFinalize(out SimpleDdgiTransportTailSummary summary)
     {
+        uint channelEvidenceVersion = _channelEvidenceVersion == uint.MaxValue
+            ? 0u
+            : _channelEvidenceVersion;
+        SimpleDdgiTransportRgbBounds certifiedContractionChannels = new(
+            MathF.Min(_configuredContractionBound,
+                _observedContractionChannels.Red),
+            MathF.Min(_configuredContractionBound,
+                _observedContractionChannels.Green),
+            MathF.Min(_configuredContractionBound,
+                _observedContractionChannels.Blue));
+        SimpleDdgiTransportRgbBounds tailChannels = new(
+            _fixedPointDefectChannels.Red / MathF.Max(
+                1.0f - certifiedContractionChannels.Red, 1e-6f),
+            _fixedPointDefectChannels.Green / MathF.Max(
+                1.0f - certifiedContractionChannels.Green, 1e-6f),
+            _fixedPointDefectChannels.Blue / MathF.Max(
+                1.0f - certifiedContractionChannels.Blue, 1e-6f));
+        SimpleDdgiTransportRgbBounds relativeTailChannels = new(
+            tailChannels.Red / MathF.Max(
+                _fieldMagnitudeChannels.Red,
+                SimpleDdgiTransportTailEstimator.AbsoluteTolerance),
+            tailChannels.Green / MathF.Max(
+                _fieldMagnitudeChannels.Green,
+                SimpleDdgiTransportTailEstimator.AbsoluteTolerance),
+            tailChannels.Blue / MathF.Max(
+                _fieldMagnitudeChannels.Blue,
+                SimpleDdgiTransportTailEstimator.AbsoluteTolerance));
+        SimpleDdgiTransportRgbBounds quantizationFloorChannels =
+            SimpleDdgiTransportRgbBounds.Broadcast(_canonicalQuantizationFloor);
         summary = SimpleDdgiTransportTailSummary.Empty with
         {
             AuditEpoch = _auditEpoch,
@@ -141,10 +199,36 @@ public sealed class SimpleDdgiTransportAuditAccumulator
             CertifiedContractionBound = MathF.Min(
                 _configuredContractionBound,
                 _observedContractionBound),
+            AbsoluteTailBound = channelEvidenceVersion ==
+                    SimpleDdgiTransportTailSummary.PerChannelEvidenceVersion
+                ? tailChannels.Maximum
+                : _fixedPointDefect / MathF.Max(
+                    1.0f - MathF.Min(
+                        _configuredContractionBound,
+                        _observedContractionBound),
+                    1e-6f),
+            RelativeTailBound = channelEvidenceVersion ==
+                    SimpleDdgiTransportTailSummary.PerChannelEvidenceVersion
+                ? relativeTailChannels.Maximum
+                : (_fixedPointDefect / MathF.Max(
+                    1.0f - MathF.Min(
+                        _configuredContractionBound,
+                        _observedContractionBound),
+                    1e-6f)) / MathF.Max(
+                        _fieldMagnitude,
+                        SimpleDdgiTransportTailEstimator.AbsoluteTolerance),
             Tolerance = MathF.Max(
                 SimpleDdgiTransportTailEstimator.AbsoluteTolerance,
                 _relativeTolerance * _fieldMagnitude),
             CanonicalQuantizationFloor = _canonicalQuantizationFloor,
+            ChannelEvidenceVersion = channelEvidenceVersion,
+            FixedPointDefectChannels = _fixedPointDefectChannels,
+            FieldMagnitudeChannels = _fieldMagnitudeChannels,
+            ObservedContractionChannels = _observedContractionChannels,
+            CertifiedContractionChannels = certifiedContractionChannels,
+            AbsoluteTailBoundChannels = tailChannels,
+            RelativeTailBoundChannels = relativeTailChannels,
+            CanonicalQuantizationFloorChannels = quantizationFloorChannels,
             AuditMicroseconds = _auditMicroseconds,
             FirstFrameSerial = _firstFrameSerial,
             FinalFrameSerial = _finalFrameSerial,
@@ -196,8 +280,10 @@ public sealed class SimpleDdgiTransportAuditAccumulator
             return false;
         }
 
-        float tail = _fixedPointDefect /
-            MathF.Max(1.0f - certifiedQ, 1e-6f);
+        float tail = channelEvidenceVersion ==
+                SimpleDdgiTransportTailSummary.PerChannelEvidenceVersion
+            ? tailChannels.Maximum
+            : _fixedPointDefect / MathF.Max(1.0f - certifiedQ, 1e-6f);
         float tolerance = summary.Tolerance;
         bool coverage = summary.HasExactParticipantCoverage &&
             summary.HasExactTexelCoverage;
@@ -213,8 +299,12 @@ public sealed class SimpleDdgiTransportAuditAccumulator
         {
             CertifiedContractionBound = certifiedQ,
             AbsoluteTailBound = tail,
-            RelativeTailBound = tail /
-                MathF.Max(_fieldMagnitude, SimpleDdgiTransportTailEstimator.AbsoluteTolerance),
+            RelativeTailBound = channelEvidenceVersion ==
+                    SimpleDdgiTransportTailSummary.PerChannelEvidenceVersion
+                ? relativeTailChannels.Maximum
+                : tail / MathF.Max(
+                    _fieldMagnitude,
+                    SimpleDdgiTransportTailEstimator.AbsoluteTolerance),
             Tolerance = tolerance,
             Reason = !coverage
                 ? SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete
@@ -232,6 +322,40 @@ public sealed class SimpleDdgiTransportAuditAccumulator
 
     private static bool IsFiniteNonNegative(float value) =>
         float.IsFinite(value) && value >= 0.0f;
+
+    private bool TryResolveChunkChannelEvidence(
+        SimpleDdgiTransportAuditChunk chunk,
+        out uint version,
+        out SimpleDdgiTransportRgbBounds defect,
+        out SimpleDdgiTransportRgbBounds fieldMagnitude,
+        out SimpleDdgiTransportRgbBounds observedContraction)
+    {
+        version = chunk.ChannelEvidenceVersion;
+        if (version == 0u)
+        {
+            // A scalar infinity-norm proof remains conservative. Broadcast it
+            // so legacy test/CPU producers can share the channel math without
+            // pretending that they supplied tighter RGB evidence.
+            defect = SimpleDdgiTransportRgbBounds.Broadcast(
+                chunk.FixedPointDefect);
+            fieldMagnitude = SimpleDdgiTransportRgbBounds.Broadcast(
+                chunk.FieldMagnitude);
+            observedContraction = SimpleDdgiTransportRgbBounds.Broadcast(
+                chunk.ObservedContractionBound);
+            return true;
+        }
+
+        defect = chunk.FixedPointDefectChannels;
+        fieldMagnitude = chunk.FieldMagnitudeChannels;
+        observedContraction = chunk.ObservedContractionChannels;
+        return version == SimpleDdgiTransportTailSummary.PerChannelEvidenceVersion &&
+            defect.IsFiniteNonNegative &&
+            fieldMagnitude.IsFiniteNonNegative &&
+            observedContraction.IsAtMost(_configuredContractionBound) &&
+            defect.Maximum == chunk.FixedPointDefect &&
+            fieldMagnitude.Maximum == chunk.FieldMagnitude &&
+            observedContraction.Maximum == chunk.ObservedContractionBound;
+    }
 
     private static bool TryAdd(ref uint target, uint value)
     {
@@ -273,6 +397,10 @@ public readonly record struct SimpleDdgiTransportAuditChunk
     public float FixedPointDefect { get; init; }
     public float FieldMagnitude { get; init; }
     public float ObservedContractionBound { get; init; }
+    public uint ChannelEvidenceVersion { get; init; }
+    public SimpleDdgiTransportRgbBounds FixedPointDefectChannels { get; init; }
+    public SimpleDdgiTransportRgbBounds FieldMagnitudeChannels { get; init; }
+    public SimpleDdgiTransportRgbBounds ObservedContractionChannels { get; init; }
     public ulong AuditMilliseconds { get; init; }
     public ulong FinalFrameSerial { get; init; }
 }

@@ -276,27 +276,27 @@ public sealed class SimpleDdgiReceiverFeedbackV2Tests
             Assert.That(plan.Layout.RecordBankBytes, Is.EqualTo(8_192UL));
             Assert.That(plan.Layout.RecordBanksBytes, Is.EqualTo(16_384UL));
             Assert.That(plan.Layout.SortScratchBytes, Is.EqualTo(18_432UL));
-            Assert.That(plan.Layout.SummaryBytes, Is.EqualTo(16_320UL));
+            Assert.That(plan.Layout.SummaryBytes, Is.EqualTo(16_352UL));
             Assert.That(plan.Layout.CaptureSource.IsValid, Is.True);
             Assert.That(plan.Layout.CaptureSource.RequiredBytes, Is.EqualTo(25_344UL));
             Assert.That(plan.Layout.CaptureSource.SharedOverflowBaseRecord,
                 Is.EqualTo(144u));
             Assert.That(plan.Layout.CaptureSource.SharedOverflowCapacity,
                 Is.EqualTo(112u));
-            Assert.That(plan.Layout.TotalBytes, Is.EqualTo(76_480UL));
+            Assert.That(plan.Layout.TotalBytes, Is.EqualTo(76_512UL));
             Assert.That(plan.Layout.GpuSortAbiVersion,
                 Is.EqualTo(SimpleDdgiReceiverFeedbackGpuSortAbi.Version));
             Assert.That(plan.Layout.GpuSortSummaryCapacity, Is.EqualTo(100u));
             Assert.That(plan.Layout.GpuSortFallbackCapacity, Is.EqualTo(256u));
             Assert.That(plan.Layout.TryGetGpuSortLayout(out var gpuLayout, out _), Is.True);
-            Assert.That(gpuLayout.RequiredTotalBytes, Is.EqualTo(51_136UL));
+            Assert.That(gpuLayout.RequiredTotalBytes, Is.EqualTo(51_168UL));
             Assert.That(plan.Memory.ReceiverFeedbackRecordBanks.AllocatedBytes,
                 Is.EqualTo(41_728UL));
             Assert.That(plan.Memory.ReceiverFeedbackSortScratch.AllocatedBytes,
                 Is.EqualTo(18_432UL));
             Assert.That(plan.Memory.ReceiverFeedbackProbeSummaries.AllocatedBytes,
-                Is.EqualTo(16_320UL));
-            Assert.That(plan.Memory.AllocatedBytes, Is.EqualTo(76_480UL));
+                Is.EqualTo(16_352UL));
+            Assert.That(plan.Memory.AllocatedBytes, Is.EqualTo(76_512UL));
         });
     }
 
@@ -511,9 +511,9 @@ public sealed class SimpleDdgiReceiverFeedbackV2Tests
             Assert.That(content.AdvancedExperimentMemory,
                 Is.EqualTo(feedback.Memory));
             Assert.That(content.PersistentBytes,
-                Is.EqualTo(58_048UL));
+                Is.EqualTo(58_080UL));
             Assert.That(content.WorkBytes, Is.EqualTo(18_432UL));
-            Assert.That(content.LiveBytes, Is.EqualTo(76_480UL));
+            Assert.That(content.LiveBytes, Is.EqualTo(76_512UL));
         });
     }
 
@@ -544,9 +544,9 @@ public sealed class SimpleDdgiReceiverFeedbackV2Tests
 
         Assert.Multiple(() =>
         {
-            Assert.That(content.PersistentBytes, Is.EqualTo(58_048UL));
+            Assert.That(content.PersistentBytes, Is.EqualTo(58_080UL));
             Assert.That(content.WorkBytes, Is.EqualTo(18_432UL));
-            Assert.That(content.LiveBytes, Is.EqualTo(76_992UL));
+            Assert.That(content.LiveBytes, Is.EqualTo(77_024UL));
         });
     }
 
@@ -578,7 +578,7 @@ public sealed class SimpleDdgiReceiverFeedbackV2Tests
         {
             Assert.That(combined.CausticPhotonRecords.AllocatedBytes,
                 Is.EqualTo(256UL));
-            Assert.That(combined.AllocatedBytes, Is.EqualTo(76_736UL));
+            Assert.That(combined.AllocatedBytes, Is.EqualTo(76_768UL));
             Assert.That(() => SimpleDdgiAdvancedExperimentMemoryPlan.CombineDisjoint(
                     feedback.Memory,
                     feedback.Memory),
@@ -907,13 +907,12 @@ public sealed class SimpleDdgiReceiverFeedbackV2Tests
             Assert.That(gi.DdgiOpacityMicromapMode,
                 Is.EqualTo(DdgiOpacityMicromapMode.ExtFourStateExperiment));
             Assert.That(gi.SimpleDdgiDirectionalGuidingMode,
-                Is.EqualTo(SimpleDdgiDirectionalGuidingMode
-                    .PerProbeHistogramExperiment));
+                Is.EqualTo(SimpleDdgiDirectionalGuidingMode.Off));
             Assert.That(gi.GiCausticMode,
                 Is.EqualTo(GiCausticMode.WorldCacheExperiment));
             Assert.That(gi.SimpleDdgiNearFieldResidualMode,
                 Is.EqualTo(SimpleDdgiNearFieldResidualMode
-                    .HiZHalfResolutionExperiment));
+                    .HiZAdaptive));
             Assert.That(gi.DdgiRayTracingPipelineExperimentEnabled, Is.False);
         });
 

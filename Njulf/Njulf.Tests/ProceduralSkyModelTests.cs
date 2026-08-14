@@ -330,7 +330,9 @@ public sealed class ProceduralSkyModelTests
             Assert.That(settings.GroundAlbedo.X, Is.EqualTo(0.0f));
             Assert.That(settings.GroundAlbedo.Y, Is.EqualTo(0.4f));
             Assert.That(settings.GroundAlbedo.Z, Is.EqualTo(1.0f));
-            Assert.That(settings.SunAngularDiameterDegrees, Is.EqualTo(0.1f));
+            // Zero is the exact deterministic hard-sun contract used by the
+            // directional ray-shadow sampler.
+            Assert.That(settings.SunAngularDiameterDegrees, Is.EqualTo(0.0f));
             Assert.That(settings.MoonAngularDiameterDegrees, Is.EqualTo(2.0f));
             Assert.That(settings.TimeOfDayHours, Is.EqualTo(24.0f));
             Assert.That(settings.LatitudeDegrees, Is.EqualTo(-90.0f));
@@ -405,7 +407,7 @@ public sealed class ProceduralSkyModelTests
             Assert.That(
                 BindlessIndex.StaticBufferCount,
                 Is.EqualTo(
-                    BindlessIndex.SimpleDdgiReceiverFeedbackCandidateBuffer + 1));
+                    BindlessIndex.DirectionalShadowCounterBufferFrame1 + 1));
         });
     }
 

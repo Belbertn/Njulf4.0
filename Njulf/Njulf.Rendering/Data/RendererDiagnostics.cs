@@ -150,6 +150,14 @@ namespace Njulf.Rendering.Data
         public float TailRelativeBound { get; init; }
         public float TailTolerance { get; init; }
         public float TailCanonicalQuantizationFloor { get; init; }
+        public uint TailChannelEvidenceVersion { get; init; }
+        public SimpleDdgiTransportRgbBounds TailFixedPointDefectChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds TailFieldMagnitudeChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds TailObservedContractionChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds TailCertifiedContractionChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds TailAbsoluteBoundChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds TailRelativeBoundChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds TailCanonicalQuantizationFloorChannels { get; init; }
         public uint TailMaximumDefectWitnessProbeIndex { get; init; }
         public uint TailMaximumDefectWitnessTexelIndex { get; init; }
         public bool TailDetailedWitnessValid { get; init; }
@@ -971,6 +979,8 @@ namespace Njulf.Rendering.Data
         public long GpuBloomUpsampleMicroseconds { get; init; }
         public long GpuDirectionalShadowMicroseconds { get; init; }
         public long GpuDirectionalRayShadowMicroseconds { get; init; }
+        public long GpuDirectionalShadowTemporalMicroseconds { get; init; }
+        public long GpuDirectionalShadowSpatialMicroseconds { get; init; }
         public long GpuSpotShadowMicroseconds { get; init; }
         public long GpuPointShadowMicroseconds { get; init; }
         public int DirectionalShadowRecordSkipped { get; init; }

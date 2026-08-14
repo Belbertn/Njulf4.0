@@ -86,6 +86,41 @@ public sealed class EditorImGuiPanels
         if (ImGui.Button("Add Directional Light"))
             Run(() => editor.AddLightAtCamera(LightType.Directional));
 
+        ImGui.SeparatorText("Imported model lights");
+        ImportedModelLightEditorStatus importedLights =
+            editor.GetImportedModelLightStatus();
+        bool importedLightsEnabled = importedLights.Enabled;
+        if (ImGui.Checkbox(
+                "Enable all imported model lights",
+                ref importedLightsEnabled))
+        {
+            Run(() => editor.SetImportedModelLightsEnabled(
+                importedLightsEnabled));
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "Enables or disables every light embedded in placed model assets. " +
+                "Authored scene lights are unaffected.");
+        }
+        ImGui.TextDisabled(
+            $"{importedLights.ActiveLightCount} active lights across " +
+            $"{importedLights.ModelPlacementsWithLightsCount}/" +
+            $"{importedLights.ModelPlacementCount} model placements");
+        if (importedLights.ModelPlacementCount > 0 &&
+            importedLights.ImportedLightDefinitionCount == 0)
+        {
+            ImGui.TextColored(
+                new System.Numerics.Vector4(1f, 0.75f, 0.2f, 1f),
+                "No imported lights found; recook/reimport the model assets.");
+        }
+        if (!string.IsNullOrWhiteSpace(importedLights.Error))
+        {
+            ImGui.TextColored(
+                new System.Numerics.Vector4(1f, 0.35f, 0.25f, 1f),
+                importedLights.Error);
+        }
+
         if (editor.RendererSettings is { } renderSettings)
         {
             ImGui.SeparatorText("Environment");
@@ -117,7 +152,7 @@ public sealed class EditorImGuiPanels
         RenderEntities(editor, "Particle Effects", EditorSelectionKind.ParticleEffect, editor.Scene.ParticleEffects);
         RenderEntities(editor, "Instance Batches", EditorSelectionKind.InstanceBatch, editor.Scene.StaticInstanceBatches);
         IReadOnlyList<LightRecord> lights = editor.GetLights();
-        if (ImGui.CollapsingHeader($"Lights ({lights.Count})"))
+        if (ImGui.CollapsingHeader($"Authored Lights ({lights.Count})"))
         {
             foreach (LightRecord light in lights)
             {

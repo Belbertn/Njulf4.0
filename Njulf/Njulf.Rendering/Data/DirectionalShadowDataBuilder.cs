@@ -126,7 +126,14 @@ namespace Njulf.Rendering.Data
         public static GPUDirectionalShadowParameters BuildParameters(
             ShadowSettings settings,
             ReadOnlySpan<DirectionalShadowCascadeFitDiagnostics> diagnostics,
-            DirectionalShadowMode effectiveMode = DirectionalShadowMode.Cascaded)
+            DirectionalShadowMode effectiveMode = DirectionalShadowMode.Cascaded,
+            float sunAngularRadiusRadians = 0f,
+            RaySceneReadinessSnapshot rayScene = default,
+            bool csmTemporalActive = false,
+            DirectionalShadowQualificationLevel qualificationLevel =
+                DirectionalShadowQualificationLevel.Developer,
+            uint screenResourceGeneration = 0u,
+            bool historyValid = false)
         {
             if (settings == null)
                 throw new ArgumentNullException(nameof(settings));
@@ -147,8 +154,23 @@ namespace Njulf.Rendering.Data
                     (float)settings.RequestedDirectionalShadowMode,
                     (float)effectiveMode,
                     settings.DirectionalContactShadowDistance,
-                    0f),
-                Reserved = CoreVector4.Zero
+                    Math.Clamp(sunAngularRadiusRadians, 0f, MathF.PI * 0.25f)),
+                TemporalAndSampling = new CoreVector4(
+                    settings.DirectionalSoftRecoveryRayCount,
+                    settings.DirectionalSoftHistoryLength,
+                    settings.DirectionalSoftSpatialPassCount,
+                    settings.DirectionalTransparentSoftRayCount),
+                RaySceneBoundsMinimum = new CoreVector4(
+                    rayScene.CoverageMinimum,
+                    rayScene.HasQualifiedBounds ? 1f : 0f),
+                RaySceneBoundsMaximum = new CoreVector4(
+                    rayScene.CoverageMaximum,
+                    rayScene.HasQualifiedBounds ? 1f : 0f),
+                RuntimeFlags = new CoreVector4(
+                    csmTemporalActive ? 1f : 0f,
+                    (float)qualificationLevel,
+                    screenResourceGeneration,
+                    historyValid ? 1f : 0f)
             };
         }
 

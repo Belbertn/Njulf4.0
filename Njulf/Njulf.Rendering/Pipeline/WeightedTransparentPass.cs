@@ -14,6 +14,7 @@ namespace Njulf.Rendering.Pipeline
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;
+        private readonly RaySceneDescriptorBank? _raySceneDescriptors;
         private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
             _receiverFeedbackRuntime;
 
@@ -23,11 +24,13 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
             RenderTargetManager renderTargets,
+            RaySceneDescriptorBank? raySceneDescriptors = null,
             SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime = null)
             : base("WeightedTransparentPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _raySceneDescriptors = raySceneDescriptors;
             _receiverFeedbackRuntime = receiverFeedbackRuntime;
         }
 
@@ -47,7 +50,13 @@ namespace Njulf.Rendering.Pipeline
             if (!ShouldExecute(frameIndex, sceneData))
                 return;
 
+            bool rayVariant =
+                sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
+                    DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery &&
+                _meshPipeline.RayTransparentPipelinesAvailable &&
+                _raySceneDescriptors?.IsAvailable == true;
             if (sceneData.TransparentReceiveGlobalIllumination ||
+                rayVariant ||
                 sceneData.DecalReceiveGlobalIllumination)
             {
                 PublishComputeStorageToFragment(cmd);
@@ -60,9 +69,19 @@ namespace Njulf.Rendering.Pipeline
             bool exactFeedback = TrySelectExactFeedbackPipeline(
                 frameIndex,
                 sceneData,
-                out Silk.NET.Vulkan.Pipeline pipeline);
+                rayVariant,
+                out Silk.NET.Vulkan.Pipeline pipeline,
+                out PipelineLayout pipelineLayout);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
-            BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
+            BindBindlessStorageAndTextures(cmd, pipelineLayout);
+            if (rayVariant)
+            {
+                _raySceneDescriptors!.Bind(
+                    cmd,
+                    PipelineBindPoint.Graphics,
+                    pipelineLayout,
+                    frameIndex);
+            }
 
             var colorAttachments = stackalloc RenderingAttachmentInfo[2];
             colorAttachments[0] = ColorAttachment(
@@ -135,7 +154,7 @@ namespace Njulf.Rendering.Pipeline
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();
             _context.Api.CmdPushConstants(
                 cmd,
-                _meshPipeline.Layout,
+                pipelineLayout,
                 ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
                 0,
                 size,
@@ -165,9 +184,16 @@ namespace Njulf.Rendering.Pipeline
         private bool TrySelectExactFeedbackPipeline(
             int frameIndex,
             SceneRenderingData sceneData,
-            out Silk.NET.Vulkan.Pipeline pipeline)
+            bool rayVariant,
+            out Silk.NET.Vulkan.Pipeline pipeline,
+            out PipelineLayout pipelineLayout)
         {
-            pipeline = _meshPipeline.WeightedOitTransparentPipeline;
+            pipeline = rayVariant
+                ? _meshPipeline.RayWeightedOitTransparentPipeline
+                : _meshPipeline.WeightedOitTransparentPipeline;
+            pipelineLayout = rayVariant
+                ? _meshPipeline.RayTransparentLayout
+                : _meshPipeline.Layout;
             if (_receiverFeedbackRuntime is null ||
                 !_receiverFeedbackRuntime.IsPendingOwnedProducerRequired(
                     frameIndex,
@@ -176,13 +202,17 @@ namespace Njulf.Rendering.Pipeline
                 return false;
             }
             if (sceneData.CurrentFrameIndex != checked((uint)frameIndex) ||
-                _meshPipeline.WeightedOitReceiverFeedbackPipeline.Handle == 0)
+                (rayVariant
+                    ? _meshPipeline.RayWeightedOitReceiverFeedbackPipeline.Handle
+                    : _meshPipeline.WeightedOitReceiverFeedbackPipeline.Handle) == 0)
             {
                 _receiverFeedbackRuntime.AbortCapture(
                     "receiver-feedback-weighted-oit-pipeline-or-frame-slot-unavailable");
                 return false;
             }
-            pipeline = _meshPipeline.WeightedOitReceiverFeedbackPipeline;
+            pipeline = rayVariant
+                ? _meshPipeline.RayWeightedOitReceiverFeedbackPipeline
+                : _meshPipeline.WeightedOitReceiverFeedbackPipeline;
             return true;
         }
 

@@ -180,23 +180,26 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
     internal void RecordReset(
         CommandBuffer commandBuffer,
         in SimpleDdgiNearFieldResidualGpuFrameToken token,
+        in SimpleDdgiNearFieldResidualExecutionExtent extent,
         ulong completedFrameSerial)
     {
         ThrowIfDisposed();
+        ValidateExecutionExtent(extent);
+        uint tileCount = CalculateTileCount(extent);
         var push = new GPUSimpleDdgiNearFieldResidualResetPushConstants
         {
             AbiVersion = SimpleDdgiNearFieldResidualGpuAbi.Version,
-            MetadataCount = PixelCount,
-            TileWordCount = checked((uint)(_layout.TileBuffersBytes / sizeof(uint))),
+            MetadataCount = PixelCount(extent),
+            TileWordCount = checked(
+                SimpleDdgiNearFieldResidualGpuAbi.TelemetryHeaderWordCount +
+                tileCount * SimpleDdgiNearFieldResidualGpuAbi.TileRecordWordCount),
             HistoryEpoch = token.HistoryEpoch,
             Flags = (uint)(
                 SimpleDdgiNearFieldResidualGpuFlags.InvalidAndMissOutputsZeroed |
                 SimpleDdgiNearFieldResidualGpuFlags.SourceAttachmentVerified),
             FrameSerialLow = unchecked((uint)completedFrameSerial),
             FrameSerialHigh = unchecked((uint)(completedFrameSerial >> 32)),
-            TileCount = checked(
-                DivideRoundUp(checked((uint)_layout.TraceWidth), ComputeLocalSize) *
-                DivideRoundUp(checked((uint)_layout.TraceHeight), ComputeLocalSize))
+            TileCount = tileCount
         };
         BindAndPush(commandBuffer, _resetPipeline, _resetPipelineLayout,
             _resetSet, &push,
@@ -210,17 +213,19 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
     internal void RecordTrace(
         CommandBuffer commandBuffer,
         int frameIndex,
-        in SimpleDdgiNearFieldResidualGpuFrameToken token)
+        in SimpleDdgiNearFieldResidualGpuFrameToken token,
+        in SimpleDdgiNearFieldResidualExecutionExtent extent)
     {
         ThrowIfDisposed();
+        ValidateExecutionExtent(extent);
         var push = new GPUSimpleDdgiNearFieldResidualTracePushConstants
         {
             AbiVersion = SimpleDdgiNearFieldResidualGpuAbi.Version,
             TraceSourceTerms = (uint)_configuration.TraceSourceContract.Terms,
             FullWidth = checked((uint)_layout.SourceWidth),
             FullHeight = checked((uint)_layout.SourceHeight),
-            TraceWidth = checked((uint)_layout.TraceWidth),
-            TraceHeight = checked((uint)_layout.TraceHeight),
+            TraceWidth = checked((uint)extent.Width),
+            TraceHeight = checked((uint)extent.Height),
             FrameIndex = checked((uint)frameIndex),
             HistoryEpoch = token.HistoryEpoch,
             MaximumTraceSteps = checked((uint)_configuration.MaximumTraceSteps),
@@ -239,7 +244,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         BindAndPush(commandBuffer, _tracePipeline, _tracePipelineLayout,
             _traceSets[frameIndex & 1], &push,
             SimpleDdgiNearFieldResidualGpuAbi.TracePushConstantByteCount);
-        DispatchTraceExtent(commandBuffer);
+        DispatchTraceExtent(commandBuffer, extent);
         RecordComputeWriteBarrier(commandBuffer);
     }
 
@@ -247,9 +252,11 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         CommandBuffer commandBuffer,
         in SimpleDdgiNearFieldResidualGpuFrameToken token,
         in SimpleDdgiNearFieldResidualGpuHistoryRevision revision,
-        bool historyInputValid)
+        bool historyInputValid,
+        in SimpleDdgiNearFieldResidualExecutionExtent extent)
     {
         ThrowIfDisposed();
+        ValidateExecutionExtent(extent);
         var flags = BaseFlags;
         if (historyInputValid)
             flags |= SimpleDdgiNearFieldResidualGpuFlags.HistoryInputValid;
@@ -258,8 +265,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         var push = new GPUSimpleDdgiNearFieldResidualTemporalPushConstants
         {
             AbiVersion = SimpleDdgiNearFieldResidualGpuAbi.Version,
-            TraceWidth = checked((uint)_layout.TraceWidth),
-            TraceHeight = checked((uint)_layout.TraceHeight),
+            TraceWidth = checked((uint)extent.Width),
+            TraceHeight = checked((uint)extent.Height),
             HistoryReadIndex = checked((uint)token.HistoryReadIndex),
             HistoryWriteIndex = checked((uint)token.HistoryWriteIndex),
             HistoryEpoch = token.HistoryEpoch,
@@ -286,23 +293,25 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         BindAndPush(commandBuffer, _temporalPipeline, _temporalPipelineLayout,
             set, &push,
             SimpleDdgiNearFieldResidualGpuAbi.TemporalPushConstantByteCount);
-        DispatchTraceExtent(commandBuffer);
+        DispatchTraceExtent(commandBuffer, extent);
         RecordComputeWriteBarrier(commandBuffer);
     }
 
     internal void RecordFilter(
         CommandBuffer commandBuffer,
         in SimpleDdgiNearFieldResidualGpuFrameToken token,
-        int iteration)
+        int iteration,
+        in SimpleDdgiNearFieldResidualExecutionExtent extent)
     {
         ThrowIfDisposed();
+        ValidateExecutionExtent(extent);
         if (iteration < 0 || iteration >= _configuration.FilterIterationCount)
             throw new ArgumentOutOfRangeException(nameof(iteration));
         var push = new GPUSimpleDdgiNearFieldResidualFilterPushConstants
         {
             AbiVersion = SimpleDdgiNearFieldResidualGpuAbi.Version,
-            TraceWidth = checked((uint)_layout.TraceWidth),
-            TraceHeight = checked((uint)_layout.TraceHeight),
+            TraceWidth = checked((uint)extent.Width),
+            TraceHeight = checked((uint)extent.Height),
             IterationIndex = checked((uint)iteration),
             IterationCount = checked((uint)_configuration.FilterIterationCount),
             FilterRadius = checked((uint)_configuration.FilterRadius),
@@ -316,22 +325,24 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         BindAndPush(commandBuffer, _filterPipeline, _filterPipelineLayout,
             set, &push,
             SimpleDdgiNearFieldResidualGpuAbi.FilterPushConstantByteCount);
-        DispatchTraceExtent(commandBuffer);
+        DispatchTraceExtent(commandBuffer, extent);
         RecordComputeWriteBarrier(commandBuffer);
     }
 
     internal void RecordComposite(
         CommandBuffer commandBuffer,
-        in SimpleDdgiNearFieldResidualGpuFrameToken token)
+        in SimpleDdgiNearFieldResidualGpuFrameToken token,
+        in SimpleDdgiNearFieldResidualExecutionExtent extent)
     {
         ThrowIfDisposed();
+        ValidateExecutionExtent(extent);
         var push = new GPUSimpleDdgiNearFieldResidualCompositePushConstants
         {
             AbiVersion = SimpleDdgiNearFieldResidualGpuAbi.Version,
             FullWidth = checked((uint)_layout.SourceWidth),
             FullHeight = checked((uint)_layout.SourceHeight),
-            TraceWidth = checked((uint)_layout.TraceWidth),
-            TraceHeight = checked((uint)_layout.TraceHeight),
+            TraceWidth = checked((uint)extent.Width),
+            TraceHeight = checked((uint)extent.Height),
             HistoryEpoch = token.HistoryEpoch,
             Flags = BaseFlags |
                 SimpleDdgiNearFieldResidualGpuFlags.CompositeUsesValidResidualOnly,
@@ -353,14 +364,33 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         SimpleDdgiNearFieldResidualGpuFlags.SourceAttachmentVerified |
         SimpleDdgiNearFieldResidualGpuFlags.InvalidAndMissOutputsZeroed;
 
-    private uint PixelCount => checked(
-        (uint)_layout.TraceWidth * (uint)_layout.TraceHeight);
+    private static uint PixelCount(
+        in SimpleDdgiNearFieldResidualExecutionExtent extent) => checked(
+        (uint)extent.Width * (uint)extent.Height);
 
-    private void DispatchTraceExtent(CommandBuffer commandBuffer) =>
+    private void DispatchTraceExtent(
+        CommandBuffer commandBuffer,
+        in SimpleDdgiNearFieldResidualExecutionExtent extent) =>
         _context.Api.CmdDispatch(commandBuffer,
-            DivideRoundUp(checked((uint)_layout.TraceWidth), ComputeLocalSize),
-            DivideRoundUp(checked((uint)_layout.TraceHeight), ComputeLocalSize),
+            DivideRoundUp(checked((uint)extent.Width), ComputeLocalSize),
+            DivideRoundUp(checked((uint)extent.Height), ComputeLocalSize),
             1u);
+
+    private static uint CalculateTileCount(
+        in SimpleDdgiNearFieldResidualExecutionExtent extent) => checked(
+        DivideRoundUp(checked((uint)extent.Width), ComputeLocalSize) *
+        DivideRoundUp(checked((uint)extent.Height), ComputeLocalSize));
+
+    private void ValidateExecutionExtent(
+        in SimpleDdgiNearFieldResidualExecutionExtent extent)
+    {
+        if (!extent.IsValid || extent.Width > _layout.TraceWidth ||
+            extent.Height > _layout.TraceHeight)
+        {
+            throw new ArgumentOutOfRangeException(nameof(extent),
+                "C5 execution extent must fit the admitted allocation.");
+        }
+    }
 
     private void BindAndPush(
         CommandBuffer commandBuffer,

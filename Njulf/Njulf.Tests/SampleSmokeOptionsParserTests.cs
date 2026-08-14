@@ -581,7 +581,7 @@ public sealed class SampleSmokeOptionsParserTests
         Assert.Multiple(() =>
         {
             Assert.That(settings.GlobalIllumination.Mode, Is.EqualTo(GlobalIlluminationMode.Ddgi));
-            Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.False);
+            Assert.That(settings.GlobalIllumination.UseRayQueryBackend, Is.True);
             Assert.That(settings.GlobalIllumination.IndirectIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.GlobalIllumination.EnvironmentFallbackIntensity, Is.EqualTo(1.0f));
         });
@@ -1811,5 +1811,27 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(restarted.GiCausticQualificationId, Is.Null);
             Assert.That(restarted.OpenEditorOnStartup, Is.True);
         });
+    }
+
+    [Test]
+    public void EditorSsgiSwitchRestartsInAdaptiveResolutionMode()
+    {
+        SampleSmokeOptions source = SampleSmokeOptionsParser.Parse([]);
+        var selection = new AdvancedGiFeatureSelection(
+            ReceiverFeedbackEnabled: false,
+            OpacityMicromapsEnabled: false,
+            DirectionalGuidingEnabled: false,
+            TaggedCausticsEnabled: false,
+            NearFieldResidualEnabled: true);
+
+        SampleSmokeOptions restarted =
+            Program.PrepareAdvancedGiFeatureRestartOptions(
+                source,
+                selection);
+
+        Assert.That(
+            restarted.SimpleDdgiNearFieldResidualModeOverride,
+            Is.EqualTo(SimpleDdgiNearFieldResidualMode
+                .HiZAdaptive));
     }
 }

@@ -255,6 +255,17 @@ public readonly record struct SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics(
         init;
     } = SimpleDdgiReceiverFeedbackPublicationTelemetry.Empty;
 
+    /// <summary>
+    /// Highest positive exact receiver-contribution mass selected by the same
+    /// validated bank transaction. Null means that the frame carried no
+    /// positive measured refinement demand.
+    /// </summary>
+    public SimpleDdgiReceiverFeedbackRefinementWitness? RefinementWitness
+    {
+        get;
+        init;
+    }
+
     public static SimpleDdgiReceiverFeedbackGpuRuntimeDiagnostics Disabled { get; } =
         new(
             SimpleDdgiReceiverFeedbackGpuCapabilityReason.ExactCaptureProducerUnavailable,
@@ -302,7 +313,7 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
         SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
             SimpleDdgiReceiverFeedbackProducer.RefinementOrBaseFallback);
     private const ulong HeaderReadbackBytes =
-        SimpleDdgiReceiverFeedbackGpuSortAbi.BankHeaderByteCount;
+        SimpleDdgiReceiverFeedbackGpuSortAbi.HeaderAndRefinementWitnessByteCount;
 
     private readonly object _sync = new();
     private readonly VulkanContext _context;
@@ -318,6 +329,8 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
     private SimpleDdgiReceiverFeedbackGpuPass? _pass;
     private SimpleDdgiReceiverFeedbackGpuSortLayout _activeGpuLayout;
     private GPUSimpleDdgiReceiverFeedbackBankHeaderV2? _publishedHeader;
+    private SimpleDdgiReceiverFeedbackRefinementWitness?
+        _publishedRefinementWitness;
     private bool _ownedCandidateSource;
     private bool _disposed;
 
@@ -359,6 +372,45 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
                 return !_disposed && _ownedCandidateSource && _pass is not null &&
                     _resourceManager.Snapshot.IsEffectivelyEnabled;
             }
+        }
+    }
+
+    /// <summary>
+    /// Returns a recent, fence-complete measured receiver focus. The witness
+    /// remains advisory: stale viewport/frame identities fail closed without
+    /// disabling the exact GPU scheduler bank.
+    /// </summary>
+    public bool TryGetPublishedRefinementWitness(
+        uint viewportGeneration,
+        uint volumeTableGeneration,
+        ulong schedulingFrameSerial,
+        out SimpleDdgiReceiverFeedbackRefinementWitness witness)
+    {
+        lock (_sync)
+        {
+            witness = default;
+            if (_disposed || !_publishedHeader.HasValue ||
+                !_publishedRefinementWitness.HasValue)
+            {
+                return false;
+            }
+
+            SimpleDdgiReceiverFeedbackRefinementWitness candidate =
+                _publishedRefinementWitness.Value;
+            if (!candidate.IsValid ||
+                candidate.ViewportGeneration != viewportGeneration ||
+                candidate.VolumeTableGeneration != volumeTableGeneration ||
+                candidate.FeedbackGeneration !=
+                    _publishedHeader.Value.FeedbackGeneration ||
+                schedulingFrameSerial <= candidate.SourceFrameSerial ||
+                schedulingFrameSerial - candidate.SourceFrameSerial >
+                    (ulong)RenderingConstants.FramesInFlight + 1UL)
+            {
+                return false;
+            }
+
+            witness = candidate;
+            return true;
         }
     }
 
@@ -649,6 +701,24 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
         ulong frameSerial,
         uint requiredProducerMask,
         out SimpleDdgiReceiverFeedbackCaptureProducerContract producer,
+        out string reason) => TryBeginOwnedCapture(
+            commandBuffer,
+            frameIndex,
+            viewportGeneration,
+            frameSerial,
+            volumeTableGeneration: 0u,
+            requiredProducerMask,
+            out producer,
+            out reason);
+
+    public bool TryBeginOwnedCapture(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        uint viewportGeneration,
+        ulong frameSerial,
+        uint volumeTableGeneration,
+        uint requiredProducerMask,
+        out SimpleDdgiReceiverFeedbackCaptureProducerContract producer,
         out string reason)
     {
         RenderingConstants.ValidateFrameIndex(frameIndex);
@@ -764,7 +834,8 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
                     allocation.AllocationId,
                     token,
                     producer,
-                    RecordedProducerMask: 0u);
+                    RecordedProducerMask: 0u,
+                    VolumeTableGeneration: volumeTableGeneration);
                 UpdateDiagnosticsNoLock(
                     SimpleDdgiReceiverFeedbackGpuCapabilityReason.None,
                     "receiver-feedback-owned-capture-open-for-producers",
@@ -911,7 +982,8 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
                     pending.Token,
                     allocation.AllocationId,
                     gpuLayout,
-                    nativeAllocation);
+                    nativeAllocation,
+                    pending.VolumeTableGeneration);
                 _pendingOwnedCaptures[frameIndex] = null;
                 _activeGpuLayout = gpuLayout;
                 UpdateDiagnosticsNoLock(
@@ -1110,7 +1182,7 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
 
     /// <summary>
     /// Records reset, capture, full radix ordering, reductions, finalize, and
-    /// the exact 64-byte summary header copy.  It never manufactures a source
+    /// the exact 80-byte header/witness prefix copy. It never manufactures a source
     /// from an unrelated receiver path.
     /// </summary>
     public bool TryRecord(
@@ -1202,7 +1274,8 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
                     token,
                     allocation.AllocationId,
                     gpuLayout,
-                    nativeAllocation);
+                    nativeAllocation,
+                    volumeTableGeneration: 0u);
             }
             catch (Exception exception)
             {
@@ -1229,7 +1302,7 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
     }
 
     /// <summary>
-    /// Consumes a fence-complete header readback. Live scheduling already read
+    /// Consumes a fence-complete header and refinement-witness readback. Live scheduling already read
     /// the immediately preceding bank directly on the GPU; this delayed CPU
     /// read validates diagnostics and releases the frame-ring bank for reuse.
     /// A readback is rejected only if its caller is not later than the source
@@ -1318,9 +1391,12 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
             {
                 BufferHandle readback = nativeAllocation.ReadbackBuffers[frameIndex];
                 _bufferManager.InvalidateBuffer(readback, 0UL, HeaderReadbackBytes);
+                byte* mapped = (byte*)_bufferManager.GetMappedPointer(readback);
                 GPUSimpleDdgiReceiverFeedbackBankHeaderV2 header =
-                    *(GPUSimpleDdgiReceiverFeedbackBankHeaderV2*)
-                        _bufferManager.GetMappedPointer(readback);
+                    *(GPUSimpleDdgiReceiverFeedbackBankHeaderV2*)mapped;
+                GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1 gpuWitness =
+                    *(GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1*)(mapped +
+                        SimpleDdgiReceiverFeedbackGpuSortAbi.BankHeaderByteCount);
                 validation = _resourceManager.CompleteGpuCapture(expected.Token, header);
                 if (!validation.UseFeedback)
                 {
@@ -1334,6 +1410,14 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
 
                 _activeGpuLayout = gpuLayout;
                 _publishedHeader = header;
+                _publishedRefinementWitness =
+                    SimpleDdgiReceiverFeedbackGpuSortAbi.TryDecodeRefinementWitness(
+                        header,
+                        gpuWitness,
+                        expected.VolumeTableGeneration,
+                        out SimpleDdgiReceiverFeedbackRefinementWitness witness)
+                    ? witness
+                    : null;
                 UpdateDiagnosticsNoLock(
                     SimpleDdgiReceiverFeedbackGpuCapabilityReason.None,
                     "receiver-feedback-previous-bank-published",
@@ -1752,7 +1836,8 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
         in SimpleDdgiReceiverFeedbackFrameToken token,
         ulong allocationId,
         in SimpleDdgiReceiverFeedbackGpuSortLayout gpuLayout,
-        NativeAllocation nativeAllocation)
+        NativeAllocation nativeAllocation,
+        uint volumeTableGeneration)
     {
         BufferHandle readbackHandle = nativeAllocation.ReadbackBuffers[frameIndex];
         if (!readbackHandle.IsValid)
@@ -1796,7 +1881,8 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
         ExecuteBufferBarrier(commandBuffer, afterCopy);
         _pendingReadbacks[frameIndex] = new PendingReadback(
             allocationId,
-            token);
+            token,
+            volumeTableGeneration);
     }
 
     private bool TryValidatePhysicalProducerBuffer(
@@ -1843,7 +1929,11 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
             exactCaptureProducerAvailable);
     }
 
-    private void ClearPublishedHeaderNoLock() => _publishedHeader = null;
+    private void ClearPublishedHeaderNoLock()
+    {
+        _publishedHeader = null;
+        _publishedRefinementWitness = null;
+    }
 
     private void ClearPendingReadbacksAndPublicationNoLock()
     {
@@ -1871,7 +1961,8 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
             Publication = _publishedHeader.HasValue
                 ? SimpleDdgiReceiverFeedbackPublicationTelemetry
                     .FromValidatedHeader(_publishedHeader.Value)
-                : SimpleDdgiReceiverFeedbackPublicationTelemetry.Empty
+                : SimpleDdgiReceiverFeedbackPublicationTelemetry.Empty,
+            RefinementWitness = _publishedRefinementWitness
         };
     }
 
@@ -1935,13 +2026,15 @@ public sealed unsafe class SimpleDdgiReceiverFeedbackVulkanRuntime : IDisposable
 
     private readonly record struct PendingReadback(
         ulong AllocationId,
-        SimpleDdgiReceiverFeedbackFrameToken Token);
+        SimpleDdgiReceiverFeedbackFrameToken Token,
+        uint VolumeTableGeneration);
 
     private readonly record struct PendingOwnedCapture(
         ulong AllocationId,
         SimpleDdgiReceiverFeedbackFrameToken Token,
         SimpleDdgiReceiverFeedbackCaptureProducerContract Producer,
-        uint RecordedProducerMask);
+        uint RecordedProducerMask,
+        uint VolumeTableGeneration);
 
     private sealed class VulkanAllocator : ISimpleDdgiReceiverFeedbackGpuResourceAllocator,
         IDisposable

@@ -283,13 +283,24 @@ public sealed class SimpleDdgiTraceVariantTests
             }
             Assert.That(
                 directionalStage,
-                Does.Contain("TryReadSimpleDdgiGuidingTracePayload"));
+                Does.Contain("TryReadSimpleDdgiGuidingTransportPayload"));
             Assert.That(
                 directionalProject,
                 Does.Not.Contain("SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT"));
             Assert.That(
                 directionalProject,
                 Does.Contain("SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION"));
+            Assert.That(
+                directionalProject,
+                Does.Contain("TryReadSimpleDdgiGuidingTransportPayload"));
+            Assert.That(
+                directionalProject,
+                Does.Contain("recursiveGuidingActive"));
+            Assert.That(
+                project,
+                Does.Contain(
+                    "-DSIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION=1 " +
+                    "-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1"));
 
             foreach (string artifact in new[]
                      {

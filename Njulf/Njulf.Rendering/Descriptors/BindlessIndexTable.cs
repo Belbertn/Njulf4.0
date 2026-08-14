@@ -706,6 +706,36 @@ namespace Njulf.Rendering.Descriptors
         public const int DirectionalRayShadowMaskBufferFrame1 =
             DirectionalRayShadowMaskBufferBase + 1;
 
+        /// <summary>Half2 raw visibility and blocker-distance banks.</summary>
+        public const int DirectionalShadowRawBufferBase =
+            DirectionalRayShadowMaskBufferFrame1 + 1;
+        public const int DirectionalShadowRawBufferFrame1 =
+            DirectionalShadowRawBufferBase + 1;
+
+        /// <summary>Three-word temporal history records for each frame bank.</summary>
+        public const int DirectionalShadowHistoryBufferBase =
+            DirectionalShadowRawBufferFrame1 + 1;
+        public const int DirectionalShadowHistoryBufferFrame1 =
+            DirectionalShadowHistoryBufferBase + 1;
+
+        /// <summary>One-word per-pixel spatial-filter scratch banks.</summary>
+        public const int DirectionalShadowScratchBufferBase =
+            DirectionalShadowHistoryBufferFrame1 + 1;
+        public const int DirectionalShadowScratchBufferFrame1 =
+            DirectionalShadowScratchBufferBase + 1;
+
+        /// <summary>Optional per-pixel hit/candidate/rejection diagnostics.</summary>
+        public const int DirectionalShadowDiagnosticBufferBase =
+            DirectionalShadowScratchBufferFrame1 + 1;
+        public const int DirectionalShadowDiagnosticBufferFrame1 =
+            DirectionalShadowDiagnosticBufferBase + 1;
+
+        /// <summary>Aggregate ray and history counters, one bank per frame.</summary>
+        public const int DirectionalShadowCounterBufferBase =
+            DirectionalShadowDiagnosticBufferFrame1 + 1;
+        public const int DirectionalShadowCounterBufferFrame1 =
+            DirectionalShadowCounterBufferBase + 1;
+
         // ============================================
         // TEXTURE HEAP INDICES (dynamic allocation)
         // ============================================
@@ -839,7 +869,7 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>Number of static (fixed-index) buffers</summary>
         public const int StaticBufferCount =
-            DirectionalRayShadowMaskBufferFrame1 + 1;
+            DirectionalShadowCounterBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1067,6 +1097,16 @@ namespace Njulf.Rendering.Descriptors
                     SimpleDdgiReceiverFeedbackCandidateBuffer => nameof(SimpleDdgiReceiverFeedbackCandidateBuffer),
                     DirectionalRayShadowMaskBufferBase => nameof(DirectionalRayShadowMaskBufferBase),
                     DirectionalRayShadowMaskBufferFrame1 => nameof(DirectionalRayShadowMaskBufferFrame1),
+                    DirectionalShadowRawBufferBase => nameof(DirectionalShadowRawBufferBase),
+                    DirectionalShadowRawBufferFrame1 => nameof(DirectionalShadowRawBufferFrame1),
+                    DirectionalShadowHistoryBufferBase => nameof(DirectionalShadowHistoryBufferBase),
+                    DirectionalShadowHistoryBufferFrame1 => nameof(DirectionalShadowHistoryBufferFrame1),
+                    DirectionalShadowScratchBufferBase => nameof(DirectionalShadowScratchBufferBase),
+                    DirectionalShadowScratchBufferFrame1 => nameof(DirectionalShadowScratchBufferFrame1),
+                    DirectionalShadowDiagnosticBufferBase => nameof(DirectionalShadowDiagnosticBufferBase),
+                    DirectionalShadowDiagnosticBufferFrame1 => nameof(DirectionalShadowDiagnosticBufferFrame1),
+                    DirectionalShadowCounterBufferBase => nameof(DirectionalShadowCounterBufferBase),
+                    DirectionalShadowCounterBufferFrame1 => nameof(DirectionalShadowCounterBufferFrame1),
                     _ => "Unknown"
                 };
             }

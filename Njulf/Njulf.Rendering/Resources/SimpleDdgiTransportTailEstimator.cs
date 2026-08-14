@@ -40,6 +40,15 @@ public static class SimpleDdgiTransportTailEstimator
         bool QuantizationLimited,
         bool IsWithinTolerance)
     {
+        public uint ChannelEvidenceVersion { get; init; }
+        public SimpleDdgiTransportRgbBounds FixedPointDefectChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds FieldMagnitudeChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds ObservedContractionChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds CertifiedContractionChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds AbsoluteTailBoundChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds RelativeTailBoundChannels { get; init; }
+        public SimpleDdgiTransportRgbBounds CanonicalQuantizationFloorChannels { get; init; }
+
         public bool CanCertify =>
             IsFinite &&
             HasValidContractionBound &&
@@ -151,16 +160,43 @@ public static class SimpleDdgiTransportTailEstimator
         float observedContractionBound = float.NaN,
         float canonicalQuantizationFloor = 0.0f)
     {
-        float defect = 0.0f;
-        float fieldMagnitude = 0.0f;
+        SimpleDdgiTransportRgbBounds observedChannels = float.IsNaN(
+            observedContractionBound)
+                ? SimpleDdgiTransportRgbBounds.Broadcast(configuredContractionBound)
+                : SimpleDdgiTransportRgbBounds.Broadcast(observedContractionBound);
+        return EvaluateTailPerChannel(
+            candidate,
+            canonical,
+            configuredContractionBound,
+            relativeTolerance,
+            observedChannels,
+            SimpleDdgiTransportRgbBounds.Broadcast(canonicalQuantizationFloor));
+    }
+
+    /// <summary>
+    /// Computes the component-wise positive-operator certificate. Each defect
+    /// is divided only by its own channel gain; the public scalar values are
+    /// retained as maxima for existing diagnostics.
+    /// </summary>
+    public static TailEstimate EvaluateTailPerChannel(
+        ReadOnlySpan<Vector3> candidate,
+        ReadOnlySpan<Vector3> canonical,
+        float configuredContractionBound,
+        float relativeTolerance,
+        SimpleDdgiTransportRgbBounds observedContractionChannels,
+        SimpleDdgiTransportRgbBounds canonicalQuantizationFloorChannels)
+    {
+        SimpleDdgiTransportRgbBounds defectChannels = default;
+        SimpleDdgiTransportRgbBounds fieldMagnitudeChannels = default;
         bool finite = candidate.Length == canonical.Length &&
                       float.IsFinite(configuredContractionBound) &&
                       configuredContractionBound >= 0.0f &&
                       configuredContractionBound <= MaximumCertifiedContraction &&
                       float.IsFinite(relativeTolerance) &&
                       relativeTolerance >= 0.0f &&
-                      float.IsFinite(canonicalQuantizationFloor) &&
-                      canonicalQuantizationFloor >= 0.0f;
+                      observedContractionChannels.IsAtMost(
+                          configuredContractionBound) &&
+                      canonicalQuantizationFloorChannels.IsFiniteNonNegative;
 
         for (int i = 0; finite && i < candidate.Length; i++)
         {
@@ -172,22 +208,56 @@ public static class SimpleDdgiTransportTailEstimator
                 break;
             }
 
-            defect = MathF.Max(defect, MaxComponent(Abs(next - previous)));
-            fieldMagnitude = MathF.Max(fieldMagnitude, MaxComponent(previous));
+            Vector3 channelDefect = Abs(next - previous);
+            defectChannels = SimpleDdgiTransportRgbBounds.Max(
+                defectChannels,
+                new SimpleDdgiTransportRgbBounds(
+                    channelDefect.X,
+                    channelDefect.Y,
+                    channelDefect.Z));
+            fieldMagnitudeChannels = SimpleDdgiTransportRgbBounds.Max(
+                fieldMagnitudeChannels,
+                new SimpleDdgiTransportRgbBounds(
+                    previous.X,
+                    previous.Y,
+                    previous.Z));
         }
 
-        bool observedValid = float.IsNaN(observedContractionBound) ||
-                             (float.IsFinite(observedContractionBound) &&
-                              observedContractionBound >= 0.0f &&
-                              observedContractionBound <= configuredContractionBound);
-        float observed = float.IsNaN(observedContractionBound)
-            ? configuredContractionBound
-            : observedContractionBound;
-        finite &= observedValid;
-
-        float certifiedQ = finite ? MathF.Min(configuredContractionBound, observed) : float.NaN;
-        float absoluteTail = finite ? defect / MathF.Max(1.0f - certifiedQ, 1e-6f) : float.NaN;
-        float relativeTail = finite ? absoluteTail / MathF.Max(fieldMagnitude, AbsoluteTolerance) : float.NaN;
+        SimpleDdgiTransportRgbBounds certifiedContractionChannels = finite
+            ? new SimpleDdgiTransportRgbBounds(
+                MathF.Min(configuredContractionBound,
+                    observedContractionChannels.Red),
+                MathF.Min(configuredContractionBound,
+                    observedContractionChannels.Green),
+                MathF.Min(configuredContractionBound,
+                    observedContractionChannels.Blue))
+            : SimpleDdgiTransportRgbBounds.Broadcast(float.NaN);
+        SimpleDdgiTransportRgbBounds absoluteTailChannels = finite
+            ? new SimpleDdgiTransportRgbBounds(
+                defectChannels.Red / MathF.Max(
+                    1.0f - certifiedContractionChannels.Red, 1e-6f),
+                defectChannels.Green / MathF.Max(
+                    1.0f - certifiedContractionChannels.Green, 1e-6f),
+                defectChannels.Blue / MathF.Max(
+                    1.0f - certifiedContractionChannels.Blue, 1e-6f))
+            : SimpleDdgiTransportRgbBounds.Broadcast(float.NaN);
+        float defect = defectChannels.Maximum;
+        float fieldMagnitude = fieldMagnitudeChannels.Maximum;
+        float observed = observedContractionChannels.Maximum;
+        float certifiedQ = certifiedContractionChannels.Maximum;
+        float absoluteTail = absoluteTailChannels.Maximum;
+        SimpleDdgiTransportRgbBounds relativeTailChannels = finite
+            ? new SimpleDdgiTransportRgbBounds(
+                absoluteTailChannels.Red / MathF.Max(
+                    fieldMagnitudeChannels.Red, AbsoluteTolerance),
+                absoluteTailChannels.Green / MathF.Max(
+                    fieldMagnitudeChannels.Green, AbsoluteTolerance),
+                absoluteTailChannels.Blue / MathF.Max(
+                    fieldMagnitudeChannels.Blue, AbsoluteTolerance))
+            : SimpleDdgiTransportRgbBounds.Broadcast(float.NaN);
+        float relativeTail = finite
+            ? relativeTailChannels.Maximum
+            : float.NaN;
         float tolerance = finite
             ? MathF.Max(AbsoluteTolerance, relativeTolerance * fieldMagnitude)
             : float.NaN;
@@ -195,6 +265,8 @@ public static class SimpleDdgiTransportTailEstimator
         // than the authored tail tolerance. A zero defect is a valid exact
         // fixed point (including an all-black field), so using `defect <=
         // floor` would incorrectly make every representable field pending.
+        float canonicalQuantizationFloor =
+            canonicalQuantizationFloorChannels.Maximum;
         bool quantizationLimited = finite &&
                                    canonicalQuantizationFloor > tolerance;
         bool withinTolerance = finite && absoluteTail <= tolerance;
@@ -212,7 +284,19 @@ public static class SimpleDdgiTransportTailEstimator
             finite,
             finite,
             quantizationLimited,
-            withinTolerance);
+            withinTolerance)
+        {
+            ChannelEvidenceVersion =
+                SimpleDdgiTransportTailSummary.PerChannelEvidenceVersion,
+            FixedPointDefectChannels = defectChannels,
+            FieldMagnitudeChannels = fieldMagnitudeChannels,
+            ObservedContractionChannels = observedContractionChannels,
+            CertifiedContractionChannels = certifiedContractionChannels,
+            AbsoluteTailBoundChannels = absoluteTailChannels,
+            RelativeTailBoundChannels = relativeTailChannels,
+            CanonicalQuantizationFloorChannels =
+                canonicalQuantizationFloorChannels
+        };
     }
 
     /// <summary>

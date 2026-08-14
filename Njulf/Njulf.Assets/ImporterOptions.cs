@@ -13,6 +13,10 @@ namespace Njulf.Assets
         public bool FlipWindingOrder { get; set; } = false;
         public string PreferredFormat { get; set; } = "gltf";
         public ModelImportBackend Backend { get; set; } = ModelImportBackend.Auto;
+        public bool ImportLights { get; set; } = true;
+        public float DefaultImportedLightRange { get; set; } = 100f;
+        public float MaximumImportedLightRange { get; set; } = 1000f;
+        public float ImportedLightAttenuationCutoff { get; set; } = 1f / 256f;
 
         public ImporterOptions()
         {

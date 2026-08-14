@@ -302,8 +302,9 @@ public sealed class AdvancedGiRuntimeEvidenceBundleTests
             IndependentRunCount:
                 SimpleDdgiNearFieldResidualEvidenceAbi
                     .MinimumIndependentRunCount,
-            C5AddedMilliseconds: 0.8,
-            EqualCostAdditionalB3Milliseconds: 0.82,
+            C5AddedMilliseconds: 0.60,
+            C5P95Milliseconds: 0.70,
+            EqualCostAdditionalB3Milliseconds: 0.62,
             B3ConvergenceVerified: true,
             CpuOrImageSpaceOracleVerified: true,
             TraceSourceIndependenceVerified: true,

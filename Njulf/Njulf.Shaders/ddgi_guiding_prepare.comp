@@ -15,7 +15,7 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-const uint SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION = 0x43330008u;
+const uint SIMPLE_DDGI_GUIDING_PREPARE_ABI_VERSION = 0x43330009u;
 const uint SIMPLE_DDGI_GUIDING_PREPARE_BUILD_WORK = 1u << 0u;
 const uint SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_WORK = 1u << 1u;
 const uint SIMPLE_DDGI_GUIDING_PREPARE_SAMPLE_EXPAND = 1u << 2u;
@@ -81,8 +81,8 @@ struct SimpleDdgiGuidingSampleRequest
     uint technique;
     uint randomBranchBits;
     float requestedUniformFraction;
-    uint randomIntraLeafUBits;
-    uint randomIntraLeafVBits;
+    uint sourceEpoch;
+    uint sourceLightingGeneration;
     uint traceRayIndex;
 };
 
@@ -207,10 +207,9 @@ void GuidingPrepareStoreSampleRequest(
     guidingPrepareSampleRequests.words[baseWord + 9u] = request.randomBranchBits;
     guidingPrepareSampleRequests.words[baseWord + 10u] =
         floatBitsToUint(request.requestedUniformFraction);
-    guidingPrepareSampleRequests.words[baseWord + 11u] =
-        request.randomIntraLeafUBits;
+    guidingPrepareSampleRequests.words[baseWord + 11u] = request.sourceEpoch;
     guidingPrepareSampleRequests.words[baseWord + 12u] =
-        request.randomIntraLeafVBits;
+        request.sourceLightingGeneration;
     guidingPrepareSampleRequests.words[baseWord + 13u] = request.traceRayIndex;
 }
 
@@ -450,16 +449,8 @@ void main()
             work.directionProposalEpoch,
             slot ^ 0x19b47a31u);
         request.requestedUniformFraction = uniformFraction;
-        request.randomIntraLeafUBits = GuidingPrepareHash(
-            work.virtualProbeId,
-            generation,
-            work.directionProposalEpoch,
-            slot ^ 0x6d2b79f5u);
-        request.randomIntraLeafVBits = GuidingPrepareHash(
-            work.virtualProbeId,
-            generation,
-            work.directionProposalEpoch,
-            slot ^ 0xb5297a4du);
+        request.sourceEpoch = work.sourceEpoch;
+        request.sourceLightingGeneration = work.sourceLightingGeneration;
         uint traceRayBase;
         if (!SimpleDdgiGuidingTryMultiplyU32(
                 work.physicalProbeIndex,

@@ -82,7 +82,7 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(11));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(12));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));
@@ -273,6 +273,114 @@ public sealed class RenderSettingsFileIoTests
                 Assert.That(json, Does.Contain("SimpleDdgiTransportAcceleratedSweepCount"));
                 Assert.That(json, Does.Not.Contain("SimpleDdgiTransportResidualThreshold"));
                 Assert.That(json, Does.Not.Contain("SimpleDdgiTransportMaximumSolverGenerations"));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void SaveLoad_PreservesRecursiveCertifiedGlossyTransportIntent()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "recursive-certified-transport.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.GlobalIllumination.SimpleDdgiDirectionalRadianceMode =
+                SimpleDdgiDirectionalRadianceMode.L2;
+            settings.GlobalIllumination.SimpleDdgiGlossyTransportMode =
+                SimpleDdgiGlossyTransportMode.RecursiveCertified;
+
+            settings.Save(path);
+            RenderSettings loaded = RenderSettings.Load(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    loaded.GlobalIllumination.SimpleDdgiDirectionalRadianceMode,
+                    Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
+                Assert.That(
+                    loaded.GlobalIllumination.SimpleDdgiGlossyTransportMode,
+                    Is.EqualTo(SimpleDdgiGlossyTransportMode.RecursiveCertified));
+                Assert.That(
+                    loaded.GlobalIllumination.ContentDependentSettingsMigrationDiagnostic,
+                    Is.Null);
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_Version11RecursiveExperimentalMigratesToOneBounce()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "legacy-recursive-transport.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 11,
+                  "GlobalIllumination": {
+                    "SimpleDdgiDirectionalRadianceMode": 2,
+                    "SimpleDdgiGlossyTransportMode": 3
+                  }
+                }
+                """);
+
+            RenderSettings loaded = RenderSettings.Load(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    loaded.GlobalIllumination.SimpleDdgiDirectionalRadianceMode,
+                    Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
+                Assert.That(
+                    loaded.GlobalIllumination.SimpleDdgiGlossyTransportMode,
+                    Is.EqualTo(SimpleDdgiGlossyTransportMode.OneBounce));
+                Assert.That(
+                    loaded.GlobalIllumination.ContentDependentSettingsMigrationDiagnostic,
+                    Does.Contain("Legacy RecursiveExperimental"));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_Version12RetainsRecursiveCertifiedTransport()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "certified-recursive-transport.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 12,
+                  "GlobalIllumination": {
+                    "SimpleDdgiDirectionalRadianceMode": 2,
+                    "SimpleDdgiGlossyTransportMode": 3
+                  }
+                }
+                """);
+
+            RenderSettings loaded = RenderSettings.Load(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    loaded.GlobalIllumination.SimpleDdgiGlossyTransportMode,
+                    Is.EqualTo(SimpleDdgiGlossyTransportMode.RecursiveCertified));
+                Assert.That(
+                    loaded.GlobalIllumination.ContentDependentSettingsMigrationDiagnostic,
+                    Is.Null);
             });
         }
         finally

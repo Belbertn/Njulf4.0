@@ -212,6 +212,7 @@ public static class AdvancedGiSettingsFingerprint
 
     private static string Normalize(SimpleDdgiNearFieldResidualMode mode) =>
         mode is SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment or
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive or
             SimpleDdgiNearFieldResidualMode.AutoQualified
             ? "hiz-residual"
             : mode.ToString();

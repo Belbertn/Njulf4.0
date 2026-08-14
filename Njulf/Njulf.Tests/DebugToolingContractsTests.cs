@@ -664,7 +664,7 @@ namespace Njulf.Tests
             {
                 Assert.That(settings.GlobalIllumination.SimpleDdgiFogEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiParticlesEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.True);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.False);
                 Assert.That(
                     settings.GlobalIllumination.EffectiveSimpleDdgiGlossyTransportMode,
                     Is.EqualTo(SimpleDdgiGlossyTransportMode.Off));

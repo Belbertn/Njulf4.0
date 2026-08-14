@@ -256,7 +256,17 @@ const int SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_TILE_BUFFER_INDEX = 208;
 const int SIMPLE_DDGI_RECEIVER_FEEDBACK_CANDIDATE_BUFFER_INDEX = 209;
 const int DIRECTIONAL_RAY_SHADOW_MASK_BUFFER_BASE_INDEX = 210;
 const int DIRECTIONAL_RAY_SHADOW_MASK_BUFFER_FRAME1_INDEX = 211;
-const int STATIC_BUFFER_COUNT = 212;
+const int DIRECTIONAL_SHADOW_RAW_BUFFER_BASE_INDEX = 212;
+const int DIRECTIONAL_SHADOW_RAW_BUFFER_FRAME1_INDEX = 213;
+const int DIRECTIONAL_SHADOW_HISTORY_BUFFER_BASE_INDEX = 214;
+const int DIRECTIONAL_SHADOW_HISTORY_BUFFER_FRAME1_INDEX = 215;
+const int DIRECTIONAL_SHADOW_SCRATCH_BUFFER_BASE_INDEX = 216;
+const int DIRECTIONAL_SHADOW_SCRATCH_BUFFER_FRAME1_INDEX = 217;
+const int DIRECTIONAL_SHADOW_DIAGNOSTIC_BUFFER_BASE_INDEX = 218;
+const int DIRECTIONAL_SHADOW_DIAGNOSTIC_BUFFER_FRAME1_INDEX = 219;
+const int DIRECTIONAL_SHADOW_COUNTER_BUFFER_BASE_INDEX = 220;
+const int DIRECTIONAL_SHADOW_COUNTER_BUFFER_FRAME1_INDEX = 221;
+const int STATIC_BUFFER_COUNT = 222;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -269,6 +279,11 @@ const uint MESHLET_DRAW_FLAG_CAN_HIZ_TEST = 1u << 5;
 const uint FOLIAGE_PROTOTYPE_FLAG_CAST_SHADOWS = 1u << 0;
 const uint FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR = 1u << 1;
 const uint GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS = 1u << 0;
+const uint GPU_LIGHT_ATTENUATION_MODE_SHIFT = 8u;
+const uint GPU_LIGHT_ATTENUATION_MODE_MASK = 3u << GPU_LIGHT_ATTENUATION_MODE_SHIFT;
+const uint GPU_LIGHT_ATTENUATION_LEGACY_WINDOWED = 0u;
+const uint GPU_LIGHT_ATTENUATION_INVERSE_SQUARE = 1u;
+const uint GPU_LIGHT_ATTENUATION_POLYNOMIAL = 2u;
 
 const uint HIZ_TEST_MODE_OFF = 0u;
 const uint HIZ_TEST_MODE_BOUNDS_4_TAP = 1u;
@@ -715,6 +730,10 @@ struct GPULight
     int ShadowFlags;
     float ShadowStrength;
     uint StableIdentity;
+    float InnerSpotAngle;
+    float AttenuationConstant;
+    float AttenuationLinear;
+    float AttenuationQuadratic;
 };
 
 struct GPUSceneData
@@ -1176,7 +1195,10 @@ struct GPUDirectionalShadowParameters
     vec4 CascadeWorldTexelSizes;
     vec4 FilterAndBias;
     vec4 ModeAndRayDistance;
-    vec4 Reserved;
+    vec4 TemporalAndSampling;
+    vec4 RaySceneBoundsMinimum;
+    vec4 RaySceneBoundsMaximum;
+    vec4 RuntimeFlags;
 };
 
 struct GPUSpotShadow
@@ -1436,7 +1458,7 @@ const int SIZEOF_GPU_OBJECT_DATA = 208;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
 const int SIZEOF_GPU_MATERIAL_DATA = 320;
 const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
-const int SIZEOF_GPU_LIGHT = 64;
+const int SIZEOF_GPU_LIGHT = 80;
 const int SIZEOF_GPU_SCENE_DATA = 400;
 const int SIZEOF_GPU_MESHLET_DRAW_COMMAND = 16;
 const int SIZEOF_GPU_PACKED_MESHLET_DRAW_COMMAND = 32;
@@ -1464,7 +1486,7 @@ const int SIZEOF_GPU_FORWARD_PUSH_CONSTANTS = 256;
 const int SIZEOF_GPU_MOTION_VECTOR_PUSH_CONSTANTS = 160;
 const int SIZEOF_GPU_LIGHT_CULL_PUSH_CONSTANTS = 208;
 const int SIZEOF_GPU_SHADOW_DATA = 320;
-const int SIZEOF_GPU_DIRECTIONAL_SHADOW_PARAMETERS = 64;
+const int SIZEOF_GPU_DIRECTIONAL_SHADOW_PARAMETERS = 112;
 const int SIZEOF_GPU_SPOT_SHADOW = 112;
 const int SIZEOF_GPU_POINT_SHADOW = 432;
 const int SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX = 16;
@@ -1811,7 +1833,10 @@ const int OFFSET_GPU_SHADOW_DATA_CASCADE_TRANSITION_DATA = 304;
 const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_CASCADE_WORLD_TEXEL_SIZES = 0;
 const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_FILTER_AND_BIAS = 16;
 const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_MODE_AND_RAY_DISTANCE = 32;
-const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RESERVED = 48;
+const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_TEMPORAL_AND_SAMPLING = 48;
+const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RAY_SCENE_BOUNDS_MINIMUM = 64;
+const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RAY_SCENE_BOUNDS_MAXIMUM = 80;
+const int OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RUNTIME_FLAGS = 96;
 const int OFFSET_GPU_SPOT_SHADOW_LIGHT_VIEW_PROJECTION = 0;
 const int OFFSET_GPU_SPOT_SHADOW_ATLAS_SCALE_OFFSET = 64;
 const int OFFSET_GPU_SPOT_SHADOW_BIAS_STRENGTH_TEXEL_SIZE = 80;
@@ -2188,6 +2213,13 @@ const uint MESHLET_TASK_GROUP_SIZE = 1u;
 
 #ifndef NJULF_DDGI_DETAILED_COUNTERS
 #define NJULF_DDGI_DETAILED_COUNTERS 0
+#endif
+
+// Directional-shadow traversal/filter counters are investigation-only.  Keep
+// their compile-time switch independent of DDGI so production shaders contain
+// no hidden diagnostic atomics even when the runtime counter flag is false.
+#ifndef NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+#define NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS 0
 #endif
 
 uint ReadStorageWord(uint bufferIndex, uint wordOffset)
@@ -3329,6 +3361,7 @@ GPULight ReadLight(uint lightIndex)
     vec4 colorRange = ReadStorageAlignedVec4Uniform(lightBufferIndex, baseWord + 4u);
     vec4 directionAngle = ReadStorageAlignedVec4Uniform(lightBufferIndex, baseWord + 8u);
     uvec4 typeShadow = ReadStorageAlignedUVec4Uniform(lightBufferIndex, baseWord + 12u);
+    vec4 attenuation = ReadStorageAlignedVec4Uniform(lightBufferIndex, baseWord + 16u);
     GPULight light;
     light.Position = positionIntensity.xyz;
     light.Intensity = positionIntensity.w;
@@ -3340,13 +3373,16 @@ GPULight ReadLight(uint lightIndex)
     light.ShadowFlags = int(typeShadow.y);
     light.ShadowStrength = uintBitsToFloat(typeShadow.z);
     light.StableIdentity = typeShadow.w;
+    light.InnerSpotAngle = attenuation.x;
+    light.AttenuationConstant = attenuation.y;
+    light.AttenuationLinear = attenuation.z;
+    light.AttenuationQuadratic = attenuation.w;
     return light;
 }
 
-// Njulf's currently supported punctual-light contract is deliberately a
-// scene-unit convention: Color * Intensity is scene-linear incident radiance
-// at zero distance, with a squared finite-range window. Raster and GI must use
-// these helpers together until a future physical-unit migration changes both.
+// Legacy authored lights retain Njulf's squared scene-range convention. Model
+// imports select physical inverse-square or Assimp polynomial attenuation via
+// reserved flag bits; raster and GI share the dispatch helpers below.
 float EvaluateNjulfPunctualRangeAttenuation(float distanceToLight, float lightRange)
 {
     if (lightRange <= 0.0 || distanceToLight >= lightRange)
@@ -3355,11 +3391,82 @@ float EvaluateNjulfPunctualRangeAttenuation(float distanceToLight, float lightRa
     return rangeFactor * rangeFactor;
 }
 
+float EvaluateNjulfFiniteRangeWindow(float distanceToLight, float lightRange)
+{
+    if (lightRange <= 0.0 || distanceToLight >= lightRange)
+        return 0.0;
+    float ratio = max(distanceToLight, 0.0) / lightRange;
+    float factor = clamp(1.0 - ratio * ratio * ratio * ratio, 0.0, 1.0);
+    return factor * factor;
+}
+
+uint NjulfLightAttenuationMode(GPULight light)
+{
+    return (uint(light.ShadowFlags) & GPU_LIGHT_ATTENUATION_MODE_MASK) >>
+        GPU_LIGHT_ATTENUATION_MODE_SHIFT;
+}
+
+float EvaluateNjulfLightDistanceAttenuation(
+    GPULight light,
+    float distanceToLight)
+{
+    uint mode = NjulfLightAttenuationMode(light);
+    if (mode == GPU_LIGHT_ATTENUATION_LEGACY_WINDOWED)
+    {
+        return EvaluateNjulfPunctualRangeAttenuation(
+            distanceToLight,
+            light.Range);
+    }
+
+    float rangeWindow = EvaluateNjulfFiniteRangeWindow(
+        distanceToLight,
+        light.Range);
+    if (rangeWindow <= 0.0)
+        return 0.0;
+    float distance = max(distanceToLight, 0.0);
+    if (mode == GPU_LIGHT_ATTENUATION_INVERSE_SQUARE)
+        return rangeWindow / max(distance * distance, 1e-4);
+    if (mode == GPU_LIGHT_ATTENUATION_POLYNOMIAL)
+    {
+        float denominator = light.AttenuationConstant +
+            light.AttenuationLinear * distance +
+            light.AttenuationQuadratic * distance * distance;
+        return rangeWindow / max(denominator, 1e-4);
+    }
+    return 0.0;
+}
+
 float EvaluateNjulfSpotAttenuation(vec3 lightDirection, vec3 directionToLight, float spotAngle)
 {
     float coneCos = cos(spotAngle);
     float spotCos = dot(normalize(lightDirection), -directionToLight);
     return smoothstep(coneCos, min(coneCos + 0.1, 1.0), spotCos);
+}
+
+float EvaluateNjulfSpotAttenuation(
+    GPULight light,
+    vec3 directionToLight)
+{
+    if (NjulfLightAttenuationMode(light) ==
+        GPU_LIGHT_ATTENUATION_LEGACY_WINDOWED)
+    {
+        return EvaluateNjulfSpotAttenuation(
+            light.Direction,
+            directionToLight,
+            light.SpotAngle);
+    }
+
+    float outerCos = cos(light.SpotAngle);
+    float innerCos = cos(light.InnerSpotAngle);
+    float spotCos = dot(normalize(light.Direction), -directionToLight);
+    float coneWidth = innerCos - outerCos;
+    if (coneWidth <= 1e-6)
+        return step(outerCos, spotCos);
+    float attenuation = clamp(
+        (spotCos - outerCos) / coneWidth,
+        0.0,
+        1.0);
+    return attenuation * attenuation;
 }
 
 GPUDdgiEmissiveSource ReadDdgiEmissiveSource(uint sourceIndex)
@@ -3916,6 +4023,38 @@ vec4 ReadDirectionalShadowModeAndRayDistance()
     return ReadStorageAlignedVec4Uniform(
         uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX),
         baseWord + uint(OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_MODE_AND_RAY_DISTANCE / 4));
+}
+
+vec4 ReadDirectionalShadowTemporalAndSampling()
+{
+    uint baseWord = uint(SIZEOF_GPU_SHADOW_DATA / 4);
+    return ReadStorageAlignedVec4Uniform(
+        uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX),
+        baseWord + uint(OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_TEMPORAL_AND_SAMPLING / 4));
+}
+
+vec4 ReadDirectionalShadowRaySceneBoundsMinimum()
+{
+    uint baseWord = uint(SIZEOF_GPU_SHADOW_DATA / 4);
+    return ReadStorageAlignedVec4Uniform(
+        uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX),
+        baseWord + uint(OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RAY_SCENE_BOUNDS_MINIMUM / 4));
+}
+
+vec4 ReadDirectionalShadowRaySceneBoundsMaximum()
+{
+    uint baseWord = uint(SIZEOF_GPU_SHADOW_DATA / 4);
+    return ReadStorageAlignedVec4Uniform(
+        uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX),
+        baseWord + uint(OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RAY_SCENE_BOUNDS_MAXIMUM / 4));
+}
+
+vec4 ReadDirectionalShadowRuntimeFlags()
+{
+    uint baseWord = uint(SIZEOF_GPU_SHADOW_DATA / 4);
+    return ReadStorageAlignedVec4Uniform(
+        uint(DIRECTIONAL_SHADOW_DATA_BUFFER_INDEX),
+        baseWord + uint(OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RUNTIME_FLAGS / 4));
 }
 
 void WriteTiledLightHeader(uint tileIndex, uint lightCount, uint lightOffset, uint overflowCount)

@@ -17,6 +17,13 @@ namespace Njulf.Rendering.Resources
         Spot = 2
     }
 
+    public enum LightAttenuationMode : int
+    {
+        LegacyWindowed = 0,
+        InverseSquare = 1,
+        Polynomial = 2
+    }
+
     /// <summary>
     /// A stable, generation-checked reference to a light owned by <see cref="LightManager"/>.
     /// Packed GPU indices are intentionally not exposed through this type.
@@ -50,6 +57,11 @@ namespace Njulf.Rendering.Resources
         public float Range;
         public Vector3 Direction;
         public float SpotAngle;
+        public float InnerSpotAngle;
+        public LightAttenuationMode AttenuationMode;
+        public float AttenuationConstant;
+        public float AttenuationLinear;
+        public float AttenuationQuadratic;
         public LightType Type;
         public bool CastsShadows;
         public float ShadowStrength;
@@ -717,8 +729,14 @@ namespace Njulf.Rendering.Resources
                 Direction = new Njulf.Core.Math.Vector3(light.Direction.X, light.Direction.Y, light.Direction.Z),
                 SpotAngle = light.SpotAngle,
                 Type = (int)light.Type,
-                ShadowFlags = light.CastsShadows ? GPULight.CastsShadowsFlag : 0,
-                ShadowStrength = shadowStrength
+                ShadowFlags =
+                    (light.CastsShadows ? GPULight.CastsShadowsFlag : 0) |
+                    GPULight.EncodeAttenuationMode(light.AttenuationMode),
+                ShadowStrength = shadowStrength,
+                InnerSpotAngle = light.InnerSpotAngle,
+                AttenuationConstant = light.AttenuationConstant,
+                AttenuationLinear = light.AttenuationLinear,
+                AttenuationQuadratic = light.AttenuationQuadratic
             };
         }
 

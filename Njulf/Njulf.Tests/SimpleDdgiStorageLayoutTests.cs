@@ -57,6 +57,109 @@ public sealed class SimpleDdgiStorageLayoutTests
     }
 
     [Test]
+    public void RecursiveGlossySidecar_PreservesOrdinaryStrideAndChargesFourBytesPerRay()
+    {
+        SimpleDdgiTransportCacheRegionRequest request =
+            Request(0, "recursive", 11, 3, 8, 3, 0.125f, 0.10f) with
+            {
+                UseRecursiveGlossySidecar = true
+            };
+        SimpleDdgiStorageLayout layout =
+            SimpleDdgiStorageLayoutCompiler.Compile([request]);
+        SimpleDdgiTransportCacheRegion region = layout.Regions.Single();
+        bool secondValid =
+            SimpleDdgiStorageLayoutCompiler.TryResolveProbeCacheBaseWordPlusOne(
+                region,
+                12U,
+                out uint secondProbeBase);
+        uint flags = SimpleDdgiStorageLayoutCompiler.PackVolumeFlags(
+            region.Format,
+            irradianceMirrorPresent: false,
+            visibilityMirrorPresent: false,
+            layout.AbiVersion,
+            layout.DirectionCodebookVersion,
+            recursiveGlossySidecar: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(region.UsesRecursiveGlossySidecar, Is.True);
+            Assert.That(region.StrideWords,
+                Is.EqualTo(region.Format.WordCount()));
+            Assert.That(region.OrdinaryRecordBytes,
+                Is.EqualTo(3UL * 8UL * (ulong)region.StrideWords * 4UL));
+            Assert.That(region.GlossyMaterialSidecarBytes,
+                Is.EqualTo(3UL * 8UL * 4UL));
+            Assert.That(layout.GlossyMaterialSidecarBytes,
+                Is.EqualTo(region.GlossyMaterialSidecarBytes));
+            Assert.That(region.ByteCount, Is.EqualTo(
+                region.OrdinaryRecordBytes +
+                region.GlossyMaterialSidecarBytes));
+            Assert.That(secondValid, Is.True);
+            Assert.That(secondProbeBase, Is.EqualTo(
+                checked((uint)(region.BaseWord + region.WordsPerProbe + 1UL))));
+            Assert.That(flags &
+                SimpleDdgiStorageLayoutCompiler.RecursiveGlossySidecarFlag,
+                Is.Not.Zero);
+        });
+    }
+
+    [Test]
+    public void RecursiveGlossyAdmission_RequiresCompleteSidecarAndAccountsItExactly()
+    {
+        SimpleDdgiTransportCacheRegionRequest ordinaryRequest =
+            Request(0, "recursive-admission", 0, 4, 16, 4, 0.125f, 0.10f);
+        SimpleDdgiStorageLayout ordinaryLayout =
+            SimpleDdgiStorageLayoutCompiler.Compile([ordinaryRequest]);
+        SimpleDdgiStorageLayout recursiveLayout =
+            SimpleDdgiStorageLayoutCompiler.Compile(
+                [ordinaryRequest with { UseRecursiveGlossySidecar = true }]);
+        const ulong directionalBudget = 4UL * 64UL * 2UL;
+
+        SimpleDdgiMemoryPlan fallback = SimpleDdgiMemoryPlan.Create(
+            probeCount: 4,
+            updateRequestCapacity: 4,
+            rayCapacity: 16,
+            sampledAtlasRequested: false,
+            concreteTransportBuffers: true,
+            readbackBufferCount: 0,
+            storageLayout: ordinaryLayout,
+            directionalRadianceMode: SimpleDdgiDirectionalRadianceMode.L2,
+            glossyTransportMode: SimpleDdgiGlossyTransportMode.RecursiveCertified,
+            directionalRadianceBudgetBytes: directionalBudget);
+        SimpleDdgiMemoryPlan admitted = SimpleDdgiMemoryPlan.Create(
+            probeCount: 4,
+            updateRequestCapacity: 4,
+            rayCapacity: 16,
+            sampledAtlasRequested: false,
+            concreteTransportBuffers: true,
+            readbackBufferCount: 0,
+            storageLayout: recursiveLayout,
+            directionalRadianceMode: SimpleDdgiDirectionalRadianceMode.L2,
+            glossyTransportMode: SimpleDdgiGlossyTransportMode.RecursiveCertified,
+            directionalRadianceBudgetBytes: directionalBudget);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fallback.GlossyTransportMode,
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.OneBounce));
+            Assert.That(fallback.DirectionalRadianceFallbackReason,
+                Is.EqualTo("recursive-glossy-sidecar-unavailable"));
+            Assert.That(admitted.GlossyTransportMode,
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.RecursiveCertified));
+            Assert.That(admitted.DirectionalRadianceFallbackReason, Is.Empty);
+            Assert.That(admitted.TransportSourceCacheGlossyMaterialSidecarBytes,
+                Is.EqualTo(4UL * 16UL * sizeof(uint)));
+            Assert.That(
+                admitted.TransportSourceCacheLegacyBytes +
+                admitted.TransportSourceCacheCompact28Bytes +
+                admitted.TransportSourceCacheCompact24Bytes +
+                admitted.TransportSourceCacheGlossyMaterialSidecarBytes +
+                admitted.TransportSourceCacheAlignmentBytes,
+                Is.EqualTo(admitted.TransportSourceCacheBytes));
+        });
+    }
+
+    [Test]
     public void ExplicitMaximumTraceDistance_DrivesPackingAndFingerprint()
     {
         SimpleDdgiTransportCacheRegionRequest request =

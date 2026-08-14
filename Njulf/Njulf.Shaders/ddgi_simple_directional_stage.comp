@@ -84,6 +84,15 @@ void main()
     {
         return;
     }
+    // The recursive solver's total-radiance records remain live until the
+    // project dispatch. The guided project reads and validates C3's compact
+    // payload directly for this mode, so this staging pass must not replace
+    // those records with source-only inputs.
+    if (SimpleDdgiGlossyTransportMode(params.residencyFlags) ==
+            SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_RECURSIVE_CERTIFIED)
+    {
+        return;
+    }
 
     uint localProbeOffset = gl_WorkGroupID.x;
     bool gpuScheduler = SimpleDdgiGpuSchedulerActive(
@@ -231,12 +240,12 @@ void main()
             params);
         bool recordPresent = false;
         SimpleDdgiGuidingTransportPayload payload;
-        bool valid = TryReadSimpleDdgiGuidingTracePayload(
-            pc.RayResultScratchBufferIndex,
-            params.guidingTraceDirectionScratchOffsetWords,
+        bool valid = TryReadSimpleDdgiGuidingTransportPayload(
             update.physicalProbeIndex,
             update.probeIndex,
             update.pageMappingGeneration,
+            update.sourceEpoch,
+            update.sourceLightingGeneration,
             uvec2(
                 update.probeIndex,
                 SimpleDdgiProbeGeneration(initialState)),

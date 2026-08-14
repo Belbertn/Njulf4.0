@@ -150,49 +150,63 @@ void main()
         params,
         volume,
         localProbeOffset);
+    bool recursiveGlossy =
+        SimpleDdgiGlossyTransportMode(params.residencyFlags) ==
+            SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_RECURSIVE_CERTIFIED;
 #if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
     // The preceding C3-only dispatch has consumed the independent source
     // cache and written a layout-independent, preweighted projection record
-    // into the now-dead ordinary ray scratch. Consume it with the proven V1
-    // transaction ordering so every record is read before SH overwrites the
-    // allocation prefix.
+    // into the now-dead ordinary ray scratch. Recursive glossy keeps its
+    // solved total-radiance records live instead and consumes C3's estimator
+    // payload directly below.
     bool transportV2 = false;
-    uint stagedFirstMetadataWord =
-        localProbeOffset * params.raysPerProbe *
-            SimpleDdgiRayResultStrideWords(volume) +
-        SIMPLE_DDGI_DIRECTIONAL_STAGE_METADATA_WORD;
-    uint stagedFirstMetadata = ReadStorageWordUniform(
-        pc.RayResultScratchBufferIndex,
-        stagedFirstMetadataWord);
-    if (stagedFirstMetadata == SIMPLE_DDGI_DIRECTIONAL_STAGE_NO_WORK)
+    bool useStagedProjection = !recursiveGlossy;
+    bool stagedGuidingActive = false;
+    if (useStagedProjection)
     {
-        WriteStorageWordUniform(
+        uint stagedFirstMetadataWord =
+            localProbeOffset * params.raysPerProbe *
+                SimpleDdgiRayResultStrideWords(volume) +
+            SIMPLE_DDGI_DIRECTIONAL_STAGE_METADATA_WORD;
+        uint stagedFirstMetadata = ReadStorageWordUniform(
             pc.RayResultScratchBufferIndex,
-            scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_WORD,
-            SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_EMPTY);
-        return;
+            stagedFirstMetadataWord);
+        if (stagedFirstMetadata == SIMPLE_DDGI_DIRECTIONAL_STAGE_NO_WORK)
+        {
+            WriteStorageWordUniform(
+                pc.RayResultScratchBufferIndex,
+                scratchBaseWord + SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_WORD,
+                SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_EMPTY);
+            return;
+        }
+        if (stagedFirstMetadata == SIMPLE_DDGI_DIRECTIONAL_STAGE_FAILED ||
+            !SimpleDdgiDirectionalStageMetadataIsValid(
+                stagedFirstMetadata,
+                update.sourceEpoch))
+        {
+            MarkSimpleDdgiDirectionalProjectionFailure(
+                scratchBaseWord,
+                SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_PROJECTING,
+                SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FAILURE_SOURCE);
+            return;
+        }
+        stagedGuidingActive =
+            SimpleDdgiDirectionalStageMetadataIsGuided(stagedFirstMetadata);
     }
-    if (stagedFirstMetadata == SIMPLE_DDGI_DIRECTIONAL_STAGE_FAILED ||
-        !SimpleDdgiDirectionalStageMetadataIsValid(
-            stagedFirstMetadata,
-            update.sourceEpoch))
-    {
-        MarkSimpleDdgiDirectionalProjectionFailure(
-            scratchBaseWord,
-            SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_PROJECTING,
-            SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FAILURE_SOURCE);
-        return;
-    }
-    bool stagedGuidingActive =
-        SimpleDdgiDirectionalStageMetadataIsGuided(stagedFirstMetadata);
 #else
+    // Recursive glossy projects the just-solved total-radiance scratch. This
+    // publishes the directional half of the same lagged-Jacobi state consumed
+    // by the next solve/audit; ordinary V2 modes retain source-cache projection.
     bool transportV2 =
-        (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u;
+        (params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) != 0u &&
+        !recursiveGlossy;
 #endif
     uint status = SIMPLE_DDGI_DIRECTIONAL_SCRATCH_STATUS_PROJECTING;
     uint rayCount = min(
 #if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
-        SimpleDdgiUpdateSourceRayCount(update, params),
+        useStagedProjection
+            ? SimpleDdgiUpdateSourceRayCount(update, params)
+            : SimpleDdgiUpdateRayCount(update, params),
 #else
         transportV2
             ? SimpleDdgiUpdateSourceRayCount(update, params)
@@ -268,6 +282,88 @@ void main()
     uint sourceRayCount = SimpleDdgiUpdateSourceRayCount(update, params);
     uint validCount = 0u;
     bool projectionFailed = false;
+#if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
+    // A recursive guided projection cannot consume the source-only staging
+    // records. Determine whether the authenticated C3 transaction is present
+    // from its first deterministic slot, derive its technique population, and
+    // validate each payload exactly once while projecting total radiance.
+    uint recursiveGuidingMaintenanceCount = 0u;
+    uint recursiveGuidingMixtureCount = 0u;
+    bool recursiveGuidingActive = false;
+    bool recursiveGuidingEligible = false;
+    bool firstGuidingRecordPresent = false;
+    bool firstGuidingPayloadValid = false;
+    SimpleDdgiGuidingTransportPayload firstGuidingPayload;
+    if (!useStagedProjection)
+    {
+        recursiveGuidingEligible =
+            params.guidingPhysicalProbeCapacity != 0u &&
+            update.physicalProbeIndex < params.guidingPhysicalProbeCapacity;
+        if (recursiveGuidingEligible && rayCount != 0u)
+        {
+            uint firstDirectionRayIndex =
+                SimpleDdgiUpdateDirectionRayIndex(
+                0u,
+                rayCount,
+                sourceRayCount,
+                params);
+            firstGuidingPayloadValid =
+                TryReadSimpleDdgiGuidingTransportPayload(
+                update.physicalProbeIndex,
+                update.probeIndex,
+                update.pageMappingGeneration,
+                update.sourceEpoch,
+                update.sourceLightingGeneration,
+                uvec2(
+                    update.probeIndex,
+                    SimpleDdgiProbeGeneration(initialState)),
+                firstDirectionRayIndex,
+                params.raysPerProbe,
+                params.guidingPhysicalProbeCapacity,
+                firstGuidingRecordPresent,
+                firstGuidingPayload);
+            if (firstGuidingRecordPresent && !firstGuidingPayloadValid)
+            {
+                MarkSimpleDdgiDirectionalProjectionFailure(
+                    scratchBaseWord,
+                    status,
+                    SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FAILURE_SOURCE);
+                return;
+            }
+            recursiveGuidingActive = firstGuidingRecordPresent;
+        }
+        if (recursiveGuidingActive)
+        {
+            for (uint ray = 0u; ray < rayCount; ray++)
+            {
+                uint directionRayIndex = SimpleDdgiUpdateDirectionRayIndex(
+                    ray,
+                    rayCount,
+                    sourceRayCount,
+                    params);
+                if (SimpleDdgiGuidingIsMaintenanceSlot(
+                        directionRayIndex,
+                        params.raysPerProbe))
+                {
+                    recursiveGuidingMaintenanceCount++;
+                }
+                else
+                {
+                    recursiveGuidingMixtureCount++;
+                }
+            }
+            if (recursiveGuidingMaintenanceCount == 0u ||
+                recursiveGuidingMixtureCount == 0u)
+            {
+                MarkSimpleDdgiDirectionalProjectionFailure(
+                    scratchBaseWord,
+                    status,
+                    SIMPLE_DDGI_DIRECTIONAL_SCRATCH_FAILURE_SOURCE);
+                return;
+            }
+        }
+    }
+#endif
 
     for (uint ray = 0u; ray < rayCount; ray++)
     {
@@ -330,34 +426,57 @@ void main()
             uint rayResultIndex =
                 localProbeOffset * params.raysPerProbe + ray;
 #if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
-            uint stagedBaseWord = rayResultIndex *
-                SimpleDdgiRayResultStrideWords(volume);
-            sourceRadiance = vec3(
-                ReadStorageFloatUniform(
-                    pc.RayResultScratchBufferIndex,
-                    stagedBaseWord),
-                ReadStorageFloatUniform(
-                    pc.RayResultScratchBufferIndex,
-                    stagedBaseWord + 1u),
-                ReadStorageFloatUniform(
-                    pc.RayResultScratchBufferIndex,
-                    stagedBaseWord + 2u));
-            sourceDirection = UnpackSimpleDdgiTransportOctDirection(
-                ReadStorageWordUniform(
+            if (useStagedProjection)
+            {
+                uint stagedBaseWord = rayResultIndex *
+                    SimpleDdgiRayResultStrideWords(volume);
+                sourceRadiance = vec3(
+                    ReadStorageFloatUniform(
+                        pc.RayResultScratchBufferIndex,
+                        stagedBaseWord),
+                    ReadStorageFloatUniform(
+                        pc.RayResultScratchBufferIndex,
+                        stagedBaseWord + 1u),
+                    ReadStorageFloatUniform(
+                        pc.RayResultScratchBufferIndex,
+                        stagedBaseWord + 2u));
+                sourceDirection = UnpackSimpleDdgiTransportOctDirection(
+                    ReadStorageWordUniform(
+                        pc.RayResultScratchBufferIndex,
+                        stagedBaseWord +
+                            SIMPLE_DDGI_DIRECTIONAL_STAGE_DIRECTION_WORD));
+                uint stagedMetadata = ReadStorageWordUniform(
                     pc.RayResultScratchBufferIndex,
                     stagedBaseWord +
-                        SIMPLE_DDGI_DIRECTIONAL_STAGE_DIRECTION_WORD));
-            uint stagedMetadata = ReadStorageWordUniform(
-                pc.RayResultScratchBufferIndex,
-                stagedBaseWord +
-                    SIMPLE_DDGI_DIRECTIONAL_STAGE_METADATA_WORD);
-            valid = SimpleDdgiDirectionalStageMetadataIsValid(
-                stagedMetadata,
-                update.sourceEpoch) &&
-                SimpleDdgiDirectionalStageMetadataIsGuided(
-                    stagedMetadata) == stagedGuidingActive;
-            hitKind = float(stagedMetadata &
-                SIMPLE_DDGI_DIRECTIONAL_STAGE_HIT_KIND_MASK);
+                        SIMPLE_DDGI_DIRECTIONAL_STAGE_METADATA_WORD);
+                valid = SimpleDdgiDirectionalStageMetadataIsValid(
+                    stagedMetadata,
+                    update.sourceEpoch) &&
+                    SimpleDdgiDirectionalStageMetadataIsGuided(
+                        stagedMetadata) == stagedGuidingActive;
+                hitKind = float(stagedMetadata &
+                    SIMPLE_DDGI_DIRECTIONAL_STAGE_HIT_KIND_MASK);
+            }
+            else
+            {
+                vec4 radianceDistance;
+                vec2 visibilityHit;
+                uint directionEpoch;
+                valid = ReadSimpleDdgiRayResultStorage(
+                    pc.RayResultScratchBufferIndex,
+                    rayResultIndex,
+                    volume,
+                    params,
+                    probeIndex,
+                    directionRayIndex,
+                    update.sourceEpoch,
+                    radianceDistance,
+                    sourceDirection,
+                    visibilityHit,
+                    directionEpoch);
+                sourceRadiance = radianceDistance.rgb;
+                hitKind = visibilityHit.y;
+            }
 #else
             vec4 radianceDistance;
             vec2 visibilityHit;
@@ -380,6 +499,60 @@ void main()
         }
 
         float sampleWeight = 1.0;
+#if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
+        if (!useStagedProjection && recursiveGuidingEligible)
+        {
+            bool recordPresent = false;
+            SimpleDdgiGuidingTransportPayload payload;
+            bool payloadValid;
+            if (ray == 0u)
+            {
+                recordPresent = firstGuidingRecordPresent;
+                payloadValid = firstGuidingPayloadValid;
+                payload = firstGuidingPayload;
+            }
+            else
+            {
+                payloadValid = TryReadSimpleDdgiGuidingTransportPayload(
+                    update.physicalProbeIndex,
+                    update.probeIndex,
+                    update.pageMappingGeneration,
+                    update.sourceEpoch,
+                    update.sourceLightingGeneration,
+                    uvec2(
+                        update.probeIndex,
+                        SimpleDdgiProbeGeneration(initialState)),
+                    directionRayIndex,
+                    params.raysPerProbe,
+                    params.guidingPhysicalProbeCapacity,
+                    recordPresent,
+                    payload);
+            }
+            float denominator = recursiveGuidingActive && payloadValid
+                ? SimpleDdgiGuidingBalanceDenominator(
+                    recursiveGuidingMaintenanceCount,
+                    recursiveGuidingMixtureCount,
+                    payload.generationTimeMixturePdf)
+                : 0.0;
+            if (recursiveGuidingActive)
+            {
+                valid = valid && recordPresent && payloadValid &&
+                    denominator > 0.0 &&
+                    !isnan(denominator) && !isinf(denominator);
+                if (valid)
+                {
+                    sourceDirection = payload.direction;
+                    sampleWeight = 1.0 / denominator;
+                }
+            }
+            else if (recordPresent)
+            {
+                // A population with a missing first slot is not a uniform
+                // transaction; reject it instead of mixing estimators.
+                valid = false;
+            }
+        }
+#endif
 
         float directionLengthSquared = dot(sourceDirection, sourceDirection);
         bool finiteSource =
@@ -436,7 +609,10 @@ void main()
     // count remains zero and makes every directional receiver fall through to
     // the next reflection source.
 #if SIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION
-    float normalization = stagedGuidingActive
+    bool guidingProjectionActive = useStagedProjection
+        ? stagedGuidingActive
+        : recursiveGuidingActive;
+    float normalization = guidingProjectionActive
         ? 1.0
         : validCount > 0u
             ? (4.0 * SIMPLE_DDGI_PI) / float(validCount)

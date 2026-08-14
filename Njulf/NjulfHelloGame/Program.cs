@@ -161,7 +161,7 @@ internal static class Program
         SimpleDdgiNearFieldResidualModeOverride =
             selection.NearFieldResidualEnabled
                 ? SimpleDdgiNearFieldResidualMode
-                    .HiZHalfResolutionExperiment
+                    .HiZAdaptive
                 : SimpleDdgiNearFieldResidualMode.Off,
         SimpleDdgiReceiverFeedbackQualificationId = null,
         DdgiOpacityMicromapQualificationId = null,

@@ -1,0 +1,338 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform DirectionalShadowTemporalPushBlock
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndMaximumDistance;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint RawInputBufferIndex;
+    uint PreviousHistoryBufferIndex;
+    uint CurrentHistoryBufferIndex;
+    uint OutputBufferIndex;
+    uint MaximumHistoryAge;
+    uint ResetReasons;
+    float MaximumHistoryWeight;
+    float RelativeDepthThreshold;
+    float NormalThreshold;
+    float TemporalKind;
+} pc;
+
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+shared uint AcceptedHistoryCount;
+shared uint RejectedHistoryCount;
+#endif
+
+bool Finite(float value) { return !isnan(value) && !isinf(value); }
+bool Finite(vec3 value) { return !any(isnan(value)) && !any(isinf(value)); }
+
+bool ReconstructPosition(ivec2 pixel, out vec3 worldPosition, out float depth)
+{
+    worldPosition = vec3(0.0);
+    depth = texelFetch(
+        BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
+        pixel,
+        0).r;
+    if (!Finite(depth) || depth <= 0.0 || depth > 1.0)
+        return false;
+    vec2 uv = (vec2(pixel) + vec2(0.5)) /
+        vec2(pc.ScreenWidth, pc.ScreenHeight);
+    vec4 world = MulRowMajor(
+        vec4(uv * 2.0 - vec2(1.0), depth, 1.0),
+        pc.InverseViewProjectionMatrix);
+    if (any(isnan(world)) || any(isinf(world)) || abs(world.w) <= 1.0e-7)
+        return false;
+    worldPosition = world.xyz / world.w;
+    return Finite(worldPosition);
+}
+
+vec3 SelectDerivative(vec3 center, vec3 negative, bool hasNegative, vec3 positive, bool hasPositive)
+{
+    if (hasNegative && hasPositive)
+    {
+        vec3 fromNegative = center - negative;
+        vec3 toPositive = positive - center;
+        return dot(fromNegative, fromNegative) < dot(toPositive, toPositive)
+            ? fromNegative
+            : toPositive;
+    }
+    if (hasNegative)
+        return center - negative;
+    if (hasPositive)
+        return positive - center;
+    return vec3(0.0);
+}
+
+bool ReconstructNormal(ivec2 pixel, vec3 center, out vec3 normal)
+{
+    ivec2 maximum = ivec2(pc.ScreenWidth, pc.ScreenHeight) - ivec2(1);
+    vec3 leftPosition;
+    vec3 rightPosition;
+    vec3 upperPosition;
+    vec3 lowerPosition;
+    float ignored;
+    bool leftValid = pixel.x > 0 && ReconstructPosition(pixel + ivec2(-1, 0), leftPosition, ignored);
+    bool rightValid = pixel.x < maximum.x && ReconstructPosition(pixel + ivec2(1, 0), rightPosition, ignored);
+    bool upperValid = pixel.y > 0 && ReconstructPosition(pixel + ivec2(0, -1), upperPosition, ignored);
+    bool lowerValid = pixel.y < maximum.y && ReconstructPosition(pixel + ivec2(0, 1), lowerPosition, ignored);
+    vec3 dx = SelectDerivative(center, leftPosition, leftValid, rightPosition, rightValid);
+    vec3 dy = SelectDerivative(center, upperPosition, upperValid, lowerPosition, lowerValid);
+    normal = cross(dx, dy);
+    float lengthSquared = dot(normal, normal);
+    if (!Finite(normal) || lengthSquared <= 1.0e-12)
+        return false;
+    normal *= inversesqrt(lengthSquared);
+    if (dot(normal, pc.CameraPositionAndMaximumDistance.xyz - center) < 0.0)
+        normal = -normal;
+    return true;
+}
+
+vec2 EncodeOctahedral(vec3 normal)
+{
+    normal /= max(abs(normal.x) + abs(normal.y) + abs(normal.z), 1.0e-7);
+    vec2 encoded = normal.xy;
+    if (normal.z < 0.0)
+        encoded = (vec2(1.0) - abs(encoded.yx)) * sign(encoded.xy);
+    return encoded * 0.5 + vec2(0.5);
+}
+
+vec3 DecodeOctahedral(vec2 encoded)
+{
+    vec2 value = encoded * 2.0 - vec2(1.0);
+    vec3 normal = vec3(value, 1.0 - abs(value.x) - abs(value.y));
+    if (normal.z < 0.0)
+        normal.xy = (vec2(1.0) - abs(normal.yx)) * sign(normal.xy);
+    return normalize(normal);
+}
+
+uint PackMetadata(vec3 normal, uint receiverSignature, uint age, bool valid, uint rejection)
+{
+    uvec2 oct = uvec2(round(clamp(EncodeOctahedral(normal), vec2(0.0), vec2(1.0)) * 255.0));
+    return (oct.x & 0xffu) |
+        ((oct.y & 0xffu) << 8u) |
+        ((receiverSignature & 0xffu) << 16u) |
+        ((min(age, 31u) & 0x1fu) << 24u) |
+        (valid ? 1u << 29u : 0u) |
+        ((rejection & 0x3u) << 30u);
+}
+
+void UnpackMetadata(
+    uint packed,
+    out vec3 normal,
+    out uint receiverSignature,
+    out uint age,
+    out bool valid)
+{
+    normal = DecodeOctahedral(vec2(
+        float(packed & 0xffu),
+        float((packed >> 8u) & 0xffu)) / 255.0);
+    receiverSignature = (packed >> 16u) & 0xffu;
+    age = (packed >> 24u) & 0x1fu;
+    valid = (packed & (1u << 29u)) != 0u;
+}
+
+vec2 ReadRaw(ivec2 pixel)
+{
+    uint index = uint(pixel.y) * pc.ScreenWidth + uint(pixel.x);
+    return unpackHalf2x16(ReadStorageWord(pc.RawInputBufferIndex, index));
+}
+
+void main()
+{
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        AcceptedHistoryCount = 0u;
+        RejectedHistoryCount = 0u;
+    }
+    barrier();
+#endif
+
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    bool invocationInBounds = pixel.x < pc.ScreenWidth && pixel.y < pc.ScreenHeight;
+    if (invocationInBounds)
+    {
+        ivec2 pixelCoordinate = ivec2(pixel);
+        uint pixelIndex = pixel.y * pc.ScreenWidth + pixel.x;
+        vec2 currentRaw = ReadRaw(pixelCoordinate);
+        float currentVisibility = clamp(currentRaw.x, 0.0, 1.0);
+        float currentHitDistance = max(currentRaw.y, 0.0);
+        vec3 currentPosition;
+        float currentDepth;
+        vec3 currentNormal = vec3(0.0, 0.0, 1.0);
+        bool currentValid = ReconstructPosition(
+            pixelCoordinate,
+            currentPosition,
+            currentDepth) &&
+            ReconstructNormal(pixelCoordinate, currentPosition, currentNormal);
+        float currentViewDistance = currentValid
+            ? length(currentPosition - pc.CameraPositionAndMaximumDistance.xyz)
+            : 0.0;
+        uint currentSignature = ReadStorageWord(
+            uint(DIRECTIONAL_SHADOW_SCRATCH_BUFFER_BASE_INDEX) +
+                (pc.CurrentHistoryBufferIndex - uint(DIRECTIONAL_SHADOW_HISTORY_BUFFER_BASE_INDEX)),
+            pixelIndex);
+
+        vec2 uv = (vec2(pixel) + vec2(0.5)) /
+            vec2(pc.ScreenWidth, pc.ScreenHeight);
+        vec2 motion = textureLod(
+            BindlessTextures[nonuniformEXT(MOTION_VECTOR_TEXTURE_INDEX)],
+            uv,
+            0.0).rg;
+        vec2 previousUv = uv - motion;
+        bool previousInside = Finite(motion.x) && Finite(motion.y) &&
+            all(greaterThanEqual(previousUv, vec2(0.0))) &&
+            all(lessThan(previousUv, vec2(1.0)));
+        ivec2 previousPixel = previousInside
+            ? ivec2(clamp(
+                floor(previousUv * vec2(pc.ScreenWidth, pc.ScreenHeight)),
+                vec2(0.0),
+                vec2(pc.ScreenWidth - 1u, pc.ScreenHeight - 1u)))
+            : pixelCoordinate;
+        uint previousIndex = uint(previousPixel.y) * pc.ScreenWidth + uint(previousPixel.x);
+        vec2 previousMoments = unpackHalf2x16(ReadStorageWord(
+            pc.PreviousHistoryBufferIndex,
+            previousIndex * 3u + 0u));
+        vec2 previousDistance = unpackHalf2x16(ReadStorageWord(
+            pc.PreviousHistoryBufferIndex,
+            previousIndex * 3u + 1u));
+        vec3 previousNormal;
+        uint previousSignature;
+        uint previousAge;
+        bool previousValid;
+        UnpackMetadata(
+            ReadStorageWord(pc.PreviousHistoryBufferIndex, previousIndex * 3u + 2u),
+            previousNormal,
+            previousSignature,
+            previousAge,
+            previousValid);
+
+        uint rejection = 0u;
+        bool historyValid = currentValid && previousInside && previousValid &&
+            pc.ResetReasons == 0u &&
+            previousAge < max(pc.MaximumHistoryAge, 1u);
+        if (historyValid && previousSignature != (currentSignature & 0xffu))
+        {
+            historyValid = false;
+            rejection = 1u;
+        }
+        float allowedDepthDelta = max(
+            0.01,
+            currentViewDistance * max(pc.RelativeDepthThreshold, 0.0001));
+        if (historyValid && abs(previousDistance.y - currentViewDistance) > allowedDepthDelta)
+        {
+            historyValid = false;
+            rejection = 2u;
+        }
+        if (historyValid && dot(previousNormal, currentNormal) < pc.NormalThreshold)
+        {
+            historyValid = false;
+            rejection = 3u;
+        }
+        if (historyValid && mod(pc.TemporalKind, 2.0) < 0.5)
+        {
+            float blockerThreshold = max(0.05, currentHitDistance * 0.10);
+            if (abs(previousDistance.x - currentHitDistance) > blockerThreshold)
+                historyValid = false;
+        }
+
+        float neighborhoodMinimum = currentVisibility;
+        float neighborhoodMaximum = currentVisibility;
+        for (int y = -1; y <= 1; y++)
+        {
+            for (int x = -1; x <= 1; x++)
+            {
+                ivec2 neighbor = clamp(
+                    pixelCoordinate + ivec2(x, y),
+                    ivec2(0),
+                    ivec2(pc.ScreenWidth, pc.ScreenHeight) - ivec2(1));
+                float sampleVisibility = clamp(ReadRaw(neighbor).x, 0.0, 1.0);
+                neighborhoodMinimum = min(neighborhoodMinimum, sampleVisibility);
+                neighborhoodMaximum = max(neighborhoodMaximum, sampleVisibility);
+            }
+        }
+
+        float historyVisibility = clamp(
+            previousMoments.x,
+            neighborhoodMinimum,
+            neighborhoodMaximum);
+        float ageWeight = float(previousAge) / float(previousAge + 1u);
+        float historyWeight = historyValid
+            ? min(clamp(pc.MaximumHistoryWeight, 0.0, 0.98), ageWeight)
+            : 0.0;
+        float resolvedVisibility = mix(
+            currentVisibility,
+            historyVisibility,
+            historyWeight);
+        float resolvedMoment = mix(
+            currentVisibility * currentVisibility,
+            max(previousMoments.y, previousMoments.x * previousMoments.x),
+            historyWeight);
+        float resolvedHitDistance = mix(
+            currentHitDistance,
+            previousDistance.x,
+            historyWeight);
+        uint resolvedAge = historyValid ? min(previousAge + 1u, 31u) : 1u;
+
+        WriteStorageWord(
+            pc.CurrentHistoryBufferIndex,
+            pixelIndex * 3u + 0u,
+            packHalf2x16(vec2(resolvedVisibility, resolvedMoment)));
+        WriteStorageWord(
+            pc.CurrentHistoryBufferIndex,
+            pixelIndex * 3u + 1u,
+            packHalf2x16(vec2(
+                clamp(resolvedHitDistance, 0.0, 65504.0),
+                clamp(currentViewDistance, 0.0, 65504.0))));
+        WriteStorageWord(
+            pc.CurrentHistoryBufferIndex,
+            pixelIndex * 3u + 2u,
+            PackMetadata(
+                currentNormal,
+                currentSignature,
+                resolvedAge,
+                currentValid,
+                rejection));
+
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+        if (pc.TemporalKind >= 2.0)
+        {
+            if (historyValid)
+                atomicAdd(AcceptedHistoryCount, 1u);
+            else
+                atomicAdd(RejectedHistoryCount, 1u);
+        }
+#endif
+        if (pc.OutputBufferIndex != 0xffffffffu)
+        {
+            uint oldDiagnostic = ReadStorageWord(pc.OutputBufferIndex, pixelIndex);
+            WriteStorageWord(
+                pc.OutputBufferIndex,
+                pixelIndex,
+                (oldDiagnostic & 0x00ffffffu) |
+                    ((historyValid ? 0u : (rejection + 1u)) << 24u));
+        }
+    }
+
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+    barrier();
+    if (pc.TemporalKind >= 2.0 && gl_LocalInvocationIndex < 2u)
+    {
+        uint frameBank = pc.CurrentHistoryBufferIndex -
+            uint(DIRECTIONAL_SHADOW_HISTORY_BUFFER_BASE_INDEX);
+        uint counterBuffer = uint(DIRECTIONAL_SHADOW_COUNTER_BUFFER_BASE_INDEX) + frameBank;
+        uint counter = gl_LocalInvocationIndex == 0u ? 9u : 10u;
+        uint value = gl_LocalInvocationIndex == 0u
+            ? AcceptedHistoryCount
+            : RejectedHistoryCount;
+        if (value != 0u)
+            atomicAdd(BindlessStorageBuffers[nonuniformEXT(counterBuffer)].Words[counter], value);
+    }
+#endif
+}

@@ -79,6 +79,8 @@ public sealed class SimpleDdgiGuidingGpuIntegrationTests
         const uint physical = 17u;
         const uint virtualProbe = 271u;
         const uint page = 9u;
+        const uint sourceEpoch = 13u;
+        const uint sourceLighting = 23u;
         const uint slot = 31u;
         const uint direction = 0xa5a5_5a5au;
 
@@ -88,24 +90,30 @@ public sealed class SimpleDdgiGuidingGpuIntegrationTests
             physical,
             virtualProbe,
             page,
+            sourceEpoch,
+            sourceLighting,
             slot,
             direction);
         uint[] mutations =
         {
             SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow + 1u,
-                stableHigh, physical, virtualProbe, page, slot, direction),
+                stableHigh, physical, virtualProbe, page, sourceEpoch, sourceLighting, slot, direction),
             SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
-                stableHigh + 1u, physical, virtualProbe, page, slot, direction),
+                stableHigh + 1u, physical, virtualProbe, page, sourceEpoch, sourceLighting, slot, direction),
             SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
-                stableHigh, physical + 1u, virtualProbe, page, slot, direction),
+                stableHigh, physical + 1u, virtualProbe, page, sourceEpoch, sourceLighting, slot, direction),
             SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
-                stableHigh, physical, virtualProbe + 1u, page, slot, direction),
+                stableHigh, physical, virtualProbe + 1u, page, sourceEpoch, sourceLighting, slot, direction),
             SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
-                stableHigh, physical, virtualProbe, page + 1u, slot, direction),
+                stableHigh, physical, virtualProbe, page + 1u, sourceEpoch, sourceLighting, slot, direction),
             SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
-                stableHigh, physical, virtualProbe, page, slot + 1u, direction),
+                stableHigh, physical, virtualProbe, page, sourceEpoch + 1u, sourceLighting, slot, direction),
             SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
-                stableHigh, physical, virtualProbe, page, slot, direction + 1u)
+                stableHigh, physical, virtualProbe, page, sourceEpoch, sourceLighting + 1u, slot, direction),
+            SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
+                stableHigh, physical, virtualProbe, page, sourceEpoch, sourceLighting, slot + 1u, direction),
+            SimpleDdgiGuidingGpuAbi.ComputeTraceOwnershipTag(stableLow,
+                stableHigh, physical, virtualProbe, page, sourceEpoch, sourceLighting, slot, direction + 1u)
         };
 
         Assert.Multiple(() =>
@@ -117,6 +125,8 @@ public sealed class SimpleDdgiGuidingGpuIntegrationTests
                 physical,
                 virtualProbe,
                 page,
+                sourceEpoch,
+                sourceLighting,
                 slot,
                 direction), Is.EqualTo(expected));
             Assert.That(mutations, Has.None.EqualTo(expected));

@@ -20,7 +20,8 @@ bool SimpleDdgiTransportSourceReady(
     uint cacheProbeBaseWordPlusOne)
 {
     return requiredSourceRayCount != 0u &&
-        sourceRayCount == requiredSourceRayCount &&
+        sourceRayCount != 0u &&
+        sourceRayCount <= requiredSourceRayCount &&
         sourceLightingGeneration == expectedSourceLightingGeneration &&
         sourceEpoch != 0u &&
         volumeGeneration == expectedVolumeGeneration &&

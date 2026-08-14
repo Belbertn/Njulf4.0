@@ -91,45 +91,26 @@ bool IsReusableHistory(
     {
         rejectionFlags |= C5_HISTORY_REASON_EPOCH;
     }
-    if (
-        !SimpleDdgiNearFieldFinite(current.receiverDepth) ||
-        !SimpleDdgiNearFieldFinite(current.hitDepth) ||
-        !SimpleDdgiNearFieldFinite(previous.receiverDepth) ||
-        !SimpleDdgiNearFieldFinite(previous.hitDepth))
+    if (!SimpleDdgiNearFieldFinite(current.receiverDepth) ||
+        !SimpleDdgiNearFieldFinite(previous.receiverDepth))
     {
         rejectionFlags |= C5_HISTORY_REASON_NONFINITE;
     }
+    // History estimates incoming light at the receiver. The hit identity,
+    // depth and UV belong to one random sample and are expected to change when
+    // temporalSampleIndex advances. Requiring those fields to match turns the
+    // temporal accumulator back into a one-sample estimator.
+    if (any(notEqual(
+            current.receiverIdentity,
+            previous.receiverIdentity)))
+    {
+        rejectionFlags |= C5_HISTORY_REASON_IDENTITY;
+    }
     if (SimpleDdgiNearFieldFinite(current.receiverDepth) &&
         SimpleDdgiNearFieldFinite(previous.receiverDepth) &&
-        abs(current.receiverDepth - previous.receiverDepth) > pc.depthTolerance ||
-        SimpleDdgiNearFieldFinite(current.hitDepth) &&
-        SimpleDdgiNearFieldFinite(previous.hitDepth) &&
-        abs(current.hitDepth - previous.hitDepth) > pc.depthTolerance ||
-        any(notEqual(current.identity, previous.identity)))
+        abs(current.receiverDepth - previous.receiverDepth) > pc.depthTolerance)
     {
-        // Identity is split below so both inclusive diagnostic reasons are
-        // retained when a moving hit also crosses a depth discontinuity.
-        if (any(notEqual(current.identity, previous.identity)))
-            rejectionFlags |= C5_HISTORY_REASON_IDENTITY;
-        if ((SimpleDdgiNearFieldFinite(current.receiverDepth) &&
-             SimpleDdgiNearFieldFinite(previous.receiverDepth) &&
-             abs(current.receiverDepth - previous.receiverDepth) > pc.depthTolerance) ||
-            (SimpleDdgiNearFieldFinite(current.hitDepth) &&
-             SimpleDdgiNearFieldFinite(previous.hitDepth) &&
-             abs(current.hitDepth - previous.hitDepth) > pc.depthTolerance))
-        {
-            rejectionFlags |= C5_HISTORY_REASON_DEPTH;
-        }
-    }
-    if (
-        !SimpleDdgiNearFieldFinite(current.hitUv.x) ||
-        !SimpleDdgiNearFieldFinite(current.hitUv.y) ||
-        !SimpleDdgiNearFieldFinite(previous.hitUv.x) ||
-        !SimpleDdgiNearFieldFinite(previous.hitUv.y) ||
-        any(greaterThan(abs(current.hitUv - previous.hitUv),
-            vec2(pc.hitUvTolerance))))
-    {
-        rejectionFlags |= C5_HISTORY_REASON_REPROJECTION;
+        rejectionFlags |= C5_HISTORY_REASON_DEPTH;
     }
 
     vec3 currentGeometric = SimpleDdgiNearFieldDecodeOctNormal(
@@ -189,7 +170,9 @@ bool TryGetCurrentNeighbourhoodBounds(
             if (!SimpleDdgiNearFieldIsValidCandidate(neighbour) ||
                 !SimpleDdgiNearFieldHasFlag(neighbourMetadata.packedFlags,
                     SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) ||
-                any(notEqual(neighbourMetadata.identity.xy, centre.identity.xy)))
+                any(notEqual(
+                    neighbourMetadata.receiverIdentity,
+                    centre.receiverIdentity)))
             {
                 continue;
             }
@@ -330,7 +313,12 @@ bool EvaluateTemporalPixel(
         SimpleDdgiNearFieldHasFlag(pc.flags,
             SIMPLE_DDGI_NEAR_FIELD_FLAG_HISTORY_INPUT_VALID))
     {
-        ivec2 historyExtent = textureSize(historyRadianceInput, 0);
+        // History is packed with the active execution stride inside images
+        // allocated for the maximum admitted scale. A layout-revision change
+        // invalidates history before a different active extent is selected.
+        ivec2 historyExtent = min(
+            ivec2(pc.traceWidth, pc.traceHeight),
+            textureSize(historyRadianceInput, 0));
         ivec2 previousPixel = clamp(ivec2(previousUv * vec2(historyExtent)),
             ivec2(0), max(historyExtent - ivec2(1), ivec2(0)));
         uint previousIndex = uint(previousPixel.y) * uint(historyExtent.x) +
@@ -349,8 +337,8 @@ bool EvaluateTemporalPixel(
                 historyValidityInput, previousPixel, 0).r;
             SimpleDdgiNearFieldResidualHitMetadata previous =
                 historyMetadata.values[previousIndex];
-            vec4 previousPackedNormals = textureLod(
-                historyReceiverNormals, previousUv, 0.0);
+            vec4 previousPackedNormals = texelFetch(
+                historyReceiverNormals, previousPixel, 0);
             uint previousHistoryLength;
             uint reuseRejections;
             bool previousPayloadValid =
@@ -417,13 +405,12 @@ bool EvaluateTemporalPixel(
                             SIMPLE_DDGI_NEAR_FIELD_MAX_HISTORY_LENGTH));
                     float runningHistoryAuthority = float(
                         outputHistoryLength - 1u) / float(outputHistoryLength);
-                    float varianceAuthority = 1.0 / (1.0 + sqrt(
-                        max(previousVariance, neighbourhoodVariance)));
                     float blend = min(clamp(pc.temporalBlend, 0.0, 1.0),
-                        runningHistoryAuthority) * varianceAuthority;
+                        runningHistoryAuthority);
                     outputResidual.rgb = mix(
                         candidate.rgb, clippedHistory, blend);
-                    outputResidual.a = min(candidate.a, previousResidual.a);
+                    outputResidual.a = mix(
+                        candidate.a, previousResidual.a, blend);
                     float sampleWeight = 1.0 / float(outputHistoryLength);
                     outputMoments = mix(previousMoments,
                         vec2(candidateLuminance,
@@ -456,7 +443,14 @@ bool EvaluateTemporalPixel(
     else
         outputFlags &= ~SIMPLE_DDGI_NEAR_FIELD_FLAG_HISTORY_ACCEPTED;
     current.packedFlags = outputFlags;
-    current.confidence = clamp(outputResidual.a, 0.0, 1.0);
+    // Keep the radiance/history alpha as trace eligibility so zero-valued miss
+    // samples remain in the estimator. Metadata confidence is the separate,
+    // final-composite authority and is admitted only after the accumulated
+    // mean is supported by enough temporal evidence.
+    float temporalEvidence = SimpleDdgiNearFieldTemporalEvidenceConfidence(
+        outputMoments, outputHistoryLength);
+    current.confidence = clamp(outputResidual.a, 0.0, 1.0) *
+        temporalEvidence;
     outputMetadata = current;
     outputValidity = SimpleDdgiNearFieldPackHistoryValidity(
         outputHistoryLength, pc.historyEpoch);
@@ -563,11 +557,13 @@ void RecordTemporalTileSummary()
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 outputExtent = imageSize(temporalRadianceOutput);
-    bool covered = pixel.x < outputExtent.x && pixel.y < outputExtent.y &&
-        pixel.x < int(pc.traceWidth) && pixel.y < int(pc.traceHeight);
+    ivec2 physicalOutputExtent = imageSize(temporalRadianceOutput);
+    ivec2 outputExtent = min(
+        ivec2(pc.traceWidth, pc.traceHeight),
+        physicalOutputExtent);
+    bool covered = pixel.x < outputExtent.x && pixel.y < outputExtent.y;
     uint outputIndex = covered
-        ? uint(pixel.y) * uint(outputExtent.x) + uint(pixel.x)
+        ? uint(pixel.y) * pc.traceWidth + uint(pixel.x)
         : 0u;
     vec4 outputResidual;
     vec2 outputMoments;

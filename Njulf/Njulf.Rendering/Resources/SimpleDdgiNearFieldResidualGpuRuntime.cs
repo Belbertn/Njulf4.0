@@ -47,16 +47,22 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
         MaximumMipVisits: 8,
         BinaryRefinementSteps: 4,
         FilterIterationCount: 2,
-        FilterRadius: 2,
+        // A 7x7 receiver-bounded footprint overlaps the sparse screen-hit
+        // population without crossing object/material/depth/normal edges.
+        FilterRadius: 3,
         Thickness: 0.02f,
         StartBias: 0.001f,
-        TemporalBlend: 0.9f,
+        // Match the 64-sample running average at saturation. Receiver depth,
+        // identity, normal, and revision gates provide motion responsiveness;
+        // shortening a stationary estimate to an effective ten-frame EMA
+        // reintroduces visible impulse noise at the measured hit rate.
+        TemporalBlend: 63.0f / 64.0f,
         DepthTolerance: 0.02f,
         MinimumNormalDot: 0.85f,
         MaximumTraceDistance: 4.0f,
         MinimumB3FootprintRadius: 1,
         MaximumB3FootprintRadius: 4,
-        MaximumHistoryLength: 32,
+        MaximumHistoryLength: 64,
         HitUvTolerance: 0.0025f);
 
     public SimpleDdgiNearFieldResidualGpuConfigurationValidation Validate(

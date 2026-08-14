@@ -10,7 +10,7 @@ namespace Njulf.Rendering.Data;
 /// </summary>
 public static class SimpleDdgiDirectionCodebook
 {
-    public const uint Version = 1;
+    public const uint Version = 3;
     public const int RotationCount = 32;
     public const uint EpochMask = RotationCount - 1;
 
@@ -85,6 +85,11 @@ public static class SimpleDdgiDirectionCodebook
         {
             throw new ArgumentOutOfRangeException(nameof(activeRayCount));
         }
+
+        // Version 3 embeds every supported source cardinality into one
+        // maximum-cardinality Fibonacci lattice. Promotion fills unused slots
+        // without reinterpreting cached directions, and maintenance selects a
+        // deterministic nested subset with the same low quadrature error.
         uint sourceOrdinal = (uint)Math.Min(
             (ulong)localRayOrdinal * sourceRayCount / activeRayCount,
             sourceRayCount - 1UL);

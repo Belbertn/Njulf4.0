@@ -14,6 +14,8 @@ namespace Njulf.Rendering.Pipeline
     {
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;
+        private readonly ForwardPlusPass _forwardPlusPass;
+        private readonly RaySceneDescriptorBank? _raySceneDescriptors;
         private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
             _receiverFeedbackRuntime;
 
@@ -23,11 +25,16 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             PipelineObjects.MeshPipeline meshPipeline,
             RenderTargetManager renderTargets,
+            ForwardPlusPass forwardPlusPass,
+            RaySceneDescriptorBank? raySceneDescriptors = null,
             SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime = null)
             : base("TransparentForwardPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+            _forwardPlusPass = forwardPlusPass ??
+                throw new ArgumentNullException(nameof(forwardPlusPass));
+            _raySceneDescriptors = raySceneDescriptors;
             _receiverFeedbackRuntime = receiverFeedbackRuntime;
         }
 
@@ -47,7 +54,13 @@ namespace Njulf.Rendering.Pipeline
             if (!ShouldExecute(frameIndex, sceneData))
                 return;
 
+            bool rayVariant =
+                sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
+                    DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery &&
+                _meshPipeline.RayTransparentPipelinesAvailable &&
+                _raySceneDescriptors?.IsAvailable == true;
             if (sceneData.TransparentReceiveGlobalIllumination ||
+                rayVariant ||
                 sceneData.DecalReceiveGlobalIllumination)
             {
                 PublishComputeStorageToFragment(cmd);
@@ -59,9 +72,36 @@ namespace Njulf.Rendering.Pipeline
             bool exactFeedback = TrySelectExactFeedbackPipeline(
                 frameIndex,
                 sceneData,
-                out Silk.NET.Vulkan.Pipeline pipeline);
+                rayVariant,
+                out Silk.NET.Vulkan.Pipeline pipeline,
+                out PipelineLayout pipelineLayout);
+            bool decalReceiverCache = ShouldUseDecalReceiverCache(
+                sceneData,
+                exactFeedback,
+                rayVariant,
+                _forwardPlusPass.CanConsumeSimpleDdgiReceiverCacheForCurrentView,
+                _meshPipeline.TransparentReceiverCachePipeline.Handle != 0);
+            if (decalReceiverCache)
+            {
+                pipeline = _meshPipeline.TransparentReceiverCachePipeline;
+                pipelineLayout = _meshPipeline.Layout;
+            }
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
-            BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
+            BindBindlessStorageAndTextures(cmd, pipelineLayout);
+            if (decalReceiverCache)
+            {
+                _forwardPlusPass.BindSimpleDdgiReceiverCacheBuffer(
+                    cmd,
+                    frameIndex);
+            }
+            if (rayVariant)
+            {
+                _raySceneDescriptors!.Bind(
+                    cmd,
+                    PipelineBindPoint.Graphics,
+                    pipelineLayout,
+                    frameIndex);
+            }
 
             var colorAttachment = ColorAttachment(
                 _renderTargets.SceneColor.View,
@@ -126,7 +166,7 @@ namespace Njulf.Rendering.Pipeline
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();
             _context.Api.CmdPushConstants(
                 cmd,
-                _meshPipeline.Layout,
+                pipelineLayout,
                 ShaderStageFlags.MeshBitExt | ShaderStageFlags.FragmentBit | ShaderStageFlags.TaskBitExt,
                 0,
                 size,
@@ -153,12 +193,44 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
+        internal static bool ShouldUseDecalReceiverCache(
+            SceneRenderingData sceneData,
+            bool exactFeedback,
+            bool rayVariant,
+            bool receiverCacheAvailable,
+            bool receiverCachePipelineAvailable)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+
+            // Geometry decals are depth-backed overlays, so the current-frame
+            // low-frequency irradiance cache produced from the opaque depth
+            // owner is the correct bounded approximation. Real transparent
+            // surfaces may not have an opaque depth owner and retain the exact
+            // gather path. Exact B1 feedback also always takes precedence.
+            return sceneData.TransparentObjectCount == 0 &&
+                   sceneData.TransparentMeshletCount > 0 &&
+                   sceneData.GeometryDecalMeshletCount >=
+                       sceneData.TransparentMeshletCount &&
+                   sceneData.DecalReceiveGlobalIllumination &&
+                   !exactFeedback &&
+                   !rayVariant &&
+                   receiverCacheAvailable &&
+                   receiverCachePipelineAvailable;
+        }
+
         private bool TrySelectExactFeedbackPipeline(
             int frameIndex,
             SceneRenderingData sceneData,
-            out Silk.NET.Vulkan.Pipeline pipeline)
+            bool rayVariant,
+            out Silk.NET.Vulkan.Pipeline pipeline,
+            out PipelineLayout pipelineLayout)
         {
-            pipeline = _meshPipeline.TransparentForwardPipeline;
+            pipeline = rayVariant
+                ? _meshPipeline.RayTransparentForwardPipeline
+                : _meshPipeline.TransparentForwardPipeline;
+            pipelineLayout = rayVariant
+                ? _meshPipeline.RayTransparentLayout
+                : _meshPipeline.Layout;
             if (_receiverFeedbackRuntime is null ||
                 !_receiverFeedbackRuntime.IsPendingOwnedProducerRequired(
                     frameIndex,
@@ -167,13 +239,17 @@ namespace Njulf.Rendering.Pipeline
                 return false;
             }
             if (sceneData.CurrentFrameIndex != checked((uint)frameIndex) ||
-                _meshPipeline.TransparentReceiverFeedbackPipeline.Handle == 0)
+                (rayVariant
+                    ? _meshPipeline.RayTransparentReceiverFeedbackPipeline.Handle
+                    : _meshPipeline.TransparentReceiverFeedbackPipeline.Handle) == 0)
             {
                 _receiverFeedbackRuntime.AbortCapture(
                     "receiver-feedback-transparent-pipeline-or-frame-slot-unavailable");
                 return false;
             }
-            pipeline = _meshPipeline.TransparentReceiverFeedbackPipeline;
+            pipeline = rayVariant
+                ? _meshPipeline.RayTransparentReceiverFeedbackPipeline
+                : _meshPipeline.TransparentReceiverFeedbackPipeline;
             return true;
         }
 

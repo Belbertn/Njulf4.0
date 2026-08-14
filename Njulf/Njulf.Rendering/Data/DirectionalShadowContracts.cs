@@ -1,4 +1,5 @@
 using System;
+using Njulf.Core.Math;
 
 namespace Njulf.Rendering.Data;
 
@@ -16,7 +17,42 @@ public enum DirectionalShadowFallbackReason : uint
     RequiredTransparentVariantUnavailable = 8,
     ResourceAllocationFailed = 9,
     InvalidConfiguration = 10,
-    DeviceLost = 11
+    DeviceLost = 11,
+    GpuBudgetDemotion = 12,
+    QualificationManifestMissing = 13,
+    QualificationManifestMismatch = 14,
+    RaySceneBoundsInvalid = 15
+}
+
+public enum DirectionalShadowQualificationLevel : uint
+{
+    Developer = 0,
+    Experimental = 1,
+    Production = 2
+}
+
+[Flags]
+public enum DirectionalShadowHistoryResetReason : uint
+{
+    None = 0,
+    InitialFrame = 1u << 0,
+    CameraCut = 1u << 1,
+    LightChanged = 1u << 2,
+    ModeChanged = 1u << 3,
+    ExtentChanged = 1u << 4,
+    RaySceneChanged = 1u << 5,
+    MaterialChanged = 1u << 6,
+    ResourceRecreated = 1u << 7,
+    DeviceRecreated = 1u << 8,
+    InvalidMotion = 1u << 9
+}
+
+public enum DirectionalShadowReceiverPolicy : uint
+{
+    Cascaded = 0,
+    OpaqueScreenMask = 1,
+    LayeredFragmentRayQuery = 2,
+    DecalDepthOwnerMask = 3
 }
 
 [Flags]
@@ -102,6 +138,19 @@ public readonly record struct RaySceneReadinessSnapshot(
     ulong ContentEpoch,
     string FailureDetail)
 {
+    public Vector3 CoverageMinimum { get; init; }
+    public Vector3 CoverageMaximum { get; init; }
+    public RaySceneGeometryCategory ExactCategories { get; init; }
+    public RaySceneGeometryCategory ProxyCategories { get; init; }
+
+    public bool HasQualifiedBounds =>
+        ResourceGeneration != 0u &&
+        IsFinite(CoverageMinimum) &&
+        IsFinite(CoverageMaximum) &&
+        CoverageMinimum.X <= CoverageMaximum.X &&
+        CoverageMinimum.Y <= CoverageMaximum.Y &&
+        CoverageMinimum.Z <= CoverageMaximum.Z;
+
     public static RaySceneReadinessSnapshot Unavailable(
         RaySceneConsumer requested,
         string detail) => new(
@@ -120,6 +169,11 @@ public readonly record struct RaySceneReadinessSnapshot(
         (ReadyConsumers & consumer) == consumer &&
         (CompleteCategories & requiredCategories) == requiredCategories &&
         ResourceGeneration != 0u;
+
+    private static bool IsFinite(Vector3 value) =>
+        float.IsFinite(value.X) &&
+        float.IsFinite(value.Y) &&
+        float.IsFinite(value.Z);
 }
 
 /// <summary>
@@ -160,9 +214,12 @@ public readonly record struct RaySceneRequirement(
                     RaySceneGeometryCategory.DirectionalShadowDefault,
                     settings.MaxShadowDistance,
                     RequiresCurrentPose: true),
-            // Finite-sun sampling/history is not promotion-qualified yet. Its
-            // authored intent must not build a ray scene that cannot be consumed.
-            DirectionalShadowMode.RayQuerySoft => None,
+            DirectionalShadowMode.RayQuerySoft =>
+                new RaySceneRequirement(
+                    RaySceneConsumer.DirectionalFull,
+                    RaySceneGeometryCategory.DirectionalShadowDefault,
+                    settings.MaxShadowDistance,
+                    RequiresCurrentPose: true),
             _ => None
         };
     }
@@ -177,7 +234,9 @@ public static class DirectionalShadowModeResolver
             bool rayQuerySupported,
             in RaySceneReadinessSnapshot rayScene,
             bool rayMaskAvailable = true,
-            bool softRayAvailable = false)
+            bool softRayAvailable = false,
+            bool transparentRayReceiverRequired = false,
+            bool transparentRayVariantAvailable = true)
     {
         ArgumentNullException.ThrowIfNull(settings);
         if (!settings.DirectionalShadowsEnabled)
@@ -204,6 +263,16 @@ public static class DirectionalShadowModeResolver
                 DirectionalShadowFallbackReason.RequiredReceiverResourceUnavailable,
                 "the full-resolution directional ray-shadow mask is unavailable");
         }
+        if (requested is (DirectionalShadowMode.RayQueryHard or
+                DirectionalShadowMode.RayQuerySoft) &&
+            transparentRayReceiverRequired &&
+            !transparentRayVariantAvailable)
+        {
+            return (
+                DirectionalShadowMode.Cascaded,
+                DirectionalShadowFallbackReason.RequiredTransparentVariantUnavailable,
+                "an active transparent shadow receiver requires the ray-query fragment variant");
+        }
 
         RaySceneConsumer consumer = requested == DirectionalShadowMode.HybridContact
             ? RaySceneConsumer.DirectionalContact
@@ -218,6 +287,13 @@ public static class DirectionalShadowModeResolver
                 string.IsNullOrWhiteSpace(rayScene.FailureDetail)
                     ? "the shared ray scene is not complete for directional shadows"
                     : rayScene.FailureDetail);
+        }
+        if (!rayScene.HasQualifiedBounds)
+        {
+            return (
+                DirectionalShadowMode.Cascaded,
+                DirectionalShadowFallbackReason.RaySceneBoundsInvalid,
+                "the shared ray scene did not publish finite qualified coverage bounds");
         }
 
         return (requested, DirectionalShadowFallbackReason.None, string.Empty);
@@ -241,6 +317,21 @@ public readonly record struct DirectionalShadowFramePlan(
     uint RaySceneResourceGeneration,
     ulong RaySceneContentEpoch)
 {
+    public bool UsesCsmTemporal { get; init; }
+    public DirectionalShadowReceiverPolicy OpaqueReceiverPolicy { get; init; }
+    public DirectionalShadowReceiverPolicy TransparentReceiverPolicy { get; init; }
+    public DirectionalShadowReceiverPolicy DecalReceiverPolicy { get; init; }
+    public DirectionalShadowHistoryResetReason HistoryResetReason { get; init; }
+    public uint ScreenResourceGeneration { get; init; }
+    public float SunAngularRadiusRadians { get; init; }
+    public DirectionalShadowQualificationLevel QualificationLevel { get; init; }
+    public string QualificationId { get; init; } = string.Empty;
+    public string QualificationDetail { get; init; } = string.Empty;
+    public string QualificationDeviceRuleId { get; init; } = string.Empty;
+    public string QualificationTrackId { get; init; } = string.Empty;
+    public double QualifiedGpuBudgetMicroseconds { get; init; }
+    public ulong QualifiedMemoryBudgetBytes { get; init; }
+
     public bool UsesCascadedShadowMap =>
         EffectiveMode is DirectionalShadowMode.Cascaded or
             DirectionalShadowMode.HybridContact ||
@@ -251,4 +342,6 @@ public readonly record struct DirectionalShadowFramePlan(
 
     public bool UsesSoftHistory =>
         EffectiveMode == DirectionalShadowMode.RayQuerySoft;
+
+    public bool UsesScreenHistory => UsesSoftHistory || UsesCsmTemporal;
 }

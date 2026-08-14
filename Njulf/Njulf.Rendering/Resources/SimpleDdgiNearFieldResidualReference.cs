@@ -317,7 +317,11 @@ public enum SimpleDdgiNearFieldHistoryRejectionReason : byte
     ProbeOwnershipMismatch
 }
 
-/// <summary>Everything that makes residual history semantically reusable.</summary>
+/// <summary>
+/// Receiver-owned identity used to decide whether residual history is reusable.
+/// Hit fields remain in the diagnostic contract, but stochastic hit variation is
+/// deliberately not a temporal rejection condition.
+/// </summary>
 public readonly record struct SimpleDdgiNearFieldHistoryIdentity(
     bool CurrentCandidateValid,
     bool CameraCut,
@@ -354,6 +358,9 @@ public readonly record struct SimpleDdgiNearFieldHistoryValidation(
 
 public static class SimpleDdgiNearFieldResidualReference
 {
+    public const float MaximumRelativeCompositeCorrection = 0.20f;
+    public const float MinimumAbsoluteCompositeCorrection = 1.0e-4f;
+
     public static bool IsTraceSourceValid(
         in SimpleDdgiNearFieldTraceSourceContract contract) => contract.IsValid;
 
@@ -393,9 +400,59 @@ public static class SimpleDdgiNearFieldResidualReference
         if (!residualValid || !IsFinite(bandResidual) || !float.IsFinite(confidence))
             return Vector3.Max(canonicalDdgiPlusB3, Vector3.Zero);
 
+        Vector3 contribution = bandResidual * Math.Clamp(confidence, 0.0f, 1.0f);
+        Vector3 correctionLimit = Vector3.Max(
+            canonicalDdgiPlusB3 * MaximumRelativeCompositeCorrection,
+            new Vector3(MinimumAbsoluteCompositeCorrection));
+        float correctionScale = 1.0f;
+        if (MathF.Abs(contribution.X) > 1.0e-12f)
+            correctionScale = MathF.Min(correctionScale,
+                correctionLimit.X / MathF.Abs(contribution.X));
+        if (MathF.Abs(contribution.Y) > 1.0e-12f)
+            correctionScale = MathF.Min(correctionScale,
+                correctionLimit.Y / MathF.Abs(contribution.Y));
+        if (MathF.Abs(contribution.Z) > 1.0e-12f)
+            correctionScale = MathF.Min(correctionScale,
+                correctionLimit.Z / MathF.Abs(contribution.Z));
         return Vector3.Max(
-            canonicalDdgiPlusB3 + bandResidual * Math.Clamp(confidence, 0.0f, 1.0f),
+            canonicalDdgiPlusB3 + contribution * Math.Clamp(correctionScale, 0.0f, 1.0f),
             Vector3.Zero);
+    }
+
+    /// <summary>
+    /// Mirrors the temporal shader's evidence gate. A valid zero miss remains
+    /// in history, but a visible correction is admitted only after the signed
+    /// mean has both enough history and enough signal relative to its standard
+    /// error.
+    /// </summary>
+    public static float EvaluateTemporalEvidenceConfidence(
+        float firstMoment,
+        float secondMoment,
+        int historyLength)
+    {
+        if (!float.IsFinite(firstMoment) || !float.IsFinite(secondMoment) ||
+            historyLength <= 0 || MathF.Abs(firstMoment) <= 1.0e-6f)
+        {
+            return 0.0f;
+        }
+
+        float variance = MathF.Max(
+            secondMoment - firstMoment * firstMoment,
+            0.0f);
+        float standardError = MathF.Sqrt(MathF.Max(
+            variance / historyLength,
+            1.0e-12f));
+        float snr = MathF.Abs(firstMoment) / standardError;
+        return SmoothEvidence(8.0f, 32.0f, historyLength) *
+            SmoothEvidence(1.5f, 3.0f, snr);
+    }
+
+    private static float SmoothEvidence(float low, float high, float value)
+    {
+        if (!float.IsFinite(value) || high <= low)
+            return 0.0f;
+        float t = Math.Clamp((value - low) / (high - low), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
     }
 
     public static SimpleDdgiNearFieldHistoryValidation ValidateHistory(
@@ -469,11 +526,6 @@ public static class SimpleDdgiNearFieldResidualReference
             return SimpleDdgiNearFieldHistoryValidation.Reject(
                 SimpleDdgiNearFieldHistoryRejectionReason.ReceiverDepthMismatch);
         }
-        if (MathF.Abs(current.HitDepth - previous.HitDepth) > depthTolerance)
-        {
-            return SimpleDdgiNearFieldHistoryValidation.Reject(
-                SimpleDdgiNearFieldHistoryRejectionReason.HitDepthMismatch);
-        }
         if (Vector3.Dot(Vector3.Normalize(current.ReceiverGeometricNormal),
                 Vector3.Normalize(previous.ReceiverGeometricNormal)) < minimumNormalDot ||
             Vector3.Dot(Vector3.Normalize(current.ReceiverShadingNormal),
@@ -491,16 +543,6 @@ public static class SimpleDdgiNearFieldResidualReference
         {
             return SimpleDdgiNearFieldHistoryValidation.Reject(
                 SimpleDdgiNearFieldHistoryRejectionReason.ReceiverMaterialRevisionMismatch);
-        }
-        if (current.HitObjectId != previous.HitObjectId)
-        {
-            return SimpleDdgiNearFieldHistoryValidation.Reject(
-                SimpleDdgiNearFieldHistoryRejectionReason.HitObjectMismatch);
-        }
-        if (current.HitMaterialRevision != previous.HitMaterialRevision)
-        {
-            return SimpleDdgiNearFieldHistoryValidation.Reject(
-                SimpleDdgiNearFieldHistoryRejectionReason.HitMaterialRevisionMismatch);
         }
         if (current.ProbeOwnershipRevision != previous.ProbeOwnershipRevision)
         {
@@ -520,7 +562,6 @@ public static class SimpleDdgiNearFieldResidualReference
 
     private static bool FiniteIdentity(in SimpleDdgiNearFieldHistoryIdentity identity) =>
         float.IsFinite(identity.ReceiverDepth) &&
-        float.IsFinite(identity.HitDepth) &&
         IsFinite(identity.ReceiverGeometricNormal) &&
         IsFinite(identity.ReceiverShadingNormal) &&
         identity.ReceiverGeometricNormal.LengthSquared() > 1.0e-12f &&

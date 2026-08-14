@@ -105,7 +105,11 @@ public static class AdvancedGiQualificationContract
         "gpu-sampling-goodness-of-fit",
         "independent-estimator-confidence",
         "uniform-maintenance-audit",
-        "generation-time-pdf-identity"
+        "generation-time-pdf-identity",
+        "canonical-self-normalized-estimator-parity",
+        "guided-frozen-audit-parity",
+        "progressive-prefix-cardinality",
+        "per-channel-tail-certificate"
     ];
 
     private static readonly string[] ReceiverFeedbackCorrectnessChecks =
@@ -143,7 +147,8 @@ public static class AdvancedGiQualificationContract
         AdvancedGiPrerequisiteFeature.ReceiverFeedback =>
             "b1-exact-multi-producer-compaction/v1",
         AdvancedGiPrerequisiteFeature.OpacityMicromaps => "c1-ext-four-state-static-blas/v1",
-        AdvancedGiPrerequisiteFeature.DirectionalGuiding => "c3-equal-area-mis-guiding/v2",
+        AdvancedGiPrerequisiteFeature.DirectionalGuiding =>
+            "c3-progressive-sobol-self-normalized-balance-mis/v3",
         AdvancedGiPrerequisiteFeature.TaggedCaustics => "c4-tagged-world-photon-cache/v1",
         AdvancedGiPrerequisiteFeature.NearFieldResidual => "c5-bounded-hiz-residual/v1",
         _ => string.Empty

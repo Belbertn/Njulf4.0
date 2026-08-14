@@ -51,6 +51,16 @@ public static class ForwardNearFieldDirectSourceContract
     public const string SimpleFullInputOpaqueFragmentShader =
         "forward_opaque_simple_full_input_ddgi_near_field_direct_source.frag.spv";
 
+    // C5 must not evict the production DDGI receiver cache merely because it
+    // adds two MRT outputs. Keep exact-gather fallbacks above, and select these
+    // cache-required siblings only after the current-frame cache is published.
+    public const string ReceiverCacheOpaqueFragmentShader =
+        "forward_opaque_ddgi_near_field_direct_source_cache_required.frag.spv";
+    public const string ReceiverCacheSimpleOpaqueFragmentShader =
+        "forward_opaque_simple_ddgi_near_field_direct_source_cache_required.frag.spv";
+    public const string ReceiverCacheSimpleFullInputOpaqueFragmentShader =
+        "forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag.spv";
+
     public static bool TryValidatePipelineConfiguration(
         in ForwardNearFieldDirectSourcePipelineConfiguration configuration,
         out string failure)

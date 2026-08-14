@@ -46,7 +46,7 @@ public sealed class GlobalIlluminationDefaultsTests
     [TestCase(RenderQualityPreset.High)]
     [TestCase(RenderQualityPreset.Ultra)]
     [TestCase(RenderQualityPreset.DdgiHigh)]
-    public void NewSettings_RequestEveryCompletedAdvancedGiPathByDefault(
+    public void NewSettings_KeepUnqualifiedDirectionalGuidingOptIn(
         RenderQualityPreset preset)
     {
         var settings = new RenderSettings();
@@ -61,15 +61,31 @@ public sealed class GlobalIlluminationDefaultsTests
             Assert.That(gi.DdgiOpacityMicromapMode,
                 Is.EqualTo(DdgiOpacityMicromapMode.ExtFourStateExperiment));
             Assert.That(gi.SimpleDdgiDirectionalGuidingMode,
-                Is.EqualTo(SimpleDdgiDirectionalGuidingMode
-                    .PerProbeHistogramExperiment));
+                Is.EqualTo(SimpleDdgiDirectionalGuidingMode.Off));
             Assert.That(gi.GiCausticMode,
                 Is.EqualTo(GiCausticMode.WorldCacheExperiment));
             Assert.That(gi.SimpleDdgiNearFieldResidualMode,
                 Is.EqualTo(SimpleDdgiNearFieldResidualMode
-                    .HiZHalfResolutionExperiment));
+                    .HiZAdaptive));
             Assert.That(gi.DdgiRayTracingPipelineExperimentEnabled, Is.False,
                 "C2/SER remains explicitly excluded.");
+        });
+    }
+
+    [Test]
+    public void NearFieldResidualMode_PreservesDurableValues()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That((uint)SimpleDdgiNearFieldResidualMode.Off, Is.Zero);
+            Assert.That((uint)SimpleDdgiNearFieldResidualMode.Reference,
+                Is.EqualTo(1u));
+            Assert.That((uint)SimpleDdgiNearFieldResidualMode
+                .HiZHalfResolutionExperiment, Is.EqualTo(2u));
+            Assert.That((uint)SimpleDdgiNearFieldResidualMode.AutoQualified,
+                Is.EqualTo(3u));
+            Assert.That((uint)SimpleDdgiNearFieldResidualMode.HiZAdaptive,
+                Is.EqualTo(4u));
         });
     }
 
@@ -96,7 +112,7 @@ public sealed class GlobalIlluminationDefaultsTests
                 missing), Is.True);
             Assert.That(AdvancedGiActivationPolicy.PrerequisitesSatisfied(
                 SimpleDdgiNearFieldResidualMode
-                    .HiZHalfResolutionExperiment,
+                    .HiZAdaptive,
                 missing), Is.True);
             Assert.That(AdvancedGiActivationPolicy.PrerequisitesSatisfied(
                 GiCausticMode.AutoQualified,
@@ -114,9 +130,9 @@ public sealed class GlobalIlluminationDefaultsTests
             Assert.That(settings.SimpleDdgiStoragePackingMode,
                 Is.EqualTo(SimpleDdgiStoragePackingMode.Packed));
             Assert.That(settings.SimpleDdgiSourceCacheLayoutMode,
-                Is.EqualTo(SimpleDdgiSourceCacheLayoutMode.FixedRecord));
-            Assert.That(settings.SimpleDdgiRefinementBricksEnabled, Is.False);
-            Assert.That(settings.SimpleDdgiNearVisibilitySidecarEnabled, Is.False);
+                Is.EqualTo(SimpleDdgiSourceCacheLayoutMode.Auto));
+            Assert.That(settings.SimpleDdgiRefinementBricksEnabled, Is.True);
+            Assert.That(settings.SimpleDdgiNearVisibilitySidecarEnabled, Is.True);
             Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold,
                 Is.EqualTo(1.0f));
             Assert.That(settings.SimpleDdgiSampledAtlasEnabled, Is.True);
@@ -141,17 +157,19 @@ public sealed class GlobalIlluminationDefaultsTests
         var settings = new RenderSettings();
 
         settings.ApplyQualityPreset(preset);
+        bool highTier = preset is RenderQualityPreset.High or
+            RenderQualityPreset.Ultra or RenderQualityPreset.DdgiHigh;
 
         Assert.Multiple(() =>
         {
             Assert.That(settings.GlobalIllumination.SimpleDdgiStoragePackingMode,
                 Is.EqualTo(SimpleDdgiStoragePackingMode.Packed));
             Assert.That(settings.GlobalIllumination.SimpleDdgiSourceCacheLayoutMode,
-                Is.EqualTo(SimpleDdgiSourceCacheLayoutMode.FixedRecord));
+                Is.EqualTo(SimpleDdgiSourceCacheLayoutMode.Auto));
             Assert.That(settings.GlobalIllumination.SimpleDdgiRefinementBricksEnabled,
-                Is.False);
+                Is.EqualTo(highTier));
             Assert.That(settings.GlobalIllumination.SimpleDdgiNearVisibilitySidecarEnabled,
-                Is.False);
+                Is.EqualTo(highTier));
             Assert.That(
                 settings.GlobalIllumination.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold,
                 Is.EqualTo(1.0f));
@@ -213,9 +231,9 @@ public sealed class GlobalIlluminationDefaultsTests
 
     [TestCase(RenderQualityPreset.Low, 2, 16, 8, 16, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
     [TestCase(RenderQualityPreset.Medium, 2, 22, 11, 22, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
-    [TestCase(RenderQualityPreset.High, 3, 28, 14, 28, SimpleDdgiProbeResidencyMode.SparseNearRing, 960, 768)]
+    [TestCase(RenderQualityPreset.High, 3, 28, 14, 28, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
     [TestCase(RenderQualityPreset.Ultra, 3, 32, 16, 32, SimpleDdgiProbeResidencyMode.SparseNearRing, 1_440, 1_152)]
-    [TestCase(RenderQualityPreset.DdgiHigh, 3, 28, 14, 28, SimpleDdgiProbeResidencyMode.SparseNearRing, 960, 768)]
+    [TestCase(RenderQualityPreset.DdgiHigh, 3, 28, 14, 28, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
     public void QualityPreset_ReplacesTheCompleteSimpleDdgiProfileRegardlessOfPriorTier(
         RenderQualityPreset preset,
         int expectedRingCount,

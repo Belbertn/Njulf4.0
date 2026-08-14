@@ -17,6 +17,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
+        private readonly RaySceneDescriptorBank? _raySceneDescriptors;
         private readonly bool _receiverFeedbackPipelinesEnabled;
         private readonly nint _entryPointName;
         private ForwardNearFieldDirectSourcePipelineConfiguration
@@ -40,6 +41,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardSimpleFullInputNearFieldDirectSourcePipeline;
         private VkPipeline _forwardCompactedSimpleNearFieldDirectSourcePipeline;
         private VkPipeline _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardReceiverCacheNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardCompactedReceiverCacheNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardSimpleReceiverCacheNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardCompactedSimpleReceiverCacheNearFieldDirectSourcePipeline;
+        private VkPipeline _forwardCompactedSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline;
         private VkPipeline _forwardGiCausticReceiverPipeline;
         private VkPipeline _forwardCompactedGiCausticReceiverPipeline;
         private VkPipeline _forwardSimpleGiCausticReceiverPipeline;
@@ -71,7 +78,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardCompactedSimpleGiDisabledPipeline;
         private VkPipeline _forwardCompactedSimpleFullInputGiDisabledPipeline;
         private VkPipeline _transparentForwardPipeline;
+        private VkPipeline _transparentReceiverCachePipeline;
         private VkPipeline _weightedOitTransparentPipeline;
+        private VkPipeline _rayTransparentForwardPipeline;
+        private VkPipeline _rayWeightedOitTransparentPipeline;
+        private VkPipeline _rayTransparentReceiverFeedbackPipeline;
+        private VkPipeline _rayWeightedOitReceiverFeedbackPipeline;
         private VkPipeline _transparentReceiverFeedbackPipeline;
         private VkPipeline _weightedOitReceiverFeedbackPipeline;
         private VkPipeline _motionVectorPipeline;
@@ -79,6 +91,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _sceneOpaqueCompactionDiagnosticsPipeline;
         private VkPipeline _forwardVisibilityCompactionPipeline;
         private PipelineLayout _layout;
+        private PipelineLayout _rayTransparentLayout;
         private PipelineLayout _sceneSubmissionComputeLayout;
         private DescriptorSetLayout _forwardReceiverCacheBufferSetLayout;
         private PipelineCache _pipelineCache;
@@ -94,10 +107,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 nearFieldDirectSourceConfiguration = default,
             ForwardGiCausticReceiverPipelineConfiguration
                 giCausticReceiverConfiguration = default,
-            bool receiverFeedbackPipelinesEnabled = false)
+            bool receiverFeedbackPipelinesEnabled = false,
+            RaySceneDescriptorBank? raySceneDescriptors = null)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
+            _raySceneDescriptors = raySceneDescriptors;
             Settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _receiverFeedbackPipelinesEnabled =
                 receiverFeedbackPipelinesEnabled;
@@ -115,6 +130,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             CreatePipelineCache();
             CreateForwardReceiverCacheBufferSetLayout();
             CreatePipelineLayout();
+            CreateRayTransparentPipelineLayout();
             CreateSceneSubmissionComputeLayout();
             CreatePipelines(colorFormat, depthFormat);
             CreateComputePipelines();
@@ -133,7 +149,23 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ForwardCompactedSimpleGlobalIblPipeline => _forwardCompactedSimplePipeline;
         public VkPipeline ForwardCompactedSimpleFullInputGlobalIblPipeline => _forwardCompactedSimpleFullInputPipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
+        public VkPipeline TransparentReceiverCachePipeline =>
+            _transparentReceiverCachePipeline;
         public VkPipeline WeightedOitTransparentPipeline => _weightedOitTransparentPipeline;
+        public VkPipeline RayTransparentForwardPipeline =>
+            _rayTransparentForwardPipeline;
+        public VkPipeline RayWeightedOitTransparentPipeline =>
+            _rayWeightedOitTransparentPipeline;
+        public VkPipeline RayTransparentReceiverFeedbackPipeline =>
+            _rayTransparentReceiverFeedbackPipeline;
+        public VkPipeline RayWeightedOitReceiverFeedbackPipeline =>
+            _rayWeightedOitReceiverFeedbackPipeline;
+        public bool RayTransparentPipelinesAvailable =>
+            _rayTransparentLayout.Handle != 0 &&
+            _rayTransparentForwardPipeline.Handle != 0 &&
+            _rayWeightedOitTransparentPipeline.Handle != 0;
+        public string RayTransparentPipelineFailureReason { get; private set; } =
+            "ray-query transparent pipelines are unavailable";
         public VkPipeline TransparentReceiverFeedbackPipeline =>
             _transparentReceiverFeedbackPipeline;
         public VkPipeline WeightedOitReceiverFeedbackPipeline =>
@@ -158,6 +190,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ForwardVisibilityCompactionPipeline => _forwardVisibilityCompactionPipeline;
         public VkPipeline Pipeline => _forwardPipeline;
         public PipelineLayout Layout => _layout;
+        public PipelineLayout RayTransparentLayout => _rayTransparentLayout;
         public PipelineLayout SceneSubmissionComputeLayout => _sceneSubmissionComputeLayout;
         internal DescriptorSetLayout ForwardReceiverCacheBufferSetLayout =>
             _forwardReceiverCacheBufferSetLayout;
@@ -265,12 +298,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         /// <summary>
         /// Maps one ordinary opaque/alpha-mask base pipeline to the matching C5
-        /// MRT program.  Cache and GI-disabled specializations are deliberately
-        /// not considered: source ownership is valid only for the dedicated,
-        /// semantic-stamped fragment variants created with this pipeline set.
+        /// MRT program. When the frame-local DDGI receiver cache is ready, its
+        /// cache-required C5 sibling preserves the same SceneColor path used
+        /// without SSGI while still writing both C5 producer attachments.
         /// </summary>
         public bool TryResolveNearFieldDirectSourcePipeline(
             VkPipeline exactPipeline,
+            bool receiverCacheRequired,
             out VkPipeline nearFieldPipeline)
         {
             nearFieldPipeline = default;
@@ -278,20 +312,41 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 return false;
 
             if (exactPipeline.Handle == _forwardPipeline.Handle)
-                nearFieldPipeline = _forwardNearFieldDirectSourcePipeline;
+            {
+                nearFieldPipeline = receiverCacheRequired
+                    ? _forwardReceiverCacheNearFieldDirectSourcePipeline
+                    : _forwardNearFieldDirectSourcePipeline;
+            }
             else if (exactPipeline.Handle == _forwardCompactedPipeline.Handle)
-                nearFieldPipeline = _forwardCompactedNearFieldDirectSourcePipeline;
+            {
+                nearFieldPipeline = receiverCacheRequired
+                    ? _forwardCompactedReceiverCacheNearFieldDirectSourcePipeline
+                    : _forwardCompactedNearFieldDirectSourcePipeline;
+            }
             else if (exactPipeline.Handle == _forwardSimplePipeline.Handle)
-                nearFieldPipeline = _forwardSimpleNearFieldDirectSourcePipeline;
+            {
+                nearFieldPipeline = receiverCacheRequired
+                    ? _forwardSimpleReceiverCacheNearFieldDirectSourcePipeline
+                    : _forwardSimpleNearFieldDirectSourcePipeline;
+            }
             else if (exactPipeline.Handle == _forwardSimpleFullInputPipeline.Handle)
-                nearFieldPipeline = _forwardSimpleFullInputNearFieldDirectSourcePipeline;
+            {
+                nearFieldPipeline = receiverCacheRequired
+                    ? _forwardSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline
+                    : _forwardSimpleFullInputNearFieldDirectSourcePipeline;
+            }
             else if (exactPipeline.Handle == _forwardCompactedSimplePipeline.Handle)
-                nearFieldPipeline = _forwardCompactedSimpleNearFieldDirectSourcePipeline;
+            {
+                nearFieldPipeline = receiverCacheRequired
+                    ? _forwardCompactedSimpleReceiverCacheNearFieldDirectSourcePipeline
+                    : _forwardCompactedSimpleNearFieldDirectSourcePipeline;
+            }
             else if (exactPipeline.Handle ==
                 _forwardCompactedSimpleFullInputPipeline.Handle)
             {
-                nearFieldPipeline =
-                    _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline;
+                nearFieldPipeline = receiverCacheRequired
+                    ? _forwardCompactedSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline
+                    : _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline;
             }
             else
             {
@@ -529,6 +584,57 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (result != Result.Success)
                 throw new VulkanException("Failed to create mesh pipeline layout", result);
             _context.SetDebugName(_layout.Handle, ObjectType.PipelineLayout, "Mesh Pipeline Layout");
+        }
+
+        private void CreateRayTransparentPipelineLayout()
+        {
+            if (_raySceneDescriptors?.IsAvailable != true)
+            {
+                RayTransparentPipelineFailureReason =
+                    _raySceneDescriptors?.FailureDetail ??
+                    "the shared ray-scene descriptor bank is unavailable";
+                return;
+            }
+
+            var setLayouts = stackalloc DescriptorSetLayout[3];
+            setLayouts[0] = _bindlessHeap.StorageBufferSetLayout;
+            setLayouts[1] = _bindlessHeap.TextureSamplerSetLayout;
+            setLayouts[2] = _raySceneDescriptors.Layout;
+            var pushConstantRange = new PushConstantRange
+            {
+                StageFlags = ShaderStageFlags.TaskBitExt |
+                    ShaderStageFlags.MeshBitExt |
+                    ShaderStageFlags.FragmentBit,
+                Offset = 0,
+                Size = (uint)Math.Max(
+                    Math.Max(
+                        Marshal.SizeOf<GPUDepthPushConstants>(),
+                        Marshal.SizeOf<GPUForwardPushConstants>()),
+                    Marshal.SizeOf<GPUMotionVectorPushConstants>())
+            };
+            var layoutInfo = new PipelineLayoutCreateInfo
+            {
+                SType = StructureType.PipelineLayoutCreateInfo,
+                SetLayoutCount = 3,
+                PSetLayouts = setLayouts,
+                PushConstantRangeCount = 1,
+                PPushConstantRanges = &pushConstantRange
+            };
+            Result result = _context.Api.CreatePipelineLayout(
+                _context.Device,
+                &layoutInfo,
+                null,
+                out _rayTransparentLayout);
+            if (result != Result.Success)
+            {
+                throw new VulkanException(
+                    "Failed to create the ray-query transparent mesh pipeline layout",
+                    result);
+            }
+            _context.SetDebugName(
+                _rayTransparentLayout.Handle,
+                ObjectType.PipelineLayout,
+                "Ray Query Transparent Mesh Pipeline Layout");
         }
 
         private void CreateSceneSubmissionComputeLayout()
@@ -825,6 +931,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false);
             _context.SetDebugName(_transparentForwardPipeline.Handle, ObjectType.Pipeline, "Transparent Forward Plus Mesh Pipeline");
 
+            _transparentReceiverCachePipeline = CreateGraphicsPipeline(
+                forwardTaskShaderName,
+                "forward.mesh.spv",
+                "forward_transparent_ddgi_cache_required.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: true,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            _context.SetDebugName(
+                _transparentReceiverCachePipeline.Handle,
+                ObjectType.Pipeline,
+                "Decal Receiver Cache Forward Plus Mesh Pipeline");
+
             _weightedOitTransparentPipeline = CreateWeightedOitGraphicsPipeline(
                 forwardTaskShaderName,
                 "forward.mesh.spv",
@@ -833,6 +955,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 RenderTargetManager.WeightedOitRevealageFormat,
                 depthFormat);
             _context.SetDebugName(_weightedOitTransparentPipeline.Handle, ObjectType.Pipeline, "Weighted OIT Transparent Mesh Pipeline");
+
+            CreateRayTransparentPipelines(
+                colorFormat,
+                depthFormat,
+                forwardTaskShaderName);
 
             CreateReceiverFeedbackPipelines(
                 colorFormat,
@@ -853,6 +980,62 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false);
             _context.SetDebugName(_motionVectorPipeline.Handle, ObjectType.Pipeline, "Motion Vector Mesh Pipeline");
 
+        }
+
+        private void CreateRayTransparentPipelines(
+            Format colorFormat,
+            Format depthFormat,
+            string forwardTaskShaderName)
+        {
+            if (_rayTransparentLayout.Handle == 0)
+                return;
+
+            try
+            {
+                _rayTransparentForwardPipeline = CreateGraphicsPipeline(
+                    forwardTaskShaderName,
+                    "forward.mesh.spv",
+                    "forward_transparent_ray.frag.spv",
+                    colorFormat,
+                    depthFormat,
+                    hasColorAttachment: true,
+                    depthWriteEnable: false,
+                    blendEnable: true,
+                    cullMode: CullModeFlags.None,
+                    depthBiasEnable: false,
+                    pipelineLayout: _rayTransparentLayout);
+                _rayWeightedOitTransparentPipeline =
+                    CreateWeightedOitGraphicsPipeline(
+                        forwardTaskShaderName,
+                        "forward.mesh.spv",
+                        "forward_weighted_oit_ray.frag.spv",
+                        RenderTargetManager.WeightedOitAccumulationFormat,
+                        RenderTargetManager.WeightedOitRevealageFormat,
+                        depthFormat,
+                        _rayTransparentLayout);
+                _context.SetDebugName(
+                    _rayTransparentForwardPipeline.Handle,
+                    ObjectType.Pipeline,
+                    "Ray Query Transparent Forward Plus Mesh Pipeline");
+                _context.SetDebugName(
+                    _rayWeightedOitTransparentPipeline.Handle,
+                    ObjectType.Pipeline,
+                    "Ray Query Weighted OIT Transparent Mesh Pipeline");
+                RayTransparentPipelineFailureReason = string.Empty;
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                ArgumentException or InvalidOperationException)
+            {
+                DestroyOptionalPipeline(ref _rayTransparentForwardPipeline);
+                DestroyOptionalPipeline(ref _rayWeightedOitTransparentPipeline);
+                RayTransparentPipelineFailureReason =
+                    "ray-query-transparent-pipeline-creation-failed:" +
+                    exception.GetType().Name + ":" + exception.Message;
+                System.Diagnostics.Debug.WriteLine(
+                    "Ray-query transparent variants are unavailable; " +
+                    RayTransparentPipelineFailureReason);
+            }
         }
 
         private void CreateReceiverFeedbackPipelines(
@@ -918,6 +1101,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     ObjectType.Pipeline,
                     "B1 Exact Weighted OIT Transparent Mesh Pipeline");
 
+                CreateRayTransparentReceiverFeedbackPipelines(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName);
+
                 ReceiverFeedbackPipelineFailureReason =
                     "receiver-feedback-pipelines-ready";
             }
@@ -937,6 +1125,55 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     "B1 receiver-feedback pipelines unavailable; canonical " +
                     "forward rendering retained. " +
                     ReceiverFeedbackPipelineFailureReason);
+            }
+        }
+
+        private void CreateRayTransparentReceiverFeedbackPipelines(
+            Format colorFormat,
+            Format depthFormat,
+            string forwardTaskShaderName)
+        {
+            if (!RayTransparentPipelinesAvailable ||
+                _rayTransparentLayout.Handle == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                _rayTransparentReceiverFeedbackPipeline = CreateGraphicsPipeline(
+                    forwardTaskShaderName,
+                    "forward.mesh.spv",
+                    "forward_transparent_ray_ddgi_b1.frag.spv",
+                    colorFormat,
+                    depthFormat,
+                    hasColorAttachment: true,
+                    depthWriteEnable: false,
+                    blendEnable: true,
+                    cullMode: CullModeFlags.None,
+                    depthBiasEnable: false,
+                    pipelineLayout: _rayTransparentLayout);
+                _rayWeightedOitReceiverFeedbackPipeline =
+                    CreateWeightedOitGraphicsPipeline(
+                        forwardTaskShaderName,
+                        "forward.mesh.spv",
+                        "forward_weighted_oit_ray_ddgi_b1.frag.spv",
+                        RenderTargetManager.WeightedOitAccumulationFormat,
+                        RenderTargetManager.WeightedOitRevealageFormat,
+                        depthFormat,
+                        _rayTransparentLayout);
+            }
+            catch (Exception exception) when (
+                exception is VulkanException or IOException or
+                ArgumentException or InvalidOperationException)
+            {
+                DestroyOptionalPipeline(
+                    ref _rayTransparentReceiverFeedbackPipeline);
+                DestroyOptionalPipeline(
+                    ref _rayWeightedOitReceiverFeedbackPipeline);
+                System.Diagnostics.Debug.WriteLine(
+                    "Combined ray-query/B1 transparent variants are unavailable: " +
+                    exception.Message);
             }
         }
 
@@ -987,12 +1224,40 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     tertiaryColorFormat:
                         ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
 
+                CreateOpaqueSpecializedPipelineSet(
+                    colorFormat,
+                    depthFormat,
+                    forwardTaskShaderName,
+                    ForwardNearFieldDirectSourceContract
+                        .ReceiverCacheOpaqueFragmentShader,
+                    ForwardNearFieldDirectSourceContract
+                        .ReceiverCacheSimpleOpaqueFragmentShader,
+                    ForwardNearFieldDirectSourceContract
+                        .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
+                    "Near-Field Direct Source with DDGI Receiver Cache",
+                    out _forwardReceiverCacheNearFieldDirectSourcePipeline,
+                    out _forwardCompactedReceiverCacheNearFieldDirectSourcePipeline,
+                    out _forwardSimpleReceiverCacheNearFieldDirectSourcePipeline,
+                    out _forwardSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline,
+                    out _forwardCompactedSimpleReceiverCacheNearFieldDirectSourcePipeline,
+                    out _forwardCompactedSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline,
+                    secondaryColorFormat:
+                        ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
+                    tertiaryColorFormat:
+                        ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat);
+
                 if (_forwardNearFieldDirectSourcePipeline.Handle == 0 ||
                     _forwardCompactedNearFieldDirectSourcePipeline.Handle == 0 ||
                     _forwardSimpleNearFieldDirectSourcePipeline.Handle == 0 ||
                     _forwardSimpleFullInputNearFieldDirectSourcePipeline.Handle == 0 ||
                     _forwardCompactedSimpleNearFieldDirectSourcePipeline.Handle == 0 ||
-                    _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline.Handle == 0)
+                    _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardReceiverCacheNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardCompactedReceiverCacheNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardSimpleReceiverCacheNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardCompactedSimpleReceiverCacheNearFieldDirectSourcePipeline.Handle == 0 ||
+                    _forwardCompactedSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline.Handle == 0)
                 {
                     DestroyNearFieldDirectSourcePipelines();
                     NearFieldDirectSourceFailureReason =
@@ -1335,7 +1600,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? secondaryColorFormat = null,
             Format? tertiaryColorFormat = null,
             Format? quaternaryColorFormat = null,
-            Format? materialTransportProvenanceFormat = null)
+            Format? materialTransportProvenanceFormat = null,
+            PipelineLayout pipelineLayout = default)
         {
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
@@ -1371,7 +1637,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     tertiaryColorFormat: tertiaryColorFormat,
                     quaternaryColorFormat: quaternaryColorFormat,
                     materialTransportProvenanceFormat:
-                        materialTransportProvenanceFormat);
+                        materialTransportProvenanceFormat,
+                    pipelineLayout: pipelineLayout);
             }
             catch (Exception exception)
             {
@@ -1441,7 +1708,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             string fragmentShaderName,
             Format accumulationFormat,
             Format revealageFormat,
-            Format depthFormat)
+            Format depthFormat,
+            PipelineLayout pipelineLayout = default)
         {
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
@@ -1462,7 +1730,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     fragmentModule,
                     accumulationFormat,
                     revealageFormat,
-                    depthFormat);
+                    depthFormat,
+                    pipelineLayout);
             }
             finally
             {
@@ -1486,7 +1755,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? secondaryColorFormat = null,
             Format? tertiaryColorFormat = null,
             Format? quaternaryColorFormat = null,
-            Format? materialTransportProvenanceFormat = null)
+            Format? materialTransportProvenanceFormat = null,
+            PipelineLayout pipelineLayout = default)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             int stageCount = 0;
@@ -1652,7 +1922,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PDepthStencilState = &depthStencilInfo,
                 PColorBlendState = &colorBlendInfo,
                 PDynamicState = &dynamicInfo,
-                Layout = _layout,
+                Layout = pipelineLayout.Handle != 0 ? pipelineLayout : _layout,
                 RenderPass = default,
                 Subpass = 0,
                 BasePipelineHandle = default,
@@ -1679,7 +1949,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ShaderModule fragmentModule,
             Format accumulationFormat,
             Format revealageFormat,
-            Format depthFormat)
+            Format depthFormat,
+            PipelineLayout pipelineLayout = default)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             int stageCount = 0;
@@ -1812,7 +2083,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PDepthStencilState = &depthStencilInfo,
                 PColorBlendState = &colorBlendInfo,
                 PDynamicState = &dynamicInfo,
-                Layout = _layout,
+                Layout = pipelineLayout.Handle != 0 ? pipelineLayout : _layout,
                 RenderPass = default,
                 Subpass = 0,
                 BasePipelineHandle = default,
@@ -1999,11 +2270,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _transparentForwardPipeline = default;
             }
 
+            if (_transparentReceiverCachePipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _transparentReceiverCachePipeline,
+                    null);
+                _transparentReceiverCachePipeline = default;
+            }
+
             if (_weightedOitTransparentPipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(_context.Device, _weightedOitTransparentPipeline, null);
                 _weightedOitTransparentPipeline = default;
             }
+            DestroyOptionalPipeline(ref _rayTransparentForwardPipeline);
+            DestroyOptionalPipeline(ref _rayWeightedOitTransparentPipeline);
 
             if (_motionVectorPipeline.Handle != 0)
             {
@@ -2043,6 +2325,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 ref _forwardCompactedSimpleNearFieldDirectSourcePipeline);
             DestroyOptionalPipeline(
                 ref _forwardCompactedSimpleFullInputNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardReceiverCacheNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedReceiverCacheNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleReceiverCacheNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleReceiverCacheNearFieldDirectSourcePipeline);
+            DestroyOptionalPipeline(
+                ref _forwardCompactedSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline);
         }
 
         private void DestroyGiCausticReceiverPipelines()
@@ -2096,6 +2390,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             DestroyOptionalPipeline(ref _transparentReceiverFeedbackPipeline);
             DestroyOptionalPipeline(ref _weightedOitReceiverFeedbackPipeline);
+            DestroyOptionalPipeline(
+                ref _rayTransparentReceiverFeedbackPipeline);
+            DestroyOptionalPipeline(
+                ref _rayWeightedOitReceiverFeedbackPipeline);
         }
 
         private void DestroyOptionalPipeline(ref VkPipeline pipeline)
@@ -2128,6 +2426,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
+
+            if (_rayTransparentLayout.Handle != 0)
+            {
+                _context.Api.DestroyPipelineLayout(
+                    _context.Device,
+                    _rayTransparentLayout,
+                    null);
+                _rayTransparentLayout = default;
+            }
 
             if (_forwardReceiverCacheBufferSetLayout.Handle != 0)
             {

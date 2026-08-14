@@ -34,17 +34,12 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
     private readonly ShadowSettings _settings;
     private readonly BufferManager _bufferManager;
     private readonly AccelerationStructureManager _accelerationStructureManager;
+    private readonly RaySceneDescriptorBank _raySceneDescriptors;
+    private readonly DirectionalShadowHistoryResources _historyResources;
     private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly BufferHandle[] _maskBuffers =
         new BufferHandle[RenderingConstants.FramesInFlight];
-    private readonly DescriptorSet[] _accelerationStructureSets =
-        new DescriptorSet[RenderingConstants.FramesInFlight];
-    private readonly AccelerationStructureKHR[] _boundTlases =
-        new AccelerationStructureKHR[RenderingConstants.FramesInFlight];
-
     private nint _entryPointName;
-    private DescriptorSetLayout _accelerationStructureSetLayout;
-    private DescriptorPool _descriptorPool;
     private PipelineLayout _pipelineLayout;
     private PipelineCache _pipelineCache;
     private VkPipeline _pipeline;
@@ -61,6 +56,8 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
         ShadowSettings settings,
         BufferManager bufferManager,
         AccelerationStructureManager accelerationStructureManager,
+        RaySceneDescriptorBank raySceneDescriptors,
+        DirectionalShadowHistoryResources historyResources,
         GiPipelineCacheService? pipelineCacheService = null)
         : base("DirectionalRayShadowPass", context, swapchain, bindlessHeap)
     {
@@ -71,6 +68,10 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
             throw new ArgumentNullException(nameof(bufferManager));
         _accelerationStructureManager = accelerationStructureManager ??
             throw new ArgumentNullException(nameof(accelerationStructureManager));
+        _raySceneDescriptors = raySceneDescriptors ??
+            throw new ArgumentNullException(nameof(raySceneDescriptors));
+        _historyResources = historyResources ??
+            throw new ArgumentNullException(nameof(historyResources));
         _pipelineCacheService = pipelineCacheService;
     }
 
@@ -87,6 +88,7 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
     public ulong BufferBytes => _bufferBytes;
     public uint Width => _allocatedWidth;
     public uint Height => _allocatedHeight;
+    public DirectionalShadowHistoryResources HistoryResources => _historyResources;
 
     public BufferHandle GetMaskBuffer(int frameIndex) =>
         (uint)frameIndex < (uint)_maskBuffers.Length
@@ -99,7 +101,8 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
     {
         if (!_context.RayQuerySupported ||
             _context.KhrAccelerationStructure == null ||
-            !_accelerationStructureManager.Supported)
+            !_accelerationStructureManager.Supported ||
+            !_raySceneDescriptors.IsAvailable)
         {
             FailureDetail =
                 "directional ray shadows require ray-query and acceleration-structure support";
@@ -110,14 +113,13 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
         {
             _entryPointName = SilkMarshal.StringToPtr("main");
             ValidatePushConstantRange();
-            CreateAccelerationStructureSetLayout();
-            CreateDescriptorPoolAndSets();
             if (_pipelineCacheService != null)
                 _pipelineCache = _pipelineCacheService.Cache;
             else
                 CreatePipelineCache();
             CreatePipelineLayout();
             CreatePipeline();
+            _historyResources.EnsureCounters();
             PipelineAvailable = true;
             FailureDetail = string.Empty;
         }
@@ -140,7 +142,9 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
     public bool EnsureResources(
         uint width,
         uint height,
-        ulong frameSerial)
+        ulong frameSerial,
+        bool requiresHistory = false,
+        bool detailedDiagnostics = false)
     {
         if (!PipelineAvailable)
             return false;
@@ -153,7 +157,22 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
             _allocatedHeight == height &&
             AllMaskBuffersValid())
         {
-            return true;
+            if (!requiresHistory && !detailedDiagnostics)
+                return true;
+            try
+            {
+                return _historyResources.Ensure(
+                    width,
+                    height,
+                    detailedDiagnostics);
+            }
+            catch (Exception exception)
+            {
+                FailureDetail =
+                    $"directional shadow history allocation failed: {exception.Message}";
+                _nextAllocationRetryFrame = checked(frameSerial + AllocationRetryFrames);
+                return false;
+            }
         }
         if (frameSerial < _nextAllocationRetryFrame)
             return false;
@@ -220,6 +239,15 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
                 ResourceGeneration = 1u;
             _nextAllocationRetryFrame = 0UL;
             FailureDetail = string.Empty;
+            if ((requiresHistory || detailedDiagnostics) &&
+                !_historyResources.Ensure(
+                    width,
+                    height,
+                    detailedDiagnostics))
+            {
+                FailureDetail = "directional shadow history resources are unavailable";
+                return false;
+            }
             return true;
         }
         catch (Exception exception)
@@ -243,8 +271,8 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
     {
         bool execute = IsAvailable &&
             sceneData.DirectionalShadowFramePlan.UsesRayQuery &&
-            sceneData.DirectionalShadowFramePlan.EffectiveMode !=
-                DirectionalShadowMode.RayQuerySoft &&
+            (!sceneData.DirectionalShadowFramePlan.UsesSoftHistory ||
+             _historyResources.IsAllocated) &&
             sceneData.DirectionalShadowPassEnabled &&
             _accelerationStructureManager.Active;
         sceneData.DirectionalRayShadowPassEnabled = execute;
@@ -269,9 +297,21 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
         if ((uint)frameIndex >= (uint)_maskBuffers.Length)
             throw new ArgumentOutOfRangeException(nameof(frameIndex));
 
-        UpdateAccelerationStructureDescriptor(sceneData);
+        if (!_raySceneDescriptors.TryUpdate(frameIndex, out string descriptorFailure))
+            throw new InvalidOperationException(descriptorFailure);
         _renderTargets.SceneDepth.TransitionToDepthReadOnly(commandBuffer);
-        ResetPackedMask(commandBuffer, frameIndex);
+        bool soft = sceneData.DirectionalShadowFramePlan.UsesSoftHistory;
+        if (soft)
+            ResetSoftTraceOutputs(
+                commandBuffer,
+                frameIndex,
+                sceneData.DirectionalShadowRayCountersEnabled);
+        else
+        {
+            ResetPackedMask(commandBuffer, frameIndex);
+            if (sceneData.DirectionalShadowRayCountersEnabled)
+                ResetCounterBuffer(commandBuffer, frameIndex);
+        }
         _context.Api.CmdBindPipeline(
             commandBuffer,
             PipelineBindPoint.Compute,
@@ -280,17 +320,11 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
             commandBuffer,
             _pipelineLayout,
             PipelineBindPoint.Compute);
-        DescriptorSet accelerationStructureSet =
-            _accelerationStructureSets[frameIndex];
-        _context.Api.CmdBindDescriptorSets(
+        _raySceneDescriptors.Bind(
             commandBuffer,
             PipelineBindPoint.Compute,
             _pipelineLayout,
-            2,
-            1,
-            &accelerationStructureSet,
-            0,
-            null);
+            frameIndex);
 
         Vector3 lightDirection = -sceneData.DirectionalShadowLightDirection;
         float lightDirectionLengthSquared = lightDirection.LengthSquared();
@@ -317,11 +351,21 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
                 maximumRayDistance),
             ScreenWidth = _allocatedWidth,
             ScreenHeight = _allocatedHeight,
-            OutputBufferIndex = checked((uint)
-                (BindlessIndex.DirectionalRayShadowMaskBufferBase + frameIndex)),
+            OutputBufferIndex = checked((uint)(soft
+                ? BindlessIndex.DirectionalShadowRawBufferBase + frameIndex
+                : BindlessIndex.DirectionalRayShadowMaskBufferBase + frameIndex)),
             InstanceMask = AccelerationStructureManager
                 .DirectionalShadowInstanceMask,
-            OutputMode = (uint)sceneData.DirectionalShadowFramePlan.EffectiveMode
+            OutputMode = (uint)sceneData.DirectionalShadowFramePlan.EffectiveMode,
+            FrameIndex = sceneData.CurrentFrameIndex,
+            TraceSampleCount = soft &&
+                sceneData.DirectionalShadowFramePlan.HistoryResetReason !=
+                    DirectionalShadowHistoryResetReason.None
+                ? checked((uint)_settings.DirectionalSoftRecoveryRayCount)
+                : 1u,
+            DebugFlags =
+                (_historyResources.DetailedDiagnosticsAllocated ? 1u : 0u) |
+                (sceneData.DirectionalShadowRayCountersEnabled ? 2u : 0u)
         };
         _context.Api.CmdPushConstants(
             commandBuffer,
@@ -335,6 +379,8 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
             (_allocatedWidth + WorkgroupSize - 1u) / WorkgroupSize,
             (_allocatedHeight + WorkgroupSize - 1u) / WorkgroupSize,
             1u);
+        if (sceneData.DirectionalShadowRayCountersEnabled)
+            _historyResources.MarkCountersSubmitted(frameIndex);
     }
 
     private void ResetPackedMask(CommandBuffer commandBuffer, int frameIndex)
@@ -371,6 +417,106 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
                 AccessFlags2.ShaderStorageWriteBit,
             0UL,
             _bufferBytes);
+        ExecuteBarriers(commandBuffer, barriers);
+    }
+
+    private void ResetSoftTraceOutputs(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        bool resetCounters)
+    {
+        BufferHandle rawHandle = _historyResources.GetRaw(frameIndex);
+        BufferHandle counterHandle = _historyResources.GetCounters(frameIndex);
+        if (!rawHandle.IsValid || !counterHandle.IsValid)
+            throw new InvalidOperationException("Directional soft-shadow buffers are unavailable.");
+
+        VkBuffer raw = _bufferManager.GetBuffer(rawHandle);
+        VkBuffer counters = _bufferManager.GetBuffer(counterHandle);
+        Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[2];
+        int barrierCount = 1;
+        barriers[0] = BarrierBuilder.BufferBarrier(
+            raw,
+            PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferWriteBit,
+            0UL,
+            _historyResources.RawBufferBytes);
+        if (resetCounters)
+        {
+            barriers[barrierCount++] = BarrierBuilder.BufferBarrier(
+                counters,
+                PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                0UL,
+                DirectionalShadowHistoryResources.CounterBytes);
+        }
+        ExecuteBarriers(commandBuffer, barriers[..barrierCount]);
+        _context.Api.CmdFillBuffer(commandBuffer, raw, 0UL, _historyResources.RawBufferBytes, 0u);
+        if (resetCounters)
+        {
+            _context.Api.CmdFillBuffer(
+                commandBuffer,
+                counters,
+                0UL,
+                DirectionalShadowHistoryResources.CounterBytes,
+                0u);
+        }
+        barrierCount = 1;
+        barriers[0] = BarrierBuilder.BufferBarrier(
+            raw,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+            0UL,
+            _historyResources.RawBufferBytes);
+        if (resetCounters)
+        {
+            barriers[barrierCount++] = BarrierBuilder.BufferBarrier(
+                counters,
+                PipelineStageFlags2.TransferBit,
+                AccessFlags2.TransferWriteBit,
+                PipelineStageFlags2.ComputeShaderBit,
+                AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+                0UL,
+                DirectionalShadowHistoryResources.CounterBytes);
+        }
+        ExecuteBarriers(commandBuffer, barriers[..barrierCount]);
+    }
+
+    private void ResetCounterBuffer(CommandBuffer commandBuffer, int frameIndex)
+    {
+        BufferHandle counterHandle = _historyResources.GetCounters(frameIndex);
+        if (!counterHandle.IsValid)
+            throw new InvalidOperationException("Directional shadow counters are unavailable.");
+        VkBuffer counters = _bufferManager.GetBuffer(counterHandle);
+        Span<BufferMemoryBarrier2> barriers = stackalloc BufferMemoryBarrier2[1];
+        barriers[0] = BarrierBuilder.BufferBarrier(
+            counters,
+            PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferWriteBit,
+            0UL,
+            DirectionalShadowHistoryResources.CounterBytes);
+        ExecuteBarriers(commandBuffer, barriers);
+        _context.Api.CmdFillBuffer(
+            commandBuffer,
+            counters,
+            0UL,
+            DirectionalShadowHistoryResources.CounterBytes,
+            0u);
+        barriers[0] = BarrierBuilder.BufferBarrier(
+            counters,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferWriteBit,
+            PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
+            0UL,
+            DirectionalShadowHistoryResources.CounterBytes);
         ExecuteBarriers(commandBuffer, barriers);
     }
 
@@ -441,85 +587,6 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
         }
     }
 
-    private void CreateAccelerationStructureSetLayout()
-    {
-        var binding = new DescriptorSetLayoutBinding
-        {
-            Binding = 0,
-            DescriptorType = DescriptorType.AccelerationStructureKhr,
-            DescriptorCount = 1,
-            StageFlags = ShaderStageFlags.ComputeBit
-        };
-        var createInfo = new DescriptorSetLayoutCreateInfo
-        {
-            SType = StructureType.DescriptorSetLayoutCreateInfo,
-            BindingCount = 1,
-            PBindings = &binding
-        };
-        Result result = _context.Api.CreateDescriptorSetLayout(
-            _context.Device,
-            &createInfo,
-            null,
-            out _accelerationStructureSetLayout);
-        if (result != Result.Success)
-            throw new VulkanException(
-                "Failed to create directional ray-shadow AS descriptor layout",
-                result);
-    }
-
-    private void CreateDescriptorPoolAndSets()
-    {
-        const uint descriptorSetCount = RenderingConstants.FramesInFlight;
-        var poolSize = new DescriptorPoolSize
-        {
-            Type = DescriptorType.AccelerationStructureKhr,
-            DescriptorCount = descriptorSetCount
-        };
-        var poolInfo = new DescriptorPoolCreateInfo
-        {
-            SType = StructureType.DescriptorPoolCreateInfo,
-            PoolSizeCount = 1,
-            PPoolSizes = &poolSize,
-            MaxSets = descriptorSetCount
-        };
-        Result result = _context.Api.CreateDescriptorPool(
-            _context.Device,
-            &poolInfo,
-            null,
-            out _descriptorPool);
-        if (result != Result.Success)
-            throw new VulkanException(
-                "Failed to create directional ray-shadow descriptor pool",
-                result);
-
-        DescriptorSetLayout* layouts =
-            stackalloc DescriptorSetLayout[RenderingConstants.FramesInFlight];
-        for (int index = 0;
-             index < RenderingConstants.FramesInFlight;
-             index++)
-        {
-            layouts[index] = _accelerationStructureSetLayout;
-        }
-        fixed (DescriptorSet* descriptorSets = _accelerationStructureSets)
-        {
-            var allocationInfo = new DescriptorSetAllocateInfo
-            {
-                SType = StructureType.DescriptorSetAllocateInfo,
-                DescriptorPool = _descriptorPool,
-                DescriptorSetCount = descriptorSetCount,
-                PSetLayouts = layouts
-            };
-            result = _context.Api.AllocateDescriptorSets(
-                _context.Device,
-                &allocationInfo,
-                descriptorSets);
-        }
-        if (result != Result.Success)
-            throw new VulkanException(
-                "Failed to allocate directional ray-shadow descriptor sets",
-                result);
-    }
-
     private void CreatePipelineCache()
     {
         var createInfo = new PipelineCacheCreateInfo
@@ -543,7 +610,7 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
         {
             _bindlessHeap.StorageBufferSetLayout,
             _bindlessHeap.TextureSamplerSetLayout,
-            _accelerationStructureSetLayout
+            _raySceneDescriptors.Layout
         };
         var pushRange = new PushConstantRange
         {
@@ -624,46 +691,6 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
         }
     }
 
-    private void UpdateAccelerationStructureDescriptor(
-        SceneRenderingData sceneData)
-    {
-        uint frameSlot = sceneData.CurrentFrameIndex;
-        if (frameSlot >= RenderingConstants.FramesInFlight)
-            throw new ArgumentOutOfRangeException(nameof(sceneData));
-        AccelerationStructureKHR tlas =
-            _accelerationStructureManager.TopLevelAccelerationStructureHandle;
-        if (tlas.Handle == 0)
-            throw new InvalidOperationException(
-                "Directional ray shadows were admitted without a live TLAS.");
-        if (_boundTlases[frameSlot].Handle == tlas.Handle)
-            return;
-
-        var accelerationStructureInfo =
-            new WriteDescriptorSetAccelerationStructureKHR
-            {
-                SType = StructureType
-                    .WriteDescriptorSetAccelerationStructureKhr,
-                AccelerationStructureCount = 1,
-                PAccelerationStructures = &tlas
-            };
-        var write = new WriteDescriptorSet
-        {
-            SType = StructureType.WriteDescriptorSet,
-            PNext = &accelerationStructureInfo,
-            DstSet = _accelerationStructureSets[frameSlot],
-            DstBinding = 0,
-            DescriptorCount = 1,
-            DescriptorType = DescriptorType.AccelerationStructureKhr
-        };
-        _context.Api.UpdateDescriptorSets(
-            _context.Device,
-            1,
-            &write,
-            0,
-            null);
-        _boundTlases[frameSlot] = tlas;
-    }
-
     private void CleanupPipelineResources()
     {
         if (_pipeline.Handle != 0)
@@ -682,20 +709,6 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
                 _pipelineCache,
                 null);
         }
-        if (_descriptorPool.Handle != 0)
-        {
-            _context.Api.DestroyDescriptorPool(
-                _context.Device,
-                _descriptorPool,
-                null);
-        }
-        if (_accelerationStructureSetLayout.Handle != 0)
-        {
-            _context.Api.DestroyDescriptorSetLayout(
-                _context.Device,
-                _accelerationStructureSetLayout,
-                null);
-        }
         if (_entryPointName != 0)
         {
             SilkMarshal.Free(_entryPointName);
@@ -704,7 +717,5 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
         _pipeline = default;
         _pipelineLayout = default;
         _pipelineCache = default;
-        _descriptorPool = default;
-        _accelerationStructureSetLayout = default;
     }
 }

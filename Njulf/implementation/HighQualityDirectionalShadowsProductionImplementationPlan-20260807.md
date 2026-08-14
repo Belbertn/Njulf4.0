@@ -1,16 +1,16 @@
 # High-Quality Directional Shadows Production Implementation Plan
 
 - Date: 2026-08-07
-- Status: implemented through the deterministic CSM, hard-ray, and hybrid-contact slices; hardware promotion remains evidence-gated
+- Status: implementation complete; hardware promotion remains evidence-gated by target captures
 - Target: stable cascaded sun shadows for every quality tier, with an optional
   ray-query hard/soft shadow path for qualified Ultra hardware
 - Expands: `implementation/Shadows.md`
 - Related but independent work: DDGI cohort/history stabilization. Replacing a
   direct-shadow backend must not be presented as a fix for DDGI transitions.
 
-## Implementation outcome (2026-08-13)
+## Implementation outcome (2026-08-13, completed)
 
-The approved initial-production scope is implemented:
+The approved implementation is complete:
 
 - CSM fitting now uses renderer-owned transported-basis state, a rotation-
   invariant guarded sphere, symmetric nearest-texel snapping, and independently
@@ -33,18 +33,35 @@ The approved initial-production scope is implemented:
   caps candidate traversal conservatively, and skips background/far receivers.
 - `RayQueryHard` consumes the mask once for supported opaque depth owners.
   `HybridContact` conservatively combines it with CSM and fades the final 20% of
-  the bounded ray segment. Transparent/decal/debug receivers retain an explicit
-  named CSM fallback, and scenes without those receivers skip redundant map work.
+  the bounded ray segment. Sorted and weighted transparent receivers use shared
+  fragment ray-query variants; geometry decals use the depth-owner mask with a
+  named CSM fallback. Scenes without a real fallback receiver skip redundant maps.
+- `RayQuerySoft` now uses finite-sun disk sampling, a deterministic fixed
+  blue-noise rank tile with low-discrepancy samples, lazy raw/history/scratch
+  resources, motion-vector reprojection, receiver/depth/normal/generation
+  rejection, bounded history, and an edge-aware multi-pass spatial resolve.
+  Zero angular radius remains the exact hard path. Transparent fragments use a
+  bounded direct multi-sample path instead of invalid opaque history.
+- Optional short CSM temporal resolution is implemented but `Auto` remains
+  dormant unless exact residual-stepping evidence approves it. `DeveloperForce`
+  is explicitly labeled Developer and never manufactures release authority.
 - Requested/effective state, stable fallback reason/detail, map/cache fitter
   provenance, mask format/extent/bytes/generation, ray-scene generation/epoch,
-  and separate map/ray GPU timings are available in runtime diagnostics.
+  exact/proxy category state, traversal/filter counters, history reset state,
+  and separate map/ray/temporal/spatial GPU timings are available in diagnostics.
+- Mask, hit-distance, candidate-count, residency, CSM/ray-difference, history-
+  confidence, and history-rejection debug views read the production buffers.
+- A deterministic capture catalog covers the committed camera/light trajectories
+  and the 1080p/1440p/4K, SMAA/TAA, DDGI/ray-consumer matrix. An immutable strict-
+  JSON qualification manifest size/hash-pins numeric, visual, performance,
+  memory, validation, lifecycle, and fallback artifacts to the exact clean build,
+  shader bundle, settings, device/driver/API, resolution, AA mode, and geometry
+  policy. Runtime budget overruns cause bounded CSM demotion.
 
-The two evidence-gated phases remain intentionally inactive, as this plan
-requires: Phase 2 does not allocate a CSM temporal resolve without measured
-residual stepping, and Phase 6 `RayQuerySoft` resolves to deterministic CSM
-without preparing ray-scene, mask, motion, or history resources until finite-sun
-sampling and denoising qualify. All ray modes remain opt-in pending release-build
-visual, validation-layer, and target-GPU budget captures.
+No target-GPU evidence is fabricated by the implementation. Explicit ray modes
+therefore run as `Experimental` until matching release-build artifacts are
+reviewed and installed; CSM remains `Production`, Ultra remains CSM by default,
+and only a matching manifest can report ray/temporal `Production`.
 
 ## 1. Decision
 

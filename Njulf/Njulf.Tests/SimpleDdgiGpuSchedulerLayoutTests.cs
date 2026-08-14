@@ -270,7 +270,8 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
                 "SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR"));
             Assert.That(classify, Does.Contain("periodicWaveMember"));
             Assert.That(classify, Does.Contain("periodicRefreshGateOpen"));
-            Assert.That(classify, Does.Contain("routineDue);"));
+            Assert.That(classify, Does.Contain("routineDue ||"));
+            Assert.That(classify, Does.Contain("cardinalityPromotionDue);"));
 
             Assert.That(emit, Does.Contain("SchedulerWriteOutcome("));
             Assert.That(emit, Does.Contain("SchedulerMarkOutcomeComplete("));
@@ -362,6 +363,11 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
                 "SIMPLE_DDGI_SCHEDULER_COUNTER_VISIBLE_PAGE_COHORT_BASE"));
             Assert.That(admit, Does.Contain(
                 "(remaining * available) / residualPendingTotal"));
+            Assert.That(admit, Does.Contain("uint livenessVolumeStart"));
+            Assert.That(admit, Does.Contain(
+                "offset < activeVolumes && remaining != 0u"));
+            Assert.That(admit, Does.Contain(
+                "uint volume = (livenessVolumeStart + offset) % activeVolumes"));
             Assert.That(admit, Does.Contain(
                 "quotas[volume] >= specializedPendingByVolume[volume]"));
             Assert.That(admit, Does.Contain("uint admittedLaneMask[28]"));
@@ -458,7 +464,17 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiParams>(), Is.EqualTo(256));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiPushConstants>(), Is.EqualTo(136));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditPushConstants>(), Is.EqualTo(128));
-            Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>(), Is.EqualTo(160));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportAuditSummary>(), Is.EqualTo(212));
+            Assert.That(
+                Marshal.OffsetOf<GPUSimpleDdgiTransportAuditSummary>(
+                    nameof(GPUSimpleDdgiTransportAuditSummary.ChannelEvidenceVersion))
+                    .ToInt32(),
+                Is.EqualTo(160));
+            Assert.That(
+                Marshal.OffsetOf<GPUSimpleDdgiTransportAuditSummary>(
+                    nameof(GPUSimpleDdgiTransportAuditSummary.CanonicalQuantizationFloorBBits))
+                    .ToInt32(),
+                Is.EqualTo(208));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulePushConstants>(), Is.EqualTo(124));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiPublishPushConstants>(), Is.EqualTo(56));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiSchedulerFeedback>(), Is.EqualTo(256));

@@ -79,10 +79,10 @@ public sealed class AdvancedGiCandidateProfileTests
                 GiCausticMode.AutoQualified,
                 usesCandidateAuthorization: false), Is.True);
             Assert.That(AdvancedGiRuntimeContentPolicy.RequiresExactMatch(
-                SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
+                SimpleDdgiNearFieldResidualMode.HiZAdaptive,
                 usesCandidateAuthorization: false), Is.False);
             Assert.That(AdvancedGiRuntimeContentPolicy.RequiresExactMatch(
-                SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
+                SimpleDdgiNearFieldResidualMode.HiZAdaptive,
                 usesCandidateAuthorization: true), Is.True);
             Assert.That(AdvancedGiRuntimeContentPolicy.RequiresExactMatch(
                 SimpleDdgiNearFieldResidualMode.AutoQualified,

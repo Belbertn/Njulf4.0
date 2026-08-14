@@ -119,7 +119,7 @@ public sealed class DirectionalShadowContractsTests
     }
 
     [Test]
-    public void RaySceneRequirements_DoNotPrepareUnqualifiedSoftIntent()
+    public void RaySceneRequirements_PrepareExplicitSoftIntentForExperimentalUse()
     {
         var settings = new ShadowSettings
         {
@@ -129,7 +129,14 @@ public sealed class DirectionalShadowContractsTests
         RaySceneRequirement requirement =
             RaySceneRequirement.ForDirectionalShadows(settings);
 
-        Assert.That(requirement, Is.EqualTo(RaySceneRequirement.None));
+        Assert.Multiple(() =>
+        {
+            Assert.That(requirement.Consumers,
+                Is.EqualTo(RaySceneConsumer.DirectionalFull));
+            Assert.That(requirement.RequiredCategories,
+                Is.EqualTo(RaySceneGeometryCategory.DirectionalShadowDefault));
+            Assert.That(requirement.RequiresCurrentPose, Is.True);
+        });
     }
 
     [Test]
@@ -159,7 +166,13 @@ public sealed class DirectionalShadowContractsTests
                 RaySceneGeometryCategory.DirectionalShadowDefault,
                 4u,
                 8UL,
-                string.Empty));
+                string.Empty)
+            {
+                CoverageMinimum = new(-100f, -100f, -100f),
+                CoverageMaximum = new(100f, 100f, 100f),
+                ExactCategories =
+                    RaySceneGeometryCategory.DirectionalShadowDefault
+            });
 
         Assert.Multiple(() =>
         {

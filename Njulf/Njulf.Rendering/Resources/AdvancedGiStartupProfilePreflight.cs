@@ -73,8 +73,9 @@ public static class AdvancedGiStartupProfilePreflight
             autoQualified = GetAutoQualifiedFeatures(gi);
         bool c4Candidate = gi.GiCausticMode ==
             GiCausticMode.WorldCacheExperiment;
-        bool c5Candidate = gi.SimpleDdgiNearFieldResidualMode ==
-            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment;
+        bool c5Candidate = gi.SimpleDdgiNearFieldResidualMode is
+            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment or
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive;
         bool runtimeIdentityRequired = autoQualified.Length > 0 ||
             c4Candidate || c5Candidate;
         if (runtimeIdentityRequired)

@@ -629,9 +629,15 @@ namespace Njulf.Rendering.Pipeline
         private const string LegacyShader = "ddgi_simple_transport_audit_legacy.comp.spv";
         private const string ValidateShader = "ddgi_simple_transport_audit_validate.comp.spv";
         private const string PackedShader = "ddgi_simple_transport_audit_packed.comp.spv";
+        private const string LegacyGuidedShader = "ddgi_simple_transport_audit_legacy_guided.comp.spv";
+        private const string ValidateGuidedShader = "ddgi_simple_transport_audit_validate_guided.comp.spv";
+        private const string PackedGuidedShader = "ddgi_simple_transport_audit_packed_guided.comp.spv";
         private const string LegacyReduceShader = "ddgi_simple_transport_audit_reduce_legacy.comp.spv";
         private const string ValidateReduceShader = "ddgi_simple_transport_audit_reduce_validate.comp.spv";
         private const string PackedReduceShader = "ddgi_simple_transport_audit_reduce_packed.comp.spv";
+        private const string LegacyGuidedReduceShader = "ddgi_simple_transport_audit_reduce_legacy_guided.comp.spv";
+        private const string ValidateGuidedReduceShader = "ddgi_simple_transport_audit_reduce_validate_guided.comp.spv";
+        private const string PackedGuidedReduceShader = "ddgi_simple_transport_audit_reduce_packed_guided.comp.spv";
         private readonly RenderSettings _settings;
         private readonly SimpleDdgiVolumeManager _volumeManager;
         private readonly GiPipelineCacheService? _pipelineCacheService;
@@ -684,12 +690,19 @@ namespace Njulf.Rendering.Pipeline
                 LegacyShader,
                 ValidateShader,
                 PackedShader,
+                LegacyGuidedShader,
+                ValidateGuidedShader,
+                PackedGuidedShader,
                 LegacyReduceShader,
                 ValidateReduceShader,
-                PackedReduceShader
+                PackedReduceShader,
+                LegacyGuidedReduceShader,
+                ValidateGuidedReduceShader,
+                PackedGuidedReduceShader
             ];
             foreach (string shaderName in admittedShaders)
                 _ = GetOrCreatePipeline(shaderName);
+            _volumeManager.SetGuidedTransportAuditAvailable(true);
         }
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
@@ -799,6 +812,7 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Cleanup()
         {
+            _volumeManager.SetGuidedTransportAuditAvailable(false);
             foreach (VkPipeline pipeline in _pipelines.Values)
             {
                 if (pipeline.Handle != 0)
@@ -932,23 +946,30 @@ namespace Njulf.Rendering.Pipeline
 
         private VkPipeline GetOrCreatePipeline(AuditPipelineRole role)
         {
+            bool guided = _volumeManager.DirectionalGuidingTransportActive;
             string shaderName = _settings.GlobalIllumination
                 .SimpleDdgiStoragePackingMode.Sanitize() switch
             {
                 SimpleDdgiStoragePackingMode.Legacy => role switch
                 {
-                    AuditPipelineRole.Reduce => LegacyReduceShader,
-                    _ => LegacyShader
+                    AuditPipelineRole.Reduce => guided
+                        ? LegacyGuidedReduceShader
+                        : LegacyReduceShader,
+                    _ => guided ? LegacyGuidedShader : LegacyShader
                 },
                 SimpleDdgiStoragePackingMode.Packed => role switch
                 {
-                    AuditPipelineRole.Reduce => PackedReduceShader,
-                    _ => PackedShader
+                    AuditPipelineRole.Reduce => guided
+                        ? PackedGuidedReduceShader
+                        : PackedReduceShader,
+                    _ => guided ? PackedGuidedShader : PackedShader
                 },
                 _ => role switch
                 {
-                    AuditPipelineRole.Reduce => ValidateReduceShader,
-                    _ => ValidateShader
+                    AuditPipelineRole.Reduce => guided
+                        ? ValidateGuidedReduceShader
+                        : ValidateReduceShader,
+                    _ => guided ? ValidateGuidedShader : ValidateShader
                 }
             };
             return GetOrCreatePipeline(shaderName);

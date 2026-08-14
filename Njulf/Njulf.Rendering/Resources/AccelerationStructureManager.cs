@@ -176,6 +176,8 @@ namespace Njulf.Rendering.Resources
         private PreparedRayScene? _preparedRayScene;
         private StaticOpaqueInstance[] _publishedRaySceneInstances =
             Array.Empty<StaticOpaqueInstance>();
+        private CoreBoundingBox _publishedRaySceneBounds;
+        private bool _publishedRaySceneBoundsValid;
         private ulong _publishedRaySceneContentRevision;
         private ulong _publishedTlasInstanceSignature;
         private ulong _dynamicBlasBytes;
@@ -1666,6 +1668,27 @@ namespace Njulf.Rendering.Resources
             ulong topLevelInstanceSignature)
         {
             _publishedRaySceneInstances = instances.ToArray();
+            _publishedRaySceneBoundsValid = false;
+            for (int index = 0; index < _publishedRaySceneInstances.Length; index++)
+            {
+                CoreBoundingBox instanceBounds =
+                    GetInstanceWorldBounds(_publishedRaySceneInstances[index]);
+                if (!IsFinite(instanceBounds.Min) || !IsFinite(instanceBounds.Max))
+                    continue;
+                if (!_publishedRaySceneBoundsValid)
+                {
+                    _publishedRaySceneBounds = instanceBounds;
+                    _publishedRaySceneBoundsValid = true;
+                    continue;
+                }
+
+                _publishedRaySceneBounds.Min = CoreVector3.Min(
+                    _publishedRaySceneBounds.Min,
+                    instanceBounds.Min);
+                _publishedRaySceneBounds.Max = CoreVector3.Max(
+                    _publishedRaySceneBounds.Max,
+                    instanceBounds.Max);
+            }
             _publishedRaySceneContentRevision = sceneContentRevision;
             _publishedTlasInstanceSignature = topLevelInstanceSignature;
         }
@@ -1673,6 +1696,8 @@ namespace Njulf.Rendering.Resources
         private void ClearPublishedRaySceneInstances()
         {
             _publishedRaySceneInstances = Array.Empty<StaticOpaqueInstance>();
+            _publishedRaySceneBounds = default;
+            _publishedRaySceneBoundsValid = false;
             _publishedRaySceneContentRevision = 0UL;
             _publishedTlasInstanceSignature = 0UL;
         }
@@ -1746,6 +1771,11 @@ namespace Njulf.Rendering.Resources
                 return false;
             }
         }
+
+        private static bool IsFinite(CoreVector3 value) =>
+            float.IsFinite(value.X) &&
+            float.IsFinite(value.Y) &&
+            float.IsFinite(value.Z);
 
         private bool TryGetRayQueryMaterial(
             object? material,
@@ -4264,6 +4294,9 @@ namespace Njulf.Rendering.Resources
                     : !string.IsNullOrEmpty(coverageFailure)
                         ? coverageFailure
                     : $"ray-scene geometry categories are unqualified: required={_preparedRaySceneRequirement.RequiredCategories}, supported={_preparedRaySceneSupportedCategories}";
+            RaySceneGeometryCategory proxyCategories = admitted &
+                (RaySceneGeometryCategory.FoliageOpaque |
+                 RaySceneGeometryCategory.FoliageAlphaTested);
             _readinessSnapshot = new RaySceneReadinessSnapshot(
                 requested,
                 requirementsComplete ? requested : RaySceneConsumer.None,
@@ -4271,7 +4304,23 @@ namespace Njulf.Rendering.Resources
                 complete,
                 requirementsComplete ? unchecked((uint)Math.Max(1UL, _resourceGeneration)) : 0u,
                 requirementsComplete ? _raySceneContentEpoch : 0UL,
-                failureDetail);
+                failureDetail)
+            {
+                CoverageMinimum = requirementsComplete &&
+                    _publishedRaySceneBoundsValid
+                        ? _publishedRaySceneBounds.Min
+                        : default,
+                CoverageMaximum = requirementsComplete &&
+                    _publishedRaySceneBoundsValid
+                        ? _publishedRaySceneBounds.Max
+                        : default,
+                ExactCategories = requirementsComplete
+                    ? admitted & ~proxyCategories
+                    : RaySceneGeometryCategory.None,
+                ProxyCategories = requirementsComplete
+                    ? proxyCategories
+                    : RaySceneGeometryCategory.None
+            };
         }
 
         internal static string BuildRaySceneCoverageFailureDetail(

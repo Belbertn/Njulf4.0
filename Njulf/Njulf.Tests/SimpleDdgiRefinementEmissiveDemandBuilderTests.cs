@@ -156,6 +156,153 @@ public sealed class SimpleDdgiRefinementEmissiveDemandBuilderTests
             Is.EqualTo(expected));
     }
 
+    [TestCase(
+        SimpleDdgiTransportRecoveryAction.None,
+        SimpleDdgiTransportPhase.AuditFrozen,
+        false)]
+    [TestCase(
+        SimpleDdgiTransportRecoveryAction.AdvanceSolveEpoch,
+        SimpleDdgiTransportPhase.AcceleratedSolve,
+        false)]
+    [TestCase(
+        SimpleDdgiTransportRecoveryAction.ReconcileParticipants,
+        SimpleDdgiTransportPhase.ParticipantReconciliation,
+        true)]
+    [TestCase(
+        SimpleDdgiTransportRecoveryAction.RepairSourceCache,
+        SimpleDdgiTransportPhase.SourceRepair,
+        true)]
+    [TestCase(
+        SimpleDdgiTransportRecoveryAction.RebuildPrivateField,
+        SimpleDdgiTransportPhase.FailClosedRecovery,
+        true)]
+    public void PublicationContinuity_RevokesOnlyForDestructiveRecovery(
+        SimpleDdgiTransportRecoveryAction action,
+        SimpleDdgiTransportPhase phase,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiRefinementPublication.RequiresPublicationRevocation(
+                action,
+                phase),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void PublicationState_RetainsCertifiedFieldAcrossRoutineRecertification()
+    {
+        var state = new SimpleDdgiRefinementPublicationState();
+        SimpleDdgiTransportGenerations certified = Generations(
+            sourceEpoch: 5u,
+            canonicalField: 7u,
+            solve: 2u,
+            audit: 2u);
+        SimpleDdgiTransportGenerations routineResample = Generations(
+            sourceLighting: 4u,
+            sourceEpoch: 6u,
+            canonicalField: 8u,
+            solve: 4u,
+            audit: 4u);
+
+        bool beforeCertificate = state.Resolve(
+            false, false, true, false, false, Identity(certified));
+        bool certifiedPublished = state.Resolve(
+            false, false, true, true, false, Identity(certified));
+        bool retainedDuringAudit = state.Resolve(
+            false, false, true, false, false, Identity(routineResample));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(beforeCertificate, Is.False);
+            Assert.That(certifiedPublished, Is.True);
+            Assert.That(retainedDuringAudit, Is.True);
+            Assert.That(state.IsRetainingCertifiedAuthority, Is.True);
+        });
+    }
+
+    [TestCase("invalidation")]
+    [TestCase("topology")]
+    [TestCase("recovery")]
+    [TestCase("lighting")]
+    [TestCase("source-calibration")]
+    public void PublicationState_RevokesContinuityForRealInvalidation(
+        string boundary)
+    {
+        var state = new SimpleDdgiRefinementPublicationState();
+        SimpleDdgiTransportGenerations certified = Generations();
+        Assert.That(
+            state.Resolve(
+                false,
+                false,
+                true,
+                true,
+                false,
+                Identity(certified)),
+            Is.True);
+
+        SimpleDdgiTransportGenerations current = certified with
+        {
+            SourceEpoch = 12u,
+            CanonicalField = 13u
+        };
+        SimpleDdgiRefinementPublicationIdentity currentIdentity =
+            boundary == "lighting"
+                ? Identity(current, lightingSignature: 99u)
+                : boundary == "source-calibration"
+                    ? Identity(current, sourceCalibrationSignature: 99u)
+                : Identity(current);
+        bool authority = state.Resolve(
+            transactionHasInvalidation: boundary == "invalidation",
+            topologyChangedThisFrame: boundary == "topology",
+            tailCertificationEnabled: true,
+            currentTailCertificate: false,
+            recoveryActive: boundary == "recovery",
+            currentIdentity);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(authority, Is.False);
+            Assert.That(state.IsRetainingCertifiedAuthority, Is.False);
+            Assert.That(
+                state.Resolve(
+                    false,
+                    false,
+                    true,
+                    false,
+                    false,
+                    currentIdentity),
+                Is.False,
+                "A revoked field must wait for a new current certificate.");
+        });
+    }
+
+    private static SimpleDdgiRefinementPublicationIdentity Identity(
+        SimpleDdgiTransportGenerations generations,
+        ulong lightingSignature = 10u,
+        ulong sourceCalibrationSignature = 11u) =>
+        SimpleDdgiRefinementPublicationIdentity.From(
+            generations,
+            lightingSignature,
+            sourceCalibrationSignature);
+
+    private static SimpleDdgiTransportGenerations Generations(
+        uint sourceLighting = 3u,
+        uint sourceEpoch = 5u,
+        uint canonicalField = 7u,
+        uint solve = 2u,
+        uint audit = 2u) =>
+        new(
+            VolumeTable: 1u,
+            PhysicalOwnership: 2u,
+            SourceLighting: sourceLighting,
+            SourceEpoch: sourceEpoch,
+            TransportOperator: 4u,
+            CanonicalField: canonicalField,
+            Solve: solve,
+            Audit: audit,
+            Queue: 8u,
+            SchedulerResources: 9u);
+
     private static GPUDdgiEmissiveSource Triangle(
         Vector3 origin,
         Vector3 edge1,

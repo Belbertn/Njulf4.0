@@ -4,6 +4,7 @@ using Njulf.Core.Animation;
 using Njulf.Core.Geometry;
 using Njulf.Core.Math;
 using Njulf.Assets.Validation;
+using Njulf.Core.Scene;
 
 namespace Njulf.Assets.Cooked;
 
@@ -29,7 +30,11 @@ public sealed record CookedModelManifest(
     CookedAssetReference? Animation,
     IReadOnlyList<CookedModelSubObject> SubObjects,
     BoundingBox BoundingBox,
-    BoundingSphere BoundingSphere);
+    BoundingSphere BoundingSphere)
+{
+    public IReadOnlyList<ModelLightDefinition> Lights { get; init; } =
+        Array.Empty<ModelLightDefinition>();
+}
 
 public sealed record CookedSubMeshRecord(
     string Name,

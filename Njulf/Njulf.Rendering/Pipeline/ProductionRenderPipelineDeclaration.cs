@@ -22,6 +22,8 @@ internal sealed class ProductionRenderPipelineDeclaration
         "MotionVectorPass",
         "HiZBuildPass",
         "DirectionalRayShadowPass",
+        "DirectionalShadowTemporalPass",
+        "DirectionalShadowSpatialPass",
         "ForwardVisibilityCompactionPass",
         "AmbientOcclusionPass",
         "AmbientOcclusionBlurPass",
@@ -237,6 +239,9 @@ internal sealed class ProductionRenderPipelineDeclaration
             Pass("MotionVectorPass",
             ReadDepth(RenderGraphResourceId.SceneDepth),
             Read(RenderGraphResourceId.SceneSubmissionBuffers),
+            WriteGraphicsStorage(
+                RenderGraphResourceId.DirectionalShadowScratch,
+                RenderGraphHistoryBindingSelection.Current),
             WriteColorAttachment(RenderGraphResourceId.MotionVectors)),
             Pass("HiZBuildPass",
             ReadComputeDepth(RenderGraphResourceId.SceneDepth),
@@ -249,7 +254,36 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
             ReadComputeSampled(RenderGraphResourceId.MaterialTextures),
             WriteTransferAndComputeBuffer(
-                RenderGraphResourceId.DirectionalRayShadowMask)),
+                RenderGraphResourceId.DirectionalRayShadowMask),
+            WriteComputeBuffer(
+                RenderGraphResourceId.DirectionalShadowRaw,
+                RenderGraphHistoryBindingSelection.Current),
+            ReadWriteComputeBuffer(RenderGraphResourceId.DirectionalShadowCounters)),
+            Pass("DirectionalShadowTemporalPass",
+            ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+            ReadComputeSampled(RenderGraphResourceId.MotionVectors),
+            ReadComputeBuffer(
+                RenderGraphResourceId.DirectionalShadowRaw,
+                RenderGraphHistoryBindingSelection.Current),
+            ReadComputeBuffer(
+                RenderGraphResourceId.DirectionalShadowScratch,
+                RenderGraphHistoryBindingSelection.Current),
+            ReadComputeBuffer(
+                RenderGraphResourceId.DirectionalShadowHistory,
+                RenderGraphHistoryBindingSelection.Previous),
+            WriteComputeBuffer(
+                RenderGraphResourceId.DirectionalShadowHistory,
+                RenderGraphHistoryBindingSelection.Current),
+            ReadWriteComputeBuffer(RenderGraphResourceId.DirectionalShadowDiagnostics),
+            ReadWriteComputeBuffer(RenderGraphResourceId.DirectionalShadowCounters)),
+            Pass("DirectionalShadowSpatialPass",
+            ReadComputeBuffer(
+                RenderGraphResourceId.DirectionalShadowHistory,
+                RenderGraphHistoryBindingSelection.Current),
+            ReadWriteComputeBuffer(RenderGraphResourceId.DirectionalShadowRaw),
+            ReadWriteComputeBuffer(RenderGraphResourceId.DirectionalShadowScratch),
+            WriteTransferAndComputeBuffer(RenderGraphResourceId.DirectionalRayShadowMask),
+            ReadWriteComputeBuffer(RenderGraphResourceId.DirectionalShadowCounters)),
             Pass("ForwardVisibilityCompactionPass",
             ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
             ReadComputeBuffer(RenderGraphResourceId.SceneSubmissionBuffers),
@@ -313,6 +347,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 Read(RenderGraphResourceId.SpotShadowAtlas),
                 Read(RenderGraphResourceId.PointShadowCubemapArray),
                 ReadGraphicsStorage(RenderGraphResourceId.DirectionalRayShadowMask),
+                ReadGraphicsStorage(RenderGraphResourceId.DirectionalShadowHistory),
+                ReadGraphicsStorage(RenderGraphResourceId.DirectionalShadowDiagnostics),
                 Read(RenderGraphResourceId.ReflectionProbeCubemaps),
                 Read(RenderGraphResourceId.EnvironmentMaps),
                 ReadGraphicsStorage(RenderGraphResourceId.MeshGeometryBuffers),
@@ -497,7 +533,13 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
             Pass("TransparentForwardPass",
             ReadDepth(RenderGraphResourceId.SceneDepth),
+            ReadFragmentAccelerationStructure(RenderGraphResourceId.TlasStorage),
+            ReadGraphicsStorage(RenderGraphResourceId.RayQueryInstanceMetadata),
             Read(RenderGraphResourceId.DirectionalShadowMap),
+            ReadGraphicsStorage(RenderGraphResourceId.DirectionalRayShadowMask),
+            ReadGraphicsStorage(RenderGraphResourceId.DirectionalShadowHistory),
+            ReadGraphicsStorage(RenderGraphResourceId.DirectionalShadowDiagnostics),
+            ReadWriteGraphicsStorage(RenderGraphResourceId.DirectionalShadowCounters),
             Read(RenderGraphResourceId.SpotShadowAtlas),
             Read(RenderGraphResourceId.PointShadowCubemapArray),
             Read(RenderGraphResourceId.ReflectionProbeCubemaps),
@@ -521,7 +563,13 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
             Pass("WeightedTransparentPass",
             ReadDepth(RenderGraphResourceId.SceneDepth),
+            ReadFragmentAccelerationStructure(RenderGraphResourceId.TlasStorage),
+            ReadGraphicsStorage(RenderGraphResourceId.RayQueryInstanceMetadata),
             Read(RenderGraphResourceId.DirectionalShadowMap),
+            ReadGraphicsStorage(RenderGraphResourceId.DirectionalRayShadowMask),
+            ReadGraphicsStorage(RenderGraphResourceId.DirectionalShadowHistory),
+            ReadGraphicsStorage(RenderGraphResourceId.DirectionalShadowDiagnostics),
+            ReadWriteGraphicsStorage(RenderGraphResourceId.DirectionalShadowCounters),
             Read(RenderGraphResourceId.SpotShadowAtlas),
             Read(RenderGraphResourceId.PointShadowCubemapArray),
             Read(RenderGraphResourceId.ReflectionProbeCubemaps),
@@ -902,6 +950,11 @@ internal sealed class ProductionRenderPipelineDeclaration
             BufferSetResource(RenderGraphResourceId.DdgiFoliageProxyGeometry, "DDGI foliage proxy AS geometry"),
             BufferSetResource(RenderGraphResourceId.DynamicBlasStorage, "Dynamic DDGI BLAS storage"),
             BufferSetResource(RenderGraphResourceId.DirectionalRayShadowMask, "Directional ray-shadow mask buffers"),
+            BufferSetResource(RenderGraphResourceId.DirectionalShadowRaw, "Directional shadow raw visibility buffers"),
+            BufferSetResource(RenderGraphResourceId.DirectionalShadowHistory, "Directional shadow temporal history buffers"),
+            BufferSetResource(RenderGraphResourceId.DirectionalShadowScratch, "Directional shadow filter scratch buffers"),
+            BufferSetResource(RenderGraphResourceId.DirectionalShadowDiagnostics, "Directional shadow per-pixel diagnostics"),
+            BufferSetResource(RenderGraphResourceId.DirectionalShadowCounters, "Directional shadow aggregate counters"),
             OwnedImageResource(RenderGraphResourceId.FogOutput, "Fog output", RenderTargetManager.FoggedSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
             ImageResource(RenderGraphResourceId.DirectionalShadowMap, "Directional shadow map", depthFormat, RenderGraphResourceSizePolicy.ShadowMap),
             ImageResource(RenderGraphResourceId.SpotShadowAtlas, "Spot shadow atlas", depthFormat, RenderGraphResourceSizePolicy.ShadowMap),
@@ -1495,7 +1548,10 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphQueueIntent.Compute);
     }
 
-    private static RenderGraphResourceUsage ReadGraphicsStorage(RenderGraphResourceId resource)
+    private static RenderGraphResourceUsage ReadGraphicsStorage(
+        RenderGraphResourceId resource,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
     {
         return new RenderGraphResourceUsage(
             resource,
@@ -1505,6 +1561,19 @@ internal sealed class ProductionRenderPipelineDeclaration
             PipelineStageFlags2.VertexShaderBit |
             PipelineStageFlags2.FragmentShaderBit,
             AccessFlags2.ShaderStorageReadBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics,
+            HistoryBinding: historyBinding);
+    }
+
+    private static RenderGraphResourceUsage ReadFragmentAccelerationStructure(
+        RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.AccelerationStructureReadBitKhr,
             ImageLayout.Undefined,
             RenderGraphQueueIntent.Graphics);
     }
@@ -1521,6 +1590,21 @@ internal sealed class ProductionRenderPipelineDeclaration
             AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
             ImageLayout.Undefined,
             RenderGraphQueueIntent.Graphics);
+    }
+
+    private static RenderGraphResourceUsage WriteGraphicsStorage(
+        RenderGraphResourceId resource,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Write,
+            PipelineStageFlags2.FragmentShaderBit,
+            AccessFlags2.ShaderStorageWriteBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Graphics,
+            HistoryBinding: historyBinding);
     }
 
     private static RenderGraphResourceUsage ReadAccelerationStructureBuildInput(

@@ -248,7 +248,7 @@
       </SimpleDdgiGuidedShaderVariant>
       <SimpleDdgiGuidedShaderVariant Include="ddgi_simple_directional_project_guided.comp">
         <Source>ddgi_simple_directional_project.comp</Source>
-        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION=1</Defines>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_STAGED_GUIDING_PROJECTION=1 -DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
       </SimpleDdgiGuidedShaderVariant>
       <SimpleDdgiGuidingExtractShaderVariant Include="ddgi_guiding_extract_legacy.comp">
         <Source>ddgi_guiding_extract.comp</Source>
@@ -279,6 +279,24 @@
         <StorageMode>2</StorageMode>
         <Role>2</Role>
       </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_legacy_guided.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>2</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_validate_guided.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>2</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1 -DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_packed_guided.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>2</StorageMode>
+        <Role>2</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiAuditShaderVariant>
       <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_reduce_legacy.comp">
         <Source>ddgi_simple_transport_audit.comp</Source>
         <StorageMode>1</StorageMode>
@@ -294,6 +312,24 @@
         <Source>ddgi_simple_transport_audit.comp</Source>
         <StorageMode>2</StorageMode>
         <Role>3</Role>
+      </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_reduce_legacy_guided.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_reduce_validate_guided.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>1</StorageMode>
+        <Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTION_VALIDATION=1 -DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
+      </SimpleDdgiAuditShaderVariant>
+      <SimpleDdgiAuditShaderVariant Include="ddgi_simple_transport_audit_reduce_packed_guided.comp">
+        <Source>ddgi_simple_transport_audit.comp</Source>
+        <StorageMode>2</StorageMode>
+        <Role>3</Role>
+        <Defines>-DSIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT=1</Defines>
       </SimpleDdgiAuditShaderVariant>
       <!-- Admission's generic policy and mutually-exclusive tail source/solve
            policy share one source, but compile into separate native programs.
@@ -346,6 +382,18 @@
         <Source>forward.frag</Source>
       <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
       </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_near_field_direct_source_cache_required.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_near_field_direct_source_cache_required.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      </NearFieldDirectSourceShaderVariant>
       <!-- C4 receiver facts use a distinct two-attachment opaque MRT variant. -->
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_c4_receiver.frag">
         <Source>forward.frag</Source>
@@ -390,6 +438,30 @@
       <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_ddgi_b1.frag">
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_WEIGHTED_OIT=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <!-- Geometry decals are depth-backed overlays and can consume the same
+           current-frame low-frequency receiver cache as their opaque owner.
+           Keep this a separate native program so the exact sparse gather is
+           absent from the decal-only hot path. -->
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_ddgi_cache_required.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_ray.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_ray.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_WEIGHTED_OIT=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_transparent_ray_ddgi_b1.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
+      </ReceiverFeedbackGraphicsShaderVariant>
+      <ReceiverFeedbackGraphicsShaderVariant Include="forward_weighted_oit_ray_ddgi_b1.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_WEIGHTED_OIT=1 -DDIRECTIONAL_TRANSPARENT_RAY_QUERY=1 -DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>
       </ReceiverFeedbackGraphicsShaderVariant>
       <ReceiverFeedbackGraphicsShaderVariant Include="particle_b1.vert">
         <Source>particle.vert</Source>
@@ -452,7 +524,9 @@
       <NjulfShaderDebugOptions Condition="'$(NjulfShaderDebugInformation)' == 'true'">-gVS</NjulfShaderDebugOptions>
       <NjulfShaderDetailedDiagnosticsOptions>-DNJULF_DDGI_DETAILED_COUNTERS=0</NjulfShaderDetailedDiagnosticsOptions>
       <NjulfShaderDetailedDiagnosticsOptions Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'DetailedInvestigation'">-DNJULF_DDGI_DETAILED_COUNTERS=1</NjulfShaderDetailedDiagnosticsOptions>
-      <NjulfShaderCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) $(NjulfShaderDetailedDiagnosticsOptions)</NjulfShaderCompileOptions>
+      <NjulfDirectionalShadowDetailedCountersOptions>-DNJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS=0</NjulfDirectionalShadowDetailedCountersOptions>
+      <NjulfDirectionalShadowDetailedCountersOptions Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'DetailedInvestigation'">-DNJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS=1</NjulfDirectionalShadowDetailedCountersOptions>
+      <NjulfShaderCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) $(NjulfShaderDetailedDiagnosticsOptions) $(NjulfDirectionalShadowDetailedCountersOptions)</NjulfShaderCompileOptions>
       <!-- B1 graphics variants already publish their own exact per-producer,
            overflow, validity, and timing telemetry. Combining that path with
            the much larger generic per-fragment investigation counter graph
@@ -460,7 +534,7 @@
            adds unrelated atomics to a measured producer. Keep the ordinary
            diagnostic variants available, but freeze B1 graphics to the
            production counter profile in every configuration. -->
-      <NjulfReceiverFeedbackGraphicsCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) -DNJULF_DDGI_DETAILED_COUNTERS=0</NjulfReceiverFeedbackGraphicsCompileOptions>
+      <NjulfReceiverFeedbackGraphicsCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) -DNJULF_DDGI_DETAILED_COUNTERS=0 -DNJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS=0</NjulfReceiverFeedbackGraphicsCompileOptions>
     </PropertyGroup>
 
     <Target Name="RemoveObsoleteGiShaderArtifacts"

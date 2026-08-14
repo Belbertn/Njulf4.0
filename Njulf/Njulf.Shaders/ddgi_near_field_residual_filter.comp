@@ -24,14 +24,15 @@ layout(push_constant) uniform NearFieldFilterPushBlock
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 extent = imageSize(filteredResidualOutput);
-    if (pixel.x >= extent.x || pixel.y >= extent.y ||
-        pixel.x >= int(pc.traceWidth) || pixel.y >= int(pc.traceHeight))
+    ivec2 extent = min(
+        ivec2(pc.traceWidth, pc.traceHeight),
+        imageSize(filteredResidualOutput));
+    if (pixel.x >= extent.x || pixel.y >= extent.y)
     {
         return;
     }
 
-    uint pixelIndex = uint(pixel.y) * uint(extent.x) + uint(pixel.x);
+    uint pixelIndex = uint(pixel.y) * pc.traceWidth + uint(pixel.x);
     if (pc.abiVersion != SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION ||
         pc.iterationCount > SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_ITERATIONS ||
         pc.iterationIndex >= pc.iterationCount ||
@@ -74,6 +75,9 @@ void main()
 
     vec3 weightedResidual = vec3(0.0);
     float weightedConfidence = 0.0;
+    float weightedLuminance = 0.0;
+    float weightedSquaredLuminance = 0.0;
+    float squaredWeightSum = 0.0;
     float weightSum = 0.0;
     int radius = int(pc.filterRadius);
     for (int y = -int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS);
@@ -92,7 +96,7 @@ void main()
             {
                 continue;
             }
-            uint neighbourIndex = uint(neighbourPixel.y) * uint(extent.x) +
+            uint neighbourIndex = uint(neighbourPixel.y) * pc.traceWidth +
                 uint(neighbourPixel.x);
             if (neighbourIndex >= uint(filterMetadata.values.length()))
                 continue;
@@ -104,7 +108,9 @@ void main()
             if (!SimpleDdgiNearFieldIsValidCandidate(neighbourResidual) ||
                 !SimpleDdgiNearFieldHasFlag(neighbour.packedFlags,
                     SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) ||
-                any(notEqual(neighbour.identity, centre.identity)))
+                any(notEqual(
+                    neighbour.receiverIdentity,
+                    centre.receiverIdentity)))
             {
                 continue;
             }
@@ -140,7 +146,9 @@ void main()
             }
 
             float depthWeight = SimpleDdgiNearFieldDepthWeight(
-                centre.hitDepth, neighbour.hitDepth, pc.depthTolerance);
+                centre.receiverDepth,
+                neighbour.receiverDepth,
+                pc.depthTolerance);
             float normalWeight = pow(clamp(normalDot, 0.0, 1.0),
                 max(pc.normalPower, 0.0));
             float spatialWeight = 1.0 / (1.0 + float(x * x + y * y));
@@ -151,19 +159,45 @@ void main()
 
             weightedResidual += neighbourResidual.rgb * weight;
             weightedConfidence += neighbourResidual.a * weight;
+            float neighbourLuminance = dot(neighbourResidual.rgb,
+                vec3(0.2126, 0.7152, 0.0722));
+            weightedLuminance += neighbourLuminance * weight;
+            weightedSquaredLuminance +=
+                neighbourLuminance * neighbourLuminance * weight;
+            squaredWeightSum += weight * weight;
             weightSum += weight;
         }
     }
 
     if (!SimpleDdgiNearFieldFinite(weightSum) || weightSum <= 0.0 ||
         !SimpleDdgiNearFieldFinite(weightedResidual) ||
-        !SimpleDdgiNearFieldFinite(weightedConfidence))
+        !SimpleDdgiNearFieldFinite(weightedConfidence) ||
+        !SimpleDdgiNearFieldFinite(weightedLuminance) ||
+        !SimpleDdgiNearFieldFinite(weightedSquaredLuminance) ||
+        !SimpleDdgiNearFieldFinite(squaredWeightSum) ||
+        squaredWeightSum <= 0.0)
     {
         imageStore(filteredResidualOutput, pixel, vec4(0.0));
         return;
     }
 
+    vec3 meanResidual = weightedResidual / weightSum;
+    float meanLuminance = weightedLuminance / weightSum;
+    float spatialVariance = max(
+        weightedSquaredLuminance / weightSum -
+            meanLuminance * meanLuminance,
+        0.0);
+    float effectiveSampleCount = weightSum * weightSum / squaredWeightSum;
+    float supportConfidence = SimpleDdgiNearFieldSmoothEvidence(
+        4.0, 12.0, effectiveSampleCount);
+    float signalConfidence = SimpleDdgiNearFieldSignalConfidence(
+        meanLuminance,
+        spatialVariance,
+        effectiveSampleCount,
+        SIMPLE_DDGI_NEAR_FIELD_SPATIAL_SNR_LOW,
+        SIMPLE_DDGI_NEAR_FIELD_SPATIAL_SNR_HIGH);
+    float spatialEvidence = supportConfidence * signalConfidence;
     imageStore(filteredResidualOutput, pixel, vec4(
-        weightedResidual / weightSum,
+        meanResidual * spatialEvidence,
         clamp(weightedConfidence / weightSum, 0.0, 1.0)));
 }

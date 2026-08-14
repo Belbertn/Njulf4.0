@@ -295,11 +295,13 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
             }
 
             uint expectedCandidates = checked((uint)(layout.TraceWidth * layout.TraceHeight));
+            ulong rayHits = words[10];
+            ulong rayMisses = words[11];
             if (coveredSum != expectedCandidates ||
                 validSum + invalidSum != expectedCandidates ||
                 words[8] != (uint)coveredSum || words[9] != (uint)raysLaunched ||
-                words[10] != (uint)validSum ||
-                words[11] != (uint)(raysLaunched - validSum) ||
+                rayHits > raysLaunched || rayHits > validSum ||
+                rayMisses != raysLaunched - rayHits ||
                 words[12] != (uint)invalidReceivers ||
                 words[13] != (uint)invalidRays ||
                 words[14] != (uint)invalidSum)
@@ -313,8 +315,8 @@ public static class SimpleDdgiNearFieldResidualCompletionValidator
                 new SimpleDdgiNearFieldResidualTraceTelemetry(
                     coveredSum,
                     raysLaunched,
-                    validSum,
-                    raysLaunched - validSum,
+                    rayHits,
+                    rayMisses,
                     screenExits,
                     invalidReceivers,
                     invalidRays,
@@ -660,6 +662,54 @@ public readonly record struct SimpleDdgiNearFieldResidualCaptureIdentifiers(
 }
 
 /// <summary>
+/// CPU-owned resolution-governor state paired with the fence-complete timing
+/// sample. SampledExtent names the dispatch measured by the current timings;
+/// ActiveExtent names the next dispatch extent after applying that sample.
+/// </summary>
+public readonly record struct SimpleDdgiNearFieldResidualAdaptiveResolutionTelemetry(
+    SimpleDdgiNearFieldResidualExecutionExtent SampledExtent,
+    SimpleDdgiNearFieldResidualExecutionExtent ActiveExtent,
+    SimpleDdgiNearFieldResidualExecutionScale MaximumScale,
+    ulong LastP95Microseconds,
+    ulong AuthoritativeTimingSampleCount,
+    uint WindowSampleCount,
+    uint PromotionWindowStreak,
+    uint PromotionCount,
+    uint DemotionCount,
+    bool ResolutionChangedAfterSample)
+{
+    public static SimpleDdgiNearFieldResidualAdaptiveResolutionTelemetry Empty { get; } =
+        default;
+
+    [JsonIgnore]
+    public bool IsValid =>
+        ActiveExtent.IsValid &&
+        Enum.IsDefined(ActiveExtent.Scale) &&
+        Enum.IsDefined(MaximumScale) &&
+        ActiveExtent.Scale <= MaximumScale &&
+        (!SampledExtent.IsValid || Enum.IsDefined(SampledExtent.Scale));
+
+    public SimpleDdgiNearFieldResidualAdaptiveResolutionTelemetry Normalize()
+    {
+        if (!IsValid)
+            return Empty;
+
+        return this with
+        {
+            WindowSampleCount = Math.Min(
+                WindowSampleCount,
+                (uint)SimpleDdgiNearFieldResidualAdaptiveResolution.SampleWindowSize),
+            PromotionWindowStreak = Math.Min(
+                PromotionWindowStreak,
+                (uint)SimpleDdgiNearFieldResidualAdaptiveResolution.PromotionWindowCount),
+            ResolutionChangedAfterSample =
+                ResolutionChangedAfterSample && SampledExtent.IsValid &&
+                SampledExtent != ActiveExtent
+        };
+    }
+}
+
+/// <summary>
 /// Persisted C5 observability contract. It is intentionally a data boundary:
 /// the renderer publishes only common-frame, fence-complete pass/readback
 /// evidence; a pre-integration plan remains explicitly pending rather than a
@@ -676,7 +726,11 @@ public sealed record SimpleDdgiNearFieldResidualDiagnostics(
     SimpleDdgiNearFieldResidualTileTelemetry Tiles,
     SimpleDdgiNearFieldResidualCaptureIdentifiers CaptureIdentifiers)
 {
-    public const uint CurrentContractVersion = 1U;
+    public const uint CurrentContractVersion = 2U;
+
+    public SimpleDdgiNearFieldResidualAdaptiveResolutionTelemetry
+        AdaptiveResolution { get; init; } =
+            SimpleDdgiNearFieldResidualAdaptiveResolutionTelemetry.Empty;
 
     [JsonIgnore]
     public bool IsAuthoritativeReadback => Readback.IsAuthoritative;
@@ -857,7 +911,10 @@ public sealed record SimpleDdgiNearFieldResidualDiagnostics(
                     ? ResidualEnergy
                     : SimpleDdgiNearFieldResidualEnergyTelemetry.Empty,
                 countersAreValid ? Tiles : SimpleDdgiNearFieldResidualTileTelemetry.Empty,
-                SimpleDdgiNearFieldResidualCaptureIdentifiers.None);
+                SimpleDdgiNearFieldResidualCaptureIdentifiers.None)
+            {
+                AdaptiveResolution = AdaptiveResolution.Normalize()
+            };
         }
 
         if (!History.HasFiniteStatistics || !ResidualEnergy.HasFiniteStatistics)
@@ -885,6 +942,7 @@ public sealed record SimpleDdgiNearFieldResidualDiagnostics(
             ContractVersion = CurrentContractVersion,
             Readback = readback,
             Memory = memory,
+            AdaptiveResolution = AdaptiveResolution.Normalize(),
             CaptureIdentifiers = CaptureIdentifiers.Normalize()
         };
     }

@@ -10,14 +10,16 @@ namespace Njulf.Tests;
 public sealed class LightGpuPackingTests
 {
     [Test]
-    public void GpuLight_ShadowMetadataKeepsTheExistingSixtyFourByteLayout()
+    public void GpuLight_AppendsAttenuationMetadataToExistingShadowLayout()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(64));
+            Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(80));
             Assert.That(Marshal.OffsetOf<GPULight>(nameof(GPULight.ShadowFlags)).ToInt32(), Is.EqualTo(52));
             Assert.That(Marshal.OffsetOf<GPULight>(nameof(GPULight.ShadowStrength)).ToInt32(), Is.EqualTo(56));
             Assert.That(Marshal.OffsetOf<GPULight>(nameof(GPULight.Padding0)).ToInt32(), Is.EqualTo(60));
+            Assert.That(Marshal.OffsetOf<GPULight>(nameof(GPULight.InnerSpotAngle)).ToInt32(), Is.EqualTo(64));
+            Assert.That(Marshal.OffsetOf<GPULight>(nameof(GPULight.AttenuationQuadratic)).ToInt32(), Is.EqualTo(76));
         });
     }
 

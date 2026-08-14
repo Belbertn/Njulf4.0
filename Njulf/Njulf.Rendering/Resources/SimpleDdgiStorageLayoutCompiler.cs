@@ -44,6 +44,11 @@ public readonly record struct SimpleDdgiTransportCacheRegionRequest(
     /// not fetch surface response words.
     /// </summary>
     public bool UseHotColdLayout { get; init; }
+    /// <summary>
+    /// Appends one packed F0/roughness word to each probe-local ray block.
+    /// The ordinary cache record ABI and stride remain byte-identical.
+    /// </summary>
+    public bool UseRecursiveGlossySidecar { get; init; }
 }
 
 /// <summary>Authoritative byte and address contract for one volume cache region.</summary>
@@ -67,6 +72,17 @@ public readonly record struct SimpleDdgiTransportCacheRegion(
     public ulong EndWord => checked(BaseWord + ByteCount / sizeof(uint));
     public bool UsesFp16Distance => Format == SimpleDdgiTransportCacheFormat.Compact24;
     public bool UsesHotColdLayout { get; init; }
+    public ulong OrdinaryRecordBytes { get; init; }
+    public ulong GlossyMaterialSidecarBytes { get; init; }
+    /// <summary>
+    /// First probe's sidecar base. Every probe owns an interleaved block of
+    /// ordinary ray records followed by one packed material word per ray.
+    /// </summary>
+    public ulong GlossyMaterialSidecarBaseWord { get; init; }
+    public bool UsesRecursiveGlossySidecar { get; init; }
+    public ulong WordsPerProbe => checked(
+        (ulong)(uint)RaysPerProbe *
+        (ulong)(uint)(StrideWords + (UsesRecursiveGlossySidecar ? 1 : 0)));
 }
 
 /// <summary>
@@ -88,6 +104,7 @@ public sealed record SimpleDdgiStorageLayout(
     int Compact24RayCount,
     ulong Fingerprint)
 {
+    public ulong GlossyMaterialSidecarBytes { get; init; }
     public static SimpleDdgiStorageLayout Empty(
         SimpleDdgiStoragePackingMode mode = SimpleDdgiStoragePackingMode.Packed) =>
         new(
@@ -178,6 +195,7 @@ public sealed record SimpleDdgiStorageDiagnostics(
     public ulong SourceCacheAdmissionLayoutIdentity { get; init; }
     public bool SourceCacheAdmissionHasCompletedSample { get; init; }
     public ulong SourceCacheAdmissionSampleFrameSerial { get; init; }
+    public ulong SourceCacheGlossyMaterialSidecarBytes { get; init; }
 
     public static SimpleDdgiStorageDiagnostics Unavailable { get; } = new(
         false,
@@ -208,6 +226,7 @@ public static class SimpleDdgiStorageLayoutCompiler
     public const int Compact24StrideWords = 6;
     public const int LegacyScratchStrideWords = 8;
     public const int PackedScratchStrideWords = 5;
+    public const uint RecursiveGlossySidecarFlag = 1u << 17;
     public const float MaximumFiniteHalf = 65_504.0f;
     internal const ulong InitialFingerprint = 14695981039346656037UL;
     private const ulong FingerprintPrime = 1099511628211UL;
@@ -242,9 +261,7 @@ public static class SimpleDdgiStorageLayoutCompiler
         try
         {
             ulong localProbeIndex = physical - physicalFirst;
-            ulong wordsPerProbe = checked(
-                (ulong)(uint)region.RaysPerProbe *
-                (ulong)(uint)region.StrideWords);
+            ulong wordsPerProbe = region.WordsPerProbe;
             ulong probeBaseWord = checked(
                 region.BaseWord + localProbeIndex * wordsPerProbe);
             ulong probeEndWord = checked(probeBaseWord + wordsPerProbe);
@@ -277,6 +294,7 @@ public static class SimpleDdgiStorageLayoutCompiler
         ulong legacyBytes = 0UL;
         ulong compact28Bytes = 0UL;
         ulong compact24Bytes = 0UL;
+        ulong glossyMaterialSidecarBytes = 0UL;
         ulong paddingBytes = 0UL;
         int legacyRays = 0;
         int compact28Rays = 0;
@@ -381,7 +399,12 @@ public static class SimpleDdgiStorageLayoutCompiler
             ulong regionPadding = checked((alignedCursor - cursorWords) * sizeof(uint));
             ulong rayCount = checked(
                 (ulong)request.PhysicalProbeCount * (ulong)request.RaysPerProbe);
-            ulong bytes = checked(rayCount * (ulong)strideWords * sizeof(uint));
+            ulong ordinaryBytes = checked(
+                rayCount * (ulong)strideWords * sizeof(uint));
+            ulong glossyBytes = request.UseRecursiveGlossySidecar
+                ? checked(rayCount * sizeof(uint))
+                : 0UL;
+            ulong bytes = checked(ordinaryBytes + glossyBytes);
             ulong endWord = checked(alignedCursor + bytes / sizeof(uint));
             if (alignedCursor > uint.MaxValue ||
                 endWord > (ulong)uint.MaxValue + 1UL)
@@ -407,24 +430,34 @@ public static class SimpleDdgiStorageLayoutCompiler
                 maximumDecodedError,
                 distanceDecision)
             {
-                UsesHotColdLayout = request.UseHotColdLayout
+                UsesHotColdLayout = request.UseHotColdLayout,
+                OrdinaryRecordBytes = ordinaryBytes,
+                GlossyMaterialSidecarBytes = glossyBytes,
+                GlossyMaterialSidecarBaseWord = checked(
+                    alignedCursor +
+                    (ulong)(uint)request.RaysPerProbe *
+                    (ulong)(uint)strideWords),
+                UsesRecursiveGlossySidecar =
+                    request.UseRecursiveGlossySidecar
             };
             regions.Add(region);
             cursorWords = endWord;
             paddingBytes = checked(paddingBytes + regionPadding);
+            glossyMaterialSidecarBytes = checked(
+                glossyMaterialSidecarBytes + glossyBytes);
 
             switch (format)
             {
                 case SimpleDdgiTransportCacheFormat.Legacy36:
-                    legacyBytes = checked(legacyBytes + bytes);
+                    legacyBytes = checked(legacyBytes + ordinaryBytes);
                     legacyRays = checked(legacyRays + boundedRayCount);
                     break;
                 case SimpleDdgiTransportCacheFormat.Compact28:
-                    compact28Bytes = checked(compact28Bytes + bytes);
+                    compact28Bytes = checked(compact28Bytes + ordinaryBytes);
                     compact28Rays = checked(compact28Rays + boundedRayCount);
                     break;
                 case SimpleDdgiTransportCacheFormat.Compact24:
-                    compact24Bytes = checked(compact24Bytes + bytes);
+                    compact24Bytes = checked(compact24Bytes + ordinaryBytes);
                     compact24Rays = checked(compact24Rays + boundedRayCount);
                     break;
             }
@@ -452,6 +485,12 @@ public static class SimpleDdgiStorageLayoutCompiler
             fingerprint = Add(fingerprint, alignedCursor);
             fingerprint = Add(fingerprint, checked((uint)strideWords));
             fingerprint = Add(fingerprint, request.UseHotColdLayout ? 1u : 0u);
+            fingerprint = Add(
+                fingerprint,
+                request.UseRecursiveGlossySidecar ? 1u : 0u);
+            fingerprint = Add(
+                fingerprint,
+                region.GlossyMaterialSidecarBaseWord);
         }
 
         ulong sourceBytes = Math.Max(
@@ -474,7 +513,10 @@ public static class SimpleDdgiStorageLayoutCompiler
             legacyRays,
             compact28Rays,
             compact24Rays,
-            fingerprint);
+            fingerprint)
+        {
+            GlossyMaterialSidecarBytes = glossyMaterialSidecarBytes
+        };
     }
 
     public static float ResolveMaximumTraceDistance(
@@ -582,7 +624,8 @@ public static class SimpleDdgiStorageLayoutCompiler
         bool visibilityMirrorPresent,
         SimpleDdgiStorageAbiVersion abiVersion,
         uint directionCodebookVersion = DirectionCodebookVersion,
-        bool hotColdLayout = false)
+        bool hotColdLayout = false,
+        bool recursiveGlossySidecar = false)
     {
         if (format == SimpleDdgiTransportCacheFormat.Invalid)
             throw new ArgumentOutOfRangeException(nameof(format));
@@ -605,7 +648,8 @@ public static class SimpleDdgiStorageLayoutCompiler
             (visibilityMirrorPresent ? 1u << 3 : 0u) |
             (((uint)abiVersion & 0x0fu) << 4) |
             ((directionCodebookVersion & 0xffu) << 8) |
-            (hotColdLayout ? SimpleDdgiHotColdCacheLayout.LayoutFlag : 0u);
+            (hotColdLayout ? SimpleDdgiHotColdCacheLayout.LayoutFlag : 0u) |
+            (recursiveGlossySidecar ? RecursiveGlossySidecarFlag : 0u);
     }
 
     public static ulong AlignWords(ulong value, int alignmentWords)

@@ -9,11 +9,17 @@
 // sidecars because widening/reinterpreting the record would invalidate every
 // recorded layout revision.
 
-const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_GPU_SORT_ABI_VERSION = 0xb1011004u;
+const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_GPU_SORT_ABI_VERSION = 0xb1011005u;
 const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_LAYOUT_REVISION = 0xb1010002u;
 
 const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_WORDS = 8u;
 const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_WORDS = 16u;
+const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_REFINEMENT_WITNESS_WORDS = 4u;
+const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_PREFIX_WORDS =
+    SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_WORDS +
+    SIMPLE_DDGI_RECEIVER_FEEDBACK_REFINEMENT_WITNESS_WORDS;
+const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_REFINEMENT_WITNESS_VERSION =
+    0xb101f001u;
 const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_LOCATOR_WORDS = 2u;
 const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_WORDS = 8u;
 const uint SIMPLE_DDGI_RECEIVER_FEEDBACK_FALLBACK_WORDS = 4u;
@@ -252,6 +258,12 @@ uint SimpleDdgiReceiverFeedbackScratchRequiredWords()
 uint SimpleDdgiReceiverFeedbackSummaryLocatorOffsetWords()
 {
     return SimpleDdgiReceiverFeedbackSummaryBankBaseWord() +
+        SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_PREFIX_WORDS;
+}
+
+uint SimpleDdgiReceiverFeedbackRefinementWitnessOffsetWords()
+{
+    return SimpleDdgiReceiverFeedbackSummaryBankBaseWord() +
         SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_WORDS;
 }
 
@@ -271,7 +283,7 @@ uint SimpleDdgiReceiverFeedbackFallbackPressureOffsetWords()
 
 uint SimpleDdgiReceiverFeedbackRequiredSummaryBankWords()
 {
-    return SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_WORDS +
+    return SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_PREFIX_WORDS +
         receiverFeedbackPc.summaryCapacity *
             (SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_LOCATOR_WORDS +
                 SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_WORDS) +
@@ -285,13 +297,13 @@ bool SimpleDdgiReceiverFeedbackTryRequiredSummaryBankWords(out uint requiredWord
     // Do not permit a malformed push block to wrap its computed partition
     // before the descriptor-length checks below.
     if (receiverFeedbackPc.summaryCapacity >
-        (0xffffffffu - SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_WORDS) /
+        (0xffffffffu - SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_PREFIX_WORDS) /
             (SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_LOCATOR_WORDS +
                 SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_WORDS))
     {
         return false;
     }
-    uint summaryWords = SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_WORDS +
+    uint summaryWords = SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_PREFIX_WORDS +
         receiverFeedbackPc.summaryCapacity *
             (SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_LOCATOR_WORDS +
                 SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_WORDS);
@@ -889,6 +901,34 @@ uint SimpleDdgiReceiverFeedbackSaturatingAdd(uint left, uint right, out bool ove
     uint result = left + right;
     overflow = result < left;
     return overflow ? 0xffffffffu : result;
+}
+
+uint SimpleDdgiReceiverFeedbackReadSummaryLocatorWord(
+    uint summaryIndex,
+    uint word)
+{
+    return ReadStorageWordUniform(SimpleDdgiReceiverFeedbackSummaryBuffer(),
+        SimpleDdgiReceiverFeedbackSummaryLocatorOffsetWords() +
+            summaryIndex * SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_LOCATOR_WORDS +
+            word);
+}
+
+uint SimpleDdgiReceiverFeedbackReadSummaryWord(
+    uint summaryIndex,
+    uint word)
+{
+    return ReadStorageWordUniform(SimpleDdgiReceiverFeedbackSummaryBuffer(),
+        SimpleDdgiReceiverFeedbackSummaryRecordOffsetWords() +
+            summaryIndex * SIMPLE_DDGI_RECEIVER_FEEDBACK_SUMMARY_WORDS + word);
+}
+
+void SimpleDdgiReceiverFeedbackWriteRefinementWitnessWord(
+    uint word,
+    uint value)
+{
+    WriteStorageWordUniform(SimpleDdgiReceiverFeedbackSummaryBuffer(),
+        SimpleDdgiReceiverFeedbackRefinementWitnessOffsetWords() + word,
+        value);
 }
 
 void SimpleDdgiReceiverFeedbackWriteSummaryLocator(

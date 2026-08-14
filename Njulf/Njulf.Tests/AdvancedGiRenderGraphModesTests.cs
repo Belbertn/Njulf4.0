@@ -98,7 +98,7 @@ public sealed class AdvancedGiRenderGraphModesTests
             DdgiOpacityMicromapMode.ExtFourStateExperiment,
             SimpleDdgiDirectionalGuidingMode.PerProbeHistogramExperiment,
             GiCausticMode.WorldCacheExperiment,
-            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive,
             AdvancedGiNearFieldGraphProfile.HalfResolutionReference);
         var order = production.CreatePassOrder(modes).ToList();
         var declarations = production.CreatePassResourceDeclarations(modes)
@@ -188,7 +188,7 @@ public sealed class AdvancedGiRenderGraphModesTests
             DdgiOpacityMicromapMode.Off,
             SimpleDdgiDirectionalGuidingMode.Off,
             GiCausticMode.WorldCacheExperiment,
-            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive,
             AdvancedGiNearFieldGraphProfile.HalfResolutionReference);
         var declarations = ProductionRenderPipelineDeclaration.Instance
             .CreatePassResourceDeclarations(modes)
@@ -235,7 +235,7 @@ public sealed class AdvancedGiRenderGraphModesTests
             DdgiOpacityMicromapMode.Off,
             SimpleDdgiDirectionalGuidingMode.Off,
             GiCausticMode.Off,
-            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive,
             AdvancedGiNearFieldGraphProfile.HalfResolutionReference);
         var declarations = ProductionRenderPipelineDeclaration.Instance
             .CreatePassResourceDeclarations(modes)
@@ -296,20 +296,20 @@ public sealed class AdvancedGiRenderGraphModesTests
     }
 
     [Test]
-    public void NearFieldGraph_AcceptsSupportedAdaptiveProfiles()
+    public void NearFieldGraph_AcceptsFixedAndAdaptiveProfiles()
     {
         var unbound = new AdvancedGiRenderGraphModes(
             SimpleDdgiReceiverFeedbackMode.Off,
             DdgiOpacityMicromapMode.Off,
             SimpleDdgiDirectionalGuidingMode.Off,
             GiCausticMode.Off,
-            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment);
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive);
         var quarter = new AdvancedGiRenderGraphModes(
             SimpleDdgiReceiverFeedbackMode.Off,
             DdgiOpacityMicromapMode.Off,
             SimpleDdgiDirectionalGuidingMode.Off,
             GiCausticMode.Off,
-            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive,
             new AdvancedGiNearFieldGraphProfile(
                 ResolutionScale: 0.25f,
                 SourceFormat: SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat,
@@ -392,7 +392,7 @@ public sealed class AdvancedGiRenderGraphModesTests
             DdgiOpacityMicromapMode.Off,
             SimpleDdgiDirectionalGuidingMode.Off,
             GiCausticMode.Off,
-            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive,
             AdvancedGiNearFieldGraphProfile.HalfResolutionReference with
             {
                 FilterIterationCount = 0
@@ -430,7 +430,7 @@ public sealed class AdvancedGiRenderGraphModesTests
             DdgiOpacityMicromapMode.Off,
             SimpleDdgiDirectionalGuidingMode.Off,
             GiCausticMode.Off,
-            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive,
             AdvancedGiNearFieldGraphProfile.HalfResolutionReference with
             {
                 FilterIterationCount = 3
@@ -471,7 +471,7 @@ public sealed class AdvancedGiRenderGraphModesTests
             DdgiOpacityMicromapMode.Off,
             SimpleDdgiDirectionalGuidingMode.Off,
             GiCausticMode.WorldCacheExperiment,
-            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive,
             AdvancedGiNearFieldGraphProfile.HalfResolutionReference);
         var descriptors = ProductionRenderPipelineDeclaration.Instance
             .CreateResourceDescriptors(Format.D32Sfloat, Format.B8G8R8A8Srgb, modes)

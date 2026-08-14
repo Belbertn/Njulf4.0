@@ -13,6 +13,74 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiVolumeManagerTests
 {
     [Test]
+    public void ReceiverFeedbackProbeFocus_ResolvesToroidalLogicalPositionAndRelocation()
+    {
+        var volume = new GPUSimpleDdgiVolume
+        {
+            OriginAndSpacing = new Vector4(10f, 20f, 30f, 2f),
+            GridCountsAndFirstProbe = new Vector4(3f, 2f, 2f, 5f),
+            // Physical offset (1, 0, 0) means physical slot x=1 maps to
+            // logical x=0 and physical slot x=0 maps to logical x=2.
+            RaysAndReserved = new Vector4(0f, 1f, 0f, 0f)
+        };
+        Vector3[] relocations = new Vector3[17];
+        relocations[5] = new Vector3(0.25f, -0.5f, 1f);
+
+        bool resolved = SimpleDdgiVolumeManager.TryResolveVirtualProbeWorldPosition(
+            [volume], relocations, true, 5u, out Vector3 position);
+        bool outside = SimpleDdgiVolumeManager.TryResolveVirtualProbeWorldPosition(
+            [volume], relocations, true, 17u, out _);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolved, Is.True);
+            Assert.That(position.X, Is.EqualTo(14.25f).Within(0.0001f));
+            Assert.That(position.Y, Is.EqualTo(19.5f).Within(0.0001f));
+            Assert.That(position.Z, Is.EqualTo(31f).Within(0.0001f));
+            Assert.That(outside, Is.False);
+        });
+    }
+
+    [Test]
+    public void ReceiverFeedbackProbeFocus_RefinementIdentityCannotDriveRefinementPlacement()
+    {
+        var baseVolume = new GPUSimpleDdgiVolume
+        {
+            OriginAndSpacing = new Vector4(1f, 2f, 3f, 1f),
+            GridCountsAndFirstProbe = new Vector4(1f, 1f, 1f, 0f),
+            WorldMaxAndKind = new Vector4(0f, 0f, 0f, 0f)
+        };
+        var refinementVolume = new GPUSimpleDdgiVolume
+        {
+            OriginAndSpacing = new Vector4(10f, 20f, 30f, 1f),
+            GridCountsAndFirstProbe = new Vector4(1f, 1f, 1f, 1f),
+            WorldMaxAndKind = new Vector4(0f, 0f, 0f, 3f)
+        };
+
+        bool baseResolved =
+            SimpleDdgiVolumeManager.TryResolveBaseVolumeVirtualProbeWorldPosition(
+                [baseVolume, refinementVolume],
+                ReadOnlySpan<Vector3>.Empty,
+                relocationReadbackValid: false,
+                virtualProbeId: 0u,
+                out Vector3 basePosition);
+        bool refinementResolved =
+            SimpleDdgiVolumeManager.TryResolveBaseVolumeVirtualProbeWorldPosition(
+                [baseVolume, refinementVolume],
+                ReadOnlySpan<Vector3>.Empty,
+                relocationReadbackValid: false,
+                virtualProbeId: 1u,
+                out _);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(baseResolved, Is.True);
+            Assert.That(basePosition, Is.EqualTo(new Vector3(1f, 2f, 3f)));
+            Assert.That(refinementResolved, Is.False);
+        });
+    }
+
+    [Test]
     public void SceneBoundsSnapshot_ReusesOnlyVersionedContentFromTheSameScene()
     {
         Assert.Multiple(() =>

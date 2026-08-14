@@ -3,6 +3,41 @@ using System;
 namespace Njulf.Rendering.Data;
 
 /// <summary>
+/// A non-negative RGB infinity-bound tuple used by the transport certificate.
+/// Keeping channels separate lets the proof use the actual recursive gain of
+/// each colour channel instead of pessimistically pairing the largest defect
+/// with the largest gain observed in a different channel.
+/// </summary>
+public readonly record struct SimpleDdgiTransportRgbBounds(
+    float Red,
+    float Green,
+    float Blue)
+{
+    public float Maximum => MathF.Max(Red, MathF.Max(Green, Blue));
+
+    public bool IsFiniteNonNegative =>
+        float.IsFinite(Red) && Red >= 0.0f &&
+        float.IsFinite(Green) && Green >= 0.0f &&
+        float.IsFinite(Blue) && Blue >= 0.0f;
+
+    public bool IsAtMost(float ceiling) =>
+        IsFiniteNonNegative &&
+        float.IsFinite(ceiling) &&
+        Red <= ceiling && Green <= ceiling && Blue <= ceiling;
+
+    public static SimpleDdgiTransportRgbBounds Broadcast(float value) =>
+        new(value, value, value);
+
+    public static SimpleDdgiTransportRgbBounds Max(
+        SimpleDdgiTransportRgbBounds left,
+        SimpleDdgiTransportRgbBounds right) =>
+        new(
+            MathF.Max(left.Red, right.Red),
+            MathF.Max(left.Green, right.Green),
+            MathF.Max(left.Blue, right.Blue));
+}
+
+/// <summary>
 /// The phase of the V2 transport state machine.  A field is only allowed to
 /// become <see cref="Certified"/> after a complete, generation-frozen audit.
 /// </summary>
@@ -139,6 +174,7 @@ public readonly record struct SimpleDdgiTransportGenerations(
 public readonly record struct SimpleDdgiTransportTailSummary
 {
     public const float MaximumCertifiedContraction = 0.99f;
+    public const uint PerChannelEvidenceVersion = 1u;
 
     public uint AuditEpoch { get; init; }
     public SimpleDdgiTransportGenerations Generations { get; init; }
@@ -175,6 +211,20 @@ public readonly record struct SimpleDdgiTransportTailSummary
     public float RelativeTailBound { get; init; }
     public float Tolerance { get; init; }
     public float CanonicalQuantizationFloor { get; init; }
+    /// <summary>
+    /// Zero denotes the conservative legacy scalar proof. Version one carries
+    /// independent RGB reductions and is required for new GPU audit readback.
+    /// The scalar fields remain the maxima for stable diagnostics and ABI
+    /// consumers.
+    /// </summary>
+    public uint ChannelEvidenceVersion { get; init; }
+    public SimpleDdgiTransportRgbBounds FixedPointDefectChannels { get; init; }
+    public SimpleDdgiTransportRgbBounds FieldMagnitudeChannels { get; init; }
+    public SimpleDdgiTransportRgbBounds ObservedContractionChannels { get; init; }
+    public SimpleDdgiTransportRgbBounds CertifiedContractionChannels { get; init; }
+    public SimpleDdgiTransportRgbBounds AbsoluteTailBoundChannels { get; init; }
+    public SimpleDdgiTransportRgbBounds RelativeTailBoundChannels { get; init; }
+    public SimpleDdgiTransportRgbBounds CanonicalQuantizationFloorChannels { get; init; }
     /// <summary>
     /// Probe selected from the highest compact defect bucket. This locates a
     /// representative maximum-defect site without weakening or replacing the
@@ -248,7 +298,24 @@ public readonly record struct SimpleDdgiTransportTailSummary
         Tolerance >= 0.0001f &&
         float.IsFinite(CanonicalQuantizationFloor) &&
         CanonicalQuantizationFloor >= 0.0f &&
-        ConfiguredContractionBound <= MaximumCertifiedContraction;
+        ConfiguredContractionBound <= MaximumCertifiedContraction &&
+        HasFiniteChannelEvidence;
+
+    public bool HasPerChannelEvidence =>
+        ChannelEvidenceVersion == PerChannelEvidenceVersion;
+
+    private bool HasFiniteChannelEvidence =>
+        ChannelEvidenceVersion == 0u ||
+        (HasPerChannelEvidence &&
+         FixedPointDefectChannels.IsFiniteNonNegative &&
+         FieldMagnitudeChannels.IsFiniteNonNegative &&
+         ObservedContractionChannels.IsAtMost(ConfiguredContractionBound) &&
+         CertifiedContractionChannels.IsAtMost(ConfiguredContractionBound) &&
+         ChannelsMatchCertifiedContraction() &&
+         AbsoluteTailBoundChannels.IsFiniteNonNegative &&
+         RelativeTailBoundChannels.IsFiniteNonNegative &&
+         CanonicalQuantizationFloorChannels.IsFiniteNonNegative &&
+         ScalarsMatchChannelMaxima());
 
     public bool IsCertified =>
         Reason == SimpleDdgiTransportCertificationReason.Certified &&
@@ -264,9 +331,68 @@ public readonly record struct SimpleDdgiTransportTailSummary
 
     private bool IsRecomputedTailConsistent()
     {
+        if (HasPerChannelEvidence)
+        {
+            SimpleDdgiTransportRgbBounds recomputed = new(
+                FixedPointDefectChannels.Red /
+                    MathF.Max(1.0f - CertifiedContractionChannels.Red, 1e-6f),
+                FixedPointDefectChannels.Green /
+                    MathF.Max(1.0f - CertifiedContractionChannels.Green, 1e-6f),
+                FixedPointDefectChannels.Blue /
+                    MathF.Max(1.0f - CertifiedContractionChannels.Blue, 1e-6f));
+            SimpleDdgiTransportRgbBounds recomputedRelative = new(
+                recomputed.Red / MathF.Max(FieldMagnitudeChannels.Red, 0.0001f),
+                recomputed.Green / MathF.Max(FieldMagnitudeChannels.Green, 0.0001f),
+                recomputed.Blue / MathF.Max(FieldMagnitudeChannels.Blue, 0.0001f));
+            return NearlyEqual(recomputed.Red, AbsoluteTailBoundChannels.Red) &&
+                NearlyEqual(recomputed.Green, AbsoluteTailBoundChannels.Green) &&
+                NearlyEqual(recomputed.Blue, AbsoluteTailBoundChannels.Blue) &&
+                NearlyEqual(recomputed.Maximum, AbsoluteTailBound) &&
+                NearlyEqual(
+                    recomputedRelative.Red,
+                    RelativeTailBoundChannels.Red) &&
+                NearlyEqual(
+                    recomputedRelative.Green,
+                    RelativeTailBoundChannels.Green) &&
+                NearlyEqual(
+                    recomputedRelative.Blue,
+                    RelativeTailBoundChannels.Blue) &&
+                NearlyEqual(recomputedRelative.Maximum, RelativeTailBound);
+        }
+
         float denominator = MathF.Max(1.0f - CertifiedContractionBound, 1e-6f);
         float recomputedTail = FixedPointDefect / denominator;
-        float allowedError = MathF.Max(0.00001f, recomputedTail * 0.0001f);
-        return MathF.Abs(recomputedTail - AbsoluteTailBound) <= allowedError;
+        return NearlyEqual(recomputedTail, AbsoluteTailBound);
+    }
+
+    private bool ScalarsMatchChannelMaxima() =>
+        NearlyEqual(FixedPointDefectChannels.Maximum, FixedPointDefect) &&
+        NearlyEqual(FieldMagnitudeChannels.Maximum, FieldMagnitude) &&
+        NearlyEqual(ObservedContractionChannels.Maximum, ObservedContractionBound) &&
+        NearlyEqual(CertifiedContractionChannels.Maximum, CertifiedContractionBound) &&
+        NearlyEqual(AbsoluteTailBoundChannels.Maximum, AbsoluteTailBound) &&
+        NearlyEqual(RelativeTailBoundChannels.Maximum, RelativeTailBound) &&
+        NearlyEqual(
+            CanonicalQuantizationFloorChannels.Maximum,
+            CanonicalQuantizationFloor);
+
+    private bool ChannelsMatchCertifiedContraction() =>
+        NearlyEqual(
+            MathF.Min(ConfiguredContractionBound,
+                ObservedContractionChannels.Red),
+            CertifiedContractionChannels.Red) &&
+        NearlyEqual(
+            MathF.Min(ConfiguredContractionBound,
+                ObservedContractionChannels.Green),
+            CertifiedContractionChannels.Green) &&
+        NearlyEqual(
+            MathF.Min(ConfiguredContractionBound,
+                ObservedContractionChannels.Blue),
+            CertifiedContractionChannels.Blue);
+
+    private static bool NearlyEqual(float expected, float actual)
+    {
+        float allowedError = MathF.Max(0.00001f, MathF.Abs(expected) * 0.0001f);
+        return MathF.Abs(expected - actual) <= allowedError;
     }
 }

@@ -144,24 +144,37 @@ public sealed class SimpleDdgiHotColdAdmissionModel
         SimpleDdgiTransportCacheFormat format,
         ulong rayCount,
         float coldExitFraction,
-        bool hotColdLayout)
+        bool hotColdLayout,
+        int conditionalSurfaceSidecarBytes = 0)
     {
+        if (conditionalSurfaceSidecarBytes < 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(conditionalSurfaceSidecarBytes));
+        double cold = Math.Clamp(coldExitFraction, 0.0f, 1.0f);
+        double sidecarBytes = rayCount * (1.0 - cold) *
+            conditionalSurfaceSidecarBytes;
         if (format is not (SimpleDdgiTransportCacheFormat.Compact24 or
             SimpleDdgiTransportCacheFormat.Compact28) || rayCount == 0)
         {
-            return checked(rayCount * (ulong)Math.Max(format.WordCount(), 0) *
+            ulong ordinaryBytes = checked(
+                rayCount * (ulong)Math.Max(format.WordCount(), 0) *
                 sizeof(uint));
+            return checked(ordinaryBytes + (ulong)Math.Ceiling(sidecarBytes));
         }
 
         int headerWords = format == SimpleDdgiTransportCacheFormat.Compact28
             ? 4
             : 3;
         if (!hotColdLayout)
-            return checked(rayCount * (ulong)format.WordCount() * sizeof(uint));
+        {
+            ulong ordinaryBytes = checked(
+                rayCount * (ulong)format.WordCount() * sizeof(uint));
+            return checked(ordinaryBytes + (ulong)Math.Ceiling(sidecarBytes));
+        }
 
-        double cold = Math.Clamp(coldExitFraction, 0.0f, 1.0f);
         double expectedWords = rayCount * (headerWords + (1.0 - cold) * 3.0);
-        return checked((ulong)Math.Ceiling(expectedWords * sizeof(uint)));
+        return checked((ulong)Math.Ceiling(
+            expectedWords * sizeof(uint) + sidecarBytes));
     }
 
     private static ulong SaturatingAdd(ulong left, ulong right) =>

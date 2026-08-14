@@ -10,6 +10,8 @@ uint SimpleDdgiGuidingTraceOwnershipTag(
     uint physicalProbeIndex,
     uint virtualProbeId,
     uint pageGeneration,
+    uint sourceEpoch,
+    uint sourceLightingGeneration,
     uint slotIndex,
     uint packedDirectionOct32)
 {
@@ -19,6 +21,8 @@ uint SimpleDdgiGuidingTraceOwnershipTag(
     tag = (tag ^ physicalProbeIndex) * 16777619u;
     tag = (tag ^ virtualProbeId) * 16777619u;
     tag = (tag ^ pageGeneration) * 16777619u;
+    tag = (tag ^ sourceEpoch) * 16777619u;
+    tag = (tag ^ sourceLightingGeneration) * 16777619u;
     tag = (tag ^ slotIndex) * 16777619u;
     tag = (tag ^ packedDirectionOct32) * 16777619u;
     tag ^= tag >> 16u;

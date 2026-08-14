@@ -16,7 +16,7 @@ public static class SimpleDdgiGuidingGpuAbi
     /// stable sampling payload meaning changes.  The value is written into
     /// every persistent distribution header and every sampled-ray payload.
     /// </summary>
-    public const uint Version = 0x4333_0008u;
+    public const uint Version = 0x4333_0009u;
 
     public const uint HeaderWordCount = 8u;
     public const uint HeaderByteCount = HeaderWordCount * sizeof(uint);
@@ -108,12 +108,16 @@ public static class SimpleDdgiGuidingGpuAbi
             (nameof(GPUSimpleDdgiGuidingSampleRequest.PhysicalProbeIndex), 0),
             (nameof(GPUSimpleDdgiGuidingSampleRequest.StableProbeIdLow), 20),
             (nameof(GPUSimpleDdgiGuidingSampleRequest.RequestedUniformFraction), 40),
+            (nameof(GPUSimpleDdgiGuidingSampleRequest.SourceEpoch), 44),
+            (nameof(GPUSimpleDdgiGuidingSampleRequest.SourceLightingGeneration), 48),
             (nameof(GPUSimpleDdgiGuidingSampleRequest.TraceRayIndex), 52));
         Verify<GPUSimpleDdgiGuidingSamplePayload>(
             SamplePayloadByteCount,
             (nameof(GPUSimpleDdgiGuidingSamplePayload.AbiVersion), 0),
             (nameof(GPUSimpleDdgiGuidingSamplePayload.StableProbeIdLow), 4),
             (nameof(GPUSimpleDdgiGuidingSamplePayload.DistributionGeneration), 24),
+            (nameof(GPUSimpleDdgiGuidingSamplePayload.SourceEpoch), 40),
+            (nameof(GPUSimpleDdgiGuidingSamplePayload.SourceLightingGeneration), 44),
             (nameof(GPUSimpleDdgiGuidingSamplePayload.GenerationTimePdfBits), 52));
         Verify<GPUSimpleDdgiGuidingPushConstants>(
             PushConstantByteCount,
@@ -201,6 +205,8 @@ public static class SimpleDdgiGuidingGpuAbi
         uint physicalProbeIndex,
         uint virtualProbeId,
         uint pageGeneration,
+        uint sourceEpoch,
+        uint sourceLightingGeneration,
         uint slotIndex,
         uint packedDirectionOct32)
     {
@@ -212,6 +218,8 @@ public static class SimpleDdgiGuidingGpuAbi
             tag = (tag ^ physicalProbeIndex) * 16_777_619u;
             tag = (tag ^ virtualProbeId) * 16_777_619u;
             tag = (tag ^ pageGeneration) * 16_777_619u;
+            tag = (tag ^ sourceEpoch) * 16_777_619u;
+            tag = (tag ^ sourceLightingGeneration) * 16_777_619u;
             tag = (tag ^ slotIndex) * 16_777_619u;
             tag = (tag ^ packedDirectionOct32) * 16_777_619u;
             tag ^= tag >> 16;
@@ -404,8 +412,10 @@ public struct GPUSimpleDdgiGuidingSampleRequest
     public uint Technique;
     public uint RandomBranchBits;
     public float RequestedUniformFraction;
-    public uint RandomIntraLeafUBits;
-    public uint RandomIntraLeafVBits;
+    /// <summary>Frozen source sequence identity authenticated by the payload.</summary>
+    public uint SourceEpoch;
+    /// <summary>Frozen lighting generation authenticated by the payload.</summary>
+    public uint SourceLightingGeneration;
     /// <summary>
     /// Stable physical-slot ray identity used to publish the compact,
     /// authenticated trace payload into the DDGI ray-scratch sidecar.
@@ -434,8 +444,8 @@ public struct GPUSimpleDdgiGuidingSamplePayload
     public uint DirectionProposalEpoch;
     public uint SlotIndex;
     public uint TechniqueAndBranch;
-    public uint LeafIndex;
-    public uint IntraLeafSampleBits;
+    public uint SourceEpoch;
+    public uint SourceLightingGeneration;
     public uint PackedDirectionOct32;
     public uint GenerationTimePdfBits;
     public SimpleDdgiGuidingSamplePayloadFlags Flags;

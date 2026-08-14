@@ -400,6 +400,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private string _capacityTransitionDeferredReason = string.Empty;
         private readonly List<VolumeCandidate> _volumeCandidates = new(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount + 3);
         private readonly SimpleDdgiRefinementBrickPool _refinementBrickPool = new();
+        private readonly SimpleDdgiRefinementPublicationState
+            _refinementPublicationState = new();
         private readonly List<SimpleDdgiRefinementDemand> _refinementDemandScratch = new(96);
         private bool _refinementTopologyChangedThisFrame;
         private int _refinementRequestedBrickCount;
@@ -964,6 +966,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private SimpleDdgiMemoryPlan _capacityPlan;
         private uint _publishedDirectionalGuidingPhysicalProbeCapacity;
         private int _publishedDirectionalGuidingDirectionSlotsPerProbe;
+        private bool _guidedTransportAuditAvailable;
         private bool _uploadCapacityStableKeyHit;
         private long _uploadCapacityCpuProbeStateMicroseconds;
         private long _uploadCapacityPlanCreationMicroseconds;
@@ -1207,6 +1210,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _publishedDirectionalGuidingDirectionSlotsPerProbe == _raysPerProbe
                 ? _publishedDirectionalGuidingPhysicalProbeCapacity
                 : 0u;
+
+        public bool DirectionalGuidingTransportActive =>
+            EffectivePublishedDirectionalGuidingPhysicalProbeCapacity != 0u;
+
+        public void SetGuidedTransportAuditAvailable(bool available) =>
+            _guidedTransportAuditAvailable = available;
 
         /// <summary>
         /// Exposes only the immutable resident-scheduler ABI needed by C3.
@@ -1846,7 +1855,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         region.Format,
                         regionRayCount,
                         hotColdAdmission.ColdExitFraction,
-                        region.UsesHotColdLayout));
+                        region.UsesHotColdLayout,
+                        region.UsesRecursiveGlossySidecar
+                            ? sizeof(uint)
+                            : 0));
             }
 
             string mirrorFallback = !string.IsNullOrEmpty(_sampledAtlasFallbackReason)
@@ -1928,7 +1940,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 SourceCacheAdmissionHasCompletedSample =
                     hotColdAdmission.HasCompletedSampleForIdentity,
                 SourceCacheAdmissionSampleFrameSerial =
-                    hotColdAdmission.LastCompletedSampleFrameSerial
+                    hotColdAdmission.LastCompletedSampleFrameSerial,
+                SourceCacheGlossyMaterialSidecarBytes =
+                    _capacityPlan.TransportSourceCacheGlossyMaterialSidecarBytes
             };
         }
 
@@ -2072,8 +2086,25 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public float SourceStepAgeMaximumSeconds =>
             _sourceStepAgeMaximumFrames / MathF.Max(_sourceSweepFramesPerSecond, 1.0f);
         private bool UsesSteppedAtmosphereSourcePolicy =>
-            _settings.Environment.Enabled &&
-            _settings.Environment.SourceKind == EnvironmentSourceKind.ProceduralSky;
+            ShouldUseSteppedAtmosphereSourcePolicy(
+                _settings.Environment.Enabled,
+                _settings.Environment.SourceKind,
+                _settings.Environment.AnimateTimeOfDay);
+
+        /// <summary>
+        /// The short, authored source-sweep cadence exists to keep DDGI abreast
+        /// of a moving procedural sun. A stationary procedural sky is a static
+        /// source and must use the ordinary bounded watchdog; treating it as an
+        /// animated atmosphere repeatedly invalidates a certified tail and
+        /// makes refinement bricks fall back even when the scene is unchanged.
+        /// </summary>
+        internal static bool ShouldUseSteppedAtmosphereSourcePolicy(
+            bool environmentEnabled,
+            EnvironmentSourceKind sourceKind,
+            bool animateTimeOfDay) =>
+            environmentEnabled &&
+            sourceKind == EnvironmentSourceKind.ProceduralSky &&
+            animateTimeOfDay;
         public int SourceCacheReuseProbeCount => _sourceCacheReuseProbeCount;
         public SimpleDdgiSourceRefreshMode SourceRefreshMode =>
             _sourceRefreshMode;
@@ -2855,7 +2886,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 // A one-frame asynchronous warm-cache admission wait is not a
                 // scheduler capability loss and must not resize the resident
                 // arena or disable the tail contract.
-                _gpuSchedulerFrameExecutionAvailable);
+                _gpuSchedulerFrameExecutionAvailable,
+                DirectionalGuidingTransportActive,
+                _guidedTransportAuditAvailable);
         public bool TailCertificationEnabled => TailCertificationAvailability.Enabled;
         public string TailCertificationFallbackReason
         {
@@ -3174,6 +3207,25 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 gpu.ObservedContractionBits);
             float canonicalQuantizationFloor = BitConverter.UInt32BitsToSingle(
                 gpu.CanonicalQuantizationFloorBits);
+            SimpleDdgiTransportRgbBounds defectChannels = new(
+                BitConverter.UInt32BitsToSingle(gpu.FixedPointDefectRBits),
+                BitConverter.UInt32BitsToSingle(gpu.FixedPointDefectGBits),
+                BitConverter.UInt32BitsToSingle(gpu.FixedPointDefectBBits));
+            SimpleDdgiTransportRgbBounds fieldMagnitudeChannels = new(
+                BitConverter.UInt32BitsToSingle(gpu.FieldMagnitudeRBits),
+                BitConverter.UInt32BitsToSingle(gpu.FieldMagnitudeGBits),
+                BitConverter.UInt32BitsToSingle(gpu.FieldMagnitudeBBits));
+            SimpleDdgiTransportRgbBounds observedContractionChannels = new(
+                BitConverter.UInt32BitsToSingle(gpu.ObservedContractionRBits),
+                BitConverter.UInt32BitsToSingle(gpu.ObservedContractionGBits),
+                BitConverter.UInt32BitsToSingle(gpu.ObservedContractionBBits));
+            SimpleDdgiTransportRgbBounds quantizationFloorChannels = new(
+                BitConverter.UInt32BitsToSingle(
+                    gpu.CanonicalQuantizationFloorRBits),
+                BitConverter.UInt32BitsToSingle(
+                    gpu.CanonicalQuantizationFloorGBits),
+                BitConverter.UInt32BitsToSingle(
+                    gpu.CanonicalQuantizationFloorBBits));
             const uint auditWitnessAddressMask = (1u << 20) - 1u;
             uint auditWitnessAddress = gpu.MaximumDefectWitnessKey &
                 auditWitnessAddressMask;
@@ -3187,7 +3239,20 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     IrradianceTexelsPerProbe);
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
             float q = gi.SimpleDdgiTransportAlbedoClamp;
-            bool countersFinite =
+            bool channelEvidenceValid =
+                gpu.ChannelEvidenceVersion ==
+                    SimpleDdgiTransportTailSummary.PerChannelEvidenceVersion &&
+                defectChannels.IsFiniteNonNegative &&
+                fieldMagnitudeChannels.IsFiniteNonNegative &&
+                observedContractionChannels.IsAtMost(q) &&
+                quantizationFloorChannels.IsFiniteNonNegative &&
+                defect == defectChannels.Maximum &&
+                fieldMagnitude == fieldMagnitudeChannels.Maximum &&
+                observedContraction == observedContractionChannels.Maximum &&
+                canonicalQuantizationFloor == quantizationFloorChannels.Maximum;
+            bool countersFinite = channelEvidenceValid &&
+                float.IsFinite(q) && q >= 0.0f &&
+                q <= SimpleDdgiTransportTailEstimator.MaximumCertifiedContraction &&
                 float.IsFinite(defect) && defect >= 0.0f &&
                 float.IsFinite(fieldMagnitude) && fieldMagnitude >= 0.0f &&
                 float.IsFinite(observedContraction) && observedContraction >= 0.0f &&
@@ -3197,15 +3262,43 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // The shader reduction is FP32. Move the observed maximum upward
             // by one representable value before using it as evidence, then
             // retain the configured ceiling as the fail-closed upper bound.
-            float roundedObservedContraction = countersFinite
-                ? MathF.Min(q, MathF.BitIncrement(observedContraction))
-                : float.NaN;
-            float certifiedQ = countersFinite
-                ? MathF.Min(q, roundedObservedContraction)
-                : float.NaN;
-            float tail = countersFinite && certifiedQ < 1.0f
-                ? defect / MathF.Max(1.0f - certifiedQ, 1e-6f)
-                : float.NaN;
+            SimpleDdgiTransportRgbBounds roundedObservedContractionChannels =
+                countersFinite
+                    ? new SimpleDdgiTransportRgbBounds(
+                        MathF.Min(q, MathF.BitIncrement(
+                            observedContractionChannels.Red)),
+                        MathF.Min(q, MathF.BitIncrement(
+                            observedContractionChannels.Green)),
+                        MathF.Min(q, MathF.BitIncrement(
+                            observedContractionChannels.Blue)))
+                    : SimpleDdgiTransportRgbBounds.Broadcast(float.NaN);
+            SimpleDdgiTransportRgbBounds certifiedContractionChannels =
+                roundedObservedContractionChannels;
+            float roundedObservedContraction =
+                roundedObservedContractionChannels.Maximum;
+            float certifiedQ = certifiedContractionChannels.Maximum;
+            SimpleDdgiTransportRgbBounds tailChannels = countersFinite
+                ? new SimpleDdgiTransportRgbBounds(
+                    defectChannels.Red / MathF.Max(
+                        1.0f - certifiedContractionChannels.Red, 1e-6f),
+                    defectChannels.Green / MathF.Max(
+                        1.0f - certifiedContractionChannels.Green, 1e-6f),
+                    defectChannels.Blue / MathF.Max(
+                        1.0f - certifiedContractionChannels.Blue, 1e-6f))
+                : SimpleDdgiTransportRgbBounds.Broadcast(float.NaN);
+            float tail = tailChannels.Maximum;
+            SimpleDdgiTransportRgbBounds relativeTailChannels = countersFinite
+                ? new SimpleDdgiTransportRgbBounds(
+                    tailChannels.Red / MathF.Max(
+                        fieldMagnitudeChannels.Red,
+                        SimpleDdgiTransportTailEstimator.AbsoluteTolerance),
+                    tailChannels.Green / MathF.Max(
+                        fieldMagnitudeChannels.Green,
+                        SimpleDdgiTransportTailEstimator.AbsoluteTolerance),
+                    tailChannels.Blue / MathF.Max(
+                        fieldMagnitudeChannels.Blue,
+                        SimpleDdgiTransportTailEstimator.AbsoluteTolerance))
+                : SimpleDdgiTransportRgbBounds.Broadcast(float.NaN);
             float tolerance = countersFinite
                 ? MathF.Max(
                     SimpleDdgiTransportTailEstimator.AbsoluteTolerance,
@@ -3223,9 +3316,6 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 gpu.AuditedTexelCount == expectedTexels &&
                 gpu.ExcludedStaleSourceCount == 0u;
             bool finiteEvidence = countersFinite &&
-                float.IsFinite(q) &&
-                q >= 0.0f &&
-                q <= SimpleDdgiTransportTailEstimator.MaximumCertifiedContraction &&
                 float.IsFinite(roundedObservedContraction) &&
                 roundedObservedContraction >= 0.0f &&
                 roundedObservedContraction <= q &&
@@ -3289,10 +3379,18 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 CertifiedContractionBound = certifiedQ,
                 AbsoluteTailBound = tail,
                 RelativeTailBound = countersFinite
-                    ? tail / MathF.Max(fieldMagnitude, SimpleDdgiTransportTailEstimator.AbsoluteTolerance)
+                    ? relativeTailChannels.Maximum
                     : float.NaN,
                 Tolerance = tolerance,
                 CanonicalQuantizationFloor = canonicalQuantizationFloor,
+                ChannelEvidenceVersion = gpu.ChannelEvidenceVersion,
+                FixedPointDefectChannels = defectChannels,
+                FieldMagnitudeChannels = fieldMagnitudeChannels,
+                ObservedContractionChannels = roundedObservedContractionChannels,
+                CertifiedContractionChannels = certifiedContractionChannels,
+                AbsoluteTailBoundChannels = tailChannels,
+                RelativeTailBoundChannels = relativeTailChannels,
+                CanonicalQuantizationFloorChannels = quantizationFloorChannels,
                 MaximumDefectWitnessProbeIndex = maximumDefectWitnessProbeIndex,
                 MaximumDefectWitnessTexelIndex = maximumDefectWitnessTexelIndex,
                 DetailedWitnessValid = detailedWitnessValid,
@@ -3737,6 +3835,22 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 TailTolerance = _transportTailSummary.Tolerance,
                 TailCanonicalQuantizationFloor =
                     _transportTailSummary.CanonicalQuantizationFloor,
+                TailChannelEvidenceVersion =
+                    _transportTailSummary.ChannelEvidenceVersion,
+                TailFixedPointDefectChannels =
+                    _transportTailSummary.FixedPointDefectChannels,
+                TailFieldMagnitudeChannels =
+                    _transportTailSummary.FieldMagnitudeChannels,
+                TailObservedContractionChannels =
+                    _transportTailSummary.ObservedContractionChannels,
+                TailCertifiedContractionChannels =
+                    _transportTailSummary.CertifiedContractionChannels,
+                TailAbsoluteBoundChannels =
+                    _transportTailSummary.AbsoluteTailBoundChannels,
+                TailRelativeBoundChannels =
+                    _transportTailSummary.RelativeTailBoundChannels,
+                TailCanonicalQuantizationFloorChannels =
+                    _transportTailSummary.CanonicalQuantizationFloorChannels,
                 TailMaximumDefectWitnessProbeIndex =
                     _transportTailSummary.MaximumDefectWitnessProbeIndex,
                 TailMaximumDefectWitnessTexelIndex =
@@ -4047,6 +4161,121 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public ReadOnlySpan<GPUSimpleDdgiVolume> LastVolumes => new(_volumeScratch, 0, _volumeCount);
         public ReadOnlySpan<GPUSimpleDdgiVolumePaging> LastVolumePaging =>
             new(_volumePagingScratch, 0, _volumeCount);
+
+        /// <summary>
+        /// Resolves the exact virtual probe identity emitted by B1 to its
+        /// current toroidal lattice position. A fence-complete relocation is
+        /// included when available; malformed or retired identities fail
+        /// closed so the renderer can retain its camera-forward fallback.
+        /// </summary>
+        public bool TryResolveVirtualProbeWorldPosition(
+            uint virtualProbeId,
+            out Vector3 worldPosition) =>
+            TryResolveVirtualProbeWorldPosition(
+                new ReadOnlySpan<GPUSimpleDdgiVolume>(
+                    _volumeScratch,
+                    0,
+                    _volumeCount),
+                _probeRelocations,
+                _probeStateReadbackValid != 0,
+                virtualProbeId,
+                out worldPosition);
+
+        /// <summary>
+        /// Resolves a B1 witness only when it belongs to a stable base or
+        /// authored volume. Refinement probes must never choose the placement
+        /// of future refinement bricks: doing so creates a self-referential
+        /// feedback loop where a newly admitted brick changes the witness,
+        /// evicts itself, and repeatedly invalidates the receiver-ready tail.
+        /// </summary>
+        public bool TryResolveBaseVolumeVirtualProbeWorldPosition(
+            uint virtualProbeId,
+            out Vector3 worldPosition) =>
+            TryResolveBaseVolumeVirtualProbeWorldPosition(
+                new ReadOnlySpan<GPUSimpleDdgiVolume>(
+                    _volumeScratch,
+                    0,
+                    _volumeCount),
+                _probeRelocations,
+                _probeStateReadbackValid != 0,
+                virtualProbeId,
+                out worldPosition);
+
+        internal static bool TryResolveVirtualProbeWorldPosition(
+            ReadOnlySpan<GPUSimpleDdgiVolume> volumes,
+            ReadOnlySpan<Vector3> relocations,
+            bool relocationReadbackValid,
+            uint virtualProbeId,
+            out Vector3 worldPosition) =>
+            TryResolveVirtualProbeWorldPosition(
+                volumes,
+                relocations,
+                relocationReadbackValid,
+                virtualProbeId,
+                baseVolumesOnly: false,
+                out worldPosition);
+
+        internal static bool TryResolveBaseVolumeVirtualProbeWorldPosition(
+            ReadOnlySpan<GPUSimpleDdgiVolume> volumes,
+            ReadOnlySpan<Vector3> relocations,
+            bool relocationReadbackValid,
+            uint virtualProbeId,
+            out Vector3 worldPosition) =>
+            TryResolveVirtualProbeWorldPosition(
+                volumes,
+                relocations,
+                relocationReadbackValid,
+                virtualProbeId,
+                baseVolumesOnly: true,
+                out worldPosition);
+
+        private static bool TryResolveVirtualProbeWorldPosition(
+            ReadOnlySpan<GPUSimpleDdgiVolume> volumes,
+            ReadOnlySpan<Vector3> relocations,
+            bool relocationReadbackValid,
+            uint virtualProbeId,
+            bool baseVolumesOnly,
+            out Vector3 worldPosition)
+        {
+            worldPosition = default;
+            for (int volumeIndex = 0; volumeIndex < volumes.Length; ++volumeIndex)
+            {
+                GPUSimpleDdgiVolume volume = volumes[volumeIndex];
+                uint firstProbe = checked((uint)FirstProbe(volume));
+                uint probeCount = checked((uint)VolumeProbeCount(volume));
+                if (virtualProbeId < firstProbe ||
+                    virtualProbeId - firstProbe >= probeCount)
+                {
+                    continue;
+                }
+
+                if (baseVolumesOnly && Kind(volume) == VolumeKindRefinement)
+                    return false;
+
+                int localPhysicalProbe = checked((int)(virtualProbeId - firstProbe));
+                (int x, int y, int z) = CalculateLogicalProbeCoordinate(
+                    volume,
+                    localPhysicalProbe);
+                float spacing = Spacing(volume);
+                Vector3 position = Origin(volume) +
+                    new Vector3(x, y, z) * spacing;
+                if (relocationReadbackValid &&
+                    virtualProbeId < checked((uint)relocations.Length))
+                {
+                    Vector3 relocation = relocations[checked((int)virtualProbeId)];
+                    if (!IsFinite(relocation))
+                        return false;
+                    position += relocation;
+                }
+                if (!IsFinite(position))
+                    return false;
+
+                worldPosition = position;
+                return true;
+            }
+            return false;
+        }
+
         /// <summary>
         /// The exact requested/accepted/rejected layout compiled before the
         /// current resource allocation.  A missing report means simple DDGI was
@@ -5228,6 +5457,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _volumeCount = 0;
             _probeCount = 0;
             _refinementBrickPool.Clear();
+            _refinementPublicationState.Reset();
             _refinementDemandScratch.Clear();
             _refinementTopologyChangedThisFrame = false;
             _refinementRequestedBrickCount = 0;
@@ -10834,6 +11064,30 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private int ResolveUpdateRayCount(int probeIndex, SimpleDdgiRingQuality quality, uint flags)
         {
             GlobalIlluminationSettings gi = _settings.GlobalIllumination;
+            if (TransportV2Active && gi.SimpleDdgiAdaptiveRaysEnabled)
+            {
+                int current = (uint)probeIndex < (uint)_probeSourceRayCounts.Length
+                    ? _probeSourceRayCounts[probeIndex]
+                    : 0;
+                uint baseline = SimpleDdgiAdaptiveRayCardinality.ResolveBaseline(
+                    checked((uint)quality.MaintenanceRays),
+                    checked((uint)quality.FullRays),
+                    quality.RingIndex);
+
+                // The CPU fallback has no same-frame resident residual stream,
+                // so it starts at the quality baseline rather than inventing a
+                // refinement decision. Thereafter every cached solve and
+                // relight consumes the committed cardinality exactly.
+                if (current <= 0)
+                    return checked((int)baseline);
+                if ((flags & ProbeUpdateSourceRefreshFlag) != 0u)
+                    return Math.Max(current, checked((int)baseline));
+                return Math.Clamp(
+                    current,
+                    1,
+                    GlobalIlluminationSettings.MaxSimpleDdgiRaysPerProbe);
+            }
+
             // A field-wide source/layout change needs coherent low-frequency
             // transport, not a handful of maintenance directions that can make
             // a dark probe look locally stable before its bright neighbors have
@@ -11683,7 +11937,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     visibilityMirrorPresent: mirror.HasValue,
                     _storageLayout.AbiVersion,
                     _storageLayout.DirectionCodebookVersion,
-                    hotColdLayout: region.UsesHotColdLayout);
+                    hotColdLayout: region.UsesHotColdLayout,
+                    recursiveGlossySidecar:
+                        region.UsesRecursiveGlossySidecar);
                 GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
                 volume.CacheLayout = new Vector4(
                     PackHeaderWord(checked((uint)region.BaseWord)),
@@ -11973,7 +12229,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 settings.EffectiveSimpleDdgiGlossyTransportMode;
             bool sourceUsesGlossy = glossyMode is
                 SimpleDdgiGlossyTransportMode.OneBounce or
-                SimpleDdgiGlossyTransportMode.RecursiveExperimental;
+                SimpleDdgiGlossyTransportMode.RecursiveCertified;
             hash = AddLayoutFingerprintValue(
                 hash,
                 sourceUsesGlossy ? (ulong)glossyMode : 0UL,
@@ -12537,12 +12793,21 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private void UpdateRefinementReceiverReadiness(
             bool transactionHasInvalidation)
         {
+            bool recoveryActive =
+                SimpleDdgiRefinementPublication.RequiresPublicationRevocation(
+                    _transportSolveController.RecoveryAction,
+                    _transportSolveController.Phase);
             bool coherentPublication =
-                SimpleDdgiRefinementPublication.CanPublishReceiverAuthority(
+                _refinementPublicationState.Resolve(
                     transactionHasInvalidation,
                     _refinementTopologyChangedThisFrame,
                     TailCertificationEnabled,
-                    HasCurrentTransportTailCertificate);
+                    HasCurrentTransportTailCertificate,
+                    recoveryActive,
+                    SimpleDdgiRefinementPublicationIdentity.From(
+                        CreateTransportTailGenerations(),
+                        _lastLightingSignature,
+                        _lastTransportSourceCalibrationSignature));
             _refinementReadyBrickCount = 0;
             for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
             {
@@ -12561,14 +12826,43 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (_refinementAdmittedBrickCount > 0)
             {
                 _refinementAdmissionStatus = coherentPublication
-                    ? "receiver-ready"
+                    ? _refinementPublicationState.IsRetainingCertifiedAuthority
+                        ? "receiver-ready-certified-continuity"
+                        : "receiver-ready"
                     : transactionHasInvalidation
                         ? "base-fallback-during-invalidation"
                         : _refinementTopologyChangedThisFrame
                             ? "base-fallback-during-topology-publication"
-                            : "base-fallback-awaiting-tail-certificate";
+                            : ResolveRefinementPublicationStatus(
+                                _refinementPublicationState.Decision ==
+                                    SimpleDdgiRefinementPublicationDecision
+                                        .NoCertifiedAuthority
+                                    ? _refinementPublicationState
+                                        .LastRevocationDecision
+                                    : _refinementPublicationState.Decision);
             }
         }
+
+        private static string ResolveRefinementPublicationStatus(
+            SimpleDdgiRefinementPublicationDecision decision) =>
+            decision switch
+            {
+                SimpleDdgiRefinementPublicationDecision.RecoveryActive =>
+                    "base-fallback-recovery-active",
+                SimpleDdgiRefinementPublicationDecision.VolumeTableChanged =>
+                    "base-fallback-volume-table-changed",
+                SimpleDdgiRefinementPublicationDecision.PhysicalOwnershipChanged =>
+                    "base-fallback-physical-ownership-changed",
+                SimpleDdgiRefinementPublicationDecision.TransportOperatorChanged =>
+                    "base-fallback-transport-operator-changed",
+                SimpleDdgiRefinementPublicationDecision.LightingSignatureChanged =>
+                    "base-fallback-lighting-signature-changed",
+                SimpleDdgiRefinementPublicationDecision.SourceCalibrationChanged =>
+                    "base-fallback-source-calibration-changed",
+                SimpleDdgiRefinementPublicationDecision.IdentityUninitialized =>
+                    "base-fallback-identity-uninitialized",
+                _ => "base-fallback-awaiting-tail-certificate"
+            };
 
         private void UploadParams(StagingRing stagingRing, CommandBuffer commandBuffer)
         {
@@ -12969,6 +13263,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 featureFlags |=
                     SimpleDdgiSchedulerAbi.SchedulerFeatureExactReceiverFeedback;
             }
+            if (TransportV2Active && gi.SimpleDdgiAdaptiveRaysEnabled)
+            {
+                featureFlags |=
+                    SimpleDdgiSchedulerAbi.SchedulerFeatureAdaptiveRayCardinality;
+            }
 
             Span<uint> rayBuckets = stackalloc uint[SimpleDdgiSchedulerAbi.MaxRayBucketCount];
             int rayBucketCount = 0;
@@ -12977,6 +13276,31 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 SimpleDdgiRingQuality quality = ResolveVolumeQuality(volumeIndex);
                 rayBucketCount = AddGpuRayBucket(rayBuckets, rayBucketCount, quality.FullRays);
                 rayBucketCount = AddGpuRayBucket(rayBuckets, rayBucketCount, quality.MaintenanceRays);
+            }
+            // The six-word frame ABI first reserves every authored endpoint.
+            // Any deduplicated space is then filled with nested Fibonacci
+            // cardinalities, near volumes first. Every adaptive update is
+            // therefore guaranteed to have a matching indirect-dispatch bucket.
+            Span<uint> adaptiveTiers = stackalloc uint[
+                SimpleDdgiAdaptiveRayCardinality.TierCount];
+            for (int volumeIndex = 0;
+                 volumeIndex < _volumeCount && rayBucketCount < rayBuckets.Length;
+                 volumeIndex++)
+            {
+                SimpleDdgiRingQuality quality = ResolveVolumeQuality(volumeIndex);
+                SimpleDdgiAdaptiveRayCardinality.BuildTiers(
+                    checked((uint)quality.MaintenanceRays),
+                    checked((uint)quality.FullRays),
+                    adaptiveTiers);
+                for (int tier = 1;
+                     tier < adaptiveTiers.Length - 1 && rayBucketCount < rayBuckets.Length;
+                     tier++)
+                {
+                    rayBucketCount = AddGpuRayBucket(
+                        rayBuckets,
+                        rayBucketCount,
+                        checked((int)adaptiveTiers[tier]));
+                }
             }
             if (rayBucketCount == 0)
                 rayBucketCount = AddGpuRayBucket(rayBuckets, rayBucketCount, Math.Max(1, _raysPerProbe));
@@ -13526,8 +13850,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 CellDeltaZ = deltaZ,
                 DirtyGeneration = _gpuDirtyRegionGeneration,
                 ProximityRadiusPadding = current.WorldMinAndEdgeFade.W,
-                CacheWordsPerProbe = checked((uint)(
-                    cacheRegion.StrideWords * _raysPerProbe)),
+                CacheWordsPerProbe = checked((uint)
+                    cacheRegion.WordsPerProbe),
                 CachePhysicalFirstAndCount = cachePhysicalFirst |
                     (cachePhysicalCount << 16),
                 CacheLayoutFlags =
@@ -15685,7 +16009,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         {
             using IncrementalHash hash = IncrementalHash.CreateHash(
                 HashAlgorithmName.SHA256);
-            AppendWarmStartHash(hash, "simple-ddgi-direction-codebook/v1");
+            AppendWarmStartHash(hash, "simple-ddgi-direction-codebook/v3-nested-fibonacci");
             AppendWarmStartHash(hash, _storageLayout.DirectionCodebookVersion);
             AppendWarmStartHash(hash, _raysPerProbe);
             for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)

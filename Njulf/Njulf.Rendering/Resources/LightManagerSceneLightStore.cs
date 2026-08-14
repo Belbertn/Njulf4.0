@@ -5,7 +5,7 @@ using Njulf.Assets.Scenes;
 namespace Njulf.Rendering.Resources;
 
 /// <summary>Connects source-scene light records to the renderer's packed, handle-based light store.</summary>
-public sealed class LightManagerSceneLightStore : ISceneLightStore
+public sealed class LightManagerSceneLightStore : IMutableSceneLightStore
 {
     private readonly LightManager _lights;
 
@@ -28,6 +28,22 @@ public sealed class LightManagerSceneLightStore : ISceneLightStore
             yield return ToDocument(record.Id, record.Name, record.Light);
     }
 
+    public bool TryUpdate(Guid id, SceneLightDocument source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!_lights.TryGetLightHandle(id, out LightHandle handle) ||
+            !_lights.UpdateLight(handle, ToLight(source)))
+        {
+            return false;
+        }
+
+        return _lights.SetLightName(handle, source.Name);
+    }
+
+    public bool TryRemove(Guid id) =>
+        _lights.TryGetLightHandle(id, out LightHandle handle) &&
+        _lights.RemoveLight(handle);
+
     private static Light ToLight(SceneLightDocument source) => new()
     {
         Type = ParseType(source.Type),
@@ -37,6 +53,11 @@ public sealed class LightManagerSceneLightStore : ISceneLightStore
         Intensity = source.Intensity,
         Range = source.Range,
         SpotAngle = source.SpotAngle,
+        InnerSpotAngle = source.InnerSpotAngle,
+        AttenuationMode = ParseAttenuationMode(source.AttenuationMode),
+        AttenuationConstant = source.AttenuationConstant,
+        AttenuationLinear = source.AttenuationLinear,
+        AttenuationQuadratic = source.AttenuationQuadratic,
         CastsShadows = source.CastsShadows,
         ShadowStrength = source.ShadowStrength,
         ShadowMapSizeOverride = source.ShadowMapSizeOverride,
@@ -56,6 +77,11 @@ public sealed class LightManagerSceneLightStore : ISceneLightStore
         Intensity = source.Intensity,
         Range = source.Range,
         SpotAngle = source.SpotAngle,
+        InnerSpotAngle = source.InnerSpotAngle,
+        AttenuationMode = source.AttenuationMode.ToString(),
+        AttenuationConstant = source.AttenuationConstant,
+        AttenuationLinear = source.AttenuationLinear,
+        AttenuationQuadratic = source.AttenuationQuadratic,
         CastsShadows = source.CastsShadows,
         ShadowStrength = source.ShadowStrength,
         ShadowMapSizeOverride = source.ShadowMapSizeOverride,
@@ -64,7 +90,19 @@ public sealed class LightManagerSceneLightStore : ISceneLightStore
         ShadowPriority = source.ShadowPriority
     };
 
-    private static LightType ParseType(string source) => Enum.TryParse(source, ignoreCase: true, out LightType value)
+    private static LightType ParseType(string source) =>
+        Enum.TryParse(source, ignoreCase: true, out LightType value) &&
+        Enum.IsDefined(value)
         ? value
         : throw new InvalidDataException($"Unsupported light type '{source}'.");
+
+    private static LightAttenuationMode ParseAttenuationMode(string source) =>
+        Enum.TryParse(
+            source,
+            ignoreCase: true,
+            out LightAttenuationMode value) &&
+        Enum.IsDefined(value)
+            ? value
+            : throw new InvalidDataException(
+                $"Unsupported light attenuation mode '{source}'.");
 }

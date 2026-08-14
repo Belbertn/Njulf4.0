@@ -40,7 +40,10 @@ $exactOpaqueDemandModuleNames = @(
 $receiverCacheFragmentModuleNames = @(
     'forward_opaque_ddgi_cache_required.frag.spv',
     'forward_opaque_simple_ddgi_cache_required.frag.spv',
-    'forward_opaque_simple_full_input_ddgi_cache_required.frag.spv'
+    'forward_opaque_simple_full_input_ddgi_cache_required.frag.spv',
+    'forward_opaque_ddgi_near_field_direct_source_cache_required.frag.spv',
+    'forward_opaque_simple_ddgi_near_field_direct_source_cache_required.frag.spv',
+    'forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag.spv'
 )
 
 $giDisabledControlModuleNames = @(

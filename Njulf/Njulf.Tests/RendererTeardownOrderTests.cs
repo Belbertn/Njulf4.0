@@ -88,6 +88,65 @@ public sealed class RendererTeardownOrderTests
     }
 
     [Test]
+    public void RaySceneResources_AreDeclaredInDisposalDependencyOrder()
+    {
+        string source = File.ReadAllText(
+            FindSourceFile(
+                "Njulf.Rendering",
+                "VulkanRenderer.cs"));
+        int planStart =
+            source.IndexOf(
+                "private StagedDisposalPlan CreateDisposalPlan()",
+                StringComparison.Ordinal);
+        Assert.That(planStart, Is.GreaterThanOrEqualTo(0));
+        if (planStart < 0)
+            return;
+
+        string planSource = source[planStart..];
+        int meshPipeline =
+            planSource.IndexOf(
+                "\"mesh-pipeline\"",
+                StringComparison.Ordinal);
+        int descriptorBank =
+            planSource.IndexOf(
+                "\"ray-scene-descriptor-bank\"",
+                StringComparison.Ordinal);
+        int accelerationStructures =
+            planSource.IndexOf(
+                "\"acceleration-structure-manager\"",
+                StringComparison.Ordinal);
+        int foliageProxies =
+            planSource.IndexOf(
+                "\"ddgi-foliage-proxy-manager\"",
+                StringComparison.Ordinal);
+        string normalizedPlanSource =
+            Regex.Replace(
+                planSource,
+                @"\s+",
+                " ");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(meshPipeline, Is.GreaterThanOrEqualTo(0));
+            Assert.That(descriptorBank, Is.GreaterThan(meshPipeline));
+            Assert.That(
+                accelerationStructures,
+                Is.GreaterThan(descriptorBank));
+            Assert.That(
+                foliageProxies,
+                Is.GreaterThan(accelerationStructures));
+            Assert.That(
+                normalizedPlanSource,
+                Does.Contain(
+                    "}, \"render-graph\", \"mesh-pipeline\"); AddResourceStage( \"acceleration-structure-manager\""));
+            Assert.That(
+                normalizedPlanSource,
+                Does.Contain(
+                    "\"ray-scene-descriptor-bank\"); AddResourceStage( \"ddgi-foliage-proxy-manager\""));
+        });
+    }
+
+    [Test]
     public void PublicOperationalMethods_FailClosedAfterDisposalStarts()
     {
         string source = File.ReadAllText(

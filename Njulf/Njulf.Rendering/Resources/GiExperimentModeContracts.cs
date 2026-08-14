@@ -48,8 +48,19 @@ public enum SimpleDdgiNearFieldResidualMode : uint
 {
     Off = 0,
     Reference = 1,
+    /// <summary>
+    /// Original explicit C5 mode. Its numeric value is durable settings/API
+    /// state and must retain the fixed admitted execution resolution.
+    /// </summary>
     HiZHalfResolutionExperiment = 2,
-    AutoQualified = 3
+    AutoQualified = 3,
+    /// <summary>
+    /// Bounded Hi-Z SSGI residual. Explicit selection starts at quarter
+    /// resolution and falls back to eighth resolution when its independent
+    /// memory envelope cannot admit the complete quarter-resolution profile.
+    /// Half resolution is reserved for evidence-bound AutoQualified profiles.
+    /// </summary>
+    HiZAdaptive = 4
 }
 
 /// <summary>
@@ -114,7 +125,7 @@ public readonly record struct AdvancedGiFeatureSelection(
             ? GiCausticMode.WorldCacheExperiment
             : GiCausticMode.Off;
         settings.SimpleDdgiNearFieldResidualMode = NearFieldResidualEnabled
-            ? SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment
+            ? SimpleDdgiNearFieldResidualMode.HiZAdaptive
             : SimpleDdgiNearFieldResidualMode.Off;
 
         // A normal switch never inherits promotion credentials from a prior

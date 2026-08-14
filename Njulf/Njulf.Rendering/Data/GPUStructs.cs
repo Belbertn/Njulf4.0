@@ -450,6 +450,12 @@ namespace Njulf.Rendering.Data
     public struct GPULight
     {
         public const int CastsShadowsFlag = 1 << 0;
+        public const int AttenuationModeShift = 8;
+        public const int AttenuationModeMask = 0x3 << AttenuationModeShift;
+
+        public static int EncodeAttenuationMode(
+            Resources.LightAttenuationMode mode) =>
+            ((int)mode << AttenuationModeShift) & AttenuationModeMask;
 
         public Vector3 Position;
         public float Intensity;
@@ -468,6 +474,10 @@ namespace Njulf.Rendering.Data
             readonly get => Padding0;
             set => Padding0 = value;
         }
+        public float InnerSpotAngle;
+        public float AttenuationConstant;
+        public float AttenuationLinear;
+        public float AttenuationQuadratic;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1107,11 +1117,17 @@ namespace Njulf.Rendering.Data
         // z = world-texel normal-bias scale, w = maximum world normal bias.
         public Vector4 FilterAndBias;
         // x = requested mode, y = effective mode, z = contact-ray distance,
-        // w = reserved for the finite-sun angular radius.
+        // w = finite-sun angular radius in radians.
         public Vector4 ModeAndRayDistance;
-        // Reserved as a zeroed expansion lane so future ray/temporal controls do
-        // not require another storage-buffer ABI change.
-        public Vector4 Reserved;
+        // x = recovery ray count, y = maximum history age,
+        // z = spatial pass count, w = transparent finite-sun ray count.
+        public Vector4 TemporalAndSampling;
+        // xyz = qualified ray-scene AABB; w = 1 when finite and complete.
+        public Vector4 RaySceneBoundsMinimum;
+        public Vector4 RaySceneBoundsMaximum;
+        // x = CSM temporal effective, y = qualification level,
+        // z = screen-resource generation, w = current history valid.
+        public Vector4 RuntimeFlags;
     }
 
     /// <summary>
@@ -1131,8 +1147,47 @@ namespace Njulf.Rendering.Data
         public uint ScreenHeight;
         public uint OutputBufferIndex;
         public uint InstanceMask;
-        // DirectionalShadowMode; only HybridContact and RayQueryHard execute.
+        // DirectionalShadowMode.
         public uint OutputMode;
+        public uint FrameIndex;
+        public uint TraceSampleCount;
+        public uint DebugFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDirectionalShadowTemporalPushConstants
+    {
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Vector4 CameraPositionAndMaximumDistance;
+        public uint ScreenWidth;
+        public uint ScreenHeight;
+        public uint RawInputBufferIndex;
+        public uint PreviousHistoryBufferIndex;
+        public uint CurrentHistoryBufferIndex;
+        public uint OutputBufferIndex;
+        public uint MaximumHistoryAge;
+        public uint ResetReasons;
+        public float MaximumHistoryWeight;
+        public float RelativeDepthThreshold;
+        public float NormalThreshold;
+        // 0 = finite-sun ray history, 1 = short CSM history.
+        public float TemporalKind;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDirectionalShadowSpatialPushConstants
+    {
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Vector4 CameraPositionAndMaximumDistance;
+        public uint ScreenWidth;
+        public uint ScreenHeight;
+        public uint InputBufferIndex;
+        public uint OutputBufferIndex;
+        public uint HistoryBufferIndex;
+        public uint StepWidth;
+        public uint WritePackedVisibility;
+        public uint CounterEnabled;
+        public Vector4 EdgeThresholds;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -2105,6 +2160,22 @@ namespace Njulf.Rendering.Data
         public uint FirstStaleSourceIdentity;
         public uint FirstInvalidCacheIdentity;
         public uint FirstNonFiniteIdentity;
+        // Versioned RGB certificate evidence. These words are appended inside
+        // the pre-reserved 1 KiB audit region, so all preceding offsets remain
+        // stable. The host rejects a GPU summary unless the version matches.
+        public uint ChannelEvidenceVersion;
+        public uint FixedPointDefectRBits;
+        public uint FixedPointDefectGBits;
+        public uint FixedPointDefectBBits;
+        public uint FieldMagnitudeRBits;
+        public uint FieldMagnitudeGBits;
+        public uint FieldMagnitudeBBits;
+        public uint ObservedContractionRBits;
+        public uint ObservedContractionGBits;
+        public uint ObservedContractionBBits;
+        public uint CanonicalQuantizationFloorRBits;
+        public uint CanonicalQuantizationFloorGBits;
+        public uint CanonicalQuantizationFloorBBits;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

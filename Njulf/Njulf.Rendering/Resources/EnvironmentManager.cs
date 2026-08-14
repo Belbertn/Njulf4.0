@@ -534,6 +534,11 @@ namespace Njulf.Rendering.Resources
                 MathF.Abs(left.Range - right.Range) <= epsilon &&
                 Vector3.DistanceSquared(left.Direction, right.Direction) <= epsilon * epsilon &&
                 MathF.Abs(left.SpotAngle - right.SpotAngle) <= epsilon &&
+                MathF.Abs(left.InnerSpotAngle - right.InnerSpotAngle) <= epsilon &&
+                left.AttenuationMode == right.AttenuationMode &&
+                MathF.Abs(left.AttenuationConstant - right.AttenuationConstant) <= epsilon &&
+                MathF.Abs(left.AttenuationLinear - right.AttenuationLinear) <= epsilon &&
+                MathF.Abs(left.AttenuationQuadratic - right.AttenuationQuadratic) <= epsilon &&
                 left.Type == right.Type &&
                 left.CastsShadows == right.CastsShadows &&
                 MathF.Abs(left.ShadowStrength - right.ShadowStrength) <= epsilon &&

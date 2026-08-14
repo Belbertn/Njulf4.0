@@ -6,12 +6,13 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 6;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
     public string Name { get; init; } = "Scene";
     public SceneColor AmbientLight { get; init; } = new(0.2f, 0.2f, 0.2f, 1f);
+    public bool ImportedModelLightsEnabled { get; init; }
     public List<SceneObjectDocument> Objects { get; init; } = [];
     public List<SceneLightDocument> Lights { get; init; } = [];
     public List<SceneReflectionProbeDocument> ReflectionProbes { get; init; } = [];
@@ -109,6 +110,11 @@ public sealed class SceneLightDocument
     public float Intensity { get; init; } = 1f;
     public float Range { get; init; } = 10f;
     public float SpotAngle { get; init; } = 0.5f;
+    public float InnerSpotAngle { get; init; }
+    public string AttenuationMode { get; init; } = "LegacyWindowed";
+    public float AttenuationConstant { get; init; } = 1f;
+    public float AttenuationLinear { get; init; }
+    public float AttenuationQuadratic { get; init; }
     public bool CastsShadows { get; init; }
     public float ShadowStrength { get; init; } = 1f;
     public uint ShadowMapSizeOverride { get; init; }

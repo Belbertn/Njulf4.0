@@ -16,11 +16,15 @@ public sealed class SceneDocumentWriter
     {
         ArgumentNullException.ThrowIfNull(scene);
         var dependencies = new Dictionary<string, string?>(StringComparer.Ordinal);
+        ModelLightRuntimeController? importedLights =
+            scene.GetComponent<ModelLightRuntimeController>();
         var document = new SceneDocument
         {
             Id = scene.Id,
             Name = scene.Name,
             AmbientLight = ToSceneColor(scene.AmbientLight),
+            ImportedModelLightsEnabled =
+                importedLights?.ImportedModelLightsEnabled ?? false,
             Objects = scene.RenderObjects.Select(item => ToObject(item, dependencies, materials)).ToList(),
             ReflectionProbes = scene.ReflectionProbes.Select(ToReflectionProbe).ToList(),
             GiProbeVolumes = scene.GlobalIlluminationProbeVolumes.Select(ToGiProbeVolume).ToList(),
@@ -28,7 +32,9 @@ public sealed class SceneDocumentWriter
             FoliagePrototypes = scene.FoliagePrototypes.Select(item => ToFoliagePrototype(item, dependencies)).ToList(),
             FoliagePatches = scene.FoliagePatches.Select(ToFoliagePatch).ToList(),
             ParticleEffects = scene.ParticleEffects.Select(item => ToParticleEffect(item, dependencies)).ToList(),
-            Lights = lights?.Enumerate().ToList() ?? [],
+            Lights = lights?.Enumerate()
+                .Where(light => importedLights?.IsImportedLight(light.Id) != true)
+                .ToList() ?? [],
             Dependencies = []
         };
         document.Dependencies.AddRange(dependencies.OrderBy(static pair => pair.Key, StringComparer.Ordinal)

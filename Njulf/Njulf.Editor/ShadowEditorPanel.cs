@@ -102,6 +102,32 @@ internal sealed unsafe class ShadowEditorPanel
             return;
         }
 
+        ImGui.Text(
+            $"Mode: requested={runtime.RequestedMode}, effective={runtime.EffectiveMode}, " +
+            $"qualification={runtime.QualificationLevel}");
+        if (!string.IsNullOrWhiteSpace(runtime.QualificationDetail))
+            ImGui.TextWrapped($"Qualification: {runtime.QualificationDetail}");
+        if (!string.IsNullOrWhiteSpace(runtime.QualificationId))
+        {
+            ImGui.TextWrapped(
+                $"Evidence: {runtime.QualificationId}  rule={runtime.QualificationDeviceRuleId}  " +
+                $"track={runtime.QualificationTrackId}");
+            ImGui.Text(
+                $"Qualified budgets: GPU={runtime.QualifiedGpuBudgetMicroseconds:0} µs, " +
+                $"memory={runtime.QualifiedMemoryBudgetBytes:N0} bytes");
+        }
+        if (runtime.FallbackReason != DirectionalShadowFallbackReason.None)
+        {
+            ImGui.TextColored(
+                new System.Numerics.Vector4(1f, 0.72f, 0.2f, 1f),
+                $"Fallback: {runtime.FallbackReason}");
+            if (!string.IsNullOrWhiteSpace(runtime.FallbackDetail))
+                ImGui.TextWrapped(runtime.FallbackDetail);
+        }
+        ImGui.Text(
+            $"Receivers: opaque={runtime.OpaqueReceiverPolicy}, " +
+            $"transparent={runtime.TransparentReceiverPolicy}, decal={runtime.DecalReceiverPolicy}");
+
         string splits = runtime.CascadeSplits.Length == 0
             ? "unavailable"
             : string.Join(", ", runtime.CascadeSplits.Select(static split => $"{split:0.##} m"));
@@ -110,6 +136,28 @@ internal sealed unsafe class ShadowEditorPanel
             $"Static cache masks  active=0x{runtime.StaticCacheActiveMask:X}  " +
             $"valid=0x{runtime.StaticCacheValidMask:X}  refresh=0x{runtime.StaticCacheRefreshMask:X}  " +
             $"reuse=0x{runtime.StaticCacheReuseMask:X}");
+
+        if (runtime.RayMaskEnabled != 0 || runtime.CsmTemporalEnabled != 0)
+        {
+            ImGui.Text(
+                $"GPU µs: CSM={runtime.GpuCsmMicroseconds}, ray={runtime.GpuRayTraceMicroseconds}, " +
+                $"temporal={runtime.GpuTemporalMicroseconds}, spatial={runtime.GpuSpatialMicroseconds}");
+            ImGui.Text(
+                $"History: valid={runtime.HistoryValid}, reset={runtime.HistoryResetReason}, " +
+                $"bytes={runtime.HistoryBytes:N0}");
+        }
+        if (runtime.RayCounters.ReadbackValid != 0)
+        {
+            ImGui.Text(
+                $"Opaque rays={runtime.RayCounters.OpaqueRaysIssued:N0}, " +
+                $"hit={runtime.RayCounters.OpaqueHitRate:P1}, " +
+                $"avg candidates={runtime.RayCounters.AverageOpaqueCandidates:0.00}, " +
+                $"caps={runtime.RayCounters.OpaqueCandidateCapHits:N0}");
+            ImGui.Text(
+                $"Transparent rays={runtime.RayCounters.TransparentRaysIssued:N0}, " +
+                $"hit={runtime.RayCounters.TransparentHitRate:P1}, " +
+                $"avg candidates={runtime.RayCounters.AverageTransparentCandidates:0.00}");
+        }
 
         if (!string.IsNullOrWhiteSpace(diagnostics.SceneSubmissionGpuDirectionalShadowCascadeSummary))
             ImGui.TextWrapped(diagnostics.SceneSubmissionGpuDirectionalShadowCascadeSummary);

@@ -1,0 +1,206 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform DirectionalShadowSpatialPushBlock
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndMaximumDistance;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint InputBufferIndex;
+    uint OutputBufferIndex;
+    uint HistoryBufferIndex;
+    uint StepWidth;
+    uint WritePackedVisibility;
+    uint CounterEnabled;
+    vec4 EdgeThresholds;
+} pc;
+
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+shared uint FilteredPixelCount;
+#endif
+
+vec3 DecodeOctahedral(vec2 encoded)
+{
+    vec2 value = encoded * 2.0 - vec2(1.0);
+    vec3 normal = vec3(value, 1.0 - abs(value.x) - abs(value.y));
+    if (normal.z < 0.0)
+        normal.xy = (vec2(1.0) - abs(normal.yx)) * sign(normal.xy);
+    return normalize(normal);
+}
+
+void ReadHistoryMetadata(
+    uint pixelIndex,
+    out vec3 normal,
+    out float hitDistance,
+    out float viewDistance,
+    out float variance,
+    out bool valid)
+{
+    vec2 moments = unpackHalf2x16(ReadStorageWord(
+        pc.HistoryBufferIndex,
+        pixelIndex * 3u + 0u));
+    vec2 distances = unpackHalf2x16(ReadStorageWord(
+        pc.HistoryBufferIndex,
+        pixelIndex * 3u + 1u));
+    uint metadata = ReadStorageWord(
+        pc.HistoryBufferIndex,
+        pixelIndex * 3u + 2u);
+    normal = DecodeOctahedral(vec2(
+        float(metadata & 0xffu),
+        float((metadata >> 8u) & 0xffu)) / 255.0);
+    hitDistance = max(distances.x, 0.0);
+    viewDistance = max(distances.y, 0.0);
+    variance = max(moments.y - moments.x * moments.x, 0.0);
+    valid = (metadata & (1u << 29u)) != 0u;
+}
+
+vec2 ReadVisibilityAndHit(uint pixelIndex)
+{
+    if (pc.InputBufferIndex == pc.HistoryBufferIndex)
+    {
+        vec2 moments = unpackHalf2x16(ReadStorageWord(
+            pc.InputBufferIndex,
+            pixelIndex * 3u));
+        vec2 distances = unpackHalf2x16(ReadStorageWord(
+            pc.InputBufferIndex,
+            pixelIndex * 3u + 1u));
+        return vec2(moments.x, distances.x);
+    }
+    return unpackHalf2x16(ReadStorageWord(pc.InputBufferIndex, pixelIndex));
+}
+
+void WritePackedVisibility(uint pixelIndex, float visibility)
+{
+    uint wordIndex = pixelIndex >> 2u;
+    uint shift = (pixelIndex & 3u) * 8u;
+    uint packed = uint(round(clamp(visibility, 0.0, 1.0) * 255.0)) << shift;
+    if (packed != 0u)
+    {
+        atomicOr(
+            BindlessStorageBuffers[nonuniformEXT(pc.OutputBufferIndex)].Words[wordIndex],
+            packed);
+    }
+}
+
+void main()
+{
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+    if (gl_LocalInvocationIndex == 0u)
+        FilteredPixelCount = 0u;
+    barrier();
+#endif
+
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    bool invocationInBounds = pixel.x < pc.ScreenWidth && pixel.y < pc.ScreenHeight;
+    if (invocationInBounds)
+    {
+        uint pixelIndex = pixel.y * pc.ScreenWidth + pixel.x;
+        vec3 centerNormal;
+        float centerHit;
+        float centerDepth;
+        float centerVariance;
+        bool centerValid;
+        ReadHistoryMetadata(
+            pixelIndex,
+            centerNormal,
+            centerHit,
+            centerDepth,
+            centerVariance,
+            centerValid);
+        vec2 center = ReadVisibilityAndHit(pixelIndex);
+        float visibility = center.x;
+        float hitDistance = center.y;
+        if (centerValid && pc.StepWidth != 0u)
+        {
+            const float kernel[3] = float[3](1.0, 2.0, 1.0);
+            float weightedVisibility = 0.0;
+            float weightedHitDistance = 0.0;
+            float totalWeight = 0.0;
+            int stepWidth = int(max(pc.StepWidth, 1u));
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int x = -1; x <= 1; x++)
+                {
+                    ivec2 neighborPixel = clamp(
+                        ivec2(pixel) + ivec2(x, y) * stepWidth,
+                        ivec2(0),
+                        ivec2(pc.ScreenWidth, pc.ScreenHeight) - ivec2(1));
+                    uint neighborIndex = uint(neighborPixel.y) * pc.ScreenWidth +
+                        uint(neighborPixel.x);
+                    vec3 neighborNormal;
+                    float neighborHit;
+                    float neighborDepth;
+                    float neighborVariance;
+                    bool neighborValid;
+                    ReadHistoryMetadata(
+                        neighborIndex,
+                        neighborNormal,
+                        neighborHit,
+                        neighborDepth,
+                        neighborVariance,
+                        neighborValid);
+                    if (!neighborValid)
+                        continue;
+                    vec2 sampleValue = ReadVisibilityAndHit(neighborIndex);
+                    float depthWeight = exp(-abs(neighborDepth - centerDepth) /
+                        max(pc.EdgeThresholds.x * max(centerDepth, 1.0), 0.001));
+                    float normalWeight = smoothstep(
+                        pc.EdgeThresholds.y,
+                        1.0,
+                        dot(centerNormal, neighborNormal));
+                    float hitWeight = exp(-abs(neighborHit - centerHit) /
+                        max(pc.EdgeThresholds.z * max(centerHit, 0.25), 0.01));
+                    float varianceWeight = 1.0 /
+                        (1.0 + max(centerVariance, neighborVariance) *
+                            max(pc.EdgeThresholds.w, 0.0));
+                    float weight = kernel[x + 1] * kernel[y + 1] *
+                        depthWeight * normalWeight * hitWeight * varianceWeight;
+                    weightedVisibility += sampleValue.x * weight;
+                    weightedHitDistance += sampleValue.y * weight;
+                    totalWeight += weight;
+                }
+            }
+            if (totalWeight > 1.0e-6)
+            {
+                visibility = weightedVisibility / totalWeight;
+                hitDistance = weightedHitDistance / totalWeight;
+            }
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+            if (pc.CounterEnabled != 0u)
+                atomicAdd(FilteredPixelCount, 1u);
+#endif
+        }
+
+        if (pc.WritePackedVisibility != 0u)
+            WritePackedVisibility(pixelIndex, visibility);
+        else
+        {
+            WriteStorageWord(
+                pc.OutputBufferIndex,
+                pixelIndex,
+                packHalf2x16(vec2(
+                    clamp(visibility, 0.0, 1.0),
+                    clamp(hitDistance, 0.0, 65504.0))));
+        }
+    }
+
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+    barrier();
+    if (pc.CounterEnabled != 0u &&
+        gl_LocalInvocationIndex == 0u && FilteredPixelCount != 0u)
+    {
+        uint frameBank = pc.HistoryBufferIndex -
+            uint(DIRECTIONAL_SHADOW_HISTORY_BUFFER_BASE_INDEX);
+        uint counterBuffer = uint(DIRECTIONAL_SHADOW_COUNTER_BUFFER_BASE_INDEX) + frameBank;
+        atomicAdd(
+            BindlessStorageBuffers[nonuniformEXT(counterBuffer)].Words[11u],
+            FilteredPixelCount);
+    }
+#endif
+}

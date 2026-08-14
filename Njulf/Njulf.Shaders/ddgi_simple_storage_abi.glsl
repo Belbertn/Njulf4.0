@@ -24,13 +24,17 @@ const uint SIMPLE_DDGI_STORAGE_ABI_PACKED = 7u;
 const uint SIMPLE_DDGI_STORAGE_CODEBOOK_SHIFT = 8u;
 const uint SIMPLE_DDGI_STORAGE_CODEBOOK_MASK = 0xffu <<
     SIMPLE_DDGI_STORAGE_CODEBOOK_SHIFT;
-const uint SIMPLE_DDGI_STORAGE_CODEBOOK_VERSION = 1u;
+const uint SIMPLE_DDGI_STORAGE_CODEBOOK_VERSION = 3u;
 // Version 7 optionally transposes each packed probe page into a dense hot
 // header array followed by a three-word surface-response sidecar. Capacity is
 // unchanged, but misses and authored one-sided backfaces never fetch sidecar
 // words during solve/audit.
 const uint SIMPLE_DDGI_STORAGE_HOT_COLD_LAYOUT_BIT = 1u << 16u;
-const uint SIMPLE_DDGI_STORAGE_RESERVED_MASK = 0xfffe0000u;
+// Certified recursive glossy adds one packed {F0.rgb, roughness} word after
+// each probe-local ordinary ray block. The ordinary record ABI and stride are
+// unchanged, and non-recursive variants never address this sidecar.
+const uint SIMPLE_DDGI_STORAGE_RECURSIVE_GLOSSY_SIDECAR_BIT = 1u << 17u;
+const uint SIMPLE_DDGI_STORAGE_RESERVED_MASK = 0xfffc0000u;
 
 uint SimpleDdgiStorageExpectedStride(uint format)
 {
@@ -46,6 +50,56 @@ uint SimpleDdgiStorageExpectedStride(uint format)
 bool SimpleDdgiStorageUsesHotColdLayout(uint layoutFlags)
 {
     return (layoutFlags & SIMPLE_DDGI_STORAGE_HOT_COLD_LAYOUT_BIT) != 0u;
+}
+
+bool SimpleDdgiStorageUsesRecursiveGlossySidecar(uint layoutFlags)
+{
+    return (layoutFlags &
+        SIMPLE_DDGI_STORAGE_RECURSIVE_GLOSSY_SIDECAR_BIT) != 0u;
+}
+
+uint SimpleDdgiStorageWordsPerProbe(
+    uint raysPerProbe,
+    uint cacheStrideWords,
+    uint layoutFlags)
+{
+    uint wordsPerRay = cacheStrideWords +
+        (SimpleDdgiStorageUsesRecursiveGlossySidecar(layoutFlags) ? 1u : 0u);
+    return raysPerProbe * wordsPerRay;
+}
+
+bool TryResolveSimpleDdgiRecursiveGlossySidecarAddressFromProbeBase(
+    uint cacheProbeBaseWordPlusOne,
+    uint directionRayIndex,
+    uint raysPerProbe,
+    uint cacheStrideWords,
+    uint layoutFlags,
+    out uint sidecarWord)
+{
+    sidecarWord = 0u;
+    if (!SimpleDdgiStorageUsesRecursiveGlossySidecar(layoutFlags) ||
+        cacheProbeBaseWordPlusOne == 0u || raysPerProbe == 0u ||
+        directionRayIndex >= raysPerProbe || cacheStrideWords == 0u)
+    {
+        return false;
+    }
+
+    uint probeBase = cacheProbeBaseWordPlusOne - 1u;
+    uint ordinaryWordsHigh;
+    uint ordinaryWords;
+    umulExtended(
+        raysPerProbe,
+        cacheStrideWords,
+        ordinaryWordsHigh,
+        ordinaryWords);
+    if (ordinaryWordsHigh != 0u ||
+        ordinaryWords > 0xffffffffu - probeBase ||
+        directionRayIndex > 0xffffffffu - probeBase - ordinaryWords)
+    {
+        return false;
+    }
+    sidecarWord = probeBase + ordinaryWords + directionRayIndex;
+    return true;
 }
 
 uint SimpleDdgiStorageHotHeaderStride(uint format)
@@ -130,9 +184,11 @@ bool TryResolveSimpleDdgiTransportCacheProbeBase(
     return true;
 }
 
-// One mapping contract for full source sequences and maintenance subsets.
-// Counts are bounded to 256 by the public DDGI ABI, so the products cannot
-// overflow a uint.
+// Version 3 maps every source cardinality into one maximum-cardinality
+// Fibonacci lattice. Lower tiers occupy deterministic strided slots; promotion
+// fills previously unused slots and maintenance selects an exact nested subset.
+// Cached records are therefore never reinterpreted, while each supported tier
+// retains the low quadrature error required to avoid a visible probe lattice.
 uint SimpleDdgiStorageDirectionRayIndex(
     uint localRayOrdinal,
     uint activeRayCount,
@@ -292,7 +348,9 @@ bool TryResolveSimpleDdgiTransportCacheAddress(
     uint localProbeIndex = physicalProbeIndex - physicalFirst;
     uint wordsPerProbeHigh;
     uint wordsPerProbe;
-    umulExtended(raysPerProbe, cacheStrideWords, wordsPerProbeHigh, wordsPerProbe);
+    uint wordsPerRay = cacheStrideWords +
+        (SimpleDdgiStorageUsesRecursiveGlossySidecar(layoutFlags) ? 1u : 0u);
+    umulExtended(raysPerProbe, wordsPerRay, wordsPerProbeHigh, wordsPerProbe);
     if (wordsPerProbeHigh != 0u || wordsPerProbe == 0u)
         return false;
     uint probeOffsetHigh;

@@ -43,7 +43,14 @@ public enum AssetImportMessageCode
     FoliageBlendAlphaWarning,
     FoliageAlphaCutoffWarning,
     FoliageDoubleSidedWarning,
-    UnsupportedTranslucencyWarning
+    UnsupportedTranslucencyWarning,
+    LightImported,
+    LightRangeDefaulted,
+    LightRangeClamped,
+    UnsupportedLightType,
+    InvalidLight,
+    LightNodeMissing,
+    AnimatedLightUnsupported
 }
 
 public sealed record AssetImportMessage(
@@ -78,6 +85,11 @@ public sealed class AssetImportDiagnostics
     public int Uv1MeshCount { get; set; }
     public int UnsupportedCompressedTextureCount { get; set; }
     public int UnsupportedMorphTargetMeshCount { get; set; }
+    public int ImportedLightCount { get; set; }
+    public int ImportedPointLightCount { get; set; }
+    public int ImportedDirectionalLightCount { get; set; }
+    public int ImportedSpotLightCount { get; set; }
+    public int SkippedLightCount { get; set; }
 
     public void Add(AssetImportSeverity severity, AssetImportMessageCode code, string assetPath, string? source, string message)
     {

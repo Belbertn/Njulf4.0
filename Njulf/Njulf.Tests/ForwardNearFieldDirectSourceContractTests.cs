@@ -106,7 +106,13 @@ public sealed class ForwardNearFieldDirectSourceContractTests
                          ForwardNearFieldDirectSourceContract.OpaqueFragmentShader,
                          ForwardNearFieldDirectSourceContract.SimpleOpaqueFragmentShader,
                          ForwardNearFieldDirectSourceContract
-                             .SimpleFullInputOpaqueFragmentShader
+                             .SimpleFullInputOpaqueFragmentShader,
+                         ForwardNearFieldDirectSourceContract
+                             .ReceiverCacheOpaqueFragmentShader,
+                         ForwardNearFieldDirectSourceContract
+                             .ReceiverCacheSimpleOpaqueFragmentShader,
+                         ForwardNearFieldDirectSourceContract
+                             .ReceiverCacheSimpleFullInputOpaqueFragmentShader
                      })
             {
                 string itemName = artifact[..^".spv".Length];
@@ -117,6 +123,10 @@ public sealed class ForwardNearFieldDirectSourceContractTests
                 Does.Contain("-DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1"));
             Assert.That(shaderProject,
                 Does.Contain("-DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3"));
+            Assert.That(shaderProject,
+                Does.Contain("forward_opaque_ddgi_near_field_direct_source_cache_required.frag"));
+            Assert.That(shaderProject,
+                Does.Contain("-DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1"));
             Assert.That(shaderProject,
                 Does.Not.Contain("forward_weighted_oit_ddgi_near_field_direct_source"));
             Assert.That(meshPipeline,
@@ -146,8 +156,27 @@ public sealed class ForwardNearFieldDirectSourceContractTests
                     Is.GreaterThanOrEqualTo(4),
                     $"C5 pipeline variant '{pipelineVariant}' must be created, selected, and retired.");
             }
+            foreach (string pipelineVariant in new[]
+                     {
+                         "_forwardReceiverCacheNearFieldDirectSourcePipeline",
+                         "_forwardCompactedReceiverCacheNearFieldDirectSourcePipeline",
+                         "_forwardSimpleReceiverCacheNearFieldDirectSourcePipeline",
+                         "_forwardSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline",
+                         "_forwardCompactedSimpleReceiverCacheNearFieldDirectSourcePipeline",
+                         "_forwardCompactedSimpleFullInputReceiverCacheNearFieldDirectSourcePipeline"
+                     })
+            {
+                Assert.That(
+                    Regex.Matches(meshPipeline, Regex.Escape(pipelineVariant)).Count,
+                    Is.GreaterThanOrEqualTo(4),
+                    $"Cache-required C5 pipeline variant '{pipelineVariant}' must be created, selected, and retired.");
+            }
             Assert.That(forwardPass,
                 Does.Contain("TryValidateAttachmentBinding"));
+            Assert.That(forwardPass,
+                Does.Contain("receiverCacheEligible = !giCausticReceiverEnabled"));
+            Assert.That(forwardPass,
+                Does.Contain("receiverCacheEnabled,"));
             Assert.That(forwardPass,
                 Does.Contain("DrawFoliageWithoutNearFieldDirectSource"));
             Assert.That(forwardPass,

@@ -9,6 +9,10 @@
 const uint SIMPLE_DDGI_FEEDBACK_SUMMARY_LAYOUT_REVISION = 0xb1010002u;
 const uint SIMPLE_DDGI_FEEDBACK_SUMMARY_ENDIAN_SENTINEL = 0x01020304u;
 const uint SIMPLE_DDGI_FEEDBACK_SUMMARY_HEADER_WORDS = 16u;
+const uint SIMPLE_DDGI_FEEDBACK_REFINEMENT_WITNESS_WORDS = 4u;
+const uint SIMPLE_DDGI_FEEDBACK_SUMMARY_PREFIX_WORDS =
+    SIMPLE_DDGI_FEEDBACK_SUMMARY_HEADER_WORDS +
+    SIMPLE_DDGI_FEEDBACK_REFINEMENT_WITNESS_WORDS;
 const uint SIMPLE_DDGI_FEEDBACK_SUMMARY_LOCATOR_WORDS = 2u;
 const uint SIMPLE_DDGI_FEEDBACK_SUMMARY_RECORD_WORDS = 8u;
 const uint SIMPLE_DDGI_FEEDBACK_SUMMARY_FALLBACK_WORDS = 4u;
@@ -71,12 +75,12 @@ bool SimpleDdgiFeedbackSummaryTryValidateHeader(
         SIMPLE_DDGI_FEEDBACK_SUMMARY_LOCATOR_WORDS +
         SIMPLE_DDGI_FEEDBACK_SUMMARY_RECORD_WORDS;
     if (summaryCapacity >
-            (0xffffffffu - SIMPLE_DDGI_FEEDBACK_SUMMARY_HEADER_WORDS) /
+            (0xffffffffu - SIMPLE_DDGI_FEEDBACK_SUMMARY_PREFIX_WORDS) /
                 summaryWordsPerRecord)
     {
         return false;
     }
-    uint requiredWords = SIMPLE_DDGI_FEEDBACK_SUMMARY_HEADER_WORDS +
+    uint requiredWords = SIMPLE_DDGI_FEEDBACK_SUMMARY_PREFIX_WORDS +
         summaryCapacity * summaryWordsPerRecord;
     if (fallbackCapacity >
             (0xffffffffu - requiredWords) /
@@ -172,7 +176,7 @@ bool SimpleDdgiFeedbackSummaryTryFindProbe(
     {
         uint middle = low + ((high - low) >> 1u);
         uint locatorWord = bankBaseWord +
-            SIMPLE_DDGI_FEEDBACK_SUMMARY_HEADER_WORDS +
+            SIMPLE_DDGI_FEEDBACK_SUMMARY_PREFIX_WORDS +
             middle * SIMPLE_DDGI_FEEDBACK_SUMMARY_LOCATOR_WORDS;
         uint resolvedProbe = ReadStorageWordUniform(
             bufferIndex, locatorWord);
@@ -185,7 +189,7 @@ bool SimpleDdgiFeedbackSummaryTryFindProbe(
         return false;
 
     uint locatorWord = bankBaseWord +
-        SIMPLE_DDGI_FEEDBACK_SUMMARY_HEADER_WORDS +
+        SIMPLE_DDGI_FEEDBACK_SUMMARY_PREFIX_WORDS +
         low * SIMPLE_DDGI_FEEDBACK_SUMMARY_LOCATOR_WORDS;
     uint resolvedProbe = ReadStorageWordUniform(bufferIndex, locatorWord + 0u);
     uint locatorGeneration = ReadStorageWordUniform(
@@ -197,7 +201,7 @@ bool SimpleDdgiFeedbackSummaryTryFindProbe(
     }
 
     uint summaryWord = bankBaseWord +
-        SIMPLE_DDGI_FEEDBACK_SUMMARY_HEADER_WORDS +
+        SIMPLE_DDGI_FEEDBACK_SUMMARY_PREFIX_WORDS +
         summaryCapacity * SIMPLE_DDGI_FEEDBACK_SUMMARY_LOCATOR_WORDS +
         low * SIMPLE_DDGI_FEEDBACK_SUMMARY_RECORD_WORDS;
     float mass = uintBitsToFloat(ReadStorageWordUniform(

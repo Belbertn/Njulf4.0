@@ -704,10 +704,8 @@ public sealed class SimpleDdgiGuidingWorkloadPlanner
                 RandomBranchBits = StableHash32(
                     stableLow, stableHigh, proposalEpoch, slotIndex ^ 0x19b4_7a31u),
                 RequestedUniformFraction = _policy.UniformMixtureFraction,
-                RandomIntraLeafUBits = StableHash32(
-                    stableLow, stableHigh, proposalEpoch, slotIndex ^ 0x6d2b_79f5u),
-                RandomIntraLeafVBits = StableHash32(
-                    stableLow, stableHigh, proposalEpoch, slotIndex ^ 0xb529_7a4du),
+                SourceEpoch = probe.SourceEpoch,
+                SourceLightingGeneration = probe.SourceLightingGeneration,
                 TraceRayIndex = checked(
                     probe.PhysicalProbeIndex *
                         checked((uint)_layout.DirectionSlotsPerProbe) +

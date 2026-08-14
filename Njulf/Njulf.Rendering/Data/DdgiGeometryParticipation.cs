@@ -121,10 +121,40 @@ public static class DdgiGeometryParticipation
         float baseHitDistance,
         ReadOnlySpan<DdgiDecalCandidate> candidates,
         int candidateLimit = ProductionDecalCandidateLimit,
+        float facingCosine = ProductionDecalFacingCosine) =>
+        ComposeDecals(
+            baseSurface,
+            baseHitDistance,
+            SafeNormal(
+                baseSurface.Sanitized().CanonicalGeometricNormal,
+                Vector3.UnitY),
+            candidates,
+            candidateLimit,
+            facingCosine);
+
+    /// <summary>
+    /// Ray-aware decal association. Authored decal bias and tolerance are
+    /// normal-space distances, so ray-hit separation is projected onto the
+    /// candidate's canonical geometric normal before comparison.
+    /// </summary>
+    public static DdgiDecalComposition ComposeDecals(
+        DdgiReferenceSurface baseSurface,
+        float baseHitDistance,
+        Vector3 rayDirection,
+        ReadOnlySpan<DdgiDecalCandidate> candidates,
+        int candidateLimit = ProductionDecalCandidateLimit,
         float facingCosine = ProductionDecalFacingCosine)
     {
         if (!float.IsFinite(baseHitDistance) || baseHitDistance < 0f)
             throw new ArgumentOutOfRangeException(nameof(baseHitDistance));
+        if (!float.IsFinite(rayDirection.X) ||
+            !float.IsFinite(rayDirection.Y) ||
+            !float.IsFinite(rayDirection.Z) ||
+            rayDirection.LengthSquared() <= 1e-12f)
+        {
+            throw new ArgumentOutOfRangeException(nameof(rayDirection));
+        }
+        rayDirection = rayDirection.Normalized();
         if (candidateLimit < 0 || candidateLimit > 64)
             throw new ArgumentOutOfRangeException(nameof(candidateLimit));
         if (!float.IsFinite(facingCosine) || facingCosine < -1f || facingCosine > 1f)
@@ -181,18 +211,20 @@ public static class DdgiGeometryParticipation
         for (int index = 0; index < retained.Count; index++)
         {
             DdgiDecalCandidate candidate = retained[index];
-            float associatedDistance = candidate.HitDistance +
-                candidate.DepthBias;
-            if (MathF.Abs(associatedDistance - baseHitDistance) >
+            Vector3 decalNormal = SafeNormal(
+                candidate.Surface.CanonicalGeometricNormal,
+                baseNormal);
+            float projectedDepthSeparation =
+                (baseHitDistance - candidate.HitDistance) *
+                MathF.Abs(Vector3.Dot(rayDirection, decalNormal));
+            if (MathF.Abs(
+                    projectedDepthSeparation - Math.Max(candidate.DepthBias, 0f)) >
                 candidate.DepthTolerance)
             {
                 depthRejected++;
                 continue;
             }
 
-            Vector3 decalNormal = SafeNormal(
-                candidate.Surface.CanonicalGeometricNormal,
-                baseNormal);
             if (Vector3.Dot(baseNormal, decalNormal) <= facingCosine)
             {
                 facingRejected++;

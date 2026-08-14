@@ -12,11 +12,13 @@ namespace Njulf.Core.Scene
         private readonly List<Skeleton> _skeletons = new();
         private readonly List<Skin> _skins = new();
         private readonly List<AnimationClip> _animationClips = new();
+        private readonly List<ModelLightDefinition> _lights = new();
         private readonly List<Action> _disposeActions = new();
         private readonly ReadOnlyCollection<RenderObject> _readOnlyRenderObjects;
         private readonly ReadOnlyCollection<Skeleton> _readOnlySkeletons;
         private readonly ReadOnlyCollection<Skin> _readOnlySkins;
         private readonly ReadOnlyCollection<AnimationClip> _readOnlyAnimationClips;
+        private readonly ReadOnlyCollection<ModelLightDefinition> _readOnlyLights;
         private bool _disposed;
         private bool _disposeCompleted;
 
@@ -26,6 +28,7 @@ namespace Njulf.Core.Scene
             _readOnlySkeletons = _skeletons.AsReadOnly();
             _readOnlySkins = _skins.AsReadOnly();
             _readOnlyAnimationClips = _animationClips.AsReadOnly();
+            _readOnlyLights = _lights.AsReadOnly();
         }
 
         public string Name { get; set; } = "Model";
@@ -36,6 +39,7 @@ namespace Njulf.Core.Scene
         public IReadOnlyList<Skeleton> Skeletons => _readOnlySkeletons;
         public IReadOnlyList<Skin> Skins => _readOnlySkins;
         public IReadOnlyList<AnimationClip> AnimationClips => _readOnlyAnimationClips;
+        public IReadOnlyList<ModelLightDefinition> Lights => _readOnlyLights;
 
         public Model CreateInstance()
         {
@@ -49,6 +53,7 @@ namespace Njulf.Core.Scene
             instance.AddSkeletons(_skeletons);
             instance.AddSkins(_skins);
             instance.AddAnimationClips(_animationClips);
+            instance.AddLights(_lights);
             instance._renderObjects.EnsureCapacity(
                 _renderObjects.Count);
 
@@ -167,6 +172,13 @@ namespace Njulf.Core.Scene
             ObjectDisposedException.ThrowIf(_disposed, this);
 
             _animationClips.AddRange(clips);
+        }
+
+        public void AddLights(IEnumerable<ModelLightDefinition> lights)
+        {
+            ArgumentNullException.ThrowIfNull(lights);
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _lights.AddRange(lights);
         }
 
         public void Remove(RenderObject renderObject)

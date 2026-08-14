@@ -61,7 +61,7 @@ public sealed class GlobalIlluminationEditorPanelTests
     }
 
     [Test]
-    public void AdvancedGiFeatureSelection_DefaultSettingsExposeFiveEnabledSwitches()
+    public void AdvancedGiFeatureSelection_DefaultSettingsKeepDirectionalGuidingDisabled()
     {
         var settings = new GlobalIlluminationSettings();
 
@@ -70,9 +70,13 @@ public sealed class GlobalIlluminationEditorPanelTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(selection, Is.EqualTo(
-                AdvancedGiFeatureSelection.AllEnabled));
-            Assert.That(selection.AreAllEnabled, Is.True);
+            Assert.That(selection, Is.EqualTo(new AdvancedGiFeatureSelection(
+                ReceiverFeedbackEnabled: true,
+                OpacityMicromapsEnabled: true,
+                DirectionalGuidingEnabled: false,
+                TaggedCausticsEnabled: true,
+                NearFieldResidualEnabled: true)));
+            Assert.That(selection.AreAllEnabled, Is.False);
         });
     }
 
@@ -112,7 +116,7 @@ public sealed class GlobalIlluminationEditorPanelTests
                 Is.EqualTo(GiCausticMode.WorldCacheExperiment));
             Assert.That(settings.SimpleDdgiNearFieldResidualMode,
                 Is.EqualTo(SimpleDdgiNearFieldResidualMode
-                    .HiZHalfResolutionExperiment));
+                    .HiZAdaptive));
             Assert.That(settings.SimpleDdgiReceiverFeedbackQualificationId,
                 Is.Empty);
             Assert.That(settings.DdgiOpacityMicromapQualificationId, Is.Empty);

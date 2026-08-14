@@ -11,30 +11,35 @@ public sealed class DirectionalRayShadowShaderContractTests
     {
         string shader = ReadRepoText(
             "Njulf.Shaders", "directional_ray_shadow.comp");
+        string visibility = ReadRepoText(
+            "Njulf.Shaders", "directional_ray_visibility.glsl");
         string sharedAlpha = ReadRepoText(
             "Njulf.Shaders", "ray_scene_alpha.glsl");
 
         Assert.Multiple(() =>
         {
             Assert.That(shader, Does.Contain("GL_EXT_ray_query"));
-            Assert.That(shader, Does.Contain("pc.InstanceMask & 0xffu"));
             Assert.That(shader,
+                Does.Contain("directional_ray_visibility.glsl"));
+            Assert.That(visibility,
+                Does.Contain("instanceMask & 0xffu"));
+            Assert.That(visibility,
                 Does.Contain("RaySceneCandidateBlocksDirectionalShadow"));
+            Assert.That(visibility,
+                Does.Contain("DIRECTIONAL_RAY_MAX_ALPHA_CANDIDATES"));
             Assert.That(shader,
-                Does.Contain("DIRECTIONAL_RAY_SHADOW_MAX_ALPHA_CANDIDATES"));
+                Does.Contain("ReconstructNormalAndFootprint"));
             Assert.That(shader,
-                Does.Contain("ReconstructDirectionalRayShadowGeometricNormal"));
-            Assert.That(shader,
-                Does.Contain("SelectClosestDepthDerivative"));
+                Does.Contain("SelectClosestDerivative"));
             Assert.That(shader, Does.Contain("atomicOr("));
             Assert.That(shader, Does.Contain("smoothstep("));
-            Assert.That(shader, Does.Contain("rayQueryTerminateEXT"));
+            Assert.That(visibility, Does.Contain("rayQueryTerminateEXT"));
             Assert.That(shader, Does.Not.Contain("random"));
             Assert.That(shader, Does.Not.Contain("history"));
             Assert.That(sharedAlpha,
                 Does.Contain("DdgiAlphaCandidateOccupiesOpaqueTransport"));
             Assert.That(sharedAlpha,
-                Does.Contain("material.DdgiMaterialPolicy.y"));
+                Does.Contain("material.NormalScaleBias.y"));
             Assert.That(sharedAlpha,
                 Does.Contain("if (!RaySceneQueryInstanceIsValid(instance))"));
             Assert.That(sharedAlpha, Does.Contain("return true;"));
@@ -55,12 +60,14 @@ public sealed class DirectionalRayShadowShaderContractTests
             Assert.That(forward,
                 Does.Contain("EvaluateDirectionalShadowForEffectiveMode"));
             Assert.That(forward,
-                Does.Contain("return !geometryDecal;"));
+                Does.Contain("abs(ownerDepth - gl_FragCoord.z)"));
             Assert.That(forward,
                 Does.Contain("effectiveMode == 1u"));
             Assert.That(forward, Does.Contain("pixelIndex >> 2u"));
             Assert.That(forward, Does.Contain("& 0xffu"));
             Assert.That(forward, Does.Contain("return min("));
+            Assert.That(forward,
+                Does.Contain("EvaluateDirectionalTransparentRay"));
         });
     }
 

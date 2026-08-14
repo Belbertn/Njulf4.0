@@ -23,6 +23,8 @@ public sealed class SimpleDdgiReceiverFeedbackGpuSortContractTests
                 Is.EqualTo(48));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiReceiverFeedbackBankHeaderV2>(),
                 Is.EqualTo(64));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1>(),
+                Is.EqualTo(16));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiReceiverFeedbackSummaryLocatorV2>(),
                 Is.EqualTo(8));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiReceiverFeedbackFallbackPressureV2>(),
@@ -30,7 +32,12 @@ public sealed class SimpleDdgiReceiverFeedbackGpuSortContractTests
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiReceiverFeedbackGpuSortPushConstants>(),
                 Is.EqualTo(96));
             Assert.That(SimpleDdgiReceiverFeedbackGpuSortAbi.Version,
-                Is.EqualTo(0xB101_1004u));
+                Is.EqualTo(0xB101_1005u));
+            Assert.That(SimpleDdgiReceiverFeedbackGpuSortAbi.BankPrefixWordCount,
+                Is.EqualTo(20u));
+            Assert.That(
+                SimpleDdgiReceiverFeedbackGpuSortAbi.HeaderAndRefinementWitnessByteCount,
+                Is.EqualTo(80u));
             Assert.That(SimpleDdgiReceiverFeedbackGpuSortAbi.ProducerOverflowKnownMask,
                 Is.EqualTo(0x0000_007fu));
             Assert.That(SimpleDdgiReceiverFeedbackGpuSortAbi.ProducerOverflowUnattributedMask,
@@ -82,15 +89,15 @@ public sealed class SimpleDdgiReceiverFeedbackGpuSortContractTests
             Assert.That(layout.ScratchRadixBaseOffsetWords, Is.EqualTo(8704u));
             Assert.That(layout.ScratchRequiredWords, Is.EqualTo(8960u));
             Assert.That(layout.RadixWorkgroupCount, Is.EqualTo(2u));
-            Assert.That(layout.SummaryLocatorOffsetWords, Is.EqualTo(16u));
-            Assert.That(layout.SummaryRecordOffsetWords, Is.EqualTo(144u));
-            Assert.That(layout.FallbackPressureOffsetWords, Is.EqualTo(656u));
-            Assert.That(layout.SummaryBankStrideWords, Is.EqualTo(2704u));
-            Assert.That(layout.SummaryBanksWords, Is.EqualTo(5408u));
+            Assert.That(layout.SummaryLocatorOffsetWords, Is.EqualTo(20u));
+            Assert.That(layout.SummaryRecordOffsetWords, Is.EqualTo(148u));
+            Assert.That(layout.FallbackPressureOffsetWords, Is.EqualTo(660u));
+            Assert.That(layout.SummaryBankStrideWords, Is.EqualTo(2708u));
+            Assert.That(layout.SummaryBanksWords, Is.EqualTo(5416u));
             Assert.That(layout.RequiredRecordBanksBytes, Is.EqualTo(32768UL));
             Assert.That(layout.RequiredSortScratchBytes, Is.EqualTo(35840UL));
-            Assert.That(layout.RequiredSummaryBanksBytes, Is.EqualTo(21632UL));
-            Assert.That(layout.RequiredTotalBytes, Is.EqualTo(90240UL));
+            Assert.That(layout.RequiredSummaryBanksBytes, Is.EqualTo(21664UL));
+            Assert.That(layout.RequiredTotalBytes, Is.EqualTo(90272UL));
         });
     }
 
@@ -242,6 +249,80 @@ public sealed class SimpleDdgiReceiverFeedbackGpuSortContractTests
     }
 
     [Test]
+    public void RefinementWitness_SelectsMeasuredMaximumWithStableProbeTieBreak()
+    {
+        const uint generation = 17u;
+        GPUSimpleDdgiReceiverFeedbackSummaryLocatorV2[] locators =
+        [
+            new() { ResolvedVirtualProbeId = 91u, SummaryGeneration = generation },
+            new() { ResolvedVirtualProbeId = 7u, SummaryGeneration = generation },
+            new() { ResolvedVirtualProbeId = 33u, SummaryGeneration = generation }
+        ];
+        GPUSimpleDdgiReceiverContributionSummaryV2 ValidSummary(float mass) => new()
+        {
+            EstimatedContributionMass = mass,
+            MaximumSingleReceiverWeight = 0.75f,
+            ExactUniqueTileCount = 3u,
+            SampledReceiverCount = 4u,
+            ConsumerMask = 1u,
+            FeedbackGeneration = generation,
+            StatusFlags = (uint)SimpleDdgiReceiverFeedbackSummaryStatus.Validated
+        };
+        GPUSimpleDdgiReceiverContributionSummaryV2[] summaries =
+        [
+            ValidSummary(4.0f),
+            ValidSummary(4.0f),
+            ValidSummary(2.0f)
+        ];
+
+        bool selected = SimpleDdgiReceiverFeedbackGpuSortAbi
+            .TrySelectRefinementWitness(
+                locators,
+                summaries,
+                generation,
+                out GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1 witness);
+        var header = new GPUSimpleDdgiReceiverFeedbackBankHeaderV2
+        {
+            LayoutRevision = SimpleDdgiReceiverFeedbackV2Abi.LayoutRevision,
+            EndianSentinel = SimpleDdgiReceiverFeedbackV2Abi.EndianSentinel,
+            FeedbackGeneration = generation,
+            ViewportGeneration = 2u,
+            FrameSerialLow = 9u,
+            RecordCapacity = 8u,
+            AppendCount = 3u,
+            ProbePartialCount = 3u,
+            SummaryCount = 3u,
+            Flags = SimpleDdgiReceiverFeedbackGpuBankFlags.Validated
+        };
+        bool decoded = SimpleDdgiReceiverFeedbackGpuSortAbi
+            .TryDecodeRefinementWitness(
+                header,
+                witness,
+                volumeTableGeneration: 23u,
+                out SimpleDdgiReceiverFeedbackRefinementWitness decodedWitness);
+        bool unstampedDomain = SimpleDdgiReceiverFeedbackGpuSortAbi
+            .TryDecodeRefinementWitness(header, witness, 0u, out _);
+        summaries[1].StatusFlags = 0u;
+        bool malformed = SimpleDdgiReceiverFeedbackGpuSortAbi
+            .TrySelectRefinementWitness(locators, summaries, generation, out _);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(selected, Is.True);
+            Assert.That(witness.Version,
+                Is.EqualTo(SimpleDdgiReceiverFeedbackGpuSortAbi.RefinementWitnessVersion));
+            Assert.That(witness.ResolvedVirtualProbeId, Is.EqualTo(7u));
+            Assert.That(witness.EstimatedContributionMass, Is.EqualTo(4.0f));
+            Assert.That(witness.FeedbackGeneration, Is.EqualTo(generation));
+            Assert.That(decoded, Is.True);
+            Assert.That(decodedWitness.ResolvedVirtualProbeId, Is.EqualTo(7u));
+            Assert.That(decodedWitness.VolumeTableGeneration, Is.EqualTo(23u));
+            Assert.That(unstampedDomain, Is.False);
+            Assert.That(malformed, Is.False);
+        });
+    }
+
+    [Test]
     public void PushConstants_RejectInPlaceRadixAndAllowsDerivedDynamicInputCount()
     {
         Assert.That(SimpleDdgiReceiverFeedbackGpuSortAbi.TryCreateLayout(
@@ -369,7 +450,9 @@ public sealed class SimpleDdgiReceiverFeedbackGpuSortContractTests
             Assert.That(abi, Does.Contain(
                 "SIMPLE_DDGI_RECEIVER_FEEDBACK_RAW_RADIX_PASS_COUNT = 28u"));
             Assert.That(abi, Does.Contain(
-                "SIMPLE_DDGI_RECEIVER_FEEDBACK_GPU_SORT_ABI_VERSION = 0xb1011004u"));
+                "SIMPLE_DDGI_RECEIVER_FEEDBACK_GPU_SORT_ABI_VERSION = 0xb1011005u"));
+            Assert.That(abi, Does.Contain(
+                "SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_PREFIX_WORDS"));
             Assert.That(abi, Does.Contain(
                 "SIMPLE_DDGI_RECEIVER_FEEDBACK_RECORD_REQUESTED_PROBE"));
             Assert.That(abi, Does.Contain(
@@ -386,6 +469,10 @@ public sealed class SimpleDdgiReceiverFeedbackGpuSortContractTests
             Assert.That(scatter, Does.Contain("radixDestination[localIndex]"));
             Assert.That(scatter, Does.Not.Contain("atomicAdd(radixCursor"));
             Assert.That(reduce, Does.Contain("SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FALLBACK_SUMMARY_COUNT"));
+            Assert.That(reduce, Does.Contain(
+                "SimpleDdgiReceiverFeedbackFinalizeCandidates"));
+            Assert.That(reduce, Does.Contain(
+                "SIMPLE_DDGI_RECEIVER_FEEDBACK_REFINEMENT_WITNESS_VERSION"));
             Assert.That(reduce.IndexOf("memoryBarrierBuffer();", StringComparison.Ordinal),
                 Is.LessThan(reduce.LastIndexOf(
                     "SIMPLE_DDGI_RECEIVER_FEEDBACK_BANK_VALIDATED",
@@ -394,6 +481,8 @@ public sealed class SimpleDdgiReceiverFeedbackGpuSortContractTests
                 "SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FLAGS, 0u"));
             Assert.That(summaryReader, Does.Contain(
                 "SimpleDdgiFeedbackSummaryTryValidateHeader"));
+            Assert.That(summaryReader, Does.Contain(
+                "SIMPLE_DDGI_FEEDBACK_SUMMARY_PREFIX_WORDS"));
             Assert.That(summaryReader, Does.Contain(
                 "SIMPLE_DDGI_FEEDBACK_HEADER_PRODUCER_OVERFLOW) != 0u"));
             Assert.That(summaryReader, Does.Contain(

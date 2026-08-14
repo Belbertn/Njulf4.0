@@ -61,9 +61,9 @@ bool SimpleDdgiGuidingLoadSampleRequest(
     request.randomBranchBits = guidingSampleRequests.words[baseWord + 9u];
     request.requestedUniformFraction = uintBitsToFloat(
         guidingSampleRequests.words[baseWord + 10u]);
-    request.randomIntraLeafUBits =
+    request.sourceEpoch =
         guidingSampleRequests.words[baseWord + 11u];
-    request.randomIntraLeafVBits =
+    request.sourceLightingGeneration =
         guidingSampleRequests.words[baseWord + 12u];
     request.traceRayIndex = guidingSampleRequests.words[baseWord + 13u];
     return true;
@@ -86,8 +86,9 @@ void SimpleDdgiGuidingStoreSamplePayload(
         payload.directionProposalEpoch;
     guidingSamplePayloads.words[baseWord + 8u] = payload.slotIndex;
     guidingSamplePayloads.words[baseWord + 9u] = payload.techniqueAndBranch;
-    guidingSamplePayloads.words[baseWord + 10u] = payload.leafIndex;
-    guidingSamplePayloads.words[baseWord + 11u] = payload.intraLeafSampleBits;
+    guidingSamplePayloads.words[baseWord + 10u] = payload.sourceEpoch;
+    guidingSamplePayloads.words[baseWord + 11u] =
+        payload.sourceLightingGeneration;
     guidingSamplePayloads.words[baseWord + 12u] = payload.packedDirectionOct32;
     guidingSamplePayloads.words[baseWord + 13u] =
         payload.generationTimePdfBits;
@@ -352,8 +353,8 @@ void SimpleDdgiGuidingWriteInvalidPayload(
     payload.techniqueAndBranch =
         SimpleDdgiGuidingPackTechniqueAndBranch(request.technique,
             SIMPLE_DDGI_GUIDING_BRANCH_UNIFORM);
-    payload.leafIndex = 0u;
-    payload.intraLeafSampleBits = 0u;
+    payload.sourceEpoch = request.sourceEpoch;
+    payload.sourceLightingGeneration = request.sourceLightingGeneration;
     payload.packedDirectionOct32 = 0u;
     payload.generationTimePdfBits = 0u;
     payload.flags = SIMPLE_DDGI_GUIDING_SAMPLE_INVALID_DISTRIBUTION;
@@ -481,6 +482,8 @@ void main()
         baseWordFits;
     bool baseValid = guidingPc.abiVersion == SIMPLE_DDGI_GUIDING_ABI_VERSION &&
         safePhysicalProbeIndex &&
+        request.sourceEpoch != 0u &&
+        request.sourceLightingGeneration != 0u &&
         request.technique <= SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE &&
         guidingPc.bankStrideWords >= SIMPLE_DDGI_GUIDING_HEADER_WORDS &&
         SimpleDdgiGuidingSupportedLeafResolution(guidingPc.leafResolution) &&
@@ -523,8 +526,16 @@ void main()
     uint leafResolution = SimpleDdgiGuidingLeafResolution(header);
     uint leafIndex;
     float guidedPdf = SIMPLE_DDGI_GUIDING_UNIFORM_SPHERE_PDF;
-    float intraU = SimpleDdgiGuidingUnitOpen(request.randomIntraLeafUBits);
-    float intraV = SimpleDdgiGuidingUnitOpen(request.randomIntraLeafVBits);
+    uint intraLeafUBits = SimpleDdgiGuidingHash3(
+        request.randomBranchBits,
+        request.sourceEpoch,
+        request.slotIndex ^ 0x6d2b79f5u);
+    uint intraLeafVBits = SimpleDdgiGuidingHash3(
+        request.randomBranchBits,
+        request.sourceLightingGeneration,
+        request.slotIndex ^ 0xb5297a4du);
+    float intraU = SimpleDdgiGuidingUnitOpen(intraLeafUBits);
+    float intraV = SimpleDdgiGuidingUnitOpen(intraLeafVBits);
 
     if (branch == SIMPLE_DDGI_GUIDING_BRANCH_GUIDED)
     {
@@ -545,7 +556,7 @@ void main()
         float squareU = SimpleDdgiGuidingUnitOpen(
             SimpleDdgiGuidingHash3(request.randomBranchBits,
                 request.slotIndex, request.stableProbeIdHigh));
-        float squareV = SimpleDdgiGuidingUnitOpen(request.randomIntraLeafUBits);
+        float squareV = SimpleDdgiGuidingUnitOpen(intraLeafUBits);
         uint leafX = min(leafResolution - 1u,
             uint(floor(squareU * float(leafResolution))));
         uint leafY = min(leafResolution - 1u,
@@ -597,8 +608,8 @@ void main()
     payload.slotIndex = request.slotIndex;
     payload.techniqueAndBranch = SimpleDdgiGuidingPackTechniqueAndBranch(
         request.technique, branch);
-    payload.leafIndex = leafIndex;
-    payload.intraLeafSampleBits = intraLeafBits;
+    payload.sourceEpoch = request.sourceEpoch;
+    payload.sourceLightingGeneration = request.sourceLightingGeneration;
     payload.packedDirectionOct32 = SimpleDdgiGuidingPackOctahedralSnorm16(direction);
     payload.generationTimePdfBits = floatBitsToUint(generationTimePdf);
     payload.flags = request.technique == SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE
@@ -617,6 +628,8 @@ void main()
         payload.physicalProbeIndex,
         payload.virtualProbeId,
         payload.pageGeneration,
+        payload.sourceEpoch,
+        payload.sourceLightingGeneration,
         payload.slotIndex,
         payload.packedDirectionOct32);
     SimpleDdgiGuidingStoreSamplePayload(payloadIndex, payload);

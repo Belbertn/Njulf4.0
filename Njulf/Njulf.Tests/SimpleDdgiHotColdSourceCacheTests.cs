@@ -207,6 +207,27 @@ public sealed class SimpleDdgiHotColdSourceCacheTests
     }
 
     [Test]
+    public void RecursiveGlossyEstimate_ChargesSidecarOnlyForSurfaceHits()
+    {
+        const ulong rayCount = 8_192;
+        const float coldFraction = 0.75f;
+        ulong ordinary = SimpleDdgiHotColdAdmissionModel.EstimateSolveReadBytes(
+            SimpleDdgiTransportCacheFormat.Compact24,
+            rayCount,
+            coldFraction,
+            hotColdLayout: true);
+        ulong recursive = SimpleDdgiHotColdAdmissionModel.EstimateSolveReadBytes(
+            SimpleDdgiTransportCacheFormat.Compact24,
+            rayCount,
+            coldFraction,
+            hotColdLayout: true,
+            conditionalSurfaceSidecarBytes: sizeof(uint));
+
+        Assert.That(recursive, Is.EqualTo(checked(
+            ordinary + rayCount / 4UL * sizeof(uint))));
+    }
+
+    [Test]
     public void ShaderAbi_UsesHeaderGenerationAndConditionalSurfacePayload()
     {
         string abi = ReadRepoText("Njulf.Shaders", "ddgi_simple_storage_abi.glsl");
@@ -220,9 +241,15 @@ public sealed class SimpleDdgiHotColdSourceCacheTests
         {
             Assert.That(abi, Does.Contain(
                 "SIMPLE_DDGI_STORAGE_HOT_COLD_LAYOUT_BIT = 1u << 16u"));
+            Assert.That(abi, Does.Contain(
+                "SIMPLE_DDGI_STORAGE_RECURSIVE_GLOSSY_SIDECAR_BIT = 1u << 17u"));
+            Assert.That(abi, Does.Contain(
+                "TryResolveSimpleDdgiRecursiveGlossySidecarAddressFromProbeBase"));
             Assert.That(abi, Does.Contain("SimpleDdgiStorageSurfacePayloadWord"));
             Assert.That(shared, Does.Contain("requiresSurfacePayload"));
             Assert.That(shared, Does.Contain("writeSurfacePayload"));
+            Assert.That(shared, Does.Contain(
+                "ReadSimpleDdgiRecursiveGlossyMaterialSidecar"));
             Assert.That(commit, Does.Contain("SimpleDdgiStorageGenerationWord"));
             Assert.That(audit, Does.Contain("SimpleDdgiStorageGenerationWord"));
         });

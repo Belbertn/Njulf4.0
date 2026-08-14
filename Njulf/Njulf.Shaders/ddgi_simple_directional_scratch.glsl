@@ -109,7 +109,7 @@ bool SimpleDdgiDirectionalParityRequired(SimpleDdgiParams params)
     uint glossyMode = SimpleDdgiGlossyTransportMode(params.residencyFlags);
     return glossyMode == SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_ONE_BOUNCE ||
         glossyMode ==
-            SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_RECURSIVE_EXPERIMENTAL;
+            SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_RECURSIVE_CERTIFIED;
 }
 
 // A fast publication-header check is sufficient for deciding whether work is

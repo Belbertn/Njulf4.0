@@ -152,7 +152,12 @@ namespace Njulf.Rendering.Pipeline
         GiCausticScreenFrameConstants,
         // Double-buffered full-resolution packed R8-unorm visibility output
         // for deterministic directional ray shadows.
-        DirectionalRayShadowMask
+        DirectionalRayShadowMask,
+        DirectionalShadowRaw,
+        DirectionalShadowHistory,
+        DirectionalShadowScratch,
+        DirectionalShadowDiagnostics,
+        DirectionalShadowCounters
     }
 
     public enum RenderGraphResourceKind

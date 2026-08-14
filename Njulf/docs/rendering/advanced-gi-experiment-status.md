@@ -8,16 +8,17 @@ evidence.
 
 ## Current rollout state
 
-The production code paths for B1, C1, C3, C4, and the bounded C5 prototype are
+The production code paths for B1, C1, C3, C4, and bounded C5 are
 present. New settings request B1 `ExactCompacted`, C1
 `ExtFourStateExperiment`, C3 `PerProbeHistogramExperiment`, C4
-`WorldCacheExperiment`, and C5 `HiZHalfResolutionExperiment` by default.
+`WorldCacheExperiment`, and C5 `HiZAdaptive` by default.
 Requested mode is persisted intent: real hardware capability, content,
 memory, ABI, allocation, and resource-completeness gates remain authoritative.
 Explicit modes do not require promotion artifacts; prerequisite manifests and
 qualification evidence gate only `AutoQualified`. Existing saved settings
-retain their persisted mode. C2/SER is intentionally excluded and owns no
-runtime code or resources under this plan.
+retain their persisted mode. C2/SER and surfel GI are intentionally excluded
+and own no runtime code or resources under this plan. C5 is the only
+screen-space near-field complement to canonical DDGI.
 
 Requested, supported, admitted, effective, and qualified modes are separate.
 The editor shows those states together with live resource/publication status,
@@ -89,12 +90,21 @@ runtime-owned and fence-retired, avoiding duplicate graph/resource ownership.
 | C1 opacity micromaps | Deterministic pinned NVIDIA CPU bake bridge; optional checksummed cooked payload; multi-submesh runtime partitioning; EXT device enablement; build/compaction; OMM-attached static-BLAS variants; cache/lease/retirement; ordinary-candidate fallback; lifecycle/content/memory diagnostics. | RTX 3060, Ada+, extension-disabled, and non-EXT same-ray/image conformance plus amortized total-GI performance evidence. KHR and SER remain out of scope. |
 | C3 directional guiding | Equal-area hierarchy/PDF/MIS oracle; GPU-resident scheduler compaction into train/sample work; GPU train/build/sample/validate; double publication banks; compact status-last publication; central scratch; physical-probe-owned direction/PDF payloads in the ordinary ray-scratch tail; staged directional projection; generation-time PDF propagation into trace/transport/blend/relocation/projection; maintenance rays; readback/statistical qualification contracts. | Archived multi-seed convergence, quality-per-time, cache-pressure, long-run, and device-matrix evidence for automatic promotion. |
 | C4 caustics | Authored hero validation; analytic/path-reference contracts; tagged light/receiver producer; ray-query trace; deterministic radix/bottom-K world cache; coherent two-bank publication; screen resolve/composite; resize/revision/fence handling; isolated memory and diagnostics. | Archived analytic/path-traced energy, motion/reload/origin, ordinary-content zero-work, total-time, and target-device qualification evidence. |
-| C5 near-field residual | Explicit post-B3 admission with a dedicated direct-diffuse-plus-emissive opaque/masked MRT; bounded Hi-Z trace; typed ray/PDF and hit/source identity; banked history/normal/metadata; reset, temporal rejection/moments, filtering, composite, counters/timestamps, and schema-versioned diagnostics. `AutoQualified` additionally consumes scene-bound evidence. | A signed go decision and archived post-B3 equal-cost reference captures proving error reduction, edge/motion stability, energy ownership, long-run memory, and target-device cost before automatic promotion. |
+| C5 near-field residual | Explicit post-B3 admission with a dedicated direct-diffuse-plus-emissive opaque/masked MRT; bounded Hi-Z trace; typed ray/PDF and hit/source identity; banked history/normal/metadata; reset, temporal rejection/moments, filtering, composite, counters, joined stage timestamps, and schema-versioned diagnostics. Explicit mode starts at quarter resolution and can demote to eighth. Half resolution is limited to an evidence-bound `AutoQualified` profile and requires sustained P95 headroom. The production P95 ceiling is 0.75 ms. | Archived post-B3 equal-cost reference captures proving error reduction, edge/motion stability, energy ownership, long-run memory, and target-device cost before automatic promotion or half-resolution admission. |
 
 All optional allocations are transactional and independently budgeted. A
 disabled or rejected feature binds only safe fallback descriptors where the
 global bindless ABI requires a slot; it owns zero feature buffers/images and
 records no feature dispatches.
+
+The optional `RecursiveCertified` glossy transport mode is separate from the
+B/C experiment switches. It stores one packed F0/roughness word per cached ray,
+uses one shared detailed directional gather for diffuse and glossy response,
+and solves both through the same Jacobi operator. The frozen audit evaluates
+that exact operator with per-channel contraction and tail bounds. Missing or
+partial sidecar storage, stale ownership, or failed audit evidence rolls the
+effective mode back to `OneBounce`; High and Ultra intentionally default to
+that cheaper mode.
 
 ## Completion audit
 

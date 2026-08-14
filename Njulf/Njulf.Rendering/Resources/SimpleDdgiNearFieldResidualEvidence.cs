@@ -10,10 +10,9 @@ namespace Njulf.Rendering.Resources;
 /// </summary>
 public static class SimpleDdgiNearFieldResidualEvidenceAbi
 {
-    // V4 additionally budgets the asynchronous per-frame telemetry readback
-    // ring. Prior artifacts did not include that live allocation and cannot
-    // be compared against the same independent memory envelope.
-    public const uint Version = 0x4335_0104u;
+    // V5 additionally binds the production P95 GPU-time ceiling. Prior
+    // artifacts carried an equal-cost average but could hide frame spikes.
+    public const uint Version = 0x4335_0105u;
 
     // These values deliberately live in the evidence ABI rather than in a
     // preset.  Changing a promotion floor invalidates prior evidence.
@@ -21,6 +20,7 @@ public static class SimpleDdgiNearFieldResidualEvidenceAbi
     public const uint MinimumReferenceFrameCount = 120u;
     public const uint MinimumIndependentRunCount = 3u;
     public const double MaximumEqualCostRelativeDifference = 0.05;
+    public const double MaximumProductionP95Milliseconds = 0.75;
 }
 
 /// <summary>
@@ -211,6 +211,7 @@ public readonly record struct SimpleDdgiNearFieldResidualQualificationEvidence(
     uint ReferenceFrameCount,
     uint IndependentRunCount,
     double C5AddedMilliseconds,
+    double C5P95Milliseconds,
     double EqualCostAdditionalB3Milliseconds,
     bool B3ConvergenceVerified,
     bool CpuOrImageSpaceOracleVerified,
@@ -405,6 +406,19 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
                 evidence,
                 SimpleDdgiNearFieldResidualDecision.No(
                     "near-field-evidence-equal-cost-comparison-invalid"));
+        }
+        if (!double.IsFinite(evidence.C5P95Milliseconds) ||
+            evidence.C5P95Milliseconds <= 0.0 ||
+            evidence.C5P95Milliseconds >
+                SimpleDdgiNearFieldResidualEvidenceAbi
+                    .MaximumProductionP95Milliseconds)
+        {
+            return Reject(
+                GiExperimentFallbackReason.QualificationNotPassed,
+                "near-field-evidence-P95-GPU-budget-exceeded",
+                evidence,
+                SimpleDdgiNearFieldResidualDecision.No(
+                    "near-field-evidence-P95-GPU-budget-exceeded"));
         }
         if (!evidence.B3ConvergenceVerified ||
             !evidence.CpuOrImageSpaceOracleVerified ||

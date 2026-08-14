@@ -85,6 +85,7 @@ internal readonly record struct AdvancedGiRenderGraphModes(
         NearFieldProfile.IsSupported &&
         NearFieldResidual is
             SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment or
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive or
             SimpleDdgiNearFieldResidualMode.AutoQualified;
 
     public bool UsesNearFieldFiltering =>

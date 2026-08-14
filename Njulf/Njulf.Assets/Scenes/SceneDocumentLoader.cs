@@ -57,10 +57,17 @@ public sealed class SceneDocumentLoader
                 document);
         ValidateDocument(document);
 
-        if (scene.RenderObjects.Count != 0 || scene.ReflectionProbes.Count != 0 || scene.GlobalIlluminationProbeVolumes.Count != 0 ||
+        if (scene.RenderObjects.Count != 0 || scene.Updateables.Count != 0 || scene.ReflectionProbes.Count != 0 || scene.GlobalIlluminationProbeVolumes.Count != 0 ||
             scene.StaticInstanceBatches.Count != 0 || scene.FoliagePatches.Count != 0 || scene.ParticleEffects.Count != 0)
         {
             throw new InvalidOperationException("SceneDocumentLoader.Populate requires an empty scene. Clear and dispose the destination before reloading.");
+        }
+
+        if (document.ImportedModelLightsEnabled &&
+            lights is not IMutableSceneLightStore)
+        {
+            throw new InvalidOperationException(
+                "The document enables imported model lights, but no IMutableSceneLightStore was supplied.");
         }
 
         scene.Id = document.Id;
@@ -126,6 +133,18 @@ public sealed class SceneDocumentLoader
             else if (document.Lights.Count != 0)
             {
                 throw new InvalidOperationException("The document contains lights, but no ISceneLightStore was supplied.");
+            }
+
+            if (document.ImportedModelLightsEnabled &&
+                lights is IMutableSceneLightStore mutableLights)
+            {
+                ModelLightRuntimeController importedLights =
+                    ModelLightRuntimeController.Attach(
+                        scene,
+                        _content,
+                        mutableLights);
+                importedLights.SetImportedModelLightsEnabled(
+                    document.ImportedModelLightsEnabled);
             }
         }
         catch (Exception failure)
@@ -454,6 +473,8 @@ public sealed class SceneDocumentLoader
         AddIds(document.FoliagePrototypes, static item => item.Id, "foliage prototype");
         AddIds(document.FoliagePatches, static item => item.Id, "foliage patch");
         AddIds(document.ParticleEffects, static item => item.Id, "particle effect");
+        foreach (SceneLightDocument light in document.Lights)
+            ValidateLight(light);
         foreach (SceneObjectDocument record in document.Objects)
         {
             float alphaCutoff = record.MaterialOverride?.AlphaCutoff ?? 0.5f;
@@ -464,6 +485,76 @@ public sealed class SceneDocumentLoader
                     "that is not finite and non-negative.");
             }
         }
+
+        static void ValidateLight(SceneLightDocument light)
+        {
+            if (!Enum.TryParse(
+                    light.Type,
+                    ignoreCase: true,
+                    out Njulf.Core.Scene.ModelLightType type) ||
+                !Enum.IsDefined(type))
+            {
+                throw new InvalidDataException(
+                    $"Scene light '{light.Name}' ({light.Id}) has unsupported type '{light.Type}'.");
+            }
+            if (!Enum.TryParse(
+                    light.AttenuationMode,
+                    ignoreCase: true,
+                    out Njulf.Core.Scene.ModelLightAttenuationMode attenuation) ||
+                !Enum.IsDefined(attenuation))
+            {
+                throw new InvalidDataException(
+                    $"Scene light '{light.Name}' ({light.Id}) has unsupported attenuation mode '{light.AttenuationMode}'.");
+            }
+            bool finite = IsFinite(light.Position) && IsFinite(light.Direction) &&
+                IsFinite(light.Color) && float.IsFinite(light.Intensity) &&
+                float.IsFinite(light.Range) && float.IsFinite(light.SpotAngle) &&
+                float.IsFinite(light.InnerSpotAngle) &&
+                float.IsFinite(light.AttenuationConstant) &&
+                float.IsFinite(light.AttenuationLinear) &&
+                float.IsFinite(light.AttenuationQuadratic);
+            if (!finite || light.Intensity < 0f || light.Range <= 0f ||
+                light.Color.X < 0f || light.Color.Y < 0f || light.Color.Z < 0f)
+            {
+                throw new InvalidDataException(
+                    $"Scene light '{light.Name}' ({light.Id}) contains invalid numeric data.");
+            }
+            float directionLengthSquared =
+                light.Direction.X * light.Direction.X +
+                light.Direction.Y * light.Direction.Y +
+                light.Direction.Z * light.Direction.Z;
+            if ((type is Njulf.Core.Scene.ModelLightType.Directional or
+                    Njulf.Core.Scene.ModelLightType.Spot) &&
+                directionLengthSquared <= float.Epsilon)
+            {
+                throw new InvalidDataException(
+                    $"Scene light '{light.Name}' ({light.Id}) has a zero direction.");
+            }
+            if (type == Njulf.Core.Scene.ModelLightType.Spot &&
+                (light.InnerSpotAngle < 0f || light.SpotAngle <= 0f ||
+                 light.InnerSpotAngle > light.SpotAngle ||
+                 light.SpotAngle > MathF.PI))
+            {
+                throw new InvalidDataException(
+                    $"Scene spot light '{light.Name}' ({light.Id}) has invalid cone angles.");
+            }
+            if (attenuation ==
+                    Njulf.Core.Scene.ModelLightAttenuationMode.Polynomial &&
+                (light.AttenuationConstant < 0f ||
+                 light.AttenuationLinear < 0f ||
+                 light.AttenuationQuadratic < 0f ||
+                 light.AttenuationConstant + light.AttenuationLinear +
+                     light.AttenuationQuadratic <= 0f))
+            {
+                throw new InvalidDataException(
+                    $"Scene light '{light.Name}' ({light.Id}) has invalid polynomial attenuation.");
+            }
+        }
+
+        static bool IsFinite(SceneVector3 value) =>
+            float.IsFinite(value.X) &&
+            float.IsFinite(value.Y) &&
+            float.IsFinite(value.Z);
         return;
         void AddIds<T>(IEnumerable<T> records, Func<T, Guid> getId, string kind)
         {

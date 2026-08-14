@@ -34,6 +34,7 @@ public sealed class CookedModelPackageSnapshot
 
 public static class CookedPackage
 {
+    private const int MaximumCookedModelLights = 1024;
     private const CookedSectionFlags Required = CookedSectionFlags.Required;
     public const int MaximumModelPackageSnapshotBytes =
         512 * 1024 * 1024;
@@ -46,6 +47,7 @@ public static class CookedPackage
         uint toolVersion = 1,
         CookedOpacityMicromapModelChunk? opacityMicromapChunk = null)
     {
+        ValidateModelLights(path, manifest.Lights);
         using var writer = new CookedAssetWriter(path, CookedAssetKind.Model, manifest.SourceHash, manifest.ImportSettingsHash, manifest.DependencyListHash, toolVersion);
         writer.WriteSection(CookedSectionIds.Manifest, Required | CookedSectionFlags.Zstd, CookedJson.Serialize(manifest));
         if (opacityMicromapChunk is not null)
@@ -232,6 +234,11 @@ public static class CookedPackage
             reader.GetRequiredSection(CookedSectionIds.Manifest).Span,
             modelPath,
             "manifest");
+        manifest = manifest with
+        {
+            Lights = manifest.Lights ?? Array.Empty<Core.Scene.ModelLightDefinition>()
+        };
+        ValidateModelLights(modelPath, manifest.Lights);
         (OpacityMicromapCookedPayload? opacityMicromapPayload,
             CookedOpacityMicromapPayloadLoadStatus opacityMicromapLoadStatus) =
             LoadOptionalOpacityMicromapPayload(reader);
@@ -332,6 +339,35 @@ public static class CookedPackage
             OpacityMicromapPayload = opacityMicromapPayload,
             OpacityMicromapLoadStatus = opacityMicromapLoadStatus
         };
+    }
+
+    private static void ValidateModelLights(
+        string path,
+        IReadOnlyList<Core.Scene.ModelLightDefinition>? lights)
+    {
+        if (lights is null)
+            throw new InvalidDataException(
+                $"Cooked model '{path}' contains a null light collection.");
+        if (lights.Count > MaximumCookedModelLights)
+        {
+            throw new InvalidDataException(
+                $"Cooked model '{path}' contains {lights.Count} lights, exceeding the runtime limit of {MaximumCookedModelLights}.");
+        }
+
+        var diagnostics = new AssetImportDiagnostics();
+        for (int index = 0; index < lights.Count; index++)
+        {
+            Core.Scene.ModelLightDefinition? light = lights[index];
+            if (light is null)
+            {
+                throw new InvalidDataException(
+                    $"Cooked model '{path}' contains a null light at index {index}.");
+            }
+            ModelLightImportUtilities.ValidateAndRecord(
+                light,
+                diagnostics,
+                path);
+        }
     }
 
     private static (

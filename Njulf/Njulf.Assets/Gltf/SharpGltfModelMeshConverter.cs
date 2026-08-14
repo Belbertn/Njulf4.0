@@ -17,6 +17,9 @@ using CoreMatrix4x4 = Njulf.Core.Math.Matrix4x4;
 using CoreQuaternion = Njulf.Core.Math.Quaternion;
 using CoreSkeleton = Njulf.Core.Animation.Skeleton;
 using CoreSkin = Njulf.Core.Animation.Skin;
+using ModelLightAttenuationMode = Njulf.Core.Scene.ModelLightAttenuationMode;
+using ModelLightDefinition = Njulf.Core.Scene.ModelLightDefinition;
+using ModelLightType = Njulf.Core.Scene.ModelLightType;
 using CoreVector2 = Njulf.Core.Math.Vector2;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 using CoreVector4 = Njulf.Core.Math.Vector4;
@@ -27,6 +30,7 @@ using NumericsVector3 = System.Numerics.Vector3;
 using NumericsVector4 = System.Numerics.Vector4;
 using SchemaMesh = SharpGLTF.Schema2.Mesh;
 using SchemaNode = SharpGLTF.Schema2.Node;
+using SchemaPunctualLight = SharpGLTF.Schema2.PunctualLight;
 using SchemaSkin = SharpGLTF.Schema2.Skin;
 
 namespace Njulf.Assets.Gltf;
@@ -81,6 +85,9 @@ internal static class SharpGltfModelMeshConverter
 
         Scene scene = root.DefaultScene ?? root.LogicalScenes.FirstOrDefault()
             ?? throw new InvalidDataException($"glTF asset '{fullPath}' does not contain a scene.");
+
+        if (options.ImportLights)
+            ImportLights(root, scene, model, options, diagnostics, fullPath);
 
         var vertices = new List<CoreVector3>();
         var normals = new List<CoreVector3>();
@@ -142,6 +149,115 @@ internal static class SharpGltfModelMeshConverter
         model.AnimationDiagnostics = CreateAnimationDiagnostics(model);
 
         return model;
+    }
+
+    private static void ImportLights(
+        ModelRoot root,
+        Scene scene,
+        ModelMesh model,
+        ImporterOptions options,
+        AssetImportDiagnostics diagnostics,
+        string assetPath)
+    {
+        SchemaNode[] lightNodes = EnumerateSceneNodes(scene)
+            .Where(static node => node.PunctualLight != null)
+            .ToArray();
+        for (int instanceIndex = 0; instanceIndex < lightNodes.Length; instanceIndex++)
+        {
+            SchemaNode node = lightNodes[instanceIndex];
+            SchemaPunctualLight source = node.PunctualLight!;
+            NumericsMatrix4x4 world = node.WorldMatrix;
+            CoreVector3 direction = NormalizeOrDefault(
+                TransformDirection(
+                    ToCoreVector(SchemaPunctualLight.LocalDirection),
+                    world));
+            bool directional = source.LightType == PunctualLightType.Directional;
+            bool hasAuthoredRange = !directional &&
+                float.IsFinite(source.Range) && source.Range > 0f;
+            string name = !string.IsNullOrWhiteSpace(source.Name)
+                ? source.Name
+                : !string.IsNullOrWhiteSpace(node.Name)
+                    ? node.Name
+                    : $"Light_{source.LogicalIndex}";
+            float range = directional
+                ? options.DefaultImportedLightRange
+                : ModelLightImportUtilities.ResolveRange(
+                    source.Range,
+                    hasAuthoredRange,
+                    options,
+                    diagnostics,
+                    assetPath,
+                    name);
+            var imported = new ModelLightDefinition
+            {
+                SourceIndex = source.LogicalIndex >= 0
+                    ? source.LogicalIndex
+                    : instanceIndex,
+                SourceNodeIndex = node.LogicalIndex,
+                SourceNodeName = node.Name ?? string.Empty,
+                Name = name,
+                Type = source.LightType switch
+                {
+                    PunctualLightType.Directional => ModelLightType.Directional,
+                    PunctualLightType.Point => ModelLightType.Point,
+                    PunctualLightType.Spot => ModelLightType.Spot,
+                    _ => throw new InvalidDataException(
+                        $"Unsupported glTF punctual light type '{source.LightType}'.")
+                },
+                Position = TransformPosition(CoreVector3.Zero, world, options.GlobalScale),
+                Direction = direction,
+                Color = ToCoreVector(source.Color),
+                Intensity = source.Intensity,
+                Range = range,
+                HasAuthoredRange = hasAuthoredRange,
+                InnerConeAngle = source.LightType == PunctualLightType.Spot
+                    ? source.InnerConeAngle
+                    : 0f,
+                OuterConeAngle = source.LightType == PunctualLightType.Spot
+                    ? source.OuterConeAngle
+                    : MathF.PI / 4f,
+                AttenuationMode = ModelLightAttenuationMode.InverseSquare,
+                AttenuationConstant = 1f
+            };
+            model.Lights.Add(ModelLightImportUtilities.ValidateAndRecord(
+                imported,
+                diagnostics,
+                assetPath));
+        }
+
+        if (lightNodes.Length == 0 || root.LogicalAnimations.Count == 0)
+            return;
+
+        var lightTransforms = new HashSet<SchemaNode>();
+        foreach (SchemaNode lightNode in lightNodes)
+        {
+            for (SchemaNode? current = lightNode; current != null;
+                 current = current.VisualParent)
+            {
+                lightTransforms.Add(current);
+            }
+        }
+
+        var warnedNodes = new HashSet<SchemaNode>();
+        foreach (SharpGLTF.Schema2.Animation animation in root.LogicalAnimations)
+        {
+            foreach (SharpGLTF.Schema2.AnimationChannel channel in animation.Channels)
+            {
+                SchemaNode? target = channel.TargetNode;
+                if (target == null || !lightTransforms.Contains(target) ||
+                    !warnedNodes.Add(target))
+                {
+                    continue;
+                }
+
+                diagnostics.Add(
+                    AssetImportSeverity.Warning,
+                    AssetImportMessageCode.AnimatedLightUnsupported,
+                    assetPath,
+                    target.Name,
+                    $"Animation '{animation.Name ?? animation.LogicalIndex.ToString()}' targets light node or ancestor '{target.Name ?? target.LogicalIndex.ToString()}'; imported lights use the default pose.");
+            }
+        }
     }
 
     private static IEnumerable<ModelMaterial> CreateMaterials(

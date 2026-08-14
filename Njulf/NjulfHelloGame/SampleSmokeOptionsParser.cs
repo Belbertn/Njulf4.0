@@ -1776,12 +1776,13 @@ public static class SampleSmokeOptionsParser
         where TEnum : struct, Enum
     {
         string normalized = NormalizeEnumToken(value);
-        foreach (TEnum candidate in Enum.GetValues<TEnum>())
+        foreach (string candidateName in Enum.GetNames<TEnum>())
         {
             if (string.Equals(
-                    NormalizeEnumToken(candidate.ToString()),
+                    NormalizeEnumToken(candidateName),
                     normalized,
-                    StringComparison.OrdinalIgnoreCase))
+                    StringComparison.OrdinalIgnoreCase) &&
+                Enum.TryParse(candidateName, ignoreCase: false, out TEnum candidate))
             {
                 return candidate;
             }

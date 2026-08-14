@@ -63,6 +63,15 @@ void main()
     // source cache and can prepare (or elide) the transaction here.
     if ((params.flags & SIMPLE_DDGI_FLAG_TRANSPORT_V2) == 0u)
         return;
+    // Recursive glossy must project the just-solved total-radiance ray
+    // records. They share this allocation with the directional transaction,
+    // so the serial project dispatch owns the first write after consuming all
+    // rays; preparation here would destroy the first records prematurely.
+    if (SimpleDdgiGlossyTransportMode(params.residencyFlags) ==
+            SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_RECURSIVE_CERTIFIED)
+    {
+        return;
+    }
 
     uint localProbeOffset = gl_WorkGroupID.x;
     bool gpuScheduler = SimpleDdgiGpuSchedulerActive(

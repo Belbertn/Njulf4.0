@@ -164,6 +164,7 @@ namespace Njulf.Rendering.Resources
             model.AddSkeletons(modelMesh.Skeletons);
             model.AddSkins(modelMesh.Skins);
             model.AddAnimationClips(modelMesh.AnimationClips);
+            model.AddLights(modelMesh.Lights);
 
             IReadOnlyList<ModelMaterial> importedMaterials = modelMesh.Materials.Count > 0
                 ? modelMesh.Materials
@@ -429,6 +430,7 @@ namespace Njulf.Rendering.Resources
             model.AddSkeletons(cooked.Animation.Skeletons);
             model.AddSkins(cooked.Animation.Skins);
             model.AddAnimationClips(cooked.Animation.AnimationClips);
+            model.AddLights(cooked.Manifest.Lights);
 
             var rollback =
                 new ModelUploadRollbackLedger(

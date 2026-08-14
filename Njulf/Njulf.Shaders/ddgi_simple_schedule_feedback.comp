@@ -259,7 +259,8 @@ void main()
                 ? 1u
                 : 0u;
         pendingSourceCardinality += !inactive &&
-            (!sourceVolumeValid || sourceRays != requiredSourceRays)
+            (!sourceVolumeValid || sourceRays == 0u ||
+                sourceRays > requiredSourceRays)
                 ? 1u
                 : 0u;
         pendingSourceGeneration += !inactive &&

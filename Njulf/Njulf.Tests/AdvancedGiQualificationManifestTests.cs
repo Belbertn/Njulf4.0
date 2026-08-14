@@ -307,6 +307,14 @@ public sealed class AdvancedGiQualificationManifestTests
                 "uniform-maintenance-audit"));
             Assert.That(requiredChecks, Does.Contain(
                 "generation-time-pdf-identity"));
+            Assert.That(requiredChecks, Does.Contain(
+                "canonical-self-normalized-estimator-parity"));
+            Assert.That(requiredChecks, Does.Contain(
+                "guided-frozen-audit-parity"));
+            Assert.That(requiredChecks, Does.Contain(
+                "progressive-prefix-cardinality"));
+            Assert.That(requiredChecks, Does.Contain(
+                "per-channel-tail-certificate"));
         });
     }
 

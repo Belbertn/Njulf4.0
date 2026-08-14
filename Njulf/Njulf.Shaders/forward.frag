@@ -2,6 +2,14 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
+#ifndef DIRECTIONAL_TRANSPARENT_RAY_QUERY
+#define DIRECTIONAL_TRANSPARENT_RAY_QUERY 0
+#endif
+
+#if DIRECTIONAL_TRANSPARENT_RAY_QUERY
+#extension GL_EXT_ray_query : require
+#endif
+
 #ifndef NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
 #define NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION 0
 #endif
@@ -83,6 +91,10 @@ layout(early_fragment_tests) in;
 #endif
 #include "gi_material_transport.glsl"
 #include "material_coverage.glsl"
+#if DIRECTIONAL_TRANSPARENT_RAY_QUERY
+layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
+#include "directional_ray_visibility.glsl"
+#endif
 // Detailed captures need representative gather counts, not one globally
 // contended atomic per shaded fragment.  Preserve an estimated full-resolution
 // count while sampling one pixel from each 16x16 screen tile.
@@ -199,6 +211,13 @@ const uint DEBUG_VIEW_SHADOW_RECEIVER_FACTOR = 4u;
 const uint DEBUG_VIEW_SPOT_ATLAS_PREVIEW = 5u;
 const uint DEBUG_VIEW_POINT_CUBEMAP_FACE_PREVIEW = 6u;
 const uint DEBUG_VIEW_LOCAL_SHADOW_SELECTION = 7u;
+const uint DEBUG_VIEW_DIRECTIONAL_RAY_MASK = 8u;
+const uint DEBUG_VIEW_DIRECTIONAL_RAY_HIT_DISTANCE = 9u;
+const uint DEBUG_VIEW_DIRECTIONAL_RAY_CANDIDATE_COUNT = 10u;
+const uint DEBUG_VIEW_DIRECTIONAL_RAY_SCENE_RESIDENCY = 11u;
+const uint DEBUG_VIEW_DIRECTIONAL_CSM_RAY_DIFFERENCE = 12u;
+const uint DEBUG_VIEW_DIRECTIONAL_HISTORY_CONFIDENCE = 13u;
+const uint DEBUG_VIEW_DIRECTIONAL_HISTORY_REJECTION = 14u;
 const uint ENVIRONMENT_DEBUG_SKYBOX_ONLY = 1u;
 const uint ENVIRONMENT_DEBUG_IRRADIANCE_CUBEMAP = 2u;
 const uint ENVIRONMENT_DEBUG_PREFILTERED_ENVIRONMENT_MIP = 3u;
@@ -1474,15 +1493,219 @@ void RecordDirectionalShadowVisibility(
     AddRendererDiagnostic(pc.Push.CurrentFrameIndex, counter + cascade, 1u);
 }
 
+#if DIRECTIONAL_TRANSPARENT_RAY_QUERY
+void AddDirectionalTransparentRayCounter(uint counter, uint value)
+{
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+    if (!DirectionalShadowReceiverCountersEnabled() ||
+        value == 0u || counter >= 64u)
+        return;
+    uint frameSlot = min(
+        pc.Push.CurrentFrameIndex,
+        uint(FRAMES_IN_FLIGHT - 1));
+    uint bufferIndex = uint(DIRECTIONAL_SHADOW_COUNTER_BUFFER_BASE_INDEX) +
+        frameSlot;
+    atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[counter],
+        value);
+#endif
+}
+
+float EvaluateDirectionalTransparentRay(
+    uint lightIndex,
+    vec3 worldPosition,
+    vec3 geometricNormal,
+    uint effectiveMode)
+{
+    vec4 shadowIndices = ReadShadowIndices();
+    if (shadowIndices.x < 0.5 ||
+        int(round(shadowIndices.w)) != int(lightIndex) ||
+        !ForwardLayeredReceiverAcceptsShadows(false))
+    {
+        return 1.0;
+    }
+
+    GPULight light = ReadLight(lightIndex);
+    vec3 centerDirection = -light.Direction;
+    float directionLengthSquared = dot(centerDirection, centerDirection);
+    if (!DirectionalRayFinite(centerDirection) ||
+        directionLengthSquared <= 1.0e-8 ||
+        !DirectionalRayFinite(worldPosition))
+    {
+        AddDirectionalTransparentRayCounter(18u, 1u);
+        return 1.0;
+    }
+    centerDirection *= inversesqrt(directionLengthSquared);
+
+    vec4 modeAndDistance = ReadDirectionalShadowModeAndRayDistance();
+    vec4 shadowSettings = ReadShadowSettings();
+    float maximumDistance = effectiveMode == 1u
+        ? max(modeAndDistance.z, 0.0)
+        : max(shadowSettings.y, 0.0);
+    if (!DirectionalRayFinite(maximumDistance) || maximumDistance <= 0.0)
+        return 1.0;
+
+    vec3 normal = geometricNormal;
+    float normalLengthSquared = dot(normal, normal);
+    if (!DirectionalRayFinite(normal) || normalLengthSquared <= 1.0e-10)
+    {
+        AddDirectionalTransparentRayCounter(18u, 1u);
+        return 1.0;
+    }
+    normal *= inversesqrt(normalLengthSquared);
+    if (dot(normal, centerDirection) < -0.25)
+        return 1.0;
+    if (dot(normal, centerDirection) < 0.0)
+        normal = -normal;
+
+    float footprint = max(
+        length(dFdx(worldPosition)),
+        length(dFdy(worldPosition)));
+    if (!DirectionalRayFinite(footprint) || footprint <= 1.0e-7)
+        footprint = max(length(worldPosition - pc.Push.CameraPosition) /
+            max(max(pc.Push.ScreenDimensions.x, pc.Push.ScreenDimensions.y), 1.0),
+            0.0001);
+
+    float coordinateScale = max(
+        max(abs(worldPosition.x), max(abs(worldPosition.y), abs(worldPosition.z))),
+        1.0);
+    float normalEpsilon = clamp(
+        coordinateScale * 1.0e-7,
+        0.0005,
+        0.02);
+    float rayEpsilon = clamp(
+        max(0.0005, maximumDistance * 1.0e-6),
+        0.0005,
+        0.01);
+    vec3 origin = worldPosition + normal * normalEpsilon +
+        centerDirection * rayEpsilon;
+    float boundedMaximum;
+    if (!DirectionalIntersectQualifiedBounds(
+            origin,
+            centerDirection,
+            maximumDistance,
+            boundedMaximum))
+    {
+        AddDirectionalTransparentRayCounter(18u, 1u);
+        return 1.0;
+    }
+
+    vec4 temporalAndSampling = ReadDirectionalShadowTemporalAndSampling();
+    uint sampleCount = effectiveMode == 3u
+        ? clamp(uint(round(temporalAndSampling.w)), 1u, 4u)
+        : 1u;
+    float visibility = 0.0;
+    uint totalCandidates = 0u;
+    uint totalAlphaSamples = 0u;
+    uint hitCount = 0u;
+    bool capHit = false;
+    uvec2 pixel = uvec2(max(floor(gl_FragCoord.xy), vec2(0.0)));
+    for (uint sampleIndex = 0u; sampleIndex < sampleCount; sampleIndex++)
+    {
+        vec3 direction = DirectionalSampleSunDirection(
+            centerDirection,
+            pixel,
+            pc.Push.CurrentFrameIndex,
+            sampleIndex,
+            max(modeAndDistance.w, 0.0),
+            effectiveMode == 3u);
+        float sampleMaximum;
+        if (!DirectionalIntersectQualifiedBounds(
+                origin,
+                direction,
+                maximumDistance,
+                sampleMaximum))
+        {
+            visibility += 1.0;
+            AddDirectionalTransparentRayCounter(18u, 1u);
+            continue;
+        }
+
+        float hitDistance;
+        uint candidates;
+        uint alphaSamples;
+        bool sampleCapHit;
+        bool blocked = DirectionalTraceVisibility(
+            SceneTlas,
+            origin,
+            direction,
+            sampleMaximum,
+            footprint,
+            0x02u,
+            hitDistance,
+            candidates,
+            alphaSamples,
+            sampleCapHit);
+        hitCount += blocked ? 1u : 0u;
+        totalCandidates += candidates;
+        totalAlphaSamples += alphaSamples;
+        capHit = capHit || sampleCapHit;
+        float sampleVisibility = blocked ? 0.0 : 1.0;
+        if (blocked && effectiveMode == 1u)
+        {
+            sampleVisibility = smoothstep(
+                sampleMaximum * 0.8,
+                sampleMaximum,
+                clamp(hitDistance, 0.0, sampleMaximum));
+        }
+        visibility += sampleVisibility;
+    }
+
+    AddDirectionalTransparentRayCounter(12u, sampleCount);
+    AddDirectionalTransparentRayCounter(13u, hitCount);
+    AddDirectionalTransparentRayCounter(14u, sampleCount - hitCount);
+    AddDirectionalTransparentRayCounter(15u, totalCandidates);
+    AddDirectionalTransparentRayCounter(16u, totalAlphaSamples);
+    AddDirectionalTransparentRayCounter(17u, capHit ? 1u : 0u);
+    float authoredVisibility = visibility / float(sampleCount);
+    return mix(
+        1.0,
+        authoredVisibility,
+        clamp(shadowSettings.x, 0.0, 1.0));
+}
+#endif
+
 bool DirectionalRayShadowMaskSupportsReceiver(bool geometryDecal)
 {
 #if defined(FORWARD_OPAQUE) || defined(FORWARD_SIMPLE_OPAQUE)
-    // Geometry decals and layered transparent receivers retain the named CSM
-    // fallback. The screen mask represents the opaque depth owner only.
-    return !geometryDecal;
+    if (!geometryDecal)
+        return true;
 #else
-    return false;
+    if (!geometryDecal)
+        return false;
 #endif
+    ivec2 pixel = ivec2(gl_FragCoord.xy);
+    float ownerDepth = texelFetch(
+        BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
+        pixel,
+        0).r;
+    float tolerance = max(0.00001, abs(dFdx(gl_FragCoord.z)) + abs(dFdy(gl_FragCoord.z)));
+    return abs(ownerDepth - gl_FragCoord.z) <= tolerance;
+}
+
+float EvaluateDirectionalCsmTemporalMask(
+    uint lightIndex,
+    bool geometryDecal)
+{
+    vec4 runtimeFlags = ReadDirectionalShadowRuntimeFlags();
+    vec4 shadowIndices = ReadShadowIndices();
+    if (runtimeFlags.x < 0.5 || runtimeFlags.w < 0.5 ||
+        shadowIndices.x < 0.5 ||
+        int(round(shadowIndices.w)) != int(lightIndex) ||
+        !DirectionalRayShadowMaskSupportsReceiver(geometryDecal))
+        return -1.0;
+
+    uvec2 dimensions = uvec2(max(round(pc.Push.ScreenDimensions), vec2(1.0)));
+    uvec2 pixel = uvec2(clamp(
+        floor(gl_FragCoord.xy),
+        vec2(0.0),
+        vec2(dimensions - uvec2(1u))));
+    uint pixelIndex = pixel.y * dimensions.x + pixel.x;
+    uint frameSlot = min(pc.Push.CurrentFrameIndex, uint(FRAMES_IN_FLIGHT - 1));
+    uint historyIndex = uint(DIRECTIONAL_SHADOW_HISTORY_BUFFER_BASE_INDEX) + frameSlot;
+    return clamp(unpackHalf2x16(ReadStorageWord(
+        historyIndex,
+        pixelIndex * 3u)).x, 0.0, 1.0);
 }
 
 float EvaluateDirectionalRayShadowMask(
@@ -1814,6 +2037,28 @@ float EvaluateDirectionalShadowForEffectiveMode(
         round(ReadDirectionalShadowModeAndRayDistance().y),
         0.0,
         3.0));
+    if (effectiveMode == 0u)
+    {
+        float temporalCsm = EvaluateDirectionalCsmTemporalMask(
+            lightIndex,
+            geometryDecal);
+        if (temporalCsm >= 0.0)
+        {
+            selectedCascade = 0u;
+            return temporalCsm;
+        }
+    }
+#if DIRECTIONAL_TRANSPARENT_RAY_QUERY
+    if (!geometryDecal && (effectiveMode == 2u || effectiveMode == 3u))
+    {
+        selectedCascade = 0u;
+        return EvaluateDirectionalTransparentRay(
+            lightIndex,
+            worldPosition,
+            normal,
+            effectiveMode);
+    }
+#endif
     bool maskReceiver =
         DirectionalRayShadowMaskSupportsReceiver(geometryDecal);
     if (maskReceiver &&
@@ -1837,7 +2082,188 @@ float EvaluateDirectionalShadowForEffectiveMode(
             cascaded,
             EvaluateDirectionalRayShadowMask(lightIndex, geometryDecal));
     }
+#if DIRECTIONAL_TRANSPARENT_RAY_QUERY
+    if (!geometryDecal && effectiveMode == 1u)
+    {
+        return min(
+            cascaded,
+            EvaluateDirectionalTransparentRay(
+                lightIndex,
+                worldPosition,
+                normal,
+                effectiveMode));
+    }
+#endif
     return cascaded;
+}
+
+uint DirectionalShadowScreenPixelIndex(out uint frameSlot)
+{
+    uvec2 dimensions = uvec2(max(
+        round(pc.Push.ScreenDimensions),
+        vec2(1.0)));
+    uvec2 pixel = uvec2(clamp(
+        floor(gl_FragCoord.xy),
+        vec2(0.0),
+        vec2(dimensions - uvec2(1u))));
+    frameSlot = min(
+        pc.Push.CurrentFrameIndex,
+        uint(FRAMES_IN_FLIGHT - 1));
+    return pixel.y * dimensions.x + pixel.x;
+}
+
+float ReadDirectionalShadowDebugMask(uint pixelIndex, uint frameSlot)
+{
+    uint bufferIndex =
+        uint(DIRECTIONAL_RAY_SHADOW_MASK_BUFFER_BASE_INDEX) + frameSlot;
+    uint packedVisibility = ReadStorageWord(bufferIndex, pixelIndex >> 2u);
+    uint byteShift = (pixelIndex & 3u) * 8u;
+    return float((packedVisibility >> byteShift) & 0xffu) / 255.0;
+}
+
+vec3 DirectionalShadowRejectionColor(uint rejection)
+{
+    return rejection == 0u ? vec3(0.05, 0.85, 0.15) :
+        rejection == 1u ? vec3(1.0, 0.75, 0.05) :
+        rejection == 2u ? vec3(0.95, 0.1, 0.85) :
+        rejection == 3u ? vec3(0.1, 0.45, 1.0) :
+        vec3(1.0, 0.1, 0.05);
+}
+
+bool TryEvaluateDirectionalShadowDebug(
+    uint debugViewMode,
+    vec3 worldPosition,
+    vec3 normal,
+    bool geometryDecal,
+    float effectiveVisibility,
+    out vec3 debugColor)
+{
+    debugColor = vec3(0.0);
+    if (debugViewMode < DEBUG_VIEW_DIRECTIONAL_RAY_MASK ||
+        debugViewMode > DEBUG_VIEW_DIRECTIONAL_HISTORY_REJECTION)
+    {
+        return false;
+    }
+
+    vec4 modeAndDistance = ReadDirectionalShadowModeAndRayDistance();
+    uint effectiveMode = uint(clamp(round(modeAndDistance.y), 0.0, 3.0));
+    vec4 runtimeFlags = ReadDirectionalShadowRuntimeFlags();
+    uint frameSlot;
+    uint pixelIndex = DirectionalShadowScreenPixelIndex(frameSlot);
+
+    if (debugViewMode == DEBUG_VIEW_DIRECTIONAL_RAY_SCENE_RESIDENCY)
+    {
+        vec4 minimumBounds = ReadDirectionalShadowRaySceneBoundsMinimum();
+        vec4 maximumBounds = ReadDirectionalShadowRaySceneBoundsMaximum();
+        bool validBounds = minimumBounds.w > 0.5 && maximumBounds.w > 0.5;
+        bool resident = validBounds &&
+            all(greaterThanEqual(worldPosition, minimumBounds.xyz)) &&
+            all(lessThanEqual(worldPosition, maximumBounds.xyz));
+        debugColor = !validBounds
+            ? vec3(1.0, 0.05, 0.05)
+            : resident
+                ? vec3(0.05, 0.85, 0.15)
+                : vec3(1.0, 0.65, 0.05);
+        return true;
+    }
+
+    bool temporalDebug =
+        debugViewMode == DEBUG_VIEW_DIRECTIONAL_HISTORY_CONFIDENCE ||
+        debugViewMode == DEBUG_VIEW_DIRECTIONAL_HISTORY_REJECTION;
+    if (effectiveMode == 0u && !(temporalDebug && runtimeFlags.x > 0.5))
+    {
+        debugColor = vec3(0.18, 0.02, 0.02);
+        return true;
+    }
+
+    if (debugViewMode == DEBUG_VIEW_DIRECTIONAL_RAY_MASK)
+    {
+        float visibility = ReadDirectionalShadowDebugMask(pixelIndex, frameSlot);
+        debugColor = vec3(visibility);
+        return true;
+    }
+
+    if (debugViewMode == DEBUG_VIEW_DIRECTIONAL_CSM_RAY_DIFFERENCE)
+    {
+        uint ignoredCascade;
+        int shadowLightIndex = int(round(ReadShadowIndices().w));
+        float cascaded = shadowLightIndex >= 0
+            ? EvaluateDirectionalShadow(
+                uint(shadowLightIndex),
+                worldPosition,
+                normal,
+                geometryDecal,
+                ignoredCascade)
+            : 1.0;
+        float difference = effectiveVisibility - cascaded;
+        debugColor = difference < 0.0
+            ? vec3(min(-difference * 4.0, 1.0), 0.0, 0.0)
+            : vec3(0.0, 0.25 * min(difference * 4.0, 1.0),
+                min(difference * 4.0, 1.0));
+        return true;
+    }
+
+    // Detailed per-pixel storage is allocated only while one of these views
+    // is selected. A missing generation is rendered as an explicit unavailable
+    // state rather than reading an unbound descriptor.
+    if (runtimeFlags.z < 0.5)
+    {
+        debugColor = vec3(1.0, 0.0, 1.0);
+        return true;
+    }
+
+    uint diagnosticIndex =
+        uint(DIRECTIONAL_SHADOW_DIAGNOSTIC_BUFFER_BASE_INDEX) + frameSlot;
+    uint diagnostic = ReadStorageWord(diagnosticIndex, pixelIndex);
+    if (debugViewMode == DEBUG_VIEW_DIRECTIONAL_RAY_HIT_DISTANCE)
+    {
+        float normalizedDistance = float((diagnostic >> 8u) & 0xffffu) /
+            65535.0;
+        debugColor = vec3(
+            normalizedDistance,
+            1.0 - abs(normalizedDistance * 2.0 - 1.0),
+            1.0 - normalizedDistance);
+        return true;
+    }
+    if (debugViewMode == DEBUG_VIEW_DIRECTIONAL_RAY_CANDIDATE_COUNT)
+    {
+        float normalizedCandidates = min(
+            float(diagnostic & 0xffu) / 16.0,
+            1.0);
+        debugColor = vec3(
+            normalizedCandidates,
+            normalizedCandidates * normalizedCandidates,
+            0.05);
+        return true;
+    }
+
+    if (runtimeFlags.w < 0.5)
+    {
+        debugColor = vec3(0.2, 0.0, 0.2);
+        return true;
+    }
+    uint historyIndex =
+        uint(DIRECTIONAL_SHADOW_HISTORY_BUFFER_BASE_INDEX) + frameSlot;
+    uint metadata = ReadStorageWord(historyIndex, pixelIndex * 3u + 2u);
+    bool historyValid = (metadata & (1u << 29u)) != 0u;
+    if (debugViewMode == DEBUG_VIEW_DIRECTIONAL_HISTORY_CONFIDENCE)
+    {
+        uint age = (metadata >> 24u) & 0x1fu;
+        float maximumAge = max(
+            ReadDirectionalShadowTemporalAndSampling().y,
+            1.0);
+        float confidence = historyValid
+            ? clamp(float(age) / maximumAge, 0.0, 1.0)
+            : 0.0;
+        debugColor = vec3(1.0 - confidence, confidence, 0.05);
+        return true;
+    }
+
+    uint rejection = (diagnostic >> 24u) & 0xffu;
+    debugColor = historyValid
+        ? DirectionalShadowRejectionColor(0u)
+        : DirectionalShadowRejectionColor(rejection);
+    return true;
 }
 
 float CompareReverseZDepth(float receiverDepth, float sampledDepth, float bias)
@@ -2557,11 +2983,15 @@ void AccumulateLight(
         lightDirection = toLight / max(distanceToLight, 0.0001);
         if (dot(normal, lightDirection) <= 0.0)
             return;
-        attenuation = EvaluateNjulfPunctualRangeAttenuation(distanceToLight, light.Range);
+        attenuation = EvaluateNjulfLightDistanceAttenuation(
+            light,
+            distanceToLight);
 
         if (light.Type == 2)
         {
-            attenuation *= EvaluateNjulfSpotAttenuation(light.Direction, lightDirection, light.SpotAngle);
+            attenuation *= EvaluateNjulfSpotAttenuation(
+                light,
+                lightDirection);
             shadowFactor = EvaluateSpotShadow(
                 lightIndex,
                 worldPosition,
@@ -3763,6 +4193,21 @@ void main()
             directDiffuseSource);
     }
 
+    float directionalShadowFactor = lastShadowFactor;
+    uint directionalShadowCascade = lastShadowCascade;
+    vec3 directionalShadowDebugColor;
+    if (TryEvaluateDirectionalShadowDebug(
+            debugViewMode,
+            fragWorldPosition,
+            shadowNormal,
+            geometryDecal,
+            directionalShadowFactor,
+            directionalShadowDebugColor))
+    {
+        WriteForwardColor(vec4(directionalShadowDebugColor, 1.0));
+        return;
+    }
+
     if (pc.Push.LocalLightCount == 0u)
     {
         // Directional lights were handled above; there are no tiled local lights.
@@ -3824,15 +4269,15 @@ void main()
 
     if (debugViewMode == DEBUG_VIEW_SHADOW_RECEIVER_FACTOR)
     {
-        WriteForwardColor(vec4(vec3(lastShadowFactor), 1.0));
+        WriteForwardColor(vec4(vec3(directionalShadowFactor), 1.0));
         return;
     }
 
     if (debugViewMode == DEBUG_VIEW_SHADOW_CASCADE_OVERLAY)
     {
-        vec3 cascadeColor = lastShadowCascade == 0u ? vec3(0.9, 0.15, 0.1) :
-            lastShadowCascade == 1u ? vec3(0.1, 0.75, 0.2) :
-            lastShadowCascade == 2u ? vec3(0.1, 0.35, 0.95) :
+        vec3 cascadeColor = directionalShadowCascade == 0u ? vec3(0.9, 0.15, 0.1) :
+            directionalShadowCascade == 1u ? vec3(0.1, 0.75, 0.2) :
+            directionalShadowCascade == 2u ? vec3(0.1, 0.35, 0.95) :
             vec3(0.9, 0.8, 0.1);
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
@@ -3856,7 +4301,7 @@ void main()
     ForwardDdgiReceiverCacheSample cachedGather =
         SampleForwardDdgiReceiverCache(
             gl_FragCoord.xy,
-            floatBitsToUint(pc.Push.Time));
+            pc.Push.ScreenDimensions);
     finalDiffuseIndirect =
         (cachedGather.DdgiIrradiance * ambientOcclusion +
          cachedGather.EnvironmentIrradiance * indirectAo) *

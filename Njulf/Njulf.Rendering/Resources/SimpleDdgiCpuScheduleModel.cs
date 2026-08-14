@@ -126,6 +126,11 @@ public static class SimpleDdgiSchedulerAbi
     /// locator/summary records validate.
     /// </summary>
     public const uint SchedulerFeatureExactReceiverFeedback = 1u << 14;
+    /// <summary>
+    /// Enables progressive per-probe source cardinalities. The committed
+    /// source count remains immutable through every solve/audit epoch.
+    /// </summary>
+    public const uint SchedulerFeatureAdaptiveRayCardinality = 1u << 15;
     public const uint ExactReceiverFeedbackBindingValid = 1u << 0;
     public const uint ReasonFresh = (uint)SimpleDdgiSchedulerCandidateReason.Fresh;
     public const uint ReasonScrollExposed = (uint)SimpleDdgiSchedulerCandidateReason.ScrollExposed;
@@ -486,6 +491,83 @@ public static class SimpleDdgiIndirectDispatchMath
 /// </summary>
 public static class SimpleDdgiCpuScheduleModel
 {
+    /// <summary>
+    /// CPU oracle for the residual-volume portion of the resident tail quota
+    /// allocator. Every nonempty volume receives a rotating liveness slot
+    /// before proportional floors and deterministic remainder distribution.
+    /// </summary>
+    internal static void AllocateSpecializedTailResidualQuotas(
+        ReadOnlySpan<int> pendingByVolume,
+        int requestBudget,
+        uint frameIndex,
+        Span<int> quotas)
+    {
+        if (quotas.Length < pendingByVolume.Length)
+            throw new ArgumentException(
+                "The quota destination must cover every pending volume.",
+                nameof(quotas));
+
+        quotas.Clear();
+        int activeVolumes = Math.Min(
+            pendingByVolume.Length,
+            GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount);
+        int remaining = Math.Max(0, requestBudget);
+        if (activeVolumes == 0 || remaining == 0)
+            return;
+
+        int start = checked((int)(frameIndex % (uint)activeVolumes));
+        for (int offset = 0; offset < activeVolumes && remaining > 0; offset++)
+        {
+            int volume = (start + offset) % activeVolumes;
+            if (pendingByVolume[volume] <= 0)
+                continue;
+            quotas[volume]++;
+            remaining--;
+        }
+
+        long residualPendingTotal = 0;
+        for (int volume = 0; volume < activeVolumes; volume++)
+        {
+            residualPendingTotal += Math.Max(
+                0,
+                pendingByVolume[volume] - quotas[volume]);
+        }
+
+        int distributed = 0;
+        if (remaining > 0 && residualPendingTotal > 0)
+        {
+            for (int volume = 0; volume < activeVolumes; volume++)
+            {
+                int available = Math.Max(
+                    0,
+                    pendingByVolume[volume] - quotas[volume]);
+                int share = (int)Math.Min(
+                    available,
+                    (long)remaining * available / residualPendingTotal);
+                quotas[volume] += share;
+                distributed += share;
+            }
+            remaining -= Math.Min(distributed, remaining);
+        }
+
+        while (remaining > 0)
+        {
+            bool progressed = false;
+            for (int volume = 0;
+                 volume < activeVolumes && remaining > 0;
+                 volume++)
+            {
+                if (quotas[volume] >= Math.Max(0, pendingByVolume[volume]))
+                    continue;
+                quotas[volume]++;
+                remaining--;
+                progressed = true;
+            }
+            if (!progressed)
+                break;
+        }
+    }
+
     public static SimpleDdgiCpuScheduleResult Schedule(
         ReadOnlySpan<GPUSimpleDdgiSchedulerCandidate> candidates,
         ReadOnlySpan<SimpleDdgiCpuVolumePolicy> volumePolicies,

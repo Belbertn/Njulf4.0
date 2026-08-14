@@ -88,6 +88,7 @@ const uint SIMPLE_DDGI_SCHEDULER_FEATURE_CERTIFIED_QUIESCED = 1u << 11u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_COST_AWARE_PRIORITY = 1u << 12u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_SPARSE_RESIDUAL_PROPAGATION = 1u << 13u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_EXACT_RECEIVER_FEEDBACK = 1u << 14u;
+const uint SIMPLE_DDGI_SCHEDULER_FEATURE_ADAPTIVE_RAY_CARDINALITY = 1u << 15u;
 const uint SIMPLE_DDGI_SCHEDULER_EXACT_FEEDBACK_BINDING_VALID = 1u << 0u;
 
 const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_BUFFER = 44u;
@@ -567,6 +568,10 @@ bool SchedulerExactReceiverFeedback() {
             SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_FLAGS) &
             SIMPLE_DDGI_SCHEDULER_EXACT_FEEDBACK_BINDING_VALID) != 0u;
 }
+bool SchedulerAdaptiveRayCardinality() {
+    return (SchedulerFeatureFlags() &
+        SIMPLE_DDGI_SCHEDULER_FEATURE_ADAPTIVE_RAY_CARDINALITY) != 0u;
+}
 
 shared uint schedulerExactFeedbackHeaderValid;
 shared uint schedulerExactFeedbackSummaryCount;
@@ -801,6 +806,136 @@ uint SchedulerVolumeRing(uint volumeIndex) { return SchedulerVolumeWord(volumeIn
 uint SchedulerVolumeSourceOrdinal(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 4u); }
 uint SchedulerVolumeFullRays(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 30u); }
 uint SchedulerVolumeMaintenanceRays(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 31u); }
+
+uint SchedulerAdaptiveMinimumSourceRays(uint volumeIndex)
+{
+    uint maximum = clamp(
+        SchedulerVolumeFullRays(volumeIndex),
+        1u,
+        SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+    return clamp(SchedulerVolumeMaintenanceRays(volumeIndex), 1u, maximum);
+}
+
+uint SchedulerAdaptiveMaximumSourceRays(uint volumeIndex)
+{
+    return clamp(
+        SchedulerVolumeFullRays(volumeIndex),
+        1u,
+        SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
+}
+
+uint SchedulerAdaptivePromoteSourceRays(uint volumeIndex, uint current)
+{
+    uint maximum = SchedulerAdaptiveMaximumSourceRays(volumeIndex);
+    uint result = maximum;
+    for (uint bucket = 0u; bucket < 6u; bucket++)
+    {
+        uint candidate = SchedulerFrame(32u + bucket);
+        if (candidate > current && candidate <= maximum)
+            result = min(result, candidate);
+    }
+    return result;
+}
+
+uint SchedulerAdaptiveDemoteSourceRays(uint volumeIndex, uint current)
+{
+    uint minimum = SchedulerAdaptiveMinimumSourceRays(volumeIndex);
+    uint result = minimum;
+    for (uint bucket = 0u; bucket < 6u; bucket++)
+    {
+        uint candidate = SchedulerFrame(32u + bucket);
+        if (candidate >= minimum && candidate < current)
+            result = max(result, candidate);
+    }
+    return result;
+}
+
+uint SchedulerAdaptiveBaselineSourceRays(uint volumeIndex)
+{
+    // Solver residual is not a directional-variance estimate. A short fixed
+    // prefix can look converged while retaining visible spatial estimator
+    // noise, so use the authored full count until variance evidence exists.
+    return SchedulerAdaptiveMaximumSourceRays(volumeIndex);
+}
+
+bool SchedulerAdaptivePromotionDue(
+    uint volumeIndex,
+    uint sourceRayCount,
+    float residual,
+    uint stableUpdates)
+{
+    if (sourceRayCount == 0u)
+        return false;
+    uint maximum = SchedulerAdaptiveMaximumSourceRays(volumeIndex);
+    if (sourceRayCount >= maximum)
+        return false;
+    // Turning adaptation off must repair any previously committed short
+    // sequence instead of leaving its noisy estimate frozen indefinitely.
+    if (!SchedulerAdaptiveRayCardinality())
+        return true;
+    if (sourceRayCount < SchedulerAdaptiveBaselineSourceRays(volumeIndex))
+        return true;
+    float tolerance = max(uintBitsToFloat(SchedulerFrame(39u)), 1.0e-7);
+    return stableUpdates != 0u && !isnan(residual) && !isinf(residual) &&
+        residual > tolerance * 2.0;
+}
+
+uint SchedulerResolveAdaptiveSourceRayCount(
+    uint probeIndex,
+    uint volumeIndex,
+    uint candidateReasons,
+    bool sourceWork)
+{
+    uint maximum = SchedulerAdaptiveMaximumSourceRays(volumeIndex);
+    if (!SchedulerTransportV2() || !SchedulerAdaptiveRayCardinality())
+        return maximum;
+
+    uint privateBase = pc.SchedulerProbeStateOffsetWords +
+        probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    uint packedLifecycle = SchedulerArenaRead(privateBase + 7u);
+    uint current = packedLifecycle & SIMPLE_DDGI_SCHEDULER_SOURCE_RAY_MASK;
+    if (current == 0u)
+        return SchedulerAdaptiveBaselineSourceRays(volumeIndex);
+    if (!sourceWork)
+        return min(current, maximum);
+
+    // Relight transactions must re-evaluate the exact committed sequence;
+    // topology/repair transactions preserve its size. Resizing is an explicit
+    // routine source transaction selected by classify below.
+    if ((candidateReasons & (
+            SIMPLE_DDGI_SCHEDULER_REASON_RADIOMETRIC_RELIGHT |
+            SIMPLE_DDGI_SCHEDULER_REASON_SEGMENT_SELECTIVE)) != 0u)
+    {
+        return min(current, maximum);
+    }
+    if ((candidateReasons &
+            SIMPLE_DDGI_SCHEDULER_REASON_RESIDUAL_PROPAGATION) != 0u)
+    {
+        return SchedulerAdaptivePromoteSourceRays(volumeIndex, current);
+    }
+
+    if ((candidateReasons & SIMPLE_DDGI_SCHEDULER_REASON_ROUTINE_DUE) != 0u)
+    {
+        uint stableUpdates = (packedLifecycle &
+            SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_MASK) >>
+            SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT;
+        float residual = ReadStorageFloatUniform(
+            pc.ProbeStateBufferIndex,
+            probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS + 7u);
+        uint baseline = SchedulerAdaptiveBaselineSourceRays(volumeIndex);
+        if (current < baseline)
+            return SchedulerAdaptivePromoteSourceRays(volumeIndex, current);
+        float tolerance = max(uintBitsToFloat(SchedulerFrame(39u)), 1.0e-7);
+        uint demotionRequirement = max(SchedulerFrame(30u) * 4u, 8u);
+        if (current > baseline && stableUpdates >= demotionRequirement &&
+            !isnan(residual) && !isinf(residual) &&
+            residual <= tolerance * 0.25)
+        {
+            return SchedulerAdaptiveDemoteSourceRays(volumeIndex, current);
+        }
+    }
+    return min(current, maximum);
+}
 uint SchedulerVolumeLayoutGeneration(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 6u); }
 uint SchedulerVolumePreviousLayoutGeneration(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 7u); }
 uint SchedulerVolumeCurrentCountX(uint volumeIndex) { return SchedulerVolumeWord(volumeIndex, 16u); }

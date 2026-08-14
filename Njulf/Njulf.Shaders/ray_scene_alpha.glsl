@@ -114,8 +114,12 @@ bool RaySceneCandidateBlocksDirectionalShadow(
     uint instanceIndex,
     uint primitiveIndex,
     vec2 barycentrics,
-    bool frontFacing)
+    bool frontFacing,
+    mat4x3 objectToWorld,
+    float primaryRayFootprintWorld,
+    out bool sampledAlphaTexture)
 {
+    sampledAlphaTexture = false;
     GPUDdgiRayQueryInstance instance =
         ReadRaySceneQueryInstance(instanceIndex);
     if (!RaySceneQueryInstanceIsValid(instance))
@@ -175,10 +179,61 @@ bool RaySceneCandidateBlocksDirectionalShadow(
             uv,
             material.BaseColorOffsetScale,
             material.TextureRotations.x);
+
+        vec3 world0 = objectToWorld * vec4(vertex0.Position, 1.0);
+        vec3 world1 = objectToWorld * vec4(vertex1.Position, 1.0);
+        vec3 world2 = objectToWorld * vec4(vertex2.Position, 1.0);
+        vec2 authoredUv0 = int(round(material.TextureTexCoordSets.x)) == 1
+            ? vertex0.TexCoord2
+            : vertex0.TexCoord;
+        vec2 authoredUv1 = int(round(material.TextureTexCoordSets.x)) == 1
+            ? vertex1.TexCoord2
+            : vertex1.TexCoord;
+        vec2 authoredUv2 = int(round(material.TextureTexCoordSets.x)) == 1
+            ? vertex2.TexCoord2
+            : vertex2.TexCoord;
+        authoredUv0 = TransformRaySceneUv(
+            authoredUv0,
+            material.BaseColorOffsetScale,
+            material.TextureRotations.x);
+        authoredUv1 = TransformRaySceneUv(
+            authoredUv1,
+            material.BaseColorOffsetScale,
+            material.TextureRotations.x);
+        authoredUv2 = TransformRaySceneUv(
+            authoredUv2,
+            material.BaseColorOffsetScale,
+            material.TextureRotations.x);
+        float worldEdge = max(
+            max(length(world1 - world0), length(world2 - world0)),
+            length(world2 - world1));
+        float uvEdge = max(
+            max(length(authoredUv1 - authoredUv0), length(authoredUv2 - authoredUv0)),
+            length(authoredUv2 - authoredUv1));
+        if (isnan(worldEdge) || isinf(worldEdge) || worldEdge <= 1.0e-7 ||
+            isnan(uvEdge) || isinf(uvEdge) ||
+            isnan(primaryRayFootprintWorld) || isinf(primaryRayFootprintWorld) ||
+            primaryRayFootprintWorld <= 0.0)
+        {
+            // A malformed footprint cannot be interpreted as transparent.
+            return true;
+        }
+        ivec2 baseDimensions = textureSize(
+            BindlessTextures[nonuniformEXT(material.AlbedoTextureIndex)],
+            0);
+        float texelFootprint = max(primaryRayFootprintWorld, 1.0e-6) *
+            (uvEdge / worldEdge) *
+            float(max(max(baseDimensions.x, baseDimensions.y), 1));
+        float primaryLod = clamp(
+            log2(max(texelFootprint, 1.0)),
+            0.0,
+            float(max(textureQueryLevels(
+                BindlessTextures[nonuniformEXT(material.AlbedoTextureIndex)]) - 1, 0)));
         sampledTextureAlpha = textureLod(
             BindlessTextures[nonuniformEXT(material.AlbedoTextureIndex)],
             uv,
-            max(material.DdgiMaterialPolicy.y, 0.0)).a;
+            primaryLod).a;
+        sampledAlphaTexture = true;
     }
 
     return DdgiAlphaCandidateOccupiesOpaqueTransport(

@@ -237,7 +237,7 @@ public sealed class AdvancedGiScratchArenaTests
             DdgiOpacityMicromapMode.ExtFourStateExperiment,
             SimpleDdgiDirectionalGuidingMode.PerProbeHistogramExperiment,
             GiCausticMode.WorldCacheExperiment,
-            SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment,
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive,
             AdvancedGiNearFieldGraphProfile.HalfResolutionReference);
         IReadOnlyDictionary<RenderGraphResourceId, RenderGraphResourceDescriptor> resources =
             ProductionRenderPipelineDeclaration.Instance.CreateResourceDescriptors(

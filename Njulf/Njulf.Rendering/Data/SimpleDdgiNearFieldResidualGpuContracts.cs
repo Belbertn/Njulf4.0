@@ -17,10 +17,9 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     /// Increment when any C5 GPU field, binding meaning, source ownership rule,
     /// or history-reuse rule changes.
     /// </summary>
-    // V6 adds a versioned, fence-read telemetry header and one low-contention
-    // aggregate record per 8x8 trace tile. This replaces untyped three-word
-    // counters and makes rejection/history/energy diagnostics auditable.
-    public const uint Version = 0x4335_0006u;
+    // V10 fixes the GLSL std430 metadata-array stride and admits C5 output only
+    // after temporal/spatial evidence plus a bounded composite correction.
+    public const uint Version = 0x4335_000Au;
 
     public const uint DirectDiffuseTraceSourceTerm = 1u << 0;
     public const uint EmissiveTraceSourceTerm = 1u << 1;

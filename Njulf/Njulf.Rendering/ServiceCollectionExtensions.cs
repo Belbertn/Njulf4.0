@@ -38,6 +38,10 @@ namespace Microsoft.Extensions.DependencyInjection
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
                     "NJULF_ADVANCED_GI_STARTUP_PROFILE"));
+        private string? _directionalShadowQualificationManifestPath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_DIRECTIONAL_SHADOW_QUALIFICATION_MANIFEST"));
 
         public bool EnableValidation
         {
@@ -195,6 +199,18 @@ namespace Microsoft.Extensions.DependencyInjection
         {
             get => _advancedGiQualificationManifestPath;
             set => _advancedGiQualificationManifestPath =
+                RendererValidationSettings.NormalizeOptionalPath(value);
+        }
+
+        /// <summary>
+        /// Optional artifact-pinned directional-shadow promotion manifest.
+        /// Missing or rejected evidence leaves explicit ray modes Experimental
+        /// and keeps CSM temporal Auto dormant.
+        /// </summary>
+        public string? DirectionalShadowQualificationManifestPath
+        {
+            get => _directionalShadowQualificationManifestPath;
+            set => _directionalShadowQualificationManifestPath =
                 RendererValidationSettings.NormalizeOptionalPath(value);
         }
 
@@ -451,6 +467,25 @@ namespace Microsoft.Extensions.DependencyInjection
                     accepted
                         ? $"accepted:{detail}"
                         : $"rejected:{detail};canonical-gi-retained");
+            }
+
+            const string directionalShadowQualificationStep =
+                "DirectionalShadow.QualificationManifest";
+            if (options.DirectionalShadowQualificationManifestPath is
+                { } directionalShadowQualificationPath)
+            {
+                startupLog?.StepStarted(
+                    directionalShadowQualificationStep,
+                    directionalShadowQualificationPath);
+                bool accepted = renderer
+                    .TryConfigureDirectionalShadowQualificationManifestFile(
+                        directionalShadowQualificationPath,
+                        out string detail);
+                startupLog?.StepSucceeded(
+                    directionalShadowQualificationStep,
+                    accepted
+                        ? $"accepted:{detail}"
+                        : $"rejected:{detail};experimental-ray-and-csm-fallback-retained");
             }
 
             const string runtimeEvidenceStep =

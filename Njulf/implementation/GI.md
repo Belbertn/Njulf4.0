@@ -1,4 +1,9 @@
-- Surfels as a near-field dynamic cache.
+Current near-field decision: C5 adaptive Hi-Z SSGI is the sole complement to
+Simple DDGI. It starts at quarter resolution, can fall back to eighth under its
+0.75 ms P95 budget, and reserves half resolution for evidence-bound profiles
+with sustained headroom. Surfels are deferred and are not part of the current
+runtime, memory plan, or 60 FPS target.
+
 - Ray traced transparency.
 - Ray traced caustics.
 - Accelerate same-frame convergence of cached multi-bounce Transport V2 for urgent and local changes while preserving the certified fixed point.
@@ -7,7 +12,6 @@
 - Neural denoising or vendor-specific upscalers
 - Emissive mesh
 - RT VFX
-- A new SSGI designed to complement Simple DDGI (future work)
 - HDRI
 
 

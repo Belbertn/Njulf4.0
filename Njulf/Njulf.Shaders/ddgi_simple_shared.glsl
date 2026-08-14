@@ -2099,6 +2099,38 @@ vec3 SimpleDdgiClampTransportRadiance(vec3 value)
     return clamp(value * scale, vec3(0.0), vec3(65504.0));
 }
 
+// Cached-hit relighting is exact only for the CPU-certified sole-directional
+// radiance edit. Geometry, visibility and material response are unchanged, so
+// the direct source term is component-wise linear in emitter radiance. Keep
+// the bounded cache representation identical to a fresh source write and fail
+// closed if an unexpected payload or ratio is not representable.
+bool TryEvaluateSimpleDdgiExactCachedHitRelight(
+    vec3 cachedSourceRadiance,
+    vec3 relightScale,
+    out vec3 relitSourceRadiance)
+{
+    relitSourceRadiance = vec3(0.0);
+    if (any(isnan(cachedSourceRadiance)) ||
+        any(isinf(cachedSourceRadiance)) ||
+        any(lessThan(cachedSourceRadiance, vec3(0.0))) ||
+        any(isnan(relightScale)) || any(isinf(relightScale)) ||
+        any(lessThan(relightScale, vec3(0.0))))
+    {
+        return false;
+    }
+
+    vec3 scaled = cachedSourceRadiance * relightScale;
+    if (any(isnan(scaled)) || any(isinf(scaled)) ||
+        any(lessThan(scaled, vec3(0.0))))
+    {
+        return false;
+    }
+    relitSourceRadiance = SimpleDdgiClampTransportRadiance(scaled);
+    return !any(isnan(relitSourceRadiance)) &&
+        !any(isinf(relitSourceRadiance)) &&
+        all(greaterThanEqual(relitSourceRadiance, vec3(0.0)));
+}
+
 vec3 SimpleDdgiRotateByQuaternion(vec3 v, vec4 q)
 {
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
@@ -2268,6 +2300,8 @@ struct SimpleDdgiTransportRayCache
     vec3 diffuseReflectance;
     vec3 transmittedDiffuseReflectance;
     float materialOcclusion;
+    vec3 specularF0;
+    float roughness;
     // The high byte of the packed transmission word carries the complete
     // source sequence cardinality.  The RGB transmission payload remains
     // unchanged; retaining this per-probe value in every cache entry lets the
@@ -2277,6 +2311,50 @@ struct SimpleDdgiTransportRayCache
     uint sourceLightingGeneration;
     uint sourceEpoch;
 };
+
+bool ReadSimpleDdgiRecursiveGlossyMaterialSidecar(
+    uint bufferIndex,
+    uint cacheProbeBaseWordPlusOne,
+    uint directionRayIndex,
+    uint cacheStrideWords,
+    uint cacheLayoutFlags,
+    SimpleDdgiParams p,
+    bool requiresSurfacePayload,
+    out vec3 specularF0,
+    out float roughness)
+{
+    specularF0 = vec3(0.0);
+    roughness = 1.0;
+    if (SimpleDdgiGlossyTransportMode(p.residencyFlags) !=
+            SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_RECURSIVE_CERTIFIED)
+    {
+        return true;
+    }
+    // Misses and rejected one-sided back faces have no glossy event. Their
+    // zero/default material is authoritative, so avoid one sidecar load and
+    // its probe-local address arithmetic on the common cold-exit path.
+    if (!requiresSurfacePayload)
+        return true;
+
+    uint sidecarWord;
+    if (bufferIndex == 0u ||
+        !TryResolveSimpleDdgiRecursiveGlossySidecarAddressFromProbeBase(
+            cacheProbeBaseWordPlusOne,
+            directionRayIndex,
+            p.raysPerProbe,
+            cacheStrideWords,
+            cacheLayoutFlags,
+            sidecarWord))
+    {
+        return false;
+    }
+
+    vec4 material = unpackUnorm4x8(
+        ReadStorageWordUniform(bufferIndex, sidecarWord));
+    specularF0 = material.rgb;
+    roughness = material.a;
+    return !any(isnan(material)) && !any(isinf(material));
+}
 
 uint PackSimpleDdgiTransportCacheHitKind(float hitKind)
 {
@@ -2340,6 +2418,10 @@ vec3 SimpleDdgiReconstructRayDirection(
         probeIndex,
         SimpleDdgiDirectionCodebookRotation(
             SimpleDdgiDirectionEpoch(sourceEpoch)));
+    // directionRayIndex is already mapped into the maximum-cardinality
+    // sequence by SimpleDdgiStorageDirectionRayIndex. Lower ray tiers fill a
+    // deterministic strided subset, so promotion adds samples without
+    // changing any cached direction and every tier keeps Fibonacci quadrature.
     vec3 direction = SimpleDdgiFibonacciDirection(
         directionRayIndex,
         p.raysPerProbe,
@@ -2638,6 +2720,8 @@ void WriteSimpleDdgiTransportRayCache(
     vec3 diffuseReflectance,
     vec3 transmittedDiffuseReflectance,
     float materialOcclusion,
+    vec3 specularF0,
+    float roughness,
     float hitKind,
     uint probeGeneration,
     uint sourceLightingGeneration,
@@ -2660,6 +2744,20 @@ void WriteSimpleDdgiTransportRayCache(
     }
     uint generationWord = SimpleDdgiStorageGenerationWord(
         baseWord, format, volume.cacheLayoutFlags);
+    uint glossySidecarWord = 0u;
+    bool glossySidecarEnabled =
+        SimpleDdgiStorageUsesRecursiveGlossySidecar(
+            volume.cacheLayoutFlags);
+    bool glossySidecarAddressValid = !glossySidecarEnabled ||
+        TryResolveSimpleDdgiRecursiveGlossySidecarAddressFromProbeBase(
+            cacheProbeBaseWordPlusOne,
+            directionRayIndex,
+            p.raysPerProbe,
+            volume.cacheStrideWords,
+            volume.cacheLayoutFlags,
+            glossySidecarWord);
+    if (!glossySidecarAddressValid)
+        return;
     bool invalidSourceEpoch = sourceEpoch == 0u;
     bool invalidHitKind = isnan(hitKind) || isinf(hitKind) ||
         hitKind < SIMPLE_DDGI_RAY_HIT_KIND_MISS ||
@@ -2680,6 +2778,11 @@ void WriteSimpleDdgiTransportRayCache(
         !any(isinf(transmittedDiffuseReflectance)) &&
         !any(lessThan(transmittedDiffuseReflectance, vec3(0.0))) &&
         !isnan(materialOcclusion) && !isinf(materialOcclusion) &&
+        (!glossySidecarEnabled ||
+            (!any(isnan(specularF0)) && !any(isinf(specularF0)) &&
+             !any(lessThan(specularF0, vec3(0.0))) &&
+             !isnan(roughness) && !isinf(roughness) &&
+             roughness >= 0.0)) &&
         !invalidHitKind &&
         (probeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) != 0u &&
         sourceLightingGeneration != 0u && !invalidSourceEpoch &&
@@ -2696,6 +2799,8 @@ void WriteSimpleDdgiTransportRayCache(
             0.0,
             0.0);
         WriteStorageWordUniform(bufferIndex, generationWord, 0u);
+        if (glossySidecarEnabled)
+            WriteStorageWordUniform(bufferIndex, glossySidecarWord, 0u);
         RecordSimpleDdgiInvalidRayMetadata(
             p, invalidSourceEpoch, invalidHitKind);
         return;
@@ -2851,6 +2956,17 @@ void WriteSimpleDdgiTransportRayCache(
                 clamp(diffuseReflectance, vec3(0.0), vec3(1.0)),
                 clamp(materialOcclusion, 0.0, 1.0))));
         WriteStorageWordUniform(bufferIndex, transmissionWord, packedTransmission);
+    }
+    if (glossySidecarEnabled)
+    {
+        WriteStorageWordUniform(
+            bufferIndex,
+            glossySidecarWord,
+            requiresSurfacePayload
+                ? packUnorm4x8(vec4(
+                    clamp(specularF0, vec3(0.0), vec3(1.0)),
+                    clamp(roughness, 0.0, 1.0)))
+                : 0u);
     }
     uint flags = PackSimpleDdgiTransportCacheHitKind(hitKind) |
         (SimpleDdgiDirectionEpoch(sourceEpoch) <<
@@ -3214,6 +3330,8 @@ bool ReadSimpleDdgiLegacyTransportRayCacheForSolve(
     cache.diffuseReflectance = vec3(0.0);
     cache.transmittedDiffuseReflectance = vec3(0.0);
     cache.materialOcclusion = 1.0;
+    cache.specularF0 = vec3(0.0);
+    cache.roughness = 1.0;
     cache.sourceRayCount = 0u;
     cache.generationAndFlags = 0u;
     cache.sourceLightingGeneration = 0u;
@@ -3303,7 +3421,20 @@ bool ReadSimpleDdgiLegacyTransportRayCacheForSolve(
     cache.generationAndFlags = generationAndFlags;
     cache.sourceLightingGeneration = expectedSourceLightingGeneration;
     cache.sourceEpoch = expectedSourceEpoch;
-    return true;
+    uint hitKind = UnpackSimpleDdgiTransportCacheHitKind(generationAndFlags);
+    bool requiresSurfacePayload =
+        hitKind != uint(SIMPLE_DDGI_RAY_HIT_KIND_MISS) &&
+        hitKind != uint(SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE);
+    return ReadSimpleDdgiRecursiveGlossyMaterialSidecar(
+        bufferIndex,
+        cacheProbeBaseWordPlusOne,
+        directionRayIndex,
+        volume.cacheStrideWords,
+        volume.cacheLayoutFlags,
+        p,
+        requiresSurfacePayload,
+        cache.specularF0,
+        cache.roughness);
 }
 
 // Packed transport already receives a producer-validated, one-based cache
@@ -3331,6 +3462,8 @@ bool ReadSimpleDdgiPackedTransportRayCacheForSolve(
     cache.diffuseReflectance = vec3(0.0);
     cache.transmittedDiffuseReflectance = vec3(0.0);
     cache.materialOcclusion = 1.0;
+    cache.specularF0 = vec3(0.0);
+    cache.roughness = 1.0;
     cache.sourceRayCount = 0u;
     cache.generationAndFlags = 0u;
     cache.sourceLightingGeneration = 0u;
@@ -3438,7 +3571,16 @@ bool ReadSimpleDdgiPackedTransportRayCacheForSolve(
             unpackUnorm4x8(packedTransmission).rgb;
         cache.materialOcclusion = surface.a;
     }
-    return true;
+    return ReadSimpleDdgiRecursiveGlossyMaterialSidecar(
+        bufferIndex,
+        cacheProbeBaseWordPlusOne,
+        directionRayIndex,
+        volume.cacheStrideWords,
+        volume.cacheLayoutFlags,
+        p,
+        requiresSurfacePayload,
+        cache.specularF0,
+        cache.roughness);
 }
 
 // Decode failures are rare and already reject the resident transaction. Keep
@@ -3573,6 +3715,8 @@ bool ReadSimpleDdgiTransportRayCache(
     cache.diffuseReflectance = vec3(0.0);
     cache.transmittedDiffuseReflectance = vec3(0.0);
     cache.materialOcclusion = 1.0;
+    cache.specularF0 = vec3(0.0);
+    cache.roughness = 1.0;
     cache.sourceRayCount = 0u;
     cache.generationAndFlags = 0u;
     cache.sourceLightingGeneration = 0u;
@@ -3805,6 +3949,25 @@ bool ReadSimpleDdgiTransportRayCache(
     {
         if (sourceEpochMismatch)
             RecordSimpleDdgiDirectionEpochMismatch(p);
+        return false;
+    }
+    uint ordinaryAddressStride =
+        SimpleDdgiStorageUsesHotColdLayout(layoutFlags)
+            ? SimpleDdgiStorageHotHeaderStride(format)
+            : SimpleDdgiStorageExpectedStride(format);
+    uint cacheProbeBaseWord = baseWord -
+        directionRayIndex * ordinaryAddressStride;
+    if (!ReadSimpleDdgiRecursiveGlossyMaterialSidecar(
+            bufferIndex,
+            cacheProbeBaseWord + 1u,
+            directionRayIndex,
+            SimpleDdgiStorageExpectedStride(format),
+            layoutFlags,
+            p,
+            requiresSurfacePayload,
+            cache.specularF0,
+            cache.roughness))
+    {
         return false;
     }
 #if SIMPLE_DDGI_DIRECTION_VALIDATION
@@ -5129,6 +5292,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     bool evaluateDirectionalRadiance = directionalRadianceMode !=
             SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF &&
         glossyTransportMode != SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_OFF &&
+        SimpleDdgiDirectionalRadianceQueryBufferIndex != 0u &&
         directionalRoughnessWeight > 0.0;
 #endif
 #if NJULF_DDGI_DETAILED_COUNTERS
@@ -6343,14 +6507,16 @@ vec3 SampleSimpleDdgiUnifiedIrradiance(vec3 worldPos, vec3 normal, vec3 viewDir,
     return SampleSimpleDdgiUnifiedIrradiance(worldPos, normal, viewDir, allowFallback, ignoredOwnership);
 }
 
-vec3 SampleSimpleDdgiSolverBounceIrradiance(
+vec3 SampleSimpleDdgiSolverBounceIrradianceDetailed(
     SimpleDdgiParams p,
     vec3 worldPos,
     vec3 normal,
     vec3 viewDir,
     out float solverOwnershipOut,
-    out float fallbackWeightOut)
+    out float fallbackWeightOut,
+    out SimpleDdgiGatherResult gather)
 {
+    gather = EmptySimpleDdgiGatherResult();
     if ((p.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u)
     {
         solverOwnershipOut = 0.0;
@@ -6359,7 +6525,7 @@ vec3 SampleSimpleDdgiSolverBounceIrradiance(
     }
 
     vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
-    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(p, worldPos, safeNormal, viewDir);
+    gather = SampleSimpleDdgiGather(p, worldPos, safeNormal, viewDir);
     float spatialCoverage = clamp(gather.spatialCoverage, 0.0, 1.0);
     float solverOwnership = spatialCoverage * smoothstep(
         0.0,
@@ -6386,6 +6552,25 @@ vec3 SampleSimpleDdgiSolverBounceIrradiance(
     }
 
     return clamp(irradiance, vec3(0.0), vec3(64.0));
+}
+
+vec3 SampleSimpleDdgiSolverBounceIrradiance(
+    SimpleDdgiParams p,
+    vec3 worldPos,
+    vec3 normal,
+    vec3 viewDir,
+    out float solverOwnershipOut,
+    out float fallbackWeightOut)
+{
+    SimpleDdgiGatherResult ignoredGather;
+    return SampleSimpleDdgiSolverBounceIrradianceDetailed(
+        p,
+        worldPos,
+        normal,
+        viewDir,
+        solverOwnershipOut,
+        fallbackWeightOut,
+        ignoredGather);
 }
 
 vec3 SampleSimpleDdgiSolverBounceIrradiance(

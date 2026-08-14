@@ -139,7 +139,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDebugLineVertex>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(320));
                 Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(548));
-                Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(64));
+                Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
                 Assert.That(Marshal.SizeOf<GPUMeshletDrawCommand>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUPackedMeshletDrawCommand>(), Is.EqualTo(32));
@@ -163,8 +163,8 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUMotionVectorPushConstants>(), Is.EqualTo(160));
                 Assert.That(Marshal.SizeOf<GPULightCullPushConstants>(), Is.EqualTo(208));
                 Assert.That(Marshal.SizeOf<GPUShadowData>(), Is.EqualTo(320));
-                Assert.That(Marshal.SizeOf<GPUDirectionalShadowParameters>(), Is.EqualTo(64));
-        Assert.That(Marshal.SizeOf<GPUDirectionalRayShadowPushConstants>(), Is.EqualTo(116));
+                Assert.That(Marshal.SizeOf<GPUDirectionalShadowParameters>(), Is.EqualTo(112));
+                Assert.That(Marshal.SizeOf<GPUDirectionalRayShadowPushConstants>(), Is.EqualTo(128));
                 Assert.That(Marshal.SizeOf<GPUSpotShadow>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUPointShadow>(), Is.EqualTo(432));
                 Assert.That(Marshal.SizeOf<GPULocalLightShadowIndex>(), Is.EqualTo(16));
@@ -774,7 +774,10 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUDirectionalShadowParameters>(nameof(GPUDirectionalShadowParameters.CascadeWorldTexelSizes), "OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_CASCADE_WORLD_TEXEL_SIZES");
                 AssertFieldOffset<GPUDirectionalShadowParameters>(nameof(GPUDirectionalShadowParameters.FilterAndBias), "OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_FILTER_AND_BIAS");
                 AssertFieldOffset<GPUDirectionalShadowParameters>(nameof(GPUDirectionalShadowParameters.ModeAndRayDistance), "OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_MODE_AND_RAY_DISTANCE");
-                AssertFieldOffset<GPUDirectionalShadowParameters>(nameof(GPUDirectionalShadowParameters.Reserved), "OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RESERVED");
+                AssertFieldOffset<GPUDirectionalShadowParameters>(nameof(GPUDirectionalShadowParameters.TemporalAndSampling), "OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_TEMPORAL_AND_SAMPLING");
+                AssertFieldOffset<GPUDirectionalShadowParameters>(nameof(GPUDirectionalShadowParameters.RaySceneBoundsMinimum), "OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RAY_SCENE_BOUNDS_MINIMUM");
+                AssertFieldOffset<GPUDirectionalShadowParameters>(nameof(GPUDirectionalShadowParameters.RaySceneBoundsMaximum), "OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RAY_SCENE_BOUNDS_MAXIMUM");
+                AssertFieldOffset<GPUDirectionalShadowParameters>(nameof(GPUDirectionalShadowParameters.RuntimeFlags), "OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RUNTIME_FLAGS");
 
                 AssertFieldOffset<GPUSpotShadow>(nameof(GPUSpotShadow.LightViewProjection), "OFFSET_GPU_SPOT_SHADOW_LIGHT_VIEW_PROJECTION");
                 AssertFieldOffset<GPUSpotShadow>(nameof(GPUSpotShadow.AtlasScaleOffset), "OFFSET_GPU_SPOT_SHADOW_ATLAS_SCALE_OFFSET");

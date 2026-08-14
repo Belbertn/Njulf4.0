@@ -42,13 +42,13 @@ shared vec3 c5TileNear[64];
 shared vec3 c5TileLow[64];
 shared float c5TileConfidence[64];
 shared uint c5TileValid[64];
+shared uint c5TileHit[64];
 shared uint c5TileCovered[64];
 shared uint c5TileReasonFlags[64];
 shared uint c5TileRayLaunched[64];
 shared uint c5TileTraceSteps[64];
 shared uint c5TileMipVisits[64];
 shared uint c5TileRefinementVisits[64];
-shared vec3 c5TileMeanResidual;
 
 const uint C5_TRACE_REASON_SCREEN_EXIT = 1u << 0u;
 const uint C5_TRACE_REASON_INVALID_RECEIVER = 1u << 1u;
@@ -441,6 +441,7 @@ void RecordTileSummary()
 {
     uint coveredCount = 0u;
     uint validCount = 0u;
+    uint hitCount = 0u;
     uint invalidCount = 0u;
     uint raysLaunched = 0u;
     uint screenExits = 0u;
@@ -472,6 +473,7 @@ void RecordTileSummary()
             validCount++;
         else
             invalidCount++;
+        hitCount += c5TileHit[lane];
         uint reasons = c5TileReasonFlags[lane];
         screenExits += (reasons & C5_TRACE_REASON_SCREEN_EXIT) != 0u ? 1u : 0u;
         invalidReceivers += (reasons & C5_TRACE_REASON_INVALID_RECEIVER) != 0u ? 1u : 0u;
@@ -529,8 +531,11 @@ void RecordTileSummary()
     // Aggregate once per tile; no trace pixel performs a global atomic.
     atomicAdd(traceTileRecords.words[8u], coveredCount);
     atomicAdd(traceTileRecords.words[9u], raysLaunched);
-    atomicAdd(traceTileRecords.words[10u], validCount);
-    atomicAdd(traceTileRecords.words[11u], raysLaunched - validCount);
+    // Tile validity counts estimator candidates, including a legitimate
+    // zero-valued miss. The aggregate hit/miss pair retains actual ray-query
+    // semantics for diagnostics.
+    atomicAdd(traceTileRecords.words[10u], hitCount);
+    atomicAdd(traceTileRecords.words[11u], raysLaunched - hitCount);
     atomicAdd(traceTileRecords.words[12u], invalidReceivers);
     atomicAdd(traceTileRecords.words[13u], invalidRays);
     atomicAdd(traceTileRecords.words[14u], invalidCount);
@@ -664,6 +669,20 @@ bool EvaluateCandidate(
     }
     rayLaunched = 1u;
 
+    // Receiver identity owns temporal/spatial reuse. Populate it before the
+    // stochastic trace so a bounded miss can still contribute a valid zero
+    // Monte Carlo sample and preserve the receiver's accumulation.
+    metadata.receiverDepth = startDepth;
+    metadata.hitDepth = startDepth;
+    metadata.confidence = 1.0;
+    metadata.packedFlags =
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE |
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_ATTACHMENT_VERIFIED |
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED;
+    metadata.receiverIdentity = receiverIds;
+    metadata.hitIdentity = uvec2(0u);
+    metadata.hitUv = receiverUv;
+
     vec2 hitUv;
     float hitRayDepth;
     float hitSceneDepth;
@@ -671,7 +690,17 @@ bool EvaluateCandidate(
             hitUv, hitRayDepth, hitSceneDepth, failureFlags,
             traceSteps, mipVisits, refinementVisits))
     {
-        failureFlags = C5_TRACE_REASON_NORMAL;
+        // Screen exit and bounded step/mip exhaustion are the zero branch of
+        // this screen-space estimator. Invalid or non-finite rays remain hard
+        // failures and are not allowed to refresh history.
+        bool validMiss = (failureFlags & C5_TRACE_REASON_MISS) != 0u &&
+            (failureFlags & (C5_TRACE_REASON_INVALID_RAY |
+                C5_TRACE_REASON_NONFINITE)) == 0u;
+        if (validMiss)
+        {
+            confidence = 1.0;
+            return true;
+        }
         return false;
     }
 
@@ -693,9 +722,12 @@ bool EvaluateCandidate(
     if (dot(hitGeometric, hitGeometric) <= 0.0 ||
         dot(hitShading, hitShading) <= 0.0)
     {
-        failureFlags = C5_TRACE_REASON_INVALID_RAY |
-            C5_TRACE_REASON_NORMAL;
-        return false;
+        // The receiver and its stochastic ray are valid, but this screen hit
+        // is outside the source domain. It is the zero branch of the bounded
+        // screen-space estimator, not a reason to discard receiver history.
+        failureFlags = C5_TRACE_REASON_NORMAL | C5_TRACE_REASON_MISS;
+        confidence = 1.0;
+        return true;
     }
 
     float receiverCosine = max(dot(receiverShading, generationDirection), 0.0);
@@ -705,11 +737,17 @@ bool EvaluateCandidate(
         generationPdf <= 0.0 || generationPdf > 0.31831 ||
         dot(generationDirection, generationDirection) <= 0.0 ||
         abs(generationPdf - expectedPdf) > 2.0e-4 ||
-        !SimpleDdgiNearFieldFinite(hitFrontFaceCosine) ||
-        hitFrontFaceCosine <= 0.01)
+        !SimpleDdgiNearFieldFinite(hitFrontFaceCosine))
     {
-        failureFlags = C5_TRACE_REASON_SOURCE;
+        failureFlags = C5_TRACE_REASON_INVALID_RAY |
+            C5_TRACE_REASON_NONFINITE;
         return false;
+    }
+    if (hitFrontFaceCosine <= 0.01)
+    {
+        failureFlags = C5_TRACE_REASON_NORMAL | C5_TRACE_REASON_MISS;
+        confidence = 1.0;
+        return true;
     }
 
     vec4 directAtHitPayload = texelFetch(
@@ -732,9 +770,13 @@ bool EvaluateCandidate(
             footprintRadius,
             directLowFrequency))
     {
-        failureFlags = C5_TRACE_REASON_DEPTH |
-            C5_TRACE_REASON_NONFINITE;
-        return false;
+        // Missing source ownership, an unusable reconstruction, or a
+        // discontinuity-bounded B3 footprint means C5 owns no contribution
+        // for this launched sample. Preserve a valid zero so isolated source
+        // hits cannot become persistent salt-and-pepper impulses.
+        failureFlags = C5_TRACE_REASON_SOURCE | C5_TRACE_REASON_MISS;
+        confidence = 1.0;
+        return true;
     }
 
     float depthConfidence = pc.depthTolerance <= 0.0
@@ -752,14 +794,14 @@ bool EvaluateCandidate(
         return false;
     }
 
-    metadata.receiverDepth = startDepth;
     metadata.hitDepth = hitSceneDepth;
     metadata.confidence = confidence;
     metadata.packedFlags = SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE |
         SIMPLE_DDGI_NEAR_FIELD_FLAG_SCREEN_SPACE_HIT |
         SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_ATTACHMENT_VERIFIED |
         SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED;
-    metadata.identity = uvec4(receiverIds, hitIds);
+    metadata.receiverIdentity = receiverIds;
+    metadata.hitIdentity = hitIds;
     metadata.hitUv = hitUv;
     failureFlags = 0u;
     return true;
@@ -772,7 +814,7 @@ void main()
     bool covered = pixel.x < outputExtent.x && pixel.y < outputExtent.y &&
         pixel.x < int(pc.traceWidth) && pixel.y < int(pc.traceHeight);
     uint metadataIndex = covered
-        ? uint(pixel.y) * uint(outputExtent.x) + uint(pixel.x)
+        ? uint(pixel.y) * pc.traceWidth + uint(pixel.x)
         : 0u;
     uint localIndex = gl_LocalInvocationIndex;
 
@@ -792,10 +834,13 @@ void main()
 
     c5TileCovered[localIndex] = covered ? 1u : 0u;
     c5TileValid[localIndex] = valid ? 1u : 0u;
+    c5TileHit[localIndex] = valid && SimpleDdgiNearFieldHasFlag(
+        metadata.packedFlags,
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_SCREEN_SPACE_HIT) ? 1u : 0u;
     c5TileNear[localIndex] = valid ? nearEstimate : vec3(0.0);
     c5TileLow[localIndex] = valid ? lowEstimate : vec3(0.0);
     c5TileConfidence[localIndex] = valid ? confidence : 0.0;
-    c5TileReasonFlags[localIndex] = valid ? 0u : failureFlags;
+    c5TileReasonFlags[localIndex] = failureFlags;
     c5TileRayLaunched[localIndex] = rayLaunched;
     c5TileTraceSteps[localIndex] = traceSteps;
     c5TileMipVisits[localIndex] = mipVisits;
@@ -804,21 +849,6 @@ void main()
 
     if (localIndex == 0u)
     {
-        vec3 residualSum = vec3(0.0);
-        uint validCount = 0u;
-        for (uint lane = 0u; lane < 64u; ++lane)
-        {
-            if (c5TileValid[lane] == 0u)
-                continue;
-            residualSum += c5TileNear[lane] - c5TileLow[lane];
-            validCount++;
-        }
-        // Subtracting the valid-tile mean makes the isolated high-frequency
-        // residual energy-neutral over every 8x8 trace tile. Invalid/edge
-        // pixels never participate in this correction.
-        c5TileMeanResidual = validCount == 0u
-            ? vec3(0.0)
-            : residualSum / float(validCount);
         RecordTileSummary();
     }
     barrier();
@@ -831,7 +861,12 @@ void main()
         return;
     }
 
-    vec3 signedResidual = nearEstimate - lowEstimate - c5TileMeanResidual;
+    // The B3 footprint is already the low-frequency control variate. A second
+    // independently estimated 8x8 tile mean creates discontinuities at every
+    // workgroup boundary and spreads one bright stochastic hit across the
+    // other valid pixels as a dark residual. Preserve the per-receiver control
+    // variate and let temporal/spatial filtering reduce its variance.
+    vec3 signedResidual = nearEstimate - lowEstimate;
     if (!SimpleDdgiNearFieldFinite(signedResidual))
     {
         WriteInvalid(pixel, metadataIndex);

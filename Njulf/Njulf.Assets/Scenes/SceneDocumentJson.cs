@@ -12,7 +12,7 @@ public static class SceneDocumentJson
 
     private static readonly HashSet<string> KnownRootFields = new(StringComparer.Ordinal)
     {
-        "schemaVersion", "id", "name", "ambientLight", "objects", "lights", "reflectionProbes",
+        "schemaVersion", "id", "name", "ambientLight", "importedModelLightsEnabled", "objects", "lights", "reflectionProbes",
         "giProbeVolumes", "instanceBatches", "foliagePrototypes", "foliagePatches", "particleEffects", "dependencies"
     };
 
@@ -172,6 +172,7 @@ public static class SceneDocumentJson
         Id = document.Id,
         Name = document.Name,
         AmbientLight = document.AmbientLight,
+        ImportedModelLightsEnabled = document.ImportedModelLightsEnabled,
         Objects = document.Objects.OrderBy(static item => item.Id).ToList(),
         Lights = document.Lights.OrderBy(static item => item.Id).ToList(),
         ReflectionProbes = document.ReflectionProbes.OrderBy(static item => item.Id).ToList(),

@@ -411,6 +411,8 @@ namespace Njulf.Rendering.Data
         public long GpuTransparentMicroseconds { get; set; }
         public long GpuDirectionalShadowMicroseconds { get; set; }
         public long GpuDirectionalRayShadowMicroseconds { get; set; }
+        public long GpuDirectionalShadowTemporalMicroseconds { get; set; }
+        public long GpuDirectionalShadowSpatialMicroseconds { get; set; }
         public long GpuSpotShadowMicroseconds { get; set; }
         public long GpuPointShadowMicroseconds { get; set; }
         public long GpuBloomExtractMicroseconds { get; set; }
@@ -552,6 +554,14 @@ namespace Njulf.Rendering.Data
         public uint DirectionalRayShadowMaskHeight { get; set; }
         public ulong DirectionalRayShadowMaskBytes { get; set; }
         public uint DirectionalRayShadowResourceGeneration { get; set; }
+        public bool DirectionalShadowTemporalPassEnabled { get; set; }
+        public bool DirectionalShadowSpatialPassEnabled { get; set; }
+        public bool DirectionalShadowRayCountersEnabled { get; set; }
+        public int DirectionalShadowHistoryValid { get; set; }
+        public DirectionalShadowHistoryResetReason DirectionalShadowHistoryResetReason { get; set; }
+        public ulong DirectionalShadowHistoryBytes { get; set; }
+        public DirectionalShadowRayCounters DirectionalShadowRayCountersReadback { get; set; } =
+            DirectionalShadowRayCounters.Empty;
         public bool SpotShadowsEnabled { get; set; }
         public bool SpotShadowRecordSkipped { get; set; }
         public int SpotShadowCandidateCount { get; set; }
@@ -1724,6 +1734,8 @@ namespace Njulf.Rendering.Data
             GpuTransparentMicroseconds = 0;
             GpuDirectionalShadowMicroseconds = 0;
             GpuDirectionalRayShadowMicroseconds = 0;
+            GpuDirectionalShadowTemporalMicroseconds = 0;
+            GpuDirectionalShadowSpatialMicroseconds = 0;
             GpuSpotShadowMicroseconds = 0;
             GpuPointShadowMicroseconds = 0;
             GpuBloomExtractMicroseconds = 0;
@@ -1934,6 +1946,15 @@ namespace Njulf.Rendering.Data
             DirectionalRayShadowMaskHeight = 0u;
             DirectionalRayShadowMaskBytes = 0UL;
             DirectionalRayShadowResourceGeneration = 0u;
+            DirectionalShadowTemporalPassEnabled = false;
+            DirectionalShadowSpatialPassEnabled = false;
+            DirectionalShadowRayCountersEnabled = false;
+            DirectionalShadowHistoryValid = 0;
+            DirectionalShadowHistoryResetReason =
+                global::Njulf.Rendering.Data.DirectionalShadowHistoryResetReason.None;
+            DirectionalShadowHistoryBytes = 0UL;
+            DirectionalShadowRayCountersReadback =
+                DirectionalShadowRayCounters.Empty;
             SpotShadowsEnabled = false;
             SpotShadowRecordSkipped = false;
             SpotShadowCandidateCount = 0;

@@ -15,6 +15,9 @@ using Silk.NET.Assimp;
 using Silk.NET.Core.Native;
 using File = System.IO.File;
 using CoreSkeleton = Njulf.Core.Animation.Skeleton;
+using ModelLightAttenuationMode = Njulf.Core.Scene.ModelLightAttenuationMode;
+using ModelLightDefinition = Njulf.Core.Scene.ModelLightDefinition;
+using ModelLightType = Njulf.Core.Scene.ModelLightType;
 using NumericsMatrix4x4 = System.Numerics.Matrix4x4;
 using NumericsVector4 = System.Numerics.Vector4;
 
@@ -33,6 +36,7 @@ namespace Njulf.Assets
         public ModelMesh Import(string path, ImporterOptions? options = null)
         {
             options ??= ImporterOptions.Default!;
+            ModelLightImportUtilities.ValidateOptions(options);
 
             ModelImportBackend backend = ResolveBackend(path, options);
             if (backend == ModelImportBackend.SharpGltf)
@@ -46,6 +50,7 @@ namespace Njulf.Assets
         public ModelImportResult ImportDetailed(string path, ImporterOptions? options = null)
         {
             options ??= ImporterOptions.Default!;
+            ModelLightImportUtilities.ValidateOptions(options);
             string fullPath = Path.GetFullPath(path);
             ModelImportBackend backend = ResolveBackend(fullPath, options);
 
@@ -346,6 +351,7 @@ namespace Njulf.Assets
                 "KHR_materials_specular",
                 "KHR_materials_iridescence",
                 "KHR_materials_dispersion",
+                "KHR_lights_punctual",
                 "KHR_texture_basisu",
                 "EXT_texture_webp"
             };
@@ -440,6 +446,8 @@ namespace Njulf.Assets
             mesh.AnimationDiagnostics = animationManifest.Diagnostics;
             if (gltfManifest != null)
                 mesh.ImportDiagnostics = gltfManifest.Diagnostics;
+            if (options.ImportLights)
+                ImportAssimpLights(scene, path, options, mesh);
 
             AccumulateNodeMeshTotals(scene, scene->MRootNode, out int vertexCapacity, out int indexCapacity);
             var vertices = new List<Vector3>(vertexCapacity);
@@ -492,6 +500,224 @@ namespace Njulf.Assets
 
             return mesh;
         }
+
+        private static unsafe void ImportAssimpLights(
+            Scene* scene,
+            string assetPath,
+            ImporterOptions options,
+            ModelMesh model)
+        {
+            if (scene->MNumLights == 0)
+                return;
+
+            float globalDistanceScale = MathF.Abs(options.GlobalScale);
+            if (!float.IsFinite(globalDistanceScale) ||
+                globalDistanceScale <= float.Epsilon)
+            {
+                throw new InvalidDataException(
+                    "Assimp light import requires a finite, non-zero GlobalScale.");
+            }
+
+            var nodes = new Dictionary<string, AssimpLightNodeInfo>(
+                StringComparer.Ordinal);
+            int nextNodeIndex = 0;
+            BuildAssimpLightNodeMap(
+                scene->MRootNode,
+                NumericsMatrix4x4.Identity,
+                nodes,
+                ref nextNodeIndex);
+            var animatedLightTransforms = new HashSet<string>(
+                StringComparer.Ordinal);
+
+            for (uint lightIndex = 0; lightIndex < scene->MNumLights;
+                 lightIndex++)
+            {
+                Light* source = scene->MLights[lightIndex];
+                string nodeName = source->MName.AsString;
+                string lightName = string.IsNullOrWhiteSpace(nodeName)
+                    ? $"Light_{lightIndex}"
+                    : nodeName;
+                if (!nodes.TryGetValue(nodeName, out AssimpLightNodeInfo node))
+                {
+                    model.ImportDiagnostics.SkippedLightCount++;
+                    model.ImportDiagnostics.Add(
+                        AssetImportSeverity.Warning,
+                        AssetImportMessageCode.LightNodeMissing,
+                        assetPath,
+                        nodeName,
+                        $"Assimp light '{lightName}' has no matching scene node and was skipped.");
+                    continue;
+                }
+
+                ModelLightType? type = source->MType switch
+                {
+                    LightSourceType.Point => ModelLightType.Point,
+                    LightSourceType.Directional => ModelLightType.Directional,
+                    LightSourceType.Spot => ModelLightType.Spot,
+                    _ => null
+                };
+                if (!type.HasValue)
+                {
+                    model.ImportDiagnostics.SkippedLightCount++;
+                    model.ImportDiagnostics.Add(
+                        AssetImportSeverity.Warning,
+                        AssetImportMessageCode.UnsupportedLightType,
+                        assetPath,
+                        nodeName,
+                        $"Assimp light '{lightName}' uses unsupported type '{source->MType}' and was skipped.");
+                    continue;
+                }
+
+                float constant = type == ModelLightType.Directional
+                    ? 1f
+                    : source->MAttenuationConstant;
+                float linear = type == ModelLightType.Directional
+                    ? 0f
+                    : source->MAttenuationLinear / globalDistanceScale;
+                float quadratic = type == ModelLightType.Directional
+                    ? 0f
+                    : source->MAttenuationQuadratic /
+                        (globalDistanceScale * globalDistanceScale);
+                if (type != ModelLightType.Directional &&
+                    constant == 0f && linear == 0f && quadratic == 0f)
+                {
+                    // Some FBX producers omit DecayType entirely. Assimp then
+                    // exposes an all-zero tuple; interpret that as constant
+                    // attenuation and retain the configured finite range.
+                    constant = 1f;
+                }
+                float range = type == ModelLightType.Directional
+                    ? options.DefaultImportedLightRange
+                    : ModelLightImportUtilities.ResolvePolynomialRange(
+                        constant,
+                        linear,
+                        quadratic,
+                        options,
+                        model.ImportDiagnostics,
+                        assetPath,
+                        lightName);
+                var localPosition = new Vector3(
+                    source->MPosition.X,
+                    source->MPosition.Y,
+                    source->MPosition.Z);
+                var localDirection = new Vector3(
+                    source->MDirection.X,
+                    source->MDirection.Y,
+                    source->MDirection.Z);
+                var imported = new ModelLightDefinition
+                {
+                    SourceIndex = checked((int)lightIndex),
+                    SourceNodeIndex = node.Index,
+                    SourceNodeName = nodeName,
+                    Name = lightName,
+                    Type = type.Value,
+                    Position = TransformPosition(
+                        localPosition,
+                        node.WorldTransform,
+                        options.GlobalScale),
+                    Direction = NormalizeOrDefault(
+                        TransformDirection(localDirection, node.WorldTransform)),
+                    Color = new Vector3(
+                        source->MColorDiffuse.X,
+                        source->MColorDiffuse.Y,
+                        source->MColorDiffuse.Z),
+                    // Assimp's FBX converter premultiplies source intensity into
+                    // the diffuse light color.
+                    Intensity = 1f,
+                    Range = range,
+                    HasAuthoredRange = false,
+                    InnerConeAngle = type == ModelLightType.Spot
+                        ? source->MAngleInnerCone
+                        : 0f,
+                    OuterConeAngle = type == ModelLightType.Spot
+                        ? source->MAngleOuterCone
+                        : MathF.PI / 4f,
+                    AttenuationMode = type == ModelLightType.Directional
+                        ? ModelLightAttenuationMode.InverseSquare
+                        : ModelLightAttenuationMode.Polynomial,
+                    AttenuationConstant = constant,
+                    AttenuationLinear = linear,
+                    AttenuationQuadratic = quadratic
+                };
+                model.Lights.Add(ModelLightImportUtilities.ValidateAndRecord(
+                    imported,
+                    model.ImportDiagnostics,
+                    assetPath));
+
+                for (Node* current = (Node*)node.Address;
+                     current != null;
+                     current = current->MParent)
+                {
+                    string ancestorName = current->MName.AsString;
+                    if (!string.IsNullOrWhiteSpace(ancestorName))
+                        animatedLightTransforms.Add(ancestorName);
+                }
+            }
+
+            if (animatedLightTransforms.Count == 0)
+                return;
+
+            var warnedNodes = new HashSet<string>(StringComparer.Ordinal);
+            for (uint animationIndex = 0;
+                 animationIndex < scene->MNumAnimations;
+                 animationIndex++)
+            {
+                Animation* animation = scene->MAnimations[animationIndex];
+                for (uint channelIndex = 0;
+                     channelIndex < animation->MNumChannels;
+                     channelIndex++)
+                {
+                    string targetName =
+                        animation->MChannels[channelIndex]->MNodeName.AsString;
+                    if (!animatedLightTransforms.Contains(targetName) ||
+                        !warnedNodes.Add(targetName))
+                    {
+                        continue;
+                    }
+
+                    model.ImportDiagnostics.Add(
+                        AssetImportSeverity.Warning,
+                        AssetImportMessageCode.AnimatedLightUnsupported,
+                        assetPath,
+                        targetName,
+                        $"Animation '{animation->MName.AsString}' targets light node or ancestor '{targetName}'; imported lights use the default pose.");
+                }
+            }
+        }
+
+        private static unsafe void BuildAssimpLightNodeMap(
+            Node* node,
+            NumericsMatrix4x4 parentWorld,
+            Dictionary<string, AssimpLightNodeInfo> nodes,
+            ref int nextNodeIndex)
+        {
+            NumericsMatrix4x4 world =
+                ToEngineTransform(node->MTransformation) * parentWorld;
+            int nodeIndex = nextNodeIndex++;
+            string name = node->MName.AsString;
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                nodes[name] = new AssimpLightNodeInfo(
+                    world,
+                    nodeIndex,
+                    (nint)node);
+            }
+
+            for (uint childIndex = 0; childIndex < node->MNumChildren;
+                 childIndex++)
+            {
+                BuildAssimpLightNodeMap(
+                    node->MChildren[childIndex],
+                    world,
+                    nodes,
+                    ref nextNodeIndex);
+            }
+        }
+
+        private readonly record struct AssimpLightNodeInfo(
+            NumericsMatrix4x4 WorldTransform,
+            int Index,
+            nint Address);
 
         private static unsafe AssimpAnimationManifest BuildAssimpAnimationManifest(Scene* scene)
         {
@@ -2560,6 +2786,7 @@ namespace Njulf.Assets
         public List<CoreSkeleton> Skeletons { get; } = new();
         public List<Skin> Skins { get; } = new();
         public List<AnimationClip> AnimationClips { get; } = new();
+        public List<ModelLightDefinition> Lights { get; } = new();
         public ModelAnimationImportDiagnostics AnimationDiagnostics { get; set; } = ModelAnimationImportDiagnostics.Empty;
         public AssetImportDiagnostics ImportDiagnostics { get; set; } = new();
 

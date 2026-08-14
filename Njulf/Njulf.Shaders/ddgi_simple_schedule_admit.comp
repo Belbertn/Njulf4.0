@@ -368,6 +368,28 @@ void main()
         // cohort. One proportional pass handles the bulk; the at-most-fifteen
         // floor remainders use stable volume order as the deterministic tie.
         uint remaining = requestBudget - min(assigned, requestBudget);
+        // Proportional floors alone can permanently assign zero to a small
+        // final volume (for example two missing probes beside an 800-probe
+        // source cohort). Stable remainder order then repeats that zero every
+        // frame. Reserve one slot per nonempty residual volume before the
+        // proportional pass. Rotate the first volume so configurations whose
+        // request budget is smaller than their active-volume count still make
+        // bounded progress instead of favoring low volume indices forever.
+        uint livenessVolumeStart = SchedulerFrameIndex() %
+            max(activeVolumes, 1u);
+        for (uint offset = 0u;
+             offset < activeVolumes && remaining != 0u;
+             offset++)
+        {
+            uint volume = (livenessVolumeStart + offset) % activeVolumes;
+            uint available = specializedPendingByVolume[volume] - min(
+                specializedPendingByVolume[volume],
+                quotas[volume]);
+            if (available == 0u)
+                continue;
+            quotas[volume]++;
+            remaining--;
+        }
         uint residualPendingTotal = 0u;
         for (uint volume = 0u;
              volume < SIMPLE_DDGI_SCHEDULER_MAX_VOLUMES;
@@ -637,7 +659,7 @@ void main()
                             SchedulerSourceModeUsesRadiometricRelight(
                                 SchedulerSourceRefreshMode());
                         uint laneRequiredSourceRayCount = clamp(
-                            SchedulerVolumeFullRays(volumeIndex),
+                            SchedulerVolumeMaintenanceRays(volumeIndex),
                             1u,
                             SIMPLE_DDGI_SCHEDULER_MAX_RAYS);
                         if (laneSourceWork && !laneCanContainZeroPrimaryRelight &&
@@ -777,15 +799,18 @@ void main()
                             // transport work. Cached work never consumes the
                             // primary/source-ray budgets below.
                             uint sourceRayCount = SchedulerTransportV2()
-                                ? requiredSourceRayCount
+                                ? SchedulerResolveAdaptiveSourceRayCount(
+                                    probeIndex,
+                                    volumeIndex,
+                                    candidateReasons,
+                                    sourceWork)
                                 : (sourceWork ? requiredSourceRayCount : 0u);
-                            // A source refresh is an atomic replacement of the
-                            // complete cache sequence. A maintenance-tier subset
-                            // may be used only by cached solver work; accepting it
-                            // as a source refresh would leave unaudited stale
-                            // entries behind while publishing a current epoch.
+                            // V2 evaluates the complete committed source
+                            // prefix. Source refresh may atomically replace it
+                            // with a promoted/demoted prefix; cached work keeps
+                            // the frozen count and consumes no primary rays.
                             if (SchedulerTransportV2() || sourceWork)
-                                activeRayCount = requiredSourceRayCount;
+                                activeRayCount = sourceRayCount;
                             if (sourceUsesPrimaryRays && (primaryBudget == 0u ||
                                 activeRayCount > primaryBudget - min(primaryUsed, primaryBudget)))
                             {

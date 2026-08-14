@@ -597,6 +597,28 @@ public sealed class SimpleDdgiTransportTailTests
     }
 
     [Test]
+    public void TailCertificationPolicy_FailsClosedWithoutGuidedAudit()
+    {
+        SimpleDdgiTailCertificationAvailability availability =
+            SimpleDdgiTransportSolveController.ResolveTailCertificationAvailability(
+                requested: true,
+                SimpleDdgiSchedulerMode.GpuResident,
+                gpuSchedulerReady: true,
+                gpuSchedulerFrameExecutionAvailable: true,
+                guidedTransportActive: true,
+                guidedAuditAvailable: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(availability.Enabled, Is.False);
+            Assert.That(availability.Reason, Is.EqualTo(
+                SimpleDdgiTailCertificationFallbackReason
+                    .GuidedOperatorUnsupported));
+            Assert.That(availability.Message, Does.Contain("guided audit"));
+        });
+    }
+
+    [Test]
     public void EvaluateTail_UsesInfinityNormAndAbsoluteFloor()
     {
         Vector3[] candidate =
@@ -626,6 +648,49 @@ public sealed class SimpleDdgiTransportTailTests
             Assert.That(estimate.IsWithinTolerance, Is.False);
             Assert.That(estimate.CanCertify, Is.False);
         });
+    }
+
+    [Test]
+    public void EvaluateTailPerChannel_DoesNotPairUnrelatedDefectAndGainMaxima()
+    {
+        SimpleDdgiTransportTailEstimator.TailEstimate estimate =
+            SimpleDdgiTransportTailEstimator.EvaluateTailPerChannel(
+                [new Vector3(1.001f, 1.0f, 1.01f)],
+                [Vector3.One],
+                configuredContractionBound: 0.9f,
+                relativeTolerance: 0.02f,
+                observedContractionChannels:
+                    new SimpleDdgiTransportRgbBounds(0.9f, 0.2f, 0.1f),
+                canonicalQuantizationFloorChannels: default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(estimate.ChannelEvidenceVersion, Is.EqualTo(
+                SimpleDdgiTransportTailSummary.PerChannelEvidenceVersion));
+            Assert.That(estimate.FixedPointDefect, Is.EqualTo(0.01f).Within(1e-5f));
+            Assert.That(estimate.CertifiedContractionBound, Is.EqualTo(0.9f));
+            Assert.That(estimate.AbsoluteTailBound, Is.EqualTo(
+                0.01f / 0.9f).Within(1e-5f));
+            Assert.That(estimate.AbsoluteTailBound, Is.LessThan(0.02f));
+            Assert.That(estimate.CanCertify, Is.True);
+        });
+    }
+
+    [Test]
+    public void EvaluateTailPerChannel_RejectsAnyChannelAbovePhysicalCeiling()
+    {
+        SimpleDdgiTransportTailEstimator.TailEstimate estimate =
+            SimpleDdgiTransportTailEstimator.EvaluateTailPerChannel(
+                [Vector3.Zero],
+                [Vector3.Zero],
+                configuredContractionBound: 0.99f,
+                relativeTolerance: 0.02f,
+                observedContractionChannels:
+                    new SimpleDdgiTransportRgbBounds(0.2f, 0.991f, 0.2f),
+                canonicalQuantizationFloorChannels: default);
+
+        Assert.That(estimate.HasValidContractionBound, Is.False);
+        Assert.That(estimate.CanCertify, Is.False);
     }
 
     [Test]
@@ -1343,6 +1408,55 @@ public sealed class SimpleDdgiTransportTailTests
             Assert.That(summary.AbsoluteTailBound, Is.EqualTo(0.0002f).Within(1e-7f));
             Assert.That(summary.AuditMicroseconds, Is.EqualTo(3000u));
             Assert.That(summary.ChunkCount, Is.EqualTo(2u));
+        });
+    }
+
+    [Test]
+    public void AuditAccumulator_PreservesPerChannelCertificateEvidence()
+    {
+        var accumulator = new SimpleDdgiTransportAuditAccumulator(
+            auditEpoch: 5u,
+            generations: Generations,
+            expectedParticipantCount: 1u,
+            expectedTexelCount: 1u,
+            configuredContractionBound: 0.9f,
+            relativeTolerance: 0.02f,
+            canonicalQuantizationFloor: 0.0f,
+            firstFrameSerial: 10u,
+            expectedChunkCount: 1u);
+
+        Assert.That(accumulator.TryAddChunk(new SimpleDdgiTransportAuditChunk
+        {
+            AuditEpoch = 5u,
+            Generations = Generations,
+            ChunkIndex = 0u,
+            ExpectedChunkCount = 1u,
+            ExpectedParticipantCount = 1u,
+            ExpectedTexelCount = 1u,
+            AuditedParticipantCount = 1u,
+            AuditedTexelCount = 1u,
+            FixedPointDefect = 0.01f,
+            FieldMagnitude = 1.0f,
+            ObservedContractionBound = 0.9f,
+            ChannelEvidenceVersion =
+                SimpleDdgiTransportTailSummary.PerChannelEvidenceVersion,
+            FixedPointDefectChannels =
+                new SimpleDdgiTransportRgbBounds(0.001f, 0.0f, 0.01f),
+            FieldMagnitudeChannels =
+                new SimpleDdgiTransportRgbBounds(1.0f, 1.0f, 1.0f),
+            ObservedContractionChannels =
+                new SimpleDdgiTransportRgbBounds(0.9f, 0.2f, 0.1f),
+            FinalFrameSerial = 10u
+        }), Is.True);
+
+        Assert.That(accumulator.TryFinalize(
+            out SimpleDdgiTransportTailSummary summary), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(summary.HasPerChannelEvidence, Is.True);
+            Assert.That(summary.AbsoluteTailBound, Is.EqualTo(
+                0.01f / 0.9f).Within(1e-6f));
+            Assert.That(summary.IsCertified, Is.True);
         });
     }
 

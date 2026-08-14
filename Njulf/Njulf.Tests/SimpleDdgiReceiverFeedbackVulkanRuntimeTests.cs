@@ -127,6 +127,7 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
         {
             MaskedMeshletCount = 1,
             FoliageClusterCount = 1,
+            TransparentObjectCount = 1,
             TransparentMeshletCount = 2,
             TransparentReceiveGlobalIllumination = true,
             ParticleDdgiSampleCount = 3,
@@ -178,6 +179,79 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
             SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
                 SimpleDdgiReceiverFeedbackProducer.ReflectionCapture),
             Is.Zero);
+    }
+
+    [Test]
+    public void DecalOnlyDraws_DoNotClaimTheTransparentExactFeedbackProducer()
+    {
+        var decalOnly = new SceneRenderingData
+        {
+            TransparentObjectCount = 0,
+            TransparentMeshletCount = 481,
+            GeometryDecalMeshletCount = 481,
+            TransparentReceiveGlobalIllumination = true,
+            DecalReceiveGlobalIllumination = true
+        };
+
+        uint mask = ForwardPlusPass.ResolveRequiredReceiverFeedbackProducerMask(
+            decalOnly,
+            fogEnabled: false,
+            reflectionCaptureFeedbackEnabled: false);
+        uint transparentBit =
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
+                SimpleDdgiReceiverFeedbackProducer.TransparentWeightedOit);
+
+        Assert.That(mask & transparentBit, Is.Zero);
+    }
+
+    [Test]
+    public void DecalReceiverCache_IsRestrictedToDepthBackedDecalOnlyDraws()
+    {
+        var decalOnly = new SceneRenderingData
+        {
+            TransparentObjectCount = 0,
+            TransparentMeshletCount = 481,
+            GeometryDecalMeshletCount = 481,
+            DecalReceiveGlobalIllumination = true
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                TransparentForwardPass.ShouldUseDecalReceiverCache(
+                    decalOnly,
+                    exactFeedback: false,
+                    rayVariant: false,
+                    receiverCacheAvailable: true,
+                    receiverCachePipelineAvailable: true),
+                Is.True);
+            Assert.That(
+                TransparentForwardPass.ShouldUseDecalReceiverCache(
+                    decalOnly,
+                    exactFeedback: true,
+                    rayVariant: false,
+                    receiverCacheAvailable: true,
+                    receiverCachePipelineAvailable: true),
+                Is.False);
+            Assert.That(
+                TransparentForwardPass.ShouldUseDecalReceiverCache(
+                    decalOnly,
+                    exactFeedback: false,
+                    rayVariant: true,
+                    receiverCacheAvailable: true,
+                    receiverCachePipelineAvailable: true),
+                Is.False);
+        });
+
+        decalOnly.TransparentObjectCount = 1;
+        Assert.That(
+            TransparentForwardPass.ShouldUseDecalReceiverCache(
+                decalOnly,
+                exactFeedback: false,
+                rayVariant: false,
+                receiverCacheAvailable: true,
+                receiverCachePipelineAvailable: true),
+            Is.False);
     }
 
     [Test]

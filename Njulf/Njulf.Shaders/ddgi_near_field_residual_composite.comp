@@ -45,10 +45,16 @@ void main()
         return;
     }
 
-    ivec2 residualExtent = textureSize(filteredResidualInput, 0);
+    // The physical image can be larger than the active adaptive C5 extent.
+    // Address only the push-constant extent so quarter/eighth transitions do
+    // not sample stale texels from the admitted maximum allocation.
+    ivec2 physicalResidualExtent = textureSize(filteredResidualInput, 0);
+    ivec2 residualExtent = min(
+        ivec2(pc.traceWidth, pc.traceHeight),
+        physicalResidualExtent);
     ivec2 residualPixel = clamp(ivec2(fullUv * vec2(residualExtent)), ivec2(0),
         max(residualExtent - ivec2(1), ivec2(0)));
-    uint residualIndex = uint(residualPixel.y) * uint(residualExtent.x) +
+    uint residualIndex = uint(residualPixel.y) * pc.traceWidth +
         uint(residualPixel.x);
     if (residualIndex >= uint(compositeMetadata.values.length()))
     {
@@ -62,6 +68,11 @@ void main()
     bool validResidual = SimpleDdgiNearFieldIsValidCandidate(residual) &&
         SimpleDdgiNearFieldHasFlag(metadata.packedFlags,
             SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) &&
+        // A newly exposed receiver has only one stochastic sample. Keep the
+        // canonical DDGI result until temporal validation has accepted a prior
+        // receiver estimate; this prevents disocclusion sparkles.
+        SimpleDdgiNearFieldHasFlag(metadata.packedFlags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_HISTORY_ACCEPTED) &&
         SimpleDdgiNearFieldFinite(metadata.confidence) && metadata.confidence > 0.0;
     if (!validResidual)
     {
@@ -80,7 +91,20 @@ void main()
     }
 
     float intensity = max(pc.residualIntensity, 0.0);
-    vec3 composed = canonical + residual.rgb * confidence * intensity;
+    vec3 contribution = residual.rgb * confidence * intensity;
+    // A quarter-resolution signed residual must never erase or explosively
+    // brighten the canonical solution when one rare screen-space path carries
+    // unusual radiance. Scale the RGB vector uniformly to preserve hue while
+    // bounding each channel relative to the already-valid canonical result.
+    vec3 correctionLimit = max(
+        canonical * SIMPLE_DDGI_NEAR_FIELD_MAX_RELATIVE_CORRECTION,
+        vec3(SIMPLE_DDGI_NEAR_FIELD_MIN_ABSOLUTE_CORRECTION));
+    vec3 correctionRatio = correctionLimit /
+        max(abs(contribution), vec3(1.0e-12));
+    float correctionScale = min(1.0,
+        min(correctionRatio.x, min(correctionRatio.y, correctionRatio.z)));
+    contribution *= clamp(correctionScale, 0.0, 1.0);
+    vec3 composed = canonical + contribution;
     imageStore(canonicalSceneColorOutput, pixel,
         vec4(SimpleDdgiNearFieldFinite(composed)
             ? max(composed, vec3(0.0))

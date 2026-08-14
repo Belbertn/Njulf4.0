@@ -302,6 +302,9 @@ void main()
     uint packedLifecycle = SchedulerArenaRead(schedulerStateBase + 7u);
     uint stableUpdates = (packedLifecycle & SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_MASK) >>
         SIMPLE_DDGI_SCHEDULER_STABLE_UPDATE_SHIFT;
+    float residualEnvelope = ReadStorageFloatUniform(
+        pc.ProbeStateBufferIndex,
+        stateBase + 7u);
     bool visibilityRefreshRequired = globalDirtySignal || fresh || scrollExposed ||
         regionalDirtySignal || inactive ||
         stableUpdates < max(SchedulerFrame(30u), 1u);
@@ -330,8 +333,17 @@ void main()
         SchedulerWriteInvalidCandidate(candidateBase);
         return;
     }
+    bool cardinalityPromotionDue = sourceReady &&
+        SchedulerAdaptivePromotionDue(
+            volumeIndex,
+            sourceRays,
+            residualEnvelope,
+            stableUpdates) &&
+        !globalDirty && !regionalDirty && !sourceInvalid &&
+        !fresh && !scrollExposed && !relocationRetry && !inactive;
     bool stableTailParticipant =
         sourceReady &&
+        !cardinalityPromotionDue &&
         !fresh &&
         !scrollExposed &&
         !relocationRetry &&
@@ -350,7 +362,8 @@ void main()
             globalDirty ||
             regionalDirty ||
             sourceInvalid ||
-            routineDue);
+            routineDue ||
+            cardinalityPromotionDue);
     if (SchedulerTailCertification() && pendingTailSource)
     {
         atomicAdd(
@@ -387,9 +400,6 @@ void main()
     bool zeroSupport = fresh || relocationRetry || activeWeight <= 0.0001 ||
         (SchedulerTransportV2() && sourceRays == 0u && !inactive);
     bool visibleZeroSupport = visible && zeroSupport;
-    float residualEnvelope = ReadStorageFloatUniform(
-        pc.ProbeStateBufferIndex,
-        stateBase + 7u);
     uint packedPropagation = SchedulerArenaRead(schedulerStateBase + 11u);
     float propagatedResidual = unpackHalf2x16(
         packedPropagation & 0xffffu).x;
@@ -419,7 +429,7 @@ void main()
         !isnan(residualEnvelope) && !isinf(residualEnvelope) &&
         residualEnvelope >= 0.0 &&
         residualEnvelope <= uintBitsToFloat(SchedulerFrame(39u));
-    if (solverConverged && !sparsePropagationDue &&
+    if (solverConverged && !sparsePropagationDue && !cardinalityPromotionDue &&
         !globalDirty && !regionalDirty && !fresh &&
         !scrollExposed && !sourceInvalid && !relocationRetry && !inactiveRetry)
     {
@@ -484,6 +494,19 @@ void main()
         reasons |= SIMPLE_DDGI_SCHEDULER_REASON_RETRY;
         reasons |= relocationRetry ? SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY : 0u;
         reasons |= inactiveRetry ? SIMPLE_DDGI_SCHEDULER_REASON_INACTIVE_RETRY : 0u;
+    }
+    else if (cardinalityPromotionDue)
+    {
+        // A low-cardinality source sequence is a committed pilot, not a
+        // partially valid full sequence. Promote exactly one supported Sobol
+        // prefix after measured solve residual (or the ring baseline) asks for
+        // it; commit then freezes the new count before any audit can begin.
+        workClass = SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_DIRTY;
+        transport = SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+        rayTier = SIMPLE_DDGI_SCHEDULER_RAY_FULL;
+        reasons |= SIMPLE_DDGI_SCHEDULER_REASON_CONVERGENCE |
+            SIMPLE_DDGI_SCHEDULER_REASON_ROUTINE_DUE |
+            SIMPLE_DDGI_SCHEDULER_REASON_RESIDUAL_PROPAGATION;
     }
     else if (!sourceReady || sourceInvalid || globalDirty || regionalDirty)
     {

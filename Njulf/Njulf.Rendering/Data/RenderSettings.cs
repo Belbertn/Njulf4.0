@@ -28,7 +28,14 @@ namespace Njulf.Rendering.Data
         ReceiverFactor = 4,
         SpotAtlasPreview = 5,
         PointCubemapFacePreview = 6,
-        LocalShadowSelection = 7
+        LocalShadowSelection = 7,
+        DirectionalRayMask = 8,
+        DirectionalRayHitDistance = 9,
+        DirectionalRayCandidateCount = 10,
+        DirectionalRaySceneResidency = 11,
+        DirectionalCsmRayDifference = 12,
+        DirectionalHistoryConfidence = 13,
+        DirectionalHistoryRejection = 14
     }
 
     /// <summary>
@@ -41,6 +48,18 @@ namespace Njulf.Rendering.Data
         HybridContact = 1,
         RayQueryHard = 2,
         RayQuerySoft = 3
+    }
+
+    /// <summary>
+    /// Optional short-history stabilization for the CSM receiver result. Auto
+    /// remains inactive until a matching qualification manifest proves that
+    /// stable-map residual stepping exceeds the committed threshold.
+    /// </summary>
+    public enum DirectionalCsmTemporalMode : uint
+    {
+        Disabled = 0,
+        Auto = 1,
+        DeveloperForce = 2
     }
 
     public enum DirectionalShadowFilterMode : uint
@@ -67,6 +86,11 @@ namespace Njulf.Rendering.Data
         private float _directionalCascadeSplitLambda = 0.5f;
         private float _directionalCasterExtrusionDistance = 80f;
         private float _directionalContactShadowDistance = 3f;
+        private DirectionalCsmTemporalMode _directionalCsmTemporalMode;
+        private int _directionalSoftRecoveryRayCount = 2;
+        private int _directionalSoftHistoryLength = 16;
+        private int _directionalSoftSpatialPassCount = 3;
+        private int _directionalTransparentSoftRayCount = 4;
         private DirectionalShadowMode _requestedDirectionalShadowMode =
             DirectionalShadowMode.Cascaded;
         private DirectionalShadowFilterMode _directionalFilterMode =
@@ -106,6 +130,30 @@ namespace Njulf.Rendering.Data
                     ? value
                     : DirectionalShadowMode.Cascaded;
         }
+
+        public DirectionalCsmTemporalMode DirectionalCsmTemporalMode
+        {
+            get => _directionalCsmTemporalMode;
+            set => _directionalCsmTemporalMode = value is
+                DirectionalCsmTemporalMode.Disabled or
+                DirectionalCsmTemporalMode.Auto or
+                DirectionalCsmTemporalMode.DeveloperForce
+                    ? value
+                    : DirectionalCsmTemporalMode.Disabled;
+        }
+
+        /// <summary>
+        /// Runtime-only admission supplied by a verified qualification
+        /// manifest. Saving settings can never manufacture this authority.
+        /// </summary>
+        [JsonIgnore]
+        public bool DirectionalCsmTemporalQualificationApproved { get; internal set; }
+
+        [JsonIgnore]
+        public bool EffectiveDirectionalCsmTemporalEnabled =>
+            DirectionalCsmTemporalMode == DirectionalCsmTemporalMode.DeveloperForce ||
+            DirectionalCsmTemporalMode == DirectionalCsmTemporalMode.Auto &&
+            DirectionalCsmTemporalQualificationApproved;
 
         public DirectionalShadowFilterMode DirectionalFilterMode
         {
@@ -191,6 +239,37 @@ namespace Njulf.Rendering.Data
         {
             get => MathF.Min(_directionalContactShadowDistance, MaxShadowDistance);
             set => _directionalContactShadowDistance = Clamp(value, 0.1f, 100f);
+        }
+
+        /// <summary>Additional finite-sun rays used after history rejection.</summary>
+        public int DirectionalSoftRecoveryRayCount
+        {
+            get => _directionalSoftRecoveryRayCount;
+            set => _directionalSoftRecoveryRayCount = Math.Clamp(value, 1, 4);
+        }
+
+        /// <summary>Maximum accepted finite-sun history age in frames.</summary>
+        public int DirectionalSoftHistoryLength
+        {
+            get => _directionalSoftHistoryLength;
+            set => _directionalSoftHistoryLength = Math.Clamp(value, 1, 32);
+        }
+
+        /// <summary>Edge-aware A-trous passes for finite-sun visibility.</summary>
+        public int DirectionalSoftSpatialPassCount
+        {
+            get => _directionalSoftSpatialPassCount;
+            set => _directionalSoftSpatialPassCount = Math.Clamp(value, 0, 3);
+        }
+
+        /// <summary>
+        /// Direct finite-sun samples for layered transparent receivers, which
+        /// deliberately do not consume opaque screen history.
+        /// </summary>
+        public int DirectionalTransparentSoftRayCount
+        {
+            get => _directionalTransparentSoftRayCount;
+            set => _directionalTransparentSoftRayCount = Math.Clamp(value, 1, 4);
         }
 
         public float NormalBias
@@ -1471,7 +1550,7 @@ namespace Njulf.Rendering.Data
         public float SunAngularDiameterDegrees
         {
             get => _sunAngularDiameterDegrees;
-            set => _sunAngularDiameterDegrees = Clamp(value, 0.1f, 2.0f);
+            set => _sunAngularDiameterDegrees = Clamp(value, 0.0f, 2.0f);
         }
 
         public float MoonAngularDiameterDegrees
@@ -1946,10 +2025,12 @@ namespace Njulf.Rendering.Data
         public const int MaxSimpleDdgiExactLocalLightThreshold = 1_024;
         public const ulong MaxDdgiDynamicAccelerationStructureBudgetBytes = 8UL * 1024UL * 1024UL * 1024UL;
         public const ulong MaxSimpleDdgiDirectionalRadianceBudgetBytes = 2UL * 1024UL * 1024UL * 1024UL;
-        // New settings request every completed advanced-GI production path.
-        // These are explicit user defaults. Hardware capability, memory, ABI,
-        // allocation and resource-completeness gates remain authoritative;
-        // manifests and promotion evidence apply only to AutoQualified.
+        // New settings request the stable advanced-GI production paths.
+        // Directional guiding remains opt-in: an invalid guiding publication
+        // must never be allowed to stall the canonical DDGI update stream.
+        // Hardware capability, memory, ABI, allocation and resource-completeness
+        // gates remain authoritative; manifests and promotion evidence apply
+        // only to AutoQualified.
         public const SimpleDdgiReceiverFeedbackMode
             DefaultSimpleDdgiReceiverFeedbackMode =
                 SimpleDdgiReceiverFeedbackMode.ExactCompacted;
@@ -1957,12 +2038,12 @@ namespace Njulf.Rendering.Data
             DdgiOpacityMicromapMode.ExtFourStateExperiment;
         public const SimpleDdgiDirectionalGuidingMode
             DefaultSimpleDdgiDirectionalGuidingMode =
-                SimpleDdgiDirectionalGuidingMode.PerProbeHistogramExperiment;
+                SimpleDdgiDirectionalGuidingMode.Off;
         public const GiCausticMode DefaultGiCausticMode =
             GiCausticMode.WorldCacheExperiment;
         public const SimpleDdgiNearFieldResidualMode
             DefaultSimpleDdgiNearFieldResidualMode =
-                SimpleDdgiNearFieldResidualMode.HiZHalfResolutionExperiment;
+                SimpleDdgiNearFieldResidualMode.HiZAdaptive;
 
         private float _indirectIntensity = 1.0f;
         private float _environmentFallbackIntensity = 1.0f;
@@ -1995,7 +2076,7 @@ namespace Njulf.Rendering.Data
         private int _simpleDdgiFarRingGridSizeX = 12;
         private int _simpleDdgiFarRingGridSizeY = 8;
         private int _simpleDdgiFarRingGridSizeZ = 12;
-        private bool _simpleDdgiRefinementBricksEnabled;
+        private bool _simpleDdgiRefinementBricksEnabled = true;
         private int _simpleDdgiRefinementMaximumBricks = 2;
         private int _simpleDdgiRefinementGridSizeX = 6;
         private int _simpleDdgiRefinementGridSizeY = 4;
@@ -2004,7 +2085,7 @@ namespace Njulf.Rendering.Data
         private int _simpleDdgiRefinementRetentionFrames = 90;
         private float _simpleDdgiRefinementMinimumEmissiveLuminanceNits = 250f;
         private float _simpleDdgiRefinementMaximumEmitterAreaSquareMeters = 4f;
-        private bool _simpleDdgiNearVisibilitySidecarEnabled;
+        private bool _simpleDdgiNearVisibilitySidecarEnabled = true;
         private ulong _simpleDdgiNearVisibilitySidecarMemoryBudgetBytes =
             32UL * 1024UL * 1024UL;
         private int _simpleDdgiRaysPerProbe = 96;
@@ -2040,9 +2121,9 @@ namespace Njulf.Rendering.Data
         private float _simpleDdgiSecondVolumeOwnershipEarlyOutThreshold = 1.0f;
         private int _simpleDdgiSchedulerReentryStableFrameCount = 120;
         private SimpleDdgiProbeResidencyMode _simpleDdgiProbeResidencyMode =
-            SimpleDdgiProbeResidencyMode.SparseNearRing;
-        private int _simpleDdgiSparsePhysicalPageBudget = 960;
-        private int _simpleDdgiSparseMinimumPhysicalPageBudget = 768;
+            SimpleDdgiProbeResidencyMode.Dense;
+        private int _simpleDdgiSparsePhysicalPageBudget;
+        private int _simpleDdgiSparseMinimumPhysicalPageBudget;
         private int _simpleDdgiSparseRetentionFrames = 120;
         private int _simpleDdgiSparseMaximumAdmissionsPerFrame = 64;
         private int _simpleDdgiSparseMaximumReceiverFeedbackRequests = 2_048;
@@ -2343,9 +2424,9 @@ namespace Njulf.Rendering.Data
         }
         /// <summary>
         /// Selects identity, qualification-shadow, or authoritative near-ring
-        /// payload paging. High and Ultra presets enable the qualified sparse
-        /// path; unsupported runtime combinations fail closed to dense/coarse
-        /// lighting with an explicit diagnostic reason.
+        /// payload paging. Ultra enables the qualified sparse path. High stays
+        /// dense because its complete authored cardinality fits the tier budget
+        /// and must not inherit sparse feedback faults or coarse-ring fallback.
         /// </summary>
         public SimpleDdgiProbeResidencyMode SimpleDdgiProbeResidencyMode
         {
@@ -2457,7 +2538,7 @@ namespace Njulf.Rendering.Data
         /// gate; forced hot/cold remains useful for locked A/B captures.
         /// </summary>
         public SimpleDdgiSourceCacheLayoutMode SimpleDdgiSourceCacheLayoutMode { get; set; } =
-            SimpleDdgiSourceCacheLayoutMode.FixedRecord;
+            SimpleDdgiSourceCacheLayoutMode.Auto;
         public bool SimpleDdgiClassificationReadbackEnabled { get; set; } = true;
         public bool SimpleDdgiAdaptiveHysteresisEnabled { get; set; } = true;
         public bool SimpleDdgiLightingDirtyBoostEnabled { get; set; } = true;
@@ -2557,7 +2638,7 @@ namespace Njulf.Rendering.Data
         /// until a production L2 incident-radiance sidecar and froxel consumer
         /// are both present; the existing irradiance tint is not relabeled.
         /// </summary>
-        public bool SimpleDdgiDirectionalFogEnabled { get; set; }
+        public bool SimpleDdgiDirectionalFogEnabled { get; set; } = true;
         /// <summary>
         /// Schema-v9 compatibility alias.  It maps an old true value to the
         /// explicit EXT four-state experiment and never to AutoQualified.
@@ -3708,9 +3789,15 @@ namespace Njulf.Rendering.Data
 
                 if (SimpleDdgiGlossyTransportMode is
                     SimpleDdgiGlossyTransportMode.OneBounce or
-                    SimpleDdgiGlossyTransportMode.RecursiveExperimental)
+                    SimpleDdgiGlossyTransportMode.RecursiveCertified)
                 {
                     features |= DdgiContentFeature.OneBounceGlossyTransport;
+                }
+
+                if (SimpleDdgiGlossyTransportMode ==
+                    SimpleDdgiGlossyTransportMode.RecursiveCertified)
+                {
+                    features |= DdgiContentFeature.RecursiveGlossyTransport;
                 }
 
                 return features;
@@ -3740,15 +3827,6 @@ namespace Njulf.Rendering.Data
                     active &= ~DdgiContentFeature.DirectionalRadiance;
                 }
 
-                // Recursive transport is never release-authorized. It remains
-                // available only inside an explicit validation process.
-                if (SimpleDdgiGlossyTransportMode ==
-                        SimpleDdgiGlossyTransportMode.RecursiveExperimental &&
-                    !ContentDependentRollout.ValidationReferenceModesAuthorized)
-                {
-                    active &= ~DdgiContentFeature.OneBounceGlossyTransport;
-                }
-
                 return active;
             }
         }
@@ -3756,10 +3834,36 @@ namespace Njulf.Rendering.Data
         public bool EffectiveSimpleDdgiManyLightSamplingEnabled =>
             (ActiveContentDependentFeatures & DdgiContentFeature.ManyLightSampling) != 0;
 
-        public DdgiSkinnedGeometryMode EffectiveDdgiSkinnedGeometryMode =>
-            (ActiveContentDependentFeatures & DdgiContentFeature.CurrentPoseGeometry) != 0
-                ? DdgiSkinnedGeometryMode
-                : DdgiSkinnedGeometryMode.Excluded;
+        /// <summary>
+        /// Resolves the skinned representation used by DDGI. Complete-field
+        /// tail certification requires a frozen transport operator, so a live
+        /// current-pose BLAS cannot participate while certified transport is
+        /// enabled. In that configuration the bind-pose proxy remains in the
+        /// ray scene instead of continually invalidating the certified field.
+        /// Current-pose transport remains available as an explicit
+        /// non-certified diagnostics/conformance mode.
+        /// </summary>
+        public DdgiSkinnedGeometryMode EffectiveDdgiSkinnedGeometryMode
+        {
+            get
+            {
+                if ((ActiveContentDependentFeatures &
+                        DdgiContentFeature.CurrentPoseGeometry) == 0)
+                {
+                    return DdgiSkinnedGeometryMode.Excluded;
+                }
+
+                if (DdgiSkinnedGeometryMode ==
+                        DdgiSkinnedGeometryMode.CurrentPose &&
+                    SimpleDdgiTransportV2Enabled &&
+                    SimpleDdgiTransportTailCertificationEnabled)
+                {
+                    return DdgiSkinnedGeometryMode.ConservativeProxy;
+                }
+
+                return DdgiSkinnedGeometryMode;
+            }
+        }
 
         public DdgiTransparentGeometryMode EffectiveDdgiTransparentGeometryMode =>
             (ActiveContentDependentFeatures & DdgiContentFeature.TransparentGeometry) != 0
@@ -3784,11 +3888,19 @@ namespace Njulf.Rendering.Data
                     return SimpleDdgiGlossyTransportMode.Off;
                 if (SimpleDdgiGlossyTransportMode is
                         SimpleDdgiGlossyTransportMode.OneBounce or
-                        SimpleDdgiGlossyTransportMode.RecursiveExperimental &&
+                        SimpleDdgiGlossyTransportMode.RecursiveCertified &&
                     (ActiveContentDependentFeatures &
                         DdgiContentFeature.OneBounceGlossyTransport) == 0)
                 {
                     return SimpleDdgiGlossyTransportMode.ReceiverOnly;
+                }
+
+                if (SimpleDdgiGlossyTransportMode ==
+                        SimpleDdgiGlossyTransportMode.RecursiveCertified &&
+                    (ActiveContentDependentFeatures &
+                        DdgiContentFeature.RecursiveGlossyTransport) == 0)
+                {
+                    return SimpleDdgiGlossyTransportMode.OneBounce;
                 }
 
                 return SimpleDdgiGlossyTransportMode;
@@ -3830,13 +3942,15 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportAcceleratedSweepCount = 2;
             SimpleDdgiTransportAccelerationEnabled = true;
             SimpleDdgiTransportTailCertificationEnabled = true;
-            SimpleDdgiRefinementBricksEnabled = false;
+            bool highTier = tier is
+                DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra;
+            SimpleDdgiRefinementBricksEnabled = highTier;
             SimpleDdgiRefinementMaximumBricks = tier == DdgiQualityTier.DdgiUltra
                 ? 4
                 : tier == DdgiQualityTier.DdgiHigh
                     ? 2
                     : 0;
-            SimpleDdgiNearVisibilitySidecarEnabled = false;
+            SimpleDdgiNearVisibilitySidecarEnabled = highTier;
             SimpleDdgiNearVisibilitySidecarMemoryBudgetBytes = tier ==
                 DdgiQualityTier.DdgiUltra
                     ? 48UL * 1024UL * 1024UL
@@ -3844,7 +3958,7 @@ namespace Njulf.Rendering.Data
                         ? 32UL * 1024UL * 1024UL
                         : 0UL;
             SimpleDdgiSourceCacheLayoutMode =
-                SimpleDdgiSourceCacheLayoutMode.FixedRecord;
+                SimpleDdgiSourceCacheLayoutMode.Auto;
             SimpleDdgiTransportMaximumSolverGenerations = 8;
             SimpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
             SimpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
@@ -3857,20 +3971,17 @@ namespace Njulf.Rendering.Data
             // Legacy/Validate and full-canonical mirroring remain explicit
             // rollback and qualification overrides.
             SimpleDdgiStoragePackingMode = SimpleDdgiStoragePackingMode.Packed;
-            SimpleDdgiProbeResidencyMode = tier is
-                DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra
-                    ? SimpleDdgiProbeResidencyMode.SparseNearRing
-                    : SimpleDdgiProbeResidencyMode.Dense;
+            SimpleDdgiProbeResidencyMode = tier == DdgiQualityTier.DdgiUltra
+                ? SimpleDdgiProbeResidencyMode.SparseNearRing
+                : SimpleDdgiProbeResidencyMode.Dense;
             SimpleDdgiSparsePhysicalPageBudget = tier switch
             {
                 DdgiQualityTier.DdgiUltra => 1_440,
-                DdgiQualityTier.DdgiHigh => 960,
                 _ => 0
             };
             SimpleDdgiSparseMinimumPhysicalPageBudget = tier switch
             {
                 DdgiQualityTier.DdgiUltra => 1_152,
-                DdgiQualityTier.DdgiHigh => 768,
                 _ => 0
             };
             SimpleDdgiSparseRetentionFrames = tier == DdgiQualityTier.DdgiUltra
@@ -3885,17 +3996,25 @@ namespace Njulf.Rendering.Data
             SimpleDdgiRegionalInvalidationEnabled = true;
             SimpleDdgiMutationJournalEnabled = true;
             SimpleDdgiLocalLightSamplingMode = SimpleDdgiLocalLightSamplingMode.Auto;
-            SimpleDdgiDirectionalRadianceMode = tier is
-                DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra
-                    ? SimpleDdgiDirectionalRadianceMode.L2
-                    : SimpleDdgiDirectionalRadianceMode.Off;
-            SimpleDdgiGlossyTransportMode = tier is
-                DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra
-                    ? SimpleDdgiGlossyTransportMode.ReceiverOnly
-                    : SimpleDdgiGlossyTransportMode.Off;
+            // Per-fragment directional SH evaluation bypasses the production
+            // low-frequency receiver cache. On the High target this made the
+            // opaque gather dominate the complete frame, while C5 already
+            // supplies bounded near-field indirect detail. Keep the exact
+            // directional/glossy receiver as an Ultra feature (and an explicit
+            // editor opt-in); High retains diffuse DDGI through the cache.
+            SimpleDdgiDirectionalRadianceMode = tier == DdgiQualityTier.DdgiUltra
+                ? SimpleDdgiDirectionalRadianceMode.L2
+                : SimpleDdgiDirectionalRadianceMode.Off;
+            SimpleDdgiGlossyTransportMode = tier == DdgiQualityTier.DdgiUltra
+                ? SimpleDdgiGlossyTransportMode.OneBounce
+                : SimpleDdgiGlossyTransportMode.Off;
+            SimpleDdgiDirectionalFogEnabled = highTier;
+            // Certified transport must use a time-invariant skinned
+            // representation. Live current-pose transport is available only
+            // when tail certification is explicitly disabled.
             DdgiSkinnedGeometryMode = tier is
                 DdgiQualityTier.DdgiHigh or DdgiQualityTier.DdgiUltra
-                    ? DdgiSkinnedGeometryMode.CurrentPose
+                    ? DdgiSkinnedGeometryMode.ConservativeProxy
                     : DdgiSkinnedGeometryMode.Excluded;
             DdgiTransparentGeometryMode = tier switch
             {
@@ -4642,7 +4761,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 11;
+        public const int SerializationVersion = 12;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -4741,6 +4860,14 @@ namespace Njulf.Rendering.Data
             QualityPresetChanging?.Invoke(preset);
             QualityPreset = preset;
             ShowRawHdrSceneColor = false;
+
+            // C3 is an explicit experiment, not part of a production quality
+            // preset. RenderDoc validation showed that accepting an invalid C3
+            // publication can poison every ray transaction for a probe and halt
+            // DDGI convergence. A caller may still opt in after applying a
+            // preset (the sample's command-line overrides do exactly that).
+            GlobalIllumination.SimpleDdgiDirectionalGuidingMode =
+                SimpleDdgiDirectionalGuidingMode.Off;
 
             switch (preset)
             {
@@ -4973,7 +5100,11 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.IndirectIntensity = 1.0f;
                     GlobalIllumination.EnvironmentFallbackIntensity = 1.0f;
                     GlobalIllumination.UseDdgi = true;
-                    GlobalIllumination.UseRayQueryBackend = false;
+                    // High enables the production DDGI path. Leaving its only
+                    // shipping trace backend disabled produces an internally
+                    // contradictory profile: the gather and SSGI residual run,
+                    // but no probe can ever acquire irradiance or visibility.
+                    GlobalIllumination.UseRayQueryBackend = true;
                     GlobalIllumination.ApplyDdgiQualityTier(DdgiQualityTier.DdgiHigh);
                     GlobalIllumination.DdgiProbeClassificationEnabled = true;
                     GlobalIllumination.DdgiProbeRelocationEnabled = true;
@@ -5331,6 +5462,8 @@ namespace Njulf.Rendering.Data
             public bool DirectionalShadowsEnabled { get; init; } = true;
             public DirectionalShadowMode RequestedDirectionalShadowMode { get; init; } =
                 DirectionalShadowMode.Cascaded;
+            public DirectionalCsmTemporalMode DirectionalCsmTemporalMode { get; init; } =
+                DirectionalCsmTemporalMode.Disabled;
             public DirectionalShadowFilterMode DirectionalFilterMode { get; init; } =
                 DirectionalShadowFilterMode.LegacyBoxPcf;
             public DirectionalShadowBiasMode DirectionalBiasMode { get; init; } =
@@ -5342,6 +5475,10 @@ namespace Njulf.Rendering.Data
             public float DirectionalCascadeSplitLambda { get; init; } = 0.5f;
             public float DirectionalCasterExtrusionDistance { get; init; } = 80f;
             public float DirectionalContactShadowDistance { get; init; } = 3f;
+            public int DirectionalSoftRecoveryRayCount { get; init; } = 2;
+            public int DirectionalSoftHistoryLength { get; init; } = 16;
+            public int DirectionalSoftSpatialPassCount { get; init; } = 3;
+            public int DirectionalTransparentSoftRayCount { get; init; } = 4;
             public float NormalBias { get; init; } = 0.03f;
             public float SlopeScaledDepthBias { get; init; } = 1.5f;
             public float ConstantDepthBias { get; init; } = 0.0005f;
@@ -5351,6 +5488,7 @@ namespace Njulf.Rendering.Data
             {
                 DirectionalShadowsEnabled = settings.DirectionalShadowsEnabled,
                 RequestedDirectionalShadowMode = settings.RequestedDirectionalShadowMode,
+                DirectionalCsmTemporalMode = settings.DirectionalCsmTemporalMode,
                 DirectionalFilterMode = settings.DirectionalFilterMode,
                 DirectionalBiasMode = settings.DirectionalBiasMode,
                 DirectionalShadowMapSize = settings.DirectionalShadowMapSize,
@@ -5360,6 +5498,10 @@ namespace Njulf.Rendering.Data
                 DirectionalCascadeSplitLambda = settings.DirectionalCascadeSplitLambda,
                 DirectionalCasterExtrusionDistance = settings.DirectionalCasterExtrusionDistance,
                 DirectionalContactShadowDistance = settings.DirectionalContactShadowDistance,
+                DirectionalSoftRecoveryRayCount = settings.DirectionalSoftRecoveryRayCount,
+                DirectionalSoftHistoryLength = settings.DirectionalSoftHistoryLength,
+                DirectionalSoftSpatialPassCount = settings.DirectionalSoftSpatialPassCount,
+                DirectionalTransparentSoftRayCount = settings.DirectionalTransparentSoftRayCount,
                 NormalBias = settings.NormalBias,
                 SlopeScaledDepthBias = settings.SlopeScaledDepthBias,
                 ConstantDepthBias = settings.ConstantDepthBias,
@@ -5370,6 +5512,7 @@ namespace Njulf.Rendering.Data
             {
                 settings.DirectionalShadowsEnabled = DirectionalShadowsEnabled;
                 settings.RequestedDirectionalShadowMode = RequestedDirectionalShadowMode;
+                settings.DirectionalCsmTemporalMode = DirectionalCsmTemporalMode;
                 settings.DirectionalFilterMode = DirectionalFilterMode;
                 settings.DirectionalBiasMode = DirectionalBiasMode;
                 settings.DirectionalShadowMapSize = DirectionalShadowMapSize;
@@ -5379,6 +5522,10 @@ namespace Njulf.Rendering.Data
                 settings.DirectionalCascadeSplitLambda = DirectionalCascadeSplitLambda;
                 settings.DirectionalCasterExtrusionDistance = DirectionalCasterExtrusionDistance;
                 settings.DirectionalContactShadowDistance = DirectionalContactShadowDistance;
+                settings.DirectionalSoftRecoveryRayCount = DirectionalSoftRecoveryRayCount;
+                settings.DirectionalSoftHistoryLength = DirectionalSoftHistoryLength;
+                settings.DirectionalSoftSpatialPassCount = DirectionalSoftSpatialPassCount;
+                settings.DirectionalTransparentSoftRayCount = DirectionalTransparentSoftRayCount;
                 settings.NormalBias = NormalBias;
                 settings.SlopeScaledDepthBias = SlopeScaledDepthBias;
                 settings.ConstantDepthBias = ConstantDepthBias;
@@ -6241,7 +6388,20 @@ namespace Njulf.Rendering.Data
                     if (SimpleDdgiDirectionalRadianceMode.HasValue)
                         settings.SimpleDdgiDirectionalRadianceMode = SimpleDdgiDirectionalRadianceMode.Value;
                     if (SimpleDdgiGlossyTransportMode.HasValue)
-                        settings.SimpleDdgiGlossyTransportMode = SimpleDdgiGlossyTransportMode.Value;
+                    {
+                        SimpleDdgiGlossyTransportMode requestedGlossy =
+                            SimpleDdgiGlossyTransportMode.Value;
+                        if (sourceVersion < 12 && requestedGlossy ==
+                            global::Njulf.Rendering.Data
+                                .SimpleDdgiGlossyTransportMode.RecursiveCertified)
+                        {
+                            requestedGlossy = global::Njulf.Rendering.Data
+                                .SimpleDdgiGlossyTransportMode.OneBounce;
+                            settings.ContentDependentSettingsMigrationDiagnostic =
+                                "Legacy RecursiveExperimental transport was not certified; migrated to OneBounce.";
+                        }
+                        settings.SimpleDdgiGlossyTransportMode = requestedGlossy;
+                    }
                     if (DdgiSkinnedGeometryMode.HasValue)
                         settings.DdgiSkinnedGeometryMode = DdgiSkinnedGeometryMode.Value;
                     if (DdgiTransparentGeometryMode.HasValue)

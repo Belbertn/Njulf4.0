@@ -6,6 +6,7 @@
 #include "gi_material_transport.glsl"
 #define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
 #define SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE 1
+#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
 // Recursive transport reads the canonical field published by the preceding
 // completed update. The sampled atlas is a receiver-only accelerator and is
 // intentionally not synchronized between the inner red/black solve colors.
@@ -192,12 +193,12 @@ void main()
 #if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
     bool guidingRecordPresent = false;
     SimpleDdgiGuidingTransportPayload guidingPayload;
-    bool guidingPayloadValid = TryReadSimpleDdgiGuidingTracePayload(
-        pc.RayResultScratchBufferIndex,
-        params.guidingTraceDirectionScratchOffsetWords,
+    bool guidingPayloadValid = TryReadSimpleDdgiGuidingTransportPayload(
         update.physicalProbeIndex,
         update.probeIndex,
         update.pageMappingGeneration,
+        update.sourceEpoch,
+        update.sourceLightingGeneration,
         uvec2(update.probeIndex, SimpleDdgiProbeGeneration(probeState)),
         directionRayIndex,
         params.raysPerProbe,
@@ -396,7 +397,7 @@ void main()
     float solverOwnershipSum;
     float solverFallbackWeightSum;
     bool malformedOperatorInput;
-    float enforcedThroughput;
+    vec3 enforcedThroughput;
     vec3 bounceRadiance = EvaluateSimpleDdgiCachedRecursiveBounce(
         params,
         volume,

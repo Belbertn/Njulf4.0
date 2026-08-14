@@ -6,7 +6,7 @@
 // Compact consumer-side mirror of GPUSimpleDdgiGuidingSamplePayload. The
 // standalone train/build/sample shaders include the larger hierarchy ABI;
 // ordinary DDGI transport needs only these 16 words and the exact estimator.
-const uint SIMPLE_DDGI_GUIDING_TRANSPORT_ABI_VERSION = 0x43330008u;
+const uint SIMPLE_DDGI_GUIDING_TRANSPORT_ABI_VERSION = 0x43330009u;
 const uint SIMPLE_DDGI_GUIDING_PAYLOAD_WORDS = 16u;
 const uint SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE = 0u;
 const uint SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE = 1u;
@@ -41,8 +41,8 @@ struct SimpleDdgiGuidingTransportPayload
     uint slotIndex;
     uint technique;
     uint branch;
-    uint leafIndex;
-    uint intraLeafSampleBits;
+    uint sourceEpoch;
+    uint sourceLightingGeneration;
     uint packedDirectionOct32;
     float generationTimeMixturePdf;
     uint flags;
@@ -121,6 +121,8 @@ bool SimpleDdgiGuidingTracePayloadOwnerMatches(
     uint physicalProbeIndex,
     uint virtualProbeId,
     uint pageGeneration,
+    uint expectedSourceEpoch,
+    uint expectedSourceLightingGeneration,
     uint directionSlot,
     out bool stableIdMatches,
     out uint packedDirectionOct32)
@@ -148,6 +150,8 @@ bool SimpleDdgiGuidingTracePayloadOwnerMatches(
         physicalProbeIndex,
         virtualProbeId,
         pageGeneration,
+        expectedSourceEpoch,
+        expectedSourceLightingGeneration,
         directionSlot,
         packedDirectionOct32);
 }
@@ -164,6 +168,8 @@ bool TryReadSimpleDdgiGuidingTracePayload(
     uint physicalProbeIndex,
     uint virtualProbeId,
     uint pageGeneration,
+    uint expectedSourceEpoch,
+    uint expectedSourceLightingGeneration,
     uvec2 expectedStableProbeId,
     uint directionSlot,
     uint directionSlotsPerProbe,
@@ -181,8 +187,8 @@ bool TryReadSimpleDdgiGuidingTracePayload(
     payload.slotIndex = 0u;
     payload.technique = SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE;
     payload.branch = SIMPLE_DDGI_GUIDING_BRANCH_UNIFORM;
-    payload.leafIndex = 0u;
-    payload.intraLeafSampleBits = 0u;
+    payload.sourceEpoch = expectedSourceEpoch;
+    payload.sourceLightingGeneration = expectedSourceLightingGeneration;
     payload.packedDirectionOct32 = 0u;
     payload.generationTimeMixturePdf = 0.0;
     payload.flags = 0u;
@@ -233,6 +239,8 @@ bool TryReadSimpleDdgiGuidingTracePayload(
         physicalProbeIndex,
         virtualProbeId,
         pageGeneration,
+        expectedSourceEpoch,
+        expectedSourceLightingGeneration,
         directionSlot,
         stableIdMatches,
         payload.packedDirectionOct32);
@@ -351,6 +359,8 @@ bool SimpleDdgiGuidingTransportProbeHasCompleteBacking(
     uint physicalProbeIndex,
     uint virtualProbeId,
     uint pageGeneration,
+    uint expectedSourceEpoch,
+    uint expectedSourceLightingGeneration,
     uvec2 expectedStableProbeId,
     uint directionSlotsPerProbe,
     uint sidecarPhysicalProbeCapacity)
@@ -384,12 +394,18 @@ bool SimpleDdgiGuidingTransportProbeHasCompleteBacking(
         sidecarIndex, firstWord + 4u);
     uint storedPageGeneration = ReadStorageWordUniform(
         sidecarIndex, firstWord + 5u);
+    uint storedSourceEpoch = ReadStorageWordUniform(
+        sidecarIndex, firstWord + 10u);
+    uint storedSourceLightingGeneration = ReadStorageWordUniform(
+        sidecarIndex, firstWord + 11u);
     return abiVersion != 0u &&
         any(notEqual(expectedStableProbeId, uvec2(0u))) &&
         all(equal(stableProbeId, expectedStableProbeId)) &&
         storedPhysicalProbeIndex == physicalProbeIndex &&
         storedVirtualProbeId == virtualProbeId &&
-        storedPageGeneration == pageGeneration;
+        storedPageGeneration == pageGeneration &&
+        storedSourceEpoch == expectedSourceEpoch &&
+        storedSourceLightingGeneration == expectedSourceLightingGeneration;
 }
 
 // Trace consumes only the sampled direction. The C3 sample/validate stages own
@@ -401,12 +417,16 @@ bool TryReadSimpleDdgiGuidingTraceDirection(
     uint physicalProbeIndex,
     uint virtualProbeId,
     uint pageGeneration,
+    uint expectedSourceEpoch,
+    uint expectedSourceLightingGeneration,
     uvec2 expectedStableProbeId,
     uint directionSlot,
     uint directionSlotsPerProbe,
     uint sidecarPhysicalProbeCapacity,
+    out bool recordPresent,
     out vec3 direction)
 {
+    recordPresent = false;
     direction = vec3(0.0, 1.0, 0.0);
     uint baseWord;
     if (!TryResolveSimpleDdgiGuidingTransportPayloadRange(
@@ -422,6 +442,28 @@ bool TryReadSimpleDdgiGuidingTraceDirection(
 
     uint sidecarIndex = uint(
         SIMPLE_DDGI_GUIDING_DIRECTION_PDF_SIDECAR_BUFFER_INDEX);
+    uint abiVersion = ReadStorageWordUniform(sidecarIndex, baseWord + 0u);
+    uvec2 stableProbeId = uvec2(
+        ReadStorageWordUniform(sidecarIndex, baseWord + 1u),
+        ReadStorageWordUniform(sidecarIndex, baseWord + 2u));
+    uint storedPhysicalProbeIndex = ReadStorageWordUniform(
+        sidecarIndex, baseWord + 3u);
+    uint storedVirtualProbeId = ReadStorageWordUniform(
+        sidecarIndex, baseWord + 4u);
+    uint storedPageGeneration = ReadStorageWordUniform(
+        sidecarIndex, baseWord + 5u);
+    recordPresent = abiVersion != 0u &&
+        any(notEqual(expectedStableProbeId, uvec2(0u))) &&
+        all(equal(stableProbeId, expectedStableProbeId)) &&
+        storedPhysicalProbeIndex == physicalProbeIndex &&
+        storedVirtualProbeId == virtualProbeId &&
+        storedPageGeneration == pageGeneration;
+    if (!recordPresent)
+        return false;
+
+    uvec4 payloadIdentity = ReadStorageAlignedUVec4Uniform(
+        sidecarIndex,
+        baseWord + 8u);
     uvec4 payloadTail = ReadStorageAlignedUVec4Uniform(
         sidecarIndex,
         baseWord + 12u);
@@ -430,9 +472,14 @@ bool TryReadSimpleDdgiGuidingTraceDirection(
         physicalProbeIndex,
         virtualProbeId,
         pageGeneration,
+        expectedSourceEpoch,
+        expectedSourceLightingGeneration,
         directionSlot,
         payloadTail.x);
-    if (any(equal(expectedStableProbeId, uvec2(0u))) ||
+    if (abiVersion != SIMPLE_DDGI_GUIDING_TRANSPORT_ABI_VERSION ||
+        payloadIdentity.x != directionSlot ||
+        payloadIdentity.z != expectedSourceEpoch ||
+        payloadIdentity.w != expectedSourceLightingGeneration ||
         payloadTail.w != expectedOwnershipTag)
     {
         return false;
@@ -449,12 +496,16 @@ bool TryReadSimpleDdgiGuidingTransportPayload(
     uint physicalProbeIndex,
     uint virtualProbeId,
     uint pageGeneration,
+    uint expectedSourceEpoch,
+    uint expectedSourceLightingGeneration,
     uvec2 expectedStableProbeId,
     uint directionSlot,
     uint directionSlotsPerProbe,
     uint sidecarPhysicalProbeCapacity,
+    out bool recordPresent,
     out SimpleDdgiGuidingTransportPayload payload)
 {
+    recordPresent = false;
     payload.stableProbeId = uvec2(0u);
     payload.physicalProbeIndex = 0u;
     payload.virtualProbeId = 0u;
@@ -464,8 +515,8 @@ bool TryReadSimpleDdgiGuidingTransportPayload(
     payload.slotIndex = 0u;
     payload.technique = SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE;
     payload.branch = SIMPLE_DDGI_GUIDING_BRANCH_UNIFORM;
-    payload.leafIndex = 0u;
-    payload.intraLeafSampleBits = 0u;
+    payload.sourceEpoch = 0u;
+    payload.sourceLightingGeneration = 0u;
     payload.packedDirectionOct32 = 0u;
     payload.generationTimeMixturePdf = 0.0;
     payload.flags = 0u;
@@ -504,8 +555,8 @@ bool TryReadSimpleDdgiGuidingTransportPayload(
         sidecarIndex, baseWord + 9u);
     payload.technique = techniqueAndBranch & 0xffu;
     payload.branch = (techniqueAndBranch >> 8u) & 0xffu;
-    payload.leafIndex = ReadStorageWordUniform(sidecarIndex, baseWord + 10u);
-    payload.intraLeafSampleBits = ReadStorageWordUniform(
+    payload.sourceEpoch = ReadStorageWordUniform(sidecarIndex, baseWord + 10u);
+    payload.sourceLightingGeneration = ReadStorageWordUniform(
         sidecarIndex, baseWord + 11u);
     payload.packedDirectionOct32 = ReadStorageWordUniform(
         sidecarIndex, baseWord + 12u);
@@ -515,6 +566,15 @@ bool TryReadSimpleDdgiGuidingTransportPayload(
     uint traceOwnershipTag = ReadStorageWordUniform(
         sidecarIndex,
         baseWord + 15u);
+
+    recordPresent = abiVersion != 0u &&
+        any(notEqual(expectedStableProbeId, uvec2(0u))) &&
+        all(equal(payload.stableProbeId, expectedStableProbeId)) &&
+        payload.physicalProbeIndex == physicalProbeIndex &&
+        payload.virtualProbeId == virtualProbeId &&
+        payload.pageGeneration == pageGeneration;
+    if (!recordPresent)
+        return false;
 
     bool techniqueValid = payload.technique ==
             SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE ||
@@ -547,6 +607,8 @@ bool TryReadSimpleDdgiGuidingTransportPayload(
         payload.physicalProbeIndex == physicalProbeIndex &&
         payload.virtualProbeId == virtualProbeId &&
         payload.pageGeneration == pageGeneration &&
+        payload.sourceEpoch == expectedSourceEpoch &&
+        payload.sourceLightingGeneration == expectedSourceLightingGeneration &&
         payload.slotIndex == directionSlot &&
         payload.distributionGeneration != 0u && payload.proposalEpoch != 0u;
     bool pdfValid = !isnan(payload.generationTimeMixturePdf) &&
@@ -558,6 +620,8 @@ bool TryReadSimpleDdgiGuidingTransportPayload(
         physicalProbeIndex,
         virtualProbeId,
         pageGeneration,
+        expectedSourceEpoch,
+        expectedSourceLightingGeneration,
         directionSlot,
         payload.packedDirectionOct32);
     if (!identityValid || !techniqueValid || !branchValid ||

@@ -85,6 +85,11 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_ddgi_c4_c5.frag.spv' = 14
     'forward_opaque_simple_full_input_ddgi_c4_c5.frag.spv' = 14
     'forward_weighted_oit.frag.spv' = 14
+    # Ray-query transparent receivers change only directional visibility. They
+    # retain the exact bounded DDGI receiver-demand/gather synchronization of
+    # the corresponding sorted and weighted transparent programs.
+    'forward_transparent_ray.frag.spv' = 14
+    'forward_weighted_oit_ray.frag.spv' = 14
     'fog.comp.spv' = 14
     'particle.vert.spv' = 14
     'foliage_grass.mesh.spv' = 14
@@ -101,6 +106,8 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_full_input_ddgi_b1_provenance.frag.spv' = 21
     'forward_transparent_ddgi_b1.frag.spv' = 21
     'forward_weighted_oit_ddgi_b1.frag.spv' = 21
+    'forward_transparent_ray_ddgi_b1.frag.spv' = 21
+    'forward_weighted_oit_ray_ddgi_b1.frag.spv' = 21
     'foliage_forward_ddgi_b1.frag.spv' = 21
     'foliage_forward_ddgi_b1_provenance.frag.spv' = 21
     'fog_b1.comp.spv' = 20
@@ -207,13 +214,17 @@ $algorithmicAtomicCounts = @{
     # max). All additive certificate/cache-rejection reductions are isolated in
     # the small second shader so native drivers never lower the recursive
     # operator, workgroup coordination, and certificate reduction together.
-    # Two additional functional reductions derive the frozen expected
-    # participant and texel population on-GPU from the shared eligibility
-    # predicate. They replace the delayed host-count witness.
-    'ddgi_simple_transport_audit.comp.spv' = 29
-    'ddgi_simple_transport_audit_reduce_legacy.comp.spv' = 29
-    'ddgi_simple_transport_audit_reduce_validate.comp.spv' = 29
-    'ddgi_simple_transport_audit_reduce_packed.comp.spv' = 29
+    # The reduce role derives the frozen expected participant and texel
+    # populations on-GPU and performs one workgroup reduction for all scalar
+    # and RGB certificate maxima. Guided and uniform projections deliberately
+    # retain the same fixed global-add count.
+    'ddgi_simple_transport_audit.comp.spv' = 28
+    'ddgi_simple_transport_audit_reduce_legacy.comp.spv' = 28
+    'ddgi_simple_transport_audit_reduce_validate.comp.spv' = 28
+    'ddgi_simple_transport_audit_reduce_packed.comp.spv' = 28
+    'ddgi_simple_transport_audit_reduce_legacy_guided.comp.spv' = 28
+    'ddgi_simple_transport_audit_reduce_validate_guided.comp.spv' = 28
+    'ddgi_simple_transport_audit_reduce_packed_guided.comp.spv' = 28
     'ddgi_simple_transport_intermediate_publish.comp.spv' = 5
 }
 $missingAlgorithmicModules = @($algorithmicAtomicCounts.Keys | Where-Object {

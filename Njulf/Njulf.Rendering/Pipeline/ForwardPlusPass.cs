@@ -723,8 +723,12 @@ namespace Njulf.Rendering.Pipeline
                     sceneData,
                     renderExtent,
                     materialTransportProvenanceEnabled);
-            bool receiverCacheEligible = !nearFieldDirectSourceEnabled &&
-                !giCausticReceiverEnabled && receiverGatherDispatchable;
+            // C5 adds producer MRTs but does not change SceneColor ownership.
+            // Keep the stable receiver-cache path active for C5-only frames.
+            // C4/combined variants retain their exact fallback until they gain
+            // an independently qualified cache-required shader family.
+            bool receiverCacheEligible = !giCausticReceiverEnabled &&
+                receiverGatherDispatchable;
             // B1 owns an exact opaque receiver producer in this compute
             // gather. C4/C5 attachment output changes how Forward+ consumes
             // GI, but must not suppress an independently enabled B1 capture.
@@ -1269,8 +1273,7 @@ namespace Njulf.Rendering.Pipeline
             if (meshletCount <= 0)
                 return;
 
-            bool receiverCacheEnabled = !nearFieldDirectSourceEnabled &&
-                !giCausticReceiverEnabled &&
+            bool receiverCacheEnabled = !giCausticReceiverEnabled &&
                 !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                 !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                 ShouldUseSimpleDdgiReceiverCacheForDraw();
@@ -1290,6 +1293,7 @@ namespace Njulf.Rendering.Pipeline
             {
                 if (!_meshPipeline.TryResolveNearFieldDirectSourcePipeline(
                         pipeline,
+                        receiverCacheEnabled,
                         out Silk.NET.Vulkan.Pipeline nearFieldPipeline))
                 {
                     throw new InvalidOperationException(
@@ -1327,14 +1331,11 @@ namespace Njulf.Rendering.Pipeline
                 InverseViewMatrix = sceneData.InverseViewMatrix,
                 InverseProjectionMatrix = sceneData.InverseProjectionMatrix,
                 CameraPosition = sceneData.CameraPosition,
-                // Time is unused by opaque forward mesh/fragment stages. The
-                // receiver-cache specialization consumes its exact bit pattern
-                // as the cache width without changing the 256-byte ABI.
+                // C5 consumes the exact temporal-sample bits. Receiver-cache
+                // variants derive their row stride from ScreenDimensions, so
+                // both paths can remain active without overloading this word.
                 Time = nearFieldDirectSourceEnabled
                     ? BitConverter.UInt32BitsToSingle(sceneData.TemporalSampleIndex)
-                    : receiverCacheEnabled
-                    ? BitConverter.UInt32BitsToSingle(
-                        _simpleDdgiReceiverCacheWidth)
                     : sceneData.Time,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
@@ -1519,8 +1520,7 @@ namespace Njulf.Rendering.Pipeline
             if (meshletCapacity <= 0 || _bufferManager == null)
                 return;
 
-            bool receiverCacheEnabled = !nearFieldDirectSourceEnabled &&
-                !giCausticReceiverEnabled &&
+            bool receiverCacheEnabled = !giCausticReceiverEnabled &&
                 !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                 !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                 ShouldUseSimpleDdgiReceiverCacheForDraw();
@@ -1540,6 +1540,7 @@ namespace Njulf.Rendering.Pipeline
             {
                 if (!_meshPipeline.TryResolveNearFieldDirectSourcePipeline(
                         pipeline,
+                        receiverCacheEnabled,
                         out Silk.NET.Vulkan.Pipeline nearFieldPipeline))
                 {
                     throw new InvalidOperationException(
@@ -1579,9 +1580,6 @@ namespace Njulf.Rendering.Pipeline
                 CameraPosition = sceneData.CameraPosition,
                 Time = nearFieldDirectSourceEnabled
                     ? BitConverter.UInt32BitsToSingle(sceneData.TemporalSampleIndex)
-                    : receiverCacheEnabled
-                    ? BitConverter.UInt32BitsToSingle(
-                        _simpleDdgiReceiverCacheWidth)
                     : sceneData.Time,
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
@@ -1950,6 +1948,7 @@ namespace Njulf.Rendering.Pipeline
                     frameIndex,
                     viewportGeneration,
                     sceneData.DdgiFrameSerial,
+                    sceneData.SimpleDdgiVolumeResourceGeneration,
                     requiredProducerMask,
                     out producer,
                     out _))
@@ -1979,7 +1978,7 @@ namespace Njulf.Rendering.Pipeline
             }
             if (sceneData.TransparentPassEnabled &&
                 sceneData.TransparentReceiveGlobalIllumination &&
-                sceneData.TransparentMeshletCount > 0)
+                sceneData.TransparentObjectCount > 0)
             {
                 mask |= SimpleDdgiReceiverFeedbackCaptureSourceAbi.GetProducerBit(
                     SimpleDdgiReceiverFeedbackProducer.TransparentWeightedOit);
@@ -2028,7 +2027,10 @@ namespace Njulf.Rendering.Pipeline
                    !ShouldWriteMaterialTransportProvenance();
         }
 
-        private void BindSimpleDdgiReceiverCacheBuffer(
+        internal bool CanConsumeSimpleDdgiReceiverCacheForCurrentView =>
+            ShouldUseSimpleDdgiReceiverCacheForDraw();
+
+        internal void BindSimpleDdgiReceiverCacheBuffer(
             CommandBuffer cmd,
             int frameIndex)
         {

@@ -70,6 +70,7 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `SpotShadowsEnabled` | Enables spot light shadows. |
 | `PointShadowsEnabled` | Enables point light shadows. |
 | `RequestedDirectionalShadowMode` | Authored intent: `Cascaded`, `HybridContact`, `RayQueryHard`, or promotion-gated `RayQuerySoft`. The runtime can fall back to `Cascaded` when ray capability, scene completeness, or receiver resources are unavailable. |
+| `DirectionalCsmTemporalMode` | Optional short CSM history: `Disabled`, evidence-gated `Auto`, or explicit development-only `DeveloperForce`. |
 | `DirectionalFilterMode` | Directional-map filter: legacy box PCF or normalized tent PCF. |
 | `DirectionalBiasMode` | Directional receiver-bias interpretation: legacy clip-space values or world-texel-scaled bias for more consistent cascades. |
 | `DirectionalShadowMapSize` | Directional shadow map resolution. |
@@ -79,6 +80,10 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `DirectionalCascadeSplitLambda` | Practical split blend between uniform (`0`) and logarithmic (`1`) cascade partitions. |
 | `DirectionalCasterExtrusionDistance` | Conservative search distance toward the sun for casters outside the receiver slice. It expands depth coverage without changing stabilized XY coverage. |
 | `DirectionalContactShadowDistance` | Maximum ray segment for `HybridContact`; bounded by `MaxShadowDistance`. |
+| `DirectionalSoftRecoveryRayCount` | Finite-sun samples used after a history reset/rejection; clamped to 1–4. |
+| `DirectionalSoftHistoryLength` | Maximum finite-sun history age; clamped to 1–32 frames. |
+| `DirectionalSoftSpatialPassCount` | Edge-aware spatial visibility-filter passes; clamped to 0–3. |
+| `DirectionalTransparentSoftRayCount` | Direct finite-sun samples for transparent fragments, which do not reuse opaque history; clamped to 1–4. |
 | `NormalBias` | Directional normal bias. |
 | `SlopeScaledDepthBias` | Directional slope-scaled depth bias. |
 | `ConstantDepthBias` | Directional constant depth bias. |
@@ -100,27 +105,47 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `DebugView` | Shadow debug view. |
 
 Directional shadow modes use a requested/effective contract. `HybridContact` combines
-the stable CSM result with a bounded deterministic ray query. `RayQueryHard` uses a
-full-resolution binary visibility mask for supported opaque receivers while retaining
-CSM for transparent/decal/debug receiver variants. Both ray modes require a complete,
-current shared ray scene and a successfully allocated mask; failures are diagnosed and
-fall back to CSM for that frame. `RayQuerySoft` is serialized as future intent but is
-currently held behind its finite-sun sampling and denoising qualification gate, so it
-also resolves to CSM and does not allocate motion/history resources.
+the stable CSM result with a bounded deterministic ray query. `RayQueryHard` writes a
+full-resolution packed binary visibility mask for opaque depth owners. `RayQuerySoft`
+uses blue-noise-scrambled finite-sun samples, motion-vector reprojection, depth/normal/
+receiver/generation rejection, bounded history, and edge-aware spatial filtering.
+Angular radius zero remains the deterministic hard result. Both ray modes require a
+complete, current shared ray scene with finite coverage bounds and successfully allocated
+resources; failures are diagnosed and fall back to CSM for that frame.
 
-When a hard-ray frame contains transparent or geometry-decal receivers, diagnostics
-set `CascadedReceiverFallbackRequired` and the map is rendered only for those named
-layered receivers; opaque depth owners continue to use the hard mask. Scenes without
-such receivers avoid the redundant map work.
+Sorted and weighted transparent pipelines have ray-query variants using the same TLAS,
+candidate cap, alpha/material rule, stable ray-footprint LOD, finite bounds, and sun
+sampler as the opaque pass. Soft transparency traces a bounded small sample set directly
+because opaque depth history cannot represent a layered fragment. Geometry decals use
+the opaque mask only when their fragment matches the depth owner; otherwise CSM remains
+the named fallback. CSM is retained only for a real fallback receiver or a CSM comparison
+debug view, so fully qualified ray-only scenes avoid redundant map rendering.
 
 The visibility mask uses a packed `R8Unorm`-equivalent storage-buffer layout
 (one byte per pixel and one bank per frame in flight); contact fading is resolved
 before packing. The stable CSM implementation uses a transported light basis, rotation-invariant
 cascade extents, symmetric nearest-texel snapping, independently stabilized depth,
 and per-cascade static-cache invalidation. Runtime diagnostics expose the requested
-and effective mode, fallback reason/detail, ray-mask allocation/generation, shared
-ray-scene generation/epoch, cascade-fit state, cache-layer provenance, and separate
-GPU timings for the map and ray-mask passes.
+and effective mode, fallback reason/detail, ray-mask/history allocation and generation,
+shared ray-scene bounds/category/generation/epoch, traversal and filter counters,
+cascade-fit state, cache-layer provenance, and separate GPU timings for map, trace,
+temporal, and spatial work.
+
+Production qualification is fail-closed. Set
+`RenderingOptions.DirectionalShadowQualificationManifestPath` or the
+`NJULF_DIRECTIONAL_SHADOW_QUALIFICATION_MANIFEST` environment variable to an
+artifact-pinned manifest. It must match the exact shader bundle, settings fingerprint,
+clean build commit, resolution, AA mode, quality preset, device/driver/API class, and
+exact/proxy geometry policy. It also pins numeric, visual, performance, memory,
+validation, lifecycle, and fallback evidence. Without a match, an explicit ray mode can
+run as `Experimental`, Ultra is not silently promoted, and CSM temporal `Auto` remains
+dormant. Three consecutive overruns of a matched GPU or memory budget demote the feature
+to CSM for a bounded cooldown.
+
+`DirectionalShadowQualificationTracks` supplies deterministic camera/light tracks and
+the 1080p/1440p/4K, SMAA/TAA, DDGI-off/raster/ray, CSM/hybrid/hard/soft capture matrix.
+Full beauty/debug images remain qualification artifacts rather than repository-generated
+claims; the manifest loader hashes and size-pins them before granting `Production`.
 
 Shadow debug views:
 
@@ -131,6 +156,13 @@ Shadow debug views:
 - `SpotAtlasPreview`
 - `PointCubemapFacePreview`
 - `LocalShadowSelection`
+- `DirectionalRayMask`
+- `DirectionalRayHitDistance`
+- `DirectionalRayCandidateCount`
+- `DirectionalRaySceneResidency`
+- `DirectionalCsmRayDifference`
+- `DirectionalHistoryConfidence`
+- `DirectionalHistoryRejection`
 
 ## Bloom
 
@@ -284,7 +316,7 @@ AO debug views:
 | `SimpleDdgiLightTreeUniformMixtureProbability` | Exact uniform-over-tree-leaves proposal mixed with the point-dependent contribution-bound proposal so every represented nonzero light retains support. Default `0.02`; clamped to `[0.001, 0.25]`. |
 | `SimpleDdgiLightTreeMaximumRefitAge` | Maximum consecutive refits before a deterministic inactive-bank rebuild is requested. Default `120`; clamped to `[1, 4096]`. |
 | `SimpleDdgiDirectionalRadianceMode` | Probe incident-radiance sidecar: `Off`, validation-only `L1Reference`, or canonical RGB L2 SH. Each representation has a distinct ABI and cannot reinterpret live data from another mode. |
-| `SimpleDdgiGlossyTransportMode` | `Off`, `ReceiverOnly`, bounded `OneBounce`, or validation-only `RecursiveExperimental`. One-bounce reads the previous compatible directional-radiance generation; recursive mode is never release-authorized by this plan. |
+| `SimpleDdgiGlossyTransportMode` | `Off`, `ReceiverOnly`, bounded `OneBounce`, or opt-in `RecursiveCertified`. Ultra defaults to `OneBounce`; High defaults to `Off` so its opaque diffuse DDGI uses the production receiver cache while C5 supplies bounded near-field detail. The directional/glossy modes remain explicit editor opt-ins on High. Recursive transport adds a four-byte F0/roughness sidecar per cached ray, includes glossy energy in the same coupled Jacobi operator and per-channel tail audit as diffuse transport, and falls back to `OneBounce` if its storage ABI or certification contract is unavailable. Schema versions before 12 migrate the former numeric recursive experiment to `OneBounce`. |
 | `SimpleDdgiDirectionalRadianceMemoryBudgetBytes` | Independent hard admission budget for the canonical 64-byte-per-probe L2 sidecar and any mode-required parity allocation. Allocation failure leaves diffuse DDGI active and disables the DDGI rough-specular source. |
 | `SimpleDdgiRoughSpecularMinimumRoughness`, `SimpleDdgiRoughSpecularFullWeightRoughness` | Lower edge and full-weight edge of the DDGI directional-radiance receiver band. DDGI ownership is exactly zero below the minimum and cross-fades to full weight over the nonzero band. Defaults are `0.55` and `0.70`. |
 | `DdgiSkinnedGeometryMode` | Dynamic ray-scene representation: `Excluded`, `ConservativeProxy`, or frame-slot-owned `CurrentPose` geometry built from the GPU skinning output. |
@@ -300,6 +332,10 @@ AO debug views:
 | `DdgiSelfShadowBiasScale` | Artist-facing multiplier for authored DDGI normal/view self-shadow bias. Default `1.0`; higher values reduce acne/leaks at the cost of contact accuracy. |
 | `DdgiThinWallPolicyEnabled`, `DdgiThinWallLeakClampStrength` | Enables and controls Simple-DDGI visibility-based leak attenuation. Simple-DDGI keeps one-sided source shading, records covered backfaces in receiver visibility, and uses close backface hits to relocate probes trapped behind architectural shells. |
 | `DdgiHysteresisResponse` | Artist-facing response scale for DDGI probe lighting history. Default `1.0`; higher values converge lighting changes faster, lower values favor stability. |
+| `SimpleDdgiRefinementBricksEnabled` and `SimpleDdgiRefinement*` | Enables the bounded B3 fine-probe overlay around measured receiver/emissive focus. High and Ultra enable it by default with a fixed brick pool, retention policy, and independently bounded work; lower tiers retain the canonical rings. |
+| `SimpleDdgiNearVisibilitySidecarEnabled`, `SimpleDdgiNearVisibilitySidecarMemoryBudgetBytes` | Requests the independently admitted B4 conservative near-occluder visibility sidecar. High and Ultra enable it by default. A failed budget or allocation leaves canonical DDGI active without the sidecar. |
+| `SimpleDdgiSourceCacheLayoutMode` | `FixedRecord` keeps the ordinary packed record layout, `HotHeaderConditionalPayload` explicitly requests the conditional-payload representation, and `Auto` admits it only when completed-work evidence shows enough misses/backfaces to repay the extra addressing. All tiers default to `Auto`. Recursive glossy's four-byte material sidecar remains a separate required payload. |
+| `SimpleDdgiDirectionalFogEnabled` | Allows fog integration to consume the qualified directional DDGI field. High and Ultra enable it; invalid directional ownership resolves to the existing non-directional fog path. |
 | `SimpleDdgiSampledAtlasEnabled` | Enables the optional filtered image mirror of the canonical Simple-DDGI SSBO atlases. High and Ultra enable it by default; the runtime disables it safely if format, descriptor, layer, or remaining-memory admission fails. Low and Medium retain the canonical SSBO-only path. |
 | `SimpleDdgiSampledAtlasCoverageMode` | `Disabled` uses canonical SSBOs only. `FullCanonical` mirrors every complete admitted physical volume. `ReceiverRelevant` mirrors complete authored receiver volumes and near/mid rings in priority order; excluded volumes and octahedral seams use the canonical typed SSBO path. A mirror never affects canonical volume admission. High and Ultra default to `ReceiverRelevant`; `FullCanonical` remains an explicit comparison/rollback override. |
 | `SimpleDdgiStoragePackingMode` | Versioned Simple-DDGI storage contract: `Legacy` keeps the 36-byte FP32 source cache and 32-byte scratch rollback ABI; `Validate` keeps those bytes while tracing the fixed direction codebook and shadow-comparing stored/reconstructed directions; `Packed` uses mixed 28/24-byte FP16-radiance cache regions and 20-byte direction-free scratch. A change forces a cold allocation/source/atlas generation transition. Every quality preset defaults to `Packed`; `Legacy` and `Validate` remain explicit rollback/qualification overrides. |
@@ -311,7 +347,8 @@ AO debug views:
 | `SimpleDdgiSparseMaximumAdmissionsPerFrame` | Hard per-frame page admission limit. High defaults to `64`; Ultra defaults to `96`. Camera cuts waive old-page retention only under pressure and still obey this limit. |
 | `SimpleDdgiSparseMaximumReceiverFeedbackRequests` | Bound on deduplicated supplemental receiver-page requests per epoch. High defaults to `2048`; Ultra defaults to `4096`. Opaque depth demand remains the primary producer. |
 | `SimpleDdgiSparseInactiveRetryFrames` | Retry interval for pages suppressed after repeated all-inactive classification. Default `300`; geometry/topology invalidation reactivates affected pages immediately. |
-| `SimpleDdgiTransportTailRelativeTolerance` | Relative error bound required by Transport V2 tail certification. Default `0.025`. |
+| `SimpleDdgiTransportTailRelativeTolerance` | Relative error bound required by Transport V2 tail certification. The frozen audit preserves independent RGB defect, field-magnitude, contraction, and quantization evidence, while the legacy scalar diagnostics report their maxima. Default `0.025`. |
+| `SimpleDdgiAdaptiveRaysEnabled` | Enables four bounded progressive source-ray cardinalities under Transport V2. Fresh and far probes start from a low Owen-scrambled Sobol prefix; measured residual pressure promotes one supported prefix at a time, while sustained low residuals demote with hysteresis. A committed cache cardinality remains immutable through relight, solve, and audit. |
 | `SimpleDdgiTransportMaximumSolverGenerations` | Legacy-named minimum cached-source Jacobi generations required before convergence can retire a probe. Default `8`; a future maximum-work cap should use a separate setting. |
 | `SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold` | Ownership threshold for skipping a containing coarser-ring gather. Default `0.95`; lower values reduce gather work while increasing transition risk, and `1.0` keeps the conservative behavior. |
 | `SimpleDdgiRingBaseSpacing`, `SimpleDdgiRingSpacingMultiplier` | Base near-ring spacing and per-ring spacing multiplier for camera-relative Simple-DDGI rings. |
@@ -342,16 +379,21 @@ misreported as active.
 
 | Setting | Values and behavior |
 | --- | --- |
-| `SimpleDdgiReceiverFeedbackMode` | `Off`, `LegacyPackedReference`, `ExactCompacted`, or `AutoQualified`. `ExactCompacted` is the versioned B1 receiver-feedback ABI. It remains a one-frame-late scheduler priority signal and never controls probe liveness, residency, or visibility. |
+| `SimpleDdgiReceiverFeedbackMode` | `Off`, `LegacyPackedReference`, `ExactCompacted`, or `AutoQualified`. `ExactCompacted` is the versioned B1 receiver-feedback ABI. It remains a one-frame-late scheduler priority signal and never controls probe liveness, residency, or visibility. Its validated bank also publishes the highest positive measured receiver contribution as a generation-stamped refinement focus; stale viewport, frame, or volume-table identities fall back to the camera-forward heuristic. |
 | `DdgiOpacityMicromapMode` | `Off`, `ExtFourStateExperiment`, or `AutoQualified`. The production experiment is four-state only; unsupported, dynamic, or ambiguous alpha content uses the unchanged candidate-confirmation path. |
-| `SimpleDdgiDirectionalGuidingMode` | `Off`, `CpuOracle`, `PerProbeHistogramExperiment`, or `AutoQualified`. Guiding retains a nonzero uniform proposal and an independent uniform-maintenance subset. |
+| `SimpleDdgiDirectionalGuidingMode` | `Off`, `CpuOracle`, `PerProbeHistogramExperiment`, or `AutoQualified`. Guiding retains a nonzero uniform proposal and an independent uniform-maintenance subset. Canonical irradiance uses the positive self-normalized balance-MIS projection shared by solve and frozen audit; the raw unbiased estimator is qualification-only, and stale source/lighting ownership fails closed. |
 | `GiCausticMode` | `Off`, `PhotonReference`, `WorldCacheExperiment`, or `AutoQualified`. It is a separate hero-specular/refractive path; caustic flux never becomes DDGI source/transport data. |
-| `SimpleDdgiNearFieldResidualMode` | `Off`, `Reference`, `HiZHalfResolutionExperiment`, or `AutoQualified`. It requires measured post-B3 evidence and an exact direct-diffuse-plus-emissive source contract; it never samples final scene color. |
+| `SimpleDdgiNearFieldResidualMode` | `Off`, `Reference`, `HiZAdaptive`, or `AutoQualified`. C5 is the sole near-field SSGI complement to DDGI and never uses surfels or final scene color. Explicit `HiZAdaptive` starts at quarter resolution and may fall back to eighth; half resolution is available only to an evidence-bound `AutoQualified` profile after sustained timing headroom. The governor uses joined reset/trace/temporal/filter/composite GPU timestamps, enforces a 0.75 ms P95 ceiling, and requires sustained P95 at or below 0.45 ms before promotion. |
 
-New settings turn on every completed advanced-GI production path in every
-preset: B1 `ExactCompacted`, C1 `ExtFourStateExperiment`, C3
-`PerProbeHistogramExperiment`, C4 `WorldCacheExperiment`, and C5
-`HiZHalfResolutionExperiment`. Explicit modes need no promotion evidence and
+New settings turn on the stable advanced-GI production paths in every preset:
+B1 `ExactCompacted`, C1 `ExtFourStateExperiment`, C4
+`WorldCacheExperiment`, and C5 `HiZAdaptive`. The adaptive C5 path starts at
+quarter resolution and may step down to eighth resolution when its measured
+GPU cost exceeds the bounded runtime target. Fixed half resolution remains an
+explicit reference/compatibility mode. C3
+`PerProbeHistogramExperiment` stays off unless explicitly selected because an
+invalid guiding publication must not stall canonical DDGI convergence.
+Explicit modes need no promotion evidence and
 enter their production graph/resource paths whenever their real prerequisites
 are available. Existing saved settings retain their persisted mode. Unsupported
 hardware, an exceeded memory or Vulkan limit, an ABI mismatch, allocation
@@ -410,7 +452,7 @@ transaction completion but supplies no rough-reflection ownership.
 
 Foliage proxy LOD is world/probe-space stable. Enabled authored probe volumes determine near, mid, far, and excluded tiers from their bounds, spacing, blend distance, and ray influence. With no authored volumes, patches conservatively remain near; camera position never participates. Mid and far procedural tiers reduce card density while increasing represented-instance weight so integrated density remains stable. Captures report requested/represented density, error, tier card counts, excluded patches, wind age, cadence generation, and the policy ABI version.
 
-The `DdgiHigh` Simple-DDGI profile uses three asymmetric camera-relative rings: near `28x14x28` at `1.25 m`, mid `18x10x18` at `3.75 m`, and far `12x8x12` at `11.25 m`. This is 15,368 virtual probes total, reaching approximately `±16.9 m / ±8.1 m`, `±31.9 m / ±16.9 m`, and `±61.9 m / ±39.4 m` horizontally/vertically before authored volumes. The near ring has 1,372 fixed 2×2×2 virtual pages. Its 960-page sparse pool reserves 7,680 near payload probes alongside 4,392 dense mid/far probes; authored volumes remain dense. The exact resident-scheduler fixture is 160,821,296 live bytes versus 201,263,392 bytes for the same-binary Dense plan, a 40,442,096-byte saving, with a 139,024-byte residency arena. Its global update budget remains 2,048 probes per frame, with near/mid/far preferred quotas of 1,024/324/128 and 128/64/32 full-refresh rays per probe.
+The `DdgiHigh` Simple-DDGI profile uses three asymmetric camera-relative rings: near `28x14x28` at `1.25 m`, mid `18x10x18` at `3.75 m`, and far `12x8x12` at `11.25 m`. This is 15,368 probes total, reaching approximately `±16.9 m / ±8.1 m`, `±31.9 m / ±16.9 m`, and `±61.9 m / ±39.4 m` horizontally/vertically before authored volumes. High keeps every admitted probe dense: its complete profile fits the 192 MiB tier budget and therefore does not expose ordinary High rendering to sparse feedback invalidation or coarse-ring fallback. Ultra retains the qualified sparse near-ring policy. High's global update budget remains 2,048 probes per frame, with near/mid/far preferred quotas of 1,024/324/128 and 128/64/32 full-refresh rays per probe.
 
 The page geometry is an internal ABI constant. Sparse allocation is capacity-based, not occupancy-based: diagnostics separately report virtual pages, resident pages, physical capacity, permanently invalid edge-page padding, sampled-atlas 256-layer rounding, dense-equivalent bytes, allocated bytes, and avoided bytes. A full pool leaves excess fine demand nonresident and uses a dense coarser ring; it never reallocates opportunistically.
 

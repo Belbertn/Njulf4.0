@@ -6,10 +6,10 @@
 // C5 is intentionally a separate, opt-in ABI.  These stages are not part of
 // the global bindless contract until the renderer has explicitly created the
 // source attachment, history identity resources, barriers, and dispatch path.
-// V6 adds a versioned telemetry header and one low-contention aggregate record
-// per 8x8 trace tile. Keep this in lockstep with
-// SimpleDdgiNearFieldResidualGpuAbi.
-const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x43350006u;
+// V10 fixes the metadata std430 array stride and makes temporal/spatial
+// evidence plus a bounded composite correction part of the C5 contract.
+// Keep this in lockstep with SimpleDdgiNearFieldResidualGpuAbi.
+const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000au;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_MAGIC = 0x4335544du;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS = 16u;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS = 16u;
@@ -38,6 +38,14 @@ const uint SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_ITERATIONS = 8u;
 const uint SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS = 8u;
 const uint SIMPLE_DDGI_NEAR_FIELD_MAX_HISTORY_LENGTH = 64u;
 const float SIMPLE_DDGI_NEAR_FIELD_MAX_ENCODED_TRACE_DISTANCE = 65504.0;
+const float SIMPLE_DDGI_NEAR_FIELD_MINIMUM_SIGNAL = 1.0e-6;
+const float SIMPLE_DDGI_NEAR_FIELD_MINIMUM_VARIANCE = 1.0e-12;
+const float SIMPLE_DDGI_NEAR_FIELD_TEMPORAL_SNR_LOW = 1.5;
+const float SIMPLE_DDGI_NEAR_FIELD_TEMPORAL_SNR_HIGH = 3.0;
+const float SIMPLE_DDGI_NEAR_FIELD_SPATIAL_SNR_LOW = 1.0;
+const float SIMPLE_DDGI_NEAR_FIELD_SPATIAL_SNR_HIGH = 2.5;
+const float SIMPLE_DDGI_NEAR_FIELD_MAX_RELATIVE_CORRECTION = 0.20;
+const float SIMPLE_DDGI_NEAR_FIELD_MIN_ABSOLUTE_CORRECTION = 1.0e-4;
 const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_VALID_BIT = 1u;
 const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_LENGTH_SHIFT = 1u;
 const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_LENGTH_MASK = 0x7fu <<
@@ -46,17 +54,20 @@ const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_SHIFT = 8u;
 const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_MASK = 0x00ffffffu <<
     SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_SHIFT;
 
-// The std430 representation is exactly ten 32-bit words (40 bytes),
-// matching GPUSimpleDdgiNearFieldResidualHitMetadata.  History metadata must
-// be double-buffered by the eventual renderer integration: current trace
-// metadata is never silently reused as prior-frame identity.
+// The std430 representation is exactly ten 32-bit words (40 bytes), matching
+// GPUSimpleDdgiNearFieldResidualHitMetadata. Keep the identities as two uvec2
+// members: one uvec4 would raise the structure alignment to 16 bytes and make
+// an array stride 48 bytes even though the member payload still totals 40.
+// History metadata is double-buffered: current trace metadata is never
+// silently reused as prior-frame identity.
 struct SimpleDdgiNearFieldResidualHitMetadata
 {
     float receiverDepth;
     float hitDepth;
     float confidence;
     uint packedFlags;
-    uvec4 identity;
+    uvec2 receiverIdentity;
+    uvec2 hitIdentity;
     vec2 hitUv;
 };
 
@@ -262,6 +273,55 @@ bool SimpleDdgiNearFieldIsValidCandidate(vec4 residual)
         SimpleDdgiNearFieldFinite(residual.a) && residual.a > 0.0;
 }
 
+float SimpleDdgiNearFieldSmoothEvidence(float low, float high, float value)
+{
+    if (!SimpleDdgiNearFieldFinite(low) ||
+        !SimpleDdgiNearFieldFinite(high) ||
+        !SimpleDdgiNearFieldFinite(value) || high <= low)
+    {
+        return 0.0;
+    }
+    float t = clamp((value - low) / (high - low), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+float SimpleDdgiNearFieldSignalConfidence(
+    float mean,
+    float variance,
+    float sampleCount,
+    float snrLow,
+    float snrHigh)
+{
+    if (!SimpleDdgiNearFieldFinite(mean) ||
+        !SimpleDdgiNearFieldFinite(variance) ||
+        !SimpleDdgiNearFieldFinite(sampleCount) ||
+        variance < 0.0 || sampleCount <= 0.0 ||
+        abs(mean) <= SIMPLE_DDGI_NEAR_FIELD_MINIMUM_SIGNAL)
+    {
+        return 0.0;
+    }
+    float standardError = sqrt(max(
+        variance / sampleCount,
+        SIMPLE_DDGI_NEAR_FIELD_MINIMUM_VARIANCE));
+    float snr = abs(mean) / standardError;
+    return SimpleDdgiNearFieldSmoothEvidence(snrLow, snrHigh, snr);
+}
+
+float SimpleDdgiNearFieldTemporalEvidenceConfidence(
+    vec2 moments,
+    uint historyLength)
+{
+    float historyEvidence = SimpleDdgiNearFieldSmoothEvidence(
+        8.0, 32.0, float(historyLength));
+    float variance = max(moments.y - moments.x * moments.x, 0.0);
+    return historyEvidence * SimpleDdgiNearFieldSignalConfidence(
+        moments.x,
+        variance,
+        float(max(historyLength, 1u)),
+        SIMPLE_DDGI_NEAR_FIELD_TEMPORAL_SNR_LOW,
+        SIMPLE_DDGI_NEAR_FIELD_TEMPORAL_SNR_HIGH);
+}
+
 float SimpleDdgiNearFieldDepthWeight(float currentDepth, float neighbourDepth,
     float tolerance)
 {
@@ -284,7 +344,8 @@ SimpleDdgiNearFieldZeroMetadata()
     metadata.hitDepth = 0.0;
     metadata.confidence = 0.0;
     metadata.packedFlags = 0u;
-    metadata.identity = uvec4(0u);
+    metadata.receiverIdentity = uvec2(0u);
+    metadata.hitIdentity = uvec2(0u);
     metadata.hitUv = vec2(0.0);
     return metadata;
 }

@@ -248,7 +248,7 @@ public readonly record struct SimpleDdgiContentMemoryPlan(
         ulong directionalCanonicalRequired = checked((ulong)probes * directionalStride);
         bool parityRequired = settings.EffectiveSimpleDdgiGlossyTransportMode is
             SimpleDdgiGlossyTransportMode.OneBounce or
-            SimpleDdgiGlossyTransportMode.RecursiveExperimental;
+            SimpleDdgiGlossyTransportMode.RecursiveCertified;
         ulong directionalParityRequired = parityRequired
             ? directionalCanonicalRequired
             : 0UL;

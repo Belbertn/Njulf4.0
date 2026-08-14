@@ -183,6 +183,42 @@ public sealed class DdgiGeometryParticipationTests
     }
 
     [Test]
+    public void Decals_ProjectRayDistanceOntoNormalAtGrazingAngles()
+    {
+        DdgiReferenceSurface baseSurface = Surface(
+            Vector3.Zero,
+            1f,
+            Vector3.UnitY);
+        DdgiDecalCandidate grazingDecal = Candidate(
+            distance: 4.995f,
+            layer: 0,
+            stableIdentity: 1,
+            diffuse: new Vector3(0.4f, 0.3f, 0.2f),
+            opacity: 1f) with
+        {
+            DepthBias = 0.0005f
+        };
+        var rayDirection = new Vector3(
+            MathF.Sqrt(1f - 0.1f * 0.1f),
+            -0.1f,
+            0f);
+
+        DdgiDecalComposition result = DdgiGeometryParticipation.ComposeDecals(
+            baseSurface,
+            5f,
+            rayDirection,
+            new[] { grazingDecal });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AssociatedCount, Is.EqualTo(1));
+            Assert.That(result.DepthRejectedCount, Is.Zero);
+            Assert.That(result.Surface.DiffuseReflectance,
+                Is.EqualTo(grazingDecal.Surface.DiffuseReflectance));
+        });
+    }
+
+    [Test]
     public void DecalCandidateCap_RetainsNearestSetDeterministically()
     {
         DdgiReferenceSurface baseSurface = Surface(

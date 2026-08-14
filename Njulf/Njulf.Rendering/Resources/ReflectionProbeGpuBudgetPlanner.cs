@@ -13,11 +13,10 @@ public readonly record struct ReflectionProbeGpuBudgetSnapshot(
     bool BudgetExhausted);
 
 /// <summary>
-/// Predicts the GPU cost of a single reflection work unit and admits only work that fits the
-/// configured per-frame budget. The first measured frame is deliberately conservative: without a
-/// unit cost history, one unit is admitted and the next unit waits for feedback. This keeps a
-/// newly enabled feature from creating an unbounded GPU spike while still allowing the EWMA to
-/// increase throughput quickly once timestamps are available.
+/// Predicts the GPU cost of a single reflection work unit and admits work against the configured
+/// per-frame budget. A nonzero budget always admits one unit per frame, even when its learned cost
+/// exceeds the target. The budget is therefore a soft cap with a liveness floor: an expensive
+/// capture can make slow progress, but it cannot leave an unpublished probe queued forever.
 /// </summary>
 public sealed class ReflectionProbeGpuBudgetPlanner
 {
@@ -46,7 +45,13 @@ public sealed class ReflectionProbeGpuBudgetPlanner
         if (_budgetMicroseconds <= 0)
             return false;
 
-        // A cold start admits one unit, then waits for a completed timestamp. This is a
+        // Always admit the first unit. Without timing history this provides a bounded cold start;
+        // with timing history it prevents an estimate above the whole frame budget from starving
+        // an in-progress capture transaction forever.
+        if (_reservedMicroseconds == 0)
+            return true;
+
+        // A cold start admits one unit, then waits for a completed timestamp. This remains a
         // deterministic cap even when a device reports no timestamp results for several frames.
         if (!_hasTimingHistory)
             return _reservedMicroseconds == 0;

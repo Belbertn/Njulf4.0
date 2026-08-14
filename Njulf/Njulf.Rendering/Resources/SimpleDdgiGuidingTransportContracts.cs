@@ -183,9 +183,12 @@ public readonly record struct SimpleDdgiGuidingProjectionResult(
 }
 
 /// <summary>
-/// Frozen C3 transport policy and estimator. The result is the Monte-Carlo
-/// irradiance integral directly; no equal-ray cosine normalization is applied
-/// after inverse-PDF weighting.
+/// Frozen C3 transport policy and estimator. Production projection uses a
+/// self-normalized balance-MIS kernel: it is positive, preserves a constant
+/// incident field exactly, and has unit row mass after the Lambertian factor.
+/// The raw unbiased estimator remains available only as an independent
+/// statistical qualification reference and never supplies certificate
+/// authority.
 /// </summary>
 public static class SimpleDdgiGuidingTransportEstimator
 {
@@ -263,7 +266,30 @@ public static class SimpleDdgiGuidingTransportEstimator
 
     public static SimpleDdgiGuidingProjectionResult ProjectIrradiance(
         Vector3 receiverDirection,
-        ReadOnlySpan<SimpleDdgiGuidingProjectionSample> samples)
+        ReadOnlySpan<SimpleDdgiGuidingProjectionSample> samples) =>
+        ProjectIrradianceCore(
+            receiverDirection,
+            samples,
+            selfNormalize: true);
+
+    /// <summary>
+    /// Raw unbiased multi-technique estimator retained for statistical tests.
+    /// Its finite-sample row gain is not bounded, so it must not be used by the
+    /// canonical DDGI solve or deterministic tail audit.
+    /// </summary>
+    public static SimpleDdgiGuidingProjectionResult
+        ProjectRawIrradianceReference(
+            Vector3 receiverDirection,
+            ReadOnlySpan<SimpleDdgiGuidingProjectionSample> samples) =>
+        ProjectIrradianceCore(
+            receiverDirection,
+            samples,
+            selfNormalize: false);
+
+    private static SimpleDdgiGuidingProjectionResult ProjectIrradianceCore(
+        Vector3 receiverDirection,
+        ReadOnlySpan<SimpleDdgiGuidingProjectionSample> samples,
+        bool selfNormalize)
     {
         if (!IsFinite(receiverDirection) ||
             receiverDirection.LengthSquared() <= 1.0e-12f)
@@ -344,6 +370,14 @@ public static class SimpleDdgiGuidingTransportEstimator
                 1.0d / denominator);
             sumWeights += weight;
             sumSquaredWeights += weight * weight;
+        }
+
+        if (selfNormalize && sumWeights > 0.0d)
+        {
+            double normalization = Math.PI / sumWeights;
+            accumulatedR *= normalization;
+            accumulatedG *= normalization;
+            accumulatedB *= normalization;
         }
 
         if (!double.IsFinite(accumulatedR) || !double.IsFinite(accumulatedG) ||

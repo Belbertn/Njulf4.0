@@ -1,5 +1,7 @@
 using System;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
+using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
@@ -8,6 +10,68 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
 {
+    [Test]
+    public void StageTimingJoin_SumsResetAndAllFilterIterations()
+    {
+        var snapshot = new FrameTimingSnapshot(
+        [
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Reset,
+                0L, 11L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Trace,
+                0L, 101L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
+                0L, 53L, true),
+            new PassTiming(
+                SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(0),
+                0L, 29L, true),
+            new PassTiming(
+                SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(1),
+                0L, 23L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Composite,
+                0L, 17L, true)
+        ]);
+
+        bool available = SimpleDdgiNearFieldResidualVulkanRuntime
+            .TryResolveStageTimings(snapshot, 2, out var timings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(available, Is.True);
+            Assert.That(timings.SourceMicroseconds, Is.Zero);
+            Assert.That(timings.RawTraceMicroseconds, Is.EqualTo(112UL));
+            Assert.That(timings.TemporalMicroseconds, Is.EqualTo(53UL));
+            Assert.That(timings.FilterMicroseconds, Is.EqualTo(52UL));
+            Assert.That(timings.CompositeMicroseconds, Is.EqualTo(17UL));
+            Assert.That(timings.TotalMicroseconds, Is.EqualTo(234UL));
+        });
+    }
+
+    [Test]
+    public void StageTimingJoin_FailsClosedWhenOneIterationIsUnavailable()
+    {
+        var snapshot = new FrameTimingSnapshot(
+        [
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Reset,
+                0L, 1L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Trace,
+                0L, 2L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
+                0L, 3L, true),
+            new PassTiming(
+                SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(0),
+                0L, 4L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Composite,
+                0L, 5L, true)
+        ]);
+
+        Assert.That(
+            SimpleDdgiNearFieldResidualVulkanRuntime.TryResolveStageTimings(
+                snapshot,
+                2,
+                out _),
+            Is.False);
+    }
+
     [Test]
     public void PendingRendererIntegration_ExposesPlanBytesButNoFabricatedGpuTelemetry()
     {
@@ -121,6 +185,7 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         uint validSum = 0U;
         uint invalidSum = 0U;
         uint raySum = 0U;
+        uint hitSum = 0U;
         int headerWords = checked((int)
             SimpleDdgiNearFieldResidualGpuAbi.TelemetryHeaderWordCount);
         int tileWords = checked((int)
@@ -128,11 +193,13 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         for (int tile = 0; tile < covered.Length; tile++)
         {
             int word = headerWords + tile * tileWords;
-            uint valid = tile == 0 ? 48U : 0U;
+            uint valid = tile == 0 ? 56U : 0U;
             uint invalid = covered[tile] - valid;
+            uint rays = valid;
+            uint hits = tile == 0 ? 48U : 0U;
             uint accepted = tile == 0 ? 32U : 0U;
             words[word] = (uint)tile;
-            words[word + 1] = PackTileCounts(covered[tile], valid, invalid, valid);
+            words[word + 1] = PackTileCounts(covered[tile], valid, invalid, rays);
             words[word + 2] = PackTileCounts(0U, invalid, 0U, 0U);
             words[word + 3] = 0U;
             words[word + 4] = PackTileCounts(0U, valid, accepted, 0U);
@@ -159,7 +226,8 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
                 (SimpleDdgiNearFieldResidualGpuAbi.TelemetryRequiredCompletionMask << 16);
             validSum += valid;
             invalidSum += invalid;
-            raySum += valid;
+            raySum += rays;
+            hitSum += hits;
         }
         words[0] = SimpleDdgiNearFieldResidualGpuAbi.TelemetryMagic;
         words[1] = SimpleDdgiNearFieldResidualGpuAbi.Version;
@@ -172,8 +240,8 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
             SimpleDdgiNearFieldResidualGpuAbi.TelemetryRequiredCompletionMask;
         words[8] = validSum + invalidSum;
         words[9] = raySum;
-        words[10] = validSum;
-        words[11] = raySum - validSum;
+        words[10] = hitSum;
+        words[11] = raySum - hitSum;
         words[12] = invalidSum;
         words[13] = 0U;
         words[14] = invalidSum;
@@ -193,14 +261,15 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
             Assert.That(witness.CompletedFrameSerial, Is.EqualTo(17UL));
             Assert.That(witness.Trace.CandidateReceiverCount, Is.EqualTo(81UL));
             Assert.That(witness.Trace.RayHitCount, Is.EqualTo(48UL));
+            Assert.That(witness.Trace.RayMissCount, Is.EqualTo(8UL));
             Assert.That(witness.Trace.InvalidReceiverRejectedCount,
-                Is.EqualTo(33UL));
+                Is.EqualTo(25UL));
             Assert.That(witness.History.AcceptedHistoryCount, Is.EqualTo(32UL));
             Assert.That(witness.Tiles.CandidateTileCount, Is.EqualTo(4U));
             Assert.That(witness.Tiles.CompactedTileCount, Is.EqualTo(1U));
             Assert.That(witness.MaximumTraceDistance, Is.EqualTo(7.5f));
             Assert.That(witness.ResidualEnergy.LowFrequencyLeakage,
-                Is.EqualTo(1.0 / 48.0).Within(1.0e-6));
+                Is.EqualTo(1.0 / 56.0).Within(1.0e-6));
         });
 
         words[8]--;
@@ -283,7 +352,33 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
                     TileRecordBytes: 496UL),
                 captureIdentifiers: new SimpleDdgiNearFieldResidualCaptureIdentifiers(
                     DebugCaptureId: "c5-debug-73",
-                    ReferenceCaptureId: "reference-corpus-22"));
+                    ReferenceCaptureId: "reference-corpus-22"))
+            with
+            {
+                AdaptiveResolution =
+                    new SimpleDdgiNearFieldResidualAdaptiveResolutionTelemetry(
+                        SampledExtent:
+                            new SimpleDdgiNearFieldResidualExecutionExtent(
+                                480,
+                                270,
+                                SimpleDdgiNearFieldResidualExecutionScale.Quarter,
+                                1U),
+                        ActiveExtent:
+                            new SimpleDdgiNearFieldResidualExecutionExtent(
+                                240,
+                                135,
+                                SimpleDdgiNearFieldResidualExecutionScale.Eighth,
+                                2U),
+                        MaximumScale:
+                            SimpleDdgiNearFieldResidualExecutionScale.Quarter,
+                        LastP95Microseconds: 800UL,
+                        AuthoritativeTimingSampleCount: 120UL,
+                        WindowSampleCount: 0U,
+                        PromotionWindowStreak: 0U,
+                        PromotionCount: 0U,
+                        DemotionCount: 1U,
+                        ResolutionChangedAfterSample: true)
+            };
 
         Assert.Multiple(() =>
         {
@@ -301,6 +396,18 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
             Assert.That(telemetry.ResidualEnergy.SignedResidualEnergy, Is.EqualTo(-1.25));
             Assert.That(telemetry.ResidualEnergy.AbsoluteResidualEnergy, Is.EqualTo(3.5));
             Assert.That(telemetry.Tiles.CompactedTileCount, Is.EqualTo(31U));
+            Assert.That(telemetry.ContractVersion,
+                Is.EqualTo(SimpleDdgiNearFieldResidualDiagnostics
+                    .CurrentContractVersion));
+            Assert.That(telemetry.AdaptiveResolution.SampledExtent.Scale,
+                Is.EqualTo(SimpleDdgiNearFieldResidualExecutionScale.Quarter));
+            Assert.That(telemetry.AdaptiveResolution.ActiveExtent.Scale,
+                Is.EqualTo(SimpleDdgiNearFieldResidualExecutionScale.Eighth));
+            Assert.That(telemetry.AdaptiveResolution.LastP95Microseconds,
+                Is.EqualTo(800UL));
+            Assert.That(telemetry.AdaptiveResolution.DemotionCount, Is.EqualTo(1U));
+            Assert.That(telemetry.AdaptiveResolution.ResolutionChangedAfterSample,
+                Is.True);
             Assert.That(telemetry.CaptureIdentifiers.DebugCaptureId, Is.EqualTo("c5-debug-73"));
             Assert.That(telemetry.CaptureIdentifiers.ReferenceCaptureId,
                 Is.EqualTo("reference-corpus-22"));

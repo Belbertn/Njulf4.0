@@ -9,6 +9,48 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiGpuSchedulerPolicyTests
 {
     [Test]
+    public void SpecializedTailQuota_GivesTinyFinalVolumeALivenessSlot()
+    {
+        int[] pending = [500, 120, 28, 153, 2];
+        int[] quotas = new int[pending.Length];
+
+        SimpleDdgiCpuScheduleModel.AllocateSpecializedTailResidualQuotas(
+            pending,
+            requestBudget: 128,
+            frameIndex: 364u,
+            quotas);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(quotas.Sum(), Is.EqualTo(128));
+            Assert.That(quotas[4], Is.GreaterThanOrEqualTo(1));
+            for (int volume = 0; volume < pending.Length; volume++)
+                Assert.That(quotas[volume], Is.InRange(1, pending[volume]));
+        });
+    }
+
+    [Test]
+    public void SpecializedTailQuota_RotatesLivenessWhenBudgetIsSmallerThanVolumeCount()
+    {
+        int[] pending = [1, 1, 1, 1, 1];
+        int[] quotas = new int[pending.Length];
+        int[] admitted = new int[pending.Length];
+
+        for (uint frame = 0; frame < pending.Length; frame++)
+        {
+            SimpleDdgiCpuScheduleModel.AllocateSpecializedTailResidualQuotas(
+                pending,
+                requestBudget: 2,
+                frame,
+                quotas);
+            for (int volume = 0; volume < pending.Length; volume++)
+                admitted[volume] += quotas[volume];
+        }
+
+        Assert.That(admitted, Has.All.GreaterThanOrEqualTo(1));
+    }
+
+    [Test]
     public void EveryLaneRoundTripsThroughThePackedIndex()
     {
         for (int lane = 0; lane < SimpleDdgiSchedulerAbi.MaxLaneCount; lane++)

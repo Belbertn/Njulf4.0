@@ -19,7 +19,7 @@ public static class SimpleDdgiReceiverFeedbackGpuSortAbi
     /// meaning changes.  The record layout revision remains
     /// <see cref="SimpleDdgiReceiverFeedbackV2Abi.LayoutRevision"/>.
     /// </summary>
-    public const uint Version = 0xB101_1004u;
+    public const uint Version = 0xB101_1005u;
 
     public const uint RecordBindlessSlot = 194u;
     public const uint SortScratchBindlessSlot = 195u;
@@ -41,6 +41,14 @@ public static class SimpleDdgiReceiverFeedbackGpuSortAbi
     public const uint CaptureCandidateByteCount = CaptureCandidateWordCount * sizeof(uint);
     public const uint BankHeaderWordCount = 16u;
     public const uint BankHeaderByteCount = BankHeaderWordCount * sizeof(uint);
+    public const uint RefinementWitnessWordCount = 4u;
+    public const uint RefinementWitnessByteCount =
+        RefinementWitnessWordCount * sizeof(uint);
+    public const uint RefinementWitnessVersion = 0xB101_F001u;
+    public const uint BankPrefixWordCount =
+        BankHeaderWordCount + RefinementWitnessWordCount;
+    public const uint HeaderAndRefinementWitnessByteCount =
+        BankPrefixWordCount * sizeof(uint);
     public const uint SummaryLocatorWordCount = 2u;
     public const uint SummaryLocatorByteCount = SummaryLocatorWordCount * sizeof(uint);
     public const uint ProbePartialWordCount = 8u;
@@ -107,6 +115,12 @@ public static class SimpleDdgiReceiverFeedbackGpuSortAbi
             (nameof(GPUSimpleDdgiReceiverFeedbackBankHeaderV2.RecordCapacity), 36),
             (nameof(GPUSimpleDdgiReceiverFeedbackBankHeaderV2.SummaryCount), 48),
             (nameof(GPUSimpleDdgiReceiverFeedbackBankHeaderV2.Flags), 60));
+        Verify<GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1>(
+            RefinementWitnessByteCount,
+            (nameof(GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1.Version), 0),
+            (nameof(GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1.ResolvedVirtualProbeId), 4),
+            (nameof(GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1.EstimatedContributionMass), 8),
+            (nameof(GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1.FeedbackGeneration), 12));
         Verify<GPUSimpleDdgiReceiverFeedbackSummaryLocatorV2>(
             SummaryLocatorByteCount,
             (nameof(GPUSimpleDdgiReceiverFeedbackSummaryLocatorV2.ResolvedVirtualProbeId), 0),
@@ -166,11 +180,14 @@ public static class SimpleDdgiReceiverFeedbackGpuSortAbi
             ulong radixBases = checked(radixPrefix + workgroupCount * RadixBinCount);
             ulong scratchWords = checked(radixBases + RadixBinCount);
 
-            // Header + compact virtual-probe locator + fixed 32-byte summary
-            // records + bounded requested-page fallback pressure.  The locator
-            // keeps the frozen 32-byte summary ABI intact without pretending a
-            // sparse virtual ID is a physical-probe array index.
-            ulong summaryLocator = BankHeaderWordCount;
+            // Header + a fixed top-contributor witness + compact virtual-probe
+            // locator + fixed 32-byte summary records + bounded requested-page
+            // fallback pressure. The witness makes measured refinement
+            // placement available through an 80-byte readback without copying
+            // the complete summary stream. The locator keeps the frozen
+            // 32-byte summary ABI intact without pretending a sparse virtual ID
+            // is a physical-probe array index.
+            ulong summaryLocator = BankPrefixWordCount;
             ulong summaryRecords = checked(summaryLocator +
                 (ulong)summaryCapacity * SummaryLocatorWordCount);
             ulong fallbackRecords = checked(summaryRecords +
@@ -496,6 +513,104 @@ public static class SimpleDdgiReceiverFeedbackGpuSortAbi
         return float.IsFinite(correctedContributionMass);
     }
 
+    /// <summary>
+    /// CPU oracle for the finalize shader's deterministic top-contributor
+    /// reduction. Only complete, generation-matched V2 summaries participate;
+    /// equal FP32 masses select the lower virtual-probe identity.
+    /// </summary>
+    public static bool TrySelectRefinementWitness(
+        ReadOnlySpan<GPUSimpleDdgiReceiverFeedbackSummaryLocatorV2> locators,
+        ReadOnlySpan<GPUSimpleDdgiReceiverContributionSummaryV2> summaries,
+        uint feedbackGeneration,
+        out GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1 witness)
+    {
+        witness = default;
+        if (feedbackGeneration == 0u || locators.Length != summaries.Length)
+            return false;
+
+        bool found = false;
+        float bestMass = 0.0f;
+        uint bestProbe = uint.MaxValue;
+        for (int index = 0; index < summaries.Length; ++index)
+        {
+            GPUSimpleDdgiReceiverFeedbackSummaryLocatorV2 locator = locators[index];
+            GPUSimpleDdgiReceiverContributionSummaryV2 summary = summaries[index];
+            if (locator.SummaryGeneration != feedbackGeneration ||
+                summary.FeedbackGeneration != feedbackGeneration ||
+                summary.StatusFlags !=
+                    (uint)SimpleDdgiReceiverFeedbackSummaryStatus.Validated ||
+                !float.IsFinite(summary.EstimatedContributionMass) ||
+                summary.EstimatedContributionMass < 0.0f ||
+                !float.IsFinite(summary.MaximumSingleReceiverWeight) ||
+                summary.MaximumSingleReceiverWeight < 0.0f ||
+                summary.MaximumSingleReceiverWeight > 1.0f ||
+                summary.ExactUniqueTileCount == 0u ||
+                summary.SampledReceiverCount == 0u ||
+                summary.ExactUniqueTileCount > summary.SampledReceiverCount ||
+                summary.ConsumerMask == 0u ||
+                (summary.ConsumerMask & ~ProducerOverflowKnownMask) != 0u)
+            {
+                return false;
+            }
+
+            float mass = summary.EstimatedContributionMass;
+            if (!(mass > 0.0f) ||
+                (found && (mass < bestMass ||
+                    (mass == bestMass && locator.ResolvedVirtualProbeId >= bestProbe))))
+            {
+                continue;
+            }
+
+            found = true;
+            bestMass = mass;
+            bestProbe = locator.ResolvedVirtualProbeId;
+        }
+
+        if (!found)
+            return false;
+
+        witness = new GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1
+        {
+            Version = RefinementWitnessVersion,
+            ResolvedVirtualProbeId = bestProbe,
+            EstimatedContributionMass = bestMass,
+            FeedbackGeneration = feedbackGeneration
+        };
+        return true;
+    }
+
+    /// <summary>
+    /// Decodes a witness only when it belongs to the same validated bank
+    /// transaction. A missing (all-zero) witness is a valid no-demand result,
+    /// not a reason to reject otherwise usable scheduler feedback.
+    /// </summary>
+    public static bool TryDecodeRefinementWitness(
+        in GPUSimpleDdgiReceiverFeedbackBankHeaderV2 header,
+        in GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1 gpuWitness,
+        uint volumeTableGeneration,
+        out SimpleDdgiReceiverFeedbackRefinementWitness witness)
+    {
+        witness = default;
+        if (!IsCompleteAndReadable(header) ||
+            gpuWitness.Version != RefinementWitnessVersion ||
+            gpuWitness.FeedbackGeneration != header.FeedbackGeneration ||
+            volumeTableGeneration == 0u ||
+            !float.IsFinite(gpuWitness.EstimatedContributionMass) ||
+            !(gpuWitness.EstimatedContributionMass > 0.0f))
+        {
+            return false;
+        }
+
+        witness = new SimpleDdgiReceiverFeedbackRefinementWitness(
+            gpuWitness.ResolvedVirtualProbeId,
+            gpuWitness.EstimatedContributionMass,
+            gpuWitness.FeedbackGeneration,
+            header.ViewportGeneration,
+            ((ulong)header.FrameSerialHigh << 32) | header.FrameSerialLow,
+            volumeTableGeneration);
+        return true;
+    }
+
     private static bool AreLocationsCompatible(
         SimpleDdgiReceiverFeedbackGpuInputKind inputKind,
         SimpleDdgiReceiverFeedbackGpuItemLocation inputLocation,
@@ -729,6 +844,42 @@ public struct GPUSimpleDdgiReceiverFeedbackBankHeaderV2
     public uint FallbackSummaryCount;
     public uint InvalidRecordCount;
     public SimpleDdgiReceiverFeedbackGpuBankFlags Flags;
+}
+
+/// <summary>
+/// Fixed sidecar immediately following the B1 bank header. The finalize
+/// workgroup publishes the highest positive exact contribution mass, with a
+/// stable lower-probe-ID tie break, before publishing the bank Validated bit.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 16)]
+public struct GPUSimpleDdgiReceiverFeedbackRefinementWitnessV1
+{
+    public uint Version;
+    public uint ResolvedVirtualProbeId;
+    public float EstimatedContributionMass;
+    public uint FeedbackGeneration;
+}
+
+/// <summary>
+/// CPU-visible measured refinement focus identity. Source frame and viewport
+/// are retained so consumers can reject stale feedback after a camera-target
+/// or render-target transition.
+/// </summary>
+public readonly record struct SimpleDdgiReceiverFeedbackRefinementWitness(
+    uint ResolvedVirtualProbeId,
+    float EstimatedContributionMass,
+    uint FeedbackGeneration,
+    uint ViewportGeneration,
+    ulong SourceFrameSerial,
+    uint VolumeTableGeneration)
+{
+    public bool IsValid =>
+        float.IsFinite(EstimatedContributionMass) &&
+        EstimatedContributionMass > 0.0f &&
+        FeedbackGeneration != 0u &&
+        ViewportGeneration != 0u &&
+        SourceFrameSerial != ulong.MaxValue &&
+        VolumeTableGeneration != 0u;
 }
 
 /// <summary>Associates a compact summary record with its exact sparse virtual

@@ -146,7 +146,7 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
     }
 
     [Test]
-    public void Composite_LeavesCanonicalFieldUnchangedOnMissAndAllowsValidatedNegativeBand()
+    public void Composite_LeavesCanonicalFieldUnchangedOnMissAndBoundsValidatedNegativeBand()
     {
         Vector3 canonical = new(4.0f, 1.0f, 1.0f);
         Vector3 miss = SimpleDdgiNearFieldResidualReference.Composite(
@@ -157,17 +157,68 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
         Assert.Multiple(() =>
         {
             Assert.That(miss, Is.EqualTo(canonical));
-            Assert.That(correction, Is.EqualTo(new Vector3(2.0f, 1.0f, 1.0f)));
+            Assert.That(correction.X, Is.EqualTo(3.2f).Within(1.0e-6f));
+            Assert.That(correction.Y, Is.EqualTo(1.0f));
+            Assert.That(correction.Z, Is.EqualTo(1.0f));
         });
     }
 
     [Test]
-    public void History_RejectsMovingHitAndRevisionChanges()
+    public void Composite_UniformlyLimitsRareResidualOutliersWithoutChangingHue()
+    {
+        Vector3 composed = SimpleDdgiNearFieldResidualReference.Composite(
+            new Vector3(1.0f, 2.0f, 4.0f),
+            new Vector3(100.0f, -100.0f, 100.0f),
+            confidence: 1.0f,
+            residualValid: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(composed.X, Is.EqualTo(1.2f).Within(1.0e-6f));
+            Assert.That(composed.Y, Is.EqualTo(1.8f).Within(1.0e-6f));
+            Assert.That(composed.Z, Is.EqualTo(4.2f).Within(1.0e-6f));
+        });
+    }
+
+    [Test]
+    public void TemporalEvidence_RejectsYoungOrNoisyResidualsAndAcceptsStableHistory()
+    {
+        float young = SimpleDdgiNearFieldResidualReference
+            .EvaluateTemporalEvidenceConfidence(0.01f, 0.000_100_1f, 1);
+        float noisy = SimpleDdgiNearFieldResidualReference
+            .EvaluateTemporalEvidenceConfidence(0.01f, 0.01f, 64);
+        float stable = SimpleDdgiNearFieldResidualReference
+            .EvaluateTemporalEvidenceConfidence(0.01f, 0.000_100_1f, 64);
+        float zero = SimpleDdgiNearFieldResidualReference
+            .EvaluateTemporalEvidenceConfidence(0.0f, 0.0f, 64);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(young, Is.Zero);
+            Assert.That(noisy, Is.Zero);
+            Assert.That(stable, Is.EqualTo(1.0f).Within(1.0e-6f));
+            Assert.That(zero, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void History_ReusesStochasticHitChangesButRejectsReceiverAndRevisionChanges()
     {
         SimpleDdgiNearFieldHistoryIdentity baseline = Identity();
-        SimpleDdgiNearFieldHistoryValidation hitMoved =
+        SimpleDdgiNearFieldHistoryValidation stochasticHitChanged =
             SimpleDdgiNearFieldResidualReference.ValidateHistory(
-                Identity() with { HitObjectId = 12 },
+                Identity() with
+                {
+                    HitObjectId = 12,
+                    HitMaterialRevision = 13,
+                    HitDepth = float.NaN
+                },
+                baseline,
+                depthTolerance: 0.01f,
+                minimumNormalDot: 0.9f);
+        SimpleDdgiNearFieldHistoryValidation receiverChanged =
+            SimpleDdgiNearFieldResidualReference.ValidateHistory(
+                Identity() with { ReceiverObjectId = 12 },
                 baseline,
                 depthTolerance: 0.01f,
                 minimumNormalDot: 0.9f);
@@ -189,8 +240,9 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(hitMoved.Reason,
-                Is.EqualTo(SimpleDdgiNearFieldHistoryRejectionReason.HitObjectMismatch));
+            Assert.That(stochasticHitChanged.Accepted, Is.True);
+            Assert.That(receiverChanged.Reason,
+                Is.EqualTo(SimpleDdgiNearFieldHistoryRejectionReason.ReceiverObjectMismatch));
             Assert.That(abiChanged.Reason,
                 Is.EqualTo(SimpleDdgiNearFieldHistoryRejectionReason.TraceSourceAbiChanged));
             Assert.That(sourceLayoutChanged.Reason,

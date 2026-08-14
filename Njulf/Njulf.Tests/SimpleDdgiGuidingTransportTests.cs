@@ -236,6 +236,70 @@ public sealed class SimpleDdgiGuidingTransportTests
     }
 
     [Test]
+    public void CanonicalEstimator_PreservesAConstantForAnUnevenGuidedSampleSet()
+    {
+        Vector3 incident = new(0.25f, 1.0f, 3.0f);
+        SimpleDdgiGuidingProjectionSample[] samples =
+        [
+            new(incident, Vector3.UnitZ,
+                SimpleDdgiDirectionSamplingTechnique.UniformMaintenance,
+                (float)SimpleDdgiGuidingTransportEstimator.UniformSpherePdf),
+            new(incident, Vector3.Normalize(new Vector3(1.0f, 0.0f, 0.05f)),
+                SimpleDdgiDirectionSamplingTechnique.Mixture, 0.75f),
+            new(incident, Vector3.Normalize(new Vector3(-0.2f, 0.1f, 1.0f)),
+                SimpleDdgiDirectionSamplingTechnique.Mixture, 0.02f)
+        ];
+
+        SimpleDdgiGuidingProjectionResult canonical =
+            SimpleDdgiGuidingTransportEstimator.ProjectIrradiance(
+                Vector3.UnitZ,
+                samples);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(canonical.IsValid, Is.True, canonical.Reason);
+            Assert.That(canonical.Irradiance.X,
+                Is.EqualTo(incident.X * MathF.PI).Within(1.0e-5f));
+            Assert.That(canonical.Irradiance.Y,
+                Is.EqualTo(incident.Y * MathF.PI).Within(1.0e-5f));
+            Assert.That(canonical.Irradiance.Z,
+                Is.EqualTo(incident.Z * MathF.PI).Within(1.0e-5f));
+        });
+    }
+
+    [Test]
+    public void RawEstimator_RemainsSeparateFromCanonicalCertificateOperator()
+    {
+        SimpleDdgiGuidingProjectionSample[] samples =
+        [
+            new(Vector3.One, Vector3.UnitZ,
+                SimpleDdgiDirectionSamplingTechnique.UniformMaintenance,
+                (float)SimpleDdgiGuidingTransportEstimator.UniformSpherePdf),
+            new(Vector3.One, Vector3.UnitZ,
+                SimpleDdgiDirectionSamplingTechnique.Mixture, 0.75f)
+        ];
+
+        SimpleDdgiGuidingProjectionResult canonical =
+            SimpleDdgiGuidingTransportEstimator.ProjectIrradiance(
+                Vector3.UnitZ,
+                samples);
+        SimpleDdgiGuidingProjectionResult raw =
+            SimpleDdgiGuidingTransportEstimator.ProjectRawIrradianceReference(
+                Vector3.UnitZ,
+                samples);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(canonical.IsValid, Is.True);
+            Assert.That(raw.IsValid, Is.True);
+            Assert.That(canonical.Irradiance.X,
+                Is.EqualTo(MathF.PI).Within(1.0e-5f));
+            Assert.That(raw.Irradiance.X,
+                Is.Not.EqualTo(canonical.Irradiance.X).Within(1.0e-3f));
+        });
+    }
+
+    [Test]
     public void Estimator_RejectsNonFiniteOrFloatOverflowingPublication()
     {
         var invalid = new[]

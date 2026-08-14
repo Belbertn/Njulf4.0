@@ -777,6 +777,40 @@ public sealed class GiRoadmapExperimentTests
     }
 
     [Test]
+    public void C5_EvidenceAboveProductionP95BudgetIsRejectedWithZeroMemory()
+    {
+        var prerequisites = new SimpleDdgiNearFieldResidualPrerequisites(
+            true, true, true, true, true, true, true, true);
+        SimpleDdgiNearFieldResidualConfiguration configuration =
+            ResidualConfiguration(enabled: true);
+        SimpleDdgiNearFieldResidualAdmissionContext context = ResidualContext();
+        SimpleDdgiNearFieldResidualQualificationEvidence evidence =
+            QualifiedResidualEvidence(configuration, context) with
+            {
+                C5P95Milliseconds =
+                    SimpleDdgiNearFieldResidualEvidenceAbi
+                        .MaximumProductionP95Milliseconds + 0.001
+            };
+
+        SimpleDdgiNearFieldResidualPlan plan =
+            SimpleDdgiNearFieldResidualExperiment.CreatePlan(
+                configuration,
+                prerequisites,
+                evidence,
+                context);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Active, Is.False);
+            Assert.That(plan.Status,
+                Is.EqualTo("near-field-evidence-P95-GPU-budget-exceeded"));
+            Assert.That(plan.EvidenceValidation.FallbackReason,
+                Is.EqualTo(GiExperimentFallbackReason.QualificationNotPassed));
+            Assert.That(plan.Memory.AllCategoriesZero, Is.True);
+        });
+    }
+
+    [Test]
     public void C5_ActivePlanAttachesItsExactCategoriesToCentralContentMemory()
     {
         var prerequisites = new SimpleDdgiNearFieldResidualPrerequisites(
@@ -819,13 +853,13 @@ public sealed class GiRoadmapExperimentTests
         Assert.Multiple(() =>
         {
             Assert.That(defaults.GlobalIllumination
-                .SimpleDdgiDirectionalFogEnabled, Is.False);
+                .SimpleDdgiDirectionalFogEnabled, Is.True);
             Assert.That(defaults.GlobalIllumination
                 .DdgiOpacityMicromapExperimentEnabled, Is.True);
             Assert.That(defaults.GlobalIllumination
                 .DdgiRayTracingPipelineExperimentEnabled, Is.False);
             Assert.That(defaults.GlobalIllumination
-                .SimpleDdgiDirectionalRayGuidingExperimentEnabled, Is.True);
+                .SimpleDdgiDirectionalRayGuidingExperimentEnabled, Is.False);
             Assert.That(defaults.GlobalIllumination
                 .DdgiTaggedCausticCacheExperimentEnabled, Is.True);
             Assert.That(defaults.GlobalIllumination
@@ -1036,8 +1070,9 @@ public sealed class GiRoadmapExperimentTests
                 SimpleDdgiNearFieldResidualEvidenceAbi.MinimumReferenceFrameCount,
             IndependentRunCount:
                 SimpleDdgiNearFieldResidualEvidenceAbi.MinimumIndependentRunCount,
-            C5AddedMilliseconds: 1.00,
-            EqualCostAdditionalB3Milliseconds: 1.02,
+            C5AddedMilliseconds: 0.60,
+            C5P95Milliseconds: 0.70,
+            EqualCostAdditionalB3Milliseconds: 0.62,
             B3ConvergenceVerified: true,
             CpuOrImageSpaceOracleVerified: true,
             TraceSourceIndependenceVerified: true,

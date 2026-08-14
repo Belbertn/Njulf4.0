@@ -56,14 +56,14 @@ namespace Njulf.Rendering.Pipeline
 
         public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
         {
-            SurfaceHistoryConsumer consumers = ResolveHistoryConsumers();
+            SurfaceHistoryConsumer consumers = ResolveHistoryConsumers(sceneData);
             sceneData.SurfaceHistoryConsumers = consumers;
             return consumers.RequiresMotionVectors();
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            SurfaceHistoryConsumer consumers = ResolveHistoryConsumers();
+            SurfaceHistoryConsumer consumers = ResolveHistoryConsumers(sceneData);
             sceneData.SurfaceHistoryConsumers = consumers;
             if (!consumers.RequiresMotionVectors())
             {
@@ -213,7 +213,7 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 MeshletDrawCount = (uint)meshletCount,
                 MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
-                PreviousFrameValid = previousFrameValid ? 1u : 0u,
+                PreviousFrameValid = PackHistoryFlags(previousFrameValid, sceneData),
                 Time = sceneData.Time,
                 PreviousTime = previousTime
             };
@@ -260,7 +260,7 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 MeshletDrawCount = checked((uint)buffers.MeshletDrawCapacity),
                 MeshletDrawBufferBaseIndex = (uint)BindlessIndex.FoliageMeshletDrawBufferBase,
-                PreviousFrameValid = previousFrameValid ? 1u : 0u,
+                PreviousFrameValid = PackHistoryFlags(previousFrameValid, sceneData),
                 Time = sceneData.Time,
                 PreviousTime = previousTime
             };
@@ -365,9 +365,17 @@ namespace Njulf.Rendering.Pipeline
             return Stopwatch.GetElapsedTime(startTimestamp).Ticks / (TimeSpan.TicksPerMillisecond / 1000);
         }
 
-        private SurfaceHistoryConsumer ResolveHistoryConsumers() =>
-            _historyConsumers?.Invoke() ??
-            SurfaceHistoryPolicy.Resolve(_settings, nearFieldResidualActive: false);
+        private SurfaceHistoryConsumer ResolveHistoryConsumers(
+            SceneRenderingData sceneData) =>
+            (_historyConsumers?.Invoke() ??
+             SurfaceHistoryPolicy.Resolve(_settings, nearFieldResidualActive: false)) |
+            sceneData.DirectionalShadowFramePlan.HistoryConsumers;
+
+        private static uint PackHistoryFlags(
+            bool previousFrameValid,
+            SceneRenderingData sceneData) =>
+            (previousFrameValid ? 1u : 0u) |
+            (sceneData.DirectionalShadowFramePlan.UsesScreenHistory ? 2u : 0u);
 
         private static bool IsCameraCut(Matrix4x4 current, Matrix4x4 previous)
         {

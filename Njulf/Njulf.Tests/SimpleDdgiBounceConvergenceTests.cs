@@ -15,6 +15,24 @@ public sealed class SimpleDdgiBounceConvergenceTests
 {
     private const float ResidualThreshold = 0.025f;
 
+    [TestCase(true, EnvironmentSourceKind.ProceduralSky, true, true)]
+    [TestCase(true, EnvironmentSourceKind.ProceduralSky, false, false)]
+    [TestCase(true, EnvironmentSourceKind.HdrEquirectangular, true, false)]
+    [TestCase(false, EnvironmentSourceKind.ProceduralSky, true, false)]
+    public void AtmosphereSourceSweep_RequiresAnAnimatedProceduralSky(
+        bool environmentEnabled,
+        EnvironmentSourceKind sourceKind,
+        bool animateTimeOfDay,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ShouldUseSteppedAtmosphereSourcePolicy(
+                environmentEnabled,
+                sourceKind,
+                animateTimeOfDay),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(0.2f)]
     [TestCase(0.5f)]
     [TestCase(0.8f)]

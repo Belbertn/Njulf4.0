@@ -18,6 +18,8 @@ shared uint meshNegativeDeterminant;
 
 layout(location = 0) noperspective out vec2 meshCurrentUv[];
 layout(location = 1) noperspective out vec2 meshPreviousUv[];
+layout(location = 2) flat out uint meshReceiverSignature[];
+layout(location = 3) flat out uint meshHistoryFrameAndFlags[];
 
 layout(push_constant) uniform MotionVectorPushConstantBlock
 {
@@ -76,7 +78,15 @@ void main()
 
         gl_MeshVerticesEXT[vertexSlot].gl_Position = currentClip;
         meshCurrentUv[vertexSlot] = ClipToUv(currentClip);
-        meshPreviousUv[vertexSlot] = pc.Push.PreviousFrameValid != 0u ? ClipToUv(previousClip) : meshCurrentUv[vertexSlot];
+        meshPreviousUv[vertexSlot] = (pc.Push.PreviousFrameValid & 1u) != 0u
+            ? ClipToUv(previousClip)
+            : meshCurrentUv[vertexSlot];
+        meshReceiverSignature[vertexSlot] =
+            (command.InstanceId * 0x9e3779b9u) ^
+            (command.MaterialIndex * 0x85ebca6bu) ^ 0x51ed270bu;
+        meshHistoryFrameAndFlags[vertexSlot] =
+            (pc.Push.CurrentFrameIndex & 0xffu) |
+            ((pc.Push.PreviousFrameValid & 2u) << 7u);
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

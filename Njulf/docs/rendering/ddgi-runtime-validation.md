@@ -1,6 +1,6 @@
 # Simple DDGI Runtime Validation
 
-This checklist validates the active Simple DDGI implementation in runtime scenes. The retired full-DDGI scheduler and SSGI pipeline are not part of this validation.
+This checklist validates the active Simple DDGI implementation in runtime scenes. The retired full-DDGI scheduler and legacy SSGI pipeline are not part of this validation; the bounded C5 Hi-Z residual is the sole supported screen-space near-field path.
 
 ## Required Scenes
 
@@ -80,10 +80,11 @@ Keep scene, probe/source epochs, stochastic hash ABI, sampling-sequence epoch, c
 2. Enable only `ManyLightSampling`; cover zero locals, exact-threshold boundary, and tree mode independently. Repeat symmetric scenes under at least 100 deterministic packed-light permutations and compare the stochastic mean/confidence interval with the exact oracle.
 3. Enable only `DirectionalRadiance` in receiver-only mode. Run constant-field, isolated-basis, rotated-lobe, roughness-sweep, white-furnace, SSR, local-probe, and environment ownership captures. Diffuse output must remain equivalent to the disabled run.
 4. Enable `OneBounceGlossyTransport` only after receiver-only passes. Verify previous-generation parity, source-generation rejection, energy amplification, and monotonic convergence.
-5. Enable only `CurrentPoseGeometry`; exercise shared-mesh/different-pose identity, frame-slot reuse, topology rebuild, forced dynamic-AS budgets, and regional invalidation.
-6. Enable only `TransparentGeometry`; independently exercise alpha masks, stable stochastic blend, deterministic thin transmittance, layer/candidate overflow, decals, and unsupported thick refraction.
-7. Enable only `FoliageGeometry`; compare proxy integrated transmittance and bounced-color ROIs while moving the camera without changing world/probe inputs, then exercise wind cadence and forced triangle-budget exhaustion.
-8. Run the reviewed combined profile and reconcile aggregate GI/AS time and memory rather than granting each addition the entire frame budget.
+5. Enable `RecursiveGlossyTransport` only after one-bounce passes. Verify the four-byte/ray F0/roughness sidecar over every admitted region, identical solve/audit operator fingerprints, independent RGB contraction/tail bounds, source-generation rejection, and deterministic fallback to `OneBounce` on injected storage or audit failure.
+6. Enable only `CurrentPoseGeometry`; exercise shared-mesh/different-pose identity, frame-slot reuse, topology rebuild, forced dynamic-AS budgets, and regional invalidation.
+7. Enable only `TransparentGeometry`; independently exercise alpha masks, stable stochastic blend, deterministic thin transmittance, layer/candidate overflow, decals, and unsupported thick refraction.
+8. Enable only `FoliageGeometry`; compare proxy integrated transmittance and bounced-color ROIs while moving the camera without changing world/probe inputs, then exercise wind cadence and forced triangle-budget exhaustion.
+9. Run the reviewed combined profile and reconcile aggregate GI/AS time and memory rather than granting each addition the entire frame budget.
 
 For every directional run, require native pipeline creation for all three
 modules (`directional_prepare`, `directional_project`, and
@@ -95,7 +96,7 @@ predicate bits must all be zero. Also include a fully reverse-face/zero-support
 fixture: it must publish a checked zero-sample SH record, commit diffuse data,
 and leave directional reflection ownership at zero.
 
-`LegacyTopKReference`, `L1Reference`, and `RecursiveExperimental` require explicit validation authorization and must be visibly named in the capture. Never use them as an unreported production fallback.
+`LegacyTopKReference` and `L1Reference` require explicit validation authorization and must be visibly named in the capture. `RecursiveCertified` is an explicit opt-in production mode; it must report its sidecar and audit state and may fall back only to `OneBounce`, never to an unreported recursive implementation.
 
 For bounded sample runs, `--ddgi-content-conformance` (or
 `NJULF_RENDERER_DDGI_CONTENT_CONFORMANCE=true`) grants runtime-only
@@ -122,14 +123,15 @@ Probe overlays must retain the regular virtual lattice. Confirm that nonresident
 - Allocation-to-first-schedule and allocation-to-first-publication P50/P95/max.
 - Page/reverse disagreement, duplicate owners, stale virtual/mapping/resource requests, out-of-range requests, nonresident rejections, and coarser fallbacks.
 - In Shadow, predictor false negatives/positives, false-negative rate, inflation ratio, and the exported working-set/capacity simulation report.
-- Storage ABI/mode, canonical visibility bytes, cache bytes and rays by format, cache padding, scratch stride/bytes, and FP16-distance eligibility/rejection by volume.
+- Storage ABI/mode, canonical visibility bytes, cache bytes and rays by format, recursive glossy sidecar bytes/rays, cache padding, scratch stride/bytes, and FP16-distance eligibility/rejection by volume.
 - Mirror requested/eligible/admitted/provisioned probes, typed logical bytes, actual allocator bytes, excluded volume identities, mapping/allocation generations, and fallback reason.
 - Image hits, interior opportunities, seam/unmirrored/invalid-map fallbacks, cache non-finite/saturation/error maxima, and direction epoch/angular-error evidence from a detailed build.
 - Detailed validation-bank readback validity. Direction histogram cardinality must equal its sample count, and the reported P99 bound must remain finite even when samples reach the overflow bucket.
 - `ContentDependentDdgi` configured/active feature masks; every requested/effective mode pair; all fallback/migration reasons; light/tree/ray-scene/source/sampling revisions and ABI versions.
 - Light-tree action/reason, local/leaf/node/depth counts, full publication revisions/generation, readback pending/validation failures, exact planned/allocated/live/retired/peak bytes, and build/refit/reuse/bypass totals.
 - Many-light bypass/exact/tree hits, samples, duplicates, visibility/zero-term work, uniform repairs, invalid sample/PDF repairs, PDF statistics, maximum estimator weight, and exact-oracle comparison evidence.
-- Directional-radiance budget/planned/allocated/parity bytes, projection/receiver counters, roughness ownership, invalid/cross-generation rejection, negative reconstruction/clamp energy, and one-bounce convergence evidence.
+- Directional-radiance budget/planned/allocated/parity bytes, projection/receiver counters, roughness ownership, invalid/cross-generation rejection, negative reconstruction/clamp energy, one-bounce convergence evidence, and recursive per-channel contraction/tail evidence.
+- C5 active resolution, layout revision, joined stage-timing sample count, P50/P95, demotion/promotion count, rejected history/source counts, and exact independent memory categories. P95 above 0.75 ms must demote; half-resolution promotion requires sustained P95 at or below 0.45 ms and an admitted `AutoQualified` half profile.
 - GPU-resident accepted/committed/published/failed counts plus transaction predicate, missing-completion, producer-failure, and cache-read masks. The combined content profile must prove the trace-only many-light flag payload does not alter cached-solve first-color/sweep completion.
 - Ray-scene resource generation versus content epoch; current-pose/proxy/excluded counts; dynamic BLAS build/refit/topology/budget counts; storage/scratch/primitive/retired bytes; and BLAS/TLAS timing.
 - Stochastic-alpha, thin-layer, unsupported-material, decal association/overflow, and invalid-metadata counters.
@@ -164,7 +166,8 @@ Probe overlays must retain the regular virtual lattice. Confirm that nonresident
 - The one-sun/no-local run allocates and dispatches no light tree and remains within benchmark noise of the qualified baseline.
 - Exact local-light runs match the all-lights oracle. Tree runs retain every nonzero-support light, have finite positive PDFs, preserve duplicate draws, and place the brute-force result inside the predeclared 95% confidence interval with less than 1% measured residual bias.
 - Packed-light permutations do not change the statistical result; stale/partial tree publication is never consumed, and publication/PDF correctness counters remain zero outside deliberate fault injection.
-- L2 DC/basis/rotation and FP16 pack tests pass; DDGI rough ownership is zero below the approved band; source weights remain normalized; receiver-only leaves diffuse output equivalent; one-bounce passes the energy/convergence gate.
+- L2 DC/basis/rotation and FP16 pack tests pass; DDGI rough ownership is zero below the approved band; source weights remain normalized; receiver-only leaves diffuse output equivalent; one-bounce passes the energy/convergence gate; recursive transport passes the same-operator RGB audit or deterministically resolves to one-bounce.
+- C5 starts at quarter resolution in explicit mode, remains at or below 0.75 ms P95 on the RTX 3060 qualification run, demotes to eighth under pressure, and never promotes to half without both bound evidence and sustained timing headroom. Disabled or rejected C5 records no dispatches and composites exact canonical DDGI+B3.
 - Directional prepare/project/publish pipelines create natively on every target driver; a valid zero-sample record commits diffuse data but never claims reflection ownership; all scheduler transaction masks remain zero in the combined many-light profile.
 - Current-pose ray silhouettes follow both differently posed shared-mesh instances without bind-pose/stale-slot flashes. Ordinary pose/material/wind changes advance content epochs and bounded dirty regions without changing resource generation or globally clearing DDGI.
 - Alpha decisions replay identically, transparent visibility remains deterministic, decals never occlude, and sustained candidate/layer overflow is zero. Unsupported thick glass is visibly proxied or excluded.

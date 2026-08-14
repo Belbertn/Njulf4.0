@@ -41,9 +41,9 @@ public sealed class SimpleDdgiSchedulerSettingsTests
             Assert.That(gi.SimpleDdgiPersistentWarmStartEnabled, Is.True);
             Assert.That(gi.SimpleDdgiSchedulerReentryStableFrameCount, Is.EqualTo(120));
             Assert.That(gi.SimpleDdgiProbeResidencyMode,
-                Is.EqualTo(SimpleDdgiProbeResidencyMode.SparseNearRing));
-            Assert.That(gi.SimpleDdgiSparsePhysicalPageBudget, Is.EqualTo(960));
-            Assert.That(gi.SimpleDdgiSparseMinimumPhysicalPageBudget, Is.EqualTo(768));
+                Is.EqualTo(SimpleDdgiProbeResidencyMode.Dense));
+            Assert.That(gi.SimpleDdgiSparsePhysicalPageBudget, Is.Zero);
+            Assert.That(gi.SimpleDdgiSparseMinimumPhysicalPageBudget, Is.Zero);
             Assert.That(gi.SimpleDdgiSparseRetentionFrames, Is.EqualTo(120));
             Assert.That(gi.SimpleDdgiSparseMaximumAdmissionsPerFrame, Is.EqualTo(64));
             Assert.That(gi.SimpleDdgiSparseMaximumReceiverFeedbackRequests, Is.EqualTo(2_048));
@@ -53,7 +53,7 @@ public sealed class SimpleDdgiSchedulerSettingsTests
 
     [TestCase(DdgiQualityTier.DdgiLow, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
     [TestCase(DdgiQualityTier.DdgiMedium, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
-    [TestCase(DdgiQualityTier.DdgiHigh, SimpleDdgiProbeResidencyMode.SparseNearRing, 960, 768)]
+    [TestCase(DdgiQualityTier.DdgiHigh, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]
     [TestCase(DdgiQualityTier.DdgiUltra, SimpleDdgiProbeResidencyMode.SparseNearRing, 1_440, 1_152)]
     public void QualityTiersSelectExplicitResidencyPolicy(
         DdgiQualityTier tier,

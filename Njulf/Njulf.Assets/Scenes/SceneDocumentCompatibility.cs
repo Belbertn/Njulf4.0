@@ -33,6 +33,7 @@ internal static class SceneDocumentCompatibility
             Id = source.Id,
             Name = source.Name,
             AmbientLight = source.AmbientLight,
+            ImportedModelLightsEnabled = source.ImportedModelLightsEnabled,
             Objects = source.Objects.Select(MaterializeObject).ToList(),
             Lights = source.Lights.ToList(),
             ReflectionProbes = source.ReflectionProbes.ToList(),

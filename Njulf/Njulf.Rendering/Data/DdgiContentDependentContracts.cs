@@ -29,7 +29,15 @@ public enum SimpleDdgiGlossyTransportMode : uint
     Off = 0,
     ReceiverOnly = 1,
     OneBounce = 2,
-    RecursiveExperimental = 3
+    /// <summary>
+    /// Coupled diffuse and rough-glossy Jacobi transport. Admission requires
+    /// the recursive-glossy release feature in addition to the ordinary
+    /// directional-radiance and one-bounce feature gates.
+    /// </summary>
+    RecursiveCertified = 3,
+    /// <summary>Schema compatibility name for pre-certification settings.</summary>
+    [Obsolete("Use RecursiveCertified. Legacy requests are migrated on load.")]
+    RecursiveExperimental = RecursiveCertified
 }
 
 public enum DdgiSkinnedGeometryMode : uint
@@ -68,12 +76,14 @@ public enum DdgiContentFeature : uint
     FoliageGeometry = 1u << 3,
     DirectionalRadiance = 1u << 4,
     OneBounceGlossyTransport = 1u << 5,
+    RecursiveGlossyTransport = 1u << 6,
     All = ManyLightSampling |
         CurrentPoseGeometry |
         TransparentGeometry |
         FoliageGeometry |
         DirectionalRadiance |
-        OneBounceGlossyTransport
+        OneBounceGlossyTransport |
+        RecursiveGlossyTransport
 }
 
 public enum DdgiFeatureFallbackReason : uint
@@ -98,7 +108,21 @@ public enum DdgiFeatureFallbackReason : uint
 /// </summary>
 public sealed class DdgiContentRolloutPolicy
 {
-    private int _approvedFeatures;
+    /// <summary>
+    /// Features that have completed the device-independent production audit.
+    /// Recursive glossy transport remains separately qualified per device and
+    /// build because its coupled convergence certificate is hardware/shader
+    /// specific.
+    /// </summary>
+    public const DdgiContentFeature ProductionBaseline =
+        DdgiContentFeature.ManyLightSampling |
+        DdgiContentFeature.CurrentPoseGeometry |
+        DdgiContentFeature.TransparentGeometry |
+        DdgiContentFeature.FoliageGeometry |
+        DdgiContentFeature.DirectionalRadiance |
+        DdgiContentFeature.OneBounceGlossyTransport;
+
+    private int _approvedFeatures = unchecked((int)(uint)ProductionBaseline);
     private int _validationReferenceModesAuthorized;
 
     public DdgiContentFeature ApprovedFeatures =>
@@ -112,7 +136,9 @@ public sealed class DdgiContentRolloutPolicy
 
     public void UseQualifiedLegacyBaseline()
     {
-        Volatile.Write(ref _approvedFeatures, (int)DdgiContentFeature.None);
+        Volatile.Write(
+            ref _approvedFeatures,
+            unchecked((int)(uint)ProductionBaseline));
         Volatile.Write(ref _validationReferenceModesAuthorized, 0);
     }
 

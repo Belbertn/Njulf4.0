@@ -983,7 +983,11 @@ namespace Njulf.Assets
                 $"bounds={importer.CalculateBoundingBoxes}",
                 $"scale={importer.GlobalScale:R}",
                 $"flipWinding={importer.FlipWindingOrder}",
-                $"format={importer.PreferredFormat}");
+                $"format={importer.PreferredFormat}",
+                $"importLights={importer.ImportLights}",
+                $"defaultLightRange={importer.DefaultImportedLightRange:R}",
+                $"maximumLightRange={importer.MaximumImportedLightRange:R}",
+                $"lightCutoff={importer.ImportedLightAttenuationCutoff:R}");
         }
 
         private static string CreateCookedCacheKey<T>(

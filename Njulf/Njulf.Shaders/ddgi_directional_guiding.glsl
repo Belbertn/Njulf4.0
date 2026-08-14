@@ -6,7 +6,7 @@
 // C3 persistent/dispatched payload ABI.  Keep this in lock-step with
 // SimpleDdgiGuidingGpuContracts.cs.  A header/payload revision mismatch is a
 // hard fallback, never an opportunity to reinterpret old learned data.
-const uint SIMPLE_DDGI_GUIDING_ABI_VERSION = 0x43330008u;
+const uint SIMPLE_DDGI_GUIDING_ABI_VERSION = 0x43330009u;
 const uint SIMPLE_DDGI_GUIDING_HEADER_WORDS = 8u;
 const uint SIMPLE_DDGI_GUIDING_TRAINING_WORK_ITEM_WORDS = 14u;
 const uint SIMPLE_DDGI_GUIDING_BUILD_WORK_ITEM_WORDS = 12u;
@@ -165,8 +165,8 @@ struct SimpleDdgiGuidingSampleRequest
     uint technique;
     uint randomBranchBits;
     float requestedUniformFraction;
-    uint randomIntraLeafUBits;
-    uint randomIntraLeafVBits;
+    uint sourceEpoch;
+    uint sourceLightingGeneration;
     uint traceRayIndex;
 };
 
@@ -182,8 +182,8 @@ struct SimpleDdgiGuidingSamplePayload
     uint directionProposalEpoch;
     uint slotIndex;
     uint techniqueAndBranch;
-    uint leafIndex;
-    uint intraLeafSampleBits;
+    uint sourceEpoch;
+    uint sourceLightingGeneration;
     uint packedDirectionOct32;
     uint generationTimePdfBits;
     uint flags;

@@ -27,6 +27,14 @@ void main()
     SimpleDdgiReceiverFeedbackWriteHeader(
         SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_FLAGS, 0u);
     memoryBarrierBuffer();
+    // A zero version is the canonical no-measured-demand state. Clear the
+    // complete sidecar before starting this bank's new transaction.
+    for (uint word = 0u;
+         word < SIMPLE_DDGI_RECEIVER_FEEDBACK_REFINEMENT_WITNESS_WORDS;
+         ++word)
+    {
+        SimpleDdgiReceiverFeedbackWriteRefinementWitnessWord(word, 0u);
+    }
     SimpleDdgiReceiverFeedbackWriteHeader(
         SIMPLE_DDGI_RECEIVER_FEEDBACK_HEADER_LAYOUT_REVISION,
         SIMPLE_DDGI_RECEIVER_FEEDBACK_LAYOUT_REVISION);

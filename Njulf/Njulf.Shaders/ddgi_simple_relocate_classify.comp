@@ -179,12 +179,12 @@ void main()
 #if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
         bool guidingRecordPresent = false;
         SimpleDdgiGuidingTransportPayload guidingPayload;
-        bool guidingPayloadValid = TryReadSimpleDdgiGuidingTracePayload(
-            pc.RayResultScratchBufferIndex,
-            params.guidingTraceDirectionScratchOffsetWords,
+        bool guidingPayloadValid = TryReadSimpleDdgiGuidingTransportPayload(
             update.physicalProbeIndex,
             update.probeIndex,
             update.pageMappingGeneration,
+            update.sourceEpoch,
+            update.sourceLightingGeneration,
             uvec2(update.probeIndex, SimpleDdgiProbeGeneration(previous)),
             directionRayIndex,
             params.raysPerProbe,

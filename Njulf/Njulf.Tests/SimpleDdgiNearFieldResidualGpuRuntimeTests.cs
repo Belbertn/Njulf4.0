@@ -478,12 +478,12 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
         string trace = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_trace.comp"));
-        string temporal = File.ReadAllText(Path.Combine(shaderDirectory,
-            "ddgi_near_field_residual_temporal.comp"));
         string filter = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_filter.comp"));
         string composite = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_composite.comp"));
+        string temporal = File.ReadAllText(Path.Combine(shaderDirectory,
+            "ddgi_near_field_residual_temporal.comp"));
 
         Assert.Multiple(() =>
         {
@@ -507,7 +507,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
     }
 
     [Test]
-    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV6Contract()
+    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV10Contract()
     {
         string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
         string shared = File.ReadAllText(Path.Combine(shaderDirectory,
@@ -516,21 +516,51 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             "ddgi_near_field_residual_temporal.comp"));
         string reset = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_reset.comp"));
+        string trace = File.ReadAllText(Path.Combine(shaderDirectory,
+            "ddgi_near_field_residual_trace.comp"));
+        string filter = File.ReadAllText(Path.Combine(shaderDirectory,
+            "ddgi_near_field_residual_filter.comp"));
+        string composite = File.ReadAllText(Path.Combine(shaderDirectory,
+            "ddgi_near_field_residual_composite.comp"));
         string passSource = File.ReadAllText(Path.Combine(
             FindRepoDirectory("Njulf.Rendering"),
             "Pipeline",
             "SimpleDdgiNearFieldResidualPasses.cs"));
+        string runtimeSource = File.ReadAllText(Path.Combine(
+            FindRepoDirectory("Njulf.Rendering"),
+            "Resources",
+            "SimpleDdgiNearFieldResidualVulkanRuntime.cs"));
 
         Assert.Multiple(() =>
         {
-            Assert.That(shared, Does.Contain("0x43350006u"));
+            Assert.That(shared, Does.Contain("0x4335000au"));
+            Assert.That(shared, Does.Contain("uvec2 receiverIdentity;"));
+            Assert.That(shared, Does.Contain("uvec2 hitIdentity;"));
+            Assert.That(shared, Does.Not.Contain("uvec4 identity;"));
+            Assert.That(trace, Does.Contain("bool validMiss"));
+            Assert.That(trace, Does.Contain(
+                "persistent salt-and-pepper impulses"));
+            Assert.That(trace, Does.Contain("c5TileHit"));
+            Assert.That(trace, Does.Contain(
+                "metadata.receiverIdentity = receiverIds"));
+            Assert.That(trace, Does.Contain(
+                "failureFlags = C5_TRACE_REASON_NORMAL | C5_TRACE_REASON_MISS"));
             Assert.That(temporal, Does.Contain("historyValidityInput"));
             Assert.That(temporal, Does.Contain("historyMetadata"));
             Assert.That(temporal, Does.Contain("temporalMetadataOutput"));
             Assert.That(temporal, Does.Contain("temporalHistoryNormalOutput"));
             Assert.That(temporal, Does.Contain("SimpleDdgiNearFieldUnpackHistoryValidity"));
             Assert.That(temporal, Does.Contain("TryGetCurrentNeighbourhoodBounds"));
-            Assert.That(temporal, Does.Contain("previous.hitUv"));
+            Assert.That(temporal, Does.Contain(
+                "current.receiverIdentity"));
+            Assert.That(temporal, Does.Not.Contain("previous.hitUv"));
+            Assert.That(temporal, Does.Not.Contain(
+                "current.hitIdentity"));
+            Assert.That(temporal, Does.Contain(
+                "SimpleDdgiNearFieldTemporalEvidenceConfidence"));
+            Assert.That(filter, Does.Contain("effectiveSampleCount"));
+            Assert.That(filter, Does.Contain("spatialEvidence"));
+            Assert.That(composite, Does.Contain("correctionScale"));
             Assert.That(temporal, Does.Contain("outputHistoryLength"));
             Assert.That(temporal, Does.Contain("TemporalTileRecordsBuffer"));
             Assert.That(temporal, Does.Contain(
@@ -540,6 +570,24 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(reset, Does.Contain("SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION"));
             Assert.That(passSource, Does.Contain(
                 "images[3] = Sampled(validityRead, _bindlessHeap.HiZSampler)"));
+            Assert.That(runtimeSource, Does.Contain(
+                "return _frameAdmission && CanExecuteNoLock(sceneData);"));
+        });
+    }
+
+    [Test]
+    public void ReferenceConfigurationAccumulatesAStableSixtyFourSampleEstimate()
+    {
+        SimpleDdgiNearFieldResidualLayout layout = CreateLayout();
+        SimpleDdgiNearFieldResidualGpuConfiguration configuration =
+            CreateReferenceConfiguration(layout);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(configuration.TemporalBlend,
+                Is.EqualTo(63.0f / 64.0f));
+            Assert.That(configuration.MaximumHistoryLength, Is.EqualTo(64));
+            Assert.That(configuration.FilterRadius, Is.EqualTo(3));
         });
     }
 
@@ -556,7 +604,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(SimpleDdgiNearFieldResidualGpuAbi.Version,
-                Is.EqualTo(0x4335_0006u));
+                Is.EqualTo(0x4335_000Au));
             Assert.That(shared, Does.Match(
                 $@"const\s+uint\s+SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION\s*=\s*{Regex.Escape(abiLiteral)}\s*;"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualHitMetadata"));

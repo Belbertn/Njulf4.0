@@ -329,7 +329,7 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
             diagnostics.SimpleDdgiNearFieldResidual ??
             SimpleDdgiNearFieldResidualDiagnostics.Disabled();
         RenderAdvancedGiMode(
-            "C5 near-field residual",
+            "SSGI (C5 Hi-Z near-field residual)",
             roadmap.Modes.NearFieldResidual,
             c5.Readback.State.ToString(),
             c5.Memory.AllocatedBytes,
@@ -416,7 +416,24 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
                 : default;
             changed = true;
         }
-        ImGui.Separator();
+        ImGui.SeparatorText("Screen-space global illumination");
+        bool ssgiEnabled = selection.NearFieldResidualEnabled;
+        if (ImGui.Checkbox("Screen-space GI (SSGI)", ref ssgiEnabled))
+        {
+            selection = selection with
+            {
+                NearFieldResidualEnabled = ssgiEnabled
+            };
+            changed = true;
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(
+                "Enables the C5 Hi-Z screen-space near-field residual. It adds contact-scale indirect-light detail on top of DDGI. The renderer restarts to add or remove its trace, temporal, filter, and composite passes.");
+        }
+        ImGui.TextDisabled("C5 Hi-Z near-field residual; supplements DDGI.");
+
+        ImGui.SeparatorText("Other advanced GI features");
 
         bool receiverFeedback = selection.ReceiverFeedbackEnabled;
         if (ImGui.Checkbox("B1 exact receiver feedback", ref receiverFeedback))
@@ -463,20 +480,6 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         {
             ImGui.SetTooltip(
                 "The subsystem is enabled immediately; visible output requires an authored caustic hero material and an eligible light source.");
-        }
-        bool nearFieldResidual = selection.NearFieldResidualEnabled;
-        if (ImGui.Checkbox("C5 near-field residual", ref nearFieldResidual))
-        {
-            selection = selection with
-            {
-                NearFieldResidualEnabled = nearFieldResidual
-            };
-            changed = true;
-        }
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip(
-                "Uses the highest complete half-, quarter-, or eighth-resolution profile that fits the independent memory budget.");
         }
         if (!canRestart)
             ImGui.EndDisabled();

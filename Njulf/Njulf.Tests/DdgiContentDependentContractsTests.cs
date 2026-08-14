@@ -99,7 +99,7 @@ public sealed class DdgiContentDependentContractsTests
     }
 
     [Test]
-    public void HighPreset_RequestsQualifiedFeaturesButCannotSelfAuthorize()
+    public void HighPreset_UsesTheCachedDiffuseProductionBaseline()
     {
         var settings = new GlobalIlluminationSettings();
         settings.ApplyDdgiQualityTier(DdgiQualityTier.DdgiHigh);
@@ -109,15 +109,33 @@ public sealed class DdgiContentDependentContractsTests
             Assert.That(settings.SimpleDdgiLocalLightSamplingMode,
                 Is.EqualTo(SimpleDdgiLocalLightSamplingMode.Auto));
             Assert.That(settings.DdgiSkinnedGeometryMode,
-                Is.EqualTo(DdgiSkinnedGeometryMode.CurrentPose));
+                Is.EqualTo(DdgiSkinnedGeometryMode.ConservativeProxy));
+            Assert.That(settings.EffectiveDdgiSkinnedGeometryMode,
+                Is.EqualTo(DdgiSkinnedGeometryMode.ConservativeProxy));
             Assert.That(settings.SimpleDdgiDirectionalRadianceMode,
-                Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
+                Is.EqualTo(SimpleDdgiDirectionalRadianceMode.Off));
+            Assert.That(settings.ContentDependentRollout.ApprovedFeatures,
+                Is.EqualTo(DdgiContentRolloutPolicy.ProductionBaseline));
             Assert.That(settings.ActiveContentDependentFeatures,
-                Is.EqualTo(DdgiContentFeature.None));
+                Is.EqualTo(
+                    settings.ConfiguredContentDependentFeatures &
+                    DdgiContentRolloutPolicy.ProductionBaseline));
+            Assert.That(settings.ActiveContentDependentFeatures &
+                DdgiContentFeature.FoliageGeometry,
+                Is.EqualTo(DdgiContentFeature.None),
+                "The RTX 3060-oriented High tier keeps foliage proxies Ultra-only.");
             Assert.That(settings.EffectiveSimpleDdgiDirectionalRadianceMode,
                 Is.EqualTo(SimpleDdgiDirectionalRadianceMode.Off));
+            Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.Off));
         });
 
+        // The modes remain explicit opt-ins on High; this also retains the
+        // independent rollout-gate coverage below.
+        settings.SimpleDdgiDirectionalRadianceMode =
+            SimpleDdgiDirectionalRadianceMode.L2;
+        settings.SimpleDdgiGlossyTransportMode =
+            SimpleDdgiGlossyTransportMode.OneBounce;
         settings.EnableContentDependentFeaturesForConformance(
             DdgiContentFeature.ManyLightSampling |
             DdgiContentFeature.CurrentPoseGeometry |
@@ -134,19 +152,62 @@ public sealed class DdgiContentDependentContractsTests
     }
 
     [Test]
-    public void ShippingQualification_CannotPromoteRecursiveGlossyMode()
+    public void UltraPreset_RetainsDirectionalOneBounceTransport()
+    {
+        var settings = new GlobalIlluminationSettings();
+        settings.ApplyDdgiQualityTier(DdgiQualityTier.DdgiUltra);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.EffectiveSimpleDdgiDirectionalRadianceMode,
+                Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
+            Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.OneBounce));
+        });
+    }
+
+    [Test]
+    public void CertifiedTransport_UsesStableSkinnedProxy()
+    {
+        var settings = new GlobalIlluminationSettings
+        {
+            DdgiSkinnedGeometryMode = DdgiSkinnedGeometryMode.CurrentPose,
+            SimpleDdgiTransportV2Enabled = true,
+            SimpleDdgiTransportTailCertificationEnabled = true
+        };
+
+        Assert.That(settings.EffectiveDdgiSkinnedGeometryMode,
+            Is.EqualTo(DdgiSkinnedGeometryMode.ConservativeProxy));
+
+        settings.SimpleDdgiTransportTailCertificationEnabled = false;
+
+        Assert.That(settings.EffectiveDdgiSkinnedGeometryMode,
+            Is.EqualTo(DdgiSkinnedGeometryMode.CurrentPose));
+    }
+
+    [Test]
+    public void RecursiveGlossy_RequiresItsIndependentQualificationFlag()
     {
         var settings = new GlobalIlluminationSettings
         {
             SimpleDdgiDirectionalRadianceMode = SimpleDdgiDirectionalRadianceMode.L2,
-            SimpleDdgiGlossyTransportMode = SimpleDdgiGlossyTransportMode.RecursiveExperimental
+            SimpleDdgiGlossyTransportMode =
+                SimpleDdgiGlossyTransportMode.RecursiveCertified
         };
         settings.ApplyContentDependentReleaseQualification(
             DdgiContentFeature.DirectionalRadiance |
             DdgiContentFeature.OneBounceGlossyTransport);
 
         Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,
-            Is.EqualTo(SimpleDdgiGlossyTransportMode.ReceiverOnly));
+            Is.EqualTo(SimpleDdgiGlossyTransportMode.OneBounce));
+
+        settings.ApplyContentDependentReleaseQualification(
+            DdgiContentFeature.DirectionalRadiance |
+            DdgiContentFeature.OneBounceGlossyTransport |
+            DdgiContentFeature.RecursiveGlossyTransport);
+
+        Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,
+            Is.EqualTo(SimpleDdgiGlossyTransportMode.RecursiveCertified));
     }
 
     [Test]
@@ -248,11 +309,14 @@ public sealed class DdgiContentDependentContractsTests
     public void ContentMemoryPlan_HasZeroCostBypassAndExactDirectionalParity()
     {
         var settings = new GlobalIlluminationSettings();
-        settings.ApplyDdgiQualityTier(DdgiQualityTier.DdgiHigh);
+        settings.ApplyDdgiQualityTier(DdgiQualityTier.DdgiUltra);
         settings.EnableContentDependentFeaturesForConformance(
             DdgiContentFeature.ManyLightSampling |
             DdgiContentFeature.DirectionalRadiance |
             DdgiContentFeature.OneBounceGlossyTransport);
+
+        settings.SimpleDdgiGlossyTransportMode =
+            SimpleDdgiGlossyTransportMode.ReceiverOnly;
 
         SimpleDdgiContentMemoryPlan noLocals = SimpleDdgiContentMemoryPlan.Compile(
             settings,

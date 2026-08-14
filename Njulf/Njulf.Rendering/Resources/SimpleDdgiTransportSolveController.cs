@@ -15,7 +15,8 @@ public enum SimpleDdgiTailCertificationFallbackReason : byte
     DisabledByConfiguration = 1,
     RequiresGpuResidentScheduler = 2,
     GpuSchedulerNotReady = 3,
-    GpuSchedulerFrameExecutionUnavailable = 4
+    GpuSchedulerFrameExecutionUnavailable = 4,
+    GuidedOperatorUnsupported = 5
 }
 
 public readonly record struct SimpleDdgiTailCertificationAvailability(
@@ -33,6 +34,8 @@ public readonly record struct SimpleDdgiTailCertificationAvailability(
             "Tail certification is pending because the GpuResident scheduler resources are not ready.",
         SimpleDdgiTailCertificationFallbackReason.GpuSchedulerFrameExecutionUnavailable =>
             "Tail certification is disabled because GpuResident scheduler frame execution is unavailable.",
+        SimpleDdgiTailCertificationFallbackReason.GuidedOperatorUnsupported =>
+            "Tail certification is disabled because directional guiding is active but the matching guided audit operator is unavailable.",
         _ => "Tail certification is unavailable for an unknown reason."
     };
 }
@@ -118,7 +121,9 @@ public sealed class SimpleDdgiTransportSolveController
         bool requested,
         SimpleDdgiSchedulerMode schedulerMode,
         bool gpuSchedulerReady,
-        bool gpuSchedulerFrameExecutionAvailable)
+        bool gpuSchedulerFrameExecutionAvailable,
+        bool guidedTransportActive = false,
+        bool guidedAuditAvailable = false)
     {
         if (!requested)
         {
@@ -146,6 +151,13 @@ public sealed class SimpleDdgiTransportSolveController
             return new SimpleDdgiTailCertificationAvailability(
                 false,
                 SimpleDdgiTailCertificationFallbackReason.GpuSchedulerFrameExecutionUnavailable);
+        }
+
+        if (guidedTransportActive && !guidedAuditAvailable)
+        {
+            return new SimpleDdgiTailCertificationAvailability(
+                false,
+                SimpleDdgiTailCertificationFallbackReason.GuidedOperatorUnsupported);
         }
 
         return new SimpleDdgiTailCertificationAvailability(
