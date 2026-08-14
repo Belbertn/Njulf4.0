@@ -229,6 +229,26 @@ public sealed class SimpleDdgiBounceConvergenceTests
             Is.EqualTo(expected));
     }
 
+    [TestCase(true, 3_292u, 3_292, false, false)]
+    [TestCase(true, 3_292u, 3_292, true, true)]
+    [TestCase(false, 3_292u, 3_292, false, true)]
+    [TestCase(false, 3_291u, 3_292, false, false)]
+    public void CertifiedPeriodicSourceRefresh_DoesNotOvertakeInitialConvergence(
+        bool globalPending,
+        uint elapsed,
+        int refreshFrames,
+        bool periodicRefreshWaveMember,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ShouldRefreshCertifiedTransportSource(
+                globalPending,
+                elapsed,
+                refreshFrames,
+                periodicRefreshWaveMember),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(1, 16)]
     [TestCase(8, 128)]
     [TestCase(64, 255)]

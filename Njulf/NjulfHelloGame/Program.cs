@@ -8,6 +8,7 @@ using Njulf.Core.Scene;
 using Njulf.Input;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
@@ -327,6 +328,10 @@ internal sealed class HelloGame : Game
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
             SampleAssetValidationGate.Validate(AppContext.BaseDirectory, AssetManifest);
         SampleInputController.Configure(input);
+        Console.WriteLine(
+            "Debug overlays: Ctrl+Keypad9/Ctrl+Num9 forward, add Shift for reverse; " +
+            "cycle=" + string.Join(" -> ", DebugOverlayCatalog.ActiveCycle.Select(
+                static descriptor => descriptor.DisplayName)) + ".");
         PrintRendererDeviceInfo(renderer);
         Model model = LoadSampleScene(meshManager, materialManager, lightManager);
         _performanceScenarioRunner = CreatePerformanceScenarioRunner(meshManager, materialManager, lightManager);
@@ -1322,6 +1327,14 @@ internal sealed class HelloGame : Game
             SampleReflectionProbes.Configure(Scene);
             SampleAnimatedCharacter.Configure(Scene, Content!);
         }
+        TextureManager sponzaTextureManager = Services?.GetRequiredService<TextureManager>()
+            ?? throw new InvalidOperationException(
+                "The Sponza C5 emissive test sphere requires the renderer TextureManager.");
+        SampleSponzaNearFieldResidualTestSphere.Configure(
+            Scene,
+            meshManager,
+            materialManager,
+            sponzaTextureManager);
         meshManager.CompactStaticBuffers();
         return model;
     }

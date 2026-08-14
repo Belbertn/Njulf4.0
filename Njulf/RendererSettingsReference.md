@@ -813,12 +813,12 @@ Meshes without authored LOD1/LOD2 meshlet ranges safely remain on their availabl
 | Setting | Purpose |
 | --- | --- |
 | `Enabled` | Enables debug tooling. |
-| `Mode` | Active debug overlay mode. |
-| `ShowLabels` | Shows debug labels. |
+| `Mode` | Stable debug-overlay identity. Active/retired status, renderer ownership, legend, and CPU-snapshot policy come from `DebugOverlayCatalog`. |
+| `ShowLabels` | Ignored legacy property retained for settings-file compatibility; overlay legends are reported through diagnostics. |
 | `ShowDepthTestedVolumes` | Shows depth-tested debug volumes. |
 | `ShowXRayVolumes` | Shows x-ray debug volumes. |
 | `SelectedObjectIndex` | Selected object index. |
-| `SelectedLightIndex` | Selected light index. |
+| `SelectedLightIndex` | Ignored legacy property retained for settings-file compatibility; no active overlay selects one light. |
 | `SelectedReflectionProbeIndex` | Selected reflection probe index. |
 | `AllowGpuTiming` | Allows GPU timing collection. |
 | `AllowScreenshots` | Allows screenshot requests. |
@@ -826,19 +826,41 @@ Meshes without authored LOD1/LOD2 meshlet ranges safely remain on their availabl
 | `CpuSnapshotsEnabled` | Enables CPU debug snapshots. |
 | `MaxDebugLineSegments` | Debug line segment budget. |
 
-Debug overlay modes:
+The active `Ctrl+Keypad9` (`Ctrl+Num9`) cycle is:
 
 - `None`
 - `LightTiles`
 - `DirectionalShadowCascades`
 - `ReflectionProbeVolumes`
+- `DdgiProbeVolumes`
+- `DdgiProbeSpheres`
+- `DdgiProbeActivity`
+- `DdgiUpdatedProbes`
+- `DdgiProbeRelocation`
+- `DdgiProbeAge`
+- `DdgiPhysicalSlots`
+- `DdgiCascadeBounds`
+- `DdgiNewlyExposedCells`
+- `DdgiFrustumPriority` (displayed as **DDGI scheduler priority**)
+- `DdgiUpdateReasons`
 - `DecalVolumes`
 - `ObjectBounds`
 - `MeshletBounds`
 - `SelectedObject`
-- `MaterialInspection`
-- `PassTimings`
-- `GpuMemory`
+
+`Ctrl+Shift+Keypad9` traverses the same list in reverse. The persisted enum
+values `MaterialInspection`, `PassTimings`, `GpuMemory`, `DdgiSafetyRefresh`,
+and `DdgiCascadeBlend` remain readable but are retired from this world-overlay
+cycle. Their catalog guidance points to `/` or `Ctrl+K`, `Ctrl+F4`, diagnostic
+snapshots, DDGI update reasons, and the screen-space GI cascade-blend view.
+
+Each selected mode publishes a `DebugOverlayFrameStatus` with `Rendered`,
+`NoData`, `Unavailable`, `Retired`, or `Disabled`, item/drop counts, and a
+reason for every empty result. DDGI probe modes use a bounded 768-instance GPU
+path and fence-complete counters; debug resources are created lazily only when
+one of those modes executes. Completed GPU timestamps expose the DDGI-probe and
+Forward+ light-tile passes separately, with their sum retained as the aggregate
+debug-overlay timing.
 
 ## Performance Budgets
 
@@ -887,7 +909,7 @@ These are the renderer-related controls wired in `SampleInputController`.
 | Control | Default key | Effect |
 | --- | --- | --- |
 | Toggle shadows | `F1` | Toggle directional shadows. |
-| Cycle shadow debug | `F2` | Cycle shadow debug view. |
+| Cycle shadow debug | `F2` | Cycle the receiver-space shadow ownership/debug view. `DirectionalShadowCascades` in the overlay cycle instead draws world-space light frusta. |
 | Cycle shadow cascade count | `F3` | Cycle directional cascade count. |
 | Cycle tone mapper | `F4` | Cycle tone mapper. |
 | Toggle bloom | `F5` | Toggle bloom. |
@@ -968,5 +990,6 @@ Control-modified chords are also used by the sample:
 | `Ctrl+Y` | Cycle GI mode: disabled or Simple DDGI. |
 | `Ctrl+Backspace` | Clear GI debug view. |
 | `Ctrl+Keypad0` | Store diagnostic output JSON and a window screenshot with matching base filenames in `DiagnosticSnapshots`, and enable CPU snapshots for object/material inspection. |
-| `Ctrl+Keypad9` | Cycle debug overlay mode, including DDGI probe volume/activity/update overlays. |
+| `Ctrl+Keypad9` (`Ctrl+Num9`) | Traverse the catalogued debug-overlay cycle forward. |
+| `Ctrl+Shift+Keypad9` (`Ctrl+Shift+Num9`) | Traverse the same debug-overlay cycle in reverse. |
 | `Ctrl+Left` / `Ctrl+Right` | Select previous/next debug object. |

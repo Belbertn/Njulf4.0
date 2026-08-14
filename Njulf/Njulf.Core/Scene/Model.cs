@@ -85,6 +85,8 @@ namespace Njulf.Core.Scene
                                 skinned.LocalMeshBounds,
                             AssetReference =
                                 skinned.AssetReference,
+                            PersistInSceneDocument =
+                                skinned.PersistInSceneDocument,
                             SkinnedVertexOffset =
                                 skinned.SkinnedVertexOffset,
                             SkinningEnabled =
@@ -107,6 +109,8 @@ namespace Njulf.Core.Scene
                                 renderObject.LocalMeshBounds,
                             AssetReference =
                                 renderObject.AssetReference,
+                            PersistInSceneDocument =
+                                renderObject.PersistInSceneDocument,
                             Name = renderObject.Name,
                             WorldMatrix = renderObject.WorldMatrix,
                             Visible = renderObject.Visible,

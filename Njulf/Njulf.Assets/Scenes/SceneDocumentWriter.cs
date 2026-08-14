@@ -25,7 +25,10 @@ public sealed class SceneDocumentWriter
             AmbientLight = ToSceneColor(scene.AmbientLight),
             ImportedModelLightsEnabled =
                 importedLights?.ImportedModelLightsEnabled ?? false,
-            Objects = scene.RenderObjects.Select(item => ToObject(item, dependencies, materials)).ToList(),
+            Objects = scene.RenderObjects
+                .Where(static item => item.PersistInSceneDocument)
+                .Select(item => ToObject(item, dependencies, materials))
+                .ToList(),
             ReflectionProbes = scene.ReflectionProbes.Select(ToReflectionProbe).ToList(),
             GiProbeVolumes = scene.GlobalIlluminationProbeVolumes.Select(ToGiProbeVolume).ToList(),
             InstanceBatches = scene.StaticInstanceBatches.Select(item => ToInstanceBatch(item, dependencies)).ToList(),

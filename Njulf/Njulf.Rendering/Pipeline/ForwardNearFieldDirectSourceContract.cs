@@ -41,7 +41,8 @@ public static class ForwardNearFieldDirectSourceContract
     // The first graph-supported profile is deliberately frozen.  A different
     // trace distance or B3 footprint is a new semantic shader/profile ABI, not
     // a silent runtime reinterpretation of these MRT values.
-    public const float ReferenceMaximumTraceDistance = 4.0f;
+    public const float ReferenceFullWeightTraceDistance = 4.0f;
+    public const float ReferenceMaximumTraceDistance = 8.0f;
     public const float ReferenceB3WorldFootprintRadius = 0.25f;
 
     public const string OpaqueFragmentShader =

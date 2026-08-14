@@ -582,6 +582,9 @@ bool EvaluateCandidate(
         pc.maximumTraceDistance <= 0.0 ||
         pc.maximumTraceDistance >
             SIMPLE_DDGI_NEAR_FIELD_MAX_ENCODED_TRACE_DISTANCE ||
+        !SimpleDdgiNearFieldFinite(pc.fullWeightTraceDistance) ||
+        pc.fullWeightTraceDistance <= 0.0 ||
+        pc.fullWeightTraceDistance >= pc.maximumTraceDistance ||
         !C5Finite(traceFrameConstants.frame.fullExtentAndInverse) ||
         traceFrameConstants.frame.fullExtentAndInverse.x != float(pc.fullWidth) ||
         traceFrameConstants.frame.fullExtentAndInverse.y != float(pc.fullHeight) ||
@@ -784,10 +787,17 @@ bool EvaluateCandidate(
         : clamp(1.0 - abs(hitRayDepth - hitSceneDepth) /
             pc.depthTolerance, 0.0, 1.0);
     float normalConfidence = clamp(hitFrontFaceCosine, 0.0, 1.0);
+    float hitDistance = length(hitWorldPosition - receiverWorldPosition);
+    float distanceWeight = 1.0 - smoothstep(
+        pc.fullWeightTraceDistance,
+        pc.maximumTraceDistance,
+        hitDistance);
     confidence = depthConfidence * normalConfidence;
-    nearEstimate = directAtHit * receiverThroughput;
-    lowEstimate = directLowFrequency * receiverThroughput;
+    nearEstimate = directAtHit * receiverThroughput * distanceWeight;
+    lowEstimate = directLowFrequency * receiverThroughput * distanceWeight;
     if (!SimpleDdgiNearFieldFinite(confidence) || confidence <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(hitDistance) ||
+        !SimpleDdgiNearFieldFinite(distanceWeight) ||
         !SimpleDdgiNearFieldFinite(nearEstimate) ||
         !SimpleDdgiNearFieldFinite(lowEstimate))
     {

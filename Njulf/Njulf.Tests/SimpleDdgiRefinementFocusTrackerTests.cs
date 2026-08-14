@@ -63,7 +63,15 @@ public sealed class SimpleDdgiRefinementFocusTrackerTests
             cameraCutSerial: 2,
             sceneContentRevision: 11,
             replacementWitness);
-        Vector3 beyondThreshold = tracker.Resolve(
+        Vector3 transitionFrame = tracker.Resolve(
+            new Vector3(1.1f, 0f, -1f),
+            new Vector3(1.1f, 0f, 0f),
+            Vector3.Forward,
+            1f,
+            cameraCutSerial: 2,
+            sceneContentRevision: 11,
+            replacementWitness);
+        Vector3 afterFreshFeedback = tracker.Resolve(
             new Vector3(1.1f, 0f, -1f),
             new Vector3(1.1f, 0f, 0f),
             Vector3.Forward,
@@ -75,7 +83,8 @@ public sealed class SimpleDdgiRefinementFocusTrackerTests
         Assert.Multiple(() =>
         {
             Assert.That(belowThreshold, Is.EqualTo(initialWitness));
-            Assert.That(beyondThreshold, Is.EqualTo(replacementWitness));
+            Assert.That(transitionFrame, Is.EqualTo(initialWitness));
+            Assert.That(afterFreshFeedback, Is.EqualTo(replacementWitness));
         });
     }
 

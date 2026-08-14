@@ -68,6 +68,31 @@ public sealed class SceneDocumentTests
     }
 
     [Test]
+    public void Writer_OmitsExplicitRuntimeOnlyObjectsWithoutWeakeningAssetValidation()
+    {
+        var scene = new Scene();
+        scene.Add(new RenderObject
+        {
+            Name = "Runtime diagnostic",
+            PersistInSceneDocument = false
+        });
+
+        SceneDocument document = new SceneDocumentWriter().CreateDocument(scene);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(document.Objects, Is.Empty);
+            Assert.That(document.Dependencies, Is.Empty);
+        });
+
+        scene.Add(new RenderObject { Name = "Unbacked authored object" });
+        Assert.That(
+            () => new SceneDocumentWriter().CreateDocument(scene),
+            Throws.InvalidOperationException.With.Message.Contains(
+                "has no source asset reference"));
+    }
+
+    [Test]
     public void Read_RejectsUnknownSchemaAndIgnoresForwardFields()
     {
         string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.njscene.json");

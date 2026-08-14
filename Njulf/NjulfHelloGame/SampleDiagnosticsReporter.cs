@@ -45,6 +45,11 @@ internal sealed class SampleDiagnosticsReporter
     private int _stillPayloadRebuilds;
     private ulong _movingUploadedBytes;
     private ulong _stillUploadedBytes;
+    private bool _hasLastDebugOverlayStatus;
+    private DebugOverlayMode _lastDebugOverlayMode;
+    private DebugOverlayAvailability _lastDebugOverlayAvailability;
+    private string _lastDebugOverlayReason = string.Empty;
+    private int _lastDebugDdgiGpuCountersValid;
 
     public SampleDiagnosticsReporter(
         MaterialManager materialManager,
@@ -139,6 +144,7 @@ internal sealed class SampleDiagnosticsReporter
             return;
 
         RendererDiagnostics diagnostics = vulkanRenderer.LastDiagnostics;
+        PrintDebugOverlayTransition(diagnostics);
         if (_filter == SampleDiagnosticsFilter.DdgiOnly)
         {
             _diagnosticFrameCounter++;
@@ -639,6 +645,94 @@ internal sealed class SampleDiagnosticsReporter
             $"{nearFieldResidual.Tiles.CandidateTileCount}/" +
             $"{nearFieldResidual.Tiles.OverflowTileCount}, " +
             $"status='{nearFieldResidual.Readback.Reason}'.");
+    }
+
+    private void PrintDebugOverlayTransition(RendererDiagnostics diagnostics)
+    {
+        DebugOverlayFrameStatus status = diagnostics.DebugOverlayStatus;
+        bool changed = !_hasLastDebugOverlayStatus ||
+            status.Mode != _lastDebugOverlayMode ||
+            status.Availability != _lastDebugOverlayAvailability ||
+            diagnostics.DebugDdgiGpuCountersValid !=
+                _lastDebugDdgiGpuCountersValid ||
+            !string.Equals(status.Reason, _lastDebugOverlayReason, StringComparison.Ordinal);
+        if (!changed)
+            return;
+
+        _hasLastDebugOverlayStatus = true;
+        _lastDebugOverlayMode = status.Mode;
+        _lastDebugOverlayAvailability = status.Availability;
+        _lastDebugOverlayReason = status.Reason;
+        _lastDebugDdgiGpuCountersValid = diagnostics.DebugDdgiGpuCountersValid;
+
+        string displayName = DebugOverlayCatalog.TryGet(status.Mode, out DebugOverlayDescriptor descriptor)
+            ? descriptor.DisplayName
+            : $"unknown ({(uint)status.Mode})";
+        string availability = status.Availability.ToString().ToLowerInvariant();
+        string reason = string.IsNullOrWhiteSpace(status.Reason)
+            ? string.Empty
+            : $" ({status.Reason})";
+        Console.WriteLine(
+            $"Debug overlay: {displayName} — {availability}{reason}; " +
+            $"items={status.PrimaryItemCount}/{status.SecondaryItemCount}, " +
+            $"dropped={status.DroppedItemCount}, " +
+            $"cpuRecord={diagnostics.CpuDebugOverlayRecordMicroseconds}us, " +
+            $"gpu(ddgi/tile)={diagnostics.GpuDebugDdgiProbeMicroseconds}/" +
+            $"{diagnostics.GpuDebugLightTileMicroseconds}us");
+        if (descriptor != null && !string.IsNullOrWhiteSpace(descriptor.Legend))
+            Console.WriteLine($"Debug overlay legend: {descriptor.Legend}.");
+        if (descriptor?.RendererKind == DebugOverlayRendererKind.DdgiProbe)
+        {
+            Console.WriteLine(diagnostics.DebugDdgiGpuCountersValid != 0
+                ? $"Debug overlay GPU counters (fence-complete): " +
+                  $"drawn/filtered/nonresident/stale/stateUnavailable/invalidTx=" +
+                  $"{diagnostics.DebugDdgiProbeMarkersDrawn}/" +
+                  $"{diagnostics.DebugDdgiProbeMarkersFiltered}/" +
+                  $"{diagnostics.DebugDdgiNonresidentMarkers}/" +
+                  $"{diagnostics.DebugDdgiStaleMappings}/" +
+                  $"{diagnostics.DebugDdgiStateUnavailableMarkers}/" +
+                  $"{diagnostics.DebugDdgiInvalidTransactions}."
+                : "Debug overlay GPU counters: awaiting a matching fence-complete frame.");
+
+            if (status.Mode == DebugOverlayMode.DdgiUpdateReasons &&
+                diagnostics.DebugDdgiGpuCountersValid != 0)
+            {
+                Console.WriteLine(
+                    $"Debug overlay update reasons: " +
+                    FormatDebugDdgiUpdateReasons(
+                        diagnostics.DebugDdgiUpdateReasonCounts));
+            }
+        }
+    }
+
+    private static string FormatDebugDdgiUpdateReasons(
+        DebugDdgiUpdateReasonCounts counts)
+    {
+        var values = new List<string>(17);
+        Add("fresh", counts.FreshCount);
+        Add("scroll", counts.ScrollExposedCount);
+        Add("regional", counts.RegionalDirtyCount);
+        Add("global", counts.GlobalDirtyCount);
+        Add("visible", counts.VisibleCount);
+        Add("retry", counts.RetryCount);
+        Add("relocation", counts.RelocationRetryCount);
+        Add("sourceInvalid", counts.SourceCacheInvalidCount);
+        Add("routine", counts.RoutineDueCount);
+        Add("convergence", counts.ConvergencePendingCount);
+        Add("inactive", counts.InactiveRetryCount);
+        Add("topology", counts.TopologyCount);
+        Add("pageCohort", counts.VisiblePageCohortCount);
+        Add("relight", counts.RadiometricRelightCount);
+        Add("segment", counts.SegmentSelectiveCount);
+        Add("residual", counts.ResidualPropagationCount);
+        Add("multi", counts.MultiReasonCount);
+        return values.Count == 0 ? "none" : string.Join(", ", values);
+
+        void Add(string name, uint value)
+        {
+            if (value != 0)
+                values.Add($"{name}={value}");
+        }
     }
 
     private static string FormatExperiment(GiExperimentAdmission admission) =>

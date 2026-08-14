@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
@@ -12,8 +11,6 @@ namespace NjulfHelloGame;
 
 internal static class SampleMaterialShowcaseScene
 {
-    private const int LatitudeSegments = 24;
-    private const int LongitudeSegments = 48;
     private const float SphereRadius = 0.45f;
     private const float SphereCenterY = 0.62f;
 
@@ -48,7 +45,9 @@ internal static class SampleMaterialShowcaseScene
         scene.AmbientLight = new Njulf.Core.Math.Color(0.055f, 0.06f, 0.07f, 1f);
 
         MeshHandle floorMesh = meshManager.RegisterMesh(CreateFloorVertices(), CreateFloorIndices());
-        MeshHandle sphereMesh = meshManager.RegisterMesh(CreateSphereVertices(), CreateSphereIndices());
+        MeshHandle sphereMesh = meshManager.RegisterMesh(
+            SampleUvSphereMesh.CreateVertices(),
+            SampleUvSphereMesh.CreateIndices());
 
         scene.Add(new ReflectionProbe
         {
@@ -455,35 +454,6 @@ internal static class SampleMaterialShowcaseScene
             MaterialBlendMode.Additive or
             MaterialBlendMode.Multiply;
 
-    private static GPUVertex[] CreateSphereVertices()
-    {
-        var vertices = new List<GPUVertex>(2 + (LatitudeSegments - 1) * LongitudeSegments);
-        vertices.Add(CreateSphereVertex(CoreVector3.UnitY, 0f, 0f));
-
-        for (int latitude = 1; latitude < LatitudeSegments; latitude++)
-        {
-            float v = (float)latitude / LatitudeSegments;
-            float theta = v * MathF.PI;
-            float y = MathF.Cos(theta);
-            float ringRadius = MathF.Sin(theta);
-
-            for (int longitude = 0; longitude < LongitudeSegments; longitude++)
-            {
-                float u = (float)longitude / LongitudeSegments;
-                float phi = u * MathF.Tau;
-                var normal = new CoreVector3(
-                    ringRadius * MathF.Cos(phi),
-                    y,
-                    ringRadius * MathF.Sin(phi));
-
-                vertices.Add(CreateSphereVertex(normal, u, v));
-            }
-        }
-
-        vertices.Add(CreateSphereVertex(CoreVector3.Down, 0f, 1f));
-        return vertices.ToArray();
-    }
-
     private static GPUVertex[] CreateFloorVertices()
     {
         const float halfWidth = 4.4f;
@@ -502,80 +472,6 @@ internal static class SampleMaterialShowcaseScene
     private static uint[] CreateFloorIndices()
     {
         return [0u, 2u, 1u, 0u, 3u, 2u];
-    }
-
-    private static uint[] CreateSphereIndices()
-    {
-        var indices = new List<uint>(LatitudeSegments * LongitudeSegments * 6);
-        uint topIndex = 0;
-        uint bottomIndex = (uint)(1 + (LatitudeSegments - 1) * LongitudeSegments);
-
-        for (int longitude = 0; longitude < LongitudeSegments; longitude++)
-        {
-            uint firstRingCurrent = RingVertexIndex(0, longitude);
-            uint firstRingNext = RingVertexIndex(0, longitude + 1);
-            indices.Add(topIndex);
-            indices.Add(firstRingNext);
-            indices.Add(firstRingCurrent);
-        }
-
-        for (int latitude = 0; latitude < LatitudeSegments - 2; latitude++)
-        {
-            for (int longitude = 0; longitude < LongitudeSegments; longitude++)
-            {
-                uint upperCurrent = RingVertexIndex(latitude, longitude);
-                uint upperNext = RingVertexIndex(latitude, longitude + 1);
-                uint lowerCurrent = RingVertexIndex(latitude + 1, longitude);
-                uint lowerNext = RingVertexIndex(latitude + 1, longitude + 1);
-
-                indices.Add(upperCurrent);
-                indices.Add(upperNext);
-                indices.Add(lowerCurrent);
-
-                indices.Add(upperNext);
-                indices.Add(lowerNext);
-                indices.Add(lowerCurrent);
-            }
-        }
-
-        int lastRing = LatitudeSegments - 2;
-        for (int longitude = 0; longitude < LongitudeSegments; longitude++)
-        {
-            uint lastRingCurrent = RingVertexIndex(lastRing, longitude);
-            uint lastRingNext = RingVertexIndex(lastRing, longitude + 1);
-            indices.Add(bottomIndex);
-            indices.Add(lastRingCurrent);
-            indices.Add(lastRingNext);
-        }
-
-        return indices.ToArray();
-    }
-
-    private static uint RingVertexIndex(int ring, int longitude)
-    {
-        int wrappedLongitude = longitude % LongitudeSegments;
-        if (wrappedLongitude < 0)
-            wrappedLongitude += LongitudeSegments;
-
-        return (uint)(1 + ring * LongitudeSegments + wrappedLongitude);
-    }
-
-    private static GPUVertex CreateSphereVertex(CoreVector3 normal, float u, float v)
-    {
-        float phi = u * MathF.Tau;
-        var tangent = new CoreVector3(-MathF.Sin(phi), 0f, MathF.Cos(phi));
-
-        return new GPUVertex
-        {
-            Position = normal,
-            Padding0 = 0f,
-            Normal = normal,
-            Padding1 = 0f,
-            TexCoord = new CoreVector2(u, v),
-            TexCoord2 = CoreVector2.Zero,
-            Tangent = new CoreVector4(tangent, 1f),
-            Color = GPUVertex.DefaultColor
-        };
     }
 
     private static GPUVertex CreateFloorVertex(float x, float y, float z, float u, float v)

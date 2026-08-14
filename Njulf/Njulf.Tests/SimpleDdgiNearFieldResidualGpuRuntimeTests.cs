@@ -28,7 +28,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualResetPushConstants>(),
                 Is.EqualTo(32));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTracePushConstants>(),
-                Is.EqualTo(80));
+                Is.EqualTo(84));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTemporalPushConstants>(),
                 Is.EqualTo(96));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualFilterPushConstants>(),
@@ -507,7 +507,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
     }
 
     [Test]
-    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV10Contract()
+    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV11Contract()
     {
         string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
         string shared = File.ReadAllText(Path.Combine(shaderDirectory,
@@ -533,7 +533,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(shared, Does.Contain("0x4335000au"));
+            Assert.That(shared, Does.Contain("0x4335000bu"));
             Assert.That(shared, Does.Contain("uvec2 receiverIdentity;"));
             Assert.That(shared, Does.Contain("uvec2 hitIdentity;"));
             Assert.That(shared, Does.Not.Contain("uvec4 identity;"));
@@ -545,6 +545,8 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                 "metadata.receiverIdentity = receiverIds"));
             Assert.That(trace, Does.Contain(
                 "failureFlags = C5_TRACE_REASON_NORMAL | C5_TRACE_REASON_MISS"));
+            Assert.That(trace, Does.Contain("pc.fullWeightTraceDistance"));
+            Assert.That(trace, Does.Contain("1.0 - smoothstep("));
             Assert.That(temporal, Does.Contain("historyValidityInput"));
             Assert.That(temporal, Does.Contain("historyMetadata"));
             Assert.That(temporal, Does.Contain("temporalMetadataOutput"));
@@ -588,6 +590,32 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                 Is.EqualTo(63.0f / 64.0f));
             Assert.That(configuration.MaximumHistoryLength, Is.EqualTo(64));
             Assert.That(configuration.FilterRadius, Is.EqualTo(3));
+            Assert.That(configuration.MaximumTraceSteps, Is.EqualTo(64));
+            Assert.That(configuration.FullWeightTraceDistance, Is.EqualTo(4.0f));
+            Assert.That(configuration.MaximumTraceDistance, Is.EqualTo(8.0f));
+        });
+    }
+
+    [Test]
+    public void TraceDistanceFeatherMustHaveARealPositiveGuardBand()
+    {
+        SimpleDdgiNearFieldResidualLayout layout = CreateLayout();
+        SimpleDdgiNearFieldResidualGpuConfiguration reference =
+            CreateReferenceConfiguration(layout);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reference.Validate(layout).IsValid, Is.True);
+            Assert.That((reference with
+                {
+                    FullWeightTraceDistance = reference.MaximumTraceDistance
+                }).Validate(layout).Reason,
+                Is.EqualTo("near-field-gpu-numeric-configuration-invalid"));
+            Assert.That((reference with
+                {
+                    FullWeightTraceDistance = 0.0f
+                }).Validate(layout).Reason,
+                Is.EqualTo("near-field-gpu-numeric-configuration-invalid"));
         });
     }
 
@@ -604,7 +632,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(SimpleDdgiNearFieldResidualGpuAbi.Version,
-                Is.EqualTo(0x4335_000Au));
+                Is.EqualTo(0x4335_000Bu));
             Assert.That(shared, Does.Match(
                 $@"const\s+uint\s+SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION\s*=\s*{Regex.Escape(abiLiteral)}\s*;"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualHitMetadata"));

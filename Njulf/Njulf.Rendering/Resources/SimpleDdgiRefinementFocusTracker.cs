@@ -39,16 +39,17 @@ internal sealed class SimpleDdgiRefinementFocusTracker
         float resetDistance = float.IsFinite(translationResetDistance)
             ? Math.Max(MinimumTranslationResetDistance, translationResetDistance)
             : MinimumTranslationResetDistance;
-        bool reset = !_initialized ||
+        bool identityReset = !_initialized ||
             _cameraCutSerial != cameraCutSerial ||
             _sceneContentRevision != sceneContentRevision ||
-            _translationResetDistance != resetDistance ||
+            _translationResetDistance != resetDistance;
+        bool viewReacquire = !identityReset && (
             Vector3.DistanceSquared(cameraPosition, _anchorCameraPosition) >=
                 resetDistance * resetDistance ||
             Vector3.Dot(normalizedForward, _anchorCameraForward) <
-                CameraForwardResetDot;
+                CameraForwardResetDot);
 
-        if (reset)
+        if (identityReset)
         {
             _initialized = true;
             _hasMeasuredFocus = false;
@@ -59,8 +60,20 @@ internal sealed class SimpleDdgiRefinementFocusTracker
             _cameraCutSerial = cameraCutSerial;
             _sceneContentRevision = sceneContentRevision;
         }
+        else if (viewReacquire)
+        {
+            // The published B1 witness belongs to the preceding frame. Keep the
+            // last measured world-space focus for this transition frame instead
+            // of publishing a camera-relative fallback and then moving the brick
+            // again one frame later. The next generation-matched witness replaces
+            // it atomically, producing at most one topology transaction.
+            _hasMeasuredFocus = false;
+            _anchorCameraPosition = cameraPosition;
+            _anchorCameraForward = normalizedForward;
+        }
 
-        if (!_hasMeasuredFocus &&
+        if (!viewReacquire &&
+            !_hasMeasuredFocus &&
             measuredBaseFocus is { } measured &&
             IsFinite(measured))
         {

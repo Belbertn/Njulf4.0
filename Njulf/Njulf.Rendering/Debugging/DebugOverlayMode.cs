@@ -24,6 +24,8 @@ namespace Njulf.Rendering.Debug
         DdgiFrustumPriority = 19,
         DdgiSafetyRefresh = 20,
         DdgiCascadeBlend = 21,
-        DdgiUpdateReasons = 22
+        DdgiUpdateReasons = 22,
+        // Appended for persisted-settings and diagnostic numeric compatibility.
+        DdgiProbeSpheres = 23
     }
 }

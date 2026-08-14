@@ -640,6 +640,7 @@ namespace Njulf.Rendering.Pipeline
         private const string PackedGuidedReduceShader = "ddgi_simple_transport_audit_reduce_packed_guided.comp.spv";
         private readonly RenderSettings _settings;
         private readonly SimpleDdgiVolumeManager _volumeManager;
+        private readonly bool _prewarmDirectionalGuiding;
         private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private readonly Dictionary<string, VkPipeline> _pipelines =
@@ -650,7 +651,7 @@ namespace Njulf.Rendering.Pipeline
         private VkPipeline _rayPipeline;
         private VkPipeline _reducePipeline;
 
-        private enum AuditPipelineRole : byte
+        internal enum AuditPipelineRole : byte
         {
             Rays,
             Reduce
@@ -663,10 +664,32 @@ namespace Njulf.Rendering.Pipeline
             RenderSettings settings,
             SimpleDdgiVolumeManager volumeManager,
             GiPipelineCacheService? pipelineCacheService = null)
+            : this(
+                context,
+                swapchain,
+                bindlessHeap,
+                settings,
+                volumeManager,
+                settings?.GlobalIllumination.SimpleDdgiDirectionalGuidingMode is
+                    SimpleDdgiDirectionalGuidingMode.PerProbeHistogramExperiment or
+                    SimpleDdgiDirectionalGuidingMode.AutoQualified,
+                pipelineCacheService)
+        {
+        }
+
+        internal SimpleDdgiTransportAuditPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderSettings settings,
+            SimpleDdgiVolumeManager volumeManager,
+            bool prewarmDirectionalGuiding,
+            GiPipelineCacheService? pipelineCacheService)
             : base("SimpleDdgiTransportAuditPass", context, swapchain, bindlessHeap)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _volumeManager = volumeManager ?? throw new ArgumentNullException(nameof(volumeManager));
+            _prewarmDirectionalGuiding = prewarmDirectionalGuiding;
             _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr("main");
         }
@@ -685,21 +708,11 @@ namespace Njulf.Rendering.Pipeline
             else
                 CreatePipelineCache();
             CreatePipelineLayout();
-            string[] admittedShaders =
-            [
-                LegacyShader,
-                ValidateShader,
-                PackedShader,
-                LegacyGuidedShader,
-                ValidateGuidedShader,
-                PackedGuidedShader,
-                LegacyReduceShader,
-                ValidateReduceShader,
-                PackedReduceShader,
-                LegacyGuidedReduceShader,
-                ValidateGuidedReduceShader,
-                PackedGuidedReduceShader
-            ];
+            // Prewarm only variants reachable by this immutable graph. Storage
+            // alternatives remain available through the lazy runtime cache.
+            IReadOnlyList<string> admittedShaders = ResolvePrewarmShaderNames(
+                _settings.GlobalIllumination.SimpleDdgiStoragePackingMode,
+                _prewarmDirectionalGuiding);
             foreach (string shaderName in admittedShaders)
                 _ = GetOrCreatePipeline(shaderName);
             _volumeManager.SetGuidedTransportAuditAvailable(true);
@@ -944,34 +957,75 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
+        internal static string ResolveShaderName(
+            SimpleDdgiStoragePackingMode storagePackingMode,
+            bool directionalGuidingTransport,
+            AuditPipelineRole role) =>
+            (storagePackingMode.Sanitize(), directionalGuidingTransport, role) switch
+            {
+                (SimpleDdgiStoragePackingMode.Legacy, false, AuditPipelineRole.Rays) =>
+                    LegacyShader,
+                (SimpleDdgiStoragePackingMode.Legacy, false, AuditPipelineRole.Reduce) =>
+                    LegacyReduceShader,
+                (SimpleDdgiStoragePackingMode.Legacy, true, AuditPipelineRole.Rays) =>
+                    LegacyGuidedShader,
+                (SimpleDdgiStoragePackingMode.Legacy, true, AuditPipelineRole.Reduce) =>
+                    LegacyGuidedReduceShader,
+                (SimpleDdgiStoragePackingMode.Validate, false, AuditPipelineRole.Rays) =>
+                    ValidateShader,
+                (SimpleDdgiStoragePackingMode.Validate, false, AuditPipelineRole.Reduce) =>
+                    ValidateReduceShader,
+                (SimpleDdgiStoragePackingMode.Validate, true, AuditPipelineRole.Rays) =>
+                    ValidateGuidedShader,
+                (SimpleDdgiStoragePackingMode.Validate, true, AuditPipelineRole.Reduce) =>
+                    ValidateGuidedReduceShader,
+                (SimpleDdgiStoragePackingMode.Packed, false, AuditPipelineRole.Rays) =>
+                    PackedShader,
+                (SimpleDdgiStoragePackingMode.Packed, false, AuditPipelineRole.Reduce) =>
+                    PackedReduceShader,
+                (SimpleDdgiStoragePackingMode.Packed, true, AuditPipelineRole.Rays) =>
+                    PackedGuidedShader,
+                (SimpleDdgiStoragePackingMode.Packed, true, AuditPipelineRole.Reduce) =>
+                    PackedGuidedReduceShader,
+                _ => throw new ArgumentOutOfRangeException(nameof(role), role, null)
+            };
+
+        internal static IReadOnlyList<string> ResolvePrewarmShaderNames(
+            SimpleDdgiStoragePackingMode storagePackingMode,
+            bool prewarmDirectionalGuiding)
+        {
+            string rays = ResolveShaderName(
+                storagePackingMode,
+                directionalGuidingTransport: false,
+                AuditPipelineRole.Rays);
+            string reduce = ResolveShaderName(
+                storagePackingMode,
+                directionalGuidingTransport: false,
+                AuditPipelineRole.Reduce);
+            if (!prewarmDirectionalGuiding)
+                return [rays, reduce];
+
+            return
+            [
+                rays,
+                reduce,
+                ResolveShaderName(
+                    storagePackingMode,
+                    directionalGuidingTransport: true,
+                    AuditPipelineRole.Rays),
+                ResolveShaderName(
+                    storagePackingMode,
+                    directionalGuidingTransport: true,
+                    AuditPipelineRole.Reduce)
+            ];
+        }
+
         private VkPipeline GetOrCreatePipeline(AuditPipelineRole role)
         {
-            bool guided = _volumeManager.DirectionalGuidingTransportActive;
-            string shaderName = _settings.GlobalIllumination
-                .SimpleDdgiStoragePackingMode.Sanitize() switch
-            {
-                SimpleDdgiStoragePackingMode.Legacy => role switch
-                {
-                    AuditPipelineRole.Reduce => guided
-                        ? LegacyGuidedReduceShader
-                        : LegacyReduceShader,
-                    _ => guided ? LegacyGuidedShader : LegacyShader
-                },
-                SimpleDdgiStoragePackingMode.Packed => role switch
-                {
-                    AuditPipelineRole.Reduce => guided
-                        ? PackedGuidedReduceShader
-                        : PackedReduceShader,
-                    _ => guided ? PackedGuidedShader : PackedShader
-                },
-                _ => role switch
-                {
-                    AuditPipelineRole.Reduce => guided
-                        ? ValidateGuidedReduceShader
-                        : ValidateReduceShader,
-                    _ => guided ? ValidateGuidedShader : ValidateShader
-                }
-            };
+            string shaderName = ResolveShaderName(
+                _settings.GlobalIllumination.SimpleDdgiStoragePackingMode,
+                _volumeManager.DirectionalGuidingTransportActive,
+                role);
             return GetOrCreatePipeline(shaderName);
         }
 

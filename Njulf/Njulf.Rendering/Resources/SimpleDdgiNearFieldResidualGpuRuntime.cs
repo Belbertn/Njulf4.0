@@ -24,6 +24,7 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
     float DepthTolerance,
     float MinimumNormalDot,
     float MaximumTraceDistance,
+    float FullWeightTraceDistance,
     int MinimumB3FootprintRadius,
     int MaximumB3FootprintRadius,
     int MaximumHistoryLength,
@@ -43,7 +44,7 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
                 traceSourceAbiRevision,
                 traceSourceLayoutRevision,
                 traceSourceRevision),
-        MaximumTraceSteps: 32,
+        MaximumTraceSteps: 64,
         MaximumMipVisits: 8,
         BinaryRefinementSteps: 4,
         FilterIterationCount: 2,
@@ -59,7 +60,10 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
         TemporalBlend: 63.0f / 64.0f,
         DepthTolerance: 0.02f,
         MinimumNormalDot: 0.85f,
-        MaximumTraceDistance: 4.0f,
+        // Preserve the original four-metre high-frequency response, then
+        // feather it smoothly across a four-metre guard band.
+        MaximumTraceDistance: 8.0f,
+        FullWeightTraceDistance: 4.0f,
         MinimumB3FootprintRadius: 1,
         MaximumB3FootprintRadius: 4,
         MaximumHistoryLength: 64,
@@ -99,6 +103,9 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
             !float.IsFinite(MaximumTraceDistance) || MaximumTraceDistance <= 0.0f ||
             MaximumTraceDistance >
                 SimpleDdgiNearFieldResidualGpuAbi.MaximumEncodableTraceDistance ||
+            !float.IsFinite(FullWeightTraceDistance) ||
+            FullWeightTraceDistance <= 0.0f ||
+            FullWeightTraceDistance >= MaximumTraceDistance ||
             MinimumB3FootprintRadius is < 1 or >
                 (int)SimpleDdgiNearFieldResidualGpuAbi.MaximumB3FootprintRadius ||
             MaximumB3FootprintRadius < MinimumB3FootprintRadius ||

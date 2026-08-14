@@ -1403,6 +1403,9 @@ namespace Njulf.Rendering.Data
         public float Time { get; set; }
         public bool DebugToolingEnabled { get; set; }
         public DebugOverlayMode DebugOverlayMode { get; set; } = DebugOverlayMode.None;
+        public DebugOverlayFrameStatus DebugOverlayStatus { get; set; }
+        public DebugDrawDepthMode DebugOverlayDepthMode { get; set; } =
+            DebugDrawDepthMode.DepthTested;
         public bool CpuDebugSnapshotsEnabled { get; set; }
         public int DebugSelectedObjectIndex { get; set; } = -1;
         public string DebugSelectedObjectName { get; set; } = string.Empty;
@@ -1412,11 +1415,40 @@ namespace Njulf.Rendering.Data
         public long GpuDebugDrawMicroseconds { get; set; }
         public long CpuDebugOverlayRecordMicroseconds { get; set; }
         public long GpuDebugOverlayMicroseconds { get; set; }
+        public long GpuDebugDdgiProbeMicroseconds { get; set; }
+        public long GpuDebugLightTileMicroseconds { get; set; }
+        public int DebugLightTileMaxCount { get; set; }
+        public float DebugLightTileAverageCount { get; set; }
+        public int DebugDirectionalShadowCascadesDrawn { get; set; }
         public int DebugObjectBoundsDrawn { get; set; }
         public int DebugMeshletBoundsDrawn { get; set; }
         public int DebugMeshletBoundsDropped { get; set; }
+        public int DebugMeshletBoundsItemCapDropped { get; set; }
+        public int DebugMeshletBoundsLineBudgetDropped { get; set; }
         public int DebugReflectionProbeVolumesDrawn { get; set; }
         public int DebugDdgiProbeVolumesDrawn { get; set; }
+        public int DebugDdgiRequestedSamples { get; set; }
+        public int DebugDdgiProbeMarkersDrawn { get; set; }
+        public int DebugDdgiProbeMarkersFiltered { get; set; }
+        public int DebugDdgiNonresidentMarkers { get; set; }
+        public int DebugDdgiStaleMappings { get; set; }
+        public int DebugDdgiStateUnavailableMarkers { get; set; }
+        public int DebugDdgiInvalidTransactions { get; set; }
+        public int DebugDdgiSphereLineSegments { get; set; }
+        public int DebugDdgiProbeMarkersDropped { get; set; }
+        public bool DebugDdgiGpuCountersValid { get; set; }
+        public DebugDdgiUpdateReasonCounts DebugDdgiUpdateReasonCounts { get; set; }
+        public GPUDdgiProbeDebugInstance[] DebugDdgiProbeInstances { get; set; } =
+            Array.Empty<GPUDdgiProbeDebugInstance>();
+        public int DebugDdgiProbeInstanceCount { get; set; }
+        public int DebugDdgiUpdateRecordCapacity { get; set; }
+        public uint DebugDdgiSchedulerFrameOffsetWords { get; set; }
+        public uint DebugDdgiSchedulerProbeStateOffsetWords { get; set; }
+        public uint DebugDdgiSchedulerCountersOffsetWords { get; set; }
+        public uint DebugDdgiSchedulerUpdateRecordsOffsetWords { get; set; }
+        public uint DebugDdgiVolumeTableGeneration { get; set; }
+        public uint DebugDdgiSchedulerGeneration { get; set; }
+        public uint DebugDdgiResidencyGeneration { get; set; }
         public int DebugDecalVolumesDrawn { get; set; }
 
         public bool HasCpuSnapshots { get; set; }
@@ -2714,6 +2746,8 @@ namespace Njulf.Rendering.Data
             JitterY = 0;
             DebugToolingEnabled = false;
             DebugOverlayMode = DebugOverlayMode.None;
+            DebugOverlayStatus = default;
+            DebugOverlayDepthMode = DebugDrawDepthMode.DepthTested;
             CpuDebugSnapshotsEnabled = false;
             DebugSelectedObjectIndex = -1;
             DebugSelectedObjectName = string.Empty;
@@ -2723,11 +2757,39 @@ namespace Njulf.Rendering.Data
             GpuDebugDrawMicroseconds = 0;
             CpuDebugOverlayRecordMicroseconds = 0;
             GpuDebugOverlayMicroseconds = 0;
+            GpuDebugDdgiProbeMicroseconds = 0;
+            GpuDebugLightTileMicroseconds = 0;
+            DebugLightTileMaxCount = 0;
+            DebugLightTileAverageCount = 0;
+            DebugDirectionalShadowCascadesDrawn = 0;
             DebugObjectBoundsDrawn = 0;
             DebugMeshletBoundsDrawn = 0;
             DebugMeshletBoundsDropped = 0;
+            DebugMeshletBoundsItemCapDropped = 0;
+            DebugMeshletBoundsLineBudgetDropped = 0;
             DebugReflectionProbeVolumesDrawn = 0;
             DebugDdgiProbeVolumesDrawn = 0;
+            DebugDdgiRequestedSamples = 0;
+            DebugDdgiProbeMarkersDrawn = 0;
+            DebugDdgiProbeMarkersFiltered = 0;
+            DebugDdgiNonresidentMarkers = 0;
+            DebugDdgiStaleMappings = 0;
+            DebugDdgiStateUnavailableMarkers = 0;
+            DebugDdgiInvalidTransactions = 0;
+            DebugDdgiSphereLineSegments = 0;
+            DebugDdgiProbeMarkersDropped = 0;
+            DebugDdgiGpuCountersValid = false;
+            DebugDdgiUpdateReasonCounts = default;
+            DebugDdgiProbeInstances = Array.Empty<GPUDdgiProbeDebugInstance>();
+            DebugDdgiProbeInstanceCount = 0;
+            DebugDdgiUpdateRecordCapacity = 0;
+            DebugDdgiSchedulerFrameOffsetWords = 0;
+            DebugDdgiSchedulerProbeStateOffsetWords = 0;
+            DebugDdgiSchedulerCountersOffsetWords = 0;
+            DebugDdgiSchedulerUpdateRecordsOffsetWords = 0;
+            DebugDdgiVolumeTableGeneration = 0;
+            DebugDdgiSchedulerGeneration = 0;
+            DebugDdgiResidencyGeneration = 0;
             DebugDecalVolumesDrawn = 0;
             HasCpuSnapshots = false;
             MaterialExtensionBufferSize = 0;

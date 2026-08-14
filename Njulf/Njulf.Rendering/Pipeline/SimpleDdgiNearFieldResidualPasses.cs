@@ -237,6 +237,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             DepthTolerance = _configuration.DepthTolerance,
             MinimumNormalDot = _configuration.MinimumNormalDot,
             MaximumTraceDistance = _configuration.MaximumTraceDistance,
+            FullWeightTraceDistance = _configuration.FullWeightTraceDistance,
             MinimumB3FootprintRadius = checked((uint)_configuration.MinimumB3FootprintRadius),
             MaximumB3FootprintRadius = checked((uint)_configuration.MaximumB3FootprintRadius),
             TraceSourceRevision = _configuration.TraceSourceContract.SourceRevision

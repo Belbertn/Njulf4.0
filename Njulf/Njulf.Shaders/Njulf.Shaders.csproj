@@ -26,6 +26,12 @@
       <ShaderSource Update="ddgi_simple_directional_prepare.comp;ddgi_simple_directional_project.comp;ddgi_simple_directional_publish.comp">
         <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
       </ShaderSource>
+      <!-- The debug probe vertices consume the production DDGI paging/state
+           include graph. Strip unreachable transport helpers in Debug so the
+           optional graphics pipelines remain acceptable to native drivers. -->
+      <ShaderSource Update="debug_ddgi_probe.vert;debug_ddgi_update.vert">
+        <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
+      </ShaderSource>
       <ShaderInclude Include="*.glsl" />
       <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_source.comp">
         <Source>ddgi_simple_trace.comp</Source>
@@ -527,6 +533,11 @@
       <NjulfDirectionalShadowDetailedCountersOptions>-DNJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS=0</NjulfDirectionalShadowDetailedCountersOptions>
       <NjulfDirectionalShadowDetailedCountersOptions Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'DetailedInvestigation'">-DNJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS=1</NjulfDirectionalShadowDetailedCountersOptions>
       <NjulfShaderCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) $(NjulfShaderDetailedDiagnosticsOptions) $(NjulfDirectionalShadowDetailedCountersOptions)</NjulfShaderCompileOptions>
+      <!-- Detailed transport-audit counters create a particularly expensive
+           NVIDIA native pipeline in Debug. Optimize only this shader family;
+           the counter ABI stays enabled and all other Debug shaders retain
+           the ordinary unoptimized investigation profile. -->
+      <NjulfSimpleDdgiAuditOptimizationOptions Condition="'$(Configuration)' == 'Debug'">-Os</NjulfSimpleDdgiAuditOptimizationOptions>
       <!-- B1 graphics variants already publish their own exact per-producer,
            overflow, validity, and timing telemetry. Combining that path with
            the much larger generic per-fragment investigation counter graph
@@ -592,7 +603,7 @@
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 
-      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) %(SimpleDdgiAuditShaderVariant.Defines) -DSIMPLE_DDGI_STORAGE_SHADER_MODE=%(SimpleDdgiAuditShaderVariant.StorageMode) -DSIMPLE_DDGI_AUDIT_SHADER_ROLE=%(SimpleDdgiAuditShaderVariant.Role) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiAuditShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiAuditShaderVariant.Source)&quot;"
+      <Exec Command="glslangValidator -V --target-env vulkan1.3 $(NjulfShaderCompileOptions) $(NjulfSimpleDdgiAuditOptimizationOptions) %(SimpleDdgiAuditShaderVariant.Defines) -DSIMPLE_DDGI_STORAGE_SHADER_MODE=%(SimpleDdgiAuditShaderVariant.StorageMode) -DSIMPLE_DDGI_AUDIT_SHADER_ROLE=%(SimpleDdgiAuditShaderVariant.Role) -I&quot;$(MSBuildProjectDirectory)&quot; -o &quot;$(IntermediateOutputPath)Shaders\%(SimpleDdgiAuditShaderVariant.Identity).spv&quot; &quot;$(MSBuildProjectDirectory)\%(SimpleDdgiAuditShaderVariant.Source)&quot;"
             StandardOutputImportance="High"
             StandardErrorImportance="High" />
 

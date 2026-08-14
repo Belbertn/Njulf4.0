@@ -310,6 +310,31 @@ namespace Njulf.Rendering.Data
         public Vector4 Color;
     }
 
+    /// <summary>
+    /// Bounded, generation-tagged identity consumed by the DDGI debug probe
+    /// pass. Probe state and sparse residency remain GPU-owned; this record
+    /// carries only the sampled logical identity and immutable frame tags.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUDdgiProbeDebugInstance
+    {
+        public const uint SchedulerVisibleFlag = 1u << 0;
+
+        public Vector4 LogicalPositionAndRadius;
+        public uint VolumeIndex;
+        public uint LogicalX;
+        public uint LogicalY;
+        public uint LogicalZ;
+        public uint VirtualProbeIndex;
+        public uint SnapshotFrameSerialLow;
+        public uint SnapshotFrameSerialHigh;
+        public uint VolumeTableGeneration;
+        public uint SchedulerResourceGeneration;
+        public uint ResidencyResourceGeneration;
+        public uint Flags;
+        public uint Reserved0;
+    }
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUMaterialData
     {

@@ -833,6 +833,7 @@ namespace Njulf.Rendering.Data
         public int DebugToolingEnabled { get; init; }
         public int DebugOverlayEnabled { get; init; }
         public DebugOverlayMode DebugOverlayMode { get; init; } = DebugOverlayMode.None;
+        public DebugOverlayFrameStatus DebugOverlayStatus { get; init; }
         public int CpuDebugSnapshotsEnabled { get; init; }
         public int DebugSelectedObjectIndex { get; init; } = -1;
         public string DebugSelectedObjectName { get; init; } = string.Empty;
@@ -845,13 +846,29 @@ namespace Njulf.Rendering.Data
         public long GpuDebugDrawMicroseconds { get; init; }
         public long CpuDebugOverlayRecordMicroseconds { get; init; }
         public long GpuDebugOverlayMicroseconds { get; init; }
+        public long GpuDebugDdgiProbeMicroseconds { get; init; }
+        public long GpuDebugLightTileMicroseconds { get; init; }
         public int DebugLightTileMaxCount { get; init; }
         public float DebugLightTileAverageCount { get; init; }
+        public int DebugDirectionalShadowCascadesDrawn { get; init; }
         public int DebugObjectBoundsDrawn { get; init; }
         public int DebugMeshletBoundsDrawn { get; init; }
         public int DebugMeshletBoundsDropped { get; init; }
+        public int DebugMeshletBoundsItemCapDropped { get; init; }
+        public int DebugMeshletBoundsLineBudgetDropped { get; init; }
         public int DebugReflectionProbeVolumesDrawn { get; init; }
         public int DebugDdgiProbeVolumesDrawn { get; init; }
+        public int DebugDdgiRequestedSamples { get; init; }
+        public int DebugDdgiProbeMarkersDrawn { get; init; }
+        public int DebugDdgiProbeMarkersFiltered { get; init; }
+        public int DebugDdgiNonresidentMarkers { get; init; }
+        public int DebugDdgiStaleMappings { get; init; }
+        public int DebugDdgiStateUnavailableMarkers { get; init; }
+        public int DebugDdgiInvalidTransactions { get; init; }
+        public int DebugDdgiSphereLineSegments { get; init; }
+        public int DebugDdgiProbeMarkersDropped { get; init; }
+        public int DebugDdgiGpuCountersValid { get; init; }
+        public DebugDdgiUpdateReasonCounts DebugDdgiUpdateReasonCounts { get; init; }
         public int DebugDecalVolumesDrawn { get; init; }
         public int GpuTimingSupported { get; init; }
         public int GpuTimingEnabled { get; init; }

@@ -68,7 +68,8 @@ namespace Njulf.Tests
                 ("directional shadow caster attribution", RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterBase, RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterCount),
                 ("DDGI geometry participation", RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterBase, RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterCount),
                 ("DDGI many-light estimator", RendererDiagnosticsBuffer.DdgiManyLightCounterBase, RendererDiagnosticsBuffer.DdgiManyLightCounterCount),
-                ("simple DDGI near visibility", RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterCount)
+                ("simple DDGI near visibility", RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterCount),
+                ("DDGI debug overlay", RendererDiagnosticsBuffer.DebugDdgiOverlayCounterBase, RendererDiagnosticsBuffer.DebugDdgiOverlayCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -120,8 +121,10 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterCount, Is.EqualTo(12));
                 Assert.That(RendererDiagnosticsBuffer.DdgiManyLightCounterCount, Is.EqualTo(16));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterCount, Is.EqualTo(10));
+                Assert.That(RendererDiagnosticsBuffer.DebugDdgiOverlayReasonCounterCount, Is.EqualTo(16));
+                Assert.That(RendererDiagnosticsBuffer.DebugDdgiOverlayCounterCount, Is.EqualTo(27));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
-                    Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterBase + 10));
+                    Is.EqualTo(RendererDiagnosticsBuffer.DebugDdgiOverlayCounterBase + 27));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount * sizeof(uint)));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize % 256ul, Is.Zero);
@@ -151,6 +154,8 @@ namespace Njulf.Tests
                     "DDGI_MANY_LIGHT_COUNTER_BASE ="));
                 Assert.That(commonShader, Does.Contain(
                     "SIMPLE_DDGI_NEAR_VISIBILITY_COUNTER_BASE ="));
+                Assert.That(commonShader, Does.Contain(
+                    "DEBUG_DDGI_OVERLAY_COUNTER_BASE ="));
                 Assert.That(simpleSharedShader, Does.Contain(
                     "void RecordSimpleDdgiVolumeEnergyEvidence("));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -826,7 +831,9 @@ namespace Njulf.Tests
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.Keypad9, ref _cycleDebugOverlayPressed)"));
                 Assert.That(controller, Does.Contain("_renderer.Settings.Debug.Enabled = true;"));
                 Assert.That(controller, Does.Contain("_renderer.DebugDraw.Enabled = true;"));
-                Assert.That(controller, Does.Contain("_renderer.Settings.Debug.Mode = NextDebugOverlay(_renderer.Settings.Debug.Mode);"));
+                Assert.That(controller, Does.Contain("DebugOverlayCatalog.Next("));
+                Assert.That(controller, Does.Contain("bool reverse = IsShiftDown();"));
+                Assert.That(controller, Does.Not.Contain("NextDebugOverlay("));
             });
         }
 
@@ -837,14 +844,15 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(renderer, Does.Contain("DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode, maxProbeMarkers);"));
+                Assert.That(renderer, Does.Contain("PrepareDdgiProbeDebugInstances(sceneData, _simpleDdgiVolumeManager);"));
                 Assert.That(renderer, Does.Contain("Settings.GlobalIllumination.EffectiveUseDdgi"));
                 Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager.ProbeCount <= 0"));
                 Assert.That(renderer, Does.Contain("ReadOnlySpan<GPUSimpleDdgiVolume> volumes = _simpleDdgiVolumeManager.LastVolumes;"));
                 Assert.That(renderer, Does.Contain("for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)"));
                 Assert.That(renderer, Does.Contain("ResolveSimpleDdgiVolumeDebugColor(volumeIndex, volume)"));
                 Assert.That(renderer, Does.Contain("sceneData.DebugDdgiProbeVolumesDrawn++;"));
-                Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager?.IsProbeScheduledForUpdate(probeIndex) == true"));
+                Assert.That(renderer, Does.Contain("CalculatePhysicalProbeLocalIndex("));
+                Assert.That(renderer, Does.Not.Contain("IsProbeScheduledForUpdate(probeIndex)"));
             });
         }
 
@@ -867,6 +875,7 @@ namespace Njulf.Tests
                 Assert.That((uint)DebugOverlayMode.DdgiSafetyRefresh, Is.EqualTo(20u));
                 Assert.That((uint)DebugOverlayMode.DdgiCascadeBlend, Is.EqualTo(21u));
                 Assert.That((uint)DebugOverlayMode.DdgiUpdateReasons, Is.EqualTo(22u));
+                Assert.That((uint)DebugOverlayMode.DdgiProbeSpheres, Is.EqualTo(23u));
             });
         }
 

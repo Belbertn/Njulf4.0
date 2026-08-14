@@ -410,6 +410,7 @@ namespace Njulf.Rendering
         private RenderBudgetSnapshot _lastBudgetSnapshot = RenderBudgetSnapshot.Empty;
         private SceneRenderingData? _lastSceneData;
         private readonly DebugDrawList _debugDraw = new();
+        private GPUDdgiProbeDebugInstance[]? _ddgiProbeDebugInstanceScratch;
         private readonly ScreenshotCaptureService _screenshotCaptureService = new();
         private readonly ScreenshotReadbackManager _screenshotReadbackManager;
         private readonly LinearHdrCaptureService _linearHdrCaptureService = new();
@@ -431,6 +432,7 @@ namespace Njulf.Rendering
         private DdgiGeometryParticipationGpuCounters
             _completedDdgiGeometryParticipationCounters;
         private DdgiManyLightGpuCounters _completedDdgiManyLightCounters;
+        private DebugDdgiOverlayGpuCounters _completedDebugDdgiOverlayCounters;
         private GpuParticleCounterSnapshot _completedGpuParticleCounters;
         private FoliageCounterSnapshot _completedFoliageCounters;
         private SceneSubmissionCounterSnapshot _completedSceneSubmissionCounters;
@@ -2040,6 +2042,7 @@ namespace Njulf.Rendering
                 _bindlessHeap,
                 Settings,
                 _simpleDdgiVolumeManager!,
+                _advancedGiGraphModes.UsesDirectionalGuiding,
                 _giPipelineCacheService);
             _simpleDdgiTransportAuditPass = simpleDdgiTransportAuditPass;
             AddPassInstance(simpleDdgiTransportAuditPass);
@@ -2122,9 +2125,22 @@ namespace Njulf.Rendering
             AddPassInstance(_gpuParticleSortGraphPass);
             AddPassInstance(particlePass);
 
+            var simpleDdgiProbeDebugPass = new SimpleDdgiProbeDebugPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _bufferManager,
+                _stagingRing,
+                _renderTargets!);
+            AddPassInstance(simpleDdgiProbeDebugPass);
+
             var debugDrawPass = new DebugDrawPass(
                 _context, _swapchain, _bindlessHeap, _bufferManager, _stagingRing, _renderTargets!);
             AddPassInstance(debugDrawPass);
+
+            var debugOverlayPass = new DebugOverlayPass(
+                _context, _swapchain, _bindlessHeap, _renderTargets!);
+            AddPassInstance(debugOverlayPass);
 
             var fogPass = new FogPass(
                 _context,
@@ -3102,6 +3118,9 @@ namespace Njulf.Rendering
             _completedDdgiManyLightCounters =
                 _diagnosticsBuffer.GetLastCompletedDdgiManyLightCounters(
                     _currentFrame);
+            _completedDebugDdgiOverlayCounters =
+                _diagnosticsBuffer.GetLastCompletedDebugDdgiOverlayCounters(
+                    _currentFrame);
             ObserveCompletedSimpleDdgiWorkload(_currentFrame);
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
@@ -3522,14 +3541,13 @@ namespace Njulf.Rendering
             _materialManager.SetTransportV2Enabled(
                 Settings.GlobalIllumination.EffectiveGiMaterialTransportV2);
             EnsureRenderTargetProfile();
-            DebugOverlayMode activeDebugOverlay = debugEnabled ? Settings.Debug.Mode : DebugOverlayMode.None;
+            DebugOverlayMode requestedDebugOverlay = debugEnabled
+                ? Settings.Debug.Mode
+                : DebugOverlayMode.None;
             _sceneDataBuilder.CaptureCpuSnapshots = debugEnabled &&
                                                     (Settings.Debug.CpuSnapshotsEnabled ||
-                                                    activeDebugOverlay is DebugOverlayMode.ObjectBounds or
-                                                        DebugOverlayMode.MeshletBounds or
-                                                        DebugOverlayMode.SelectedObject or
-                                                        DebugOverlayMode.MaterialInspection or
-                                                        DebugOverlayMode.DecalVolumes);
+                                                     DebugOverlayCatalog.RequiresCpuSnapshots(
+                                                         requestedDebugOverlay));
             _debugDraw.Enabled = debugEnabled;
             _debugDraw.MaxLineSegments = Settings.Debug.MaxDebugLineSegments;
 
@@ -3696,7 +3714,10 @@ namespace Njulf.Rendering
                 : 0;
             sceneData.ActiveFeatureIsolation = isolationMode;
             sceneData.DebugToolingEnabled = debugEnabled;
-            sceneData.DebugOverlayMode = activeDebugOverlay;
+            sceneData.DebugOverlayMode = requestedDebugOverlay;
+            sceneData.DebugOverlayStatus = debugEnabled
+                ? DebugOverlayFrameStatus.Disabled(requestedDebugOverlay)
+                : default;
             sceneData.CpuDebugSnapshotsEnabled = _sceneDataBuilder.CaptureCpuSnapshots;
             sceneData.DebugSelectedObjectIndex = Settings.Debug.SelectedObjectIndex;
             if (sceneData.DebugSelectedObjectIndex >= 0 &&
@@ -4272,14 +4293,47 @@ namespace Njulf.Rendering
 
         private void BuildDebugOverlayDrawCommands(Scene scene, SceneRenderingData sceneData)
         {
-            if (!sceneData.DebugToolingEnabled || sceneData.DebugOverlayMode == DebugOverlayMode.None)
+            DebugOverlayMode requestedMode = sceneData.DebugOverlayMode;
+            if (!sceneData.DebugToolingEnabled)
+            {
+                sceneData.DebugOverlayStatus = default;
                 return;
+            }
+
+            if (!DebugOverlayCatalog.TryGet(requestedMode, out DebugOverlayDescriptor descriptor))
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.Unavailable(
+                    requestedMode,
+                    $"unknown overlay value {(uint)requestedMode}");
+                return;
+            }
+
+            if (!descriptor.IsActive)
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.Retired(
+                    requestedMode,
+                    descriptor.RetirementReason);
+                return;
+            }
+
+            if (requestedMode == DebugOverlayMode.None)
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.Disabled();
+                return;
+            }
 
             long start = Stopwatch.GetTimestamp();
             DebugDrawDepthMode depthMode = ResolveOverlayDepthMode();
+            sceneData.DebugOverlayDepthMode = depthMode;
 
-            switch (sceneData.DebugOverlayMode)
+            switch (requestedMode)
             {
+                case DebugOverlayMode.LightTiles:
+                    PrepareLightTileOverlayStatus(sceneData);
+                    break;
+                case DebugOverlayMode.DirectionalShadowCascades:
+                    DrawDirectionalShadowCascadeOverlay(sceneData, depthMode);
+                    break;
                 case DebugOverlayMode.ObjectBounds:
                     DrawObjectBoundsOverlay(sceneData, depthMode);
                     break;
@@ -4287,32 +4341,144 @@ namespace Njulf.Rendering
                     DrawMeshletBoundsOverlay(sceneData, depthMode);
                     break;
                 case DebugOverlayMode.SelectedObject:
-                case DebugOverlayMode.MaterialInspection:
                     DrawSelectedObjectOverlay(sceneData, depthMode);
                     break;
                 case DebugOverlayMode.ReflectionProbeVolumes:
                     DrawReflectionProbeOverlay(scene, sceneData, depthMode);
                     break;
                 case DebugOverlayMode.DdgiProbeVolumes:
+                    DrawDdgiProbeVolumeOverlay(scene, sceneData, depthMode);
+                    break;
+                case DebugOverlayMode.DdgiProbeSpheres:
+                    DrawSimpleDdgiProbeVolumeOverlay(
+                        sceneData,
+                        depthMode,
+                        faintBounds: true);
+                    PrepareDdgiProbeOverlay(sceneData);
+                    break;
                 case DebugOverlayMode.DdgiProbeActivity:
                 case DebugOverlayMode.DdgiUpdatedProbes:
                 case DebugOverlayMode.DdgiProbeRelocation:
                 case DebugOverlayMode.DdgiProbeAge:
                 case DebugOverlayMode.DdgiPhysicalSlots:
-                case DebugOverlayMode.DdgiCascadeBounds:
                 case DebugOverlayMode.DdgiNewlyExposedCells:
                 case DebugOverlayMode.DdgiFrustumPriority:
-                case DebugOverlayMode.DdgiSafetyRefresh:
-                case DebugOverlayMode.DdgiCascadeBlend:
                 case DebugOverlayMode.DdgiUpdateReasons:
+                    PrepareDdgiProbeOverlay(sceneData);
+                    break;
+                case DebugOverlayMode.DdgiCascadeBounds:
                     DrawDdgiProbeVolumeOverlay(scene, sceneData, depthMode);
                     break;
                 case DebugOverlayMode.DecalVolumes:
                     DrawGeometryDecalOverlay(sceneData, depthMode);
                     break;
+                default:
+                    sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.Unavailable(
+                        requestedMode,
+                        "catalog renderer has no registered handler");
+                    break;
             }
 
             sceneData.CpuDebugOverlayRecordMicroseconds = ElapsedMicroseconds(start);
+        }
+
+        private static void PrepareLightTileOverlayStatus(SceneRenderingData sceneData)
+        {
+            sceneData.DebugLightTileMaxCount = sceneData.MaxLightsInAnyTile;
+            sceneData.DebugLightTileAverageCount = sceneData.AverageLightsPerNonEmptyTile;
+            if (sceneData.LocalLightCount <= 0)
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.NoData(
+                    DebugOverlayMode.LightTiles,
+                    "no local lights");
+                return;
+            }
+
+            int tileCount = checked((int)Math.Min(
+                int.MaxValue,
+                (ulong)sceneData.TileCountX * sceneData.TileCountY));
+            sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.Rendered(
+                DebugOverlayMode.LightTiles,
+                tileCount,
+                sceneData.MaxLightsInAnyTile);
+        }
+
+        private void DrawDirectionalShadowCascadeOverlay(
+            SceneRenderingData sceneData,
+            DebugDrawDepthMode depthMode)
+        {
+            int cascadeCount = Math.Clamp(
+                sceneData.DirectionalShadowCascadeCount,
+                0,
+                ShadowSettings.MaxDirectionalCascades);
+            if (cascadeCount == 0 || sceneData.ShadowedDirectionalLightIndex < 0)
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.NoData(
+                    DebugOverlayMode.DirectionalShadowCascades,
+                    "no active directional shadow cascades");
+                return;
+            }
+
+            GPUShadowData shadow = sceneData.ShadowData;
+            Span<Matrix4x4> matrices = stackalloc Matrix4x4[ShadowSettings.MaxDirectionalCascades]
+            {
+                shadow.LightViewProjection0,
+                shadow.LightViewProjection1,
+                shadow.LightViewProjection2,
+                shadow.LightViewProjection3
+            };
+            Span<Vector4> colors = stackalloc Vector4[ShadowSettings.MaxDirectionalCascades]
+            {
+                new(0.9f, 0.15f, 0.1f, 0.95f),
+                new(0.1f, 0.75f, 0.2f, 0.95f),
+                new(0.1f, 0.35f, 0.95f, 0.95f),
+                new(0.9f, 0.8f, 0.1f, 0.95f)
+            };
+
+            int drawn = 0;
+            for (int cascade = 0; cascade < cascadeCount; cascade++)
+            {
+                if (!IsValidDebugFrustumMatrix(matrices[cascade]))
+                    continue;
+                _debugDraw.Frustum(matrices[cascade], colors[cascade], depthMode);
+                drawn++;
+            }
+
+            sceneData.DebugDirectionalShadowCascadesDrawn = drawn;
+            int meshlets = 0;
+            for (int cascade = 0;
+                cascade < cascadeCount && cascade < sceneData.DirectionalShadowMeshletCounts.Length;
+                cascade++)
+            {
+                meshlets = (int)Math.Min(
+                    int.MaxValue,
+                    (long)meshlets + Math.Max(0, sceneData.DirectionalShadowMeshletCounts[cascade]));
+            }
+            sceneData.DebugOverlayStatus = drawn > 0
+                ? DebugOverlayFrameStatus.Rendered(
+                    DebugOverlayMode.DirectionalShadowCascades,
+                    drawn,
+                    meshlets,
+                    _debugDraw.DroppedLineCount)
+                : DebugOverlayFrameStatus.Unavailable(
+                    DebugOverlayMode.DirectionalShadowCascades,
+                    "active cascade matrices are invalid");
+        }
+
+        internal static bool IsValidDebugFrustumMatrix(Matrix4x4 matrix)
+        {
+            if (matrix.Equals(Matrix4x4.Identity) || matrix.Equals(Matrix4x4.Zero))
+                return false;
+            for (int row = 0; row < 4; row++)
+            {
+                for (int column = 0; column < 4; column++)
+                {
+                    if (!float.IsFinite(matrix[row, column]))
+                        return false;
+                }
+            }
+            return float.IsFinite(matrix.Determinant()) &&
+                MathF.Abs(matrix.Determinant()) > 1e-12f;
         }
 
         private DebugDrawDepthMode ResolveOverlayDepthMode()
@@ -4334,17 +4500,37 @@ namespace Njulf.Rendering
                 _debugDraw.Box(snapshot.WorldBounds, color, depthMode);
                 sceneData.DebugObjectBoundsDrawn++;
             }
+
+            sceneData.DebugOverlayStatus = sceneData.DebugObjectBoundsDrawn > 0
+                ? DebugOverlayFrameStatus.Rendered(
+                    DebugOverlayMode.ObjectBounds,
+                    sceneData.DebugObjectBoundsDrawn,
+                    droppedItemCount: _debugDraw.DroppedLineCount)
+                : DebugOverlayFrameStatus.NoData(
+                    DebugOverlayMode.ObjectBounds,
+                    sceneData.CpuDebugSnapshotsEnabled
+                        ? "scene has 0 object snapshots"
+                        : "CPU object snapshots unavailable");
         }
 
         private void DrawSelectedObjectOverlay(SceneRenderingData sceneData, DebugDrawDepthMode depthMode)
         {
             int index = sceneData.DebugSelectedObjectIndex;
             if (index < 0 || index >= sceneData.ObjectDebugSnapshots.Count)
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.NoData(
+                    DebugOverlayMode.SelectedObject,
+                    "select with Ctrl+Left/Right");
                 return;
+            }
 
             ObjectDebugSnapshot snapshot = sceneData.ObjectDebugSnapshots[index];
             _debugDraw.Box(snapshot.WorldBounds, new Vector4(1.0f, 0.85f, 0.1f, 1.0f), depthMode);
             sceneData.DebugObjectBoundsDrawn = 1;
+            sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.Rendered(
+                DebugOverlayMode.SelectedObject,
+                1,
+                droppedItemCount: _debugDraw.DroppedLineCount);
         }
 
         private void DrawReflectionProbeOverlay(
@@ -4366,15 +4552,49 @@ namespace Njulf.Rendering
                 if (probe.Shape == ReflectionProbeShape.Sphere)
                 {
                     _debugDraw.Sphere(probe.Position, probe.Radius, color, segments: 32, depthMode);
+                    float innerRadius = MathF.Max(0.0f, probe.Radius - probe.BlendDistance);
+                    if (probe.BlendDistance > 0.0f && innerRadius > 0.0f)
+                    {
+                        Vector4 blendColor = color;
+                        blendColor.W = MathF.Min(blendColor.W, 0.32f);
+                        _debugDraw.Sphere(
+                            probe.Position,
+                            innerRadius,
+                            blendColor,
+                            segments: 24,
+                            depthMode);
+                    }
                 }
                 else
                 {
                     Matrix4x4 transform = probe.Rotation.ToMatrix4x4() * Matrix4x4.CreateTranslation(probe.Position);
                     _debugDraw.OrientedBox(transform, probe.BoxExtents, color, depthMode);
+                    Vector3 blendExtents = new(
+                        MathF.Max(0.0f, probe.BoxExtents.X - probe.BlendDistance),
+                        MathF.Max(0.0f, probe.BoxExtents.Y - probe.BlendDistance),
+                        MathF.Max(0.0f, probe.BoxExtents.Z - probe.BlendDistance));
+                    if (probe.BlendDistance > 0.0f &&
+                        blendExtents.X > 0.0f && blendExtents.Y > 0.0f && blendExtents.Z > 0.0f)
+                    {
+                        Vector4 blendColor = color;
+                        blendColor.W = MathF.Min(blendColor.W, 0.32f);
+                        _debugDraw.OrientedBox(transform, blendExtents, blendColor, depthMode);
+                    }
                 }
 
                 sceneData.DebugReflectionProbeVolumesDrawn++;
             }
+
+            sceneData.DebugOverlayStatus = sceneData.DebugReflectionProbeVolumesDrawn > 0
+                ? DebugOverlayFrameStatus.Rendered(
+                    DebugOverlayMode.ReflectionProbeVolumes,
+                    sceneData.DebugReflectionProbeVolumesDrawn,
+                    droppedItemCount: _debugDraw.DroppedLineCount)
+                : DebugOverlayFrameStatus.NoData(
+                    DebugOverlayMode.ReflectionProbeVolumes,
+                    probes.Count == 0
+                        ? "scene has 0 reflection probes"
+                        : "selected reflection probe is unavailable");
         }
 
         private void DrawDdgiProbeVolumeOverlay(
@@ -4382,18 +4602,301 @@ namespace Njulf.Rendering
             SceneRenderingData sceneData,
             DebugDrawDepthMode depthMode)
         {
-            const int MaxDetailedProbeMarkersPerFrame = 768;
             _ = scene;
-            int maxProbeMarkers = sceneData.DebugOverlayMode == DebugOverlayMode.DdgiProbeVolumes
-                ? 0
-                : MaxDetailedProbeMarkersPerFrame;
-            DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode, maxProbeMarkers);
+            DrawSimpleDdgiProbeVolumeOverlay(sceneData, depthMode);
+            if (sceneData.DebugDdgiProbeVolumesDrawn > 0)
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.Rendered(
+                    sceneData.DebugOverlayMode,
+                    sceneData.DebugDdgiProbeVolumesDrawn,
+                    sceneData.DebugDdgiProbeMarkersDrawn,
+                    _debugDraw.DroppedLineCount);
+            }
+            else if (!Settings.GlobalIllumination.EffectiveUseDdgi)
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.Unavailable(
+                    sceneData.DebugOverlayMode,
+                    "Simple DDGI is disabled");
+            }
+            else
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.NoData(
+                    sceneData.DebugOverlayMode,
+                    "DDGI has 0 admitted volumes");
+            }
+        }
+
+        private void PrepareDdgiProbeOverlay(SceneRenderingData sceneData)
+        {
+            if (!Settings.GlobalIllumination.EffectiveUseDdgi)
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.Unavailable(
+                    sceneData.DebugOverlayMode,
+                    "Simple DDGI is disabled");
+                return;
+            }
+            if (_simpleDdgiVolumeManager == null ||
+                _simpleDdgiVolumeManager.VolumeCount <= 0 ||
+                _simpleDdgiVolumeManager.ProbeCount <= 0)
+            {
+                sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.NoData(
+                    sceneData.DebugOverlayMode,
+                    "DDGI has 0 admitted probes");
+                return;
+            }
+
+            PrepareDdgiProbeDebugInstances(sceneData, _simpleDdgiVolumeManager);
+        }
+
+        private void PrepareDdgiProbeDebugInstances(
+            SceneRenderingData sceneData,
+            SimpleDdgiVolumeManager manager)
+        {
+            const int MaxDetailedProbeMarkersPerFrame = 768;
+            sceneData.DebugDdgiVolumeTableGeneration = manager.VolumeTableGeneration;
+            sceneData.DebugDdgiSchedulerGeneration = manager.GpuScheduler.ResourceGeneration;
+            sceneData.DebugDdgiResidencyGeneration = manager.ProbeResidencyResourceGeneration;
+
+            SimpleDdgiGpuSchedulerLayout? schedulerLayout = manager.GpuScheduler.Layout;
+            if (schedulerLayout != null)
+            {
+                sceneData.DebugDdgiSchedulerFrameOffsetWords = schedulerLayout.Frame.OffsetWords;
+                sceneData.DebugDdgiSchedulerProbeStateOffsetWords = schedulerLayout.ProbeState.OffsetWords;
+                sceneData.DebugDdgiSchedulerCountersOffsetWords = schedulerLayout.Counters.OffsetWords;
+                sceneData.DebugDdgiSchedulerUpdateRecordsOffsetWords =
+                    schedulerLayout.UpdateRecords.OffsetWords;
+            }
+
+            bool updateRecordsMode = sceneData.DebugOverlayMode is
+                DebugOverlayMode.DdgiUpdatedProbes or
+                DebugOverlayMode.DdgiUpdateReasons;
+            if (updateRecordsMode)
+            {
+                int capacity = manager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                    ? schedulerLayout?.RequestCapacity ?? 0
+                    : manager.ProbesToUpdate;
+                int boundedCapacity = Math.Clamp(
+                    capacity,
+                    0,
+                    MaxDetailedProbeMarkersPerFrame);
+                sceneData.DebugDdgiUpdateRecordCapacity = boundedCapacity;
+                if (capacity <= 0)
+                {
+                    sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.NoData(
+                        sceneData.DebugOverlayMode,
+                        "no probes admitted for update");
+                    return;
+                }
+
+                int reportedUpdates = manager.SchedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+                    manager.GpuSchedulerFeedbackValid
+                        ? checked((int)Math.Min(
+                            (uint)int.MaxValue,
+                            manager.LastGpuSchedulerFeedback.AcceptedCount))
+                        : Math.Max(0, manager.ProbesToUpdate);
+                sceneData.DebugDdgiRequestedSamples = capacity;
+                sceneData.DebugDdgiProbeMarkersDrawn =
+                    Math.Min(reportedUpdates, boundedCapacity);
+                sceneData.DebugDdgiProbeMarkersDropped =
+                    Math.Max(0, reportedUpdates - boundedCapacity);
+                bool completedCounters =
+                    TryApplyCompletedDebugDdgiOverlayCounters(sceneData);
+                if (sceneData.DebugDdgiProbeMarkersDrawn > 0)
+                {
+                    sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.Rendered(
+                        sceneData.DebugOverlayMode,
+                        sceneData.DebugDdgiProbeMarkersDrawn,
+                        capacity,
+                        sceneData.DebugDdgiProbeMarkersDropped);
+                }
+                else
+                {
+                    sceneData.DebugOverlayStatus = DebugOverlayFrameStatus.NoData(
+                        sceneData.DebugOverlayMode,
+                        completedCounters && sceneData.DebugDdgiInvalidTransactions > 0
+                            ? "all admitted records failed identity validation"
+                            : "no probes admitted for update");
+                }
+                return;
+            }
+
+            _ddgiProbeDebugInstanceScratch ??=
+                new GPUDdgiProbeDebugInstance[MaxDetailedProbeMarkersPerFrame];
+            ReadOnlySpan<GPUSimpleDdgiVolume> volumes = manager.LastVolumes;
+            int remainingMarkers = MaxDetailedProbeMarkersPerFrame;
+            int remainingVolumes = volumes.Length;
+            int instanceCount = 0;
+            long logicalProbeCount = 0;
+            for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)
+            {
+                GPUSimpleDdgiVolume volume = volumes[volumeIndex];
+                int countX = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.X));
+                int countY = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.Y));
+                int countZ = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.Z));
+                int firstProbe = Math.Max(0, (int)MathF.Round(volume.GridCountsAndFirstProbe.W));
+                float spacing = Math.Max(volume.OriginAndSpacing.W, 0.001f);
+                Vector3 origin = new(
+                    volume.OriginAndSpacing.X,
+                    volume.OriginAndSpacing.Y,
+                    volume.OriginAndSpacing.Z);
+                logicalProbeCount = Math.Min(
+                    int.MaxValue,
+                    logicalProbeCount + (long)countX * countY * countZ);
+
+                int volumeBudget = CalculateDdgiProbeMarkerBudget(
+                    remainingMarkers,
+                    remainingVolumes);
+                DdgiProbeMarkerSampling sampling = CalculateDdgiProbeMarkerSampling(
+                    countX,
+                    countY,
+                    countZ,
+                    volumeBudget);
+                int volumeDrawn = 0;
+                for (int z = 0;
+                    z < countZ && volumeDrawn < volumeBudget;
+                    z += Math.Max(1, sampling.StepZ))
+                for (int y = 0;
+                    y < countY && volumeDrawn < volumeBudget;
+                    y += Math.Max(1, sampling.StepY))
+                for (int x = 0;
+                    x < countX && volumeDrawn < volumeBudget;
+                    x += Math.Max(1, sampling.StepX))
+                {
+                    int physicalLocal = SimpleDdgiVolumeManager.CalculatePhysicalProbeLocalIndex(
+                        volume,
+                        x,
+                        y,
+                        z);
+                    int virtualProbe = checked(firstProbe + physicalLocal);
+                    Vector3 logicalPosition = origin + new Vector3(
+                        spacing * x,
+                        spacing * y,
+                        spacing * z);
+                    _ddgiProbeDebugInstanceScratch[instanceCount++] =
+                        CreateDdgiProbeDebugInstance(
+                            sceneData.DdgiFrameSerial,
+                            manager.VolumeTableGeneration,
+                            manager.GpuScheduler.ResourceGeneration,
+                            manager.ProbeResidencyResourceGeneration,
+                            volumeIndex,
+                            x,
+                            y,
+                            z,
+                            virtualProbe,
+                            logicalPosition,
+                            spacing,
+                            manager.GetDebugSchedulerPriorityFlags(virtualProbe));
+                    volumeDrawn++;
+                }
+
+                remainingMarkers -= volumeDrawn;
+                remainingVolumes = Math.Max(0, remainingVolumes - 1);
+            }
+
+            sceneData.DebugDdgiProbeInstances = _ddgiProbeDebugInstanceScratch;
+            sceneData.DebugDdgiProbeInstanceCount = instanceCount;
+            sceneData.DebugDdgiRequestedSamples = (int)logicalProbeCount;
+            sceneData.DebugDdgiProbeMarkersDrawn = instanceCount;
+            sceneData.DebugDdgiProbeMarkersDropped = Math.Max(
+                0,
+                (int)logicalProbeCount - instanceCount);
+            if (sceneData.DebugOverlayMode == DebugOverlayMode.DdgiProbeSpheres)
+                sceneData.DebugDdgiSphereLineSegments = checked(instanceCount * 8 * 3);
+
+            _ = TryApplyCompletedDebugDdgiOverlayCounters(sceneData);
+            if (sceneData.DebugOverlayMode == DebugOverlayMode.DdgiProbeSpheres &&
+                sceneData.DebugDdgiGpuCountersValid)
+            {
+                sceneData.DebugDdgiSphereLineSegments = checked(
+                    sceneData.DebugDdgiProbeMarkersDrawn * 8 * 3);
+            }
+
+            sceneData.DebugOverlayStatus = instanceCount > 0
+                ? DebugOverlayFrameStatus.Rendered(
+                    sceneData.DebugOverlayMode,
+                    sceneData.DebugDdgiProbeMarkersDrawn,
+                    droppedItemCount: sceneData.DebugDdgiProbeMarkersDropped)
+                : DebugOverlayFrameStatus.NoData(
+                    sceneData.DebugOverlayMode,
+                    "DDGI sampling produced 0 probes");
+        }
+
+        private bool TryApplyCompletedDebugDdgiOverlayCounters(
+            SceneRenderingData sceneData)
+        {
+            DebugDdgiOverlayGpuCounters counters =
+                _completedDebugDdgiOverlayCounters;
+            if (!counters.Valid ||
+                counters.Mode != sceneData.DebugOverlayMode ||
+                counters.VolumeTableGeneration !=
+                    sceneData.DebugDdgiVolumeTableGeneration ||
+                counters.SchedulerResourceGeneration !=
+                    sceneData.DebugDdgiSchedulerGeneration ||
+                counters.ResidencyResourceGeneration !=
+                    sceneData.DebugDdgiResidencyGeneration)
+            {
+                return false;
+            }
+
+            sceneData.DebugDdgiGpuCountersValid = true;
+            sceneData.DebugDdgiProbeMarkersDrawn = ClampDebugCounter(
+                counters.DrawnMarkerCount);
+            sceneData.DebugDdgiProbeMarkersFiltered = ClampDebugCounter(
+                counters.FilteredMarkerCount);
+            sceneData.DebugDdgiNonresidentMarkers = ClampDebugCounter(
+                counters.NonresidentMarkerCount);
+            sceneData.DebugDdgiStaleMappings = ClampDebugCounter(
+                counters.StaleMappingCount);
+            sceneData.DebugDdgiStateUnavailableMarkers = ClampDebugCounter(
+                counters.StateUnavailableMarkerCount);
+            sceneData.DebugDdgiInvalidTransactions = ClampDebugCounter(
+                counters.InvalidTransactionCount);
+            sceneData.DebugDdgiUpdateReasonCounts = counters.UpdateReasons;
+            return true;
+        }
+
+        private static int ClampDebugCounter(uint value) =>
+            value > int.MaxValue ? int.MaxValue : (int)value;
+
+        internal static GPUDdgiProbeDebugInstance CreateDdgiProbeDebugInstance(
+            ulong frameSerial,
+            uint volumeTableGeneration,
+            uint schedulerResourceGeneration,
+            uint residencyResourceGeneration,
+            int volumeIndex,
+            int logicalX,
+            int logicalY,
+            int logicalZ,
+            int virtualProbeIndex,
+            Vector3 logicalPosition,
+            float spacing,
+            uint schedulerPriorityFlags = 0u)
+        {
+            return new GPUDdgiProbeDebugInstance
+            {
+                LogicalPositionAndRadius = new Vector4(
+                    logicalPosition.X,
+                    logicalPosition.Y,
+                    logicalPosition.Z,
+                    Math.Clamp(spacing * 0.08f, 0.04f, 0.20f)),
+                VolumeIndex = checked((uint)volumeIndex),
+                LogicalX = checked((uint)logicalX),
+                LogicalY = checked((uint)logicalY),
+                LogicalZ = checked((uint)logicalZ),
+                VirtualProbeIndex = checked((uint)virtualProbeIndex),
+                SnapshotFrameSerialLow = unchecked((uint)frameSerial),
+                SnapshotFrameSerialHigh = unchecked((uint)(frameSerial >> 32)),
+                VolumeTableGeneration = volumeTableGeneration,
+                SchedulerResourceGeneration = schedulerResourceGeneration,
+                ResidencyResourceGeneration = residencyResourceGeneration,
+                Flags = schedulerPriorityFlags
+            };
         }
 
         private void DrawSimpleDdgiProbeVolumeOverlay(
             SceneRenderingData sceneData,
             DebugDrawDepthMode depthMode,
-            int maxProbeMarkers)
+            bool faintBounds = false)
         {
             if (!Settings.GlobalIllumination.EffectiveUseDdgi ||
                 _simpleDdgiVolumeManager == null ||
@@ -4403,20 +4906,9 @@ namespace Njulf.Rendering
             }
 
             ReadOnlySpan<GPUSimpleDdgiVolume> volumes = _simpleDdgiVolumeManager.LastVolumes;
-            int remainingProbeMarkers = maxProbeMarkers;
-            int remainingMarkerVolumes = volumes.Length;
             for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)
             {
                 GPUSimpleDdgiVolume volume = volumes[volumeIndex];
-                float spacing = Math.Max(volume.OriginAndSpacing.W, 0.001f);
-                Vector3 origin = new(
-                    volume.OriginAndSpacing.X,
-                    volume.OriginAndSpacing.Y,
-                    volume.OriginAndSpacing.Z);
-                int probeCountX = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.X));
-                int probeCountY = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.Y));
-                int probeCountZ = Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.Z));
-                int firstProbeIndex = Math.Max(0, (int)MathF.Round(volume.GridCountsAndFirstProbe.W));
                 Vector3 worldMin = new(
                     volume.WorldMinAndEdgeFade.X,
                     volume.WorldMinAndEdgeFade.Y,
@@ -4426,32 +4918,14 @@ namespace Njulf.Rendering
                     volume.WorldMaxAndKind.Y,
                     volume.WorldMaxAndKind.Z);
 
+                Vector4 volumeColor = ResolveSimpleDdgiVolumeDebugColor(volumeIndex, volume);
+                if (faintBounds)
+                    volumeColor.W = MathF.Min(volumeColor.W, 0.25f);
                 _debugDraw.Box(
                     new BoundingBox(worldMin, worldMax),
-                    ResolveSimpleDdgiVolumeDebugColor(volumeIndex, volume),
+                    volumeColor,
                     depthMode);
                 sceneData.DebugDdgiProbeVolumesDrawn++;
-
-                if (remainingProbeMarkers <= 0)
-                {
-                    remainingMarkerVolumes = Math.Max(0, remainingMarkerVolumes - 1);
-                    continue;
-                }
-
-                int volumeMarkerBudget = CalculateDdgiProbeMarkerBudget(
-                    remainingProbeMarkers,
-                    remainingMarkerVolumes);
-                remainingProbeMarkers -= DrawSimpleDdgiProbeSamples(
-                    origin,
-                    spacing,
-                    probeCountX,
-                    probeCountY,
-                    probeCountZ,
-                    firstProbeIndex,
-                    sceneData.DebugOverlayMode,
-                    depthMode,
-                    volumeMarkerBudget);
-                remainingMarkerVolumes = Math.Max(0, remainingMarkerVolumes - 1);
             }
         }
 
@@ -4471,87 +4945,6 @@ namespace Njulf.Rendering
                 1 => new Vector4(0.3f, 0.95f, 0.55f, 0.9f),
                 _ => new Vector4(0.95f, 0.3f, 0.85f, 0.9f)
             };
-        }
-
-        private int DrawSimpleDdgiProbeSamples(
-            Vector3 origin,
-            float spacing,
-            int probeCountX,
-            int probeCountY,
-            int probeCountZ,
-            int firstProbeIndex,
-            DebugOverlayMode overlayMode,
-            DebugDrawDepthMode depthMode,
-            int maxProbeMarkers)
-        {
-            int markersDrawn = 0;
-            float markerRadius = Math.Clamp(spacing * 0.08f, 0.04f, 0.2f);
-            DdgiProbeMarkerSampling markerSampling = CalculateDdgiProbeMarkerSampling(
-                probeCountX,
-                probeCountY,
-                probeCountZ,
-                maxProbeMarkers);
-            for (int z = 0; z < probeCountZ; z++)
-            {
-                for (int y = 0; y < probeCountY; y++)
-                {
-                    for (int x = 0; x < probeCountX; x++)
-                    {
-                        if (markersDrawn >= maxProbeMarkers)
-                            return markersDrawn;
-                        if (!ShouldDrawDdgiProbeMarker(x, y, z, markerSampling))
-                            continue;
-
-                        int localProbeIndex = x + y * probeCountX + z * probeCountX * probeCountY;
-                        int probeIndex = firstProbeIndex + localProbeIndex;
-                        bool updated = _simpleDdgiVolumeManager?.IsProbeScheduledForUpdate(probeIndex) == true;
-                        if (!TryResolveSimpleDdgiProbeMarkerColor(overlayMode, probeIndex, updated, out Vector4 markerColor))
-                            continue;
-
-                        Vector3 p = origin + new Vector3(spacing * x, spacing * y, spacing * z);
-                        _debugDraw.Line(p - Vector3.UnitX * markerRadius, p + Vector3.UnitX * markerRadius, markerColor, depthMode);
-                        _debugDraw.Line(p - Vector3.UnitY * markerRadius, p + Vector3.UnitY * markerRadius, markerColor, depthMode);
-                        _debugDraw.Line(p - Vector3.UnitZ * markerRadius, p + Vector3.UnitZ * markerRadius, markerColor, depthMode);
-                        markersDrawn++;
-                    }
-                }
-            }
-
-            return markersDrawn;
-        }
-
-        private static bool TryResolveSimpleDdgiProbeMarkerColor(
-            DebugOverlayMode overlayMode,
-            int probeIndex,
-            bool updated,
-            out Vector4 color)
-        {
-            switch (overlayMode)
-            {
-                case DebugOverlayMode.DdgiUpdatedProbes:
-                    color = updated
-                        ? new Vector4(0.15f, 0.65f, 1.0f, 1.0f)
-                        : new Vector4(0.25f, 0.28f, 0.35f, 0.35f);
-                    return true;
-                case DebugOverlayMode.DdgiPhysicalSlots:
-                    color = ResolveDdgiPhysicalSlotColor(true, probeIndex, 0);
-                    return true;
-                case DebugOverlayMode.DdgiCascadeBounds:
-                case DebugOverlayMode.DdgiCascadeBlend:
-                    color = new Vector4(0.2f, 0.75f, 1.0f, 0.95f);
-                    return true;
-                case DebugOverlayMode.DdgiUpdateReasons:
-                    color = updated
-                        ? new Vector4(0.15f, 0.65f, 1.0f, 1.0f)
-                        : new Vector4(0.24f, 0.28f, 0.34f, 0.35f);
-                    return true;
-                case DebugOverlayMode.DdgiProbeVolumes:
-                    color = new Vector4(0.95f, 0.9f, 0.25f, 0.95f);
-                    return true;
-                default:
-                    color = new Vector4(0.2f, 1.0f, 0.35f, 0.95f);
-                    return true;
-            }
         }
 
         internal readonly record struct DdgiProbeMarkerSampling(int StepX, int StepY, int StepZ);
@@ -4614,27 +5007,10 @@ namespace Njulf.Rendering
             return (Math.Max(1, count) + Math.Max(1, step) - 1) / Math.Max(1, step);
         }
 
-        private static Vector4 ResolveDdgiPhysicalSlotColor(bool volumeEnabled, int globalProbeIndex, int firstProbeIndex)
-        {
-            if (!volumeEnabled || globalProbeIndex < 0 || firstProbeIndex < 0)
-                return new Vector4(0.45f, 0.45f, 0.45f, 0.45f);
-
-            uint hash = HashProbeColor(unchecked((uint)(globalProbeIndex - firstProbeIndex)));
-            float r = 0.2f + ((hash & 0xffu) / 255.0f) * 0.75f;
-            float g = 0.2f + (((hash >> 8) & 0xffu) / 255.0f) * 0.75f;
-            float b = 0.2f + (((hash >> 16) & 0xffu) / 255.0f) * 0.75f;
-            return new Vector4(r, g, b, 0.95f);
-        }
-
-        private static uint HashProbeColor(uint value)
-        {
-            value ^= value >> 16;
-            value *= 0x7feb352d;
-            value ^= value >> 15;
-            value *= 0x846ca68b;
-            value ^= value >> 16;
-            return value;
-        }
+        private static int SaturatingAdd(int left, int right) =>
+            (int)Math.Min(
+                int.MaxValue,
+                (long)Math.Max(0, left) + Math.Max(0, right));
 
         private void DrawGeometryDecalOverlay(SceneRenderingData sceneData, DebugDrawDepthMode depthMode)
         {
@@ -4656,12 +5032,24 @@ namespace Njulf.Rendering
                 _debugDraw.Box(snapshot.WorldBounds, new Vector4(1.0f, 0.25f, 0.9f, 1.0f), depthMode);
                 sceneData.DebugDecalVolumesDrawn++;
             }
+
+            sceneData.DebugOverlayStatus = sceneData.DebugDecalVolumesDrawn > 0
+                ? DebugOverlayFrameStatus.Rendered(
+                    DebugOverlayMode.DecalVolumes,
+                    sceneData.DebugDecalVolumesDrawn,
+                    droppedItemCount: _debugDraw.DroppedLineCount)
+                : DebugOverlayFrameStatus.NoData(
+                    DebugOverlayMode.DecalVolumes,
+                    sceneData.CpuDebugSnapshotsEnabled
+                        ? "scene has 0 geometry decals"
+                        : "CPU object snapshots unavailable");
         }
 
         private void DrawMeshletBoundsOverlay(SceneRenderingData sceneData, DebugDrawDepthMode depthMode)
         {
             const int SphereSegments = 8;
             const int LinesPerSphere = SphereSegments * 3;
+            const int MaxMeshletBoundsPerFrame = 2_048;
             Vector4 color = new(0.1f, 0.75f, 1.0f, 0.9f);
             int lineBudget = Math.Max(0, Settings.Debug.MaxDebugLineSegments);
             int usedLines = _debugDraw.Snapshot().LineCount;
@@ -4696,10 +5084,32 @@ namespace Njulf.Rendering
                 ulong end = (ulong)meshletOffset + meshletCount;
                 for (ulong meshletIndex = meshletOffset; meshletIndex < end; meshletIndex++)
                 {
+                    if (sceneData.DebugMeshletBoundsDrawn >= MaxMeshletBoundsPerFrame)
+                    {
+                        ulong remaining = end - meshletIndex;
+                        int dropped = remaining > int.MaxValue
+                            ? int.MaxValue
+                            : (int)remaining;
+                        sceneData.DebugMeshletBoundsItemCapDropped = SaturatingAdd(
+                            sceneData.DebugMeshletBoundsItemCapDropped,
+                            dropped);
+                        sceneData.DebugMeshletBoundsDropped = SaturatingAdd(
+                            sceneData.DebugMeshletBoundsDropped,
+                            dropped);
+                        break;
+                    }
                     if (usedLines + LinesPerSphere > lineBudget)
                     {
                         ulong remaining = end - meshletIndex;
-                        sceneData.DebugMeshletBoundsDropped += remaining > int.MaxValue ? int.MaxValue : (int)remaining;
+                        int dropped = remaining > int.MaxValue
+                            ? int.MaxValue
+                            : (int)remaining;
+                        sceneData.DebugMeshletBoundsLineBudgetDropped = SaturatingAdd(
+                            sceneData.DebugMeshletBoundsLineBudgetDropped,
+                            dropped);
+                        sceneData.DebugMeshletBoundsDropped = SaturatingAdd(
+                            sceneData.DebugMeshletBoundsDropped,
+                            dropped);
                         break;
                     }
 
@@ -4727,6 +5137,20 @@ namespace Njulf.Rendering
                     sceneData.DebugMeshletBoundsDrawn++;
                 }
             }
+
+            sceneData.DebugOverlayStatus = sceneData.DebugMeshletBoundsDrawn > 0
+                ? DebugOverlayFrameStatus.Rendered(
+                    DebugOverlayMode.MeshletBounds,
+                    sceneData.DebugMeshletBoundsDrawn,
+                    secondaryItemCount: MaxMeshletBoundsPerFrame,
+                    droppedItemCount: SaturatingAdd(
+                        sceneData.DebugMeshletBoundsDropped,
+                        _debugDraw.DroppedLineCount))
+                : DebugOverlayFrameStatus.NoData(
+                    DebugOverlayMode.MeshletBounds,
+                    sceneData.CpuDebugSnapshotsEnabled
+                        ? "scene has 0 visible meshlets"
+                        : "CPU object snapshots unavailable");
         }
 
         private static float GetMaxAbsScale(Matrix4x4 matrix)
@@ -7824,8 +8248,13 @@ namespace Njulf.Rendering
                 GpuParticleIndirectDrawBufferSize = sceneData.GpuParticleIndirectDrawBufferSize,
                 GpuParticleSortKeyBufferSize = sceneData.GpuParticleSortKeyBufferSize,
                 DebugToolingEnabled = sceneData.DebugToolingEnabled ? 1 : 0,
-                DebugOverlayEnabled = sceneData.DebugToolingEnabled && sceneData.DebugOverlayMode != DebugOverlayMode.None ? 1 : 0,
+                DebugOverlayEnabled = sceneData.DebugToolingEnabled &&
+                    DebugOverlayCatalog.ResolveRendererMode(sceneData.DebugOverlayMode) !=
+                        DebugOverlayMode.None
+                            ? 1
+                            : 0,
                 DebugOverlayMode = sceneData.DebugOverlayMode,
+                DebugOverlayStatus = sceneData.DebugOverlayStatus,
                 CpuDebugSnapshotsEnabled = sceneData.CpuDebugSnapshotsEnabled ? 1 : 0,
                 DebugSelectedObjectIndex = sceneData.DebugSelectedObjectIndex,
                 DebugSelectedObjectName = sceneData.DebugSelectedObjectName,
@@ -7838,11 +8267,33 @@ namespace Njulf.Rendering
                 GpuDebugDrawMicroseconds = sceneData.GpuDebugDrawMicroseconds,
                 CpuDebugOverlayRecordMicroseconds = sceneData.CpuDebugOverlayRecordMicroseconds,
                 GpuDebugOverlayMicroseconds = sceneData.GpuDebugOverlayMicroseconds,
+                GpuDebugDdgiProbeMicroseconds =
+                    sceneData.GpuDebugDdgiProbeMicroseconds,
+                GpuDebugLightTileMicroseconds =
+                    sceneData.GpuDebugLightTileMicroseconds,
+                DebugLightTileMaxCount = sceneData.MaxLightsInAnyTile,
+                DebugLightTileAverageCount = sceneData.AverageLightsPerNonEmptyTile,
+                DebugDirectionalShadowCascadesDrawn = sceneData.DebugDirectionalShadowCascadesDrawn,
                 DebugObjectBoundsDrawn = sceneData.DebugObjectBoundsDrawn,
                 DebugMeshletBoundsDrawn = sceneData.DebugMeshletBoundsDrawn,
                 DebugMeshletBoundsDropped = sceneData.DebugMeshletBoundsDropped,
+                DebugMeshletBoundsItemCapDropped =
+                    sceneData.DebugMeshletBoundsItemCapDropped,
+                DebugMeshletBoundsLineBudgetDropped =
+                    sceneData.DebugMeshletBoundsLineBudgetDropped,
                 DebugReflectionProbeVolumesDrawn = sceneData.DebugReflectionProbeVolumesDrawn,
                 DebugDdgiProbeVolumesDrawn = sceneData.DebugDdgiProbeVolumesDrawn,
+                DebugDdgiRequestedSamples = sceneData.DebugDdgiRequestedSamples,
+                DebugDdgiProbeMarkersDrawn = sceneData.DebugDdgiProbeMarkersDrawn,
+                DebugDdgiProbeMarkersFiltered = sceneData.DebugDdgiProbeMarkersFiltered,
+                DebugDdgiNonresidentMarkers = sceneData.DebugDdgiNonresidentMarkers,
+                DebugDdgiStaleMappings = sceneData.DebugDdgiStaleMappings,
+                DebugDdgiStateUnavailableMarkers = sceneData.DebugDdgiStateUnavailableMarkers,
+                DebugDdgiInvalidTransactions = sceneData.DebugDdgiInvalidTransactions,
+                DebugDdgiSphereLineSegments = sceneData.DebugDdgiSphereLineSegments,
+                DebugDdgiProbeMarkersDropped = sceneData.DebugDdgiProbeMarkersDropped,
+                DebugDdgiGpuCountersValid = sceneData.DebugDdgiGpuCountersValid ? 1 : 0,
+                DebugDdgiUpdateReasonCounts = sceneData.DebugDdgiUpdateReasonCounts,
                 DebugDecalVolumesDrawn = sceneData.DebugDecalVolumesDrawn,
                 GpuTimingSupported = _gpuTimestamps.Supported ? 1 : 0,
                 GpuTimingEnabled = Settings.Debug.AllowGpuTiming ? 1 : 0,
@@ -11849,6 +12300,13 @@ namespace Njulf.Rendering
                 timings.GetGpuMicrosecondsOrZero("GpuParticleSortPass") +
                 timings.GetGpuMicrosecondsOrZero("ParticlePass");
             sceneData.GpuDebugDrawMicroseconds = timings.GetGpuMicrosecondsOrZero("DebugDrawPass");
+            sceneData.GpuDebugDdgiProbeMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("SimpleDdgiProbeDebugPass");
+            sceneData.GpuDebugLightTileMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("DebugOverlayPass");
+            sceneData.GpuDebugOverlayMicroseconds =
+                sceneData.GpuDebugDdgiProbeMicroseconds +
+                sceneData.GpuDebugLightTileMicroseconds;
             sceneData.GpuFogMicroseconds = timings.GetGpuMicrosecondsOrZero("FogPass");
             sceneData.GpuAutoExposureMicroseconds = timings.GetGpuMicrosecondsOrZero("AutoExposurePass");
             sceneData.GpuCompositeMicroseconds = timings.GetGpuMicrosecondsOrZero("ToneMapCompositePass");
@@ -12243,8 +12701,7 @@ namespace Njulf.Rendering
             SimpleDdgiDirtySignature dirtySignature = CreateSimpleDdgiDirtySignature(
                 scene,
                 lightSnapshot,
-                _ddgiEmissiveSourceRevision,
-                farFieldCoverageAvailable);
+                _ddgiEmissiveSourceRevision);
             SimpleDdgiWarmStartSceneIdentity? warmStartIdentity =
                 ResolveSimpleDdgiWarmStartSceneIdentity(
                     scene,
@@ -18061,8 +18518,7 @@ namespace Njulf.Rendering
         private SimpleDdgiDirtySignature CreateSimpleDdgiDirtySignature(
             Scene scene,
             LightFrameSnapshot lightSnapshot,
-            uint emissiveSourceRevision,
-            bool farFieldCoverageAvailable)
+            uint emissiveSourceRevision)
         {
             bool steppedAtmosphere =
                 Settings.Environment.Enabled &&
@@ -18094,7 +18550,11 @@ namespace Njulf.Rendering
             sourcePolicySignature = HashAdd(sourcePolicySignature, gi.FarFieldSkyVisibilityEnabled);
             sourcePolicySignature = HashAdd(sourcePolicySignature, gi.FarFieldStartDistance);
             sourcePolicySignature = HashAdd(sourcePolicySignature, gi.FarFieldMaxTraceSteps);
-            sourcePolicySignature = HashAdd(sourcePolicySignature, farFieldCoverageAvailable);
+            // Page residency is a transient producer detail, not a change to the
+            // world-space lighting contract. Hashing CoverageReady here made a
+            // camera move invalidate every cached source once while pages were
+            // requested and again when they became resident. The live readiness
+            // bit still reaches the trace flags through SimpleDdgiVolumeManager.
             ulong sourceContractSignature = HashAdd(
                 stableLightSignature,
                 sourcePolicySignature);

@@ -704,8 +704,12 @@ internal sealed class SampleInputController
         {
             _renderer.Settings.Debug.Enabled = true;
             _renderer.DebugDraw.Enabled = true;
-            _renderer.Settings.Debug.Mode = NextDebugOverlay(_renderer.Settings.Debug.Mode);
-            _renderer.Settings.Debug.CpuSnapshotsEnabled = RequiresCpuSnapshots(_renderer.Settings.Debug.Mode);
+            bool reverse = IsShiftDown();
+            _renderer.Settings.Debug.Mode = DebugOverlayCatalog.Next(
+                _renderer.Settings.Debug.Mode,
+                reverse);
+            _renderer.Settings.Debug.CpuSnapshotsEnabled =
+                DebugOverlayCatalog.RequiresCpuSnapshots(_renderer.Settings.Debug.Mode);
             PrintDebugSettings("Debug overlay");
         }
 
@@ -1209,6 +1213,11 @@ internal sealed class SampleInputController
     private bool IsControlDown()
     {
         return IsPhysicalKeyDown(Key.ControlLeft) || IsPhysicalKeyDown(Key.ControlRight);
+    }
+
+    private bool IsShiftDown()
+    {
+        return IsPhysicalKeyDown(Key.ShiftLeft) || IsPhysicalKeyDown(Key.ShiftRight);
     }
 
     private bool IsPhysicalKeyDown(Key key)
@@ -2868,10 +2877,13 @@ internal sealed class SampleInputController
             return;
 
         DebugOverlaySettings debug = _renderer.Settings.Debug;
+        string overlay = DebugOverlayCatalog.TryGet(debug.Mode, out DebugOverlayDescriptor descriptor)
+            ? descriptor.DisplayName
+            : $"unknown ({(uint)debug.Mode})";
         Console.WriteLine(
-            $"{prefix}: {(debug.Enabled ? "enabled" : "disabled")}, overlay={debug.Mode}, " +
-            $"cpuSnapshots={(debug.CpuSnapshotsEnabled ? "on" : "off")}, selected={debug.SelectedObjectIndex}, " +
-            $"debugLines={_renderer.DebugDraw.Snapshot().LineCount}/{debug.MaxDebugLineSegments}");
+            $"{prefix}: {(debug.Enabled ? "enabled" : "disabled")}, overlay={overlay}, " +
+            $"cpuSnapshots={(debug.CpuSnapshotsEnabled ? "on" : "off")}, selected={debug.SelectedObjectIndex}; " +
+            "frame status will be reported after rendering");
     }
 
     private void RequestDiagnosticSnapshot()
@@ -3106,44 +3118,6 @@ internal sealed class SampleInputController
             $"mesh={inspection.Mesh.Index}, material={inspection.Material.Index}, mode={material.RenderMode}, " +
             $"metallic={material.Metallic:F2}, roughness={material.Roughness:F2}, ao={material.AmbientOcclusion:F2}, normal={material.NormalStrength:F2}, " +
             $"textures={material.AlbedoTextureIndex}/{material.NormalTextureIndex}/{material.MetallicRoughnessTextureIndex}/{material.EmissiveTextureIndex}");
-    }
-
-    private static DebugOverlayMode NextDebugOverlay(DebugOverlayMode mode)
-    {
-        return mode switch
-        {
-            DebugOverlayMode.None => DebugOverlayMode.LightTiles,
-            DebugOverlayMode.LightTiles => DebugOverlayMode.DirectionalShadowCascades,
-            DebugOverlayMode.DirectionalShadowCascades => DebugOverlayMode.ReflectionProbeVolumes,
-            DebugOverlayMode.ReflectionProbeVolumes => DebugOverlayMode.DdgiProbeVolumes,
-            DebugOverlayMode.DdgiProbeVolumes => DebugOverlayMode.DdgiProbeActivity,
-            DebugOverlayMode.DdgiProbeActivity => DebugOverlayMode.DdgiUpdatedProbes,
-            DebugOverlayMode.DdgiUpdatedProbes => DebugOverlayMode.DdgiProbeRelocation,
-            DebugOverlayMode.DdgiProbeRelocation => DebugOverlayMode.DdgiProbeAge,
-            DebugOverlayMode.DdgiProbeAge => DebugOverlayMode.DdgiPhysicalSlots,
-            DebugOverlayMode.DdgiPhysicalSlots => DebugOverlayMode.DdgiCascadeBounds,
-            DebugOverlayMode.DdgiCascadeBounds => DebugOverlayMode.DdgiNewlyExposedCells,
-            DebugOverlayMode.DdgiNewlyExposedCells => DebugOverlayMode.DdgiFrustumPriority,
-            DebugOverlayMode.DdgiFrustumPriority => DebugOverlayMode.DdgiSafetyRefresh,
-            DebugOverlayMode.DdgiSafetyRefresh => DebugOverlayMode.DdgiCascadeBlend,
-            DebugOverlayMode.DdgiCascadeBlend => DebugOverlayMode.DdgiUpdateReasons,
-            DebugOverlayMode.DdgiUpdateReasons => DebugOverlayMode.DecalVolumes,
-            DebugOverlayMode.DecalVolumes => DebugOverlayMode.ObjectBounds,
-            DebugOverlayMode.ObjectBounds => DebugOverlayMode.MeshletBounds,
-            DebugOverlayMode.MeshletBounds => DebugOverlayMode.SelectedObject,
-            DebugOverlayMode.SelectedObject => DebugOverlayMode.MaterialInspection,
-            DebugOverlayMode.MaterialInspection => DebugOverlayMode.PassTimings,
-            DebugOverlayMode.PassTimings => DebugOverlayMode.GpuMemory,
-            _ => DebugOverlayMode.None
-        };
-    }
-
-    private static bool RequiresCpuSnapshots(DebugOverlayMode mode)
-    {
-        return mode is DebugOverlayMode.ObjectBounds or
-            DebugOverlayMode.MeshletBounds or
-            DebugOverlayMode.SelectedObject or
-            DebugOverlayMode.MaterialInspection;
     }
 
     internal static MaterialDebugView NextMaterialDebugView(MaterialDebugView mode)

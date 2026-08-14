@@ -1,7 +1,8 @@
 # Ctrl+Keypad9 Debug Overlay Improvement Plan
 
 - Date: 2026-08-07
-- Status: proposed; this document does not implement the renderer changes
+- Status: implemented 2026-08-14; automated and startup validation complete,
+  full runtime visual matrix pending
 - Scope: the `Ctrl+Keypad9` overlay cycle, its renderer implementations,
   diagnostics, tests, and documentation
 - Baseline: the current working tree, including GPU-resident Simple-DDGI
@@ -561,23 +562,53 @@ correctness or publication ownership.
 
 ## 7. Completion checklist
 
-- [ ] `Ctrl+Keypad9` and `Ctrl+Shift+Keypad9` traverse the tested catalog.
-- [ ] No active mode lacks a renderer implementation.
-- [ ] Retired values remain numerically compatible and are not cycled.
-- [ ] `LightTiles` is a real screen-space occupancy heatmap.
-- [ ] `DirectionalShadowCascades` draws actual cascade frusta.
-- [ ] `DdgiProbeSpheres` draws bounded, readable world-space probe spheres.
-- [ ] Stateful DDGI overlays use authoritative GPU/CPU state for the active
+- [x] `Ctrl+Keypad9` and `Ctrl+Shift+Keypad9` traverse the tested catalog.
+- [x] No active mode lacks a renderer implementation.
+- [x] Retired values remain numerically compatible and are not cycled.
+- [x] `LightTiles` is a real screen-space occupancy heatmap.
+- [x] `DirectionalShadowCascades` draws actual cascade frusta.
+- [x] `DdgiProbeSpheres` draws bounded, readable world-space probe spheres.
+- [x] Stateful DDGI overlays use authoritative GPU/CPU state for the active
       scheduler and residency mode.
-- [ ] Toroidal and sparse identities match the production shader helpers.
-- [ ] `DdgiUpdatedProbes` and `DdgiUpdateReasons` use admitted transaction data,
+- [x] Toroidal and sparse identities match the production shader helpers.
+- [x] `DdgiUpdatedProbes` and `DdgiUpdateReasons` use admitted transaction data,
       not `_probeQueued` in `GpuResident`.
-- [ ] Every zero-item result explains why it is empty.
-- [ ] Debug-disabled execution has no new allocation, upload, dispatch, or draw.
-- [ ] Tests cover catalog completeness, addressing, palettes, budgets, shaders,
+- [x] Every zero-item result explains why it is empty.
+- [x] Debug-disabled execution has no new allocation, upload, dispatch, or draw.
+- [x] Tests cover catalog completeness, addressing, palettes, budgets, shaders,
       render-graph resources, and numeric compatibility.
 - [ ] Runtime validation passes the dense/sparse, CPU/GPU, stationary/moving,
       resize, fallback, and no-data matrix.
-- [ ] Settings reference, shortcut guide, help text, and diagnostics agree with
+- [x] Settings reference, shortcut guide, help text, and diagnostics agree with
       the final cycle.
 
+Targeted validation on 2026-08-14 built the shader/C# solution with zero
+warnings and passed 63 overlay, tooling, ABI, and render-graph contract tests.
+The initial complete test assembly finished with 2,796 passed, one skipped, and
+one unrelated failure: `AssetTool_ReportCommand_WritesJsonReport` timed out
+waiting five minutes for `Njulf.AssetTool`. The initial three-frame Vulkan
+startup smoke also exposed a pipeline-creation stall before the first frame.
+
+The startup regression was corrected and revalidated on 2026-08-15. Exit code
+`-1,073,741,510` is Windows `0xC000013A` (`STATUS_CONTROL_C_EXIT`), emitted when
+the stalled process was stopped rather than by an application crash. Repeated
+managed/native stack samples placed the stall in `Vk.CreateComputePipelines`
+while `SimpleDdgiTransportAuditPass.Initialize` eagerly created all twelve
+storage/guiding ray and reduction variants after the overlay shader changes
+invalidated the whole GI shader-bundle cache. Debug now compiles only the audit
+shader family with `-Os` while retaining detailed counters, and startup
+prewarms only the active storage pair plus its guided pair when directional
+guiding is admitted. Other storage variants remain available through the
+existing lazy pipeline cache.
+
+Both Debug and Release solution builds completed with zero warnings and zero
+errors. `spirv-val --target-env vulkan1.3` accepted all twelve generated audit
+variants and the generic audit artifact. The focused audit/trace/overlay suite
+passed 45 of 45 tests, and the complete assembly passed 2,805 tests with one
+hardware-gated skip and no failures. With the application GI cache removed, a
+three-frame Debug startup reached `FirstFrame.End` in 7.23 seconds and exited
+zero; the immediate warm run reached it in 5.04 seconds and also exited zero.
+Cold/warm GI pipeline creation measured 208,700/19,682 microseconds with zero
+render-critical pipeline creations. The pre-existing application cache was
+restored after the check. The broader manual visual runtime matrix remains
+open.

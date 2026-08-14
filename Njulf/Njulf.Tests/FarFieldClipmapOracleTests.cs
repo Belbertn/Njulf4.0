@@ -1437,8 +1437,9 @@ namespace Njulf.Tests
                 Assert.That(renderer, Does.Contain("_farFieldClipmapManager!.Upload("));
                 Assert.That(renderer, Does.Contain("sceneData.SceneContentRevision);"));
                 Assert.That(renderer, Does.Contain("SimpleDdgiDirtySignature dirtySignature = CreateSimpleDdgiDirtySignature("));
-                Assert.That(renderer, Does.Contain("_ddgiEmissiveSourceRevision,"));
-                Assert.That(renderer, Does.Contain("farFieldCoverageAvailable);"));
+                Assert.That(renderer, Does.Contain("_ddgiEmissiveSourceRevision);"));
+                Assert.That(renderer, Does.Not.Contain(
+                    "HashAdd(sourcePolicySignature, farFieldCoverageAvailable)"));
                 Assert.That(renderer, Does.Contain("dirtySignature.Signature"));
                 Assert.That(renderer, Does.Contain("dirtySignature.ReasonFlags"));
                 Assert.That(pageCacheBytesDefinition, Does.Contain("_bakeVoxelBufferBytes"),

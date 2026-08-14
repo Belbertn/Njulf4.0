@@ -6,10 +6,10 @@
 // C5 is intentionally a separate, opt-in ABI.  These stages are not part of
 // the global bindless contract until the renderer has explicitly created the
 // source attachment, history identity resources, barriers, and dispatch path.
-// V10 fixes the metadata std430 array stride and makes temporal/spatial
-// evidence plus a bounded composite correction part of the C5 contract.
+// V11 carries a full-weight distance separately from the outer cutoff so C5
+// can feather its bounded range without a hard transition.
 // Keep this in lockstep with SimpleDdgiNearFieldResidualGpuAbi.
-const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000au;
+const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000bu;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_MAGIC = 0x4335544du;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS = 16u;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS = 16u;
@@ -127,6 +127,7 @@ struct SimpleDdgiNearFieldResidualTracePushConstants
     float depthTolerance;
     float minimumNormalDot;
     float maximumTraceDistance;
+    float fullWeightTraceDistance;
     uint minimumB3FootprintRadius;
     uint maximumB3FootprintRadius;
     uint traceSourceRevision;

@@ -1292,6 +1292,88 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
+    public void CompatibleCellAlignedRemap_DoesNotRequireAFieldReset()
+    {
+        var previous = new GPUSimpleDdgiVolume
+        {
+            OriginAndSpacing = new Vector4(0f, 0f, 0f, 1f),
+            GridCountsAndFirstProbe = new Vector4(4f, 3f, 2f, 0f),
+            WorldMaxAndKind = new Vector4(0f, 0f, 0f, 3f),
+            RaysAndReserved = new Vector4(30_000f, 0f, 0f, 0f)
+        };
+        GPUSimpleDdgiVolume oneCell = previous;
+        oneCell.OriginAndSpacing.X = 1f;
+        GPUSimpleDdgiVolume wholeVolume = previous;
+        wholeVolume.OriginAndSpacing.X = 4f;
+        GPUSimpleDdgiVolume fractional = previous;
+        fractional.OriginAndSpacing.X = 0.5f;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.IsCompatibleVolumeRemap(
+                    previous,
+                    oneCell),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.IsCompatibleVolumeRemap(
+                    previous,
+                    wholeVolume),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.IsCompatibleVolumeRemap(
+                    previous,
+                    fractional),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void LayoutFingerprint_ExcludesRuntimeWorldPlacement()
+    {
+        string source = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiVolumeManager.cs"));
+        int start = source.IndexOf(
+            "private static ulong CalculateLayoutFingerprint(",
+            StringComparison.Ordinal);
+        int end = source.IndexOf(
+            "private static ulong CalculateTransportSourceCalibrationFingerprint(",
+            start,
+            StringComparison.Ordinal);
+        Assert.That(start, Is.GreaterThanOrEqualTo(0));
+        Assert.That(end, Is.GreaterThan(start));
+        string method = source[start..end];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(method, Does.Contain("if (!includeCandidateTopology)"));
+            Assert.That(method, Does.Contain("candidate.CountX"));
+            Assert.That(method, Does.Contain("candidate.Spacing"));
+            Assert.That(method, Does.Not.Contain("candidate.Origin"));
+            Assert.That(method, Does.Not.Contain("candidate.WorldMin"));
+            Assert.That(method, Does.Not.Contain("candidate.WorldMax"));
+        });
+    }
+
+    [TestCase(false, false, false)]
+    [TestCase(false, true, false)]
+    [TestCase(true, false, true)]
+    [TestCase(true, true, true)]
+    public void SampledMirrorRemap_DoesNotClearTheCanonicalAtlas(
+        bool storageContractChanged,
+        bool sampledMappingChanged,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.RequiresCanonicalAtlasClear(
+                storageContractChanged,
+                sampledMappingChanged),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
     public void BuildVolumes_AlwaysIncludesAuthoredOwnershipUnderTransportV2()
     {
         string source = File.ReadAllText(FindSourceFile(

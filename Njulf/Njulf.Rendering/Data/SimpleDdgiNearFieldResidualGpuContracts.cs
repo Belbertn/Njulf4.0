@@ -17,9 +17,9 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     /// Increment when any C5 GPU field, binding meaning, source ownership rule,
     /// or history-reuse rule changes.
     /// </summary>
-    // V10 fixes the GLSL std430 metadata-array stride and admits C5 output only
-    // after temporal/spatial evidence plus a bounded composite correction.
-    public const uint Version = 0x4335_000Au;
+    // V11 adds an explicit full-weight trace distance so the bounded C5 range
+    // can feather to its outer cutoff without a visible hard transition.
+    public const uint Version = 0x4335_000Bu;
 
     public const uint DirectDiffuseTraceSourceTerm = 1u << 0;
     public const uint EmissiveTraceSourceTerm = 1u << 1;
@@ -41,7 +41,7 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     public const uint TelemetryRequiredCompletionMask =
         TelemetryTraceCompleteBit | TelemetryTemporalCompleteBit;
     public const uint ResetPushConstantByteCount = 32u;
-    public const uint TracePushConstantByteCount = 80u;
+    public const uint TracePushConstantByteCount = 84u;
     public const uint TemporalPushConstantByteCount = 96u;
     public const uint FilterPushConstantByteCount = 48u;
     public const uint CompositePushConstantByteCount = 48u;
@@ -117,7 +117,8 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
             (nameof(GPUSimpleDdgiNearFieldResidualTracePushConstants.Thickness), 48),
             (nameof(GPUSimpleDdgiNearFieldResidualTracePushConstants.MinimumNormalDot), 60),
             (nameof(GPUSimpleDdgiNearFieldResidualTracePushConstants.MaximumTraceDistance), 64),
-            (nameof(GPUSimpleDdgiNearFieldResidualTracePushConstants.TraceSourceRevision), 76));
+            (nameof(GPUSimpleDdgiNearFieldResidualTracePushConstants.FullWeightTraceDistance), 68),
+            (nameof(GPUSimpleDdgiNearFieldResidualTracePushConstants.TraceSourceRevision), 80));
         Verify<GPUSimpleDdgiNearFieldResidualTemporalPushConstants>(
             TemporalPushConstantByteCount,
             (nameof(GPUSimpleDdgiNearFieldResidualTemporalPushConstants.AbiVersion), 0),
@@ -296,8 +297,8 @@ public struct GPUSimpleDdgiNearFieldResidualTileRecord
     public uint FlagsAndMaximumDistance;
 }
 
-/// <summary>80-byte trace push block mirrored by ddgi_near_field_residual_trace.comp.</summary>
-[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 80)]
+/// <summary>84-byte trace push block mirrored by ddgi_near_field_residual_trace.comp.</summary>
+[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 84)]
 public struct GPUSimpleDdgiNearFieldResidualTracePushConstants
 {
     public uint AbiVersion;
@@ -317,6 +318,7 @@ public struct GPUSimpleDdgiNearFieldResidualTracePushConstants
     public float DepthTolerance;
     public float MinimumNormalDot;
     public float MaximumTraceDistance;
+    public float FullWeightTraceDistance;
     public uint MinimumB3FootprintRadius;
     public uint MaximumB3FootprintRadius;
     public uint TraceSourceRevision;

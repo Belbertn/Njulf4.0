@@ -26,7 +26,9 @@ public readonly record struct SimpleDdgiNearFieldResidualProfile(
     public static SimpleDdgiNearFieldResidualProfile HalfResolutionReference { get; } = new(
         ResolutionScale: 0.5f,
         SourceFormat: SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat,
-        MaximumTraceSteps: 32,
+        // Keep the reference step budget proportional to the eight-metre
+        // trace range so extending C5 does not halve its sampling precision.
+        MaximumTraceSteps: 64,
         MaximumMipVisits: 8,
         BinaryRefinementSteps: 4,
         FilterIterationCount: 2,

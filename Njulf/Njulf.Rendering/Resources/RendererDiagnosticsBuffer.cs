@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Memory;
@@ -161,9 +162,19 @@ namespace Njulf.Rendering.Resources
         public const int SimpleDdgiNearVisibilityCounterCount = 10;
         public const float SimpleDdgiNearVisibilityClampSumScale = 256.0f;
         public const float SimpleDdgiNearVisibilityClampMaximumScale = 65_535.0f;
-        public const int CounterCount =
+        // Debug-only probe-overlay results. The vertex pass writes one bounded
+        // item per sampled identity or admitted update record. Keeping this
+        // family in the existing fence-complete ring avoids a new readback or
+        // synchronization path.
+        public const int DebugDdgiOverlayCounterBase =
             SimpleDdgiNearVisibilityCounterBase +
             SimpleDdgiNearVisibilityCounterCount;
+        public const int DebugDdgiOverlayReasonCounterBase =
+            DebugDdgiOverlayCounterBase + 8;
+        public const int DebugDdgiOverlayReasonCounterCount = 16;
+        public const int DebugDdgiOverlayCounterCount = 27;
+        public const int CounterCount =
+            DebugDdgiOverlayCounterBase + DebugDdgiOverlayCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -206,6 +217,9 @@ namespace Njulf.Rendering.Resources
         private readonly DdgiManyLightGpuCounters[]
             _lastCompletedDdgiManyLightCounters =
                 new DdgiManyLightGpuCounters[FramesInFlight];
+        private readonly DebugDdgiOverlayGpuCounters[]
+            _lastCompletedDebugDdgiOverlayCounters =
+                new DebugDdgiOverlayGpuCounters[FramesInFlight];
         private readonly ulong[] _diagnosticFrameSerials =
             new ulong[FramesInFlight];
         private readonly bool[] _diagnosticFrameSubmitted =
@@ -275,6 +289,9 @@ namespace Njulf.Rendering.Resources
 
             _lastCompletedDirectionalShadowCasterDiagnostics[frameIndex] =
                 DecodeDirectionalShadowCasterDiagnostics(new ReadOnlySpan<uint>(counters, CounterCount));
+            _lastCompletedDebugDdgiOverlayCounters[frameIndex] =
+                DecodeDebugDdgiOverlayCounters(
+                    new ReadOnlySpan<uint>(counters, CounterCount));
 
             _lastCompletedThinSurfaceTransportCounters[frameIndex] = new ThinSurfaceTransportCounters(
                 DetailedHitCount: counters[ThinSurfaceTransportCounterBase + 0],
@@ -1002,6 +1019,61 @@ namespace Njulf.Rendering.Resources
             return _lastCompletedDdgiManyLightCounters[frameIndex];
         }
 
+        public DebugDdgiOverlayGpuCounters
+            GetLastCompletedDebugDdgiOverlayCounters(int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedDebugDdgiOverlayCounters[frameIndex];
+        }
+
+        internal static DebugDdgiOverlayGpuCounters DecodeDebugDdgiOverlayCounters(
+            ReadOnlySpan<uint> counters)
+        {
+            if (counters.Length < DebugDdgiOverlayCounterBase +
+                    DebugDdgiOverlayCounterCount)
+            {
+                return DebugDdgiOverlayGpuCounters.Empty;
+            }
+
+            int baseIndex = DebugDdgiOverlayCounterBase;
+            uint encodedMode = counters[baseIndex];
+            if (encodedMode == 0u || encodedMode > 24u)
+                return DebugDdgiOverlayGpuCounters.Empty;
+
+            int reasons = DebugDdgiOverlayReasonCounterBase;
+            var reasonCounts = new DebugDdgiUpdateReasonCounts(
+                counters[reasons + 0],
+                counters[reasons + 1],
+                counters[reasons + 2],
+                counters[reasons + 3],
+                counters[reasons + 4],
+                counters[reasons + 5],
+                counters[reasons + 6],
+                counters[reasons + 7],
+                counters[reasons + 8],
+                counters[reasons + 9],
+                counters[reasons + 10],
+                counters[reasons + 11],
+                counters[reasons + 12],
+                counters[reasons + 13],
+                counters[reasons + 14],
+                counters[reasons + 15],
+                counters[baseIndex + 7]);
+            return new DebugDdgiOverlayGpuCounters(
+                Valid: true,
+                Mode: (DebugOverlayMode)(encodedMode - 1u),
+                DrawnMarkerCount: counters[baseIndex + 1],
+                FilteredMarkerCount: counters[baseIndex + 2],
+                NonresidentMarkerCount: counters[baseIndex + 3],
+                StaleMappingCount: counters[baseIndex + 4],
+                StateUnavailableMarkerCount: counters[baseIndex + 5],
+                InvalidTransactionCount: counters[baseIndex + 6],
+                VolumeTableGeneration: counters[baseIndex + 24],
+                SchedulerResourceGeneration: counters[baseIndex + 25],
+                ResidencyResourceGeneration: counters[baseIndex + 26],
+                UpdateReasons: reasonCounts);
+        }
+
         private static int DecodeSignedCounter(uint value)
         {
             return unchecked((int)value);
@@ -1386,6 +1458,7 @@ namespace Njulf.Rendering.Resources
                 SrcAccessMask = AccessFlags2.TransferWriteBit,
                 DstStageMask = PipelineStageFlags2.TaskShaderBitExt |
                     PipelineStageFlags2.MeshShaderBitExt |
+                    PipelineStageFlags2.VertexShaderBit |
                     PipelineStageFlags2.FragmentShaderBit |
                     PipelineStageFlags2.ComputeShaderBit,
                 DstAccessMask = AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,

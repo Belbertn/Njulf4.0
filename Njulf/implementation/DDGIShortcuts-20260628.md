@@ -32,4 +32,33 @@ All shortcuts are physical key chords: hold either `Left Ctrl` or `Right Ctrl`, 
 
 ## Debug Overlays
 
-`Ctrl+Keypad9` cycles renderer overlays. The sequence includes the active Simple DDGI probe overlays when available.
+`Ctrl+Keypad9` (also described as `Ctrl+Num9`) traverses the renderer-overlay
+catalog forward; add `Shift` to traverse it in reverse. The stable cycle is:
+
+```text
+None -> Forward+ light tiles -> Directional shadow cascade frusta ->
+Reflection probe volumes -> DDGI volume bounds -> DDGI probe spheres ->
+DDGI probe activity -> DDGI updated probes -> DDGI probe relocation ->
+DDGI probe age -> DDGI physical slots -> DDGI cascade bounds ->
+DDGI newly exposed cells -> DDGI scheduler priority ->
+DDGI update reasons -> Decal volumes -> Object bounds -> Meshlet bounds ->
+Selected object -> None
+```
+
+The DDGI probe views are bounded to 768 procedural wire-sphere instances.
+Their vertex shader resolves the production toroidal index, sparse physical
+page/slot, canonical state, relocation, receiver publication, admitted update
+record, and resource generations directly on the GPU. `DDGI probe spheres`
+uses the relocated centre when publication is coherent and the logical lattice
+position otherwise. `DDGI updated probes` and `DDGI update reasons` read the
+admitted queue directly; they do not use the CPU `_probeQueued` mirror.
+
+After the first rendered frame, the diagnostics reporter prints the catalog
+legend and a `Rendered`, `NoData`, `Unavailable`, or `Retired` result. DDGI
+marker/residency/state/reason counters arrive through the existing
+fence-complete frame ring and are rejected when their volume, scheduler, or
+residency generation no longer matches.
+
+`F2` is a separate receiver-space shadow ownership view. The overlay cycle's
+`Directional shadow cascade frusta` mode draws the actual world-space light
+frusta.

@@ -4018,6 +4018,19 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         }
 
         /// <summary>
+        /// Returns the bounded, immutable scheduler classification needed by a
+        /// sampled debug marker. This keeps the CPU-reference authority behind
+        /// one semantic query rather than exposing its mutable per-probe arrays.
+        /// </summary>
+        internal uint GetDebugSchedulerPriorityFlags(int probeIndex)
+        {
+            return (uint)probeIndex < (uint)_probeSchedulingFlags.Length &&
+                   (_probeSchedulingFlags[probeIndex] & ProbeSchedulingVisibleFlag) != 0
+                ? GPUDdgiProbeDebugInstance.SchedulerVisibleFlag
+                : 0u;
+        }
+
+        /// <summary>
         /// Returns how many candidates in a work class were rejected by the hard
         /// primary-ray cap this frame. This makes a visible-response miss
         /// distinguishable from ordinary request-cap deferral without allocating a
@@ -4844,9 +4857,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
                 phaseStart = Stopwatch.GetTimestamp();
                 bool volumeTableRemapped = VolumeTableRemapped(previousProbeCount, previousVolumeCount);
+                bool remapRequiresFieldEvidenceReset = volumeTableRemapped &&
+                    VolumeTableRemapRequiresFieldEvidenceReset(previousVolumeCount);
                 bool incompatibleTopologyStateReset = false;
                 if (volumeTableRemapped)
-                    AdvanceVolumeTableGenerationAndDropPendingReadbacks();
+                {
+                    AdvanceVolumeTableGenerationAndDropPendingReadbacks(
+                        remapRequiresFieldEvidenceReset);
+                }
                 invalidationMicroseconds += ElapsedMicroseconds(phaseStart);
 
                 phaseStart = Stopwatch.GetTimestamp();
@@ -7211,6 +7229,28 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             return false;
         }
 
+        private bool VolumeTableRemapRequiresFieldEvidenceReset(
+            int previousVolumeCount)
+        {
+            if (previousVolumeCount != _volumeCount)
+                return true;
+
+            for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
+            {
+                GPUSimpleDdgiVolume current = _volumeScratch[volumeIndex];
+                if (!TryGetPreviousMatchingVolume(
+                        volumeIndex,
+                        current,
+                        out GPUSimpleDdgiVolume previous) ||
+                    !IsCompatibleVolumeRemap(previous, current))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static bool BitwiseEqual(Vector4 left, Vector4 right) =>
             BitConverter.SingleToUInt32Bits(left.X) == BitConverter.SingleToUInt32Bits(right.X) &&
             BitConverter.SingleToUInt32Bits(left.Y) == BitConverter.SingleToUInt32Bits(right.Y) &&
@@ -7241,17 +7281,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     // A cell-aligned origin move is the supported toroidal
                     // remap. Any fractional movement changes the physical
                     // sample topology and must not reuse lifecycle metadata.
-                    bool sameOrigin = ApproximatelyEqual(Origin(previous), Origin(current));
-                    bool cellAligned = TryResolveCellDelta(
-                        previous,
-                        current,
-                        out int deltaX,
-                        out int deltaY,
-                        out int deltaZ);
-                    compatible = sameOrigin || (cellAligned &&
-                        Math.Abs((long)deltaX) < CountX(current) &&
-                        Math.Abs((long)deltaY) < CountY(current) &&
-                        Math.Abs((long)deltaZ) < CountZ(current));
+                    compatible = IsCompatibleVolumeRemap(previous, current);
                     if (compatible)
                         break;
                 }
@@ -7305,12 +7335,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             return resetAnyProbe;
         }
 
-        private void AdvanceVolumeTableGenerationAndDropPendingReadbacks()
+        private void AdvanceVolumeTableGenerationAndDropPendingReadbacks(
+            bool forceFieldEvidenceReset)
         {
             _volumeTableGeneration = AdvanceSourceLightingGeneration(_volumeTableGeneration);
             _physicalOwnershipGeneration = AdvanceSourceLightingGeneration(
                 _physicalOwnershipGeneration);
-            BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
+            BeginTransportGlobalConvergence(
+                forceFieldEvidenceReset: forceFieldEvidenceReset);
             for (int i = 0; i < _probeStateReadbackRecorded.Length; i++)
             {
                 if (_probeStateReadbackRecorded[i])
@@ -9907,10 +9939,15 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     : 0;
             if (TailCertificationEnabled)
             {
-                // Source-age watchdogs remain active independently of solver
-                // completion. A periodic source refresh is a genuine operator
-                // boundary and will invalidate the current certificate.
-                return elapsed >= (uint)Math.Max(1, periodicRefreshFrames);
+                // Do not let the ordinary age cadence overtake the first bounded
+                // source -> solve -> audit transaction. If that transaction is
+                // genuinely stuck, the separately latched global watchdog wave
+                // admits a fixed cohort after two effective refresh intervals.
+                return ShouldRefreshCertifiedTransportSource(
+                    TransportGlobalConvergencePending,
+                    elapsed,
+                    periodicRefreshFrames,
+                    periodicRefreshWaveMember);
             }
 
             int minimumSolverGenerations = Math.Max(
@@ -10028,6 +10065,20 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             bool watchdogExpired =
                 Math.Max(0, completedSolverGenerations) >= watchdogGeneration;
             return hasLocalConvergenceEvidence || watchdogExpired;
+        }
+
+        internal static bool ShouldRefreshCertifiedTransportSource(
+            bool globalConvergencePending,
+            uint elapsedFrames,
+            int periodicRefreshFrames,
+            bool periodicRefreshWaveMember)
+        {
+            bool periodicRefreshDue = elapsedFrames >=
+                (uint)Math.Max(1, periodicRefreshFrames);
+            if (!periodicRefreshDue)
+                return false;
+
+            return !globalConvergencePending || periodicRefreshWaveMember;
         }
 
         internal static bool IsTransportSourceRefreshDueAtCutoff(
@@ -11423,6 +11474,29 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             FirstProbe(previous) == FirstProbe(current) &&
             NearlyEqual(Spacing(previous), Spacing(current), 0.0001f);
 
+        internal static bool IsCompatibleVolumeRemap(
+            GPUSimpleDdgiVolume previous,
+            GPUSimpleDdgiVolume current)
+        {
+            if (!MatchesVolumeIdentity(previous, current))
+                return false;
+            if (ApproximatelyEqual(Origin(previous), Origin(current)))
+                return true;
+            if (!TryResolveCellDelta(
+                    previous,
+                    current,
+                    out int deltaX,
+                    out int deltaY,
+                    out int deltaZ))
+            {
+                return false;
+            }
+
+            return Math.Abs((long)deltaX) < CountX(current) &&
+                Math.Abs((long)deltaY) < CountY(current) &&
+                Math.Abs((long)deltaZ) < CountZ(current);
+        }
+
         internal static bool TryResolveCellDelta(GPUSimpleDdgiVolume previous, GPUSimpleDdgiVolume current, out int deltaX, out int deltaY, out int deltaZ)
         {
             float spacing = Spacing(current);
@@ -11532,7 +11606,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 gi,
                 _volumeCandidates,
                 structuredGatherAvailable,
-                useHotColdSourceCacheLayout: false);
+                useHotColdSourceCacheLayout: false,
+                includeCandidateTopology: false);
             bool useHotColdSourceCacheLayout = ResolveHotColdSourceCacheLayout(
                 gi,
                 _hotColdSourceCacheAdmissionIdentity);
@@ -11540,7 +11615,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 gi,
                 _volumeCandidates,
                 structuredGatherAvailable,
-                useHotColdSourceCacheLayout);
+                useHotColdSourceCacheLayout,
+                includeCandidateTopology: true);
             if (_cachedLayoutReport == null || _cachedLayoutFingerprint != layoutFingerprint)
             {
                 var layoutRequests = new SimpleDdgiLayoutVolumeRequest[_volumeCandidates.Count];
@@ -12077,7 +12153,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             GlobalIlluminationSettings settings,
             IReadOnlyList<VolumeCandidate> candidates,
             bool structuredGatherAvailable,
-            bool useHotColdSourceCacheLayout)
+            bool useHotColdSourceCacheLayout,
+            bool includeCandidateTopology)
         {
             const ulong offset = 14695981039346656037UL;
             const ulong prime = 1099511628211UL;
@@ -12179,6 +12256,16 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 settings.SimpleDdgiClassificationReadbackEnabled ? 1UL : 0UL,
                 prime);
             hash = AddLayoutFingerprintValue(hash, (ulong)settings.SimpleDdgiLayoutAdmissionMode, prime);
+            // Auto hot/cold admission is a performance policy, not a topology
+            // ownership contract. Refinement demand can add or remove rejected
+            // optional candidates as the camera moves; resetting an already
+            // measured admission for that transient list forces fixed->hot
+            // storage transitions and cold-clears the canonical field. ABI and
+            // quality controls above remain in the identity, while the actual
+            // layout-report cache below still includes every candidate.
+            if (!includeCandidateTopology)
+                return hash;
+
             hash = AddLayoutFingerprintValue(hash, (ulong)candidates.Count, prime);
             for (int i = 0; i < candidates.Count; i++)
             {
@@ -12194,9 +12281,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     hash,
                     unchecked((uint)BitConverter.SingleToInt32Bits(candidate.Spacing)),
                     prime);
-                hash = AddLayoutFingerprintVector(hash, candidate.Origin, prime);
-                hash = AddLayoutFingerprintVector(hash, candidate.WorldMin, prime);
-                hash = AddLayoutFingerprintVector(hash, candidate.WorldMax, prime);
+                // Allocation and cache ABI depend on structural topology, not
+                // world placement. Camera-relative rings and refinement bricks
+                // move without changing their memory plan; including their
+                // origins here revoked Auto hot/cold admission and forced two
+                // destructive cache-layout transitions per focus reacquisition.
                 hash = AddLayoutFingerprintValue(
                     hash,
                     unchecked((uint)BitConverter.SingleToInt32Bits(candidate.EdgeFadeDistance)),
@@ -14677,12 +14766,15 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 forceRecreate: sampledMappingChanged);
             if (sampledMappingChanged)
                 _sampledAtlas?.MarkFullSyncRequired();
-            if (storageContractChanged || sampledMappingChanged)
+            if (RequiresCanonicalAtlasClear(
+                    storageContractChanged,
+                    sampledMappingChanged))
             {
-                // A mode/ABI/codebook or compact-mapping transition is a cold
-                // generation. Never let old source bytes or atlas history
-                // survive under new addressing, direction, or layer-owner
-                // semantics.
+                // A mode/ABI/codebook transition changes canonical buffer
+                // addressing and is therefore a cold generation. A compact
+                // sampled-mirror mapping transition is isolated to the optional
+                // images recreated above; its forced full sync must not erase
+                // the canonical field or source cache.
                 _atlasClearRequired = true;
                 _atlasFresh = true;
                 _sampledAtlas?.MarkFullSyncRequired();
@@ -14695,6 +14787,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (_context.ValidationSettings.Mode != RendererValidationMode.Off)
                 ValidateCachedCapacityPlan(allocationPlan, readbackRequired);
             return true;
+        }
+
+        internal static bool RequiresCanonicalAtlasClear(
+            bool storageContractChanged,
+            bool sampledMappingChanged)
+        {
+            _ = sampledMappingChanged;
+            return storageContractChanged;
         }
 
         private bool RequiresSynchronizedCapacityTransition(

@@ -199,6 +199,13 @@ namespace Njulf.Core.Scene
         /// </summary>
         public SceneAssetReference? AssetReference { get; set; }
 
+        /// <summary>
+        /// Controls whether this object is part of an authored scene document.
+        /// Runtime-only diagnostics and fixtures can opt out when their mesh or
+        /// material is generated in memory and therefore cannot be reloaded.
+        /// </summary>
+        public bool PersistInSceneDocument { get; set; } = true;
+
         /// <summary>True when the assigned world matrix contains shear or another non-TRS component.</summary>
         public bool HasNonTrsMatrix => _hasNonTrsMatrix;
 
