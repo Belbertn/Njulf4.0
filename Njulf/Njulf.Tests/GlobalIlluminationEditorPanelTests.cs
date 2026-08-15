@@ -61,7 +61,7 @@ public sealed class GlobalIlluminationEditorPanelTests
     }
 
     [Test]
-    public void AdvancedGiFeatureSelection_DefaultSettingsKeepDirectionalGuidingDisabled()
+    public void AdvancedGiFeatureSelection_DefaultSettingsEnableAllBoundedPaths()
     {
         var settings = new GlobalIlluminationSettings();
 
@@ -73,10 +73,10 @@ public sealed class GlobalIlluminationEditorPanelTests
             Assert.That(selection, Is.EqualTo(new AdvancedGiFeatureSelection(
                 ReceiverFeedbackEnabled: true,
                 OpacityMicromapsEnabled: true,
-                DirectionalGuidingEnabled: false,
+                DirectionalGuidingEnabled: true,
                 TaggedCausticsEnabled: true,
                 NearFieldResidualEnabled: true)));
-            Assert.That(selection.AreAllEnabled, Is.False);
+            Assert.That(selection.AreAllEnabled, Is.True);
         });
     }
 
@@ -150,6 +150,20 @@ public sealed class GlobalIlluminationEditorPanelTests
             Assert.That(
                 GlobalIlluminationEditorPanel.IsSupportedScalarType(typeof(DdgiQualityTier)),
                 Is.True);
+        });
+    }
+
+    [Test]
+    public void GlossyTransportModeEditor_CollapsesLegacyEnumAlias()
+    {
+        object[] values = GlobalIlluminationEditorPanel.GetDistinctEnumValues(
+            typeof(SimpleDdgiGlossyTransportMode));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(values, Has.Length.EqualTo(4));
+            Assert.That(values, Is.Unique);
+            Assert.That(values, Does.Contain(SimpleDdgiGlossyTransportMode.RecursiveCertified));
         });
     }
 

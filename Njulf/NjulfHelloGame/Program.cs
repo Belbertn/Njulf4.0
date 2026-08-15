@@ -68,6 +68,7 @@ internal static class Program
             {
                 string? requestedProfilePath;
                 AdvancedGiFeatureSelection? requestedFeatures;
+                SampleSceneKind currentSceneKind;
                 using (var game = new HelloGame(options, args))
                 {
                     game.Run();
@@ -75,12 +76,14 @@ internal static class Program
                         game.RequestedAdvancedGiStartupProfilePath;
                     requestedFeatures =
                         game.RequestedAdvancedGiFeatureSelection;
+                    currentSceneKind = game.CurrentSceneKind;
                 }
                 if (requestedFeatures is { } features)
                 {
                     options = PrepareAdvancedGiFeatureRestartOptions(
                         options,
-                        features);
+                        features,
+                        currentSceneKind);
                     Environment.ExitCode = 0;
                     continue;
                 }
@@ -95,7 +98,8 @@ internal static class Program
                 // immutable graph branches are selected.
                 options = PrepareAdvancedGiRestartOptions(
                     options,
-                    profilePath);
+                    profilePath,
+                    currentSceneKind);
                 Environment.ExitCode = 0;
             }
         }
@@ -115,10 +119,12 @@ internal static class Program
         return Environment.ExitCode;
     }
 
-    private static SampleSmokeOptions PrepareAdvancedGiRestartOptions(
+    internal static SampleSmokeOptions PrepareAdvancedGiRestartOptions(
         SampleSmokeOptions source,
-        string profilePath) => source with
+        string profilePath,
+        SampleSceneKind currentSceneKind) => source with
     {
+        SceneKind = currentSceneKind,
         AdvancedGiStartupProfilePath = Path.GetFullPath(profilePath),
         AdvancedGiPrerequisiteManifestPath = null,
         AdvancedGiQualificationManifestPath = null,
@@ -138,8 +144,18 @@ internal static class Program
 
     internal static SampleSmokeOptions PrepareAdvancedGiFeatureRestartOptions(
         SampleSmokeOptions source,
-        in AdvancedGiFeatureSelection selection) => source with
+        in AdvancedGiFeatureSelection selection) =>
+        PrepareAdvancedGiFeatureRestartOptions(
+            source,
+            selection,
+            source.SceneKind);
+
+    internal static SampleSmokeOptions PrepareAdvancedGiFeatureRestartOptions(
+        SampleSmokeOptions source,
+        in AdvancedGiFeatureSelection selection,
+        SampleSceneKind currentSceneKind) => source with
     {
+        SceneKind = currentSceneKind,
         AdvancedGiStartupProfilePath = null,
         AdvancedGiPrerequisiteManifestPath = null,
         AdvancedGiQualificationManifestPath = null,
@@ -263,6 +279,7 @@ internal sealed class HelloGame : Game
     internal AdvancedGiFeatureSelection?
         RequestedAdvancedGiFeatureSelection =>
             _requestedAdvancedGiFeatureSelection;
+    internal SampleSceneKind CurrentSceneKind => _sceneKind;
 
     protected override void ConfigureServices(IServiceCollection services)
     {

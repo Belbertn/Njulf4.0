@@ -66,6 +66,12 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         type == typeof(double) ||
         type.IsEnum;
 
+    internal static object[] GetDistinctEnumValues(Type type) =>
+        Enum.GetValues(type)
+            .Cast<object>()
+            .Distinct()
+            .ToArray();
+
     public void Render(EditorController editor)
     {
         ImGui.Begin("Global Illumination");
@@ -595,7 +601,7 @@ internal sealed unsafe class GlobalIlluminationEditorPanel
         {
             if (ImGui.BeginCombo(item.Label, current?.ToString() ?? string.Empty))
             {
-                foreach (object value in Enum.GetValues(type))
+                foreach (object value in GetDistinctEnumValues(type))
                 {
                     if (value is GlobalIlluminationDebugView giView &&
                         !RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(giView))

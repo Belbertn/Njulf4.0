@@ -46,7 +46,7 @@ public sealed class GlobalIlluminationDefaultsTests
     [TestCase(RenderQualityPreset.High)]
     [TestCase(RenderQualityPreset.Ultra)]
     [TestCase(RenderQualityPreset.DdgiHigh)]
-    public void NewSettings_KeepUnqualifiedDirectionalGuidingOptIn(
+    public void NewSettings_EnableBoundedAdvancedGiPathsByDefault(
         RenderQualityPreset preset)
     {
         var settings = new RenderSettings();
@@ -61,7 +61,8 @@ public sealed class GlobalIlluminationDefaultsTests
             Assert.That(gi.DdgiOpacityMicromapMode,
                 Is.EqualTo(DdgiOpacityMicromapMode.ExtFourStateExperiment));
             Assert.That(gi.SimpleDdgiDirectionalGuidingMode,
-                Is.EqualTo(SimpleDdgiDirectionalGuidingMode.Off));
+                Is.EqualTo(SimpleDdgiDirectionalGuidingMode
+                    .PerProbeHistogramExperiment));
             Assert.That(gi.GiCausticMode,
                 Is.EqualTo(GiCausticMode.WorldCacheExperiment));
             Assert.That(gi.SimpleDdgiNearFieldResidualMode,
@@ -69,6 +70,24 @@ public sealed class GlobalIlluminationDefaultsTests
                     .HiZAdaptive));
             Assert.That(gi.DdgiRayTracingPipelineExperimentEnabled, Is.False,
                 "C2/SER remains explicitly excluded.");
+        });
+    }
+
+    [Test]
+    public void DirectionalGuiding_RemainsAnExplicitPersistableOptOut()
+    {
+        var settings = new GlobalIlluminationSettings();
+
+        settings.SimpleDdgiDirectionalGuidingMode =
+            SimpleDdgiDirectionalGuidingMode.Off;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.SimpleDdgiDirectionalGuidingMode,
+                Is.EqualTo(SimpleDdgiDirectionalGuidingMode.Off));
+            Assert.That(
+                settings.SimpleDdgiDirectionalRayGuidingExperimentEnabled,
+                Is.False);
         });
     }
 

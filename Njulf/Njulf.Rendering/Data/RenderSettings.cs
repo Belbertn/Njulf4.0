@@ -2026,11 +2026,12 @@ namespace Njulf.Rendering.Data
         public const ulong MaxDdgiDynamicAccelerationStructureBudgetBytes = 8UL * 1024UL * 1024UL * 1024UL;
         public const ulong MaxSimpleDdgiDirectionalRadianceBudgetBytes = 2UL * 1024UL * 1024UL * 1024UL;
         // New settings request the stable advanced-GI production paths.
-        // Directional guiding remains opt-in: an invalid guiding publication
-        // must never be allowed to stall the canonical DDGI update stream.
-        // Hardware capability, memory, ABI, allocation and resource-completeness
-        // gates remain authoritative; manifests and promotion evidence apply
-        // only to AutoQualified.
+        // C3 remains an optional, fail-closed sidecar to canonical DDGI: an
+        // unavailable or invalid publication falls back to the uniform
+        // proposal without stalling probe updates. Hardware capability,
+        // memory, ABI, allocation and resource-completeness gates remain
+        // authoritative; manifests and promotion evidence apply only to
+        // AutoQualified. Persisted Off remains the explicit opt-out.
         public const SimpleDdgiReceiverFeedbackMode
             DefaultSimpleDdgiReceiverFeedbackMode =
                 SimpleDdgiReceiverFeedbackMode.ExactCompacted;
@@ -2038,7 +2039,8 @@ namespace Njulf.Rendering.Data
             DdgiOpacityMicromapMode.ExtFourStateExperiment;
         public const SimpleDdgiDirectionalGuidingMode
             DefaultSimpleDdgiDirectionalGuidingMode =
-                SimpleDdgiDirectionalGuidingMode.Off;
+                SimpleDdgiDirectionalGuidingMode
+                    .PerProbeHistogramExperiment;
         public const GiCausticMode DefaultGiCausticMode =
             GiCausticMode.WorldCacheExperiment;
         public const SimpleDdgiNearFieldResidualMode
@@ -4861,13 +4863,14 @@ namespace Njulf.Rendering.Data
             QualityPreset = preset;
             ShowRawHdrSceneColor = false;
 
-            // C3 is an explicit experiment, not part of a production quality
-            // preset. RenderDoc validation showed that accepting an invalid C3
-            // publication can poison every ray transaction for a probe and halt
-            // DDGI convergence. A caller may still opt in after applying a
-            // preset (the sample's command-line overrides do exactly that).
+            // Quality presets select the bounded C3 production path. Its
+            // publication handshake is transactional and preserves the
+            // canonical uniform DDGI proposal whenever guiding is unavailable.
+            // Callers can still opt out after applying a preset by selecting
+            // Off, and persisted settings retain that explicit intent.
             GlobalIllumination.SimpleDdgiDirectionalGuidingMode =
-                SimpleDdgiDirectionalGuidingMode.Off;
+                GlobalIlluminationSettings
+                    .DefaultSimpleDdgiDirectionalGuidingMode;
 
             switch (preset)
             {

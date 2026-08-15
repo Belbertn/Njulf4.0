@@ -155,6 +155,12 @@ public sealed class SimpleDdgiGuidingVulkanRuntimeTests
         string extractor = ReadRepoText(
             "Njulf.Shaders",
             "ddgi_guiding_extract.comp");
+        string prepare = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_guiding_prepare.comp");
+        string sample = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_guiding_sample.comp");
 
         Assert.Multiple(() =>
         {
@@ -201,6 +207,16 @@ public sealed class SimpleDdgiGuidingVulkanRuntimeTests
                 Does.Contain("SIMPLE_DDGI_SOURCE_MODE_FULL_TRACE"));
             Assert.That(extractor,
                 Does.Contain("layout(std430, set = 2, binding = 0)"));
+            Assert.That(prepare, Does.Not.Contain(
+                "if (sampleCompact && !readable)"));
+            Assert.That(prepare, Does.Contain(
+                "build ? max(guidingPreparePc.targetProposalEpoch, 1u) : 0u"));
+            Assert.That(sample, Does.Contain(
+                "SimpleDdgiGuidingInvalidateBootstrapPayload"));
+            Assert.That(sample, Does.Contain(
+                "request.expectedDistributionGeneration == 0u"));
+            Assert.That(sample, Does.Contain(
+                "guidingSamplePayloads.words[baseWord + 0u] = 0u"));
         });
     }
 

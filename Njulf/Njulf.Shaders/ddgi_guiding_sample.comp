@@ -123,6 +123,20 @@ void SimpleDdgiGuidingInvalidateTracePayload(
         firstWord + SIMPLE_DDGI_GUIDING_TRACE_MARKER_WORD] = 0u;
 }
 
+void SimpleDdgiGuidingInvalidateBootstrapPayload(
+    uint payloadIndex,
+    SimpleDdgiGuidingSampleRequest request)
+{
+    // A probe can enter the admitted C3 physical prefix before it has a
+    // readable distribution, or after its old distribution was invalidated.
+    // Clear the release words for both payload representations so an
+    // authenticated record from an earlier source sequence cannot turn that
+    // intentional uniform bootstrap into a hard stale-record failure.
+    uint baseWord = payloadIndex * SIMPLE_DDGI_GUIDING_SAMPLE_PAYLOAD_WORDS;
+    guidingSamplePayloads.words[baseWord + 0u] = 0u;
+    SimpleDdgiGuidingInvalidateTracePayload(request);
+}
+
 void SimpleDdgiGuidingPublishTracePayload(
     SimpleDdgiGuidingSampleRequest request,
     SimpleDdgiGuidingSamplePayload payload)
@@ -489,12 +503,18 @@ void main()
         SimpleDdgiGuidingSupportedLeafResolution(guidingPc.leafResolution) &&
         guidingPc.hierarchyWeightCount ==
             SimpleDdgiGuidingHierarchyWeightCount(guidingPc.leafResolution);
+    bool bootstrapInvalidation = request.expectedDistributionGeneration == 0u &&
+        request.expectedProposalEpoch == 0u;
+    bool proposalIdentityValid = bootstrapInvalidation ||
+        (request.expectedDistributionGeneration != 0u &&
+         request.expectedProposalEpoch != 0u);
     uint expectedTechnique = SimpleDdgiGuidingIsMaintenanceSlot(
             request.slotIndex,
             guidingPc.reserved)
         ? SIMPLE_DDGI_GUIDING_TECHNIQUE_UNIFORM_MAINTENANCE
         : SIMPLE_DDGI_GUIDING_TECHNIQUE_MIXTURE;
-    baseValid = baseValid && request.technique == expectedTechnique;
+    baseValid = baseValid && proposalIdentityValid &&
+        request.technique == expectedTechnique;
     baseValid = baseValid && baseWord <= uint(guidingSampleReadBank.words.length()) &&
         guidingPc.bankStrideWords <=
             uint(guidingSampleReadBank.words.length()) - baseWord;
@@ -503,6 +523,12 @@ void main()
         SimpleDdgiGuidingWriteInvalidPayload(payloadIndex, request);
         atomicAdd(guidingSampleCounters.counters[
             SIMPLE_DDGI_GUIDING_COUNTER_INVALID_HEADERS], 1u);
+        return;
+    }
+
+    if (bootstrapInvalidation)
+    {
+        SimpleDdgiGuidingInvalidateBootstrapPayload(payloadIndex, request);
         return;
     }
 

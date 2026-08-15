@@ -859,7 +859,7 @@ public sealed class GiRoadmapExperimentTests
             Assert.That(defaults.GlobalIllumination
                 .DdgiRayTracingPipelineExperimentEnabled, Is.False);
             Assert.That(defaults.GlobalIllumination
-                .SimpleDdgiDirectionalRayGuidingExperimentEnabled, Is.False);
+                .SimpleDdgiDirectionalRayGuidingExperimentEnabled, Is.True);
             Assert.That(defaults.GlobalIllumination
                 .DdgiTaggedCausticCacheExperimentEnabled, Is.True);
             Assert.That(defaults.GlobalIllumination

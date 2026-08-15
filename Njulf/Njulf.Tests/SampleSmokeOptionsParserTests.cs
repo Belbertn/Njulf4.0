@@ -1814,6 +1814,46 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void EditorAdvancedGiSwitchRestartPreservesTheLiveScene()
+    {
+        SampleSmokeOptions source = SampleSmokeOptionsParser.Parse([]);
+        AdvancedGiFeatureSelection selection =
+            AdvancedGiFeatureSelection.AllEnabled;
+
+        SampleSmokeOptions restarted =
+            Program.PrepareAdvancedGiFeatureRestartOptions(
+                source,
+                selection,
+                SampleSceneKind.SponzaPlaza);
+
+        Assert.That(restarted.SceneKind,
+            Is.EqualTo(SampleSceneKind.SponzaPlaza));
+    }
+
+    [Test]
+    public void EditorAdvancedGiProfileRestartPreservesTheLiveScene()
+    {
+        SampleSmokeOptions source = SampleSmokeOptionsParser.Parse([]);
+        string profilePath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "advanced-gi-profile.json");
+
+        SampleSmokeOptions restarted =
+            Program.PrepareAdvancedGiRestartOptions(
+                source,
+                profilePath,
+                SampleSceneKind.MaterialShowcase);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(restarted.SceneKind,
+                Is.EqualTo(SampleSceneKind.MaterialShowcase));
+            Assert.That(restarted.AdvancedGiStartupProfilePath,
+                Is.EqualTo(Path.GetFullPath(profilePath)));
+        });
+    }
+
+    [Test]
     public void EditorSsgiSwitchRestartsInAdaptiveResolutionMode()
     {
         SampleSmokeOptions source = SampleSmokeOptionsParser.Parse([]);

@@ -386,13 +386,15 @@ misreported as active.
 | `SimpleDdgiNearFieldResidualMode` | `Off`, `Reference`, `HiZAdaptive`, or `AutoQualified`. C5 is the sole near-field SSGI complement to DDGI and never uses surfels or final scene color. Explicit `HiZAdaptive` starts at quarter resolution and may fall back to eighth; half resolution is available only to an evidence-bound `AutoQualified` profile after sustained timing headroom. The governor uses joined reset/trace/temporal/filter/composite GPU timestamps, enforces a 0.75 ms P95 ceiling, and requires sustained P95 at or below 0.45 ms before promotion. |
 
 New settings turn on the stable advanced-GI production paths in every preset:
-B1 `ExactCompacted`, C1 `ExtFourStateExperiment`, C4
-`WorldCacheExperiment`, and C5 `HiZAdaptive`. The adaptive C5 path starts at
+B1 `ExactCompacted`, C1 `ExtFourStateExperiment`, C3
+`PerProbeHistogramExperiment`, C4 `WorldCacheExperiment`, and C5
+`HiZAdaptive`. The adaptive C5 path starts at
 quarter resolution and may step down to eighth resolution when its measured
 GPU cost exceeds the bounded runtime target. Fixed half resolution remains an
-explicit reference/compatibility mode. C3
-`PerProbeHistogramExperiment` stays off unless explicitly selected because an
-invalid guiding publication must not stall canonical DDGI convergence.
+explicit reference/compatibility mode. C3 is opt-out: selecting and persisting
+`Off` disables it. Its bounded sidecar publishes only complete, validated
+direction/PDF transactions; an unavailable or invalid publication retains the
+nonzero uniform proposal and cannot stall canonical DDGI convergence.
 Explicit modes need no promotion evidence and
 enter their production graph/resource paths whenever their real prerequisites
 are available. Existing saved settings retain their persisted mode. Unsupported

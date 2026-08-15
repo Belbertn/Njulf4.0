@@ -549,8 +549,6 @@ void main()
             update,
             readableGeneration,
             readableEpoch);
-        if (sampleCompact && !readable)
-            continue;
         uint contentRevision = GuidingPrepareContentRevision(
             update.sourceLightingGeneration,
             update.sourceEpoch);
@@ -562,12 +560,18 @@ void main()
         trainingItem.physicalProbeIndex = update.physicalProbeIndex;
         trainingItem.virtualProbeId = update.probeIndex;
         trainingItem.pageGeneration = update.pageMappingGeneration;
+        // Sample preparation keeps probes without a readable guide in the
+        // compacted order. Zero proposal identities tell the sample pass to
+        // invalidate any payload left behind by this same sparse-slot owner,
+        // making the ordinary DDGI uniform trace authoritative again. Build
+        // preparation still needs non-zero synthetic source identities for
+        // the uniform bootstrap training records.
         trainingItem.sourceDistributionGeneration = readable
             ? readableGeneration
-            : 1u;
+            : build ? 1u : 0u;
         trainingItem.directionProposalEpoch = readable
             ? readableEpoch
-            : max(guidingPreparePc.targetProposalEpoch, 1u);
+            : build ? max(guidingPreparePc.targetProposalEpoch, 1u) : 0u;
         trainingItem.recordOffset = recordOffset;
         trainingItem.recordCount = activeRayCount;
         trainingItem.partialOffset = partialOffset;
