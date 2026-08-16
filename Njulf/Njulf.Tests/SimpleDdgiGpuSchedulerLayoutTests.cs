@@ -211,6 +211,37 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
     }
 
     [Test]
+    public void ResidentClassifier_RemapFreshnessBypassesStaleInactiveThrottle()
+    {
+        string classify = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_schedule_classify.comp");
+        int layoutOwnershipReset = classify.IndexOf(
+            "bool layoutOwnershipChanged = invalidate &&",
+            StringComparison.Ordinal);
+        int inactiveReset = classify.IndexOf(
+            "if (layoutOwnershipChanged)\n        inactive = false;",
+            StringComparison.Ordinal);
+        int pendingTailSource = classify.IndexOf(
+            "bool pendingTailSource =",
+            StringComparison.Ordinal);
+        int inactiveThrottle = classify.IndexOf(
+            "if (inactive && !inactiveRetry)",
+            StringComparison.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(layoutOwnershipReset, Is.GreaterThanOrEqualTo(0));
+            Assert.That(classify, Does.Contain(
+                "(topologyInvalid || exposed || atlasFresh)"));
+            Assert.That(inactiveReset, Is.GreaterThan(layoutOwnershipReset));
+            Assert.That(pendingTailSource, Is.GreaterThan(inactiveReset),
+                "A remapped slot must enter the frozen-tail pending cohort instead of retaining its old inactive identity.");
+            Assert.That(inactiveThrottle, Is.GreaterThan(inactiveReset),
+                "Fresh layout ownership must bypass periodic inactive retry throttling.");
+        });
+    }
+
+    [Test]
     public void ResidentShadersUseOutcomeGenerationChecksAndPrivateCommitTargets()
     {
         string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_schedule_shared.glsl");

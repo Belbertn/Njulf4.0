@@ -223,6 +223,19 @@ void main()
         scrollExposed = (invalidationReasons & SIMPLE_DDGI_SCHEDULER_REASON_SCROLL) != 0u;
     }
 
+    // A toroidal physical slot can retain the classification of the world cell
+    // it represented before the scroll. Once layout ownership changes, that
+    // inactive classification is stale: the compact receiver record has
+    // already been invalidated and the new cell must earn replacement geometry
+    // evidence immediately. Match the CPU scheduler's fresh/remap semantics by
+    // bypassing inactive retry throttling for this one-shot layout transaction.
+    // Keeping the slot inactive here can strand an invalid receiver record
+    // indefinitely while the tail participant cut is frozen.
+    bool layoutOwnershipChanged = invalidate &&
+        (topologyInvalid || exposed || atlasFresh);
+    if (layoutOwnershipChanged)
+        inactive = false;
+
     // Geometry readiness remains valid for radiometric and segment-copy
     // transactions even though sourceReady may target a newer lighting epoch.
     bool radiometricRelightEligible = radiometricRelightGeneration &&
