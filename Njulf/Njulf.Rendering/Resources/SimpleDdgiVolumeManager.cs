@@ -229,6 +229,20 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         ulong SchedulerValidationReadbackBytes,
         bool FeatureEnabled);
 
+    /// <summary>
+    /// Stable pre-allocation order for a DDGI volume candidate. Required base
+    /// volumes retain their topology order, while explicitly prioritized
+    /// authored and refinement volumes are admitted from highest to lowest
+    /// priority before a deterministic source-ordinal tie break.
+    /// </summary>
+    internal readonly record struct SimpleDdgiVolumeAdmissionOrderKey(
+        int KindPriority,
+        bool HonorsExplicitPriority,
+        int Priority,
+        int PurposeRank,
+        float Spacing,
+        int SourceOrdinal);
+
     public sealed class SimpleDdgiVolumeManager : IDisposable
     {
         public const int IrradianceTexelsPerProbe = 8;
@@ -402,6 +416,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private readonly SimpleDdgiRefinementBrickPool _refinementBrickPool = new();
         private readonly SimpleDdgiRefinementPublicationState
             _refinementPublicationState = new();
+        private readonly SimpleDdgiRefinementPublicationBlendState
+            _refinementPublicationBlendState = new();
         private readonly List<SimpleDdgiRefinementDemand> _refinementDemandScratch = new(96);
         private bool _refinementTopologyChangedThisFrame;
         private int _refinementRequestedBrickCount;
@@ -1338,7 +1354,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _refinementBrickPool.Diagnostics.ProbeCount,
             _refinementEvictionCount,
             _refinementTopologyChangedThisFrame,
-            _refinementAdmissionStatus);
+            _refinementAdmissionStatus)
+        {
+            ReceiverBlendWeight = _refinementPublicationBlendState.Weight
+        };
 
         public bool ObserveSourceCacheWorkload(
             ulong surfaceHitCount,
@@ -4471,7 +4490,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         : Math.Min(probeCount, _settings.GlobalIllumination.SimpleDdgiProbeUpdatesPerFrame),
                     ScheduledProbeUpdates: scheduledUpdates,
                     ScheduledPrimaryRayCount: CountScheduledPrimaryRays(i),
-                    MaxRayDistance: Math.Max(spacing * Math.Max(Math.Max(countX, countY), countZ), spacing))
+                    MaxRayDistance: ResolveGpuVolumeTraceDistance(volume))
                 {
                     PhysicalProbeCapacity = paging.ResidencyMode ==
                         (uint)SimpleDdgiProbeResidencyMode.SparseNearRing
@@ -5340,7 +5359,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     {
                         GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
                         volume.UpdateStartAndCount = new Vector4(
-                            0.0f,
+                            volume.UpdateStartAndCount.X,
                             0.0f,
                             ResolveVolumeQuality(volumeIndex).FullRays,
                             volume.UpdateStartAndCount.W);
@@ -5476,6 +5495,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _probeCount = 0;
             _refinementBrickPool.Clear();
             _refinementPublicationState.Reset();
+            _refinementPublicationBlendState.Reset();
             _refinementDemandScratch.Clear();
             _refinementTopologyChangedThisFrame = false;
             _refinementRequestedBrickCount = 0;
@@ -11580,27 +11600,15 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 visibleReceiverFocus);
 
             _volumeCandidates.Sort(static (left, right) =>
-            {
-                int kind = left.KindPriority.CompareTo(right.KindPriority);
-                if (kind != 0)
-                    return kind;
+                CompareVolumeAdmissionOrder(
+                    left.AdmissionOrderKey,
+                    right.AdmissionOrderKey));
 
-                // Authored receiver coverage is a scene ownership declaration,
-                // not an incidental side effect of probe spacing.  Keep it ahead
-                // of camera rings and honour its explicit priority deterministically.
-                if (left.Kind == VolumeKindAuthored)
-                {
-                    int priority = right.Priority.CompareTo(left.Priority);
-                    if (priority != 0)
-                        return priority;
-                    int purpose = left.PurposeRank.CompareTo(right.PurposeRank);
-                    if (purpose != 0)
-                        return purpose;
-                }
-
-                int spacing = left.Spacing.CompareTo(right.Spacing);
-                return spacing != 0 ? spacing : left.SourceOrdinal.CompareTo(right.SourceOrdinal);
-            });
+            // A refinement brick increases spatial resolution; it must not
+            // shrink the incident-light domain. Resolve its trace horizon from
+            // the first complete base owner before compiling storage, so cache
+            // precision and the shader trace use the same exact distance.
+            ResolveRefinementTraceDistances(_volumeCandidates);
 
             _hotColdSourceCacheAdmissionIdentity = CalculateLayoutFingerprint(
                 gi,
@@ -11660,9 +11668,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                             : -1,
                         ArchitecturalThickness =
                             gi.SimpleDdgiArchitecturalThicknessMeters,
-                        MaximumTraceDistance = candidate.Spacing * Math.Max(
-                            candidate.CountX,
-                            Math.Max(candidate.CountY, candidate.CountZ))
+                        MaximumTraceDistance = candidate.MaximumTraceDistance
                     };
                 }
 
@@ -12281,6 +12287,16 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     hash,
                     unchecked((uint)BitConverter.SingleToInt32Bits(candidate.Spacing)),
                     prime);
+                // Cache distance packing is selected from the exact trace
+                // horizon.  A refinement brick can retain the same dimensions
+                // while moving between base owners with different horizons, so
+                // that transport-domain change must compile a matching layout
+                // and recertify instead of reusing an incompatible cache ABI.
+                hash = AddLayoutFingerprintValue(
+                    hash,
+                    unchecked((uint)BitConverter.SingleToInt32Bits(
+                        candidate.MaximumTraceDistance)),
+                    prime);
                 // Allocation and cache ABI depend on structural topology, not
                 // world placement. Camera-relative rings and refinement bricks
                 // move without changing their memory plan; including their
@@ -12842,7 +12858,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             {
                 GPUSimpleDdgiVolume volume = _volumeScratch[i];
                 volume.UpdateStartAndCount = new Vector4(
-                    0.0f,
+                    volume.UpdateStartAndCount.X,
                     0.0f,
                     ResolveVolumeQuality(i).FullRays,
                     volume.UpdateStartAndCount.W);
@@ -12852,9 +12868,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (_volumeCount == 0 || _probesToUpdate <= 0 || _probeCount <= 0)
                 return;
 
-            Span<int> firstQueueOffset = stackalloc int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
             Span<int> updatedCounts = stackalloc int[GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
-            firstQueueOffset.Fill(-1);
 
             for (int queueOffset = 0; queueOffset < _probesToUpdate; queueOffset++)
             {
@@ -12862,8 +12876,6 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 if ((uint)volumeIndex >= (uint)_volumeCount)
                     continue;
 
-                if (firstQueueOffset[volumeIndex] < 0)
-                    firstQueueOffset[volumeIndex] = queueOffset;
                 updatedCounts[volumeIndex]++;
             }
 
@@ -12871,7 +12883,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             {
                 GPUSimpleDdgiVolume volume = _volumeScratch[i];
                 volume.UpdateStartAndCount = new Vector4(
-                    Math.Max(firstQueueOffset[i], 0),
+                    volume.UpdateStartAndCount.X,
                     updatedCounts[i],
                     ResolveVolumeQuality(i).FullRays,
                     volume.UpdateStartAndCount.W);
@@ -12897,15 +12909,22 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         CreateTransportTailGenerations(),
                         _lastLightingSignature,
                         _lastTransportSourceCalibrationSignature));
+            float receiverBlendWeight =
+                _refinementPublicationBlendState.Update(
+                    coherentPublication,
+                    _refinementAdmittedBrickCount);
+            bool receiverBlendComplete =
+                coherentPublication &&
+                _refinementPublicationBlendState.IsComplete;
             _refinementReadyBrickCount = 0;
             for (int volumeIndex = 0; volumeIndex < _volumeCount; volumeIndex++)
             {
                 GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
                 bool refinement = Kind(volume) == VolumeKindRefinement;
-                float ready = refinement && coherentPublication ? 1.0f : 0.0f;
-                if (ready > 0.5f)
+                float receiverWeight = refinement ? receiverBlendWeight : 0.0f;
+                if (refinement && receiverBlendComplete)
                     _refinementReadyBrickCount++;
-                volume.UpdateStartAndCount.W = ready;
+                volume.UpdateStartAndCount.W = receiverWeight;
                 _volumeScratch[volumeIndex] = volume;
             }
 
@@ -12915,9 +12934,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (_refinementAdmittedBrickCount > 0)
             {
                 _refinementAdmissionStatus = coherentPublication
-                    ? _refinementPublicationState.IsRetainingCertifiedAuthority
-                        ? "receiver-ready-certified-continuity"
-                        : "receiver-ready"
+                    ? !receiverBlendComplete
+                        ? "receiver-blending"
+                        : _refinementPublicationState.IsRetainingCertifiedAuthority
+                            ? "receiver-ready-certified-continuity"
+                            : "receiver-ready"
                     : transactionHasInvalidation
                         ? "base-fallback-during-invalidation"
                         : _refinementTopologyChangedThisFrame
@@ -13144,7 +13165,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             {
                 GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
                 volume.UpdateStartAndCount = new Vector4(
-                    0.0f,
+                    volume.UpdateStartAndCount.X,
                     0.0f,
                     ResolveVolumeQuality(volumeIndex).FullRays,
                     volume.UpdateStartAndCount.W);
@@ -17269,6 +17290,184 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             return (minimum - margin, maximum + margin);
         }
 
+        internal static int CompareVolumeAdmissionOrder(
+            SimpleDdgiVolumeAdmissionOrderKey left,
+            SimpleDdgiVolumeAdmissionOrderKey right)
+        {
+            int kind = left.KindPriority.CompareTo(right.KindPriority);
+            if (kind != 0)
+                return kind;
+
+            // Authored coverage and refinement requests both carry deliberate
+            // content priorities. A refinement slot is an optional scarce
+            // resource, so slot/source ordinal must never outrank that signal.
+            int priorityPolicy = right.HonorsExplicitPriority.CompareTo(
+                left.HonorsExplicitPriority);
+            if (priorityPolicy != 0)
+                return priorityPolicy;
+            if (left.HonorsExplicitPriority)
+            {
+                int priority = right.Priority.CompareTo(left.Priority);
+                if (priority != 0)
+                    return priority;
+                int purpose = left.PurposeRank.CompareTo(right.PurposeRank);
+                if (purpose != 0)
+                    return purpose;
+            }
+
+            int spacing = left.Spacing.CompareTo(right.Spacing);
+            return spacing != 0
+                ? spacing
+                : left.SourceOrdinal.CompareTo(right.SourceOrdinal);
+        }
+
+        internal static float ResolveNativeTraceDistance(
+            float spacing,
+            int countX,
+            int countY,
+            int countZ)
+        {
+            float safeSpacing = Math.Max(spacing, 0.001f);
+            int maximumCount = Math.Max(1, Math.Max(countX, Math.Max(countY, countZ)));
+            return safeSpacing * maximumCount;
+        }
+
+        internal static float ResolveGpuVolumeTraceDistance(GPUSimpleDdgiVolume volume)
+        {
+            float spacing = Math.Max(volume.OriginAndSpacing.W, 0.001f);
+            float encoded = volume.UpdateStartAndCount.X;
+            if (float.IsFinite(encoded) && encoded > 0.0f)
+                return Math.Max(encoded, spacing);
+
+            return ResolveNativeTraceDistance(
+                spacing,
+                Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.X)),
+                Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.Y)),
+                Math.Max(1, (int)MathF.Round(volume.GridCountsAndFirstProbe.Z)));
+        }
+
+        private static void ResolveRefinementTraceDistances(
+            List<VolumeCandidate> candidates)
+        {
+            Span<BoundingBox> baseDomains = stackalloc BoundingBox[
+                GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+            Span<float> baseTraceDistances = stackalloc float[
+                GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount];
+            int baseCount = 0;
+            for (int candidateIndex = 0;
+                 candidateIndex < candidates.Count &&
+                 baseCount < baseDomains.Length;
+                 candidateIndex++)
+            {
+                VolumeCandidate candidate = candidates[candidateIndex];
+                if (candidate.Kind == VolumeKindRefinement)
+                    continue;
+                baseDomains[baseCount] = new BoundingBox(
+                    candidate.WorldMin,
+                    candidate.WorldMax);
+                baseTraceDistances[baseCount] = candidate.MaximumTraceDistance;
+                baseCount++;
+            }
+
+            for (int candidateIndex = 0; candidateIndex < candidates.Count; candidateIndex++)
+            {
+                VolumeCandidate refinement = candidates[candidateIndex];
+                if (refinement.Kind != VolumeKindRefinement)
+                    continue;
+
+                Vector3 coreMinimum = refinement.Origin;
+                Vector3 coreMaximum = refinement.Origin + LatticeSize(
+                    refinement.CountX,
+                    refinement.CountY,
+                    refinement.CountZ,
+                    refinement.Spacing);
+                refinement.MaximumTraceDistance = ResolveRefinementTraceDistance(
+                    coreMinimum,
+                    coreMaximum,
+                    refinement.MaximumTraceDistance,
+                    baseDomains[..baseCount],
+                    baseTraceDistances[..baseCount]);
+                candidates[candidateIndex] = refinement;
+            }
+        }
+
+        internal static float ResolveRefinementTraceDistance(
+            Vector3 refinementCoreMinimum,
+            Vector3 refinementCoreMaximum,
+            float nativeTraceDistance,
+            ReadOnlySpan<BoundingBox> sortedBaseDomains,
+            ReadOnlySpan<float> sortedBaseTraceDistances)
+        {
+            if (sortedBaseDomains.Length != sortedBaseTraceDistances.Length)
+            {
+                throw new ArgumentException(
+                    "Base trace domains and distances must have matching lengths.",
+                    nameof(sortedBaseTraceDistances));
+            }
+
+            float overlappingBaseDistance = 0.0f;
+            for (int baseIndex = 0; baseIndex < sortedBaseDomains.Length; baseIndex++)
+            {
+                BoundingBox baseDomain = sortedBaseDomains[baseIndex];
+                if (!BoundsIntersect(
+                        baseDomain.Min,
+                        baseDomain.Max,
+                        refinementCoreMinimum,
+                        refinementCoreMaximum))
+                {
+                    continue;
+                }
+
+                float baseDistance = sortedBaseTraceDistances[baseIndex];
+                if (float.IsFinite(baseDistance))
+                {
+                    overlappingBaseDistance = Math.Max(
+                        overlappingBaseDistance,
+                        baseDistance);
+                }
+
+                // Domain order is receiver-selection order. The first owner of
+                // the complete fine lattice is the exact base field replaced by
+                // that brick, so its horizon is authoritative.
+                if (BoundsContain(
+                        baseDomain.Min,
+                        baseDomain.Max,
+                        refinementCoreMinimum,
+                        refinementCoreMaximum))
+                {
+                    return Math.Max(
+                        nativeTraceDistance,
+                        float.IsFinite(baseDistance) ? baseDistance : 0.0f);
+                }
+            }
+
+            // A boundary-straddling brick has no single complete base owner.
+            // Use the longest overlapping horizon so no fine probe truncates a
+            // segment that either underlying base field would trace.
+            return Math.Max(nativeTraceDistance, overlappingBaseDistance);
+        }
+
+        private static bool BoundsContain(
+            Vector3 outerMinimum,
+            Vector3 outerMaximum,
+            Vector3 innerMinimum,
+            Vector3 innerMaximum) =>
+            outerMinimum.X <= innerMinimum.X &&
+            outerMinimum.Y <= innerMinimum.Y &&
+            outerMinimum.Z <= innerMinimum.Z &&
+            outerMaximum.X >= innerMaximum.X &&
+            outerMaximum.Y >= innerMaximum.Y &&
+            outerMaximum.Z >= innerMaximum.Z;
+
+        private static bool BoundsIntersect(
+            Vector3 leftMinimum,
+            Vector3 leftMaximum,
+            Vector3 rightMinimum,
+            Vector3 rightMaximum) =>
+            leftMinimum.X <= rightMaximum.X && leftMaximum.X >= rightMinimum.X &&
+            leftMinimum.Y <= rightMaximum.Y && leftMaximum.Y >= rightMinimum.Y &&
+            leftMinimum.Z <= rightMaximum.Z && leftMaximum.Z >= rightMinimum.Z;
+
         private static int ResolveAuthoredLatticeAxisCount(float maximum, float origin, float spacing, int maximumCount)
         {
             float safeSpacing = Math.Max(spacing, 0.001f);
@@ -19281,6 +19480,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 WorldMin = worldMin;
                 WorldMax = worldMax;
                 EdgeFadeDistance = edgeFadeDistance;
+                MaximumTraceDistance = ResolveNativeTraceDistance(
+                    spacing,
+                    countX,
+                    countY,
+                    countZ);
                 FirstProbeIndex = 0;
                 PhysicalOffsetX = 0;
                 PhysicalOffsetY = 0;
@@ -19299,6 +19503,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             public Vector3 WorldMin;
             public Vector3 WorldMax;
             public float EdgeFadeDistance;
+            public float MaximumTraceDistance;
             public int FirstProbeIndex;
             public int PhysicalOffsetX;
             public int PhysicalOffsetY;
@@ -19318,6 +19523,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 SimpleDdgiVolumePurpose.DynamicInfluence => 2,
                 _ => 3
             };
+            public SimpleDdgiVolumeAdmissionOrderKey AdmissionOrderKey => new(
+                KindPriority,
+                Kind is VolumeKindAuthored or VolumeKindRefinement,
+                Priority,
+                PurposeRank,
+                Spacing,
+                SourceOrdinal);
 
             public GPUSimpleDdgiVolume ToGpuVolume()
             {
@@ -19327,7 +19539,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     GridCountsAndFirstProbe = new Vector4(CountX, CountY, CountZ, FirstProbeIndex),
                     WorldMinAndEdgeFade = new Vector4(WorldMin.X, WorldMin.Y, WorldMin.Z, EdgeFadeDistance),
                     WorldMaxAndKind = new Vector4(WorldMax.X, WorldMax.Y, WorldMax.Z, Kind),
-                    UpdateStartAndCount = Vector4.Zero,
+                    UpdateStartAndCount = new Vector4(
+                        MaximumTraceDistance,
+                        0.0f,
+                        0.0f,
+                        0.0f),
                     // x remains the stable volume key; yzw are the shared toroidal
                     // physical offset used by state, irradiance, and visibility.
                     RaysAndReserved = new Vector4(SourceOrdinal, PhysicalOffsetX, PhysicalOffsetY, PhysicalOffsetZ)

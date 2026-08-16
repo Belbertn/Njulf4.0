@@ -1,3 +1,61 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:068fcae63642e0ac6895ba7193c6ef0f1130529ed9f4e45cd1a672f5f914a225
-size 3043
+{
+  "schemaVersion": "njulf-third-party-native-provenance/v1",
+  "package": {
+    "id": "Ktx2.NET",
+    "version": "1.0.5",
+    "nugetSource": "https://api.nuget.org/v3/index.json",
+    "nupkgFileName": "ktx2.net.1.0.5.nupkg",
+    "nupkgLength": 2544413,
+    "nupkgSha256": "3bcdc1605f1613959d2802b06b0a80725651aeb70b5dd53e601d14d80cb19e5c",
+    "nupkgSha512Base64": "rKonP5MEQUqtI0H0LLlhbhOo2WT8XHDYuZ5IeXyirLeckyW0Ost7Vr8IaQB+9rhiQVPlwMomQ4IeyQNvz06mGw==",
+    "nugetContentHashSha512Base64": "IDinxXLWhr8UxOdbDg8i0iPDm73Mo4frGQ9GhJAm57UyErn1oXdWaZA4ZcJiTCzbuoh6SNVf8h1vXfbIBaezeA==",
+    "licenseExpression": "MIT",
+    "declaredRepositoryUrl": "https://github.com/BoyBaykiller/Ktx2.NET",
+    "declaredRepositoryCommit": "eb77a9fe9b1908003a1cead2e8e12045a067ce27"
+  },
+  "redistribution": {
+    "noticeRelativePath": "THIRD-PARTY-NOTICES.txt",
+    "noticeSha256": "68cc83c638638f82ad5fc8879110682a3d1b3600e25cd7ad61e0a606c29072fe",
+    "payloadSourceMatch": {
+      "repositoryUrl": "https://github.com/BoyBaykiller/Ktx2.NET",
+      "commit": "a79ae87e94aeb330589e7b1ab9a01df0c3c44fe0",
+      "commitDateUtc": "2025-09-07T17:58:59Z",
+      "basis": "Both native package payloads have the same length and SHA-256 as the checked-in wrapper-repository blobs at this commit. The package nuspec repository field still names the earlier declaredRepositoryCommit."
+    },
+    "assets": [
+      {
+        "packageRelativePath": "lib/net8.0/Ktx2.NET.dll",
+        "kind": "managed",
+        "runtimeIdentifier": null,
+        "length": 26624,
+        "sha256": "d7e87f619302fe22451b8d1e49feb8c98b918a095f0c6bf69992b0376dc2a90f",
+        "sourceRepositoryPath": null,
+        "sourceGitBlobSha1": null
+      },
+      {
+        "packageRelativePath": "runtimes/linux-x64/native/libktx.so",
+        "kind": "native",
+        "runtimeIdentifier": "linux-x64",
+        "length": 3506936,
+        "sha256": "6ab3b9b3a2d52e1293be319815d1030eb34815286979ba4919a1e5552f7edcff",
+        "sourceRepositoryPath": "Ktx2.NET/Resource/Natives/linux-x64/Release/libktx.so",
+        "sourceGitBlobSha1": "349c0a9c0979057ea56ca14da06e950052cde7b9"
+      },
+      {
+        "packageRelativePath": "runtimes/win-x64/native/ktx.dll",
+        "kind": "native",
+        "runtimeIdentifier": "win-x64",
+        "length": 2021888,
+        "sha256": "28fc3827812c9d9bc91da10dbd7529830cbd3a929a1964ea6cbe28f7911eee3e",
+        "sourceRepositoryPath": "Ktx2.NET/Resource/Natives/win-x64/Release/ktx.dll",
+        "sourceGitBlobSha1": "edc68e1d4e208f32d27d93c726528a25b66c1140"
+      }
+    ]
+  },
+  "nativeUpstream": {
+    "project": "KhronosGroup/KTX-Software",
+    "repositoryUrl": "https://github.com/KhronosGroup/KTX-Software",
+    "exactSourceRevision": null,
+    "limitation": "Ktx2.NET 1.0.5 does not publish the exact KTX-Software revision, release identifier, or REUSE/SPDX bill of materials used for these native builds. This manifest pins the reviewed binary identities and matching wrapper-repository blobs without inventing a stronger upstream-source claim."
+  }
+}

@@ -1,3 +1,61 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e1684c3e5bde60c22c2ab56cf4329aa63e6fcc606970f5b0f2a84571ae4b7f6a
-size 2616
+{
+  "$schema": "./manifest.schema.json",
+  "schemaVersion": "realtime-gi-closure-baseline-manifest/v1",
+  "baselineId": "realtime-gi-closure-sponza-20260715",
+  "status": "pending-external-artifact-import",
+  "sourceSearch": {
+    "performedOn": "2026-07-15",
+    "workspaceScope": "repository working tree, artifacts, Plans, docs, and build outputs",
+    "result": "No matching source JSON or source image attachment was present. Hashes and image attachment names are intentionally unset rather than guessed."
+  },
+  "artifacts": [
+    {
+      "id": "sponza-plaza-upper-facade-low-performance",
+      "kind": "performance-snapshot",
+      "canonicalFileName": "sponza-plaza-upper-facade-low.performance.json",
+      "sourceAttachmentName": "performance-20260715-002614-7774689-23c82a49822040d6b9b50d487f6c768d.json",
+      "sourceArtifactReference": "Plan-supplied low-plaza snapshot filename",
+      "sourceSha256": null,
+      "sourceSizeBytes": null,
+      "hashAlgorithm": "SHA-256",
+      "required": true,
+      "status": "pending-external-import"
+    },
+    {
+      "id": "sponza-plaza-upper-facade-high-performance",
+      "kind": "performance-snapshot",
+      "canonicalFileName": "sponza-plaza-upper-facade-high.performance.json",
+      "sourceAttachmentName": "performance-20260715-002621-6988985-61ee424d16e74fd3bbc1ed512792dea1.json",
+      "sourceArtifactReference": "Plan-supplied higher-view snapshot filename",
+      "sourceSha256": null,
+      "sourceSizeBytes": null,
+      "hashAlgorithm": "SHA-256",
+      "required": true,
+      "status": "pending-external-import"
+    },
+    {
+      "id": "sponza-plaza-upper-facade-low-image",
+      "kind": "reference-image",
+      "canonicalFileName": "sponza-plaza-upper-facade-low.png",
+      "sourceAttachmentName": null,
+      "sourceArtifactReference": "Original low-plaza image attachment; its temporary attachment filename was not included in the plan or workspace.",
+      "sourceSha256": null,
+      "sourceSizeBytes": null,
+      "hashAlgorithm": "SHA-256",
+      "required": true,
+      "status": "pending-external-import"
+    },
+    {
+      "id": "sponza-plaza-upper-facade-high-image",
+      "kind": "reference-image",
+      "canonicalFileName": "sponza-plaza-upper-facade-high.png",
+      "sourceAttachmentName": null,
+      "sourceArtifactReference": "Original higher-view image attachment; its temporary attachment filename was not included in the plan or workspace.",
+      "sourceSha256": null,
+      "sourceSizeBytes": null,
+      "hashAlgorithm": "SHA-256",
+      "required": true,
+      "status": "pending-external-import"
+    }
+  ]
+}

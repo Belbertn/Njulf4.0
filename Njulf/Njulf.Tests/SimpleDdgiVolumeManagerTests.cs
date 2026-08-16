@@ -13,6 +13,48 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiVolumeManagerTests
 {
     [Test]
+    public void VolumeAdmissionOrder_HigherPriorityRefinementWinsBeforeSlotOrdinal()
+    {
+        var cameraBrick = new SimpleDdgiVolumeAdmissionOrderKey(
+            KindPriority: 3,
+            HonorsExplicitPriority: true,
+            Priority: 128,
+            PurposeRank: 0,
+            Spacing: 0.59375f,
+            SourceOrdinal: 30_000);
+        var emitterBrick = new SimpleDdgiVolumeAdmissionOrderKey(
+            KindPriority: 3,
+            HonorsExplicitPriority: true,
+            Priority: 195,
+            PurposeRank: 0,
+            Spacing: 0.59375f,
+            SourceOrdinal: 30_001);
+        var equalPriorityLaterSlot = emitterBrick with
+        {
+            SourceOrdinal = 30_002
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.CompareVolumeAdmissionOrder(
+                    emitterBrick,
+                    cameraBrick),
+                Is.LessThan(0));
+            Assert.That(
+                SimpleDdgiVolumeManager.CompareVolumeAdmissionOrder(
+                    cameraBrick,
+                    emitterBrick),
+                Is.GreaterThan(0));
+            Assert.That(
+                SimpleDdgiVolumeManager.CompareVolumeAdmissionOrder(
+                    emitterBrick,
+                    equalPriorityLaterSlot),
+                Is.LessThan(0));
+        });
+    }
+
+    [Test]
     public void ReceiverFeedbackProbeFocus_ResolvesToroidalLogicalPositionAndRelocation()
     {
         var volume = new GPUSimpleDdgiVolume
@@ -1165,6 +1207,80 @@ public sealed class SimpleDdgiVolumeManagerTests
             Assert.That(influenceMax, Is.EqualTo(new Vector3(4.375f, 5.375f, -1.125f)));
             Assert.That(floorEdgeDistance, Is.GreaterThanOrEqualTo(fadeDistance));
             Assert.That(wallEdgeDistance, Is.GreaterThanOrEqualTo(fadeDistance));
+        });
+    }
+
+    [Test]
+    public void RefinementTraceDistance_IsIndependentOfCompactBrickExtent()
+    {
+        const float spacing = 0.59375f;
+        float compactBrickDistance = SimpleDdgiVolumeManager.ResolveNativeTraceDistance(
+            spacing,
+            countX: 6,
+            countY: 4,
+            countZ: 6);
+        var inheritedBaseHorizon = new GPUSimpleDdgiVolume
+        {
+            OriginAndSpacing = new Vector4(0.0f, 0.0f, 0.0f, spacing),
+            GridCountsAndFirstProbe = new Vector4(6.0f, 4.0f, 6.0f, 0.0f),
+            UpdateStartAndCount = new Vector4(40.375f, 0.0f, 128.0f, 0.0f)
+        };
+        GPUSimpleDdgiVolume legacyUnencoded = inheritedBaseHorizon;
+        legacyUnencoded.UpdateStartAndCount.X = 0.0f;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(compactBrickDistance, Is.EqualTo(3.5625f).Within(0.0001f));
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveGpuVolumeTraceDistance(inheritedBaseHorizon),
+                Is.EqualTo(40.375f).Within(0.0001f));
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveGpuVolumeTraceDistance(legacyUnencoded),
+                Is.EqualTo(compactBrickDistance).Within(0.0001f));
+        });
+    }
+
+    [Test]
+    public void RefinementTraceDistance_InheritsCompleteBaseOwnerAndUsesBoundaryMaximum()
+    {
+        Vector3 refinementMinimum = new(-0.296875f, 0.1484375f, 0.4453125f);
+        Vector3 refinementMaximum = refinementMinimum +
+            new Vector3(2.96875f, 1.78125f, 2.96875f);
+        const float nativeDistance = 3.5625f;
+        var completeDomains = new[]
+        {
+            new BoundingBox(
+                new Vector3(-19.53125f, -4.28125f, -12.61875f),
+                new Vector3(23.21875f, 15.90625f, 17.06875f)),
+            new BoundingBox(new Vector3(-100.0f), new Vector3(100.0f))
+        };
+        float inheritedComplete = SimpleDdgiVolumeManager.ResolveRefinementTraceDistance(
+            refinementMinimum,
+            refinementMaximum,
+            nativeDistance,
+            completeDomains,
+            [40.375f, 135.0f]);
+
+        var splitDomains = new[]
+        {
+            new BoundingBox(
+                refinementMinimum - Vector3.One,
+                new Vector3(1.0f, refinementMaximum.Y + 1.0f, refinementMaximum.Z + 1.0f)),
+            new BoundingBox(
+                new Vector3(1.0f, refinementMinimum.Y - 1.0f, refinementMinimum.Z - 1.0f),
+                refinementMaximum + Vector3.One)
+        };
+        float inheritedBoundary = SimpleDdgiVolumeManager.ResolveRefinementTraceDistance(
+            refinementMinimum,
+            refinementMaximum,
+            nativeDistance,
+            splitDomains,
+            [40.375f, 65.79086f]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inheritedComplete, Is.EqualTo(40.375f).Within(0.0001f));
+            Assert.That(inheritedBoundary, Is.EqualTo(65.79086f).Within(0.0001f));
         });
     }
 

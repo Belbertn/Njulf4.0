@@ -14176,14 +14176,54 @@ namespace Njulf.Rendering
             // user's request. It is set immediately before a validated split graph executes.
             sceneData.DdgiAsyncComputeEnabled = 0;
             sceneData.DdgiCacheGeneration = 1u;
-            sceneData.DdgiWarmupState = DdgiRuntimeWarmupState.SteadyState;
-            sceneData.DdgiCacheWarmupState = DdgiRuntimeWarmupState.SteadyState;
+            DdgiRuntimeWarmupState warmupState = ResolveSimpleDdgiWarmupState(
+                _simpleDdgiVolumeManager.ProbeCount,
+                _simpleDdgiVolumeManager.TransportGlobalConvergencePending,
+                _simpleDdgiVolumeManager.TailCertificationEnabled,
+                _simpleDdgiVolumeManager.TransportTailCertificateCurrent,
+                _simpleDdgiVolumeManager.TransportTailPhase,
+                sceneData.SimpleDdgiRefinement);
+            sceneData.DdgiWarmupState = warmupState;
+            sceneData.DdgiCacheWarmupState = warmupState;
             sceneData.DdgiWarmedVisibleProbeFraction = 1.0f;
             sceneData.DdgiWarmedLocalProbeFraction = 1.0f;
             sceneData.DdgiWarmedCascade0ProbeFraction = 1.0f;
             sceneData.DdgiUpdateSkipReason = string.Empty;
             sceneData.DdgiPublishSkipReason = string.Empty;
             UpdateSimpleDdgiLivenessTelemetry(sceneData);
+        }
+
+        internal static DdgiRuntimeWarmupState ResolveSimpleDdgiWarmupState(
+            int activeProbeCount,
+            bool transportConvergencePending,
+            bool tailCertificationEnabled,
+            bool transportCertificateCurrent,
+            SimpleDdgiTransportPhase transportPhase,
+            in SimpleDdgiRefinementBrickDiagnostics refinement)
+        {
+            if (activeProbeCount <= 0)
+                return DdgiRuntimeWarmupState.ColdStart;
+
+            if (transportPhase is
+                SimpleDdgiTransportPhase.SourceRepair or
+                SimpleDdgiTransportPhase.ParticipantReconciliation or
+                SimpleDdgiTransportPhase.FailClosedRecovery)
+            {
+                return DdgiRuntimeWarmupState.Recovery;
+            }
+
+            bool refinementPending =
+                refinement.ReceiverReadyBrickCount !=
+                    refinement.AdmittedBrickCount ||
+                refinement.BaseFallbackBrickCount > 0;
+            if (refinementPending)
+                return DdgiRuntimeWarmupState.LocalVolumeWarmup;
+
+            return transportConvergencePending ||
+                   !tailCertificationEnabled ||
+                   !transportCertificateCurrent
+                ? DdgiRuntimeWarmupState.NearCascadeWarmup
+                : DdgiRuntimeWarmupState.SteadyState;
         }
 
         /// <summary>

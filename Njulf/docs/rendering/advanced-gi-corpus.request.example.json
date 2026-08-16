@@ -1,3 +1,186 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:072cd914bfcbeeb1b955e5fdb962df51240fb664e21873f071f78f522c080464
-size 12505
+{
+  "schemaRevision": 1,
+  "corpusId": "advanced-gi-reference-v1",
+  "cases": [
+    {
+      "id": "white-furnace",
+      "scenario": "gi-simple-ddgi-furnace",
+      "description": "Constant-environment energy, null-work, normalization, and learned-PDF parity fixture.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "TaggedCaustics", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/white-furnace/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/white-furnace/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/white-furnace/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/white-furnace/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "bright-doorway",
+      "scenario": "gi-bright-exterior-room",
+      "description": "Bright aperture, time-to-visible, contact residual, and directional-variance fixture.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/bright-doorway/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/bright-doorway/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/bright-doorway/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/bright-doorway/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "alpha-cutoff-fence",
+      "scenario": "alpha-cutoff-conformance",
+      "description": "Exhaustive opaque, transparent, unknown-opaque, and unknown-transparent cutoff coverage.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/alpha-cutoff-fence/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/alpha-cutoff-fence/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/alpha-cutoff-fence/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/alpha-cutoff-fence/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "dense-static-foliage",
+      "scenario": "forest-foliage",
+      "description": "Static masked-card coverage, OMM total-time, feedback normalization, and bright-sky guiding fixture.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/dense-static-foliage/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/dense-static-foliage/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/dense-static-foliage/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/dense-static-foliage/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "deforming-foliage",
+      "scenario": "animated-foliage",
+      "description": "Dynamic-alpha fallback, guide relearning, and temporal-history rejection fixture.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/deforming-foliage/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/deforming-foliage/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/deforming-foliage/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/deforming-foliage/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "sparse-scroll-teleport",
+      "scenario": "gi-fast-traversal-teleport",
+      "description": "Generation reset, stale-bank rejection, origin transition, and full history reset sequence.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "TaggedCaustics", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/sparse-scroll-teleport/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/sparse-scroll-teleport/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/sparse-scroll-teleport/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/sparse-scroll-teleport/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "reflection-capture",
+      "scenario": "reflection-capture-off-camera",
+      "description": "Non-camera receiver quota, traversal parity, and view-independent caustic-cache fixture.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "TaggedCaustics", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/reflection-capture/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/reflection-capture/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/reflection-capture/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/reflection-capture/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "fog-particle-storm",
+      "scenario": "gi-quality-interior-particles",
+      "description": "Bounded producer mass, maintenance liveness, exclusion ownership, and zero-caustic work fixture.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "TaggedCaustics", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/fog-particle-storm/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/fog-particle-storm/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/fog-particle-storm/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/fog-particle-storm/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "hdr-emissive-slit",
+      "scenario": "gi-emissive-material-room",
+      "description": "Tiny HDR source through an aperture for visual priority, guiding variance, and off-screen residual fallback.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "TaggedCaustics", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/hdr-emissive-slit/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/hdr-emissive-slit/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/hdr-emissive-slit/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/hdr-emissive-slit/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "moving-light-material",
+      "scenario": "gi-moving-point-light",
+      "description": "Lighting and material revision liveness, regional retraining, coherent cache replacement, and history rejection.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "TaggedCaustics", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/moving-light-material/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/moving-light-material/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/moving-light-material/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/moving-light-material/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "mirror-caustic",
+      "scenario": "hero-mirror-caustic",
+      "description": "Analytic reflected-flux, footprint, and energy-ownership target isolated from C5.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "TaggedCaustics"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/mirror-caustic/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/mirror-caustic/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/mirror-caustic/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/mirror-caustic/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "glass-prism-caustic",
+      "scenario": "hero-glass-prism-caustic",
+      "description": "Refraction, total internal reflection, absorption, and dark-receiver caustic energy target.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "TaggedCaustics"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/glass-prism-caustic/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/glass-prism-caustic/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/glass-prism-caustic/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/glass-prism-caustic/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "moving-hero-caustic",
+      "scenario": "hero-caustic-motion",
+      "description": "World-cache generation latency, motion invalidation, and stale-trail rejection fixture.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "TaggedCaustics"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/moving-hero-caustic/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/moving-hero-caustic/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/moving-hero-caustic/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/moving-hero-caustic/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "near-field-props",
+      "scenario": "post-b3-near-field-props",
+      "description": "Equal-cost B3-versus-C5 hands, props, and crease residual decision target.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/near-field-props/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/near-field-props/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/near-field-props/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/near-field-props/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    },
+    {
+      "id": "camera-cut-screen-exit",
+      "scenario": "camera-pan-cut-screen-exit",
+      "description": "Camera cut, screen-edge miss, proposal epoch, resolve history, and zero-residual fallback sequence.",
+      "features": ["ReceiverFeedback", "OpacityMicromaps", "DirectionalGuiding", "TaggedCaustics", "NearFieldResidual"],
+      "artifacts": [
+        { "role": "scene", "relativePath": "cases/camera-cut-screen-exit/scene.json", "byteLength": 0, "sha256": "" },
+        { "role": "camera-script", "relativePath": "cases/camera-cut-screen-exit/camera.json", "byteLength": 0, "sha256": "" },
+        { "role": "settings", "relativePath": "cases/camera-cut-screen-exit/settings.json", "byteLength": 0, "sha256": "" },
+        { "role": "reference", "relativePath": "cases/camera-cut-screen-exit/reference.exr", "byteLength": 0, "sha256": "" }
+      ]
+    }
+  ]
+}

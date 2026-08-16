@@ -1525,9 +1525,13 @@ namespace Njulf.Rendering.Data
         public Vector4 GridCountsAndFirstProbe;
         public Vector4 WorldMinAndEdgeFade;
         public Vector4 WorldMaxAndKind;
-        // X/Y = queue start/count, Z = required complete source-ray
-        // cardinality, W = whole-brick receiver-ready gate for B3 refinement
-        // volumes (numeric 0/1; ignored by every other volume kind).
+        // X = exact maximum trace distance for this volume, Y = queued update
+        // count, Z = required complete source-ray cardinality, W = certified
+        // receiver blend weight for B3 refinement volumes (numeric 0/1;
+        // ignored by every other volume kind). Queue records carry their own
+        // offsets; the old per-volume queue-start value was never consumed by
+        // a shader and is now used to keep local refinement transport on the
+        // same trace horizon as the base field it replaces.
         public Vector4 UpdateStartAndCount;
         public Vector4 RaysAndReserved;
         // Integer payload encoded with bit-preserving uint/float conversion:

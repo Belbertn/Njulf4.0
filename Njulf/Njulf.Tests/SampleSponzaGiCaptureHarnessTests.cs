@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
@@ -84,6 +85,98 @@ public sealed class SampleSponzaGiCaptureHarnessTests
     }
 
     [Test]
+    public void TransportCaptureReadiness_AcceptsCertifiedReceiverReadyField()
+    {
+        SampleSponzaGiCaptureContract contract =
+            SampleSponzaGiCaptureContract.Default;
+        RendererDiagnostics diagnostics = ReadyTransportDiagnostics();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                contract.GetTransportCaptureReadinessBlockers(diagnostics),
+                Is.Empty);
+            Assert.That(
+                contract.GetTransportCaptureReadinessTimeoutFrames(diagnostics),
+                Is.EqualTo(
+                    120 + 12 +
+                    SimpleDdgiRefinementPublicationBlendState
+                        .TransitionFrameCount +
+                    SampleSponzaGiCaptureContract.TransportReadinessStableFrameCount));
+        });
+    }
+
+    [Test]
+    public void TransportCaptureReadiness_RejectsIncompleteRefinementHandoff()
+    {
+        SampleSponzaGiCaptureContract contract =
+            SampleSponzaGiCaptureContract.Default;
+        RendererDiagnostics ready = ReadyTransportDiagnostics();
+        RendererDiagnostics blending = ready with
+        {
+            DdgiWarmupState = DdgiRuntimeWarmupState.LocalVolumeWarmup,
+            SimpleDdgiRefinement = ready.SimpleDdgiRefinement with
+            {
+                ReceiverReadyBrickCount = 0,
+                BaseFallbackBrickCount = 1,
+                ReceiverBlendWeight = 0.5f,
+                AdmissionStatus = "receiver-blending"
+            }
+        };
+
+        IReadOnlyList<string> blockers =
+            contract.GetTransportCaptureReadinessBlockers(blending);
+
+        Assert.That(blockers, Has.Some.Contains("handoff is incomplete"));
+    }
+
+    [Test]
+    public void TransportCaptureReadiness_RejectsUncertifiedFallbackBrick()
+    {
+        SampleSponzaGiCaptureContract contract =
+            SampleSponzaGiCaptureContract.Default;
+        RendererDiagnostics diagnostics = ReadyTransportDiagnostics() with
+        {
+            DdgiWarmupState = DdgiRuntimeWarmupState.LocalVolumeWarmup,
+            SimpleDdgiTransportGlobalConvergencePending = 1,
+            SimpleDdgiTransportConvergence =
+                SimpleDdgiTransportConvergenceTelemetry.Empty with
+                {
+                    TailPhase = SimpleDdgiTransportPhase.AuditFrozen,
+                    TailReason =
+                        SimpleDdgiTransportCertificationReason.AuditInProgress,
+                    TailExpectedParticipantCount = 64,
+                    TailAuditedParticipantCount = 32,
+                    TailCertificateCurrent = false,
+                    TailConvergenceDeadlineFrames = 120,
+                    TailAuditReadbackDeadlineFrames = 12
+                },
+            SimpleDdgiRefinement = new SimpleDdgiRefinementBrickDiagnostics(
+                Requested: true,
+                RequestedBrickCount: 1,
+                AdmittedBrickCount: 1,
+                ReceiverReadyBrickCount: 0,
+                BaseFallbackBrickCount: 1,
+                AllocatedProbeCount: 216,
+                EvictionCount: 1,
+                TopologyChangedThisFrame: true,
+                AdmissionStatus: "warming")
+        };
+
+        IReadOnlyList<string> blockers =
+            contract.GetTransportCaptureReadinessBlockers(diagnostics);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blockers, Has.Some.Contains("not SteadyState"));
+            Assert.That(blockers, Has.Some.Contains("not current"));
+            Assert.That(blockers, Has.Some.Contains("Refinement topology changed"));
+            Assert.That(blockers, Has.Some.Contains("receiver-ready"));
+            Assert.That(blockers, Has.Some.Contains("base fallback"));
+        });
+    }
+
+    [Test]
     public void DefaultContract_DefinesLockedNamedEndpointsRoisAndOutputs()
     {
         SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
@@ -105,7 +198,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
             Assert.That(contract.MotionTraversalFrameCount, Is.EqualTo(300));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v17"));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v19"));
             Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_164));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
@@ -579,6 +672,110 @@ public sealed class SampleSponzaGiCaptureHarnessTests
     }
 
     [Test]
+    public void FloorReceiverGate_UsesSceneLinearFinalIndirectAtLockedFloorPixels()
+    {
+        SampleSponzaGiCaptureContract contract =
+            SampleSponzaGiCaptureContract.Default;
+        float[] pixels = CreateLockedLinearImagePixels(0.02f);
+        var image = new LinearFloatImage(
+            SampleSponzaGiCaptureContract.LockedWidth,
+            SampleSponzaGiCaptureContract.LockedHeight,
+            pixels);
+
+        SampleSponzaGiFloorReceiverEvidence evidence =
+            SampleSponzaGiFloorReceiverGate.Evaluate(
+                image,
+                contract.Fingerprint,
+                contract.LowBookmark.Name);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(evidence.Passed, Is.True, evidence.FailureReason);
+            Assert.That(evidence.Samples, Has.Count.EqualTo(5));
+            Assert.That(evidence.ObservedMinimumLuminance,
+                Is.EqualTo(0.02f).Within(1e-6f));
+            Assert.That(evidence.ObservedAlignedMeanLuminance,
+                Is.EqualTo(0.02f).Within(1e-6f));
+            Assert.That(evidence.Samples.Select(static sample => sample.Name),
+                Does.Contain("base-floor-far"));
+        });
+    }
+
+    [Test]
+    public void FloorReceiverGate_RejectsOneBlackKnownFloorReceiver()
+    {
+        SampleSponzaGiCaptureContract contract =
+            SampleSponzaGiCaptureContract.Default;
+        float[] pixels = CreateLockedLinearImagePixels(0.02f);
+        int blackPixel = checked(
+            (820 * SampleSponzaGiCaptureContract.LockedWidth + 1200) * 3);
+        pixels[blackPixel] = 0.0f;
+        pixels[blackPixel + 1] = 0.0f;
+        pixels[blackPixel + 2] = 0.0f;
+
+        SampleSponzaGiFloorReceiverEvidence evidence =
+            SampleSponzaGiFloorReceiverGate.Evaluate(
+                new LinearFloatImage(
+                    SampleSponzaGiCaptureContract.LockedWidth,
+                    SampleSponzaGiCaptureContract.LockedHeight,
+                    pixels),
+                contract.Fingerprint,
+                contract.LowBookmark.Name);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(evidence.Passed, Is.False);
+            Assert.That(evidence.FailureReason,
+                Does.Contain("known +Y floor receiver"));
+        });
+    }
+
+    [Test]
+    public void ArtifactVerification_AcceptsOnlyLockedExtentLinearPfm()
+    {
+        string directory = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"sponza-gi-pfm-{Guid.NewGuid():N}");
+        SampleSponzaGiCaptureContract contract =
+            SampleSponzaGiCaptureContract.Default;
+        try
+        {
+            string relativePath =
+                contract.GetRelativeLinearFinalIndirectPath(
+                    contract.LowBookmark.Name);
+            string fullPath = Path.Combine(directory, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            PfmLinearImageCodec.WriteAtomic(
+                fullPath,
+                CreateLockedLinearImagePixels(0.02f),
+                SampleSponzaGiCaptureContract.LockedWidth,
+                SampleSponzaGiCaptureContract.LockedHeight);
+
+            bool verified = contract.TryVerifyArtifact(
+                directory,
+                new SampleSponzaGiCapturedArtifact(
+                    contract.LowBookmark.Name,
+                    "final-indirect",
+                    "linear-final-indirect",
+                    relativePath),
+                out SampleSponzaGiCapturedArtifact artifact,
+                out string reason);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(verified, Is.True, reason);
+                Assert.That(artifact.ByteLength, Is.GreaterThan(0));
+                Assert.That(artifact.Sha256, Has.Length.EqualTo(64));
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
     public void CompletedManifest_RequiresAndRecordsHashVerifiedRendererArtifacts()
     {
         string directory = Path.Combine(TestContext.CurrentContext.WorkDirectory, $"sponza-gi-capture-{Guid.NewGuid():N}");
@@ -610,6 +807,14 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                 "coverage-oracle",
                 "sponza-gi-coverage-oracle.json",
                 "{\"schemaVersion\":\"test\"}"));
+            artifacts.Add(CreateVerifiedTextArtifact(
+                contract,
+                directory,
+                contract.LowBookmark.Name,
+                "final-indirect",
+                "floor-receiver-evidence",
+                SampleSponzaGiCaptureContract.FloorReceiverEvidenceFileName,
+                "{\"schemaVersion\":\"test\",\"passed\":true}"));
             foreach (string traceName in new[]
                      {
                          contract.LowBookmark.Name,
@@ -642,6 +847,14 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                         "renderer-screenshot",
                         Path.ChangeExtension(imagePath, ".renderer.png")));
                 }
+
+                artifacts.Add(CreateVerifiedPfmArtifact(
+                    contract,
+                    directory,
+                    bookmark.Name,
+                    "final-indirect",
+                    "linear-final-indirect",
+                    contract.GetRelativeLinearFinalIndirectPath(bookmark.Name)));
 
                 string snapshotPath = Path.Combine(
                     Path.GetDirectoryName(contract.GetRelativeImagePath(bookmark.Name, contract.Outputs[0]))!,
@@ -760,6 +973,40 @@ public sealed class SampleSponzaGiCaptureHarnessTests
         return Verify(contract, directory, new SampleSponzaGiCapturedArtifact(bookmark, output, kind, relativePath));
     }
 
+    private static SampleSponzaGiCapturedArtifact CreateVerifiedPfmArtifact(
+        SampleSponzaGiCaptureContract contract,
+        string directory,
+        string bookmark,
+        string output,
+        string kind,
+        string relativePath)
+    {
+        string fullPath = Path.Combine(directory, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        PfmLinearImageCodec.WriteAtomic(
+            fullPath,
+            CreateLockedLinearImagePixels(0.02f),
+            SampleSponzaGiCaptureContract.LockedWidth,
+            SampleSponzaGiCaptureContract.LockedHeight);
+        return Verify(
+            contract,
+            directory,
+            new SampleSponzaGiCapturedArtifact(
+                bookmark,
+                output,
+                kind,
+                relativePath));
+    }
+
+    private static float[] CreateLockedLinearImagePixels(float value)
+    {
+        var pixels = new float[
+            SampleSponzaGiCaptureContract.LockedWidth *
+            SampleSponzaGiCaptureContract.LockedHeight * 3];
+        Array.Fill(pixels, value);
+        return pixels;
+    }
+
     private static SampleSponzaGiCapturedArtifact CreateVerifiedTextArtifact(
         SampleSponzaGiCaptureContract contract,
         string directory,
@@ -784,6 +1031,42 @@ public sealed class SampleSponzaGiCaptureHarnessTests
         Assert.That(verified, Is.True, reason);
         return result;
     }
+
+    private static RendererDiagnostics ReadyTransportDiagnostics() =>
+        RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationDdgiActive = 1,
+            SimpleDdgiActive = 1,
+            DdgiWarmupState = DdgiRuntimeWarmupState.SteadyState,
+            SimpleDdgiTransportGlobalConvergencePending = 0,
+            SimpleDdgiTransportTailCertificationEnabled = true,
+            SimpleDdgiTransportConvergence =
+                SimpleDdgiTransportConvergenceTelemetry.Empty with
+                {
+                    TailPhase = SimpleDdgiTransportPhase.Certified,
+                    TailReason =
+                        SimpleDdgiTransportCertificationReason.Certified,
+                    TailExpectedParticipantCount = 64,
+                    TailAuditedParticipantCount = 64,
+                    TailCertificateCurrent = true,
+                    TailConvergenceDeadlineFrames = 120,
+                    TailAuditReadbackDeadlineFrames = 12
+                },
+            SimpleDdgiRefinement = new SimpleDdgiRefinementBrickDiagnostics(
+                Requested: true,
+                RequestedBrickCount: 1,
+                AdmittedBrickCount: 1,
+                ReceiverReadyBrickCount: 1,
+                BaseFallbackBrickCount: 0,
+                AllocatedProbeCount: 216,
+                EvictionCount: 0,
+                TopologyChangedThisFrame: false,
+                AdmissionStatus: "ready")
+            {
+                ReceiverBlendWeight = 1.0f
+            }
+        };
 
     private static readonly byte[] ValidPng = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL0NwAAAABJRU5ErkJggg==");

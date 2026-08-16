@@ -2085,7 +2085,7 @@ namespace Njulf.Rendering.Data
         private int _simpleDdgiRefinementGridSizeZ = 6;
         private float _simpleDdgiRefinementSpacingScale = 0.5f;
         private int _simpleDdgiRefinementRetentionFrames = 90;
-        private float _simpleDdgiRefinementMinimumEmissiveLuminanceNits = 250f;
+        private float _simpleDdgiRefinementMinimumEmissiveLuminanceNits = 200f;
         private float _simpleDdgiRefinementMaximumEmitterAreaSquareMeters = 4f;
         private bool _simpleDdgiNearVisibilitySidecarEnabled = true;
         private ulong _simpleDdgiNearVisibilitySidecarMemoryBudgetBytes =

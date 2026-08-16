@@ -30,6 +30,47 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
     private const float MinimumPriority = 176f;
     private const float MaximumPriority = 384f;
 
+    private struct EmitterCluster
+    {
+        public EmitterCluster(
+            Vector3 center,
+            BoundingBox bounds,
+            float area,
+            float priority,
+            ulong stableSourceId)
+        {
+            Center = center;
+            Minimum = Min(bounds.Min, bounds.Max);
+            Maximum = Max(bounds.Min, bounds.Max);
+            Area = area;
+            Priority = priority;
+            StableSourceId = stableSourceId;
+        }
+
+        public Vector3 Center;
+        public Vector3 Minimum;
+        public Vector3 Maximum;
+        public float Area;
+        public float Priority;
+        public ulong StableSourceId;
+
+        public void Merge(
+            Vector3 center,
+            BoundingBox bounds,
+            float area,
+            float priority,
+            ulong stableSourceId)
+        {
+            float combinedArea = Area + area;
+            Center = (Center * Area + center * area) / combinedArea;
+            Minimum = Min(Minimum, Min(bounds.Min, bounds.Max));
+            Maximum = Max(Maximum, Max(bounds.Min, bounds.Max));
+            Area = combinedArea;
+            Priority = Math.Max(Priority, priority);
+            StableSourceId = Math.Min(StableSourceId, stableSourceId);
+        }
+    }
+
     public static SimpleDdgiRefinementEmissiveDemandDiagnostics Build(
         ReadOnlySpan<GPUDdgiEmissiveSource> sources,
         SimpleDdgiRefinementEmissiveDemandConfiguration configuration,
@@ -42,6 +83,13 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
         int capacity = Math.Min(
             configuration.MaximumDemandCount,
             MaximumDemandCount);
+        Span<EmitterCluster> clusters =
+            stackalloc EmitterCluster[MaximumDemandCount];
+        int clusterCount = 0;
+        float maximumMergeDistance = 2f * MathF.Sqrt(
+            configuration.MaximumEmitterAreaSquareMeters / MathF.PI);
+        float maximumMergeDistanceSquared =
+            maximumMergeDistance * maximumMergeDistance;
         int eligible = 0;
         int rejectedLarge = 0;
         int rejectedDim = 0;
@@ -51,6 +99,7 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
             if (!TryMeasure(
                     source,
                     out Vector3 center,
+                    out BoundingBox bounds,
                     out float area,
                     out float luminanceNits))
             {
@@ -82,11 +131,48 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
                 MinimumPriority + brightnessStops * 16f + compactness * 16f,
                 MinimumPriority,
                 MaximumPriority);
-            var demand = new SimpleDdgiRefinementDemand(
+            ulong stableSourceId = StablePayloadKey(source);
+            int mergeCluster = FindMergeCluster(
+                clusters[..clusterCount],
                 center,
-                priority,
+                area,
+                configuration.MaximumEmitterAreaSquareMeters,
+                maximumMergeDistanceSquared);
+            if (mergeCluster >= 0)
+            {
+                EmitterCluster cluster = clusters[mergeCluster];
+                cluster.Merge(center, bounds, area, priority, stableSourceId);
+                clusters[mergeCluster] = cluster;
+            }
+            else
+            {
+                AdmitCluster(
+                    clusters,
+                    ref clusterCount,
+                    new EmitterCluster(
+                        center,
+                        bounds,
+                        area,
+                        priority,
+                        stableSourceId));
+            }
+        }
+
+        for (int clusterIndex = 0;
+             clusterIndex < clusterCount;
+             clusterIndex++)
+        {
+            EmitterCluster cluster = clusters[clusterIndex];
+            var demand = new SimpleDdgiRefinementDemand(
+                cluster.Center,
+                cluster.Priority,
                 SimpleDdgiRefinementDemandReason.CompactEmissive,
-                StablePayloadKey(source));
+                cluster.StableSourceId)
+            {
+                SourceBounds = new BoundingBox(
+                    cluster.Minimum,
+                    cluster.Maximum)
+            };
             AdmitTopK(destination, demand, capacity);
         }
 
@@ -103,6 +189,66 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
             destination.Count,
             rejectedLarge,
             rejectedDim);
+    }
+
+    private static int FindMergeCluster(
+        ReadOnlySpan<EmitterCluster> clusters,
+        Vector3 center,
+        float area,
+        float maximumArea,
+        float maximumDistanceSquared)
+    {
+        int best = -1;
+        float bestDistanceSquared = float.MaxValue;
+        for (int index = 0; index < clusters.Length; index++)
+        {
+            EmitterCluster cluster = clusters[index];
+            if (cluster.Area + area > maximumArea)
+                continue;
+            float distanceSquared = (center - cluster.Center).LengthSquared();
+            if (distanceSquared > maximumDistanceSquared ||
+                distanceSquared >= bestDistanceSquared)
+            {
+                continue;
+            }
+            best = index;
+            bestDistanceSquared = distanceSquared;
+        }
+        return best;
+    }
+
+    private static void AdmitCluster(
+        Span<EmitterCluster> clusters,
+        ref int count,
+        EmitterCluster cluster)
+    {
+        if (count < clusters.Length)
+        {
+            clusters[count++] = cluster;
+            return;
+        }
+
+        int weakestIndex = 0;
+        for (int index = 1; index < count; index++)
+        {
+            EmitterCluster candidate = clusters[index];
+            EmitterCluster weakest = clusters[weakestIndex];
+            if (candidate.Priority < weakest.Priority ||
+                (candidate.Priority == weakest.Priority &&
+                 candidate.StableSourceId > weakest.StableSourceId))
+            {
+                weakestIndex = index;
+            }
+        }
+
+        EmitterCluster currentWeakest = clusters[weakestIndex];
+        if (cluster.Priority < currentWeakest.Priority ||
+            (cluster.Priority == currentWeakest.Priority &&
+             cluster.StableSourceId >= currentWeakest.StableSourceId))
+        {
+            return;
+        }
+        clusters[weakestIndex] = cluster;
     }
 
     private static void AdmitTopK(
@@ -142,6 +288,7 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
     private static bool TryMeasure(
         GPUDdgiEmissiveSource source,
         out Vector3 center,
+        out BoundingBox bounds,
         out float area,
         out float luminanceNits)
     {
@@ -149,9 +296,13 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
             DdgiEmissiveTriangleTable.DecodeFlags(source);
         if ((flags & DdgiEmissiveSourceFlags.Triangle) != 0)
         {
-            center = Xyz(source.Vertex0Area) +
-                     (Xyz(source.Edge1AliasProbability) +
-                      Xyz(source.Edge2AliasFlags)) / 3f;
+            Vector3 vertex0 = Xyz(source.Vertex0Area);
+            Vector3 vertex1 = vertex0 + Xyz(source.Edge1AliasProbability);
+            Vector3 vertex2 = vertex0 + Xyz(source.Edge2AliasFlags);
+            center = (vertex0 + vertex1 + vertex2) / 3f;
+            bounds = new BoundingBox(
+                Min(vertex0, Min(vertex1, vertex2)),
+                Max(vertex0, Max(vertex1, vertex2)));
             area = Math.Max(source.Vertex0Area.W, 0f);
             luminanceNits = EmissivePhotometry.SceneLinearLuminanceToNits(
                 Math.Max(
@@ -171,6 +322,11 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
             float thirdRadius = Math.Max(
                 Math.Abs(source.Edge2AliasFlags.Y),
                 radius);
+            float maximumRadius = Math.Max(
+                radius,
+                Math.Max(secondRadius, thirdRadius));
+            Vector3 extent = new(maximumRadius);
+            bounds = new BoundingBox(center - extent, center + extent);
             // Conservative projected footprint: elongated beams/capsules stop
             // qualifying as compact while spherical sparks remain small.
             area = MathF.PI * secondRadius * thirdRadius;
@@ -188,10 +344,14 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
         if ((flags & DdgiEmissiveSourceFlags.ProxyRollback) != 0)
         {
             center = Xyz(source.Vertex0Area);
-            Vector3 extent = Max(
-                Xyz(source.RadianceSelectionProbability) -
+            Vector3 min = Min(
                 Xyz(source.Edge2AliasFlags),
-                Vector3.Zero);
+                Xyz(source.RadianceSelectionProbability));
+            Vector3 max = Max(
+                Xyz(source.Edge2AliasFlags),
+                Xyz(source.RadianceSelectionProbability));
+            Vector3 extent = max - min;
+            bounds = new BoundingBox(min, max);
             area = 2f * (
                 extent.X * extent.Y +
                 extent.X * extent.Z +
@@ -205,6 +365,7 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
         }
 
         center = default;
+        bounds = default;
         area = 0f;
         luminanceNits = 0f;
         return false;
@@ -251,6 +412,11 @@ public static class SimpleDdgiRefinementEmissiveDemandBuilder
 
     private static Vector3 Xyz(Vector4 value) =>
         new(value.X, value.Y, value.Z);
+
+    private static Vector3 Min(Vector3 left, Vector3 right) => new(
+        Math.Min(left.X, right.X),
+        Math.Min(left.Y, right.Y),
+        Math.Min(left.Z, right.Z));
 
     private static Vector3 Max(Vector3 left, Vector3 right) => new(
         Math.Max(left.X, right.X),

@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Njulf.Core.Math;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
@@ -94,6 +95,203 @@ public sealed record SampleSponzaGiCapturedArtifact(
     long ByteLength = 0,
     string VerificationStatus = "unverified");
 
+/// <summary>One locked +Y floor receiver sampled from linear FinalIndirect.</summary>
+public sealed record SampleSponzaGiFloorReceiverSample(
+    string Name,
+    int X,
+    int Y,
+    float Red,
+    float Green,
+    float Blue,
+    float Luminance);
+
+/// <summary>
+/// Direct scene-linear proof that the low Sponza endpoint delivers indirect
+/// light to known floor receivers. This deliberately does not infer transport
+/// from a tone-mapped beauty or diagnostic PNG.
+/// </summary>
+public sealed record SampleSponzaGiFloorReceiverEvidence(
+    string SchemaVersion,
+    string ContractFingerprint,
+    string Bookmark,
+    int Width,
+    int Height,
+    float MinimumReceiverLuminance,
+    float MinimumAlignedMeanLuminance,
+    float ObservedMinimumLuminance,
+    float ObservedAlignedMeanLuminance,
+    bool Passed,
+    string FailureReason,
+    IReadOnlyList<SampleSponzaGiFloorReceiverSample> Samples);
+
+/// <summary>
+/// Numeric gate over the renderer's lossless linear FinalIndirect output.
+/// Coordinates are locked to the low capture camera and identify upward-facing
+/// plaza-floor pixels; the first three lie inside the aligned refinement cell
+/// and the final two are base-field controls outside it.
+/// </summary>
+public static class SampleSponzaGiFloorReceiverGate
+{
+    public const string SchemaVersion =
+        "realtime-gi-closure-sponza-floor-receivers/v1";
+    public const float MinimumReceiverLuminance = 0.001f;
+    public const float MinimumAlignedMeanLuminance = 0.005f;
+    public const string ReceiverLayoutFingerprint =
+        "aligned-floor-left=620,820|aligned-floor-center=720,820|" +
+        "aligned-floor-right=800,820|base-floor-mid=960,820|" +
+        "base-floor-far=1200,820";
+
+    private static readonly (string Name, int X, int Y)[] RequiredReceivers =
+    [
+        ("aligned-floor-left", 620, 820),
+        ("aligned-floor-center", 720, 820),
+        ("aligned-floor-right", 800, 820),
+        ("base-floor-mid", 960, 820),
+        ("base-floor-far", 1200, 820)
+    ];
+
+    public static SampleSponzaGiFloorReceiverEvidence Evaluate(
+        LinearFloatImage image,
+        string contractFingerprint,
+        string bookmark)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        if (string.IsNullOrWhiteSpace(contractFingerprint))
+            throw new ArgumentException(
+                "A capture contract fingerprint is required.",
+                nameof(contractFingerprint));
+        if (string.IsNullOrWhiteSpace(bookmark))
+            throw new ArgumentException("A bookmark is required.", nameof(bookmark));
+        if (image.Width != SampleSponzaGiCaptureContract.LockedWidth ||
+            image.Height != SampleSponzaGiCaptureContract.LockedHeight ||
+            image.Pixels.Length != checked(image.Width * image.Height * 3))
+        {
+            return Failed(
+                image,
+                contractFingerprint,
+                bookmark,
+                $"Linear FinalIndirect extent/payload is {image.Width}x{image.Height}/" +
+                $"{image.Pixels.Length}, expected " +
+                $"{SampleSponzaGiCaptureContract.LockedWidth}x" +
+                $"{SampleSponzaGiCaptureContract.LockedHeight}/" +
+                $"{SampleSponzaGiCaptureContract.LockedWidth * SampleSponzaGiCaptureContract.LockedHeight * 3}.");
+        }
+
+        var samples = new SampleSponzaGiFloorReceiverSample[RequiredReceivers.Length];
+        float minimum = float.MaxValue;
+        float alignedSum = 0.0f;
+        for (int index = 0; index < RequiredReceivers.Length; index++)
+        {
+            (string name, int x, int y) = RequiredReceivers[index];
+            int pixelOffset = checked((y * image.Width + x) * 3);
+            float red = image.Pixels[pixelOffset];
+            float green = image.Pixels[pixelOffset + 1];
+            float blue = image.Pixels[pixelOffset + 2];
+            float luminance = 0.2126f * red + 0.7152f * green + 0.0722f * blue;
+            samples[index] = new SampleSponzaGiFloorReceiverSample(
+                name,
+                x,
+                y,
+                red,
+                green,
+                blue,
+                luminance);
+            if (!float.IsFinite(red) || !float.IsFinite(green) ||
+                !float.IsFinite(blue) || !float.IsFinite(luminance))
+            {
+                return CreateEvidence(
+                    image,
+                    contractFingerprint,
+                    bookmark,
+                    Array.AsReadOnly(samples.Take(index + 1).ToArray()),
+                    float.NaN,
+                    float.NaN,
+                    false,
+                    $"Floor receiver '{name}' contains non-finite linear radiance.");
+            }
+            minimum = Math.Min(minimum, luminance);
+            if (index < 3)
+                alignedSum += luminance;
+        }
+
+        float alignedMean = alignedSum / 3.0f;
+        string failure = minimum < MinimumReceiverLuminance
+            ? $"At least one known +Y floor receiver is below the positive indirect-light floor " +
+              $"({minimum:R} < {MinimumReceiverLuminance:R})."
+            : alignedMean < MinimumAlignedMeanLuminance
+                ? $"The aligned +Y floor receiver mean is below the required indirect-light signal " +
+                  $"({alignedMean:R} < {MinimumAlignedMeanLuminance:R})."
+                : string.Empty;
+        return CreateEvidence(
+            image,
+            contractFingerprint,
+            bookmark,
+            samples,
+            minimum,
+            alignedMean,
+            failure.Length == 0,
+            failure);
+    }
+
+    public static void WriteAtomic(
+        string path,
+        SampleSponzaGiFloorReceiverEvidence evidence)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("An evidence output path is required.", nameof(path));
+        ArgumentNullException.ThrowIfNull(evidence);
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
+            evidence,
+            new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+        SampleEvidenceFileIo.WriteAtomic(
+            path,
+            payload,
+            SampleEvidenceFileIo.MaximumJsonBytes,
+            "Sponza scene-linear floor receiver evidence");
+    }
+
+    private static SampleSponzaGiFloorReceiverEvidence Failed(
+        LinearFloatImage image,
+        string contractFingerprint,
+        string bookmark,
+        string reason) =>
+        CreateEvidence(
+            image,
+            contractFingerprint,
+            bookmark,
+            [],
+            float.NaN,
+            float.NaN,
+            false,
+            reason);
+
+    private static SampleSponzaGiFloorReceiverEvidence CreateEvidence(
+        LinearFloatImage image,
+        string contractFingerprint,
+        string bookmark,
+        IReadOnlyList<SampleSponzaGiFloorReceiverSample> samples,
+        float observedMinimum,
+        float observedAlignedMean,
+        bool passed,
+        string failureReason) => new(
+            SchemaVersion,
+            contractFingerprint,
+            bookmark,
+            image.Width,
+            image.Height,
+            MinimumReceiverLuminance,
+            MinimumAlignedMeanLuminance,
+            observedMinimum,
+            observedAlignedMean,
+            passed,
+            failureReason,
+            samples);
+}
+
 /// <summary>
 /// Separates a timing-valid endpoint run from a verbose debug-image review.
 /// Diagnostic views intentionally do not contribute timing samples because they
@@ -145,7 +343,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v17";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v19";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1600;
@@ -175,6 +373,11 @@ public sealed class SampleSponzaGiCaptureContract
     // One frame presents the requested state, one spans the two-frame GPU timing
     // latency, and the final frame captures the held state with settled telemetry.
     public const int FramesPerEndpointOutput = 3;
+    // A single ready frame can coincide with delayed publication feedback. A
+    // GI endpoint is armed only after this many consecutive certified,
+    // receiver-ready frames so a stationary topology must demonstrate
+    // liveness instead of merely passing through a ready state once.
+    public const int TransportReadinessStableFrameCount = 256;
     public const uint FixedRandomSeed = 0x2026_0715u;
 
     private static readonly JsonSerializerOptions ContractJsonOptions = new()
@@ -584,6 +787,18 @@ public sealed class SampleSponzaGiCaptureContract
         return Path.Combine(directory, $"{fileName}.window.png");
     }
 
+    public string GetRelativeLinearFinalIndirectPath(string bookmarkName)
+    {
+        if (string.IsNullOrWhiteSpace(bookmarkName))
+            throw new ArgumentException("Bookmark name is required.", nameof(bookmarkName));
+        return Path.Combine(
+            ToFileSegment(bookmarkName),
+            "final-indirect.scene-linear.pfm");
+    }
+
+    public const string FloorReceiverEvidenceFileName =
+        "sponza-gi-floor-receiver-evidence.json";
+
     public string GetRelativeTemporalTracePath(string traceName)
     {
         if (string.IsNullOrWhiteSpace(traceName))
@@ -676,12 +891,12 @@ public sealed class SampleSponzaGiCaptureContract
             throw new ArgumentOutOfRangeException(nameof(sampledAtlasCoverageMode));
 
         string normalizedStatus = status.Trim().ToLowerInvariant();
-        if (normalizedStatus is not ("running" or "awaiting-renderer-screenshots" or "completed" or "failed"))
+        if (normalizedStatus is not ("running" or "awaiting-renderer-captures" or "completed" or "failed"))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(status),
                 status,
-                "The capture status must be running, awaiting-renderer-screenshots, completed, or failed.");
+                "The capture status must be running, awaiting-renderer-captures, completed, or failed.");
         }
 
         Directory.CreateDirectory(outputDirectory);
@@ -769,16 +984,21 @@ public sealed class SampleSponzaGiCaptureContract
             failureReason = $"Artifact '{relativePath}' resolves outside the capture directory.";
             return false;
         }
+        string extension = Path.GetExtension(fullPath);
         bool isPng = string.Equals(
-            Path.GetExtension(fullPath),
+            extension,
             ".png",
+            StringComparison.OrdinalIgnoreCase);
+        bool isPfm = string.Equals(
+            extension,
+            ".pfm",
             StringComparison.OrdinalIgnoreCase);
         SampleEvidenceFileContent content;
         try
         {
             content = SampleEvidenceFileIo.Read(
                 fullPath,
-                isPng
+                isPng || isPfm
                     ? SampleEvidenceFileIo.MaximumLinearFloatImageBytes
                     : SampleEvidenceFileIo.MaximumJsonBytes,
                 "Sponza GI capture artifact");
@@ -813,6 +1033,26 @@ public sealed class SampleSponzaGiCaptureContract
         {
             failureReason = $"Artifact '{relativePath}' is not a complete PNG file.";
             return false;
+        }
+        if (isPfm)
+        {
+            try
+            {
+                LinearFloatImage image = PfmLinearImageCodec.Decode(content.Bytes);
+                if (image.Width != Width || image.Height != Height)
+                {
+                    failureReason =
+                        $"Artifact '{relativePath}' has PFM extent " +
+                        $"{image.Width}x{image.Height}, expected {Width}x{Height}.";
+                    return false;
+                }
+            }
+            catch (InvalidDataException ex)
+            {
+                failureReason =
+                    $"Artifact '{relativePath}' is not a valid linear PFM: {ex.Message}";
+                return false;
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(artifact.Sha256) &&
@@ -881,6 +1121,14 @@ public sealed class SampleSponzaGiCaptureContract
             string.Empty,
             "coverage-oracle",
             "sponza-gi-coverage-oracle.json");
+        AddExpectedArtifactBlockers(
+            blockers,
+            outputDirectory,
+            artifacts,
+            LowBookmark.Name,
+            "final-indirect",
+            "floor-receiver-evidence",
+            FloorReceiverEvidenceFileName);
         foreach (string traceName in new[]
                  {
                      LowBookmark.Name,
@@ -920,6 +1168,15 @@ public sealed class SampleSponzaGiCaptureContract
                     "renderer-screenshot",
                     Path.ChangeExtension(imagePath, ".renderer.png"));
             }
+
+            AddExpectedArtifactBlockers(
+                blockers,
+                outputDirectory,
+                artifacts,
+                bookmark.Name,
+                "final-indirect",
+                "linear-final-indirect",
+                GetRelativeLinearFinalIndirectPath(bookmark.Name));
 
             AddExpectedArtifactBlockers(
                 blockers,
@@ -1025,6 +1282,111 @@ public sealed class SampleSponzaGiCaptureContract
         }
 
         return Array.AsReadOnly(blockers.ToArray());
+    }
+
+    /// <summary>
+    /// Returns the transport/publication reasons that make a GI endpoint
+    /// ineligible for capture. Unlike the fixed settle stages, this is direct
+    /// evidence that the current field and every admitted refinement brick are
+    /// authoritative at receivers.
+    /// </summary>
+    public IReadOnlyList<string> GetTransportCaptureReadinessBlockers(
+        RendererDiagnostics diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+
+        var blockers = new List<string>();
+        if (diagnostics.GlobalIlluminationEnabled != 1 ||
+            diagnostics.GlobalIlluminationDdgiActive != 1 ||
+            diagnostics.SimpleDdgiActive != 1)
+        {
+            blockers.Add(
+                "Simple DDGI is not active " +
+                $"(GI={diagnostics.GlobalIlluminationEnabled}, " +
+                $"DDGI={diagnostics.GlobalIlluminationDdgiActive}, " +
+                $"Simple={diagnostics.SimpleDdgiActive}).");
+        }
+
+        if (diagnostics.DdgiWarmupState != DdgiRuntimeWarmupState.SteadyState)
+        {
+            blockers.Add(
+                $"DDGI warmup state is {diagnostics.DdgiWarmupState}, not SteadyState.");
+        }
+        if (diagnostics.SimpleDdgiTransportGlobalConvergencePending != 0)
+        {
+            blockers.Add(
+                "Global transport convergence is still pending " +
+                $"({diagnostics.SimpleDdgiTransportGlobalConvergencePending}).");
+        }
+
+        SimpleDdgiTransportConvergenceTelemetry tail =
+            diagnostics.SimpleDdgiTransportConvergence;
+        if (!diagnostics.SimpleDdgiTransportTailCertificationEnabled)
+        {
+            blockers.Add("Transport tail certification is not enabled.");
+        }
+        else if (!tail.TailCertificateCurrent)
+        {
+            blockers.Add(
+                "The transport certificate is not current " +
+                $"(phase={tail.TailPhase}, reason={tail.TailReason}, " +
+                $"participants={tail.TailAuditedParticipantCount}/" +
+                $"{tail.TailExpectedParticipantCount}).");
+        }
+
+        SimpleDdgiRefinementBrickDiagnostics refinement =
+            diagnostics.SimpleDdgiRefinement;
+        if (refinement.TopologyChangedThisFrame)
+            blockers.Add("Refinement topology changed on the current frame.");
+        if (refinement.ReceiverReadyBrickCount !=
+            refinement.AdmittedBrickCount)
+        {
+            blockers.Add(
+                "Not every admitted refinement brick is receiver-ready " +
+                $"(ready={refinement.ReceiverReadyBrickCount}, " +
+                $"admitted={refinement.AdmittedBrickCount}).");
+        }
+        if (refinement.AdmittedBrickCount > 0 &&
+            refinement.ReceiverBlendWeight < 1.0f)
+        {
+            blockers.Add(
+                "The certified refinement receiver handoff is incomplete " +
+                $"(weight={refinement.ReceiverBlendWeight:0.###}).");
+        }
+        if (refinement.BaseFallbackBrickCount != 0)
+        {
+            blockers.Add(
+                "Refinement bricks are still using base fallback " +
+                $"(fallback={refinement.BaseFallbackBrickCount}).");
+        }
+
+        return Array.AsReadOnly(blockers.ToArray());
+    }
+
+    /// <summary>
+    /// Bounded wait for an unready field. The fixed receiver handoff and
+    /// 256-frame stability proof are separate allowances after the configured
+    /// convergence and audit-readback deadlines; extending this bound is not a
+    /// capture remedy.
+    /// </summary>
+    public int GetTransportCaptureReadinessTimeoutFrames(
+        RendererDiagnostics diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        SimpleDdgiTransportConvergenceTelemetry tail =
+            diagnostics.SimpleDdgiTransportConvergence;
+        long convergenceAllowance = Math.Max(
+            1,
+            tail.TailConvergenceDeadlineFrames);
+        long readbackAllowance = Math.Max(
+            0,
+            tail.TailAuditReadbackDeadlineFrames);
+        long total = convergenceAllowance +
+                     readbackAllowance +
+                     SimpleDdgiRefinementPublicationBlendState
+                         .TransitionFrameCount +
+                     TransportReadinessStableFrameCount;
+        return (int)Math.Min(total, int.MaxValue);
     }
 
     /// <summary>Builds a baseline-aware visual metric contract without inventing a baseline.</summary>
@@ -1366,7 +1728,15 @@ public sealed class SampleSponzaGiCaptureContract
         Append(builder, MotionTraversalName);
         Append(builder, VerticalTraversalName);
         Append(builder, FramesPerEndpointOutput);
+        Append(
+            builder,
+            SimpleDdgiRefinementPublicationBlendState.TransitionFrameCount);
+        Append(builder, TransportReadinessStableFrameCount);
         Append(builder, VisualMetricGateSchemaVersion);
+        Append(builder, SampleSponzaGiFloorReceiverGate.SchemaVersion);
+        Append(builder, SampleSponzaGiFloorReceiverGate.ReceiverLayoutFingerprint);
+        Append(builder, SampleSponzaGiFloorReceiverGate.MinimumReceiverLuminance);
+        Append(builder, SampleSponzaGiFloorReceiverGate.MinimumAlignedMeanLuminance);
         foreach (SampleSponzaGiVisualMetricRule metric in CreateRequiredVisualMetrics())
         {
             Append(builder, metric.Name);

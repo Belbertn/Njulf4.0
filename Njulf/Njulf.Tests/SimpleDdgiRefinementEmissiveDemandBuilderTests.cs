@@ -1,6 +1,7 @@
 using Njulf.Core.Math;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
+using NjulfHelloGame;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -33,9 +34,81 @@ public sealed class SimpleDdgiRefinementEmissiveDemandBuilderTests
             Assert.That(destination[0].Position.Z, Is.EqualTo(1f).Within(1e-5f));
             Assert.That(destination[0].Reason, Is.EqualTo(
                 SimpleDdgiRefinementDemandReason.CompactEmissive));
+            Assert.That(destination[0].SourceBounds, Is.EqualTo(
+                new BoundingBox(
+                    new Vector3(3f, 2f, 1f),
+                    new Vector3(5f, 3f, 1f))));
             Assert.That(diagnostics.EligibleSourceCount, Is.EqualTo(1));
             Assert.That(diagnostics.AdmittedDemandCount, Is.EqualTo(1));
         });
+    }
+
+    [Test]
+    public void Build_CoalescesTessellatedEmitterAtAreaWeightedCenter()
+    {
+        GPUDdgiEmissiveSource first = Triangle(
+            new Vector3(0f, 0.13f, 0f),
+            Vector3.UnitX,
+            Vector3.UnitZ,
+            new Vector3(3f),
+            area: 0.5f);
+        GPUDdgiEmissiveSource second = Triangle(
+            new Vector3(1f, 0.13f, 1f),
+            -Vector3.UnitX,
+            -Vector3.UnitZ,
+            new Vector3(3f),
+            area: 0.5f);
+        var forward = new List<SimpleDdgiRefinementDemand>();
+        var reverse = new List<SimpleDdgiRefinementDemand>();
+        var configuration = new SimpleDdgiRefinementEmissiveDemandConfiguration(
+            200f,
+            2f,
+            8);
+
+        SimpleDdgiRefinementEmissiveDemandBuilder.Build(
+            [first, second],
+            configuration,
+            forward);
+        SimpleDdgiRefinementEmissiveDemandBuilder.Build(
+            [second, first],
+            configuration,
+            reverse);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(forward, Has.Count.EqualTo(1));
+            Assert.That(forward[0].Position, Is.EqualTo(
+                new Vector3(0.5f, 0.13f, 0.5f)));
+            Assert.That(forward[0].SourceBounds, Is.EqualTo(
+                new BoundingBox(
+                    new Vector3(0f, 0.13f, 0f),
+                    new Vector3(1f, 0.13f, 1f))));
+            Assert.That(reverse[0], Is.EqualTo(forward[0]));
+        });
+    }
+
+    [Test]
+    public void Build_AdmitsTwoHundredThirtyFourNitEmitterAtNewDefaultThreshold()
+    {
+        GPUDdgiEmissiveSource source = Triangle(
+            Vector3.Zero,
+            Vector3.UnitX,
+            Vector3.UnitZ,
+            new Vector3(2.3440327f),
+            area: 0.5f);
+        var destination = new List<SimpleDdgiRefinementDemand>();
+
+        SimpleDdgiRefinementEmissiveDemandBuilder.Build(
+            [source],
+            new(200f, 2f, 8),
+            destination);
+        Assert.That(destination, Has.Count.EqualTo(1));
+
+        SimpleDdgiRefinementEmissiveDemandBuilder.Build(
+            [source],
+            new(250f, 2f, 8),
+            destination);
+        Assert.That(destination, Is.Empty);
     }
 
     [Test]
@@ -218,6 +291,115 @@ public sealed class SimpleDdgiRefinementEmissiveDemandBuilderTests
             Assert.That(retainedDuringAudit, Is.True);
             Assert.That(state.IsRetainingCertifiedAuthority, Is.True);
         });
+    }
+
+    [Test]
+    public void PublicationBlend_CrossFadesOnlyAfterCertificationAndResetsOnRevocation()
+    {
+        var blend = new SimpleDdgiRefinementPublicationBlendState();
+
+        Assert.That(blend.Update(false, 1), Is.Zero);
+        float firstCertifiedWeight = blend.Update(true, 1);
+        Assert.That(firstCertifiedWeight, Is.InRange(0.0f, 1.0f).And.Not.Zero);
+        Assert.That(blend.IsComplete, Is.False);
+
+        for (int frame = 1;
+             frame < SimpleDdgiRefinementPublicationBlendState
+                 .TransitionFrameCount;
+             frame++)
+        {
+            blend.Update(true, 1);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blend.Weight, Is.EqualTo(1.0f));
+            Assert.That(blend.IsComplete, Is.True);
+            Assert.That(blend.Update(true, 1), Is.EqualTo(1.0f));
+            Assert.That(blend.Update(false, 1), Is.Zero);
+            Assert.That(blend.IsComplete, Is.False);
+        });
+    }
+
+    [Test]
+    public void StationaryAlignedBrick_RemainsReceiverReadyForTwoHundredFiftySixFrames()
+    {
+        var pool = new SimpleDdgiRefinementBrickPool();
+        var publication = new SimpleDdgiRefinementPublicationState();
+        var blend = new SimpleDdgiRefinementPublicationBlendState();
+        var configuration = new SimpleDdgiRefinementBrickConfiguration(
+            Enabled: true,
+            Capacity: 1,
+            CountX: 6,
+            CountY: 6,
+            CountZ: 6,
+            Spacing: 0.59375f,
+            RetentionFrames: 90);
+        var demand = new SimpleDdgiRefinementDemand(
+            new Vector3(1.25f, 0.58f, 2f),
+            234.403f,
+            SimpleDdgiRefinementDemandReason.CompactEmissive,
+            42UL)
+        {
+            SourceBounds = new BoundingBox(
+                new Vector3(0.8f, 0.13f, 1.55f),
+                new Vector3(1.7f, 1.03f, 2.45f))
+        };
+        SimpleDdgiRefinementPublicationIdentity identity =
+            Identity(Generations());
+
+        pool.Update(1, configuration, [demand]);
+        Assert.That(pool.Diagnostics.TopologyChanged, Is.True);
+        Assert.That(
+            publication.Resolve(
+                false,
+                pool.Diagnostics.TopologyChanged,
+                true,
+                false,
+                false,
+                identity),
+            Is.False);
+        Assert.That(blend.Update(false, 1), Is.Zero);
+
+        pool.Update(2, configuration, [demand]);
+        Assert.That(pool.Diagnostics.TopologyChanged, Is.False);
+        Assert.That(
+            publication.Resolve(false, false, true, true, false, identity),
+            Is.True);
+        Assert.That(blend.Update(true, 1), Is.LessThan(1.0f));
+
+        for (int frame = 1;
+             frame < SimpleDdgiRefinementPublicationBlendState
+                 .TransitionFrameCount;
+             frame++)
+        {
+            Assert.That(
+                blend.Update(true, 1),
+                Is.GreaterThan(0.0f));
+        }
+        Assert.That(blend.IsComplete, Is.True);
+
+        for (uint frame = 3;
+             frame < 3 +
+                 SampleSponzaGiCaptureContract.TransportReadinessStableFrameCount;
+             frame++)
+        {
+            pool.Update(frame, configuration, [demand]);
+            Assert.Multiple(() =>
+            {
+                Assert.That(pool.Diagnostics.TopologyChanged, Is.False);
+                Assert.That(
+                    publication.Resolve(
+                        false,
+                        pool.Diagnostics.TopologyChanged,
+                        true,
+                        false,
+                        false,
+                        identity),
+                    Is.True);
+                Assert.That(blend.Update(true, 1), Is.EqualTo(1.0f));
+            });
+        }
     }
 
     [TestCase("invalidation")]

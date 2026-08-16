@@ -1225,7 +1225,8 @@ struct SimpleDdgiVolume
     uint kind;
     uint probesToUpdate;
     uint requiredSourceRayCount;
-    uint refinementReceiverReady;
+    float refinementReceiverWeight;
+    float maximumTraceDistance;
     uint sourceOrdinal;
     uvec3 physicalOffset;
     uint cacheBaseWord;
@@ -1662,7 +1663,13 @@ SimpleDdgiVolume ReadSimpleDdgiVolume(uint bufferIndex, uint volumeIndex)
     volume.kind = uint(max(worldMaxAndKind.w, 0.0));
     volume.probesToUpdate = uint(max(updateRange.y, 0.0));
     volume.requiredSourceRayCount = uint(max(updateRange.z, 0.0));
-    volume.refinementReceiverReady = uint(max(updateRange.w, 0.0));
+    volume.refinementReceiverWeight = clamp(updateRange.w, 0.0, 1.0);
+    float nativeTraceDistance = max(
+        volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)),
+        volume.spacing);
+    volume.maximumTraceDistance = updateRange.x > 0.0
+        ? max(updateRange.x, volume.spacing)
+        : nativeTraceDistance;
     volume.sourceOrdinal = uint(max(raysAndReserved.x, 0.0));
     volume.physicalOffset = uvec3(max(raysAndReserved.yzw, vec3(0.0)));
     volume.cacheBaseWord = floatBitsToUint(cacheLayout.x);
@@ -4750,6 +4757,7 @@ vec3 SimpleDdgiBiasedSamplePosition(vec3 worldPos, vec3 normal, vec3 viewDir, Si
 bool SelectSimpleDdgiVolume(
     SimpleDdgiParams p,
     vec3 worldPosition,
+    bool includeRefinementVolumes,
     out uint selectedVolumeIndex,
     out SimpleDdgiVolume selectedVolume,
     out float selectedEdgeWeight,
@@ -4770,17 +4778,27 @@ bool SelectSimpleDdgiVolume(
 
         if (volume.kind == SIMPLE_DDGI_VOLUME_KIND_REFINEMENT)
         {
+            // Refinement is a leaf receiver field, not another level in the
+            // recursive transport hierarchy.  In particular, its receiver
+            // publication weight is presentation state and must never change
+            // the certified transport operator.  Producer gathers therefore
+            // skip every refinement volume and inherit the stable base field.
+            if (!includeRefinementVolumes)
+                continue;
+
             foundContainingRefinement = true;
             // Producer work and receiver authority are separate transactions.
             // An incomplete/evicted brick is invisible to receivers, so the
             // complete base field remains the exact fallback without blending
             // partially published fine probes.
-            if (volume.refinementReceiverReady == 0u)
+            if (volume.refinementReceiverWeight <= 0.0)
                 continue;
 
             selectedVolumeIndex = volumeIndex;
             selectedVolume = volume;
-            selectedEdgeWeight = SimpleDdgiEdgeWeight(volume, worldPosition);
+            selectedEdgeWeight =
+                SimpleDdgiEdgeWeight(volume, worldPosition) *
+                volume.refinementReceiverWeight;
             refinementOrBaseFallback = true;
             return true;
         }
@@ -4807,6 +4825,24 @@ bool SelectSimpleDdgiVolume(
     selectedEdgeWeight = 0.0;
     refinementOrBaseFallback = false;
     return false;
+}
+
+bool SelectSimpleDdgiVolume(
+    SimpleDdgiParams p,
+    vec3 worldPosition,
+    out uint selectedVolumeIndex,
+    out SimpleDdgiVolume selectedVolume,
+    out float selectedEdgeWeight,
+    out bool refinementOrBaseFallback)
+{
+    return SelectSimpleDdgiVolume(
+        p,
+        worldPosition,
+        true,
+        selectedVolumeIndex,
+        selectedVolume,
+        selectedEdgeWeight,
+        refinementOrBaseFallback);
 }
 
 // Finds metadata for the next containing fallback. This intentionally performs
@@ -6135,7 +6171,8 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     SimpleDdgiParams p,
     vec3 worldPos,
     vec3 normal,
-    vec3 viewDir)
+    vec3 viewDir,
+    bool includeRefinementVolumes)
 {
     SimpleDdgiGatherResult empty = EmptySimpleDdgiGatherResult();
     if ((p.flags & (SIMPLE_DDGI_FLAG_ENABLED | SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) !=
@@ -6151,6 +6188,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     if (!SelectSimpleDdgiVolume(
             p,
             worldPos,
+            includeRefinementVolumes,
             selectedVolumeIndex,
             selectedVolume,
             edgeWeight,
@@ -6418,6 +6456,20 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     return selected;
 }
 
+SimpleDdgiGatherResult SampleSimpleDdgiGather(
+    SimpleDdgiParams p,
+    vec3 worldPos,
+    vec3 normal,
+    vec3 viewDir)
+{
+    return SampleSimpleDdgiGather(
+        p,
+        worldPos,
+        normal,
+        viewDir,
+        true);
+}
+
 SimpleDdgiGatherResult SampleSimpleDdgiGather(vec3 worldPos, vec3 normal, vec3 viewDir)
 {
     SimpleDdgiParams p = ReadSimpleDdgiParams(uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
@@ -6525,7 +6577,17 @@ vec3 SampleSimpleDdgiSolverBounceIrradianceDetailed(
     }
 
     vec3 safeNormal = length(normal) > 0.00001 ? normalize(normal) : vec3(0.0, 1.0, 0.0);
-    gather = SampleSimpleDdgiGather(p, worldPos, safeNormal, viewDir);
+    // The recursive field is intentionally base-only.  A refinement brick is
+    // solved against this stable coarse boundary and can then add fine spatial
+    // detail at receivers.  Letting this gather observe a published refinement
+    // brick creates self/two-way coupling and makes the transport operator vary
+    // with the receiver publication fade.
+    gather = SampleSimpleDdgiGather(
+        p,
+        worldPos,
+        safeNormal,
+        viewDir,
+        false);
     float spatialCoverage = clamp(gather.spatialCoverage, 0.0, 1.0);
     float solverOwnership = spatialCoverage * smoothstep(
         0.0,
@@ -6749,7 +6811,7 @@ SimpleDdgiDebugSample SampleSimpleDdgiDebug(
             biasedReceiverDistance,
             result.visibility);
     }
-    result.visibilityMaxRayDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
+    result.visibilityMaxRayDistance = volume.maximumTraceDistance;
     result.visibilityConfidence = mean > 0.0001
         ? clamp(1.0 - sqrt(variance) / max(result.visibilityMaxRayDistance, 0.0001), 0.0, 1.0)
         : 0.0;

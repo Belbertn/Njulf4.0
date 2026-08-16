@@ -560,6 +560,7 @@ internal sealed class SampleDiagnosticsReporter
         Console.WriteLine(
             $"Frame diagnostics Simple DDGI B3 refinement: requested/enabled={refinement.Requested}, " +
             $"bricks requested/admitted/ready/baseFallback={refinement.RequestedBrickCount}/{refinement.AdmittedBrickCount}/{refinement.ReceiverReadyBrickCount}/{refinement.BaseFallbackBrickCount}, " +
+            $"receiverBlend={refinement.ReceiverBlendWeight:0.###}, " +
             $"probes/evictions/topologyChanged={refinement.AllocatedProbeCount}/{refinement.EvictionCount}/{refinement.TopologyChangedThisFrame}, " +
             $"emissive examined/eligible/admitted/rejectLarge/rejectDim={emissiveDemand.ExaminedSourceCount}/{emissiveDemand.EligibleSourceCount}/{emissiveDemand.AdmittedDemandCount}/{emissiveDemand.RejectedLargeSourceCount}/{emissiveDemand.RejectedDimSourceCount}, " +
             $"status='{refinement.AdmissionStatus}'.");

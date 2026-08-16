@@ -41,6 +41,122 @@ public sealed class SimpleDdgiRefinementBrickPoolTests
     }
 
     [Test]
+    public void CompactEmitterBounds_PlaceEveryProbeRowAboveTheFloor()
+    {
+        var pool = new SimpleDdgiRefinementBrickPool();
+        SimpleDdgiRefinementBrickConfiguration configuration = Configuration with
+        {
+            Capacity = 1,
+            CountY = 6,
+            Spacing = 0.59375f
+        };
+        var sourceBounds = new BoundingBox(
+            new Vector3(0.8f, 0.13f, 1.55f),
+            new Vector3(1.7f, 1.03f, 2.45f));
+        var demand = new SimpleDdgiRefinementDemand(
+            new Vector3(1.25f, 0.58f, 2f),
+            200f,
+            SimpleDdgiRefinementDemandReason.CompactEmissive,
+            42UL)
+        {
+            SourceBounds = sourceBounds
+        };
+
+        pool.Update(1, configuration, [demand]);
+
+        SimpleDdgiRefinementBrick brick = pool.ActiveBricks.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(brick.Key.PlacementClass, Is.EqualTo(1));
+            Assert.That(brick.Origin.X, Is.EqualTo(-0.296875f).Within(1e-6f));
+            Assert.That(brick.Origin.Y, Is.EqualTo(0.1484375f).Within(1e-6f));
+            Assert.That(brick.Origin.Z, Is.EqualTo(0.4453125f).Within(1e-6f));
+            Assert.That(brick.Origin.Y, Is.GreaterThan(0f));
+            Assert.That(brick.Origin.Y, Is.GreaterThanOrEqualTo(sourceBounds.Min.Y));
+        });
+    }
+
+    [Test]
+    public void PlacementClasses_DoNotAliasAtTheSameWorldPosition()
+    {
+        var pool = new SimpleDdgiRefinementBrickPool();
+        Vector3 position = new(1.25f, 0.58f, 2f);
+        var compact = new SimpleDdgiRefinementDemand(
+            position,
+            200f,
+            SimpleDdgiRefinementDemandReason.CompactEmissive,
+            2UL)
+        {
+            SourceBounds = new BoundingBox(
+                new Vector3(0.8f, 0.13f, 1.55f),
+                new Vector3(1.7f, 1.03f, 2.45f))
+        };
+
+        pool.Update(
+            1,
+            Configuration,
+            [
+                new SimpleDdgiRefinementDemand(
+                    position,
+                    100f,
+                    SimpleDdgiRefinementDemandReason.VisibleReceiver,
+                    1UL),
+                compact
+            ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.ActiveBricks, Has.Count.EqualTo(2));
+            Assert.That(
+                pool.ActiveBricks.Select(static brick => brick.Key.PlacementClass),
+                Is.EquivalentTo(new[] { 0, 1 }));
+            Assert.That(pool.Diagnostics.UniqueCandidateCount, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void CompactEmitterPlacement_IsStableUntilItsQuantizedOriginChanges()
+    {
+        var pool = new SimpleDdgiRefinementBrickPool();
+        var demand = new SimpleDdgiRefinementDemand(
+            new Vector3(1.25f, 0.58f, 2f),
+            200f,
+            SimpleDdgiRefinementDemandReason.CompactEmissive,
+            42UL)
+        {
+            SourceBounds = new BoundingBox(
+                new Vector3(0.8f, 0.13f, 1.55f),
+                new Vector3(1.7f, 1.03f, 2.45f))
+        };
+
+        pool.Update(1, Configuration with { Capacity = 1 }, [demand]);
+        SimpleDdgiRefinementBrickKey initial = pool.ActiveBricks.Single().Key;
+        pool.Update(2, Configuration with { Capacity = 1 }, [demand]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.ActiveBricks.Single().Key, Is.EqualTo(initial));
+            Assert.That(pool.Diagnostics.TopologyChanged, Is.False);
+        });
+
+        var moved = demand with
+        {
+            Position = demand.Position + new Vector3(0.2f, 0f, 0f),
+            SourceBounds = new BoundingBox(
+                demand.SourceBounds!.Value.Min + new Vector3(0.2f, 0f, 0f),
+                demand.SourceBounds.Value.Max + new Vector3(0.2f, 0f, 0f))
+        };
+        pool.Update(3, Configuration with { Capacity = 1 }, [moved]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.ActiveBricks.Single().Key, Is.Not.EqualTo(initial));
+            Assert.That(pool.Diagnostics.TopologyChanged, Is.True);
+            Assert.That(pool.Diagnostics.EvictedBrickCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void Update_DeduplicatesWorldCellAndUsesBoundedProbePool()
     {
         var pool = new SimpleDdgiRefinementBrickPool();

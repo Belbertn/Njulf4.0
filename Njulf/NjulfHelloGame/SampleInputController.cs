@@ -342,6 +342,7 @@ internal sealed class SampleInputController
     private SponzaGiCaptureRestoreState? _sponzaGiCaptureRestoreState;
     private readonly List<SampleSponzaGiCapturedArtifact> _sponzaGiCaptureArtifacts = [];
     private readonly List<SponzaGiPendingRendererScreenshot> _sponzaGiPendingRendererScreenshots = [];
+    private readonly List<SponzaGiPendingLinearHdrCapture> _sponzaGiPendingLinearHdrCaptures = [];
     private SampleSponzaGiTemporalTrace? _sponzaGiTemporalTrace;
     private SampleSponzaGiCaptureMode _sponzaGiCaptureMode;
     private SimpleDdgiStoragePackingMode _sponzaGiCaptureStoragePackingMode =
@@ -349,6 +350,9 @@ internal sealed class SampleInputController
     private SimpleDdgiSampledAtlasCoverageMode _sponzaGiCaptureSampledAtlasCoverageMode =
         SimpleDdgiSampledAtlasCoverageMode.ReceiverRelevant;
     private int _sponzaGiScreenshotVerificationFrames;
+    private int _sponzaGiTransportReadyFrameCount;
+    private int _sponzaGiTransportReadinessWaitFrames;
+    private bool _sponzaGiTransportCaptureArmedThisFrame;
     private bool _sponzaGiRenderDocCaptureAttempted;
 
     public SampleInputController(
@@ -1401,8 +1405,12 @@ internal sealed class SampleInputController
         _sponzaGiCaptureSampledAtlasCoverageMode =
             captureGi.SimpleDdgiSampledAtlasCoverageMode;
         _sponzaGiScreenshotVerificationFrames = 0;
+        _sponzaGiTransportReadyFrameCount = 0;
+        _sponzaGiTransportReadinessWaitFrames = 0;
+        _sponzaGiTransportCaptureArmedThisFrame = false;
         _sponzaGiCaptureArtifacts.Clear();
         _sponzaGiPendingRendererScreenshots.Clear();
+        _sponzaGiPendingLinearHdrCaptures.Clear();
         _sponzaGiTemporalTrace = new SampleSponzaGiTemporalTrace();
         _sponzaGiRenderDocCaptureAttempted = false;
 
@@ -1458,14 +1466,24 @@ internal sealed class SampleInputController
         SampleSponzaGiCaptureInstruction instruction = sequence.CurrentInstruction;
         ApplySponzaGiCaptureCamera(instruction.Camera, viewportWidth, viewportHeight);
         ApplySponzaGiCaptureOutput(instruction.Output);
+        _sponzaGiTransportCaptureArmedThisFrame =
+            !RequiresSponzaGiTransportReadiness(instruction) ||
+            _sponzaGiTransportReadyFrameCount >=
+                SampleSponzaGiCaptureContract.TransportReadinessStableFrameCount;
         QueueSponzaGiRenderDocCapture(instruction);
+        QueueSponzaGiLinearFinalIndirectCapture(instruction);
         QueueSponzaGiRendererScreenshot(instruction);
     }
+
+    private static bool RequiresSponzaGiTransportReadiness(
+        SampleSponzaGiCaptureInstruction instruction) =>
+        instruction.Output is { DisableGlobalIllumination: false };
 
     private void QueueSponzaGiRenderDocCapture(
         SampleSponzaGiCaptureInstruction instruction)
     {
         if (_renderer == null || _sponzaGiRenderDocCaptureAttempted ||
+            !_sponzaGiTransportCaptureArmedThisFrame ||
             instruction.Stage != SampleSponzaGiCaptureStage.CaptureLowBookmark ||
             instruction.StageFrameIndex != 0 ||
             !string.Equals(instruction.Output?.Name, "beauty", StringComparison.Ordinal))
@@ -1486,6 +1504,79 @@ internal sealed class SampleInputController
             _renderer.Settings.Debug.AllowRenderDocCapture =
                 previousAllowRenderDocCapture;
         }
+    }
+
+    private void QueueSponzaGiLinearFinalIndirectCapture(
+        SampleSponzaGiCaptureInstruction instruction)
+    {
+        if (_renderer == null || _sponzaGiCaptureSequence == null ||
+            string.IsNullOrWhiteSpace(_sponzaGiCaptureDirectory) ||
+            !_sponzaGiTransportCaptureArmedThisFrame ||
+            !string.Equals(
+                instruction.Output?.Name,
+                "final-indirect",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        SampleSponzaGiCaptureContract contract =
+            _sponzaGiCaptureSequence.Contract;
+        string relativePath =
+            contract.GetRelativeLinearFinalIndirectPath(
+                instruction.BookmarkName);
+        bool alreadyQueued = _sponzaGiCaptureArtifacts.Any(artifact =>
+            string.Equals(
+                artifact.Bookmark,
+                instruction.BookmarkName,
+                StringComparison.Ordinal) &&
+            string.Equals(
+                artifact.Output,
+                "final-indirect",
+                StringComparison.Ordinal) &&
+            string.Equals(
+                artifact.RelativePath.Replace('\\', '/'),
+                relativePath.Replace('\\', '/'),
+                StringComparison.Ordinal));
+        if (alreadyQueued)
+            return;
+
+        string path = Path.Combine(
+            _sponzaGiCaptureDirectory,
+            relativePath);
+        Directory.CreateDirectory(
+            Path.GetDirectoryName(path) ?? _sponzaGiCaptureDirectory);
+        try
+        {
+            if (!_renderer.RequestLinearHdrCapture(path))
+            {
+                AbortSponzaGiCapture(
+                    $"Renderer rejected the linear FinalIndirect capture for " +
+                    $"'{instruction.BookmarkName}'.");
+                return;
+            }
+        }
+        catch (Exception exception)
+        {
+            AbortSponzaGiCapture(
+                $"Linear FinalIndirect capture request failed for " +
+                $"'{instruction.BookmarkName}': {exception.Message}");
+            return;
+        }
+
+        int artifactIndex = _sponzaGiCaptureArtifacts.Count;
+        _sponzaGiCaptureArtifacts.Add(new SampleSponzaGiCapturedArtifact(
+            instruction.BookmarkName,
+            "final-indirect",
+            "linear-final-indirect-request",
+            relativePath,
+            VerificationStatus: "requested"));
+        _sponzaGiPendingLinearHdrCaptures.Add(
+            new SponzaGiPendingLinearHdrCapture(
+                artifactIndex,
+                instruction.BookmarkName,
+                relativePath,
+                path));
     }
 
     private void ApplySponzaGiCaptureCamera(
@@ -1554,6 +1645,11 @@ internal sealed class SampleInputController
         {
             return;
         }
+        if (RequiresSponzaGiTransportReadiness(instruction) &&
+            !_sponzaGiTransportCaptureArmedThisFrame)
+        {
+            return;
+        }
 
         SampleSponzaGiCaptureContract contract = _sponzaGiCaptureSequence.Contract;
         string imagePath = contract.GetRelativeImagePath(instruction.BookmarkName, instruction.Output);
@@ -1607,12 +1703,29 @@ internal sealed class SampleInputController
                 string.Equals(artifact.Kind, "renderer-screenshot", StringComparison.Ordinal)));
     }
 
-    private void AdvanceSponzaGiCaptureAfterRenderedFrame()
+    private void AdvanceSponzaGiCaptureAfterRenderedFrame(
+        RendererDiagnostics diagnostics)
     {
         if (_sponzaGiCaptureSequence == null || _renderer == null || string.IsNullOrWhiteSpace(_sponzaGiCaptureDirectory))
             return;
 
-        if (!VerifyPendingRendererScreenshotArtifacts())
+        SampleSponzaGiCaptureContract contract =
+            _sponzaGiCaptureSequence.Contract;
+        IReadOnlyList<string> readinessBlockers =
+            contract.GetTransportCaptureReadinessBlockers(diagnostics);
+        bool transportReady = readinessBlockers.Count == 0;
+        if (transportReady)
+        {
+            if (_sponzaGiTransportReadyFrameCount < int.MaxValue)
+                _sponzaGiTransportReadyFrameCount++;
+        }
+        else
+        {
+            _sponzaGiTransportReadyFrameCount = 0;
+        }
+
+        if (!VerifyPendingRendererScreenshotArtifacts() ||
+            !VerifyPendingLinearFinalIndirectArtifacts())
             return;
 
         if (_sponzaGiCaptureSequence.IsComplete)
@@ -1622,7 +1735,43 @@ internal sealed class SampleInputController
         }
 
         SampleSponzaGiCaptureInstruction instruction = _sponzaGiCaptureSequence.CurrentInstruction;
-        _sponzaGiTemporalTrace?.Record(instruction, _renderer.LastDiagnostics);
+        _sponzaGiTemporalTrace?.Record(instruction, diagnostics);
+        if (RequiresSponzaGiTransportReadiness(instruction) &&
+            (!_sponzaGiTransportCaptureArmedThisFrame ||
+             !transportReady ||
+             _sponzaGiTransportReadyFrameCount <
+                 SampleSponzaGiCaptureContract.TransportReadinessStableFrameCount))
+        {
+            if (_sponzaGiTransportReadinessWaitFrames < int.MaxValue)
+                _sponzaGiTransportReadinessWaitFrames++;
+            int timeoutFrames =
+                contract.GetTransportCaptureReadinessTimeoutFrames(diagnostics);
+            string readiness = readinessBlockers.Count == 0
+                ? $"readiness stability is {_sponzaGiTransportReadyFrameCount}/" +
+                  SampleSponzaGiCaptureContract.TransportReadinessStableFrameCount
+                : string.Join(" ", readinessBlockers);
+            if (_sponzaGiTransportReadinessWaitFrames > timeoutFrames)
+            {
+                string failureEvidence =
+                    CaptureSponzaGiReadinessFailureEvidence(instruction);
+                AbortSponzaGiCapture(
+                    $"DDGI transport/publication did not become and remain receiver-ready for " +
+                    $"'{instruction.BookmarkName}' / '{instruction.Output!.Name}' within " +
+                    $"{timeoutFrames} bounded frames: {readiness}{failureEvidence}");
+                return;
+            }
+            if (_sponzaGiTransportReadinessWaitFrames == 1 ||
+                _sponzaGiTransportReadinessWaitFrames % contract.FramesPerSecond == 0)
+            {
+                Console.WriteLine(
+                    $"Locked Sponza GI capture is holding '{instruction.BookmarkName}' / " +
+                    $"'{instruction.Output!.Name}' for certified receiver readiness " +
+                    $"({_sponzaGiTransportReadinessWaitFrames}/{timeoutFrames}): {readiness}");
+            }
+            return;
+        }
+        _sponzaGiTransportReadinessWaitFrames = 0;
+
         if (instruction.Stage == SampleSponzaGiCaptureStage.MotionTraversal &&
             instruction.StageFrameIndex == instruction.StageFrameCount - 1 &&
             !WriteSponzaGiTemporalTrace(
@@ -1639,7 +1788,7 @@ internal sealed class SampleInputController
         }
         if (instruction.Output != null &&
             instruction.CaptureWindowAfterRenderedFrame &&
-            !CaptureSponzaGiOutput(instruction))
+            !CaptureSponzaGiOutput(instruction, diagnostics))
             return;
 
         if (_sponzaGiCaptureSequence == null)
@@ -1649,7 +1798,9 @@ internal sealed class SampleInputController
             CompleteSponzaGiCapture();
     }
 
-    private bool CaptureSponzaGiOutput(SampleSponzaGiCaptureInstruction instruction)
+    private bool CaptureSponzaGiOutput(
+        SampleSponzaGiCaptureInstruction instruction,
+        RendererDiagnostics diagnostics)
     {
         if (_renderer == null || _sponzaGiCaptureSequence == null ||
             string.IsNullOrWhiteSpace(_sponzaGiCaptureDirectory) || instruction.Output == null)
@@ -1662,7 +1813,7 @@ internal sealed class SampleInputController
         if (string.Equals(output.Name, "beauty", StringComparison.Ordinal))
         {
             IReadOnlyList<string> healthBlockers =
-                contract.GetLiveReceiverHealthBlockers(_renderer.LastDiagnostics);
+                contract.GetLiveReceiverHealthBlockers(diagnostics);
             if (healthBlockers.Count != 0)
             {
                 AbortSponzaGiCapture(
@@ -1768,6 +1919,94 @@ internal sealed class SampleInputController
             storagePackingMode: _sponzaGiCaptureStoragePackingMode,
             sampledAtlasCoverageMode: _sponzaGiCaptureSampledAtlasCoverageMode);
         return true;
+    }
+
+    /// <summary>
+    /// A bounded readiness failure is a transport diagnosis point, not merely a
+    /// failed screenshot. Persist the terminal scheduler/cache counters and the
+    /// complete frame history before the standalone capture process exits.
+    /// Evidence export is best-effort so its own failure cannot hide the
+    /// original readiness reason.
+    /// </summary>
+    private string CaptureSponzaGiReadinessFailureEvidence(
+        SampleSponzaGiCaptureInstruction instruction)
+    {
+        if (_renderer == null || _sponzaGiCaptureSequence == null ||
+            _sponzaGiTemporalTrace == null ||
+            string.IsNullOrWhiteSpace(_sponzaGiCaptureDirectory))
+        {
+            return " Failure evidence was unavailable because capture state was incomplete.";
+        }
+
+        SampleSponzaGiCaptureContract contract =
+            _sponzaGiCaptureSequence.Contract;
+        var results = new List<string>(2);
+        string outputName = instruction.Output?.Name ?? "readiness";
+        string relativeImagePath = instruction.Output != null
+            ? contract.GetRelativeImagePath(
+                instruction.BookmarkName,
+                instruction.Output)
+            : string.Empty;
+        string snapshotDirectory = Path.Combine(
+            _sponzaGiCaptureDirectory,
+            Path.GetDirectoryName(relativeImagePath) ?? string.Empty);
+        try
+        {
+            string snapshotPath = ExportPerformanceSnapshotFile(
+                snapshotDirectory,
+                $"Sponza GI {instruction.BookmarkName} readiness-failure metadata");
+            string relativeSnapshotPath = Path.GetRelativePath(
+                _sponzaGiCaptureDirectory,
+                snapshotPath);
+            if (TryAddVerifiedSponzaGiArtifact(
+                    contract,
+                    instruction.BookmarkName,
+                    outputName,
+                    "readiness-failure-performance-snapshot",
+                    relativeSnapshotPath,
+                    out string verificationFailure))
+            {
+                results.Add($" Performance evidence: '{relativeSnapshotPath}'.");
+            }
+            else
+            {
+                results.Add($" Performance evidence export was not verified: {verificationFailure}");
+            }
+        }
+        catch (Exception exception)
+        {
+            results.Add($" Performance evidence export failed: {exception.Message}");
+        }
+
+        string traceName = $"{instruction.BookmarkName}-readiness-failure";
+        string relativeTracePath = contract.GetRelativeTemporalTracePath(traceName);
+        try
+        {
+            _sponzaGiTemporalTrace.Write(
+                Path.Combine(_sponzaGiCaptureDirectory, relativeTracePath),
+                contract.Fingerprint,
+                traceName);
+            if (TryAddVerifiedSponzaGiArtifact(
+                    contract,
+                    instruction.BookmarkName,
+                    outputName,
+                    "readiness-failure-temporal-trace",
+                    relativeTracePath,
+                    out string verificationFailure))
+            {
+                results.Add($" Temporal evidence: '{relativeTracePath}'.");
+            }
+            else
+            {
+                results.Add($" Temporal evidence export was not verified: {verificationFailure}");
+            }
+        }
+        catch (Exception exception)
+        {
+            results.Add($" Temporal evidence export failed: {exception.Message}");
+        }
+
+        return string.Concat(results);
     }
 
     private bool WriteSponzaGiTemporalTrace(string traceName)
@@ -1896,6 +2135,167 @@ internal sealed class SampleInputController
         return true;
     }
 
+    private bool VerifyPendingLinearFinalIndirectArtifacts()
+    {
+        if (_renderer == null || _sponzaGiCaptureSequence == null ||
+            string.IsNullOrWhiteSpace(_sponzaGiCaptureDirectory))
+        {
+            return true;
+        }
+
+        SampleSponzaGiCaptureContract contract =
+            _sponzaGiCaptureSequence.Contract;
+        for (int pendingIndex =
+                 _sponzaGiPendingLinearHdrCaptures.Count - 1;
+             pendingIndex >= 0;
+             pendingIndex--)
+        {
+            SponzaGiPendingLinearHdrCapture pending =
+                _sponzaGiPendingLinearHdrCaptures[pendingIndex];
+            if (pending.ArtifactIndex < 0 ||
+                pending.ArtifactIndex >= _sponzaGiCaptureArtifacts.Count)
+            {
+                AbortSponzaGiCapture(
+                    "Linear FinalIndirect verification lost its requested artifact record.");
+                return false;
+            }
+
+            LinearHdrCaptureResult result;
+            try
+            {
+                result = _renderer.GetLinearHdrCaptureResult(pending.FullPath);
+            }
+            catch (Exception exception)
+            {
+                AbortSponzaGiCapture(
+                    $"Linear FinalIndirect capture status failed for " +
+                    $"'{pending.Bookmark}': {exception.Message}");
+                return false;
+            }
+
+            if (result.State == LinearHdrCaptureState.Failed)
+            {
+                AbortSponzaGiCapture(
+                    $"Linear FinalIndirect capture failed for " +
+                    $"'{pending.Bookmark}': {result.Error}");
+                return false;
+            }
+            if (result.State != LinearHdrCaptureState.Completed)
+                continue;
+
+            SampleSponzaGiCapturedArtifact requested =
+                _sponzaGiCaptureArtifacts[pending.ArtifactIndex];
+            if (!contract.TryVerifyArtifact(
+                    _sponzaGiCaptureDirectory,
+                    requested,
+                    out SampleSponzaGiCapturedArtifact verified,
+                    out string verificationFailure))
+            {
+                AbortSponzaGiCapture(
+                    $"Completed linear FinalIndirect capture could not be verified: " +
+                    verificationFailure);
+                return false;
+            }
+
+            _sponzaGiCaptureArtifacts[pending.ArtifactIndex] = verified with
+            {
+                Kind = "linear-final-indirect",
+                Bookmark = pending.Bookmark,
+                Output = "final-indirect"
+            };
+
+            if (string.Equals(
+                    pending.Bookmark,
+                    contract.LowBookmark.Name,
+                    StringComparison.Ordinal) &&
+                !WriteSponzaGiFloorReceiverEvidence(
+                    contract,
+                    pending.FullPath,
+                    pending.Bookmark))
+            {
+                return false;
+            }
+
+            _sponzaGiPendingLinearHdrCaptures.RemoveAt(pendingIndex);
+        }
+
+        return true;
+    }
+
+    private bool WriteSponzaGiFloorReceiverEvidence(
+        SampleSponzaGiCaptureContract contract,
+        string linearFinalIndirectPath,
+        string bookmark)
+    {
+        if (string.IsNullOrWhiteSpace(_sponzaGiCaptureDirectory))
+            return false;
+
+        string relativePath =
+            SampleSponzaGiCaptureContract.FloorReceiverEvidenceFileName;
+        if (_sponzaGiCaptureArtifacts.Any(artifact =>
+                string.Equals(
+                    artifact.Kind,
+                    "floor-receiver-evidence",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    artifact.RelativePath,
+                    relativePath,
+                    StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        SampleSponzaGiFloorReceiverEvidence evidence;
+        try
+        {
+            byte[] encoded = File.ReadAllBytes(linearFinalIndirectPath);
+            LinearFloatImage image = PfmLinearImageCodec.Decode(encoded);
+            evidence = SampleSponzaGiFloorReceiverGate.Evaluate(
+                image,
+                contract.Fingerprint,
+                bookmark);
+            if (!evidence.Passed)
+            {
+                AbortSponzaGiCapture(
+                    "Direct scene-linear floor receiver gate failed: " +
+                    evidence.FailureReason);
+                return false;
+            }
+
+            SampleSponzaGiFloorReceiverGate.WriteAtomic(
+                Path.Combine(_sponzaGiCaptureDirectory, relativePath),
+                evidence);
+        }
+        catch (Exception exception) when (
+            exception is IOException or
+                InvalidDataException or
+                UnauthorizedAccessException)
+        {
+            AbortSponzaGiCapture(
+                $"Direct scene-linear floor receiver evidence failed: " +
+                exception.Message);
+            return false;
+        }
+
+        if (!TryAddVerifiedSponzaGiArtifact(
+                contract,
+                bookmark,
+                "final-indirect",
+                "floor-receiver-evidence",
+                relativePath,
+                out string verificationFailure))
+        {
+            AbortSponzaGiCapture(verificationFailure);
+            return false;
+        }
+
+        Console.WriteLine(
+            $"Sponza scene-linear floor receivers passed: " +
+            $"minimum={evidence.ObservedMinimumLuminance:R}, " +
+            $"alignedMean={evidence.ObservedAlignedMeanLuminance:R}.");
+        return true;
+    }
+
     private void AddVerifiedSponzaGiArtifact(
         SampleSponzaGiCaptureContract contract,
         string bookmark,
@@ -1951,14 +2351,15 @@ internal sealed class SampleInputController
             return;
 
         SampleSponzaGiCaptureContract contract = _sponzaGiCaptureSequence.Contract;
-        if (_sponzaGiPendingRendererScreenshots.Count != 0)
+        if (_sponzaGiPendingRendererScreenshots.Count != 0 ||
+            _sponzaGiPendingLinearHdrCaptures.Count != 0)
         {
             _sponzaGiScreenshotVerificationFrames++;
             if (_sponzaGiScreenshotVerificationFrames > SponzaGiRendererScreenshotVerificationTimeoutFrames)
             {
                 AbortSponzaGiCapture(
-                    $"Renderer screenshot verification timed out after {SponzaGiRendererScreenshotVerificationTimeoutFrames} frames: " +
-                    DescribePendingSponzaGiRendererScreenshots());
+                    $"Renderer capture verification timed out after {SponzaGiRendererScreenshotVerificationTimeoutFrames} frames: " +
+                    DescribePendingSponzaGiRendererCaptures());
                 return;
             }
 
@@ -1968,8 +2369,8 @@ internal sealed class SampleInputController
                 contract.WriteRunManifest(
                     _sponzaGiCaptureDirectory,
                     _sponzaGiCaptureArtifacts,
-                    "awaiting-renderer-screenshots",
-                    DescribePendingSponzaGiRendererScreenshots(),
+                    "awaiting-renderer-captures",
+                    DescribePendingSponzaGiRendererCaptures(),
                     _sponzaGiCaptureMode,
                     _sponzaGiCaptureStoragePackingMode,
                     _sponzaGiCaptureSampledAtlasCoverageMode);
@@ -2004,13 +2405,22 @@ internal sealed class SampleInputController
             _exit();
     }
 
-    private string DescribePendingSponzaGiRendererScreenshots()
+    private string DescribePendingSponzaGiRendererCaptures()
     {
-        return string.Join(
+        string screenshots = string.Join(
             " ",
             _sponzaGiPendingRendererScreenshots.Select(static pending =>
                 $"Awaiting renderer screenshot '{pending.RelativePath}' for '{pending.Bookmark}' / '{pending.Output}' " +
                 $"(stability observations={pending.StableObservationCount})."));
+        string linear = string.Join(
+            " ",
+            _sponzaGiPendingLinearHdrCaptures.Select(static pending =>
+                $"Awaiting linear FinalIndirect '{pending.RelativePath}' for " +
+                $"'{pending.Bookmark}'."));
+        return string.Join(
+            " ",
+            new[] { screenshots, linear }.Where(
+                static value => !string.IsNullOrWhiteSpace(value)));
     }
 
     private void AbortSponzaGiCapture(string reason)
@@ -2060,8 +2470,12 @@ internal sealed class SampleInputController
         _sponzaGiCaptureRestoreState = null;
         _sponzaGiCaptureArtifacts.Clear();
         _sponzaGiPendingRendererScreenshots.Clear();
+        _sponzaGiPendingLinearHdrCaptures.Clear();
         _sponzaGiTemporalTrace = null;
         _sponzaGiScreenshotVerificationFrames = 0;
+        _sponzaGiTransportReadyFrameCount = 0;
+        _sponzaGiTransportReadinessWaitFrames = 0;
+        _sponzaGiTransportCaptureArmedThisFrame = false;
         _sponzaGiCaptureMode = SampleSponzaGiCaptureMode.ProductionTiming;
         _sponzaGiCaptureStoragePackingMode = SimpleDdgiStoragePackingMode.Packed;
         _sponzaGiCaptureSampledAtlasCoverageMode =
@@ -2070,7 +2484,7 @@ internal sealed class SampleInputController
 
     public void OnFrameRendered(int frameIndex, RendererDiagnostics diagnostics, RenderBudgetSnapshot budget)
     {
-        AdvanceSponzaGiCaptureAfterRenderedFrame();
+        AdvanceSponzaGiCaptureAfterRenderedFrame(diagnostics);
 
         if (_runtimeBenchmarkCapture == null)
             return;
@@ -3214,4 +3628,10 @@ internal sealed class SampleInputController
         string Output,
         string RelativePath,
         int StableObservationCount = 0);
+
+    private sealed record SponzaGiPendingLinearHdrCapture(
+        int ArtifactIndex,
+        string Bookmark,
+        string RelativePath,
+        string FullPath);
 }

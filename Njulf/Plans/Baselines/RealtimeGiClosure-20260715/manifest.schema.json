@@ -1,3 +1,74 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c28e4768d64ffef5ed6b626ddab3c209d9f04e033662b1e6d6dbee1cd86a76fb
-size 2339
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://njulf.example/schemas/realtime-gi-closure-baseline-manifest-v1.json",
+  "title": "Realtime GI Closure Sponza Baseline Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "baselineId",
+    "status",
+    "sourceSearch",
+    "artifacts"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": "realtime-gi-closure-baseline-manifest/v1" },
+    "baselineId": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending-external-artifact-import",
+        "complete"
+      ]
+    },
+    "sourceSearch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "performedOn", "workspaceScope", "result" ],
+      "properties": {
+        "performedOn": { "type": "string", "format": "date" },
+        "workspaceScope": { "type": "string", "minLength": 1 },
+        "result": { "type": "string", "minLength": 1 }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 4,
+      "items": { "$ref": "#/$defs/artifact" }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "canonicalFileName",
+        "sourceAttachmentName",
+        "sourceArtifactReference",
+        "sourceSha256",
+        "sourceSizeBytes",
+        "hashAlgorithm",
+        "required",
+        "status"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "kind": { "type": "string", "enum": [ "performance-snapshot", "reference-image" ] },
+        "canonicalFileName": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$" },
+        "sourceAttachmentName": { "type": [ "string", "null" ] },
+        "sourceArtifactReference": { "type": "string", "minLength": 1 },
+        "sourceSha256": {
+          "type": [ "string", "null" ],
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "sourceSizeBytes": { "type": [ "integer", "null" ], "minimum": 0 },
+        "hashAlgorithm": { "const": "SHA-256" },
+        "required": { "const": true },
+        "status": { "type": "string", "enum": [ "pending-external-import", "imported" ] }
+      }
+    }
+  }
+}

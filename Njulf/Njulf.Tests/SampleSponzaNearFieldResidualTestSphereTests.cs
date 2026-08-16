@@ -1,8 +1,11 @@
 using System.Linq;
+using Njulf.Assets;
+using Njulf.Assets.Cooked;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
+using CoreVector3 = Njulf.Core.Math.Vector3;
 
 namespace Njulf.Tests;
 
@@ -75,6 +78,90 @@ public sealed class SampleSponzaNearFieldResidualTestSphereTests
                     System.MathF.Abs(vertex.Position.LengthSquared() - 1.0f) <
                     1.0e-4f),
                 Is.True);
+        });
+    }
+
+    [Test]
+    public void ProductionSphereSources_CoalesceIntoOneAlignedEligibleDemand()
+    {
+        GPUVertex[] vertices = SampleUvSphereMesh.CreateVertices();
+        uint[] indices = SampleUvSphereMesh.CreateIndices();
+        byte[] emission =
+            SampleSponzaNearFieldResidualTestSphere.CreateEmissionPattern();
+        TextureTransportStatistics statistics = TextureTransportImage.FromRgba8(
+            emission,
+            SampleSponzaNearFieldResidualTestSphere.EmissionTextureWidth,
+            SampleSponzaNearFieldResidualTestSphere.EmissionTextureHeight,
+            TextureColorSpace.Srgb,
+            TextureSemantic.Color,
+            CookedHash.Bytes(emission),
+            SampleSponzaNearFieldResidualTestSphere.EmissionTextureSchema).Statistics;
+        float meanEmission = (float)statistics.LinearChannelMean.X;
+        CoreVector3 radiance =
+            SampleSponzaNearFieldResidualTestSphere.EmissiveColor *
+            (SampleSponzaNearFieldResidualTestSphere.EmissiveStrength *
+             meanEmission);
+        var candidates = new DdgiEmissiveTriangleCandidate[indices.Length / 3];
+        for (int triangle = 0; triangle < candidates.Length; triangle++)
+        {
+            CoreVector3 World(uint vertexIndex) =>
+                vertices[vertexIndex].Position *
+                SampleSponzaNearFieldResidualTestSphere.Radius +
+                SampleSponzaNearFieldResidualTestSphere.Position;
+            candidates[triangle] = new DdgiEmissiveTriangleCandidate(
+                World(indices[triangle * 3]),
+                World(indices[triangle * 3 + 1]),
+                World(indices[triangle * 3 + 2]),
+                radiance,
+                DdgiEmissiveSourceFlags.Triangle,
+                checked((ulong)triangle + 1UL));
+        }
+
+        var sources = new GPUDdgiEmissiveSource[candidates.Length];
+        DdgiEmissiveTriangleTable.Build(candidates, sources);
+        var demands = new List<SimpleDdgiRefinementDemand>();
+        SimpleDdgiRefinementEmissiveDemandDiagnostics diagnostics =
+            SimpleDdgiRefinementEmissiveDemandBuilder.Build(
+                sources,
+                new SimpleDdgiRefinementEmissiveDemandConfiguration(
+                    MinimumLuminanceNits: 200f,
+                    MaximumEmitterAreaSquareMeters: 4f,
+                    MaximumDemandCount: 32),
+                demands);
+
+        var pool = new SimpleDdgiRefinementBrickPool();
+        pool.Update(
+            1,
+            new SimpleDdgiRefinementBrickConfiguration(
+                Enabled: true,
+                Capacity: 1,
+                CountX: 6,
+                CountY: 6,
+                CountZ: 6,
+                Spacing: 0.59375f,
+                RetentionFrames: 90),
+            demands);
+
+        SimpleDdgiRefinementDemand demand = demands.Single();
+        SimpleDdgiRefinementBrick brick = pool.ActiveBricks.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                EmissivePhotometry.SceneLinearLuminanceToNits(
+                    EmissivePhotometry.Luminance(radiance)),
+                Is.EqualTo(234.40327f).Within(0.001f));
+            Assert.That(diagnostics.EligibleSourceCount, Is.EqualTo(2_208));
+            Assert.That(diagnostics.AdmittedDemandCount, Is.EqualTo(1));
+            Assert.That(demand.Position.X, Is.EqualTo(1.25f).Within(1e-5f));
+            Assert.That(demand.Position.Y, Is.EqualTo(0.58f).Within(1e-5f));
+            Assert.That(demand.Position.Z, Is.EqualTo(2f).Within(1e-5f));
+            Assert.That(demand.SourceBounds!.Value.Min,
+                Is.EqualTo(new CoreVector3(0.8f, 0.13f, 1.55f)));
+            Assert.That(demand.SourceBounds.Value.Max,
+                Is.EqualTo(new CoreVector3(1.7f, 1.03f, 2.45f)));
+            Assert.That(brick.Origin.X, Is.EqualTo(-0.296875f).Within(1e-6f));
+            Assert.That(brick.Origin.Y, Is.EqualTo(0.1484375f).Within(1e-6f));
+            Assert.That(brick.Origin.Z, Is.EqualTo(0.4453125f).Within(1e-6f));
         });
     }
 }

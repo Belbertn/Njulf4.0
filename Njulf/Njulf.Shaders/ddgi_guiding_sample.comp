@@ -347,7 +347,12 @@ bool SimpleDdgiGuidingEvaluateGuidedPdf(
     float leafSolidAngle = 4.0 * SIMPLE_DDGI_GUIDING_PI /
         float(leafResolution * leafResolution);
     guidedPdf = probability / leafSolidAngle;
-    return SimpleDdgiGuidingFinite(guidedPdf) && guidedPdf > 0.0;
+    // A uniform-branch sample may land in a leaf to which the guide assigns
+    // exactly zero density. That is still a valid mixture sample because the
+    // mandatory uniform component gives pMix full support. Rejecting it here
+    // poisoned the entire probe transaction even though the balance
+    // denominator remained finite and strictly positive.
+    return SimpleDdgiGuidingFinite(guidedPdf) && guidedPdf >= 0.0;
 }
 
 void SimpleDdgiGuidingWriteInvalidPayload(

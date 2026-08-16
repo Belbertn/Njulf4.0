@@ -1,3 +1,253 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6d5d5a690ce3cfc74515a6dbb0bb41bf183e63b6d9f34cfcc86461846e71c204
-size 11643
+{
+  "schemaVersion": "njulf-third-party-native-provenance/v1",
+  "decoderContract": {
+    "implementation": "Njulf bounded direct P/Invoke to WebPGetDecoderVersion, WebPGetInfo, and WebPDecodeRGBAInto",
+    "nativeLibrary": "libwebp",
+    "requiredDecoderVersionHex": "0x010600",
+    "requiredDecoderVersion": "1.6.0",
+    "output": "straight-alpha RGBA8",
+    "animatedWebP": "rejected before native decode",
+    "defaultMaximumEncodedBytes": 67108864,
+    "defaultMaximumDecodedPixels": 16777216
+  },
+  "packaging": {
+    "project": "https://github.com/imazen/libwebp-net",
+    "declaredRepositoryCommit": "462cd4a3bb76c171ff818cd16b0779614c3f8044",
+    "licenseExpression": "MIT",
+    "metaPackage": {
+      "id": "Imazen.WebP.NativeRuntime.All",
+      "version": "1.6.1",
+      "nupkgFileName": "imazen.webp.nativeruntime.all.1.6.1.nupkg",
+      "nupkgLength": 15328,
+      "nupkgSha256": "5140ccda9b20b584fd2c9a71b099f012293849f1a9b9fec642811ee832a8c32d",
+      "nupkgSha512Base64": "CWp14mE93GLEXLEdHpr88RWJpiCiW2egRSuJ6jY8YqXre/7SdZlHhbIcgZZodFv030QQq1iM7XbE3zn1NgN4xg==",
+      "nugetContentHashSha512Base64": "uwUBDum58VRhjlheE3XAw35dp5sdClblIhSrzmjD6sB67HumMM8qFB0foVZE1zOw4XUjyRniWRp8/GeKCSEM+Q=="
+    }
+  },
+  "nativeUpstream": {
+    "project": "https://chromium.googlesource.com/webm/libwebp",
+    "githubMirror": "https://github.com/webmproject/libwebp",
+    "releaseTag": "v1.6.0",
+    "tagObject": "b7e29b9d75bd31422b00c2a446d49d7af06c328d",
+    "exactSourceRevision": "4fa21912338357f89e4fd51cf2368325b59e9bd9",
+    "license": "BSD-3-Clause",
+    "runtimeVersionEvidence": "Every decode calls WebPGetDecoderVersion and rejects any value other than 0x010600."
+  },
+  "redistribution": {
+    "noticeRelativePath": "THIRD-PARTY-NOTICES.txt",
+    "noticeSha256": "68cc83c638638f82ad5fc8879110682a3d1b3600e25cd7ad61e0a606c29072fe",
+    "completeNativePayloadCount": 28,
+    "runtimePackages": [
+      {
+        "id": "Imazen.WebP.NativeRuntime.win-x64",
+        "version": "1.6.1",
+        "nupkgLength": 258279,
+        "nupkgSha256": "32df07f31f18b5f4e35409a73621d776d97761f4b601cbbbdc4efbacb6ab62f6",
+        "nupkgSha512Base64": "YAZDlifBl3mL7CLRKFn+e1+XZXAO/mAS8Mz9tcyU1g1TtJAy+HqozT3PUpzN+zuYdbJkRk4ASCvjTPyJcnVepA==",
+        "nugetContentHashSha512Base64": "xNAC283neZQZRvO7qBV2JsMddN25IcOMqijH6W9w0r/5+S9aqQyLUNQwYWFPJ2YADOYhaAsDlXG9Kq2K1oxSnA==",
+        "assets": [
+          {
+            "packageRelativePath": "runtimes/win-x64/native/libsharpyuv.dll",
+            "length": 25088,
+            "sha256": "ceba59e40848e8e14960fc8c0f6ed125a6bfae216b3814c5ad202cb36d6a2a0d"
+          },
+          {
+            "packageRelativePath": "runtimes/win-x64/native/libwebp.dll",
+            "length": 372224,
+            "sha256": "3de66254c8c0f47f299c7d55750589bf0e9fb6ab65778ed004a81e958ad1c024"
+          },
+          {
+            "packageRelativePath": "runtimes/win-x64/native/libwebpdemux.dll",
+            "length": 20480,
+            "sha256": "af9124fc82821b7bef5d526d4dc4d857de7601833305f5d01ad68089706852c9"
+          },
+          {
+            "packageRelativePath": "runtimes/win-x64/native/libwebpmux.dll",
+            "length": 41472,
+            "sha256": "60947b85e84cb1e96f12e5863dab742641e51846713857063274eb93326672a6"
+          }
+        ]
+      },
+      {
+        "id": "Imazen.WebP.NativeRuntime.win-x86",
+        "version": "1.6.1",
+        "nupkgLength": 218851,
+        "nupkgSha256": "9a204a395c16211e452003f544a7e7e4880ecf5098b669c5836dfeeef000a798",
+        "nupkgSha512Base64": "H3unAHunh76SzJoku+9TjaUcJXX0wPPmMHIybR6pGlt+blsgY+qT1w8NLeO8rdN845PY6DQaA7NIqemWAB34HA==",
+        "nugetContentHashSha512Base64": "Iz/qUdTjvpSTkXsMBIjm84w6+befIBqDTDkWPSMBgZf6lm9uXKqKGzAYjx3a0A5AttVp8F5BU8kNyMxztfofag==",
+        "assets": [
+          {
+            "packageRelativePath": "runtimes/win-x86/native/libsharpyuv.dll",
+            "length": 22016,
+            "sha256": "f77fea0112cc1b806dc7d5da79d7c6ad034c5728bd6369318fd2546cb2ac0d0b"
+          },
+          {
+            "packageRelativePath": "runtimes/win-x86/native/libwebp.dll",
+            "length": 291328,
+            "sha256": "f44546680737179d734c1f0efe322c8c81cc276c6778add5156df3de48cf6946"
+          },
+          {
+            "packageRelativePath": "runtimes/win-x86/native/libwebpdemux.dll",
+            "length": 16896,
+            "sha256": "c378a9d8cb93062380bb623b2c7c4866cedfdfccd7e4e15d5a5b43525baca735"
+          },
+          {
+            "packageRelativePath": "runtimes/win-x86/native/libwebpmux.dll",
+            "length": 32256,
+            "sha256": "273e7d7d968bda45b1458683dd39b89d52274b90c686ee5e3574fc1b72d85a8d"
+          }
+        ]
+      },
+      {
+        "id": "Imazen.WebP.NativeRuntime.win-arm64",
+        "version": "1.6.1",
+        "nupkgLength": 234598,
+        "nupkgSha256": "a6fa42b37e6155398d7e9c6c69132003ae65812b0a39d8b4cafcb79f8eb2b6bd",
+        "nupkgSha512Base64": "dBd7YVnljtp7ElpIfCwbiasqJO1s7BRvyTHt7myVoe4Q+n0/BXXyh93pjj8Mhe7xwtoykyfWWmTINdkQFg0EXw==",
+        "nugetContentHashSha512Base64": "1YGYYXBP2uF73pHN+gm0Ika0+4aZbFCmmp7hBEt7Of8cnvFEp5v7qkwz9L4qoF5zaqOZykkDpt6HFw2/ZuZOpg==",
+        "assets": [
+          {
+            "packageRelativePath": "runtimes/win-arm64/native/libsharpyuv.dll",
+            "length": 20992,
+            "sha256": "919cca61a90164fcb4e0b3c26b85a48315d992e6ee78834ece643766bfc9c020"
+          },
+          {
+            "packageRelativePath": "runtimes/win-arm64/native/libwebp.dll",
+            "length": 314880,
+            "sha256": "5ae2665283ba80d155cf249677cc55b3255f2cf985631323dd9c8008e58946bf"
+          },
+          {
+            "packageRelativePath": "runtimes/win-arm64/native/libwebpdemux.dll",
+            "length": 19456,
+            "sha256": "cd6d200f2140c09b2004b59f2b897a49de854b0555061402ff642963dc82eb7b"
+          },
+          {
+            "packageRelativePath": "runtimes/win-arm64/native/libwebpmux.dll",
+            "length": 39424,
+            "sha256": "7217b65c09eabfda4db3744ecd10a59eaf7c30b6daa67bc8327f04e2b71af3ef"
+          }
+        ]
+      },
+      {
+        "id": "Imazen.WebP.NativeRuntime.linux-x64",
+        "version": "1.6.1",
+        "nupkgLength": 459876,
+        "nupkgSha256": "c13e41ae80b80ec57ab00c4b9695513823e478fed6fe5edca7c0a3336f09cd4f",
+        "nupkgSha512Base64": "6SY05+vqOjCfh/4nTA3DuqW5iJSSYqSvlHKGriHcjajcqvmW7UY0+SqrwGBNkqwamrVwZOwRsBXMS4wL9eUcpA==",
+        "nugetContentHashSha512Base64": "g6dgg2KHAJD75JAjctFb57d+PRczizX5iCWWJX8pMroxU0GGM+LfQNOOTJnZHtFiRBJ3IBuKglCUKygCzTEQzw==",
+        "assets": [
+          {
+            "packageRelativePath": "runtimes/linux-x64/native/libsharpyuv.so",
+            "length": 50608,
+            "sha256": "6d8fdf0bee9aa50159befbdd920149f6d15349d2702f91d4a70d0eea8e4bd4ac"
+          },
+          {
+            "packageRelativePath": "runtimes/linux-x64/native/libwebp.so",
+            "length": 792584,
+            "sha256": "22b146af7ecc27084798b0ec84cc4243e89f60895d52573e4363b2d885a74d05"
+          },
+          {
+            "packageRelativePath": "runtimes/linux-x64/native/libwebpdemux.so",
+            "length": 25624,
+            "sha256": "b3e0ea3cbe5ab481c36f8b579154884369c839188cece19600b9f7cf02d32918"
+          },
+          {
+            "packageRelativePath": "runtimes/linux-x64/native/libwebpmux.so",
+            "length": 53200,
+            "sha256": "c3458738941bd26769ad287c0425a78e4594eabf8780cdc679c2c4e81a11a6b8"
+          }
+        ]
+      },
+      {
+        "id": "Imazen.WebP.NativeRuntime.linux-arm64",
+        "version": "1.6.1",
+        "nupkgLength": 369875,
+        "nupkgSha256": "c08b5804f7d006da9b3fe6f76c15e99a2ffee7258ea51bff0f362680a1de7f63",
+        "nupkgSha512Base64": "Nu/5+arnp4ADJf5opcM2UCfBA/4z349Brg/p/C4n6ZKRDUmMcLNXQI4RkCTgCah7ZRto249QsjB6maJgpnQE9g==",
+        "nugetContentHashSha512Base64": "FDnxenIsIukfoxVYDqdVJrv+wH8UT2LJjUFYUfn0Dl0g5CrIc6ky5gKlnnn2g44q0Tu6LM2VLQel1DX1yY3wIQ==",
+        "assets": [
+          {
+            "packageRelativePath": "runtimes/linux-arm64/native/libsharpyuv.so",
+            "length": 72344,
+            "sha256": "ee48c74b3060e4178dc5e93e01bca172fcd667eeb5ba8b507dd244718728e038"
+          },
+          {
+            "packageRelativePath": "runtimes/linux-arm64/native/libwebp.so",
+            "length": 580512,
+            "sha256": "d14b490efe60fad7c25e187bd3222fe673697ee26b565413852d86a02582d7f8"
+          },
+          {
+            "packageRelativePath": "runtimes/linux-arm64/native/libwebpdemux.so",
+            "length": 71576,
+            "sha256": "a876a1695674959ef65a8aa71d22ec246b9d8de8b55697034fd94a861761f64e"
+          },
+          {
+            "packageRelativePath": "runtimes/linux-arm64/native/libwebpmux.so",
+            "length": 74784,
+            "sha256": "0176bdfd11dcbbe7398ccf98740fce65fc6d50a4c73fff31ec57e5eaa80fd4cd"
+          }
+        ]
+      },
+      {
+        "id": "Imazen.WebP.NativeRuntime.osx-x64",
+        "version": "1.6.1",
+        "nupkgLength": 363057,
+        "nupkgSha256": "7b27749baf90326932326665c81a316dc7ff2df202f2397597ba7a6bd5b133e8",
+        "nupkgSha512Base64": "VRo70p4FXVzGs8e6ljvUXwkSUUjOm3Tdm0Xe+50F7Uu0/tYa2JhExFvQjf5nvefSAphzesYmYIJ09YV8KVG93A==",
+        "nugetContentHashSha512Base64": "sSzU91me+psXKIiiJ7aTOrA2MhbMae7T1oXbXdTvdeqbles15PBLqKTu9boKgZowOP7NGS8QI+RdewSTSSUHFQ==",
+        "assets": [
+          {
+            "packageRelativePath": "runtimes/osx-x64/native/libsharpyuv.dylib",
+            "length": 34912,
+            "sha256": "9463d276fbd0a095107043bca95572f522f963636ed51d11715821bddf98d67e"
+          },
+          {
+            "packageRelativePath": "runtimes/osx-x64/native/libwebp.dylib",
+            "length": 645880,
+            "sha256": "c3d00caf165830b7cb17a08a689a0cde80f9ad620add1e0f22a7554cce86d95a"
+          },
+          {
+            "packageRelativePath": "runtimes/osx-x64/native/libwebpdemux.dylib",
+            "length": 22544,
+            "sha256": "3b82e0a3e57eedbb846b14160d9044e2cd40f38d676645d8c98d61d59bb76767"
+          },
+          {
+            "packageRelativePath": "runtimes/osx-x64/native/libwebpmux.dylib",
+            "length": 46392,
+            "sha256": "235ab59164f38c8bf6c434599e8671c4bf3da53769251c3186352e2c5856c54c"
+          }
+        ]
+      },
+      {
+        "id": "Imazen.WebP.NativeRuntime.osx-arm64",
+        "version": "1.6.1",
+        "nupkgLength": 307786,
+        "nupkgSha256": "228051c3cf3da586ce6c4a0c2b580d9412249bd8c2d4fcc7fb61c06ba7a8ff22",
+        "nupkgSha512Base64": "Ucap1Zn6Fuk6gDVjpeYSwUj9tZQjKQvnN7RGZ9/Ex5+mTRCPfwFhYX6eVlbIcMR7f+B70yZbU+TQWUscDLuoYw==",
+        "nugetContentHashSha512Base64": "jM+p/6Yt7JMOp/annM7RgBYVAvi4NuaId3ez+opCAp/KfbHnqejkwJZvZyRva8nkEBswsk8LU+ptYklvOa0+7Q==",
+        "assets": [
+          {
+            "packageRelativePath": "runtimes/osx-arm64/native/libsharpyuv.dylib",
+            "length": 68128,
+            "sha256": "6678e7bcb010c3386997f97c720920ea3296e317f626ecfe9fabe2a9767b640f"
+          },
+          {
+            "packageRelativePath": "runtimes/osx-arm64/native/libwebp.dylib",
+            "length": 497520,
+            "sha256": "d1229dbc44e0e574106269052675d173515e9c224a892df9bc7bf0815f9dba8f"
+          },
+          {
+            "packageRelativePath": "runtimes/osx-arm64/native/libwebpdemux.dylib",
+            "length": 35256,
+            "sha256": "29ce5c25bece7c7c63d3fa32ba7ea931b8e1d48353f61b09289e3f3f3aa0a7ce"
+          },
+          {
+            "packageRelativePath": "runtimes/osx-arm64/native/libwebpmux.dylib",
+            "length": 71664,
+            "sha256": "f0f886248318d9b86d3a582a2206a1c8655ebc05a51cc63668c72ea261b639b4"
+          }
+        ]
+      }
+    ]
+  }
+}

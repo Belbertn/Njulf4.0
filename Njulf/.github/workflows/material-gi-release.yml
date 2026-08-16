@@ -1,3 +1,63 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b63b8f9d6338eab00663dfd094b49bdaa61676ffc55b75b06a11baedc5b66e3f
-size 1804
+name: material-gi-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      approved_hdr_manifest:
+        description: Workspace-relative path to the reviewed approved-HDR reference manifest
+        required: true
+        type: string
+
+concurrency:
+  group: material-gi-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  hardware-release-gates:
+    name: ${{ matrix.device_class }} hardware gates
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - device_class: Reference
+            runner_label: material-gi-reference
+          - device_class: LowerMemoryRayQuery
+            runner_label: material-gi-lower-memory-ray-query
+    runs-on:
+      - self-hosted
+      - windows
+      - vulkan
+      - material-gi
+      - ${{ matrix.runner_label }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run serial material-GI release gates
+        shell: pwsh
+        env:
+          APPROVED_HDR_MANIFEST: ${{ inputs.approved_hdr_manifest }}
+        run: |
+          ./eng/run-material-gi-release-gates.ps1 `
+            -DeviceClass '${{ matrix.device_class }}' `
+            -ApprovedHdrManifest $env:APPROVED_HDR_MANIFEST `
+            -ArtifactRoot 'artifacts/material-gi-release/${{ matrix.device_class }}'
+
+      - name: Upload authenticated producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: material-gi-release-${{ matrix.device_class }}-${{ github.sha }}
+          path: artifacts/material-gi-release/${{ matrix.device_class }}
+          if-no-files-found: error
+          retention-days: 30

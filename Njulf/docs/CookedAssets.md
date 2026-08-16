@@ -11,6 +11,10 @@ dotnet run --project Njulf.AssetTool -- cook changed NjulfHelloGame --out NjulfH
 dotnet run --project Njulf.AssetTool -- clean-stale --out NjulfHelloGame/Cooked
 ```
 
+`Cooked/` is generated output and is intentionally not version-controlled. After
+a fresh clone, run the folder cook before starting the normal cooked-only runtime
+or producing a Release build or publish.
+
 The cooker defaults to the host RID and writes `Cooked/<rid>/`. Override it with `--platform win-x64`, `linux-x64`, or another supported desktop RID. `cook changed` skips an asset only when its source, effective settings, dependencies, tool version, platform, and every recorded output hash are unchanged. Package and database writes are atomic. Pass `--force` to rebuild.
 
 ### Cook progress and bounded folder work

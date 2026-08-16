@@ -1,3 +1,54 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d2aa25fc0bf55c4d8236f7e8fb16e7369ab1e9a42921fdb55052a21a62a1515b
-size 2732
+name: dotnet
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore Njulf.sln
+      - name: Build cooker
+        run: dotnet build Njulf.AssetTool/Njulf.AssetTool.csproj --configuration Release --no-restore
+      - name: Cook shipping assets
+        shell: pwsh
+        run: |
+          dotnet run --project Njulf.AssetTool --configuration Release --no-build -- cook folder NjulfHelloGame --out NjulfHelloGame/Cooked --platform win-x64 --backend SharpGltf --max-texture-dimension 512
+          dotnet run --project Njulf.AssetTool --configuration Release --no-build -- cook changed NjulfHelloGame --out NjulfHelloGame/Cooked --platform win-x64 --backend SharpGltf --max-texture-dimension 512
+      - name: Build
+        run: dotnet build Njulf.sln --configuration Release --no-restore
+      - name: Test
+        run: dotnet test Njulf.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results
+      - name: Cook animated asset smoke
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'njulf-cooked-smoke'
+          dotnet run --project Njulf.AssetTool --configuration Release --no-build -- cook model NjulfHelloGame/Strut.glb --out $output --platform win-x64 --backend SharpGltf --max-texture-dimension 64
+          dotnet run --project Njulf.AssetTool --configuration Release --no-build -- migrate $output --out "$output-migrated"
+      - name: Verify source-free shipping publish
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'njulf-publish'
+          dotnet publish NjulfHelloGame/NjulfHelloGame.csproj --configuration Release --no-build --output $publish
+          $forbiddenExtensions = @('.gltf', '.glb', '.obj', '.fbx', '.dae', '.3ds', '.blend', '.ply', '.stl', '.png', '.jpg', '.jpeg')
+          $forbiddenAssemblies = @('SharpGLTF.*', 'Silk.NET.Assimp*', 'Assimp*', 'BCnEncoder*', 'StbImageSharp*')
+          $bad = Get-ChildItem $publish -Recurse -File | Where-Object {
+            $name = $_.Name
+            $forbiddenExtensions -contains $_.Extension.ToLowerInvariant() -or
+            ($forbiddenAssemblies | Where-Object { $name -like $_ }).Count -gt 0
+          }
+          if ($bad) { throw "Source assets/import libraries leaked into publish: $($bad.FullName -join ', ')" }
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results

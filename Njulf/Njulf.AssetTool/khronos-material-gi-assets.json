@@ -1,3 +1,46 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7d62f995dab5fc601edac91e861c6e6d23a25915b4e5ddbe34013f3a89e67839
-size 1660
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/KhronosGroup/glTF-Sample-Assets",
+  "commit": "2bac6f8c57bf471df0d2a1e8a8ec023c7801dddf",
+  "assets": [
+    {
+      "name": "UnlitTest",
+      "relativePath": "Models/UnlitTest/glTF-Binary/UnlitTest.glb",
+      "sha256": "e07b68c6fd9fbf73d372c610a681b89d6b013bdd1a506e46a411df82210a2481",
+      "bytes": 3992,
+      "license": "Copyright 2019 Analytical Graphics, Inc.; CC BY 4.0 International; Ed Mackey",
+      "expectations": {
+        "minimumMaterialCount": 2,
+        "minimumUnlitCount": 2,
+        "minimumOpaqueCount": 2
+      }
+    },
+    {
+      "name": "EmissiveStrengthTest",
+      "relativePath": "Models/EmissiveStrengthTest/glTF-Binary/EmissiveStrengthTest.glb",
+      "sha256": "074898ec4c3636230faffe0cacac7403c3f6135db61f943da28ffaa88ca2a39f",
+      "bytes": 10668,
+      "license": "Copyright 2022 AGI; CC BY 4.0 International; Ed Mackey",
+      "expectations": {
+        "minimumMaterialCount": 6,
+        "minimumEmissiveStrengthCount": 4,
+        "minimumMaximumEmissiveStrength": 16,
+        "minimumOpaqueCount": 6
+      }
+    },
+    {
+      "name": "AlphaBlendModeTest",
+      "relativePath": "Models/AlphaBlendModeTest/glTF-Binary/AlphaBlendModeTest.glb",
+      "sha256": "37c3577d143071b42dd46e9d942b157837eb25c6340112171d7faecaa987b14e",
+      "bytes": 2978812,
+      "license": "Copyright 2018 Analytical Graphics, Inc.; CC BY 4.0 International; Ed Mackey",
+      "expectations": {
+        "minimumMaterialCount": 6,
+        "minimumOpaqueCount": 2,
+        "minimumMaskCount": 3,
+        "minimumBlendCount": 1,
+        "minimumDoubleSidedCount": 5
+      }
+    }
+  ]
+}

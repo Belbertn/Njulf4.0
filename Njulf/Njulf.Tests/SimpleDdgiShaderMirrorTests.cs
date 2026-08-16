@@ -1494,6 +1494,8 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("SimpleDdgiDebugSample SampleSimpleDdgiDebug(vec3 worldPos, vec3 normal, vec3 viewDir)"));
                 Assert.That(shared, Does.Contain("SimpleDdgiVolume ReadSimpleDdgiVolume(uint bufferIndex, uint volumeIndex)"));
                 Assert.That(shared, Does.Contain("bool SelectSimpleDdgiVolume("));
+                Assert.That(shared, Does.Contain("bool includeRefinementVolumes,"));
+                Assert.That(shared, Does.Contain("if (!includeRefinementVolumes)"));
                 Assert.That(shared, Does.Contain("out bool refinementOrBaseFallback)"));
                 Assert.That(shared, Does.Contain("struct SimpleDdgiGatherResult"));
                 Assert.That(shared, Does.Contain("float validSupport;"));
@@ -1578,7 +1580,11 @@ namespace Njulf.Tests
                 string solverSource = shared[solverStart..solverEnd];
                 Assert.That(solverSource, Does.Contain("solverOwnershipOut = solverOwnership;"));
                 Assert.That(solverSource, Does.Contain("fallbackWeightOut = fallbackWeight;"));
+                Assert.That(solverSource, Does.Match(
+                    @"SampleSimpleDdgiGather\(\s*p,\s*worldPos,\s*safeNormal,\s*viewDir,\s*false\);"));
                 Assert.That(solverSource, Does.Not.Contain("fallback *= EstimateFarFieldSkyVisibility"));
+                Assert.That(trace, Does.Match(
+                    @"SampleSimpleDdgiGather\(\s*params,\s*worldPosition \+ surface\.GeometricNormal \* max\([\s\S]*?viewDirection,\s*false\);"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_UPDATE_RAY_COUNT_SHIFT"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT"));
                 Assert.That(shared, Does.Contain("bool SimpleDdgiUpdateMatchesProbeGeneration(SimpleDdgiProbeUpdate update, SimpleDdgiProbeState state)"));
@@ -1958,6 +1964,104 @@ namespace Njulf.Tests
                 Assert.That(renderer, Does.Contain("_farFieldClipmapManager?.CoverageReady == true"));
                 Assert.That(renderer, Does.Contain("? gi.GiAccelerationStructureStaticResidentDistance"));
                 Assert.That(renderer, Does.Contain("gi.StreamedGiAccelerationStructuresEnabled && stats.Active ? 1 : 0"));
+            });
+        }
+
+        [Test]
+        public void SimpleDdgiTransportGather_ExcludesReceiverRefinementAuthority()
+        {
+            string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
+            string trace = ReadRepoText("Njulf.Shaders", "ddgi_simple_trace.comp");
+            int solverStart = shared.IndexOf(
+                "vec3 SampleSimpleDdgiSolverBounceIrradianceDetailed(",
+                StringComparison.Ordinal);
+            int solverEnd = shared.IndexOf(
+                "SimpleDdgiDebugSample SampleSimpleDdgiDebug(",
+                solverStart,
+                StringComparison.Ordinal);
+            Assert.That(solverStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(solverEnd, Is.GreaterThan(solverStart));
+            string solverSource = shared[solverStart..solverEnd];
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(shared, Does.Contain("bool includeRefinementVolumes,"));
+                Assert.That(shared, Does.Match(
+                    @"if \(!includeRefinementVolumes\)\s*continue;"));
+                Assert.That(solverSource, Does.Match(
+                    @"SampleSimpleDdgiGather\(\s*p,\s*worldPos,\s*safeNormal,\s*viewDir,\s*false\);"));
+                Assert.That(trace, Does.Match(
+                    @"SampleSimpleDdgiGather\(\s*params,\s*worldPosition \+ surface\.GeometricNormal \* max\([\s\S]*?viewDirection,\s*false\);"));
+            });
+        }
+
+        [Test]
+        public void RefinementTransport_InheritsBaseTraceHorizonInsteadOfBrickExtent()
+        {
+            string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
+            string trace = ReadRepoText("Njulf.Shaders", "ddgi_simple_trace.comp");
+            string manager = ReadRepoText(
+                "Njulf.Rendering",
+                "Resources",
+                "SimpleDdgiVolumeManager.cs");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(manager, Does.Contain(
+                    "ResolveRefinementTraceDistances(_volumeCandidates);"));
+                Assert.That(manager, Does.Contain(
+                    "MaximumTraceDistance = candidate.MaximumTraceDistance"));
+                Assert.That(manager, Does.Contain(
+                    "BitConverter.SingleToInt32Bits(\n                        candidate.MaximumTraceDistance)"));
+                Assert.That(manager, Does.Match(
+                    @"UpdateStartAndCount = new Vector4\(\s*MaximumTraceDistance,"));
+                Assert.That(shared, Does.Contain(
+                    "volume.maximumTraceDistance = updateRange.x > 0.0"));
+                Assert.That(shared, Does.Contain(
+                    "result.visibilityMaxRayDistance = volume.maximumTraceDistance;"));
+                Assert.That(trace, Does.Contain(
+                    "float maxDistance = volume.maximumTraceDistance;"));
+                Assert.That(trace, Does.Not.Contain(
+                    "float maxDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);"));
+            });
+        }
+
+        [Test]
+        public void DirectionalGuidingUniformBranch_AcceptsZeroGuideDensity()
+        {
+            string sample = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_guiding_sample.comp");
+            int guidedSamplerStart = sample.IndexOf(
+                "bool SimpleDdgiGuidingSampleGuidedLeaf(",
+                StringComparison.Ordinal);
+            int evaluatorStart = sample.IndexOf(
+                "bool SimpleDdgiGuidingEvaluateGuidedPdf(",
+                guidedSamplerStart,
+                StringComparison.Ordinal);
+            int evaluatorEnd = sample.IndexOf(
+                "void SimpleDdgiGuidingWriteInvalidPayload(",
+                evaluatorStart,
+                StringComparison.Ordinal);
+
+            Assert.That(guidedSamplerStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(evaluatorStart, Is.GreaterThan(guidedSamplerStart));
+            Assert.That(evaluatorEnd, Is.GreaterThan(evaluatorStart));
+            string guidedSampler = sample[guidedSamplerStart..evaluatorStart];
+            string evaluator = sample[evaluatorStart..evaluatorEnd];
+
+            Assert.Multiple(() =>
+            {
+                // The guided branch must select positive mass, while evaluating
+                // pGuide for a uniform-branch sample may legitimately return 0.
+                Assert.That(guidedSampler, Does.Contain(
+                    "SimpleDdgiGuidingFinite(guidedPdf) && guidedPdf > 0.0"));
+                Assert.That(evaluator, Does.Contain(
+                    "SimpleDdgiGuidingFinite(guidedPdf) && guidedPdf >= 0.0"));
+                Assert.That(sample, Does.Contain(
+                    "alpha * SIMPLE_DDGI_GUIDING_UNIFORM_SPHERE_PDF +"));
+                Assert.That(sample, Does.Contain(
+                    "(1.0 - alpha) * guidedPdf"));
             });
         }
 

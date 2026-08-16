@@ -19,7 +19,16 @@ public readonly record struct SimpleDdgiRefinementDemand(
     Vector3 Position,
     float Priority,
     SimpleDdgiRefinementDemandReason Reason,
-    ulong StableSourceId = 0);
+    ulong StableSourceId = 0)
+{
+    /// <summary>
+    /// Optional conservative source bounds used to place compact-emissive
+    /// refinement probes on the receiver side of a Y-up scene. Keeping this
+    /// outside the positional record contract preserves the original
+    /// constructor and deconstructor for existing callers.
+    /// </summary>
+    public BoundingBox? SourceBounds { get; init; }
+}
 
 public readonly record struct SimpleDdgiRefinementBrickConfiguration(
     bool Enabled,
@@ -33,7 +42,14 @@ public readonly record struct SimpleDdgiRefinementBrickConfiguration(
     public int ProbesPerBrick => checked(CountX * CountY * CountZ);
 }
 
-public readonly record struct SimpleDdgiRefinementBrickKey(int X, int Y, int Z);
+public readonly record struct SimpleDdgiRefinementBrickKey(int X, int Y, int Z)
+{
+    /// <summary>
+    /// Separates ordinary centered cells from source-bounded placement cells
+    /// so the two policies can never alias or retain each other's authority.
+    /// </summary>
+    public int PlacementClass { get; init; }
+}
 
 public readonly record struct SimpleDdgiRefinementBrick(
     int Slot,
@@ -76,6 +92,10 @@ public sealed class SimpleDdgiRefinementBrickPool
 {
     public const int MaximumCapacity = 4;
     public const int MaximumCandidateDemandCount = 64;
+    public const float CompactEmissiveReceiverClearanceSpacingScale = 0.125f;
+    public const float CompactEmissivePlacementQuantumSpacingScale = 0.25f;
+    private const int CenteredPlacementClass = 0;
+    private const int CompactEmissivePlacementClass = 1;
     private const float ReplacementHysteresis = 1.20f;
 
     private readonly SlotState[] _slots = new SlotState[MaximumCapacity];
@@ -143,10 +163,7 @@ public sealed class SimpleDdgiRefinementBrickPool
                 continue;
             }
 
-            int retainedSlot = FindRetainingSlot(
-                demand.Position,
-                configuration,
-                capacity);
+            int retainedSlot = FindRetainingSlot(demand, configuration, capacity);
             if (retainedSlot >= 0)
             {
                 SlotState retained = _slots[retainedSlot];
@@ -158,9 +175,7 @@ public sealed class SimpleDdgiRefinementBrickPool
                 continue;
             }
 
-            SimpleDdgiRefinementBrickKey key = ResolveKey(
-                demand.Position,
-                configuration);
+            SimpleDdgiRefinementBrickKey key = ResolveKey(demand, configuration);
             int candidateIndex = FindCandidate(key);
             if (candidateIndex >= 0)
             {
@@ -211,8 +226,12 @@ public sealed class SimpleDdgiRefinementBrickPool
             if (y != 0)
                 return y;
             int z = left.Key.Z.CompareTo(right.Key.Z);
-            return z != 0
-                ? z
+            if (z != 0)
+                return z;
+            int placementClass = left.Key.PlacementClass.CompareTo(
+                right.Key.PlacementClass);
+            return placementClass != 0
+                ? placementClass
                 : left.StableSourceId.CompareTo(right.StableSourceId);
         });
 
@@ -220,7 +239,7 @@ public sealed class SimpleDdgiRefinementBrickPool
         {
             int slot = FindEmptySlot(capacity);
             if (slot < 0)
-                slot = FindReplacementSlot(candidate.Priority, capacity);
+                slot = FindReplacementSlot(candidate, capacity);
             if (slot < 0)
             {
                 rejected++;
@@ -284,22 +303,30 @@ public sealed class SimpleDdgiRefinementBrickPool
     }
 
     private int FindRetainingSlot(
-        Vector3 position,
+        SimpleDdgiRefinementDemand demand,
         SimpleDdgiRefinementBrickConfiguration configuration,
         int capacity)
     {
         int best = -1;
         float bestDistanceSquared = float.MaxValue;
         Vector3 lattice = LatticeSize(configuration);
-        Vector3 margin = lattice * 0.20f +
-                         new Vector3(configuration.Spacing);
+        int placementClass = ResolvePlacementClass(demand);
+        SimpleDdgiRefinementBrickKey resolvedKey = ResolveKey(
+            demand,
+            configuration);
+        Vector3 position = demand.Position;
         for (int slot = 0; slot < capacity; slot++)
         {
             SlotState state = _slots[slot];
-            if (!state.Active)
+            if (!state.Active || state.Key.PlacementClass != placementClass)
                 continue;
-            Vector3 min = state.Origin - margin;
-            Vector3 max = state.Origin + lattice + margin;
+            if (placementClass == CompactEmissivePlacementClass &&
+                state.Key != resolvedKey)
+            {
+                continue;
+            }
+            Vector3 min = state.Origin;
+            Vector3 max = state.Origin + lattice;
             if (position.X < min.X || position.X > max.X ||
                 position.Y < min.Y || position.Y > max.Y ||
                 position.Z < min.Z || position.Z > max.Z)
@@ -333,10 +360,12 @@ public sealed class SimpleDdgiRefinementBrickPool
         return -1;
     }
 
-    private int FindReplacementSlot(float candidatePriority, int capacity)
+    private int FindReplacementSlot(Candidate candidate, int capacity)
     {
         int weakestUndemanded = -1;
         float weakestUndemandedPriority = float.MaxValue;
+        int weakestUndemandedSameReason = -1;
+        float weakestUndemandedSameReasonPriority = float.MaxValue;
         int weakestDemanded = -1;
         float weakestDemandedPriority = float.MaxValue;
         for (int slot = 0; slot < capacity; slot++)
@@ -350,26 +379,38 @@ public sealed class SimpleDdgiRefinementBrickPool
                 weakestUndemanded = slot;
                 weakestUndemandedPriority = state.Priority;
             }
-            else if (state.DemandedThisFrame &&
-                     state.Priority < weakestDemandedPriority)
+            if (!state.DemandedThisFrame &&
+                (state.Reasons & candidate.Reasons) !=
+                    SimpleDdgiRefinementDemandReason.None &&
+                state.Priority < weakestUndemandedSameReasonPriority)
+            {
+                weakestUndemandedSameReason = slot;
+                weakestUndemandedSameReasonPriority = state.Priority;
+            }
+            if (state.DemandedThisFrame &&
+                state.Priority < weakestDemandedPriority)
             {
                 weakestDemanded = slot;
                 weakestDemandedPriority = state.Priority;
             }
         }
 
-        // Prefer dormant slots, but do not let the two persistent camera
-        // anchors monopolize a tiny pool when a materially stronger compact
-        // emissive or dynamic-geometry request appears. The same hysteresis
-        // margin applies, preventing equal-priority frame-order churn.
+        // A current demand may reclaim an undemanded slot serving the same
+        // purpose without a hysteresis premium. Cross-purpose replacement
+        // retains the material-priority margin to prevent frame-order churn.
+        if (weakestUndemandedSameReason >= 0 &&
+            candidate.Priority >= weakestUndemandedSameReasonPriority)
+        {
+            return weakestUndemandedSameReason;
+        }
         if (weakestUndemanded >= 0 &&
-            candidatePriority >
+            candidate.Priority >
                 weakestUndemandedPriority * ReplacementHysteresis)
         {
             return weakestUndemanded;
         }
         return weakestDemanded >= 0 &&
-               candidatePriority >
+               candidate.Priority >
                    weakestDemandedPriority * ReplacementHysteresis
             ? weakestDemanded
             : -1;
@@ -390,10 +431,36 @@ public sealed class SimpleDdgiRefinementBrickPool
     };
 
     private static SimpleDdgiRefinementBrickKey ResolveKey(
-        Vector3 position,
+        SimpleDdgiRefinementDemand demand,
         SimpleDdgiRefinementBrickConfiguration configuration)
     {
-        Vector3 step = LatticeSize(configuration);
+        if (ResolvePlacementClass(demand) == CompactEmissivePlacementClass)
+        {
+            BoundingBox sourceBounds = demand.SourceBounds!.Value;
+            Vector3 min = Vector3.Min(sourceBounds.Min, sourceBounds.Max);
+            Vector3 max = Vector3.Max(sourceBounds.Min, sourceBounds.Max);
+            Vector3 center = (min + max) * 0.5f;
+            Vector3 lattice = LatticeSize(configuration);
+            float quantum = Math.Max(
+                configuration.Spacing *
+                    CompactEmissivePlacementQuantumSpacingScale,
+                0.001f);
+            Vector3 desiredOrigin = new(
+                center.X - lattice.X * 0.5f,
+                min.Y + configuration.Spacing *
+                    CompactEmissiveReceiverClearanceSpacingScale,
+                center.Z - lattice.Z * 0.5f);
+            return new SimpleDdgiRefinementBrickKey(
+                FloorToInt(desiredOrigin.X / quantum + 0.5f),
+                FloorToInt(desiredOrigin.Y / quantum + 0.5f),
+                FloorToInt(desiredOrigin.Z / quantum + 0.5f))
+            {
+                PlacementClass = CompactEmissivePlacementClass
+            };
+        }
+
+        Vector3 position = demand.Position;
+        Vector3 step = PlacementStep(configuration);
         return new SimpleDdgiRefinementBrickKey(
             FloorToInt(position.X / step.X + 0.5f),
             FloorToInt(position.Y / step.Y + 0.5f),
@@ -404,10 +471,32 @@ public sealed class SimpleDdgiRefinementBrickPool
         SimpleDdgiRefinementBrickKey key,
         SimpleDdgiRefinementBrickConfiguration configuration)
     {
-        Vector3 step = LatticeSize(configuration);
+        if (key.PlacementClass == CompactEmissivePlacementClass)
+        {
+            float quantum = Math.Max(
+                configuration.Spacing *
+                    CompactEmissivePlacementQuantumSpacingScale,
+                0.001f);
+            return new Vector3(key.X, key.Y, key.Z) * quantum;
+        }
+
+        Vector3 step = PlacementStep(configuration);
         return new Vector3(key.X * step.X, key.Y * step.Y, key.Z * step.Z) -
-            step * 0.5f;
+            LatticeSize(configuration) * 0.5f;
     }
+
+    private static int ResolvePlacementClass(
+        SimpleDdgiRefinementDemand demand) =>
+        (demand.Reason & SimpleDdgiRefinementDemandReason.CompactEmissive) != 0 &&
+        demand.SourceBounds.HasValue
+            ? CompactEmissivePlacementClass
+            : CenteredPlacementClass;
+
+    private static Vector3 PlacementStep(
+        SimpleDdgiRefinementBrickConfiguration configuration) => new(
+        Math.Max(configuration.CountX - 2, 1) * configuration.Spacing,
+        Math.Max(configuration.CountY - 2, 1) * configuration.Spacing,
+        Math.Max(configuration.CountZ - 2, 1) * configuration.Spacing);
 
     private static Vector3 LatticeSize(
         SimpleDdgiRefinementBrickConfiguration configuration) => new(
@@ -431,7 +520,15 @@ public sealed class SimpleDdgiRefinementBrickPool
         float.IsFinite(demand.Position.Z) &&
         float.IsFinite(demand.Priority) &&
         demand.Priority > 0f &&
-        demand.Reason != SimpleDdgiRefinementDemandReason.None;
+        demand.Reason != SimpleDdgiRefinementDemandReason.None &&
+        (!demand.SourceBounds.HasValue ||
+         IsFinite(demand.SourceBounds.Value.Min) &&
+         IsFinite(demand.SourceBounds.Value.Max));
+
+    private static bool IsFinite(Vector3 value) =>
+        float.IsFinite(value.X) &&
+        float.IsFinite(value.Y) &&
+        float.IsFinite(value.Z);
 
     private static void ValidateConfiguration(
         SimpleDdgiRefinementBrickConfiguration configuration)

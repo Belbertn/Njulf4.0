@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:61a2183c994588f663f74227c781d31ff8c8c16323c66a87729c1fdb41548e74
-size 555
+{
+  "SchemaVersion": 1,
+  "TailJacobiReports": [
+    "jacobi-1.json",
+    "jacobi-2.json",
+    "jacobi-3.json"
+  ],
+  "TailAcceleratedReports": [
+    "accelerated-1.json",
+    "accelerated-2.json",
+    "accelerated-3.json"
+  ],
+  "Scenarios": {
+    "Scroll": "scenario-scroll.json",
+    "Teleport": "scenario-teleport.json",
+    "SourceChange": "scenario-source-change.json",
+    "Relocation": "scenario-relocation.json",
+    "HighAlbedo": "scenario-high-albedo.json",
+    "ThinWall": "scenario-thin-wall.json"
+  },
+  "LongSoakReport": "long-soak.json"
+}

@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8538a6645db1f72f8b71d136fc895896afe39d6a9b88186a276cf6b017b20b7a
-size 137
+bin/
+obj/
+artifacts/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+.idea/
+*.zip
+*.nupkg
+TestResults/
+coverage/
+*.trx
+.perf-loop-runs/
+
+# Local diagnostics, captures, and temporary work products
+/.codex-tmp/
+/.tmp/
+
+# Rebuilt with Njulf.AssetTool; required before cooked-only Release packaging
+/NjulfHelloGame/Cooked/

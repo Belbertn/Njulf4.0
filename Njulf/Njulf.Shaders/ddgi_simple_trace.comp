@@ -311,7 +311,8 @@ vec3 EvaluateSimpleDdgiOneBounceGlossyRadiance(
             0.03,
             probeSpacing * 0.02),
         surface.ShadingNormal,
-        viewDirection);
+        viewDirection,
+        false);
     float confidence = clamp(
         gather.directionalRadianceSupport *
         SimpleDdgiRadiometricOwnership(gather) *
@@ -832,7 +833,11 @@ void main()
         globalRay,
         volume);
 #endif
-    float maxDistance = max(volume.spacing * float(max(max(volume.gridCount.x, volume.gridCount.y), volume.gridCount.z)), volume.spacing);
+    // Probe density and transport horizon are independent. In particular, a
+    // compact refinement brick must solve the same incident-light domain as
+    // the base field it replaces; deriving this from its small grid extent
+    // turned every hit beyond the brick into a false environment miss.
+    float maxDistance = volume.maximumTraceDistance;
     bool farFieldOnlyRing = volume.spacing >= 15.999;
 #if defined(SIMPLE_DDGI_TRACE_FAR_FIELD_MODE) && SIMPLE_DDGI_TRACE_FAR_FIELD_MODE == 1
     const bool farFieldEnabled = false;

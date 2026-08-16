@@ -1,11 +1,13 @@
+using System;
 using Njulf.Rendering.Data;
 
 namespace Njulf.Rendering.Resources;
 
 /// <summary>
-/// Pure receiver-authority gate for a refinement brick. The fine field is
-/// all-or-nothing: no individual fine probe becomes visible before the global
-/// tail certificate proves the current topology and source cohort coherent.
+/// Pure receiver-authority gate for a refinement brick. No fine probe becomes
+/// visible before the global tail certificate proves the current topology and
+/// source cohort coherent. Once certified, the complete fine field may be
+/// blended against the complete base field without exposing partial probe data.
 /// </summary>
 public static class SimpleDdgiRefinementPublication
 {
@@ -29,6 +31,39 @@ public static class SimpleDdgiRefinementPublication
             SimpleDdgiTransportPhase.ParticipantReconciliation or
             SimpleDdgiTransportPhase.FailClosedRecovery or
             SimpleDdgiTransportPhase.UnsupportedTolerance;
+}
+
+/// <summary>
+/// Smooths the receiver handoff from the already-authoritative base field to a
+/// newly certified refinement field. Certification remains all-or-nothing;
+/// this state changes only the composition weight after the complete fine field
+/// is safe to sample.
+/// </summary>
+public sealed class SimpleDdgiRefinementPublicationBlendState
+{
+    // Just over one second at the capture contract's 60 Hz presentation rate.
+    // This is deliberately shorter than the 256-frame publication-liveness
+    // proof and is reset immediately by any authority revocation.
+    public const int TransitionFrameCount = 64;
+
+    public float Weight { get; private set; }
+    public bool IsComplete => Weight >= 1.0f;
+
+    public float Update(bool coherentPublication, int admittedBrickCount)
+    {
+        if (!coherentPublication || admittedBrickCount <= 0)
+        {
+            Weight = 0.0f;
+            return Weight;
+        }
+
+        Weight = MathF.Min(
+            1.0f,
+            Weight + 1.0f / TransitionFrameCount);
+        return Weight;
+    }
+
+    public void Reset() => Weight = 0.0f;
 }
 
 /// <summary>

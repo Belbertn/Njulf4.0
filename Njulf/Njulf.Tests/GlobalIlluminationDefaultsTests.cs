@@ -151,6 +151,9 @@ public sealed class GlobalIlluminationDefaultsTests
             Assert.That(settings.SimpleDdgiSourceCacheLayoutMode,
                 Is.EqualTo(SimpleDdgiSourceCacheLayoutMode.Auto));
             Assert.That(settings.SimpleDdgiRefinementBricksEnabled, Is.True);
+            Assert.That(
+                settings.SimpleDdgiRefinementMinimumEmissiveLuminanceNits,
+                Is.EqualTo(200f));
             Assert.That(settings.SimpleDdgiNearVisibilitySidecarEnabled, Is.True);
             Assert.That(settings.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold,
                 Is.EqualTo(1.0f));

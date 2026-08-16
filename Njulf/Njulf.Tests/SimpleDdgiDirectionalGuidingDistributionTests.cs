@@ -99,6 +99,38 @@ public sealed class SimpleDdgiDirectionalGuidingDistributionTests
     }
 
     [Test]
+    public void SparseGuide_ZeroDensityLeafRetainsUniformMixtureSupport()
+    {
+        var configuration =
+            SimpleDdgiGuidingDistributionConfiguration.FourByFour;
+        int litLeaf = configuration.GetLeafIndex(1, 2);
+        int darkLeaf = configuration.GetLeafIndex(3, 0);
+        double[] energy = new double[configuration.LeafCount];
+        energy[litLeaf] = 100.0d;
+        SimpleDdgiGuidingHierarchyBuildResult built =
+            SimpleDdgiGuidingQuantizedHierarchy.BuildFromLeafEnergies(
+                configuration,
+                energy);
+
+        double guidedPdf = built.Hierarchy
+            .EvaluateGuidedLeafProbability(darkLeaf) /
+            configuration.LeafSolidAngle;
+        double mixturePdf = SimpleDdgiGuidingReference.EvaluateMixturePdf(
+            guidedPdf,
+            requestedUniformFraction: 0.25d);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(built.Hierarchy.Validate().IsValid, Is.True);
+            Assert.That(guidedPdf, Is.Zero);
+            Assert.That(mixturePdf, Is.EqualTo(
+                0.25d * SimpleDdgiGuidingReference.UniformSpherePdf)
+                .Within(1.0e-15d));
+            Assert.That(mixturePdf, Is.GreaterThan(0.0d));
+        });
+    }
+
+    [Test]
     public void QuantizedHierarchy_SampleFrequencyMatchesItsOwnPublishedLeafMasses()
     {
         var configuration =
