@@ -253,6 +253,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private const int VolumeKindAuthored = 1;
         private const int VolumeKindRing = 2;
         private const int VolumeKindRefinement = 3;
+        // Camera rings use cell centres on either side of common world-aligned
+        // receiver planes. A zero/arbitrary vertical phase can place a complete
+        // probe row inside a floor and turn its rejected corners into a visible
+        // coarse-ring fallback contour across the entire receiver surface.
+        private const float CameraRingVerticalLatticePhase = 0.5f;
         private static readonly ulong ParamsSize = (ulong)Marshal.SizeOf<GPUSimpleDdgiParams>();
         private static readonly ulong VolumeStride = (ulong)Marshal.SizeOf<GPUSimpleDdgiVolume>();
         private static readonly ulong VolumePagingStride =
@@ -12742,7 +12747,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _ringOrigins[ringIndex],
                 ref _ringHasOrigins[ringIndex],
                 out bool recentered,
-                verticalHysteresisFraction);
+                verticalHysteresisFraction,
+                canonicalizeVerticalPhase: true);
             if (recentered && _ringRecenteredThisFrame && hadRingOrigin)
             {
                 origin = _ringOrigins[ringIndex];
@@ -17146,9 +17152,20 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             Vector3 currentOrigin,
             ref bool hasCurrentOrigin,
             out bool recentered,
-            float verticalHysteresisFraction = 0.25f)
+            float verticalHysteresisFraction = 0.25f,
+            bool canonicalizeVerticalPhase = false)
         {
             Vector3 desiredOrigin = ResolveDesiredSceneClampedOrigin(sceneMin, sceneMax, latticeSize, spacing, cameraPosition);
+            if (canonicalizeVerticalPhase)
+            {
+                desiredOrigin.Y = ResolvePhaseAlignedSceneClampedAxisOrigin(
+                    sceneMin.Y,
+                    sceneMax.Y,
+                    latticeSize.Y,
+                    spacing,
+                    desiredOrigin.Y,
+                    CameraRingVerticalLatticePhase);
+            }
             if (!hasCurrentOrigin)
             {
                 hasCurrentOrigin = true;
@@ -17165,8 +17182,65 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 ResolveAlignedSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, latticeSize.X, spacing, cameraPosition.X, currentOrigin.X, 0.25f),
                 ResolveAlignedSceneClampedAxisOrigin(sceneMin.Y, sceneMax.Y, latticeSize.Y, spacing, cameraPosition.Y, currentOrigin.Y, verticalHysteresisFraction),
                 ResolveAlignedSceneClampedAxisOrigin(sceneMin.Z, sceneMax.Z, latticeSize.Z, spacing, cameraPosition.Z, currentOrigin.Z, 0.25f));
+            if (canonicalizeVerticalPhase)
+            {
+                alignedOrigin.Y = ResolvePhaseAlignedSceneClampedAxisOrigin(
+                    sceneMin.Y,
+                    sceneMax.Y,
+                    latticeSize.Y,
+                    spacing,
+                    alignedOrigin.Y,
+                    CameraRingVerticalLatticePhase);
+            }
             recentered = !ApproximatelyEqual(currentOrigin, alignedOrigin);
             return recentered ? alignedOrigin : currentOrigin;
+        }
+
+        private static float ResolvePhaseAlignedSceneClampedAxisOrigin(
+            float sceneMin,
+            float sceneMax,
+            float latticeExtent,
+            float spacing,
+            float targetOrigin,
+            float latticePhase)
+        {
+            if (!float.IsFinite(sceneMin) ||
+                !float.IsFinite(sceneMax) ||
+                !float.IsFinite(latticeExtent) ||
+                !float.IsFinite(spacing) ||
+                !float.IsFinite(targetOrigin) ||
+                !float.IsFinite(latticePhase))
+            {
+                return targetOrigin;
+            }
+
+            float safeSpacing = Math.Max(spacing, 0.001f);
+            float phaseOffset = NormalizeLatticePhase(latticePhase) * safeSpacing;
+            float requestedCell = MathF.Round(
+                (targetOrigin - phaseOffset) / safeSpacing,
+                MidpointRounding.AwayFromZero);
+            if (!float.IsFinite(requestedCell))
+                return targetOrigin;
+
+            float oppositeBoundaryOrigin = sceneMax - Math.Max(latticeExtent, 0.0f);
+            float allowedOriginMin = Math.Min(sceneMin, oppositeBoundaryOrigin);
+            float allowedOriginMax = Math.Max(sceneMin, oppositeBoundaryOrigin);
+            float minimumCell = MathF.Ceiling(
+                (allowedOriginMin - phaseOffset) / safeSpacing - 0.0001f);
+            float maximumCell = MathF.Floor(
+                (allowedOriginMax - phaseOffset) / safeSpacing + 0.0001f);
+            if (float.IsFinite(minimumCell) &&
+                float.IsFinite(maximumCell) &&
+                minimumCell <= maximumCell)
+            {
+                requestedCell = Math.Clamp(
+                    requestedCell,
+                    minimumCell,
+                    maximumCell);
+            }
+
+            float alignedOrigin = phaseOffset + requestedCell * safeSpacing;
+            return float.IsFinite(alignedOrigin) ? alignedOrigin : targetOrigin;
         }
 
         private static float ResolveAlignedSceneClampedAxisOrigin(

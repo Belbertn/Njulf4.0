@@ -195,7 +195,7 @@ internal sealed class HelloGame : Game
     private const SampleLightingMode LightingMode = SampleLightingMode.DirectionalKey;
     private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
     private const SamplePerformanceScenario DefaultInteractiveScenario = SamplePerformanceScenario.Normal;
-    private const int BaselineCaptureFrameCount = 1;
+    private const int BaselineCaptureFrameCount = 900;
     internal const int BenchmarkDynamicScenarioDisturbanceFrameCount = 30;
     internal const float BenchmarkSimulationDeltaSeconds = 1.0f / 60.0f;
 
@@ -1831,6 +1831,7 @@ internal sealed class HelloGame : Game
 
         string directory = System.IO.Path.Combine(_smokeOptions.BaselineSnapshotDirectory, scenarioDirectoryName);
         _inputController.ExportPerformanceSnapshotFile(directory, label);
+        CaptureDiagnosticScreenshot(System.IO.Path.Combine(directory, "exact-camera.png"));
     }
 
     private void ValidateRuntimeServices()

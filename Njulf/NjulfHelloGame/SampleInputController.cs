@@ -117,11 +117,12 @@ internal sealed class SampleInputController
     private const float InteriorPitch = -0.12f;
     // Six metres away from the façade along the camera's backward axis exposes
     // enough floor for the directional-shadow distance transition to be visible.
-    private static readonly Vector3 SponzaRightWallPosition = new(6f, 1.35f, 0f);
+    private static readonly Vector3 SponzaRightWallPosition =
+        new(-4.2544713f, 7.4788947f, 5.079011f);
     // Turn the right-wall scenario a quarter turn into the courtyard. Keep this
     // aligned with the deterministic capture's low/high bookmarks.
-    private const float SponzaRightWallYaw = -MathF.PI * 0.5f;
-    private const float SponzaRightWallPitch = -0.16f;
+    private const float SponzaRightWallYaw = -1.5613531f;
+    private const float SponzaRightWallPitch = -0.17374074f;
     private static readonly Vector3 ForestFoliagePosition = new(0f, 1.6f, 5.5f);
     private const float ForestFoliageYaw = 0f;
     private const float ForestFoliagePitch = -0.14f;
@@ -2521,6 +2522,15 @@ internal sealed class SampleInputController
             case SamplePerformanceScenario.GiSponzaRightWallStationary:
                 ApplyPerformanceScenario(SamplePerformanceScenario.GiSponzaRightWallStationary);
                 MoveCamera(SponzaRightWallPosition, SponzaRightWallYaw, SponzaRightWallPitch);
+                _renderer.Settings.Diagnostics.DdgiForwardEstimateCountersEnabled = true;
+                _renderer.Settings.Debug.AllowGpuTiming = false;
+                if (Enum.TryParse(
+                        Environment.GetEnvironmentVariable("NJULF_EXACT_DDGI_DEBUG_VIEW"),
+                        ignoreCase: true,
+                        out GlobalIlluminationDebugView exactDebugView))
+                {
+                    _renderer.Settings.GlobalIllumination.DebugView = exactDebugView;
+                }
                 break;
             default:
                 throw new ArgumentException($"Unsupported baseline scenario '{scenario}'.", nameof(scenario));

@@ -1144,6 +1144,55 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SimpleDdgiCameraRingVerticalPhase_StraddlesWorldFloorAndRepairsPersistedOrigin()
+        {
+            const float spacing = 1.1875f;
+            CoreVector3 sceneMin = new(-17.75f, -2.5f, -10.8375f);
+            CoreVector3 sceneMax = new(17.0f, 10.0f, 12.0f);
+            CoreVector3 latticeSize = new(39.1875f, 16.625f, 26.125f);
+            CoreVector3 persistedOrigin = sceneMin;
+            bool hasOrigin = true;
+
+            CoreVector3 repaired = SimpleDdgiVolumeManager.ResolveSceneClampedOrigin(
+                sceneMin,
+                sceneMax,
+                latticeSize,
+                spacing,
+                cameraPosition: new CoreVector3(1.5483491f, 0.9458418f, 4.6801043f),
+                persistedOrigin,
+                ref hasOrigin,
+                out bool repairedPhase,
+                verticalHysteresisFraction: 0.25f,
+                canonicalizeVerticalPhase: true);
+            CoreVector3 stable = SimpleDdgiVolumeManager.ResolveSceneClampedOrigin(
+                sceneMin,
+                sceneMax,
+                latticeSize,
+                spacing,
+                cameraPosition: new CoreVector3(1.5483491f, 0.9458418f, 4.6801043f),
+                repaired,
+                ref hasOrigin,
+                out bool recenteredAgain,
+                verticalHysteresisFraction: 0.25f,
+                canonicalizeVerticalPhase: true);
+
+            float phase = repaired.Y / spacing;
+            phase -= MathF.Floor(phase);
+            Assert.Multiple(() =>
+            {
+                Assert.That(repairedPhase, Is.True);
+                Assert.That(repaired.Y, Is.EqualTo(-2.96875f).Within(1.0e-5f));
+                Assert.That(phase, Is.EqualTo(0.5f).Within(1.0e-5f));
+                Assert.That(repaired.Y + spacing * 2.0f,
+                    Is.EqualTo(-0.59375f).Within(1.0e-5f));
+                Assert.That(repaired.Y + spacing * 3.0f,
+                    Is.EqualTo(0.59375f).Within(1.0e-5f));
+                Assert.That(recenteredAgain, Is.False);
+                Assert.That(stable, Is.EqualTo(repaired));
+            });
+        }
+
+        [Test]
         public void SimpleDdgiSceneClampedOrigin_FollowsOnlyOversizedAxesAndClampsInsideScene()
         {
             bool hasOrigin = false;

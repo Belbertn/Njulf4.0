@@ -142,7 +142,8 @@ namespace Njulf.Rendering.Resources
                         ringOrigins[sourceRingIndex],
                         ref ringHasOrigins[sourceRingIndex],
                         out bool recentered,
-                        verticalHysteresis);
+                        verticalHysteresis,
+                        canonicalizeVerticalPhase: true);
                     if (recentered)
                         expectedRecenters++;
                     ringOrigins[sourceRingIndex] = origin;
