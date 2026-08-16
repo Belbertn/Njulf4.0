@@ -18,7 +18,7 @@ struct ForwardDdgiReceiverCacheSample
     vec3 EnvironmentIrradiance;
 };
 
-ForwardDdgiReceiverCacheSample SampleForwardDdgiReceiverCache(
+uint ForwardDdgiReceiverCacheEntryIndex(
     vec2 fragmentCoordinate,
     vec2 screenDimensions)
 {
@@ -30,7 +30,45 @@ ForwardDdgiReceiverCacheSample SampleForwardDdgiReceiverCache(
     // temporal sample seed when the cache and SSGI MRT are active together.
     uint fullWidth = uint(max(round(screenDimensions.x), 1.0));
     uint cacheWidth = (fullWidth + FORWARD_DDGI_RECEIVER_CACHE_SCALE - 1u) >> 1u;
-    uint entryIndex = cacheCoordinate.y * cacheWidth + cacheCoordinate.x;
+    return cacheCoordinate.y * cacheWidth + cacheCoordinate.x;
+}
+
+float SampleForwardDdgiReceiverCacheRoughSpecularVisibility(
+    vec2 fragmentCoordinate,
+    vec2 screenDimensions,
+    float perceptualRoughness)
+{
+    uint entryIndex = ForwardDdgiReceiverCacheEntryIndex(
+        fragmentCoordinate,
+        screenDimensions);
+    // The resolve output retains the gather metadata's upper-bit ABI:
+    // [ unused:10 | visibility:10 | minimum roughness:6 | full roughness:6 ].
+    // Read only this scalar before IBL; the RGB payload can stay out of the live
+    // register set until diffuse composition after the direct-light loop.
+    uint metadata = ForwardDdgiReceiverCache.Entries[entryIndex].w;
+    float indirectSpecularVisibility =
+        float((metadata >> 10u) & 0x3ffu) / 1023.0;
+    float minimumRoughness = float((metadata >> 20u) & 0x3fu) / 63.0;
+    float fullWeightRoughness = max(
+        float((metadata >> 26u) & 0x3fu) / 63.0,
+        minimumRoughness + 1.0 / 63.0);
+    float roughnessWeight = smoothstep(
+        minimumRoughness,
+        fullWeightRoughness,
+        clamp(perceptualRoughness, 0.0, 1.0));
+    return mix(
+        1.0,
+        clamp(indirectSpecularVisibility, 0.0, 1.0),
+        roughnessWeight);
+}
+
+ForwardDdgiReceiverCacheSample SampleForwardDdgiReceiverCache(
+    vec2 fragmentCoordinate,
+    vec2 screenDimensions)
+{
+    uint entryIndex = ForwardDdgiReceiverCacheEntryIndex(
+        fragmentCoordinate,
+        screenDimensions);
     // Sixteen-byte entries deliberately produce one naturally aligned vector
     // load. Only the FP16 payload lanes are consumed, allowing the driver to
     // eliminate dead upper-lane traffic while retaining aligned addressing.

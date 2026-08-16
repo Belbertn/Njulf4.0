@@ -5802,6 +5802,13 @@ namespace Njulf.Rendering
 
             DirectionalShadowMode requestedMode =
                 settings.RequestedDirectionalShadowMode;
+            float softAngularRadiusRadians =
+                Settings.Environment.SunAngularDiameterDegrees *
+                settings.DirectionalSoftAngularDiameterScale *
+                0.5f * (MathF.PI / 180f);
+            bool softCollapsesToHard =
+                requestedMode == DirectionalShadowMode.RayQuerySoft &&
+                softAngularRadiusRadians <= 1.0e-6f;
             uint maskWidth = _renderTargets?.SceneDepth.Extent.Width ??
                 sceneData.ScreenWidth;
             uint maskHeight = _renderTargets?.SceneDepth.Extent.Height ??
@@ -5862,7 +5869,8 @@ namespace Njulf.Rendering
                     maskHeight,
                     sceneData.DdgiFrameSerial,
                     requiresHistory: requestedMode ==
-                        DirectionalShadowMode.RayQuerySoft,
+                        DirectionalShadowMode.RayQuerySoft &&
+                        !softCollapsesToHard,
                     detailedDiagnostics: detailedScreenDiagnostics) == true;
             }
 
@@ -5881,11 +5889,20 @@ namespace Njulf.Rendering
                 readiness,
                 rayMaskAvailable,
                 softRayAvailable:
+                    softCollapsesToHard ||
                     _directionalShadowHistoryResources?.IsAllocated == true,
                 transparentRayReceiverRequired:
                     transparentRayReceiverRequired,
                 transparentRayVariantAvailable:
                     transparentRayVariantsAvailable);
+            if (softCollapsesToHard &&
+                resolved.Effective == DirectionalShadowMode.RayQuerySoft)
+            {
+                resolved = (
+                    DirectionalShadowMode.RayQueryHard,
+                    DirectionalShadowFallbackReason.None,
+                    "zero directional soft angular diameter resolves to deterministic hard rays");
+            }
             if (requestedMode != DirectionalShadowMode.Cascaded &&
                 !rayMaskAvailable &&
                 resolved.Reason ==
@@ -6055,8 +6072,7 @@ namespace Njulf.Rendering
                     : DirectionalShadowReceiverPolicy.DecalDepthOwnerMask,
                 ScreenResourceGeneration =
                     _directionalShadowHistoryResources?.ResourceGeneration ?? 0u,
-                SunAngularRadiusRadians = Settings.Environment.SunAngularDiameterDegrees *
-                    0.5f * (MathF.PI / 180f),
+                SunAngularRadiusRadians = softAngularRadiusRadians,
                 QualificationLevel = qualificationLevel,
                 QualificationId = qualification.QualificationId,
                 QualificationDetail = qualification.FailureDetail,
@@ -6071,6 +6087,8 @@ namespace Njulf.Rendering
                 sceneData.DirectionalShadowFramePlan.UsesScreenHistory
                     ? _directionalShadowHistoryResources?.EstimatedBytes ?? 0UL
                     : 0UL;
+            if (!sceneData.DirectionalShadowFramePlan.UsesScreenHistory)
+                _directionalShadowHistoryResources?.InvalidateHistoryState();
 
             GPUDirectionalShadowParameters parameters =
                 DirectionalShadowDataBuilder.BuildParameters(

@@ -168,7 +168,7 @@ namespace Njulf.Rendering.Data
                     rayScene.HasQualifiedBounds ? 1f : 0f),
                 RuntimeFlags = new CoreVector4(
                     csmTemporalActive ? 1f : 0f,
-                    (float)qualificationLevel,
+                    (float)settings.DirectionalPcfRadiusMode,
                     screenResourceGeneration,
                     historyValid ? 1f : 0f)
             };

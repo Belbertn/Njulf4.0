@@ -132,6 +132,27 @@ public sealed class DirectionalShadowQualificationManifestTests
         });
     }
 
+    [Test]
+    public void SettingsFingerprint_BindsAdaptiveRadiusAndFiniteSunScale()
+    {
+        var settings = new RenderSettings();
+        string baseline = DirectionalShadowSettingsFingerprint.Compute(settings);
+
+        settings.Shadows.DirectionalSoftAngularDiameterScale = 2f;
+        string scaledSun = DirectionalShadowSettingsFingerprint.Compute(settings);
+        settings.Shadows.DirectionalSoftAngularDiameterScale = 1f;
+        settings.Shadows.DirectionalPcfRadiusMode =
+            DirectionalPcfRadiusMode.Constant;
+        string constantRadius =
+            DirectionalShadowSettingsFingerprint.Compute(settings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scaledSun, Is.Not.EqualTo(baseline));
+            Assert.That(constantRadius, Is.Not.EqualTo(baseline));
+        });
+    }
+
     private string WriteManifest(
         out DirectionalShadowQualificationEntryDocument entry)
     {

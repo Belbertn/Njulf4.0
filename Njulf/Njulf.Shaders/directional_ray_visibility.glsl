@@ -39,20 +39,22 @@ uint DirectionalRayHash(uint value)
 
 vec2 DirectionalLowDiscrepancyDiskSample(
     uvec2 pixel,
-    uint frameIndex,
-    uint sampleIndex)
+    uint sequenceIndex)
 {
     uint rank = DirectionalBlueNoiseRank[(pixel.y & 7u) * 8u +
         (pixel.x & 7u)];
     uint seed = DirectionalRayHash(
         (pixel.x >> 3u) * 0x9e3779b9u ^
         (pixel.y >> 3u) * 0x85ebca6bu ^
-        frameIndex * 0xc2b2ae35u ^ rank * 0x27d4eb2du);
+        rank * 0x27d4eb2du);
     float blue = (float(rank) + 0.5) / 64.0;
     float rotation0 = fract(blue + float(seed & 0xffffu) / 65536.0);
     float rotation1 = fract(float(seed >> 16u) / 65536.0 + blue * 0.61803398875);
-    float u = fract((float(sampleIndex) + 0.5) * 0.7548776662 + rotation0);
-    float v = fract((float(sampleIndex) + 0.5) * 0.5698402909 + rotation1);
+    // Four sequence slots are reserved per temporal frame so recovery frames
+    // cannot repeat samples when their ray count differs from ordinary frames.
+    float sequence = float(sequenceIndex) + 0.5;
+    float u = fract(sequence * 0.7548776662 + rotation0);
+    float v = fract(sequence * 0.5698402909 + rotation1);
     float radius = sqrt(max(u, 0.0));
     float angle = 6.28318530718 * v;
     return radius * vec2(cos(angle), sin(angle));
@@ -76,8 +78,7 @@ vec3 DirectionalSampleSunDirection(
     vec3 bitangent = cross(centerDirection, tangent);
     vec2 disk = DirectionalLowDiscrepancyDiskSample(
         pixel,
-        frameIndex,
-        sampleIndex);
+        frameIndex * 4u + sampleIndex);
     return normalize(centerDirection +
         (tangent * disk.x + bitangent * disk.y) * tan(angularRadius));
 }

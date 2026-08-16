@@ -4085,6 +4085,37 @@ vec4 ReadDirectionalShadowRuntimeFlags()
         baseWord + uint(OFFSET_GPU_DIRECTIONAL_SHADOW_PARAMETERS_RUNTIME_FLAGS / 4));
 }
 
+int ResolveDirectionalShadowPcfRadius(
+    uint cascade,
+    int configuredRadius,
+    vec4 worldTexelSizes)
+{
+    int radius = clamp(configuredRadius, 0, 3);
+    int radiusMode = int(clamp(
+        round(ReadDirectionalShadowRuntimeFlags().y),
+        0.0,
+        1.0));
+    if (radiusMode == 0 || radius == 0)
+        return radius;
+
+    float referenceTexelSize = worldTexelSizes.x;
+    float cascadeTexelSize = worldTexelSizes[int(min(cascade, 3u))];
+    if (referenceTexelSize <= 1.0e-7 ||
+        cascadeTexelSize <= 1.0e-7 ||
+        isnan(referenceTexelSize) || isinf(referenceTexelSize) ||
+        isnan(cascadeTexelSize) || isinf(cascadeTexelSize))
+    {
+        return radius;
+    }
+
+    // Radius r spans approximately r + 1 texels from the bilinear center.
+    // Reduce that support as cascade texels grow to preserve the near-cascade
+    // world footprint while avoiding redundant far-cascade taps.
+    float targetSupport = float(radius + 1) *
+        referenceTexelSize / cascadeTexelSize;
+    return clamp(int(round(targetSupport)) - 1, 0, radius);
+}
+
 void WriteTiledLightHeader(uint tileIndex, uint lightCount, uint lightOffset, uint overflowCount)
 {
     uint baseWord = tileIndex * uint(SIZEOF_GPU_TILED_LIGHT_HEADER / 4);

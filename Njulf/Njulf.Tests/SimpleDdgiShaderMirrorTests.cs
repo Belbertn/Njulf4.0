@@ -294,6 +294,98 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void RoughIndirectSpecularVisibility_OccludesOnlyOwnedBroadLobes()
+        {
+            float blockedOwned = SimpleDdgiIndirectSpecularVisibility(
+                radiometricOwnership: 1.0f,
+                transportVisibility: 0.0f,
+                leakAttenuation: 0.05f);
+            float blockedUnsupported = SimpleDdgiIndirectSpecularVisibility(
+                radiometricOwnership: 0.0f,
+                transportVisibility: 0.0f,
+                leakAttenuation: 0.05f);
+            float blockedHalfOwned = SimpleDdgiIndirectSpecularVisibility(
+                radiometricOwnership: 0.5f,
+                transportVisibility: 0.0f,
+                leakAttenuation: 0.05f);
+            float partiallyVisible = SimpleDdgiIndirectSpecularVisibility(
+                radiometricOwnership: 1.0f,
+                transportVisibility: 0.35f,
+                leakAttenuation: 1.0f);
+            float smooth = SimpleDdgiRoughIndirectSpecularVisibility(
+                blockedOwned,
+                perceptualRoughness: 0.55f,
+                minimumRoughness: 0.55f,
+                fullWeightRoughness: 0.70f);
+            float transition = SimpleDdgiRoughIndirectSpecularVisibility(
+                blockedOwned,
+                perceptualRoughness: 0.625f,
+                minimumRoughness: 0.55f,
+                fullWeightRoughness: 0.70f);
+            float rough = SimpleDdgiRoughIndirectSpecularVisibility(
+                blockedOwned,
+                perceptualRoughness: 0.70f,
+                minimumRoughness: 0.55f,
+                fullWeightRoughness: 0.70f);
+            float enclosedUnsupported = Math.Min(blockedUnsupported, 0.10f);
+            float openOwned = Math.Min(partiallyVisible, 1.0f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(blockedOwned, Is.EqualTo(0.05f).Within(1.0e-6f));
+                Assert.That(blockedUnsupported, Is.EqualTo(1.0f).Within(1.0e-6f),
+                    "Missing DDGI coverage must leave reflection fallback open.");
+                Assert.That(blockedHalfOwned, Is.EqualTo(0.5f).Within(1.0e-6f));
+                Assert.That(partiallyVisible, Is.EqualTo(0.35f).Within(1.0e-6f),
+                    "Broad reflections must retain the field's absolute transport visibility.");
+                Assert.That(smooth, Is.EqualTo(1.0f).Within(1.0e-6f),
+                    "Scalar probe visibility must not occlude sharp mirror rays.");
+                Assert.That(transition, Is.EqualTo(0.525f).Within(1.0e-6f));
+                Assert.That(rough, Is.EqualTo(blockedOwned).Within(1.0e-6f));
+                Assert.That(enclosedUnsupported, Is.EqualTo(0.10f).Within(1.0e-6f),
+                    "Far-field enclosure must occlude the global fallback even without DDGI coverage.");
+                Assert.That(openOwned, Is.EqualTo(partiallyVisible).Within(1.0e-6f),
+                    "An open far field must not alter the existing transport signal.");
+            });
+        }
+
+        [Test]
+        public void IndirectRoughFresnel_SuppressesOnlyBroadDielectricGrazingVeil()
+        {
+            const float dielectricF0 = 0.04f;
+            float faceOn = IndirectRoughFresnel(
+                cosTheta: 1.0f,
+                f0: dielectricF0,
+                roughness: 0.70f);
+            float smoothGrazing = IndirectRoughFresnel(
+                cosTheta: 0.0f,
+                f0: dielectricF0,
+                roughness: 0.35f);
+            float roughGrazing = IndirectRoughFresnel(
+                cosTheta: 0.0f,
+                f0: dielectricF0,
+                roughness: 0.70f);
+            float standardRoughGrazing = Math.Max(1.0f - 0.70f, dielectricF0);
+            float metalGrazing = IndirectRoughFresnel(
+                cosTheta: 0.0f,
+                f0: 0.80f,
+                roughness: 0.70f);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(faceOn, Is.EqualTo(dielectricF0).Within(1.0e-6f),
+                    "The material's normal-incidence F0 must remain unchanged.");
+                Assert.That(smoothGrazing, Is.EqualTo(0.65f).Within(1.0e-6f),
+                    "Smooth indirect reflections must retain the standard endpoint.");
+                Assert.That(roughGrazing, Is.EqualTo(0.1264f).Within(1.0e-6f));
+                Assert.That(roughGrazing, Is.LessThan(standardRoughGrazing * 0.5f),
+                    "The broad dielectric lobe must no longer veil diffuse bounce.");
+                Assert.That(metalGrazing, Is.EqualTo(0.80f).Within(1.0e-6f),
+                    "High-F0 metallic reflections must retain their standard endpoint.");
+            });
+        }
+
+        [Test]
         public void VisibilitySelectedGather_NormalizesConstantIrradianceWithoutDoubleShadowing()
         {
             Vector3 irradiance = new(0.7f, 1.1f, 1.6f);
@@ -613,6 +705,12 @@ namespace Njulf.Tests
                     "weightedEnvironmentFallback"));
                 Assert.That(cache, Does.Contain(
                     "farFieldSkyVisibility = EstimateFarFieldSkyVisibility("));
+                Assert.That(cache, Does.Contain(
+                    "evaluateFarFieldFallback || indirectReflectionsActive"));
+                Assert.That(cache, Does.Contain(
+                    "environment.SpecularIntensity > 0.0"));
+                Assert.That(cache, Does.Contain(
+                    "indirectSpecularVisibility = min("));
                 Assert.That(cacheSampling, Does.Contain(
                     "layout(std430, set = 2, binding = 0) readonly buffer ForwardDdgiReceiverCacheBlock"));
                 Assert.That(cacheSampling, Does.Contain(
@@ -632,11 +730,25 @@ namespace Njulf.Tests
                 Assert.That(resolve, Does.Contain(
                     "layout(std430, set = 2, binding = 0) writeonly buffer ReceiverCacheOutputBlock"));
                 Assert.That(resolve, Does.Contain(
-                    "depthCode = packed.w"));
+                    "depthCode = packed.w & 0x3ffu"));
                 Assert.That(cache, Does.Contain(
-                    "EncodeReceiverCacheDepth(receiverDepth)"));
+                    "EncodeReceiverCacheMetadata("));
                 Assert.That(cache, Does.Contain(
                     "receiverDepth"));
+                Assert.That(cache, Does.Contain(
+                    "SimpleDdgiIndirectSpecularVisibility(gather, params)"));
+                Assert.That(resolve, Does.Contain(
+                    "float IndirectSpecularVisibility;"));
+                Assert.That(resolve, Does.Contain(
+                    "EncodeResolvedReceiverCacheMetadata(resolved)"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "SampleForwardDdgiReceiverCacheRoughSpecularVisibility("));
+                Assert.That(forward, Does.Contain(
+                    "pow(ambientOcclusion, 1.0 + roughness) * indirectSpecularVisibility"));
+                Assert.That(forward, Does.Contain(
+                    "FresnelSchlickIndirectRoughness("));
+                Assert.That(forward, Does.Contain(
+                    "min(standardGrazing, broadDielectricGrazing)"));
                 Assert.That(resolve, Does.Contain(
                     "candidateDepthCode > bestDepthCode"));
                 Assert.That(resolve, Does.Contain(
@@ -1502,7 +1614,12 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("float spatialCoverage;"));
                 Assert.That(shared, Does.Contain("float transportVisibility;"));
                 Assert.That(shared, Does.Contain("float SimpleDdgiLeakAttenuation(SimpleDdgiGatherResult gather, SimpleDdgiParams p)"));
+                Assert.That(shared, Does.Contain("float SimpleDdgiIndirectSpecularVisibility("));
+                Assert.That(shared, Does.Contain("float SimpleDdgiRoughIndirectSpecularVisibility("));
+                Assert.That(shared, Does.Contain("1.0 - ownership * (1.0 - transportVisibility)"));
                 Assert.That(shared, Does.Contain("mix(1.0, visibilityConfidence, p.thinWallLeakClampStrength)"));
+                Assert.That(forward, Does.Contain("SimpleDdgiRoughIndirectSpecularVisibility("));
+                Assert.That(forward, Does.Contain("SampleForwardDdgiReceiverCacheRoughSpecularVisibility("));
                 Assert.That(shared, Does.Contain("p.thinWallLeakClampStrength = clamp(biasLimits.z, 0.0, 1.0);"));
                 Assert.That(shared, Does.Contain("vec3 contributingVolumeColor;"));
                 Assert.That(shared, Does.Contain("uint selectedVolume;"));
@@ -3075,6 +3192,55 @@ namespace Njulf.Tests
                     Math.Clamp(thinWallLeakClampStrength, 0.0f, 1.0f)),
                 0.05f,
                 1.0f);
+
+        private static float SimpleDdgiIndirectSpecularVisibility(
+            float radiometricOwnership,
+            float transportVisibility,
+            float leakAttenuation) =>
+            Math.Clamp(
+                1.0f - Math.Clamp(radiometricOwnership, 0.0f, 1.0f) *
+                (1.0f - Math.Min(
+                    Math.Clamp(transportVisibility, 0.0f, 1.0f),
+                    Math.Clamp(leakAttenuation, 0.0f, 1.0f))),
+                0.05f,
+                1.0f);
+
+        private static float SimpleDdgiRoughIndirectSpecularVisibility(
+            float indirectSpecularVisibility,
+            float perceptualRoughness,
+            float minimumRoughness,
+            float fullWeightRoughness)
+        {
+            float minimum = Math.Clamp(minimumRoughness, 0.0f, 1.0f);
+            float full = Math.Max(fullWeightRoughness, minimum + 1.0f / 255.0f);
+            float roughnessWeight = SmoothStep(
+                minimum,
+                full,
+                Math.Clamp(perceptualRoughness, 0.0f, 1.0f));
+            return Lerp(1.0f, indirectSpecularVisibility, roughnessWeight);
+        }
+
+        private static float IndirectRoughFresnel(
+            float cosTheta,
+            float f0,
+            float roughness)
+        {
+            float perceptualRoughness = Math.Clamp(roughness, 0.0f, 1.0f);
+            float standardGrazing = Math.Max(1.0f - perceptualRoughness, f0);
+            float remainingGloss = 1.0f - perceptualRoughness;
+            float broadDielectricGrazing = f0 +
+                (1.0f - f0) * remainingGloss * remainingGloss;
+            float broadLobeWeight = SmoothStep(
+                0.35f,
+                0.70f,
+                perceptualRoughness);
+            float grazing = Lerp(
+                standardGrazing,
+                Math.Min(standardGrazing, broadDielectricGrazing),
+                broadLobeWeight);
+            return f0 + (grazing - f0) *
+                MathF.Pow(Math.Clamp(1.0f - cosTheta, 0.0f, 1.0f), 5.0f);
+        }
 
         private static Vector3 ResolveSkyVisibilityTraceOrigin(
             Vector3 worldPosition,

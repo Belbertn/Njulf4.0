@@ -302,6 +302,23 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
         _renderTargets.SceneDepth.TransitionToDepthReadOnly(commandBuffer);
         bool soft = sceneData.DirectionalShadowFramePlan.UsesSoftHistory;
         if (soft)
+        {
+            DirectionalShadowHistoryRevision revision =
+                DirectionalShadowHistoryRevision.Capture(
+                    sceneData,
+                    _historyResources,
+                    _settings.MaxShadowDistance);
+            DirectionalShadowHistoryResetReason resetReasons =
+                _historyResources.ResolveHistoryResetReasons(
+                    revision,
+                    sceneData.MotionVectorsEnabled != 0);
+            sceneData.DirectionalShadowFramePlan =
+                sceneData.DirectionalShadowFramePlan with
+                {
+                    HistoryResetReason = resetReasons
+                };
+        }
+        if (soft)
             ResetSoftTraceOutputs(
                 commandBuffer,
                 frameIndex,
@@ -357,7 +374,7 @@ public sealed unsafe class DirectionalRayShadowPass : RenderPassBase
             InstanceMask = AccelerationStructureManager
                 .DirectionalShadowInstanceMask,
             OutputMode = (uint)sceneData.DirectionalShadowFramePlan.EffectiveMode,
-            FrameIndex = sceneData.CurrentFrameIndex,
+            TemporalSampleIndex = sceneData.TemporalSampleIndex,
             TraceSampleCount = soft &&
                 sceneData.DirectionalShadowFramePlan.HistoryResetReason !=
                     DirectionalShadowHistoryResetReason.None

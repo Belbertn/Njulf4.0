@@ -80,6 +80,7 @@ layout(early_fragment_tests) in;
 #endif
 
 #include "common.glsl"
+#include "directional_csm_sampling.glsl"
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 #include "c5_receiver_payload.glsl"
 #endif
@@ -1149,33 +1150,6 @@ const uint DIRECTIONAL_SHADOW_SAMPLE_REJECT_NONE = 0u;
 const uint DIRECTIONAL_SHADOW_SAMPLE_REJECT_PROJECTION = 1u;
 const uint DIRECTIONAL_SHADOW_SAMPLE_REJECT_UV_DEPTH = 2u;
 
-float FetchDirectionalShadowDepth(
-    uint textureIndex,
-    ivec2 texel,
-    ivec2 maxTexel)
-{
-    float sampledDepth = texelFetch(
-        BindlessTextures[nonuniformEXT(int(textureIndex))],
-        clamp(texel, ivec2(0), maxTexel),
-        0).r;
-    return sampledDepth;
-}
-
-float SampleDirectionalShadowTexel(
-    uint textureIndex,
-    ivec2 texel,
-    ivec2 maxTexel,
-    float receiverDepth)
-{
-    float sampledDepth = FetchDirectionalShadowDepth(textureIndex, texel, maxTexel);
-    // The shadow raster pass already applies reverse-Z constant/slope bias and
-    // the receiver position carries the authored world-space normal bias. A
-    // second normalized-depth bias scales with the full light-space depth span
-    // (0.0005 became about 0.25 m at Sponza's 250 m range) and erases valid
-    // architectural shadows.
-    return receiverDepth >= sampledDepth ? 1.0 : 0.0;
-}
-
 float SampleDirectionalShadowTap(
     uint textureIndex,
     vec2 uv,
@@ -1194,15 +1168,36 @@ float SampleDirectionalShadowTap(
     ivec2 baseTexel = ivec2(floor(texelPosition));
     ivec2 maxTexel = ivec2(max(int(safeMapSize) - 1, 0));
     vec2 weights = fract(texelPosition);
-    float lower = mix(
-        SampleDirectionalShadowTexel(textureIndex, baseTexel, maxTexel, receiverDepth),
-        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(1, 0), maxTexel, receiverDepth),
-        weights.x);
-    float upper = mix(
-        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(0, 1), maxTexel, receiverDepth),
-        SampleDirectionalShadowTexel(textureIndex, baseTexel + ivec2(1, 1), maxTexel, receiverDepth),
-        weights.x);
-    return mix(lower, upper, weights.y);
+    vec4 compared = DirectionalShadowCompareGather(
+        DirectionalShadowGatherDepthBlock(
+            textureIndex,
+            baseTexel,
+            maxTexel,
+            safeMapSize),
+        receiverDepth);
+    vec4 tapWeights = vec4(
+        (1.0 - weights.x) * (1.0 - weights.y),
+        weights.x * (1.0 - weights.y),
+        (1.0 - weights.x) * weights.y,
+        weights.x * weights.y);
+    return dot(compared, tapWeights);
+}
+
+float DirectionalShadowPcfAxisWeight(
+    int offset,
+    int radius,
+    float fraction,
+    int filterMode)
+{
+    if (filterMode == 1)
+    {
+        return max(
+            float(radius + 1) - abs(float(offset) - fraction),
+            0.0);
+    }
+    return offset == -radius
+        ? 1.0 - fraction
+        : (offset == radius + 1 ? fraction : 1.0);
 }
 
 float SampleDirectionalShadowPcf(
@@ -1225,41 +1220,32 @@ float SampleDirectionalShadowPcf(
     // Adjacent bilinear PCF taps share their inner texels. Accumulating the
     // unique (2r + 2)^2 grid preserves the same filter while avoiding four
     // independent fetches for every tap.
-    for (int y = -safeRadius; y <= safeRadius + 1; y++)
+    for (int y = -safeRadius; y <= safeRadius + 1; y += 2)
     {
-        float weightY;
-        if (filterMode == 1)
+        float weightY0 = DirectionalShadowPcfAxisWeight(
+            y, safeRadius, weights.y, filterMode);
+        float weightY1 = DirectionalShadowPcfAxisWeight(
+            y + 1, safeRadius, weights.y, filterMode);
+        for (int x = -safeRadius; x <= safeRadius + 1; x += 2)
         {
-            float tentWidth = float(safeRadius + 1);
-            weightY = max(tentWidth - abs(float(y) - weights.y), 0.0);
-        }
-        else
-        {
-            weightY = y == -safeRadius
-                ? 1.0 - weights.y
-                : (y == safeRadius + 1 ? weights.y : 1.0);
-        }
-        for (int x = -safeRadius; x <= safeRadius + 1; x++)
-        {
-            float weightX;
-            if (filterMode == 1)
-            {
-                float tentWidth = float(safeRadius + 1);
-                weightX = max(tentWidth - abs(float(x) - weights.x), 0.0);
-            }
-            else
-            {
-                weightX = x == -safeRadius
-                    ? 1.0 - weights.x
-                    : (x == safeRadius + 1 ? weights.x : 1.0);
-            }
-            float tapWeight = weightX * weightY;
-            lit += SampleDirectionalShadowTexel(
-                textureIndex,
-                baseTexel + ivec2(x, y),
-                maxTexel,
-                receiverDepth) * tapWeight;
-            totalWeight += tapWeight;
+            float weightX0 = DirectionalShadowPcfAxisWeight(
+                x, safeRadius, weights.x, filterMode);
+            float weightX1 = DirectionalShadowPcfAxisWeight(
+                x + 1, safeRadius, weights.x, filterMode);
+            vec4 tapWeights = vec4(
+                weightX0 * weightY0,
+                weightX1 * weightY0,
+                weightX0 * weightY1,
+                weightX1 * weightY1);
+            vec4 compared = DirectionalShadowCompareGather(
+                DirectionalShadowGatherDepthBlock(
+                    textureIndex,
+                    baseTexel + ivec2(x, y),
+                    maxTexel,
+                    safeMapSize),
+                receiverDepth);
+            lit += dot(compared, tapWeights);
+            totalWeight += dot(tapWeights, vec4(1.0));
         }
     }
 
@@ -1302,7 +1288,7 @@ void InspectDirectionalShadowFootprint(
             if (weightX * weightY <= 0.0)
                 continue;
 
-            float sampledDepth = FetchDirectionalShadowDepth(
+            float sampledDepth = DirectionalShadowFetchDepth(
                 textureIndex,
                 baseTexel + ivec2(x, y),
                 maxTexel);
@@ -1368,6 +1354,10 @@ bool TrySampleDirectionalShadowCascade(
     }
 
     uint textureIndex = uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + cascade;
+    int resolvedRadius = ResolveDirectionalShadowPcfRadius(
+        cascade,
+        radius,
+        worldTexelSizes);
     diagnosticReceiverDepth = receiverDepth;
     if (collectDepthDiagnostics)
     {
@@ -1375,12 +1365,12 @@ bool TrySampleDirectionalShadowCascade(
             textureIndex,
             uv,
             mapSize,
-            radius,
+            resolvedRadius,
             diagnosticMinimumSampledDepth,
             diagnosticMaximumSampledDepth);
     }
 
-    if (radius <= 0)
+    if (resolvedRadius <= 0)
     {
         shadow = SampleDirectionalShadowTap(textureIndex, uv, receiverDepth, mapSize);
         return true;
@@ -1391,7 +1381,7 @@ bool TrySampleDirectionalShadowCascade(
         uv,
         receiverDepth,
         mapSize,
-        radius,
+        resolvedRadius,
         int(clamp(round(filterAndBias.x), 0.0, 1.0)));
     return true;
 }
@@ -1541,7 +1531,7 @@ float EvaluateDirectionalTransparentRay(
     vec4 shadowSettings = ReadShadowSettings();
     float maximumDistance = effectiveMode == 1u
         ? max(modeAndDistance.z, 0.0)
-        : max(shadowSettings.y, 0.0);
+        : max(ReadShadowCascadeTransitionData().z, 0.0);
     if (!DirectionalRayFinite(maximumDistance) || maximumDistance <= 0.0)
         return 1.0;
 
@@ -1605,7 +1595,7 @@ float EvaluateDirectionalTransparentRay(
         vec3 direction = DirectionalSampleSunDirection(
             centerDirection,
             pixel,
-            pc.Push.CurrentFrameIndex,
+            0u,
             sampleIndex,
             max(modeAndDistance.w, 0.0),
             effectiveMode == 3u);
@@ -2518,6 +2508,35 @@ vec3 FresnelSchlickRoughness(float cosTheta, vec3 f0, float roughness)
     return f0 + (max(vec3(1.0 - roughness), f0) - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+vec3 FresnelSchlickIndirectRoughness(
+    float cosTheta,
+    vec3 f0,
+    float roughness)
+{
+    float perceptualRoughness = clamp(roughness, 0.0, 1.0);
+    vec3 standardGrazing = max(
+        vec3(1.0 - perceptualRoughness),
+        f0);
+    float remainingGloss = 1.0 - perceptualRoughness;
+    vec3 broadDielectricGrazing = f0 +
+        (vec3(1.0) - f0) * remainingGloss * remainingGloss;
+    // A prefiltered cubemap has no receiver-local horizon information. The
+    // standard roughness approximation therefore turns authored rough stone
+    // into a bright, nearly uniform lobe at grazing angles. Clamp only the
+    // broad indirect dielectric endpoint: smooth lobes remain bit-identical,
+    // and high-F0 metals retain their standard endpoint through the min().
+    float broadLobeWeight = smoothstep(
+        0.35,
+        0.70,
+        perceptualRoughness);
+    vec3 grazing = mix(
+        standardGrazing,
+        min(standardGrazing, broadDielectricGrazing),
+        broadLobeWeight);
+    return f0 + (grazing - f0) *
+        pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
 vec3 RotateEnvironmentDirection(vec3 direction, float radians)
 {
     float s = sin(radians);
@@ -2820,6 +2839,7 @@ void EvaluateIbl(
     vec3 normal,
     vec3 viewDirection,
     float ambientOcclusion,
+    float indirectSpecularVisibility,
     vec3 ddgiDirectionalRadiance,
     float ddgiDirectionalConfidence,
     out vec3 diffuseIbl,
@@ -2838,7 +2858,10 @@ void EvaluateIbl(
 
     vec3 f0 = mix(dielectricF0, albedo, metallic);
     float nDotV = max(dot(normal, viewDirection), 0.0);
-    vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
+    vec3 fresnel = FresnelSchlickIndirectRoughness(
+        nDotV,
+        f0,
+        roughness);
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
     // The cache producer evaluates diffuse environment irradiance once per
     // low-frequency gather sample and preserves it separately from DDGI so
@@ -2862,7 +2885,13 @@ void EvaluateIbl(
     float globalMaxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
     float globalLod = roughness * globalMaxLod;
     vec2 brdf = texture(BindlessTextures[nonuniformEXT(environment.BrdfLutTextureIndex)], vec2(nDotV, roughness)).rg;
-    float specularOcclusion = clamp(pow(ambientOcclusion, 1.0 + roughness), 0.0, 1.0);
+    // Material/screen AO handles local creases. DDGI contributes the missing
+    // absolute transport visibility for broad reflection lobes, after local,
+    // directional, and global reflection sources have selected their shares.
+    float specularOcclusion = clamp(
+        pow(ambientOcclusion, 1.0 + roughness) * indirectSpecularVisibility,
+        0.0,
+        1.0);
 #if FORWARD_SIMPLE_OPAQUE
     specularIbl = EvaluateGlobalReflectionSpecular(
         environment,
@@ -4015,6 +4044,14 @@ void main()
 #endif
     vec3 ddgiDirectionalRadiance = vec3(0.0);
     float ddgiDirectionalConfidence = 0.0;
+    float indirectSpecularVisibility = 1.0;
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+    indirectSpecularVisibility =
+        SampleForwardDdgiReceiverCacheRoughSpecularVisibility(
+            gl_FragCoord.xy,
+            pc.Push.ScreenDimensions,
+            roughness);
+#endif
 #if !FORWARD_GLOBAL_ILLUMINATION_DISABLED && !FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
     bool directionalGlobalIlluminationEnabled = geometryDecal
         ? ForwardDecalGlobalIlluminationEnabled()
@@ -4061,6 +4098,11 @@ void main()
                 fragWorldPosition,
                 ddgiNormal,
                 viewDirection);
+            indirectSpecularVisibility =
+                SimpleDdgiRoughIndirectSpecularVisibility(
+                    precomputedSimpleDdgiGather,
+                    directionalParams,
+                    roughness);
             if (directionalConfigured)
             {
                 ddgiDirectionalRadiance =
@@ -4086,6 +4128,7 @@ void main()
         normal,
         viewDirection,
         indirectAo,
+        indirectSpecularVisibility,
         ddgiDirectionalRadiance,
         ddgiDirectionalConfidence,
         diffuseIbl,

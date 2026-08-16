@@ -73,6 +73,7 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `DirectionalCsmTemporalMode` | Optional short CSM history: `Disabled`, evidence-gated `Auto`, or explicit development-only `DeveloperForce`. |
 | `DirectionalFilterMode` | Directional-map filter: legacy box PCF or normalized tent PCF. |
 | `DirectionalBiasMode` | Directional receiver-bias interpretation: legacy clip-space values or world-texel-scaled bias for more consistent cascades. |
+| `DirectionalPcfRadiusMode` | Uses the authored radius for every cascade or reduces the radius as world texel size grows, keeping a more consistent world-space footprint and lowering far-cascade tap cost. |
 | `DirectionalShadowMapSize` | Directional shadow map resolution. |
 | `DirectionalCascadeCount` | Number of directional cascades. |
 | `MaxShadowDistance` | Maximum directional shadow distance. |
@@ -80,6 +81,7 @@ These live directly on `VulkanRenderer`, not inside `RenderSettings`.
 | `DirectionalCascadeSplitLambda` | Practical split blend between uniform (`0`) and logarithmic (`1`) cascade partitions. |
 | `DirectionalCasterExtrusionDistance` | Conservative search distance toward the sun for casters outside the receiver slice. It expands depth coverage without changing stabilized XY coverage. |
 | `DirectionalContactShadowDistance` | Maximum ray segment for `HybridContact`; bounded by `MaxShadowDistance`. |
+| `DirectionalSoftAngularDiameterScale` | Artistic multiplier for the environment sun diameter used by finite-sun shadows; clamped to `[0, 8]`. Zero resolves soft ray-query intent to hard rays. |
 | `DirectionalSoftRecoveryRayCount` | Finite-sun samples used after a history reset/rejection; clamped to 1–4. |
 | `DirectionalSoftHistoryLength` | Maximum finite-sun history age; clamped to 1–32 frames. |
 | `DirectionalSoftSpatialPassCount` | Edge-aware spatial visibility-filter passes; clamped to 0–3. |
@@ -318,7 +320,7 @@ AO debug views:
 | `SimpleDdgiDirectionalRadianceMode` | Probe incident-radiance sidecar: `Off`, validation-only `L1Reference`, or canonical RGB L2 SH. Each representation has a distinct ABI and cannot reinterpret live data from another mode. |
 | `SimpleDdgiGlossyTransportMode` | `Off`, `ReceiverOnly`, bounded `OneBounce`, or opt-in `RecursiveCertified`. Ultra defaults to `OneBounce`; High defaults to `Off` so its opaque diffuse DDGI uses the production receiver cache while C5 supplies bounded near-field detail. The directional/glossy modes remain explicit editor opt-ins on High. Recursive transport adds a four-byte F0/roughness sidecar per cached ray, includes glossy energy in the same coupled Jacobi operator and per-channel tail audit as diffuse transport, and falls back to `OneBounce` if its storage ABI or certification contract is unavailable. Schema versions before 12 migrate the former numeric recursive experiment to `OneBounce`. |
 | `SimpleDdgiDirectionalRadianceMemoryBudgetBytes` | Independent hard admission budget for the canonical 64-byte-per-probe L2 sidecar and any mode-required parity allocation. Allocation failure leaves diffuse DDGI active and disables the DDGI rough-specular source. |
-| `SimpleDdgiRoughSpecularMinimumRoughness`, `SimpleDdgiRoughSpecularFullWeightRoughness` | Lower edge and full-weight edge of the DDGI directional-radiance receiver band. DDGI ownership is exactly zero below the minimum and cross-fades to full weight over the nonzero band. Defaults are `0.55` and `0.70`. |
+| `SimpleDdgiRoughSpecularMinimumRoughness`, `SimpleDdgiRoughSpecularFullWeightRoughness` | Lower edge and full-weight edge of the DDGI broad-specular receiver band. Directional DDGI radiance, DDGI transport visibility, and the receiver cache's far-field enclosure visibility are exactly zero-weight below the minimum and cross-fade to full weight over the nonzero band, leaving sharp mirror reflections unchanged. Defaults are `0.55` and `0.70`. |
 | `DdgiSkinnedGeometryMode` | Dynamic ray-scene representation: `Excluded`, `ConservativeProxy`, or frame-slot-owned `CurrentPose` geometry built from the GPU skinning output. |
 | `DdgiTransparentGeometryMode` | `MaskOnly`, `MaskAndThin`, or stable `StochasticBlend`. Thick refraction, nested dielectric transport, caustics, and participating volumes remain unsupported and are explicitly diagnosed. |
 | `DdgiFoliageGeometryMode` | `Excluded`, `AuthoredMeshOnly`, or `AuthoredAndProceduralProxy`. Procedural proxies are generated into AS-build-capable GPU buffers from stable patch/material/seed identity. |

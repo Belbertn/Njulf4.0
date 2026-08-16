@@ -425,6 +425,7 @@ public static class DirectionalShadowSettingsFingerprint
         Append(hash, shadows.DirectionalContactShadowDistance);
         Append(hash, (uint)shadows.DirectionalFilterMode);
         Append(hash, (uint)shadows.DirectionalBiasMode);
+        Append(hash, (uint)shadows.DirectionalPcfRadiusMode);
         Append(hash, shadows.NormalBias);
         Append(hash, shadows.SlopeScaledDepthBias);
         Append(hash, shadows.ConstantDepthBias);
@@ -433,6 +434,7 @@ public static class DirectionalShadowSettingsFingerprint
         Append(hash, shadows.DirectionalSoftHistoryLength);
         Append(hash, shadows.DirectionalSoftSpatialPassCount);
         Append(hash, shadows.DirectionalTransparentSoftRayCount);
+        Append(hash, shadows.DirectionalSoftAngularDiameterScale);
         Append(hash, settings.Environment.SunAngularDiameterDegrees);
         Append(hash, (uint)settings.AntiAliasing.EffectiveMode);
         Append(hash, (uint)settings.Transparency.Mode);

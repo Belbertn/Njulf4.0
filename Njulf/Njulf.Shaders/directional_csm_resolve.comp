@@ -3,6 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "directional_csm_sampling.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -16,7 +17,7 @@ layout(push_constant) uniform DirectionalCsmResolvePushBlock
     uint OutputBufferIndex;
     uint InstanceMask;
     uint OutputMode;
-    uint FrameIndex;
+    uint TemporalSampleIndex;
     uint TraceSampleCount;
     uint DebugFlags;
 } pc;
@@ -89,13 +90,23 @@ uint SelectCascade(float distance, vec4 splits, uint cascadeCount)
     return cascadeCount - 1u;
 }
 
-float SampleShadowTexel(uint textureIndex, ivec2 texel, ivec2 maximum, float receiverDepth)
+float PcfAxisWeight(
+    int offset,
+    int radius,
+    float fraction,
+    int filterMode)
 {
-    float stored = texelFetch(
-        BindlessTextures[nonuniformEXT(int(textureIndex))],
-        clamp(texel, ivec2(0), maximum),
-        0).r;
-    return receiverDepth >= stored ? 1.0 : 0.0;
+    if (radius == 0)
+        return offset == 0 ? 1.0 - fraction : fraction;
+    if (filterMode == 1)
+    {
+        return max(
+            float(radius + 1) - abs(float(offset) - fraction),
+            0.0);
+    }
+    return offset == -radius
+        ? 1.0 - fraction
+        : (offset == radius + 1 ? fraction : 1.0);
 }
 
 float SampleCascade(uint cascade, vec3 worldPosition, vec3 normal, out bool valid)
@@ -131,32 +142,41 @@ float SampleCascade(uint cascade, vec3 worldPosition, vec3 normal, out bool vali
     ivec2 base = ivec2(floor(texelPosition));
     ivec2 maximum = ivec2(max(int(mapSize) - 1, 0));
     vec2 fraction = fract(texelPosition);
-    int radius = int(clamp(round(shadowSettings.w), 0.0, 3.0));
+    int radius = ResolveDirectionalShadowPcfRadius(
+        cascade,
+        int(clamp(round(shadowSettings.w), 0.0, 3.0)),
+        texelSizes);
     int minimumOffset = radius == 0 ? 0 : -radius;
     int maximumOffset = radius == 0 ? 1 : radius + 1;
+    int filterMode = int(clamp(round(filterAndBias.x), 0.0, 1.0));
     float visibility = 0.0;
     float totalWeight = 0.0;
-    for (int y = minimumOffset; y <= maximumOffset; y++)
+    for (int y = minimumOffset; y <= maximumOffset; y += 2)
     {
-        float weightY = radius == 0
-            ? (y == 0 ? 1.0 - fraction.y : fraction.y)
-            : (int(round(filterAndBias.x)) == 1
-                ? max(float(radius + 1) - abs(float(y) - fraction.y), 0.0)
-                : (y == -radius ? 1.0 - fraction.y : (y == radius + 1 ? fraction.y : 1.0)));
-        for (int x = minimumOffset; x <= maximumOffset; x++)
+        float weightY0 = PcfAxisWeight(
+            y, radius, fraction.y, filterMode);
+        float weightY1 = PcfAxisWeight(
+            y + 1, radius, fraction.y, filterMode);
+        for (int x = minimumOffset; x <= maximumOffset; x += 2)
         {
-            float weightX = radius == 0
-                ? (x == 0 ? 1.0 - fraction.x : fraction.x)
-                : (int(round(filterAndBias.x)) == 1
-                    ? max(float(radius + 1) - abs(float(x) - fraction.x), 0.0)
-                    : (x == -radius ? 1.0 - fraction.x : (x == radius + 1 ? fraction.x : 1.0)));
-            float weight = weightX * weightY;
-            visibility += SampleShadowTexel(
-                uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + cascade,
-                base + ivec2(x, y),
-                maximum,
-                coordinate.z) * weight;
-            totalWeight += weight;
+            float weightX0 = PcfAxisWeight(
+                x, radius, fraction.x, filterMode);
+            float weightX1 = PcfAxisWeight(
+                x + 1, radius, fraction.x, filterMode);
+            vec4 weights = vec4(
+                weightX0 * weightY0,
+                weightX1 * weightY0,
+                weightX0 * weightY1,
+                weightX1 * weightY1);
+            vec4 compared = DirectionalShadowCompareGather(
+                DirectionalShadowGatherDepthBlock(
+                    uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + cascade,
+                    base + ivec2(x, y),
+                    maximum,
+                    mapSize),
+                coordinate.z);
+            visibility += dot(compared, weights);
+            totalWeight += dot(weights, vec4(1.0));
         }
     }
     return visibility / max(totalWeight, 1.0e-6);

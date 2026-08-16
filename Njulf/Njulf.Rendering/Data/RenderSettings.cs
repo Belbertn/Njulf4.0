@@ -74,6 +74,16 @@ namespace Njulf.Rendering.Data
         WorldTexelScaled = 1
     }
 
+    /// <summary>
+    /// Controls whether every cascade uses the authored PCF radius or keeps a
+    /// roughly constant world-space filter footprint as texel size grows.
+    /// </summary>
+    public enum DirectionalPcfRadiusMode : uint
+    {
+        Constant = 0,
+        WorldSpaceAdaptive = 1
+    }
+
     public sealed class ShadowSettings
     {
         public const int MaxDirectionalCascades = 4;
@@ -97,6 +107,9 @@ namespace Njulf.Rendering.Data
             DirectionalShadowFilterMode.LegacyBoxPcf;
         private DirectionalShadowBiasMode _directionalBiasMode =
             DirectionalShadowBiasMode.Legacy;
+        private DirectionalPcfRadiusMode _directionalPcfRadiusMode =
+            DirectionalPcfRadiusMode.Constant;
+        private float _directionalSoftAngularDiameterScale = 1f;
         private float _normalBias = 0.03f;
         private float _slopeScaledDepthBias = 1.5f;
         private float _constantDepthBias = 0.0005f;
@@ -175,6 +188,16 @@ namespace Njulf.Rendering.Data
                     : DirectionalShadowBiasMode.Legacy;
         }
 
+        public DirectionalPcfRadiusMode DirectionalPcfRadiusMode
+        {
+            get => _directionalPcfRadiusMode;
+            set => _directionalPcfRadiusMode = value is
+                DirectionalPcfRadiusMode.Constant or
+                DirectionalPcfRadiusMode.WorldSpaceAdaptive
+                    ? value
+                    : DirectionalPcfRadiusMode.Constant;
+        }
+
         public uint DirectionalShadowMapSize
         {
             get => _directionalShadowMapSize;
@@ -239,6 +262,19 @@ namespace Njulf.Rendering.Data
         {
             get => MathF.Min(_directionalContactShadowDistance, MaxShadowDistance);
             set => _directionalContactShadowDistance = Clamp(value, 0.1f, 100f);
+        }
+
+        /// <summary>
+        /// Artistic multiplier for the environment sun diameter used by
+        /// finite-sun ray-query shadows. Zero intentionally resolves the soft
+        /// mode to deterministic hard rays.
+        /// </summary>
+        public float DirectionalSoftAngularDiameterScale
+        {
+            get => _directionalSoftAngularDiameterScale;
+            set => _directionalSoftAngularDiameterScale = float.IsFinite(value)
+                ? Math.Clamp(value, 0f, 8f)
+                : 1f;
         }
 
         /// <summary>Additional finite-sun rays used after history rejection.</summary>
@@ -4763,7 +4799,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 12;
+        public const int SerializationVersion = 13;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -4916,6 +4952,12 @@ namespace Njulf.Rendering.Data
                     Foliage.MaxVisibleMeshletDraws = 131072;
                     AntiAliasing.Mode = AntiAliasingMode.Fxaa;
                     Shadows.DirectionalCascadeCount = 1;
+                    Shadows.DirectionalFilterMode =
+                        DirectionalShadowFilterMode.LegacyBoxPcf;
+                    Shadows.DirectionalBiasMode =
+                        DirectionalShadowBiasMode.Legacy;
+                    Shadows.DirectionalPcfRadiusMode =
+                        DirectionalPcfRadiusMode.Constant;
                     Shadows.SpotShadowsEnabled = false;
                     Shadows.MaxShadowedSpotLights = 0;
                     Shadows.PointShadowsEnabled = false;
@@ -4972,6 +5014,12 @@ namespace Njulf.Rendering.Data
                     Foliage.MaxVisibleMeshletDraws = 262144;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
                     Shadows.DirectionalCascadeCount = 2;
+                    Shadows.DirectionalFilterMode =
+                        DirectionalShadowFilterMode.TentPcf;
+                    Shadows.DirectionalBiasMode =
+                        DirectionalShadowBiasMode.WorldTexelScaled;
+                    Shadows.DirectionalPcfRadiusMode =
+                        DirectionalPcfRadiusMode.WorldSpaceAdaptive;
                     Shadows.SpotShadowsEnabled = true;
                     Shadows.PointShadowsEnabled = true;
                     Shadows.MaxShadowedSpotLights = 2;
@@ -5027,6 +5075,12 @@ namespace Njulf.Rendering.Data
                     Foliage.MaxVisibleMeshletDraws = 524288;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaHigh;
                     Shadows.DirectionalCascadeCount = 3;
+                    Shadows.DirectionalFilterMode =
+                        DirectionalShadowFilterMode.TentPcf;
+                    Shadows.DirectionalBiasMode =
+                        DirectionalShadowBiasMode.WorldTexelScaled;
+                    Shadows.DirectionalPcfRadiusMode =
+                        DirectionalPcfRadiusMode.WorldSpaceAdaptive;
                     Shadows.SpotShadowsEnabled = true;
                     Shadows.PointShadowsEnabled = true;
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 3);
@@ -5080,6 +5134,12 @@ namespace Njulf.Rendering.Data
                     Foliage.MaxVisibleMeshletDraws = 1048576;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaHigh;
                     Shadows.DirectionalCascadeCount = ShadowSettings.MaxDirectionalCascades;
+                    Shadows.DirectionalFilterMode =
+                        DirectionalShadowFilterMode.TentPcf;
+                    Shadows.DirectionalBiasMode =
+                        DirectionalShadowBiasMode.WorldTexelScaled;
+                    Shadows.DirectionalPcfRadiusMode =
+                        DirectionalPcfRadiusMode.WorldSpaceAdaptive;
                     Shadows.SpotShadowsEnabled = true;
                     Shadows.PointShadowsEnabled = true;
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 4);
@@ -5138,6 +5198,12 @@ namespace Njulf.Rendering.Data
                     Foliage.MaxVisibleMeshletDraws = 524288;
                     AntiAliasing.Mode = AntiAliasingMode.SmaaMedium;
                     Shadows.DirectionalCascadeCount = 2;
+                    Shadows.DirectionalFilterMode =
+                        DirectionalShadowFilterMode.TentPcf;
+                    Shadows.DirectionalBiasMode =
+                        DirectionalShadowBiasMode.WorldTexelScaled;
+                    Shadows.DirectionalPcfRadiusMode =
+                        DirectionalPcfRadiusMode.WorldSpaceAdaptive;
                     Shadows.SpotShadowsEnabled = true;
                     Shadows.PointShadowsEnabled = true;
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 2);
@@ -5333,7 +5399,9 @@ namespace Njulf.Rendering.Data
             // Version 10 adds requested advanced-GI modes plus evidence IDs;
             // the previous experiment booleans remain read-compatible aliases.
             // Version 11 replaces the directional ShadowsEnabled scalar with a
-            // complete nested directional-shadow production contract.
+            // complete nested directional-shadow production contract. Version
+            // 13 adds finite-sun diameter scaling and adaptive per-cascade PCF;
+            // older nested shadow objects default to scale 1 and constant radius.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -5434,6 +5502,9 @@ namespace Njulf.Rendering.Data
                         DirectionalShadowFilterMode.LegacyBoxPcf;
                     settings.Shadows.DirectionalBiasMode =
                         DirectionalShadowBiasMode.Legacy;
+                    settings.Shadows.DirectionalPcfRadiusMode =
+                        DirectionalPcfRadiusMode.Constant;
+                    settings.Shadows.DirectionalSoftAngularDiameterScale = 1f;
                 }
                 settings.Particles.Enabled = ParticlesEnabled;
                 if (TransparentReceiveGlobalIllumination.HasValue)
@@ -5471,6 +5542,8 @@ namespace Njulf.Rendering.Data
                 DirectionalShadowFilterMode.LegacyBoxPcf;
             public DirectionalShadowBiasMode DirectionalBiasMode { get; init; } =
                 DirectionalShadowBiasMode.Legacy;
+            public DirectionalPcfRadiusMode DirectionalPcfRadiusMode { get; init; } =
+                DirectionalPcfRadiusMode.Constant;
             public uint DirectionalShadowMapSize { get; init; } = 2048;
             public int DirectionalCascadeCount { get; init; } = 2;
             public float MaxShadowDistance { get; init; } = 80f;
@@ -5478,6 +5551,7 @@ namespace Njulf.Rendering.Data
             public float DirectionalCascadeSplitLambda { get; init; } = 0.5f;
             public float DirectionalCasterExtrusionDistance { get; init; } = 80f;
             public float DirectionalContactShadowDistance { get; init; } = 3f;
+            public float DirectionalSoftAngularDiameterScale { get; init; } = 1f;
             public int DirectionalSoftRecoveryRayCount { get; init; } = 2;
             public int DirectionalSoftHistoryLength { get; init; } = 16;
             public int DirectionalSoftSpatialPassCount { get; init; } = 3;
@@ -5494,6 +5568,7 @@ namespace Njulf.Rendering.Data
                 DirectionalCsmTemporalMode = settings.DirectionalCsmTemporalMode,
                 DirectionalFilterMode = settings.DirectionalFilterMode,
                 DirectionalBiasMode = settings.DirectionalBiasMode,
+                DirectionalPcfRadiusMode = settings.DirectionalPcfRadiusMode,
                 DirectionalShadowMapSize = settings.DirectionalShadowMapSize,
                 DirectionalCascadeCount = settings.DirectionalCascadeCount,
                 MaxShadowDistance = settings.MaxShadowDistance,
@@ -5501,6 +5576,7 @@ namespace Njulf.Rendering.Data
                 DirectionalCascadeSplitLambda = settings.DirectionalCascadeSplitLambda,
                 DirectionalCasterExtrusionDistance = settings.DirectionalCasterExtrusionDistance,
                 DirectionalContactShadowDistance = settings.DirectionalContactShadowDistance,
+                DirectionalSoftAngularDiameterScale = settings.DirectionalSoftAngularDiameterScale,
                 DirectionalSoftRecoveryRayCount = settings.DirectionalSoftRecoveryRayCount,
                 DirectionalSoftHistoryLength = settings.DirectionalSoftHistoryLength,
                 DirectionalSoftSpatialPassCount = settings.DirectionalSoftSpatialPassCount,
@@ -5518,6 +5594,7 @@ namespace Njulf.Rendering.Data
                 settings.DirectionalCsmTemporalMode = DirectionalCsmTemporalMode;
                 settings.DirectionalFilterMode = DirectionalFilterMode;
                 settings.DirectionalBiasMode = DirectionalBiasMode;
+                settings.DirectionalPcfRadiusMode = DirectionalPcfRadiusMode;
                 settings.DirectionalShadowMapSize = DirectionalShadowMapSize;
                 settings.DirectionalCascadeCount = DirectionalCascadeCount;
                 settings.MaxShadowDistance = MaxShadowDistance;
@@ -5525,6 +5602,7 @@ namespace Njulf.Rendering.Data
                 settings.DirectionalCascadeSplitLambda = DirectionalCascadeSplitLambda;
                 settings.DirectionalCasterExtrusionDistance = DirectionalCasterExtrusionDistance;
                 settings.DirectionalContactShadowDistance = DirectionalContactShadowDistance;
+                settings.DirectionalSoftAngularDiameterScale = DirectionalSoftAngularDiameterScale;
                 settings.DirectionalSoftRecoveryRayCount = DirectionalSoftRecoveryRayCount;
                 settings.DirectionalSoftHistoryLength = DirectionalSoftHistoryLength;
                 settings.DirectionalSoftSpatialPassCount = DirectionalSoftSpatialPassCount;

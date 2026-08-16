@@ -13,7 +13,8 @@ public sealed class DirectionalShadowContractsTests
         {
             RequestedDirectionalShadowMode = (DirectionalShadowMode)99,
             DirectionalFilterMode = (DirectionalShadowFilterMode)99,
-            DirectionalBiasMode = (DirectionalShadowBiasMode)99
+            DirectionalBiasMode = (DirectionalShadowBiasMode)99,
+            DirectionalPcfRadiusMode = (DirectionalPcfRadiusMode)99
         };
 
         Assert.Multiple(() =>
@@ -24,6 +25,8 @@ public sealed class DirectionalShadowContractsTests
                 Is.EqualTo(DirectionalShadowFilterMode.LegacyBoxPcf));
             Assert.That(settings.DirectionalBiasMode,
                 Is.EqualTo(DirectionalShadowBiasMode.Legacy));
+            Assert.That(settings.DirectionalPcfRadiusMode,
+                Is.EqualTo(DirectionalPcfRadiusMode.Constant));
         });
     }
 

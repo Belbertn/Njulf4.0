@@ -215,8 +215,7 @@ void main()
 
         uint rejection = 0u;
         bool historyValid = currentValid && previousInside && previousValid &&
-            pc.ResetReasons == 0u &&
-            previousAge < max(pc.MaximumHistoryAge, 1u);
+            pc.ResetReasons == 0u;
         if (historyValid && previousSignature != (currentSignature & 0xffu))
         {
             historyValid = false;
@@ -235,13 +234,6 @@ void main()
             historyValid = false;
             rejection = 3u;
         }
-        if (historyValid && mod(pc.TemporalKind, 2.0) < 0.5)
-        {
-            float blockerThreshold = max(0.05, currentHitDistance * 0.10);
-            if (abs(previousDistance.x - currentHitDistance) > blockerThreshold)
-                historyValid = false;
-        }
-
         float neighborhoodMinimum = currentVisibility;
         float neighborhoodMaximum = currentVisibility;
         for (int y = -1; y <= 1; y++)
@@ -263,8 +255,13 @@ void main()
             neighborhoodMinimum,
             neighborhoodMaximum);
         float ageWeight = float(previousAge) / float(previousAge + 1u);
+        float boundedHistoryWeight = pc.MaximumHistoryAge <= 1u
+            ? 0.0
+            : 1.0 - 1.0 / float(pc.MaximumHistoryAge);
         float historyWeight = historyValid
-            ? min(clamp(pc.MaximumHistoryWeight, 0.0, 0.98), ageWeight)
+            ? min(
+                min(clamp(pc.MaximumHistoryWeight, 0.0, 0.98), boundedHistoryWeight),
+                ageWeight)
             : 0.0;
         float resolvedVisibility = mix(
             currentVisibility,
@@ -274,11 +271,26 @@ void main()
             currentVisibility * currentVisibility,
             max(previousMoments.y, previousMoments.x * previousMoments.x),
             historyWeight);
-        float resolvedHitDistance = mix(
-            currentHitDistance,
-            previousDistance.x,
-            historyWeight);
-        uint resolvedAge = historyValid ? min(previousAge + 1u, 31u) : 1u;
+        bool currentHasBlocker = currentVisibility < 0.999 &&
+            currentHitDistance < pc.CameraPositionAndMaximumDistance.w;
+        bool historyHasBlocker = previousMoments.x < 0.999 &&
+            previousDistance.x < pc.CameraPositionAndMaximumDistance.w;
+        float resolvedHitDistance = currentHitDistance;
+        if (currentHasBlocker && historyValid && historyHasBlocker)
+        {
+            resolvedHitDistance = mix(
+                currentHitDistance,
+                previousDistance.x,
+                historyWeight);
+        }
+        else if (!currentHasBlocker && historyValid && historyHasBlocker)
+        {
+            resolvedHitDistance = previousDistance.x;
+        }
+        uint maximumAge = min(max(pc.MaximumHistoryAge, 1u), 31u);
+        uint resolvedAge = historyValid
+            ? min(previousAge + 1u, maximumAge)
+            : 1u;
 
         WriteStorageWord(
             pc.CurrentHistoryBufferIndex,

@@ -21,7 +21,7 @@ layout(push_constant) uniform DirectionalRayShadowPushBlock
     uint OutputBufferIndex;
     uint InstanceMask;
     uint OutputMode;
-    uint FrameIndex;
+    uint TemporalSampleIndex;
     uint TraceSampleCount;
     uint DebugFlags;
 } pc;
@@ -37,6 +37,18 @@ const uint COUNTER_ALPHA_SAMPLES = 5u;
 const uint COUNTER_CAP_HITS = 6u;
 const uint COUNTER_INVALID_RECEIVERS = 7u;
 const uint COUNTER_BOUNDS_REJECTIONS = 8u;
+
+shared uint PackedVisibilityBytes[64];
+
+uint OutputFrameBank()
+{
+    uint baseIndex = pc.OutputMode == 3u
+        ? uint(DIRECTIONAL_SHADOW_RAW_BUFFER_BASE_INDEX)
+        : uint(DIRECTIONAL_RAY_SHADOW_MASK_BUFFER_BASE_INDEX);
+    return min(
+        pc.OutputBufferIndex >= baseIndex ? pc.OutputBufferIndex - baseIndex : 0u,
+        uint(FRAMES_IN_FLIGHT - 1));
+}
 
 #if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
 shared uint WorkgroupCounters[COUNTER_COUNT];
@@ -134,11 +146,11 @@ bool ReconstructNormalAndFootprint(
     return true;
 }
 
-void WritePackedVisibility(uint pixelIndex, float visibility)
+void WritePackedVisibilityAtomic(uint pixelIndex, uint visibilityByte)
 {
     uint wordIndex = pixelIndex / PIXELS_PER_WORD;
     uint byteShift = (pixelIndex % PIXELS_PER_WORD) * 8u;
-    uint packed = uint(round(clamp(visibility, 0.0, 1.0) * 255.0)) << byteShift;
+    uint packed = visibilityByte << byteShift;
     if (packed != 0u)
     {
         atomicOr(
@@ -164,13 +176,14 @@ void WriteResult(
     }
     else
     {
-        WritePackedVisibility(pixelIndex, visibility);
+        PackedVisibilityBytes[gl_LocalInvocationIndex] =
+            uint(round(clamp(visibility, 0.0, 1.0) * 255.0));
     }
 
     if ((pc.DebugFlags & 1u) != 0u)
     {
         uint diagnosticIndex = uint(DIRECTIONAL_SHADOW_DIAGNOSTIC_BUFFER_BASE_INDEX) +
-            min(pc.FrameIndex, uint(FRAMES_IN_FLIGHT - 1));
+            OutputFrameBank();
         uint normalizedHit = uint(round(clamp(
             hitDistance / max(pc.RayDirectionAndMaximumDistance.w, 0.0001),
             0.0,
@@ -185,6 +198,7 @@ void WriteResult(
 void main()
 {
     uint localIndex = gl_LocalInvocationIndex;
+    PackedVisibilityBytes[localIndex] = 0u;
 #if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
     if (localIndex < COUNTER_COUNT)
         WorkgroupCounters[localIndex] = 0u;
@@ -284,7 +298,7 @@ void main()
                         vec3 sampleDirection = DirectionalSampleSunDirection(
                             centerDirection,
                             pixel,
-                            pc.FrameIndex,
+                            pc.TemporalSampleIndex,
                             sampleIndex,
                             max(ReadDirectionalShadowModeAndRayDistance().w, 0.0),
                             pc.OutputMode == 3u);
@@ -345,13 +359,42 @@ void main()
         }
     }
 
-#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
+    // Normal render extents are four-pixel aligned. One lane then owns each
+    // packed word, replacing four contending device-memory atomics with a
+    // shared-memory gather and one ordinary store. Preserve correctness for a
+    // rare unaligned extent with the old byte-atomic fallback.
     barrier();
+    if (pc.OutputMode != 3u)
+    {
+        if ((pc.ScreenWidth & 3u) == 0u)
+        {
+            if ((gl_LocalInvocationID.x & 3u) == 0u &&
+                pixel.x < pc.ScreenWidth && pixel.y < pc.ScreenHeight)
+            {
+                uint packed =
+                    (PackedVisibilityBytes[localIndex + 0u] & 0xffu) |
+                    ((PackedVisibilityBytes[localIndex + 1u] & 0xffu) << 8u) |
+                    ((PackedVisibilityBytes[localIndex + 2u] & 0xffu) << 16u) |
+                    ((PackedVisibilityBytes[localIndex + 3u] & 0xffu) << 24u);
+                uint pixelIndex = pixel.y * pc.ScreenWidth + pixel.x;
+                WriteStorageWord(pc.OutputBufferIndex, pixelIndex >> 2u, packed);
+            }
+        }
+        else if (invocationInBounds)
+        {
+            uint pixelIndex = pixel.y * pc.ScreenWidth + pixel.x;
+            WritePackedVisibilityAtomic(
+                pixelIndex,
+                PackedVisibilityBytes[localIndex]);
+        }
+    }
+
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
     if ((pc.DebugFlags & 2u) != 0u &&
         localIndex < COUNTER_COUNT && WorkgroupCounters[localIndex] != 0u)
     {
         uint counterBuffer = uint(DIRECTIONAL_SHADOW_COUNTER_BUFFER_BASE_INDEX) +
-            min(pc.FrameIndex, uint(FRAMES_IN_FLIGHT - 1));
+            OutputFrameBank();
         atomicAdd(
             BindlessStorageBuffers[nonuniformEXT(counterBuffer)].Words[localIndex],
             WorkgroupCounters[localIndex]);

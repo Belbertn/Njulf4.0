@@ -5129,6 +5129,41 @@ float SimpleDdgiLeakAttenuation(SimpleDdgiGatherResult gather, SimpleDdgiParams 
         1.0);
 }
 
+float SimpleDdgiIndirectSpecularVisibility(
+    SimpleDdgiGatherResult gather,
+    SimpleDdgiParams p)
+{
+    // Reflection probes and the global environment are alternative radiance
+    // sources, but neither source knows whether DDGI found that the receiver's
+    // surrounding transport is blocked. Apply the same absolute visibility
+    // authority after source selection. Only the DDGI-owned share is allowed to
+    // darken: unavailable probe coverage remains a fail-open reflection rather
+    // than turning clipmap edges or freshly exposed cells into dark patches.
+    float ownership = clamp(SimpleDdgiRadiometricOwnership(gather), 0.0, 1.0);
+    float leakAttenuation = clamp(SimpleDdgiLeakAttenuation(gather, p), 0.0, 1.0);
+    float transportVisibility = min(
+        clamp(gather.transportVisibility, 0.0, 1.0),
+        leakAttenuation);
+    return clamp(1.0 - ownership * (1.0 - transportVisibility), 0.05, 1.0);
+}
+
+float SimpleDdgiRoughIndirectSpecularVisibility(
+    SimpleDdgiGatherResult gather,
+    SimpleDdgiParams p,
+    float perceptualRoughness)
+{
+    // Scalar probe visibility is suitable for a broad rough lobe, not a sharp
+    // mirror ray. Cross-fade over the existing rough-specular receiver band so
+    // smooth conductors and intentional polished reflections remain unchanged.
+    float roughnessWeight = SimpleDdgiRoughSpecularWeight(
+        p.residencyFlags,
+        perceptualRoughness);
+    return mix(
+        1.0,
+        SimpleDdgiIndirectSpecularVisibility(gather, p),
+        roughnessWeight);
+}
+
 uint SimpleDdgiProbeGatherRejectionMask(SimpleDdgiProbeState state, vec4 irradiance);
 bool SimpleDdgiProbeStateSupportsGather(SimpleDdgiProbeState state);
 

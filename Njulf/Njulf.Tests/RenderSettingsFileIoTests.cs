@@ -82,7 +82,7 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(12));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(13));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));
@@ -107,6 +107,8 @@ public sealed class RenderSettingsFileIoTests
             shadows.RequestedDirectionalShadowMode = DirectionalShadowMode.RayQuerySoft;
             shadows.DirectionalFilterMode = DirectionalShadowFilterMode.TentPcf;
             shadows.DirectionalBiasMode = DirectionalShadowBiasMode.WorldTexelScaled;
+            shadows.DirectionalPcfRadiusMode =
+                DirectionalPcfRadiusMode.WorldSpaceAdaptive;
             shadows.DirectionalShadowMapSize = 4096;
             shadows.DirectionalCascadeCount = 4;
             shadows.MaxShadowDistance = 220f;
@@ -114,6 +116,7 @@ public sealed class RenderSettingsFileIoTests
             shadows.DirectionalCascadeSplitLambda = 0.72f;
             shadows.DirectionalCasterExtrusionDistance = 350f;
             shadows.DirectionalContactShadowDistance = 4.5f;
+            shadows.DirectionalSoftAngularDiameterScale = 2.5f;
             shadows.NormalBias = 0.045f;
             shadows.SlopeScaledDepthBias = 2.25f;
             shadows.ConstantDepthBias = 0.00075f;
@@ -131,6 +134,8 @@ public sealed class RenderSettingsFileIoTests
                     Is.EqualTo(DirectionalShadowFilterMode.TentPcf));
                 Assert.That(loaded.DirectionalBiasMode,
                     Is.EqualTo(DirectionalShadowBiasMode.WorldTexelScaled));
+                Assert.That(loaded.DirectionalPcfRadiusMode,
+                    Is.EqualTo(DirectionalPcfRadiusMode.WorldSpaceAdaptive));
                 Assert.That(loaded.DirectionalShadowMapSize, Is.EqualTo(4096u));
                 Assert.That(loaded.DirectionalCascadeCount, Is.EqualTo(4));
                 Assert.That(loaded.MaxShadowDistance, Is.EqualTo(220f));
@@ -138,6 +143,8 @@ public sealed class RenderSettingsFileIoTests
                 Assert.That(loaded.DirectionalCascadeSplitLambda, Is.EqualTo(0.72f));
                 Assert.That(loaded.DirectionalCasterExtrusionDistance, Is.EqualTo(350f));
                 Assert.That(loaded.DirectionalContactShadowDistance, Is.EqualTo(4.5f));
+                Assert.That(loaded.DirectionalSoftAngularDiameterScale,
+                    Is.EqualTo(2.5f));
                 Assert.That(loaded.NormalBias, Is.EqualTo(0.045f));
                 Assert.That(loaded.SlopeScaledDepthBias, Is.EqualTo(2.25f));
                 Assert.That(loaded.ConstantDepthBias, Is.EqualTo(0.00075f));
@@ -177,6 +184,45 @@ public sealed class RenderSettingsFileIoTests
                     Is.EqualTo(DirectionalShadowFilterMode.LegacyBoxPcf));
                 Assert.That(loaded.DirectionalBiasMode,
                     Is.EqualTo(DirectionalShadowBiasMode.Legacy));
+                Assert.That(loaded.DirectionalPcfRadiusMode,
+                    Is.EqualTo(DirectionalPcfRadiusMode.Constant));
+                Assert.That(loaded.DirectionalSoftAngularDiameterScale,
+                    Is.EqualTo(1f));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_Version12ShadowObjectMigratesNewControlsToLegacyParity()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "version-12-shadows.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 12,
+                  "QualityPreset": 3,
+                  "Shadows": {
+                    "DirectionalShadowsEnabled": true,
+                    "RequestedDirectionalShadowMode": 3,
+                    "DirectionalFilterMode": 1,
+                    "DirectionalBiasMode": 1
+                  }
+                }
+                """);
+
+            ShadowSettings loaded = RenderSettings.Load(path).Shadows;
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.DirectionalPcfRadiusMode,
+                    Is.EqualTo(DirectionalPcfRadiusMode.Constant));
+                Assert.That(loaded.DirectionalSoftAngularDiameterScale,
+                    Is.EqualTo(1f));
             });
         }
         finally
@@ -483,6 +529,46 @@ public sealed class RenderSettingsFileIoTests
         settings.ApplyQualityPreset(RenderQualityPreset.Ultra);
         Assert.That(settings.Transparency.ReceiveGlobalIllumination, Is.True);
         Assert.That(settings.Decals.ReceiveGlobalIllumination, Is.True);
+    }
+
+    [Test]
+    public void QualityPresets_UseAdaptiveTentDirectionalFilteringAboveLow()
+    {
+        var settings = new RenderSettings();
+
+        settings.ApplyQualityPreset(RenderQualityPreset.Low);
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Shadows.DirectionalFilterMode,
+                Is.EqualTo(DirectionalShadowFilterMode.LegacyBoxPcf));
+            Assert.That(settings.Shadows.DirectionalBiasMode,
+                Is.EqualTo(DirectionalShadowBiasMode.Legacy));
+            Assert.That(settings.Shadows.DirectionalPcfRadiusMode,
+                Is.EqualTo(DirectionalPcfRadiusMode.Constant));
+        });
+
+        foreach (RenderQualityPreset preset in new[]
+                 {
+                     RenderQualityPreset.Medium,
+                     RenderQualityPreset.High,
+                     RenderQualityPreset.DdgiHigh,
+                     RenderQualityPreset.Ultra
+                 })
+        {
+            settings.ApplyQualityPreset(preset);
+            Assert.Multiple(() =>
+            {
+                Assert.That(settings.Shadows.DirectionalFilterMode,
+                    Is.EqualTo(DirectionalShadowFilterMode.TentPcf),
+                    preset.ToString());
+                Assert.That(settings.Shadows.DirectionalBiasMode,
+                    Is.EqualTo(DirectionalShadowBiasMode.WorldTexelScaled),
+                    preset.ToString());
+                Assert.That(settings.Shadows.DirectionalPcfRadiusMode,
+                    Is.EqualTo(DirectionalPcfRadiusMode.WorldSpaceAdaptive),
+                    preset.ToString());
+            });
+        }
     }
 
     private static string CreateTemporaryDirectory()

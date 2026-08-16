@@ -1,4 +1,5 @@
 using System;
+using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Diagnostics;
@@ -8,6 +9,43 @@ using Silk.NET.Vulkan;
 using Vma;
 
 namespace Njulf.Rendering.Resources;
+
+/// <summary>
+/// CPU-side identity for one directional-shadow history stream. It is resolved
+/// before ray dispatch so recovery sampling and temporal rejection observe the
+/// same reset decision in a frame.
+/// </summary>
+public readonly record struct DirectionalShadowHistoryRevision(
+    ulong StableLightIdentity,
+    DirectionalShadowMode EffectiveMode,
+    Vector3 LightDirection,
+    float SunAngularRadiusRadians,
+    float MaximumRayDistance,
+    uint Width,
+    uint Height,
+    uint ScreenResourceGeneration,
+    uint RaySceneResourceGeneration)
+{
+    public static DirectionalShadowHistoryRevision Capture(
+        SceneRenderingData sceneData,
+        DirectionalShadowHistoryResources resources,
+        float maximumRayDistance)
+    {
+        ArgumentNullException.ThrowIfNull(sceneData);
+        ArgumentNullException.ThrowIfNull(resources);
+        DirectionalShadowFramePlan plan = sceneData.DirectionalShadowFramePlan;
+        return new DirectionalShadowHistoryRevision(
+            plan.StableLightIdentity,
+            plan.EffectiveMode,
+            sceneData.DirectionalShadowLightDirection,
+            plan.SunAngularRadiusRadians,
+            maximumRayDistance,
+            resources.Width,
+            resources.Height,
+            resources.ResourceGeneration,
+            plan.RaySceneResourceGeneration);
+    }
+}
 
 /// <summary>
 /// Lazily-owned full-resolution temporal/filter storage for directional
@@ -34,6 +72,9 @@ public sealed unsafe class DirectionalShadowHistoryResources : IDisposable
         new bool[RenderingConstants.FramesInFlight];
     private readonly DirectionalShadowRayCounters[] _lastCompletedCounters =
         new DirectionalShadowRayCounters[RenderingConstants.FramesInFlight];
+    private DirectionalShadowHistoryRevision _committedHistoryRevision;
+    private DirectionalShadowHistoryResetReason _pendingResetReasons;
+    private bool _historyStateValid;
     private bool _disposed;
 
     public DirectionalShadowHistoryResources(
@@ -68,6 +109,65 @@ public sealed unsafe class DirectionalShadowHistoryResources : IDisposable
     public BufferHandle GetDiagnostic(int frameIndex) =>
         DetailedDiagnosticsAllocated ? Get(_diagnostic, frameIndex) : Get(_scratch, frameIndex);
     public BufferHandle GetCounters(int frameIndex) => Get(_counters, frameIndex);
+
+    /// <summary>
+    /// Resolves reset causes without committing the current revision. The ray
+    /// and temporal passes can therefore query this during the same frame and
+    /// receive an identical answer.
+    /// </summary>
+    public DirectionalShadowHistoryResetReason ResolveHistoryResetReasons(
+        in DirectionalShadowHistoryRevision revision,
+        bool motionVectorsValid)
+    {
+        DirectionalShadowHistoryResetReason reasons =
+            DirectionalShadowHistoryResetReason.None;
+        if (!_historyStateValid)
+        {
+            reasons |= DirectionalShadowHistoryResetReason.InitialFrame;
+            reasons |= _pendingResetReasons;
+        }
+        if (!motionVectorsValid)
+            reasons |= DirectionalShadowHistoryResetReason.InvalidMotion;
+        if (!_historyStateValid)
+            return reasons;
+
+        DirectionalShadowHistoryRevision previous = _committedHistoryRevision;
+        if (previous.StableLightIdentity != revision.StableLightIdentity ||
+            DirectionChanged(previous, revision) ||
+            SoftSourceChanged(previous, revision) ||
+            DistanceChanged(previous.MaximumRayDistance, revision.MaximumRayDistance))
+        {
+            reasons |= DirectionalShadowHistoryResetReason.LightChanged;
+        }
+        if (previous.EffectiveMode != revision.EffectiveMode)
+            reasons |= DirectionalShadowHistoryResetReason.ModeChanged;
+        if (previous.Width != revision.Width || previous.Height != revision.Height)
+            reasons |= DirectionalShadowHistoryResetReason.ExtentChanged;
+        if (previous.ScreenResourceGeneration != revision.ScreenResourceGeneration)
+            reasons |= DirectionalShadowHistoryResetReason.ResourceRecreated;
+        if (revision.EffectiveMode == DirectionalShadowMode.RayQuerySoft &&
+            previous.RaySceneResourceGeneration != revision.RaySceneResourceGeneration)
+        {
+            reasons |= DirectionalShadowHistoryResetReason.RaySceneChanged;
+        }
+        return reasons;
+    }
+
+    public void CommitHistoryRevision(in DirectionalShadowHistoryRevision revision)
+    {
+        _committedHistoryRevision = revision;
+        _pendingResetReasons = DirectionalShadowHistoryResetReason.None;
+        _historyStateValid = true;
+    }
+
+    public void InvalidateHistoryState(
+        DirectionalShadowHistoryResetReason reason =
+            DirectionalShadowHistoryResetReason.None)
+    {
+        _committedHistoryRevision = default;
+        _pendingResetReasons |= reason;
+        _historyStateValid = false;
+    }
 
     public void EnsureCounters()
     {
@@ -217,6 +317,8 @@ public sealed unsafe class DirectionalShadowHistoryResources : IDisposable
             ResourceGeneration = ResourceGeneration == uint.MaxValue
                 ? 1u
                 : Math.Max(1u, ResourceGeneration + 1u);
+            InvalidateHistoryState(
+                DirectionalShadowHistoryResetReason.ResourceRecreated);
             Register();
             return true;
         }
@@ -244,6 +346,7 @@ public sealed unsafe class DirectionalShadowHistoryResources : IDisposable
         Destroy(_counters);
         Width = 0u;
         Height = 0u;
+        InvalidateHistoryState();
     }
 
     private BufferHandle Create(
@@ -331,4 +434,60 @@ public sealed unsafe class DirectionalShadowHistoryResources : IDisposable
         (uint)frameIndex < (uint)buffers.Length
             ? buffers[frameIndex]
             : BufferHandle.Invalid;
+
+    private static bool DirectionChanged(
+        in DirectionalShadowHistoryRevision previous,
+        in DirectionalShadowHistoryRevision current)
+    {
+        Vector3 previousDirection = previous.LightDirection;
+        Vector3 currentDirection = current.LightDirection;
+        float previousLength = previousDirection.LengthSquared();
+        float currentLength = currentDirection.LengthSquared();
+        if (!float.IsFinite(previousLength) || !float.IsFinite(currentLength) ||
+            previousLength <= 1.0e-8f || currentLength <= 1.0e-8f)
+        {
+            return true;
+        }
+
+        previousDirection /= MathF.Sqrt(previousLength);
+        currentDirection /= MathF.Sqrt(currentLength);
+        float angularRadius = MathF.Max(
+            previous.SunAngularRadiusRadians,
+            current.SunAngularRadiusRadians);
+        float threshold = MathF.Max(
+            angularRadius * 0.25f,
+            0.05f * (MathF.PI / 180f));
+        return Vector3.Dot(previousDirection, currentDirection) <
+            MathF.Cos(threshold);
+    }
+
+    private static bool SoftSourceChanged(
+        in DirectionalShadowHistoryRevision previous,
+        in DirectionalShadowHistoryRevision current)
+    {
+        if (previous.EffectiveMode != DirectionalShadowMode.RayQuerySoft &&
+            current.EffectiveMode != DirectionalShadowMode.RayQuerySoft)
+        {
+            return false;
+        }
+
+        float radiusScale = MathF.Max(
+            MathF.Abs(previous.SunAngularRadiusRadians),
+            MathF.Abs(current.SunAngularRadiusRadians));
+        float tolerance = MathF.Max(1.0e-6f, radiusScale * 0.01f);
+        return !float.IsFinite(previous.SunAngularRadiusRadians) ||
+            !float.IsFinite(current.SunAngularRadiusRadians) ||
+            MathF.Abs(previous.SunAngularRadiusRadians -
+                current.SunAngularRadiusRadians) > tolerance;
+    }
+
+    private static bool DistanceChanged(float previous, float current)
+    {
+        if (!float.IsFinite(previous) || !float.IsFinite(current))
+            return true;
+        float tolerance = MathF.Max(
+            0.01f,
+            MathF.Max(MathF.Abs(previous), MathF.Abs(current)) * 0.001f);
+        return MathF.Abs(previous - current) > tolerance;
+    }
 }

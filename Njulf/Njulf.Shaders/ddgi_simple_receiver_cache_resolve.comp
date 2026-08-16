@@ -27,6 +27,9 @@ struct ReceiverCacheGatherSample
 {
     vec3 DdgiIrradiance;
     vec3 EnvironmentIrradiance;
+    float IndirectSpecularVisibility;
+    float RoughSpecularMinimumRoughness;
+    float RoughSpecularFullWeightRoughness;
 };
 
 ReceiverCacheGatherSample EmptyReceiverCacheGatherSample()
@@ -34,6 +37,10 @@ ReceiverCacheGatherSample EmptyReceiverCacheGatherSample()
     ReceiverCacheGatherSample result;
     result.DdgiIrradiance = vec3(0.0);
     result.EnvironmentIrradiance = vec3(0.0);
+    // Empty reconstruction support must never black out reflections.
+    result.IndirectSpecularVisibility = 1.0;
+    result.RoughSpecularMinimumRoughness = 0.55;
+    result.RoughSpecularFullWeightRoughness = 0.70;
     return result;
 }
 
@@ -50,6 +57,18 @@ ReceiverCacheGatherSample MixReceiverCacheGatherSamples(
     result.EnvironmentIrradiance = mix(
         a.EnvironmentIrradiance,
         b.EnvironmentIrradiance,
+        weight);
+    result.IndirectSpecularVisibility = mix(
+        a.IndirectSpecularVisibility,
+        b.IndirectSpecularVisibility,
+        weight);
+    result.RoughSpecularMinimumRoughness = mix(
+        a.RoughSpecularMinimumRoughness,
+        b.RoughSpecularMinimumRoughness,
+        weight);
+    result.RoughSpecularFullWeightRoughness = mix(
+        a.RoughSpecularFullWeightRoughness,
+        b.RoughSpecularFullWeightRoughness,
         weight);
     return result;
 }
@@ -89,8 +108,37 @@ ReceiverCacheGatherSample LoadGatherSample(
     result.EnvironmentIrradiance = vec3(
         ddgiZEnvironmentX.y,
         environmentYz);
-    depthCode = packed.w;
+    // Gather metadata layout:
+    // [ depth:10 | visibility:10 | minimum roughness:6 | full roughness:6 ].
+    depthCode = packed.w & 0x3ffu;
+    result.IndirectSpecularVisibility =
+        float((packed.w >> 10u) & 0x3ffu) / 1023.0;
+    result.RoughSpecularMinimumRoughness =
+        float((packed.w >> 20u) & 0x3fu) / 63.0;
+    result.RoughSpecularFullWeightRoughness =
+        float((packed.w >> 26u) & 0x3fu) / 63.0;
     return result;
+}
+
+uint EncodeResolvedReceiverCacheMetadata(ReceiverCacheGatherSample value)
+{
+    uint visibilityCode = uint(round(clamp(
+        value.IndirectSpecularVisibility,
+        0.0,
+        1.0) * 1023.0));
+    uint minimumCode = uint(round(clamp(
+        value.RoughSpecularMinimumRoughness,
+        0.0,
+        1.0) * 63.0));
+    uint fullCode = uint(round(clamp(
+        value.RoughSpecularFullWeightRoughness,
+        0.0,
+        1.0) * 63.0));
+    // Depth has served its reconstruction purpose. Leave its low ten bits zero
+    // while retaining the same upper-bit ABI for the forward cache consumer.
+    return (visibilityCode << 10u) |
+        (minimumCode << 20u) |
+        (fullCode << 26u);
 }
 
 bool TryLoadGatherSample(
@@ -210,5 +258,5 @@ void main()
             resolved.DdgiIrradiance.z,
             resolved.EnvironmentIrradiance.x)),
         packHalf2x16(resolved.EnvironmentIrradiance.yz),
-        0u);
+        EncodeResolvedReceiverCacheMetadata(resolved));
 }

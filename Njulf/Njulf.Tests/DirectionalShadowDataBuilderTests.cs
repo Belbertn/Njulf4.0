@@ -736,6 +736,7 @@ public sealed class DirectionalShadowDataBuilderTests
             RequestedDirectionalShadowMode = DirectionalShadowMode.HybridContact,
             DirectionalFilterMode = DirectionalShadowFilterMode.TentPcf,
             DirectionalBiasMode = DirectionalShadowBiasMode.WorldTexelScaled,
+            DirectionalPcfRadiusMode = DirectionalPcfRadiusMode.WorldSpaceAdaptive,
             NormalBias = 0.08f,
             DirectionalContactShadowDistance = 4.5f
         };
@@ -759,6 +760,8 @@ public sealed class DirectionalShadowDataBuilderTests
             Assert.That(parameters.FilterAndBias.X, Is.EqualTo((float)DirectionalShadowFilterMode.TentPcf));
             Assert.That(parameters.FilterAndBias.Y, Is.EqualTo((float)DirectionalShadowBiasMode.WorldTexelScaled));
             Assert.That(parameters.FilterAndBias.W, Is.EqualTo(0.08f));
+            Assert.That(parameters.RuntimeFlags.Y,
+                Is.EqualTo((float)DirectionalPcfRadiusMode.WorldSpaceAdaptive));
             Assert.That(parameters.ModeAndRayDistance.X, Is.EqualTo((float)DirectionalShadowMode.HybridContact));
             Assert.That(parameters.ModeAndRayDistance.Y, Is.EqualTo((float)DirectionalShadowMode.Cascaded));
             Assert.That(parameters.ModeAndRayDistance.Z, Is.EqualTo(4.5f));
@@ -778,6 +781,7 @@ public sealed class DirectionalShadowDataBuilderTests
             DirectionalCascadeSplitLambda = 2f,
             DirectionalCasterExtrusionDistance = -1f,
             DirectionalContactShadowDistance = 200f,
+            DirectionalSoftAngularDiameterScale = 99f,
             NormalBias = 2f,
             SlopeScaledDepthBias = 99f,
             ConstantDepthBias = 1f,
@@ -794,6 +798,7 @@ public sealed class DirectionalShadowDataBuilderTests
             Assert.That(settings.DirectionalCascadeSplitLambda, Is.EqualTo(1f));
             Assert.That(settings.DirectionalCasterExtrusionDistance, Is.EqualTo(1f));
             Assert.That(settings.DirectionalContactShadowDistance, Is.EqualTo(1f));
+            Assert.That(settings.DirectionalSoftAngularDiameterScale, Is.EqualTo(8f));
             Assert.That(settings.NormalBias, Is.EqualTo(1f));
             Assert.That(settings.SlopeScaledDepthBias, Is.EqualTo(16f));
             Assert.That(settings.ConstantDepthBias, Is.EqualTo(0.1f));

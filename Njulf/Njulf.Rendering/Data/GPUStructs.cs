@@ -1150,7 +1150,7 @@ namespace Njulf.Rendering.Data
         // xyz = qualified ray-scene AABB; w = 1 when finite and complete.
         public Vector4 RaySceneBoundsMinimum;
         public Vector4 RaySceneBoundsMaximum;
-        // x = CSM temporal effective, y = qualification level,
+        // x = CSM temporal effective, y = DirectionalPcfRadiusMode,
         // z = screen-resource generation, w = current history valid.
         public Vector4 RuntimeFlags;
     }
@@ -1174,7 +1174,9 @@ namespace Njulf.Rendering.Data
         public uint InstanceMask;
         // DirectionalShadowMode.
         public uint OutputMode;
-        public uint FrameIndex;
+        // Monotonic temporal sample index. The output resource identifies the
+        // frame-in-flight bank independently.
+        public uint TemporalSampleIndex;
         public uint TraceSampleCount;
         public uint DebugFlags;
     }

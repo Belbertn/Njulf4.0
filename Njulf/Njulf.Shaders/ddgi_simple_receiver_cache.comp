@@ -34,6 +34,8 @@
 #undef SIMPLE_DDGI_RECEIVER_COVERAGE_HASH
 #undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
 
+const uint SIMPLE_DDGI_RECEIVER_CACHE_REFLECTION_ENABLED_FLAG = 1u << 0u;
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(push_constant) uniform SimpleDdgiReceiverCachePushBlock
@@ -388,6 +390,31 @@ uint EncodeReceiverCacheDepth(float depth)
     return 1u + uint(round(normalized * 1022.0));
 }
 
+uint EncodeReceiverCacheMetadata(
+    float depth,
+    float indirectSpecularVisibility,
+    uint residencyFlags)
+{
+    // The gather entry remains sixteen bytes. Its metadata word carries a
+    // 10-bit reverse-Z code, 10-bit rough-reflection visibility, and the two
+    // 6-bit roughness-band edges consumed by the native cache shader:
+    // [ depth:10 | visibility:10 | minimum:6 | full:6 ].
+    uint visibilityCode = uint(round(
+        clamp(indirectSpecularVisibility, 0.0, 1.0) * 1023.0));
+    uint minimumCode = uint(round(clamp(
+        SimpleDdgiRoughSpecularMinimumRoughness(residencyFlags),
+        0.0,
+        1.0) * 63.0));
+    uint fullCode = uint(round(clamp(
+        SimpleDdgiRoughSpecularFullWeightRoughness(residencyFlags),
+        0.0,
+        1.0) * 63.0));
+    return EncodeReceiverCacheDepth(depth) |
+        (visibilityCode << 10u) |
+        (minimumCode << 20u) |
+        (fullCode << 26u);
+}
+
 void main()
 {
     uvec2 cacheCoord = gl_GlobalInvocationID.xy;
@@ -436,15 +463,25 @@ void main()
         SimpleDdgiLeakAttenuation(gather, params),
         0.0,
         1.0);
+    float indirectSpecularVisibility =
+        SimpleDdgiIndirectSpecularVisibility(gather, params);
     float environmentFallbackWeight =
         (1.0 - ownership) * params.environmentFallbackIntensity;
+    GPUEnvironmentData environment = ReadEnvironmentData();
+    GPUReflectionProbeHeader reflectionHeader = ReadReflectionProbeHeader();
+    bool indirectReflectionsActive =
+        environment.Enabled != 0u &&
+        environment.SpecularIntensity > 0.0 &&
+        (reflectionHeader.Flags &
+            SIMPLE_DDGI_RECEIVER_CACHE_REFLECTION_ENABLED_FLAG) != 0u &&
+        reflectionHeader.Intensity > 0.0;
     bool evaluateFarFieldFallback =
         environmentFallbackWeight >
             SIMPLE_DDGI_ENVIRONMENT_FALLBACK_MIN_WEIGHT ||
         (params.flags &
             SIMPLE_DDGI_FLAG_FORCE_LEGACY_FAR_FIELD_FALLBACK) != 0u;
     float farFieldSkyVisibility = 1.0;
-    if (evaluateFarFieldFallback &&
+    if ((evaluateFarFieldFallback || indirectReflectionsActive) &&
         (params.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
     {
         farFieldSkyVisibility = EstimateFarFieldSkyVisibility(
@@ -452,6 +489,18 @@ void main()
             normal,
             params,
             0u);
+    }
+    if (indirectReflectionsActive)
+    {
+        // Probe-to-receiver visibility only proves that the diffuse field can
+        // reach this surface. Broad reflection lobes also need a far-field
+        // enclosure test; otherwise an interior wall reflects the outdoor sky
+        // at grazing angles and reads as a uniform metallic sheen. This runs
+        // once per low-resolution cache receiver and leaves sharp lobes open
+        // through the roughness weighting applied by the forward shader.
+        indirectSpecularVisibility = min(
+            indirectSpecularVisibility,
+            farFieldSkyVisibility);
     }
     // All remaining composition is linear. Fold the global intensity,
     // radiometric ownership, leak attenuation, and far-field visibility here
@@ -466,7 +515,6 @@ void main()
         0.0,
         1.0);
     vec3 weightedEnvironmentIrradiance = vec3(0.0);
-    GPUEnvironmentData environment = ReadEnvironmentData();
     if (environment.Enabled != 0u && weightedEnvironmentFallback > 0.0)
     {
         weightedEnvironmentIrradiance =
@@ -487,9 +535,12 @@ void main()
                 weightedIrradiance.z,
                 weightedEnvironmentIrradiance.x)),
             packHalf2x16(weightedEnvironmentIrradiance.yz),
-            // Depth is reconstruction metadata only. Keep it separate from
-            // the six FP16 radiance channels so neither field loses precision.
-            EncodeReceiverCacheDepth(receiverDepth)));
+            // Keep reconstruction/visibility metadata separate from the six
+            // FP16 radiance channels so neither irradiance field loses precision.
+            EncodeReceiverCacheMetadata(
+                receiverDepth,
+                indirectSpecularVisibility,
+                params.residencyFlags)));
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
     EmitExactReceiverFeedbackProducer(
         gather,

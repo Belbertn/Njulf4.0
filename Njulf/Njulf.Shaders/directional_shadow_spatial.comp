@@ -21,6 +21,8 @@ layout(push_constant) uniform DirectionalShadowSpatialPushBlock
     vec4 EdgeThresholds;
 } pc;
 
+shared uint PackedVisibilityBytes[64];
+
 #if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
 shared uint FilteredPixelCount;
 #endif
@@ -75,11 +77,11 @@ vec2 ReadVisibilityAndHit(uint pixelIndex)
     return unpackHalf2x16(ReadStorageWord(pc.InputBufferIndex, pixelIndex));
 }
 
-void WritePackedVisibility(uint pixelIndex, float visibility)
+void WritePackedVisibilityAtomic(uint pixelIndex, uint visibilityByte)
 {
     uint wordIndex = pixelIndex >> 2u;
     uint shift = (pixelIndex & 3u) * 8u;
-    uint packed = uint(round(clamp(visibility, 0.0, 1.0) * 255.0)) << shift;
+    uint packed = visibilityByte << shift;
     if (packed != 0u)
     {
         atomicOr(
@@ -90,6 +92,8 @@ void WritePackedVisibility(uint pixelIndex, float visibility)
 
 void main()
 {
+    uint localIndex = gl_LocalInvocationIndex;
+    PackedVisibilityBytes[localIndex] = 0u;
 #if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
     if (gl_LocalInvocationIndex == 0u)
         FilteredPixelCount = 0u;
@@ -156,6 +160,15 @@ void main()
                         dot(centerNormal, neighborNormal));
                     float hitWeight = exp(-abs(neighborHit - centerHit) /
                         max(pc.EdgeThresholds.z * max(centerHit, 0.25), 0.01));
+                    // A finite-sun hit and miss are two valid Monte-Carlo
+                    // outcomes, not automatically different surfaces. Keep a
+                    // bounded contribution when visibility outcomes disagree;
+                    // receiver depth and normal still protect geometry edges.
+                    float outcomeDifference = abs(sampleValue.x - center.x);
+                    hitWeight = mix(
+                        hitWeight,
+                        max(hitWeight, 0.25),
+                        smoothstep(0.25, 0.75, outcomeDifference));
                     float varianceWeight = 1.0 /
                         (1.0 + max(centerVariance, neighborVariance) *
                             max(pc.EdgeThresholds.w, 0.0));
@@ -178,7 +191,10 @@ void main()
         }
 
         if (pc.WritePackedVisibility != 0u)
-            WritePackedVisibility(pixelIndex, visibility);
+        {
+            PackedVisibilityBytes[localIndex] =
+                uint(round(clamp(visibility, 0.0, 1.0) * 255.0));
+        }
         else
         {
             WriteStorageWord(
@@ -190,8 +206,33 @@ void main()
         }
     }
 
-#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
     barrier();
+    if (pc.WritePackedVisibility != 0u)
+    {
+        if ((pc.ScreenWidth & 3u) == 0u)
+        {
+            if ((gl_LocalInvocationID.x & 3u) == 0u &&
+                pixel.x < pc.ScreenWidth && pixel.y < pc.ScreenHeight)
+            {
+                uint packed =
+                    (PackedVisibilityBytes[localIndex + 0u] & 0xffu) |
+                    ((PackedVisibilityBytes[localIndex + 1u] & 0xffu) << 8u) |
+                    ((PackedVisibilityBytes[localIndex + 2u] & 0xffu) << 16u) |
+                    ((PackedVisibilityBytes[localIndex + 3u] & 0xffu) << 24u);
+                uint pixelIndex = pixel.y * pc.ScreenWidth + pixel.x;
+                WriteStorageWord(pc.OutputBufferIndex, pixelIndex >> 2u, packed);
+            }
+        }
+        else if (invocationInBounds)
+        {
+            uint pixelIndex = pixel.y * pc.ScreenWidth + pixel.x;
+            WritePackedVisibilityAtomic(
+                pixelIndex,
+                PackedVisibilityBytes[localIndex]);
+        }
+    }
+
+#if NJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS
     if (pc.CounterEnabled != 0u &&
         gl_LocalInvocationIndex == 0u && FilteredPixelCount != 0u)
     {

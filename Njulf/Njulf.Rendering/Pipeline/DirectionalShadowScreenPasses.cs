@@ -24,13 +24,6 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
     private readonly GiPipelineCacheService? _cacheService;
     private DirectionalShadowComputePipeline? _csmResolve;
     private DirectionalShadowComputePipeline? _temporal;
-    private bool _historyValid;
-    private ulong _previousLightIdentity;
-    private DirectionalShadowMode _previousMode;
-    private uint _previousScreenGeneration;
-    private uint _previousRaySceneGeneration;
-    private uint _previousWidth;
-    private uint _previousHeight;
 
     public DirectionalShadowTemporalPass(
         VulkanContext context,
@@ -94,8 +87,15 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
             ResolveCsm(commandBuffer, frameIndex, sceneData);
         }
 
+        DirectionalShadowHistoryRevision revision =
+            DirectionalShadowHistoryRevision.Capture(
+                sceneData,
+                _resources,
+                _settings.MaxShadowDistance);
         DirectionalShadowHistoryResetReason resetReasons =
-            ResolveResetReasons(sceneData);
+            _resources.ResolveHistoryResetReasons(
+                revision,
+                sceneData.MotionVectorsEnabled != 0);
         sceneData.DirectionalShadowFramePlan =
             sceneData.DirectionalShadowFramePlan with
             {
@@ -166,7 +166,7 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
             AccessFlags2.ShaderStorageWriteBit,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit);
-        PublishHistoryState(sceneData);
+        PublishHistoryState(sceneData, revision);
         if (sceneData.DirectionalShadowRayCountersEnabled)
             _resources.MarkCountersSubmitted(frameIndex);
     }
@@ -250,7 +250,7 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
             ScreenHeight = _resources.Height,
             OutputBufferIndex = checked((uint)
                 (BindlessIndex.DirectionalShadowRawBufferBase + frameIndex)),
-            FrameIndex = checked((uint)frameIndex)
+            TemporalSampleIndex = sceneData.TemporalSampleIndex
         };
         _context.Api.CmdBindPipeline(
             commandBuffer,
@@ -282,40 +282,12 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
             AccessFlags2.ShaderStorageReadBit);
     }
 
-    private DirectionalShadowHistoryResetReason ResolveResetReasons(
-        SceneRenderingData sceneData)
-    {
-        DirectionalShadowHistoryResetReason reasons =
-            DirectionalShadowHistoryResetReason.None;
-        if (!_historyValid)
-            reasons |= DirectionalShadowHistoryResetReason.InitialFrame;
-        if (sceneData.MotionVectorsEnabled == 0)
-            reasons |= DirectionalShadowHistoryResetReason.InvalidMotion;
-        DirectionalShadowFramePlan plan = sceneData.DirectionalShadowFramePlan;
-        if (_historyValid && _previousLightIdentity != plan.StableLightIdentity)
-            reasons |= DirectionalShadowHistoryResetReason.LightChanged;
-        if (_historyValid && _previousMode != plan.EffectiveMode)
-            reasons |= DirectionalShadowHistoryResetReason.ModeChanged;
-        if (_historyValid && (_previousWidth != _resources.Width ||
-                              _previousHeight != _resources.Height))
-            reasons |= DirectionalShadowHistoryResetReason.ExtentChanged;
-        if (_historyValid && _previousScreenGeneration != _resources.ResourceGeneration)
-            reasons |= DirectionalShadowHistoryResetReason.ResourceRecreated;
-        if (_historyValid && _previousRaySceneGeneration != plan.RaySceneResourceGeneration)
-            reasons |= DirectionalShadowHistoryResetReason.RaySceneChanged;
-        return reasons;
-    }
-
-    private void PublishHistoryState(SceneRenderingData sceneData)
+    private void PublishHistoryState(
+        SceneRenderingData sceneData,
+        in DirectionalShadowHistoryRevision revision)
     {
         DirectionalShadowFramePlan plan = sceneData.DirectionalShadowFramePlan;
-        _historyValid = true;
-        _previousLightIdentity = plan.StableLightIdentity;
-        _previousMode = plan.EffectiveMode;
-        _previousScreenGeneration = _resources.ResourceGeneration;
-        _previousRaySceneGeneration = plan.RaySceneResourceGeneration;
-        _previousWidth = _resources.Width;
-        _previousHeight = _resources.Height;
+        _resources.CommitHistoryRevision(revision);
         sceneData.DirectionalShadowHistoryValid = 1;
         sceneData.DirectionalShadowHistoryResetReason = plan.HistoryResetReason;
     }
@@ -364,7 +336,9 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
         yield break;
     }
 
-    public override void OnSwapchainRecreated() => _historyValid = false;
+    public override void OnSwapchainRecreated() =>
+        _resources.InvalidateHistoryState(
+            DirectionalShadowHistoryResetReason.ResourceRecreated);
 
     public override void Cleanup()
     {
@@ -372,7 +346,7 @@ public sealed unsafe class DirectionalShadowTemporalPass : RenderPassBase
         _temporal?.Dispose();
         _csmResolve = null;
         _temporal = null;
-        _historyValid = false;
+        _resources.InvalidateHistoryState();
     }
 }
 
