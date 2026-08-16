@@ -877,6 +877,7 @@ internal sealed class HelloGame : Game
 
         ApplySponzaScenarioFrameControls();
         ApplyBenchmarkDynamicScenarioFrameControls();
+        ApplyBenchmarkCameraScenarioFrameControls();
 
         base.Update(simulationDeltaTime);
     }
@@ -935,6 +936,55 @@ internal sealed class HelloGame : Game
         benchmarkEnabled
             ? BenchmarkSimulationDeltaSeconds
             : hostDeltaTime;
+
+    private void ApplyBenchmarkCameraScenarioFrameControls()
+    {
+        SamplePerformanceScenario scenario =
+            _performanceScenarioRunner?.CurrentScenario ??
+            _smokeOptions.PerformanceScenario;
+        if (!_smokeOptions.Benchmark.Enabled ||
+            scenario != SamplePerformanceScenario.GiFastTraversalTeleport ||
+            Camera is not FirstPersonCamera camera)
+        {
+            return;
+        }
+
+        (CoreVector3 position, float yaw, float pitch) =
+            ResolveFastTraversalBenchmarkCameraPose(_drawnFrames);
+        camera.Position = position;
+        camera.Yaw = yaw;
+        camera.Pitch = pitch;
+        camera.Update();
+
+        if (_drawnFrames is 6 or 18 or 23)
+        {
+            Console.WriteLine(
+                $"Benchmark camera disturbance: scenario={scenario}, " +
+                $"frame={_drawnFrames}, position={position}, yaw={yaw:F3}.");
+        }
+    }
+
+    internal static (CoreVector3 Position, float Yaw, float Pitch)
+        ResolveFastTraversalBenchmarkCameraPose(int drawnFrames)
+    {
+        // The 35 m separation is one complete 28x1.25 m near-ring width.
+        // Frames 6-17 stream the path incrementally, then frames 18 and 23
+        // exercise zero-overlap ring remaps in both directions. The final pose
+        // remains fixed so readiness and timing describe recovered GI.
+        var start = new CoreVector3(0.0f, 1.65f, 6.5f);
+        var arrival = new CoreVector3(0.0f, 1.65f, -28.5f);
+        const float pitch = -0.04f;
+        if (drawnFrames < 6)
+            return (start, 0.0f, pitch);
+        if (drawnFrames < 18)
+        {
+            float t = Math.Clamp((drawnFrames - 5) / 12.0f, 0.0f, 1.0f);
+            return (CoreVector3.Lerp(start, arrival, t), 0.0f, pitch);
+        }
+        if (drawnFrames < 23)
+            return (start, 0.0f, pitch);
+        return (arrival, MathF.PI, pitch);
+    }
 
     protected override void Draw()
     {

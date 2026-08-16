@@ -655,6 +655,16 @@ void main()
                         bool laneSourceWork =
                             transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
                             transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+                        bool laneRoutineSourceWork =
+                            transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+                        bool laneSpatialRecoveryClass =
+                            transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE &&
+                            (workClass == SIMPLE_DDGI_SCHEDULER_WORK_FRESH_EXPOSED_VISIBLE ||
+                                workClass == SIMPLE_DDGI_SCHEDULER_WORK_VISIBLE_ZERO_SUPPORT);
+                        bool laneCadenceLimitedSourceWork =
+                            laneRoutineSourceWork ||
+                            (transport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE &&
+                                !laneSpatialRecoveryClass);
                         bool laneCanContainZeroPrimaryRelight =
                             SchedulerSourceModeUsesRadiometricRelight(
                                 SchedulerSourceRefreshMode());
@@ -670,7 +680,12 @@ void main()
                             continue;
                         }
                         uint laneSourceVolumeBudget = sourceVolumeBudgets[volumeIndex];
-                        if (laneSourceWork && !tailSourceCohortPhase &&
+                        // The authored source cadence is a maintenance and
+                        // radiometric-transition target, not a spatial recovery
+                        // throttle. Lanes that can contain fresh/scroll-exposed
+                        // probes defer the exact decision to the candidate reason
+                        // flags below; every other source lane is paced here.
+                        if (laneCadenceLimitedSourceWork && !tailSourceCohortPhase &&
                             sourceBudgetLimited &&
                             laneRequiredSourceRayCount >
                                 laneSourceVolumeBudget - min(
@@ -778,6 +793,17 @@ void main()
 
                             bool sourceWork = candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE ||
                                 candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+                            bool routineSourceWork = candidateTransport ==
+                                SIMPLE_DDGI_SCHEDULER_TRANSPORT_ROUTINE_SOURCE;
+                            bool spatialSourceRecovery =
+                                candidateTransport == SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE &&
+                                (candidateReasons & (
+                                    SIMPLE_DDGI_SCHEDULER_REASON_FRESH |
+                                    SIMPLE_DDGI_SCHEDULER_REASON_SCROLL)) != 0u;
+                            bool cadenceLimitedSourceWork = routineSourceWork ||
+                                (candidateTransport ==
+                                    SIMPLE_DDGI_SCHEDULER_TRANSPORT_HARD_SOURCE &&
+                                    !spatialSourceRecovery);
                             bool sourceUsesPrimaryRays = sourceWork &&
                                 !SchedulerCandidateUsesRadiometricRelight(
                                     candidateReasons);
@@ -822,7 +848,7 @@ void main()
                                 break;
                             }
                             uint volumeSourceBudget = sourceVolumeBudgets[volumeIndex];
-                            if (sourceWork && !tailSourceCohortPhase &&
+                            if (cadenceLimitedSourceWork && !tailSourceCohortPhase &&
                                 sourceBudgetLimited &&
                                 (sourceRayCount > volumeSourceBudget - min(
                                     sourceVolumeUsage[volumeIndex],

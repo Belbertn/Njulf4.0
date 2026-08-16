@@ -970,6 +970,18 @@ public static class SimpleDdgiCpuScheduleModel
                                 bool sourceWork = candidateCategory is
                                     SimpleDdgiSchedulerTransportCategory.HardSourceRepair or
                                     SimpleDdgiSchedulerTransportCategory.RoutineSourceValidation;
+                                bool routineSourceWork = candidateCategory ==
+                                    SimpleDdgiSchedulerTransportCategory.RoutineSourceValidation;
+                                bool spatialSourceRecovery =
+                                    candidateCategory ==
+                                        SimpleDdgiSchedulerTransportCategory.HardSourceRepair &&
+                                    (candidateReasons & (
+                                        SimpleDdgiSchedulerCandidateReason.Fresh |
+                                        SimpleDdgiSchedulerCandidateReason.ScrollExposed)) != 0;
+                                bool cadenceLimitedSourceWork = routineSourceWork ||
+                                    (candidateCategory ==
+                                        SimpleDdgiSchedulerTransportCategory.HardSourceRepair &&
+                                        !spatialSourceRecovery);
                                 // SourceRayCount is cache identity, not this
                                 // transaction's primary-ray cost. V2
                                 // classification therefore carries the full
@@ -1014,8 +1026,14 @@ public static class SimpleDdgiCpuScheduleModel
                                 ulong sourceBudget = policy.SourceCohortRayBudget == 0
                                     ? ulong.MaxValue
                                     : policy.SourceCohortRayBudget;
-                                if (sourceCost > sourceBudget ||
-                                    acceptedSourceRays > sourceBudget - sourceCost)
+                                // Mirror resident admission: this is the
+                                // periodic-maintenance and radiometric-transition
+                                // allowance. Only fresh or scroll-exposed spatial
+                                // recovery bypasses it, remaining bounded by the
+                                // request and primary-ray budgets.
+                                if (cadenceLimitedSourceWork &&
+                                    (sourceCost > sourceBudget ||
+                                        acceptedSourceRays > sourceBudget - sourceCost))
                                 {
                                     sourceBudgetRejected++;
                                     admittedCandidates[candidateIndex] = 1;

@@ -189,6 +189,112 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
     }
 
     [Test]
+    public void CpuOracle_UrgentSourceRepairBypassesRoutineCadenceBudget()
+    {
+        var candidates = new GPUSimpleDdgiSchedulerCandidate[3];
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            candidates[i] = new GPUSimpleDdgiSchedulerCandidate
+            {
+                ProbeIndex = (uint)i,
+                VolumeIndex = 0,
+                ExpectedPhysicalGeneration = 1,
+                SequenceOrdinal = (uint)i,
+                WorkClassAndTransport = SimpleDdgiSchedulerAbi.PackCandidateWorkClassAndTransport(
+                    SimpleDdgiSchedulerWorkClass.FreshExposedVisible,
+                    SimpleDdgiSchedulerTransportCategory.HardSourceRepair),
+                RayTierAndReasonFlags = SimpleDdgiSchedulerAbi.PackCandidateRayTierAndReasons(
+                    SimpleDdgiSchedulerRayTier.Full,
+                    SimpleDdgiSchedulerCandidateReason.Fresh |
+                        SimpleDdgiSchedulerCandidateReason.ScrollExposed),
+                ActiveRayCount = 8u,
+                SourceRayCount = 8u
+            };
+        }
+
+        var queue = new GPUSimpleDdgiProbeUpdate[3];
+        var counts = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var accepted = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var cursors = new uint[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        SimpleDdgiCpuScheduleResult result = SimpleDdgiCpuScheduleModel.Schedule(
+            candidates,
+            new[] { new SimpleDdgiCpuVolumePolicy(3, 0, 3, 1, true) },
+            new SimpleDdgiCpuSchedulePolicy(
+                RequestBudget: 3,
+                PrimaryRayBudget: 24,
+                SourceCohortRayBudget: 8,
+                SourceLightingGeneration: 1,
+                ActiveVolumeCount: 1,
+                DeterministicFixedBudget: true),
+            queue,
+            counts,
+            accepted,
+            cursors);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.AcceptedRequestCount, Is.EqualTo(3));
+            Assert.That(result.AcceptedPrimaryRayCount, Is.EqualTo(24));
+            Assert.That(result.AcceptedSourceRayCount, Is.EqualTo(24));
+            Assert.That(result.SourceCohortRejectedCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void CpuOracle_LightingSourceRepairRemainsCadenceLimited()
+    {
+        var candidates = new GPUSimpleDdgiSchedulerCandidate[3];
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            candidates[i] = new GPUSimpleDdgiSchedulerCandidate
+            {
+                ProbeIndex = (uint)i,
+                VolumeIndex = 0,
+                ExpectedPhysicalGeneration = 1,
+                SequenceOrdinal = (uint)i,
+                WorkClassAndTransport = SimpleDdgiSchedulerAbi.PackCandidateWorkClassAndTransport(
+                    SimpleDdgiSchedulerWorkClass.VisibleDirty,
+                    SimpleDdgiSchedulerTransportCategory.HardSourceRepair),
+                RayTierAndReasonFlags = SimpleDdgiSchedulerAbi.PackCandidateRayTierAndReasons(
+                    SimpleDdgiSchedulerRayTier.Full,
+                    SimpleDdgiSchedulerCandidateReason.RegionalDirty |
+                        SimpleDdgiSchedulerCandidateReason.Visible),
+                ActiveRayCount = 8u,
+                SourceRayCount = 8u
+            };
+        }
+
+        var queue = new GPUSimpleDdgiProbeUpdate[3];
+        var counts = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var accepted = new int[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        var cursors = new uint[SimpleDdgiSchedulerAbi.MaxLaneCount];
+        SimpleDdgiCpuScheduleResult result = SimpleDdgiCpuScheduleModel.Schedule(
+            candidates,
+            new[] { new SimpleDdgiCpuVolumePolicy(3, 0, 3, 1, true) },
+            new SimpleDdgiCpuSchedulePolicy(
+                RequestBudget: 3,
+                PrimaryRayBudget: 24,
+                SourceCohortRayBudget: 8,
+                SourceLightingGeneration: 2,
+                ActiveVolumeCount: 1,
+                DeterministicFixedBudget: true),
+            queue,
+            counts,
+            accepted,
+            cursors);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.AcceptedRequestCount, Is.EqualTo(1));
+            Assert.That(result.AcceptedPrimaryRayCount, Is.EqualTo(8));
+            Assert.That(result.AcceptedSourceRayCount, Is.EqualTo(8));
+            Assert.That(result.SourceCohortRejectedCount, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
     public void CpuOracleRejectsMalformedPackedCandidatesWithoutEmittingWork()
     {
         var candidates = new[]

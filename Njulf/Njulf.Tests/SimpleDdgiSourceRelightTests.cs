@@ -3,6 +3,7 @@ using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
+using CoreBoundingBox = Njulf.Core.Math.BoundingBox;
 using CoreVector3 = Njulf.Core.Math.Vector3;
 
 namespace Njulf.Tests;
@@ -150,6 +151,121 @@ public sealed class SimpleDdgiSourceRelightTests
             Assert.That(scale, Is.EqualTo(CoreVector3.One));
             Assert.That(unused, Is.EqualTo(CoreVector3.One));
         });
+    }
+
+    [Test]
+    public void GlobalLightSignature_IgnoresLocalMotionButTracksDirectionalEdits()
+    {
+        Light directional = CreateDirectionalLight();
+        Light local = new()
+        {
+            Type = LightType.Point,
+            Position = new Vector3(1.0f, 2.0f, 3.0f),
+            Color = Vector3.One,
+            Intensity = 4.0f,
+            Range = 6.0f
+        };
+        LightFrameSnapshot initial = CreateSnapshot(directional, local);
+
+        local.Position += new Vector3(7.0f, 0.0f, -5.0f);
+        LightFrameSnapshot localMoved = CreateSnapshot(directional, local);
+        directional.Intensity *= 1.5f;
+        LightFrameSnapshot sunChanged = CreateSnapshot(directional, local);
+
+        ulong initialSignature =
+            VulkanRenderer.CreateSimpleDdgiGlobalLightSignature(initial);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                VulkanRenderer.CreateSimpleDdgiGlobalLightSignature(localMoved),
+                Is.EqualTo(initialSignature));
+            Assert.That(
+                VulkanRenderer.CreateSimpleDdgiGlobalLightSignature(sunChanged),
+                Is.Not.EqualTo(initialSignature));
+        });
+    }
+
+    [Test]
+    public void RegionalRadiometricChange_DetectsLightAndEmissionWithoutGeometry()
+    {
+        var bounds = new CoreBoundingBox(
+            new CoreVector3(-1.0f),
+            new CoreVector3(1.0f));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.ContainsRegionalRadiometricChange(
+                    new[]
+                    {
+                        new DdgiDirtyRegion(
+                            bounds,
+                            DdgiDirtyReason.LocalLightChanged)
+                    }),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.ContainsRegionalRadiometricChange(
+                    new[]
+                    {
+                        new DdgiDirtyRegion(
+                            bounds,
+                            DdgiDirtyReason.EmissiveChanged)
+                    }),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.ContainsRegionalRadiometricChange(
+                    new[]
+                    {
+                        new DdgiDirtyRegion(
+                            bounds,
+                            DdgiDirtyReason.TransformChanged)
+                    }),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void RadiometricSourceTarget_UsesBoundedTransitionCadence()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveRadiometricSourceProbeTarget(
+                    steadyStateTarget: 8,
+                    participatingProbeCount: 16_266,
+                    lightingTransitionActive: false,
+                    transitionProbeBudget: 32),
+                Is.EqualTo(8));
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveRadiometricSourceProbeTarget(
+                    steadyStateTarget: 8,
+                    participatingProbeCount: 16_266,
+                    lightingTransitionActive: true,
+                    transitionProbeBudget: 32),
+                Is.EqualTo(32));
+            Assert.That(
+                SimpleDdgiVolumeManager.ResolveRadiometricSourceProbeTarget(
+                    steadyStateTarget: 8,
+                    participatingProbeCount: 12,
+                    lightingTransitionActive: true,
+                    transitionProbeBudget: 32),
+                Is.EqualTo(12));
+        });
+    }
+
+    private static LightFrameSnapshot CreateSnapshot(
+        Light directional,
+        Light local)
+    {
+        Light[] lights = [directional, local];
+        return new LightFrameSnapshot(
+            lights,
+            lights.Length,
+            directionalLightCount: 1,
+            localLightCount: 1,
+            firstShadowCastingDirectionalLightIndex: 0,
+            firstShadowCastingDirectionalLight: directional,
+            revision: 1);
     }
 
     private static Light CreateDirectionalLight() => new()

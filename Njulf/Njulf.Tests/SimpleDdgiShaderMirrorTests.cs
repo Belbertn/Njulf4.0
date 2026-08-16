@@ -772,9 +772,13 @@ namespace Njulf.Tests
                 Assert.That(cache, Does.Contain(
                     "for (uint sampleX = 0u; sampleX < scale; sampleX++)"));
                 Assert.That(forward, Does.Contain(
-                    "cachedGather.DdgiIrradiance * ambientOcclusion"));
+                    "ForwardDdgiReceiverCacheDdgiIrradiance(cachedGather) *"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "uvec4 Packed;"));
+                Assert.That(cacheSampling, Does.Contain(
+                    "ForwardDdgiReceiverCacheEnvironmentIrradiance("));
                 Assert.That(forward, Does.Contain(
-                    "cachedGather.EnvironmentIrradiance * indirectAo"));
+                    "ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *"));
                 Assert.That(forward, Does.Contain(
                     "SampleForwardDdgiReceiverCache("));
                 Assert.That(cache, Does.Contain(
@@ -2394,7 +2398,11 @@ namespace Njulf.Tests
                     "classUsage[classBase + workClass] >= classLimit"));
                 Assert.That(admit, Does.Contain(
                     "stop as soon as this lane has exhausted its only"));
-                Assert.That(admit, Does.Contain("sourceWork && !tailSourceCohortPhase"));
+                Assert.That(admit, Does.Contain("cadenceLimitedSourceWork && !tailSourceCohortPhase"));
+                Assert.That(admit, Does.Contain("laneCadenceLimitedSourceWork && !tailSourceCohortPhase"));
+                Assert.That(admit, Does.Contain("bool spatialSourceRecovery ="));
+                Assert.That(admit, Does.Contain("bool laneSpatialRecoveryClass ="));
+                Assert.That(admit, Does.Not.Contain("sourceWork && !tailSourceCohortPhase"));
                 Assert.That(admit, Does.Contain("uint tailSourceReasonMask ="));
                 Assert.That(admit, Does.Contain("candidateReasons & tailSourceReasonMask"));
                 Assert.That(admit, Does.Contain("SIMPLE_DDGI_SCHEDULER_REASON_RELOCATION_RETRY"));

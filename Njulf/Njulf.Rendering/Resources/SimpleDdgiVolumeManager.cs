@@ -4942,6 +4942,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     cohortLightingTransition,
                     sourceRefreshMode,
                     sourceRelightScale ?? Vector3.One);
+                if (hasRegionalDirtyWork &&
+                    !requiresGlobalInvalidation &&
+                    ContainsRegionalRadiometricChange(dirtyRegions))
+                {
+                    BeginRegionalLightingTransition(gi, dirtyRegions!);
+                }
                 UpdateTransportV2ActivationState(sourceCacheCapacityWillChange);
                 UpdateTransportCalibrationState(gi, sourceCacheCapacityWillChange);
                 if (_recenteredThisFrame)
@@ -8226,6 +8232,45 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             return false;
         }
 
+        internal static bool ContainsRegionalRadiometricChange(
+            IReadOnlyList<DdgiDirtyRegion>? dirtyRegions)
+        {
+            if (dirtyRegions == null)
+                return false;
+
+            for (int i = 0; i < dirtyRegions.Count; i++)
+            {
+                if (dirtyRegions[i].Reason is
+                    DdgiDirtyReason.LocalLightChanged or
+                    DdgiDirtyReason.EmissiveChanged)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void BeginRegionalLightingTransition(
+            GlobalIlluminationSettings settings,
+            IReadOnlyList<DdgiDirtyRegion> dirtyRegions)
+        {
+            if (!settings.SimpleDdgiLightingDirtyBoostEnabled || _probeCount <= 0)
+                return;
+
+            _lightingDirtyFrames = Math.Max(
+                _lightingDirtyFrames,
+                settings.SimpleDdgiLightingDirtyFrameCount);
+            for (int i = 0; i < dirtyRegions.Count; i++)
+            {
+                DdgiDirtyReason reason = dirtyRegions[i].Reason;
+                if (reason is DdgiDirtyReason.LocalLightChanged or
+                    DdgiDirtyReason.EmissiveChanged)
+                {
+                    _activeDirtyReasonFlags |= ToSimpleDirtyReasonFlag(reason);
+                }
+            }
+        }
+
         internal static bool ShouldBeginTransportGlobalConvergenceForInvalidation(
             bool transportV2Active,
             int newlyInvalidatedProbeCount,
@@ -8408,14 +8453,28 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             int sourceRequestBudget,
             int schedulerRequestCapacity,
             bool transportV2Active,
-            bool acceleratedSolveActive)
+            bool acceleratedSolveActive,
+            bool spatialRecoveryActive = false)
         {
             int capacity = Math.Max(0, schedulerRequestCapacity);
             int requested = Math.Clamp(requestedBudget, 0, capacity);
             if (!transportV2Active || acceleratedSolveActive)
                 return requested;
 
-            return Math.Min(requested, Math.Max(0, sourceRequestBudget));
+            int sourceBudget = Math.Max(0, sourceRequestBudget);
+            if (!spatialRecoveryActive)
+                return Math.Min(requested, sourceBudget);
+
+            // Fresh and scroll-exposed probes have no receiver-safe history at
+            // their new logical cells. Spend a bounded second source envelope
+            // while that spatial cohort exists. The accelerated-solve arena is
+            // already provisioned for at least four source envelopes, so this
+            // halves large-move recovery without reallocating or changing the
+            // steady/radiometric refresh cadence.
+            int spatialSourceBudget = (int)Math.Min(
+                int.MaxValue,
+                (long)sourceBudget * 2L);
+            return Math.Min(requested, spatialSourceBudget);
         }
 
         private int ResolveFeedbackLimitedUpdateBudget(
@@ -9179,6 +9238,19 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     int.MaxValue,
                     ((long)participatingProbeCount + targetFrames - 1L) /
                         targetFrames);
+            _sourceRefreshTargetProbeCount = ResolveRadiometricSourceProbeTarget(
+                _sourceRefreshTargetProbeCount,
+                participatingProbeCount,
+                _lightingDirtyFrames > 0,
+                _settings.GlobalIllumination.SimpleDdgiUrgentRelightProbeBudget);
+            if (_sourceRefreshTargetProbeCount > 0)
+            {
+                targetFrames = Math.Max(
+                    1,
+                    (participatingProbeCount +
+                        _sourceRefreshTargetProbeCount - 1) /
+                    _sourceRefreshTargetProbeCount);
+            }
             _sourceRefreshCapacityShortfall = Math.Max(
                 0,
                 _sourceRefreshTargetProbeCount - Math.Max(updateBudget, 0));
@@ -11517,9 +11589,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 return false;
             }
 
-            return Math.Abs((long)deltaX) < CountX(current) &&
-                Math.Abs((long)deltaY) < CountY(current) &&
-                Math.Abs((long)deltaZ) < CountZ(current);
+            // A move of a full ring width has no overlapping cells, but it is
+            // still the same fixed resource topology and integer lattice. The
+            // resident classifier sees the unwrapped cell delta and marks every
+            // logical cell exposed, while receiver invalidation withholds the
+            // old physical payload until each replacement commits. Treating
+            // this as incompatible rebuilt the complete scheduler arena and
+            // disturbed unrelated coarser rings after a camera teleport.
+            return true;
         }
 
         internal static bool TryResolveCellDelta(GPUSimpleDdgiVolume previous, GPUSimpleDdgiVolume current, out int deltaX, out int deltaY, out int deltaZ)
@@ -13042,12 +13119,18 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             RecordPersistentWarmStartReadback(commandBuffer, frameIndex);
 
             int configuredBudget = Math.Clamp(_schedulerConfiguredRequestBudget, 0, _probeCount);
+            bool spatialRecoveryActive =
+                _recenteredThisFrame ||
+                (_gpuSchedulerFeedbackValid &&
+                    (_lastGpuSchedulerFeedback.PendingFreshCount != 0u ||
+                        _lastGpuSchedulerFeedback.PendingExposedCount != 0u));
             int effectiveBudget = ResolveTransportV2FrameRequestBudget(
                 configuredBudget,
                 _schedulerSourceRequestBudget,
                 configuredBudget,
                 TransportV2Active,
-                TransportAccelerationSolveActive);
+                TransportAccelerationSolveActive,
+                spatialRecoveryActive);
             if (!_schedulerDeterministicFixedBudget && _schedulerFeedbackRequestBudgetCap > 0)
                 effectiveBudget = Math.Min(effectiveBudget, _schedulerFeedbackRequestBudgetCap);
             _schedulerEffectiveRequestBudget = effectiveBudget;
@@ -13276,6 +13359,19 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _sourceRefreshTargetProbeCount = (int)Math.Min(
                 int.MaxValue,
                 ((long)participatingProbeCount + targetFrames - 1L) / targetFrames);
+            _sourceRefreshTargetProbeCount = ResolveRadiometricSourceProbeTarget(
+                _sourceRefreshTargetProbeCount,
+                participatingProbeCount,
+                _lightingDirtyFrames > 0,
+                _settings.GlobalIllumination.SimpleDdgiUrgentRelightProbeBudget);
+            if (_sourceRefreshTargetProbeCount > 0)
+            {
+                targetFrames = Math.Max(
+                    1,
+                    (participatingProbeCount +
+                        _sourceRefreshTargetProbeCount - 1) /
+                    _sourceRefreshTargetProbeCount);
+            }
             _sourceRefreshCapacityShortfall = Math.Max(
                 0,
                 _sourceRefreshTargetProbeCount - Math.Max(_schedulerEffectiveRequestBudget, 0));
@@ -13308,6 +13404,24 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _sourceRefreshTargetRayCount = result.TargetRaysPerFrame;
             _sourceRefreshRayCapacityShortfall = result.CapacityShortfall;
             _sourceRefreshMinimumSweepSeconds = result.MinimumAchievableSweepSeconds;
+        }
+
+        internal static int ResolveRadiometricSourceProbeTarget(
+            int steadyStateTarget,
+            int participatingProbeCount,
+            bool lightingTransitionActive,
+            int transitionProbeBudget)
+        {
+            int participants = Math.Max(0, participatingProbeCount);
+            int steady = Math.Clamp(steadyStateTarget, 0, participants);
+            if (!lightingTransitionActive || participants == 0)
+                return steady;
+
+            int transition = Math.Clamp(
+                transitionProbeBudget,
+                0,
+                SimpleDdgiUrgentRelightPolicy.MaximumProbeBudget);
+            return Math.Min(participants, Math.Max(steady, transition));
         }
 
         private void UploadGpuSchedulerFrame(

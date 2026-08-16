@@ -122,6 +122,44 @@ public sealed class SampleBenchmarkAnalyzerTests
     }
 
     [Test]
+    public void FastTraversalBenchmarkCamera_StreamsThenExercisesFullRingCuts()
+    {
+        var start = HelloGame.ResolveFastTraversalBenchmarkCameraPose(5);
+        var firstStreamingStep =
+            HelloGame.ResolveFastTraversalBenchmarkCameraPose(6);
+        var firstArrival =
+            HelloGame.ResolveFastTraversalBenchmarkCameraPose(17);
+        var returnCut =
+            HelloGame.ResolveFastTraversalBenchmarkCameraPose(18);
+        var finalCut =
+            HelloGame.ResolveFastTraversalBenchmarkCameraPose(23);
+        var settled =
+            HelloGame.ResolveFastTraversalBenchmarkCameraPose(300);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstStreamingStep.Position.Z,
+                Is.LessThan(start.Position.Z));
+            Assert.That(firstArrival.Position.Z,
+                Is.EqualTo(-28.5f).Within(1e-5f));
+            Assert.That(returnCut.Position,
+                Is.EqualTo(start.Position));
+            Assert.That(finalCut.Position,
+                Is.EqualTo(firstArrival.Position));
+            Assert.That(
+                Njulf.Core.Math.Vector3.Distance(
+                    start.Position,
+                    firstArrival.Position),
+                Is.EqualTo(35.0f).Within(1e-5f),
+                "The cut must cover a complete 28x1.25 m near-ring width.");
+            Assert.That(finalCut.Yaw,
+                Is.EqualTo(MathF.PI).Within(1e-5f));
+            Assert.That(settled,
+                Is.EqualTo(finalCut));
+        });
+    }
+
+    [Test]
     public void ResolvedGiSettingsDifference_ReportsNamedFieldsAndHonorsTheBound()
     {
         var expected = new ResolvedGiSettingsMetadata(

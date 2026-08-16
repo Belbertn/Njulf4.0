@@ -14,8 +14,10 @@ layout(std430, set = 2, binding = 0) readonly buffer ForwardDdgiReceiverCacheBlo
 
 struct ForwardDdgiReceiverCacheSample
 {
-    vec3 DdgiIrradiance;
-    vec3 EnvironmentIrradiance;
+    // Keep the packed value live until the consumer actually needs each
+    // component. This preserves the single aligned cache read without carrying
+    // six unpacked FP32 radiance lanes through IBL evaluation.
+    uvec4 Packed;
 };
 
 uint ForwardDdgiReceiverCacheEntryIndex(
@@ -34,18 +36,12 @@ uint ForwardDdgiReceiverCacheEntryIndex(
 }
 
 float SampleForwardDdgiReceiverCacheRoughSpecularVisibility(
-    vec2 fragmentCoordinate,
-    vec2 screenDimensions,
+    ForwardDdgiReceiverCacheSample cacheSample,
     float perceptualRoughness)
 {
-    uint entryIndex = ForwardDdgiReceiverCacheEntryIndex(
-        fragmentCoordinate,
-        screenDimensions);
     // The resolve output retains the gather metadata's upper-bit ABI:
     // [ unused:10 | visibility:10 | minimum roughness:6 | full roughness:6 ].
-    // Read only this scalar before IBL; the RGB payload can stay out of the live
-    // register set until diffuse composition after the direct-light loop.
-    uint metadata = ForwardDdgiReceiverCache.Entries[entryIndex].w;
+    uint metadata = cacheSample.Packed.w;
     float indirectSpecularVisibility =
         float((metadata >> 10u) & 0x3ffu) / 1023.0;
     float minimumRoughness = float((metadata >> 20u) & 0x3fu) / 63.0;
@@ -70,18 +66,28 @@ ForwardDdgiReceiverCacheSample SampleForwardDdgiReceiverCache(
         fragmentCoordinate,
         screenDimensions);
     // Sixteen-byte entries deliberately produce one naturally aligned vector
-    // load. Only the FP16 payload lanes are consumed, allowing the driver to
-    // eliminate dead upper-lane traffic while retaining aligned addressing.
+    // load. Leave the payload packed so only four words remain live through
+    // IBL; diffuse composition unpacks the six FP16 lanes at first use.
     uvec4 packed = ForwardDdgiReceiverCache.Entries[entryIndex];
-    vec2 ddgiXy = unpackHalf2x16(packed.x);
-    vec2 ddgiZEnvironmentX = unpackHalf2x16(packed.y);
-    vec2 environmentYz = unpackHalf2x16(packed.z);
     ForwardDdgiReceiverCacheSample result;
-    result.DdgiIrradiance = vec3(ddgiXy, ddgiZEnvironmentX.x);
-    result.EnvironmentIrradiance = vec3(
-        ddgiZEnvironmentX.y,
-        environmentYz);
+    result.Packed = packed;
     return result;
+}
+
+vec3 ForwardDdgiReceiverCacheDdgiIrradiance(
+    ForwardDdgiReceiverCacheSample cacheSample)
+{
+    vec2 ddgiXy = unpackHalf2x16(cacheSample.Packed.x);
+    vec2 ddgiZEnvironmentX = unpackHalf2x16(cacheSample.Packed.y);
+    return vec3(ddgiXy, ddgiZEnvironmentX.x);
+}
+
+vec3 ForwardDdgiReceiverCacheEnvironmentIrradiance(
+    ForwardDdgiReceiverCacheSample cacheSample)
+{
+    vec2 ddgiZEnvironmentX = unpackHalf2x16(cacheSample.Packed.y);
+    vec2 environmentYz = unpackHalf2x16(cacheSample.Packed.z);
+    return vec3(ddgiZEnvironmentX.y, environmentYz);
 }
 
 #endif

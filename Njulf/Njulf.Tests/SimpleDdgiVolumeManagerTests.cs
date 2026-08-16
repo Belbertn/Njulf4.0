@@ -595,6 +595,32 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
+    [TestCase(4_096, 128, 512, true, false, true, 256)]
+    [TestCase(4_096, 64, 1_024, true, false, true, 128)]
+    [TestCase(256, 128, 512, true, false, true, 256)]
+    [TestCase(4_096, 128, 192, true, false, true, 192)]
+    [TestCase(4_096, 128, 512, true, true, true, 512)]
+    [TestCase(4_096, 128, 512, false, false, true, 512)]
+    public void TransportV2SpatialRecoveryFrameBudget_UsesBoundedDoubleSourceEnvelope(
+        int requestedBudget,
+        int sourceBudget,
+        int requestCapacity,
+        bool transportV2Active,
+        bool acceleratedSolveActive,
+        bool spatialRecoveryActive,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveTransportV2FrameRequestBudget(
+                requestedBudget,
+                sourceBudget,
+                requestCapacity,
+                transportV2Active,
+                acceleratedSolveActive,
+                spatialRecoveryActive),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(0, 1)]
     [TestCase(1, 1)]
     [TestCase(64, 64)]
@@ -1408,7 +1434,7 @@ public sealed class SimpleDdgiVolumeManagerTests
     }
 
     [Test]
-    public void CompatibleCellAlignedRemap_DoesNotRequireAFieldReset()
+    public void CellAlignedRemap_IncludingWholeVolumeMove_DoesNotRequireAFieldReset()
     {
         var previous = new GPUSimpleDdgiVolume
         {
@@ -1435,7 +1461,7 @@ public sealed class SimpleDdgiVolumeManagerTests
                 SimpleDdgiVolumeManager.IsCompatibleVolumeRemap(
                     previous,
                     wholeVolume),
-                Is.False);
+                Is.True);
             Assert.That(
                 SimpleDdgiVolumeManager.IsCompatibleVolumeRemap(
                     previous,

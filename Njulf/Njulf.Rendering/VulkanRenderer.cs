@@ -18401,6 +18401,23 @@ namespace Njulf.Rendering
             return hash;
         }
 
+        internal static ulong CreateSimpleDdgiGlobalLightSignature(
+            LightFrameSnapshot lightSnapshot)
+        {
+            ulong hash = HashStart;
+            ReadOnlySpan<Light> lights = lightSnapshot.Lights.Span;
+            int count = Math.Min(lightSnapshot.Count, lights.Length);
+            int directionalCount = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (lights[i].Type != LightType.Directional)
+                    continue;
+                hash = HashAddDdgiLight(hash, lights[i]);
+                directionalCount++;
+            }
+            return HashAdd(hash, directionalCount);
+        }
+
         internal static ulong CreateSimpleDdgiLightingSignature(LightFrameSnapshot lightSnapshot, uint emissiveSourceRevision)
         {
             ulong hash = CreateDdgiLightSignature(lightSnapshot);
@@ -18578,19 +18595,25 @@ namespace Njulf.Rendering
             LightFrameSnapshot lightSnapshot,
             uint emissiveSourceRevision)
         {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            bool regionalDynamicSources =
+                gi.SimpleDdgiRegionalInvalidationEnabled;
             bool steppedAtmosphere =
                 Settings.Environment.Enabled &&
                 Settings.Environment.SourceKind == EnvironmentSourceKind.ProceduralSky &&
                 _environmentManager is { UsesAnalyticSky: true };
             ulong stableLightSignature = steppedAtmosphere
-                ? CreateSimpleDdgiStableLightSignature(lightSnapshot)
-                : CreateDdgiLightSignature(lightSnapshot);
+                ? CreateSimpleDdgiStableLightSignature(
+                    lightSnapshot,
+                    includeLocalLights: !regionalDynamicSources)
+                : regionalDynamicSources
+                    ? CreateSimpleDdgiGlobalLightSignature(lightSnapshot)
+                    : CreateDdgiLightSignature(lightSnapshot);
             ulong environmentSignature =
                 CreateSimpleDdgiEnvironmentSignature(Settings.Environment);
             ulong atmosphereStepSignature = steppedAtmosphere
                 ? _environmentManager!.GiLightingSignature
                 : 0UL;
-            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
             environmentSignature = HashAdd(
                 environmentSignature,
                 gi.EnvironmentFallbackIntensity);
@@ -18638,7 +18661,16 @@ namespace Njulf.Rendering
             lightSignature = HashAdd(
                 lightSignature,
                 exactSoleDirectionalSignature);
-            ulong emissiveSignature = HashAdd(HashStart, emissiveSourceRevision);
+            // Local lights and emissive producers already publish swept dirty
+            // regions through the bounded mutation journal. Keeping them in the
+            // global source signature discarded that spatial information and
+            // restarted every probe on every animation tick. With regional
+            // invalidation enabled, only environment/directional policy remains
+            // global; affected probes full-trace their region and retain their
+            // previously published irradiance while the temporal blend catches up.
+            ulong emissiveSignature = HashAdd(
+                HashStart,
+                regionalDynamicSources ? 0u : emissiveSourceRevision);
             // Region events are the normal Simple DDGI dynamic path.  Retain the
             // whole-scene signature only as the explicit legacy/validation mode;
             // otherwise hashing every render object merely recreates global dirty
@@ -18826,7 +18858,8 @@ namespace Njulf.Rendering
             value.X >= 0.0f && value.Y >= 0.0f && value.Z >= 0.0f;
 
         private ulong CreateSimpleDdgiStableLightSignature(
-            LightFrameSnapshot lightSnapshot)
+            LightFrameSnapshot lightSnapshot,
+            bool includeLocalLights)
         {
             ulong hash = HashStart;
             ReadOnlySpan<Light> lights = lightSnapshot.Lights.Span;
@@ -18836,6 +18869,8 @@ namespace Njulf.Rendering
             for (int lightIndex = 0; lightIndex < count; lightIndex++)
             {
                 Light light = lights[lightIndex];
+                if (!includeLocalLights && light.Type != LightType.Directional)
+                    continue;
                 bool atmosphereOwned = lightIndex == primaryDirectionalIndex ||
                     (_environmentManager?.IsManagedAtmosphereLight(
                         lightIndex,

@@ -4045,13 +4045,6 @@ void main()
     vec3 ddgiDirectionalRadiance = vec3(0.0);
     float ddgiDirectionalConfidence = 0.0;
     float indirectSpecularVisibility = 1.0;
-#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
-    indirectSpecularVisibility =
-        SampleForwardDdgiReceiverCacheRoughSpecularVisibility(
-            gl_FragCoord.xy,
-            pc.Push.ScreenDimensions,
-            roughness);
-#endif
 #if !FORWARD_GLOBAL_ILLUMINATION_DISABLED && !FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
     bool directionalGlobalIlluminationEnabled = geometryDecal
         ? ForwardDecalGlobalIlluminationEnabled()
@@ -4119,22 +4112,6 @@ void main()
     }
 #endif
 
-    EvaluateIbl(
-        albedo,
-        metallic,
-        diffuseReflectance,
-        roughness,
-        dielectricF0,
-        normal,
-        viewDirection,
-        indirectAo,
-        indirectSpecularVisibility,
-        ddgiDirectionalRadiance,
-        ddgiDirectionalConfidence,
-        diffuseIbl,
-        specularIbl,
-        reflectionDebugActive,
-        reflectionDebugColor);
     GPUEnvironmentData environment = ReadEnvironmentData();
     vec3 directLighting = vec3(0.0);
     vec3 directDiffuseSource = vec3(0.0);
@@ -4172,24 +4149,6 @@ void main()
         float linearDepth = clamp(abs(viewPosition.z) / farDepth, 0.0, 1.0);
         float visibleDepth = sqrt(linearDepth);
         WriteForwardColor(vec4(vec3(visibleDepth), 1.0));
-        return;
-    }
-
-    if (reflectionDebugActive)
-    {
-        WriteForwardColor(vec4(reflectionDebugColor, 1.0));
-        return;
-    }
-
-    if (environment.DebugView == ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY)
-    {
-        WriteForwardColor(vec4(diffuseIbl, 1.0));
-        return;
-    }
-
-    if (environment.DebugView == ENVIRONMENT_DEBUG_SPECULAR_IBL_ONLY)
-    {
-        WriteForwardColor(vec4(specularIbl, 1.0));
         return;
     }
 
@@ -4325,6 +4284,56 @@ void main()
         directLighting = mix(directLighting, cascadeColor, 0.35);
     }
 
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+    // One packed read supplies both the rough-reflection visibility used by
+    // IBL and the diffuse fields consumed immediately afterwards. Deferring
+    // this until the direct-light loop has finished keeps the packed value out
+    // of that loop's live register set and satisfies the one-load cache ABI.
+    ForwardDdgiReceiverCacheSample cachedGather =
+        SampleForwardDdgiReceiverCache(
+            gl_FragCoord.xy,
+            pc.Push.ScreenDimensions);
+    indirectSpecularVisibility =
+        SampleForwardDdgiReceiverCacheRoughSpecularVisibility(
+            cachedGather,
+            roughness);
+#endif
+
+    EvaluateIbl(
+        albedo,
+        metallic,
+        diffuseReflectance,
+        roughness,
+        dielectricF0,
+        normal,
+        viewDirection,
+        indirectAo,
+        indirectSpecularVisibility,
+        ddgiDirectionalRadiance,
+        ddgiDirectionalConfidence,
+        diffuseIbl,
+        specularIbl,
+        reflectionDebugActive,
+        reflectionDebugColor);
+
+    if (reflectionDebugActive)
+    {
+        WriteForwardColor(vec4(reflectionDebugColor, 1.0));
+        return;
+    }
+
+    if (environment.DebugView == ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY)
+    {
+        WriteForwardColor(vec4(diffuseIbl, 1.0));
+        return;
+    }
+
+    if (environment.DebugView == ENVIRONMENT_DEBUG_SPECULAR_IBL_ONLY)
+    {
+        WriteForwardColor(vec4(specularIbl, 1.0));
+        return;
+    }
+
     vec3 finalDiffuseIndirect = vec3(0.0);
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
     // Pipeline selection is the authoritative handshake: this native program
@@ -4341,13 +4350,11 @@ void main()
     // loop's live register set. The producer already applied intensity,
     // ownership, leak attenuation, fallback weight, far-field visibility, and
     // the Lambert factor.
-    ForwardDdgiReceiverCacheSample cachedGather =
-        SampleForwardDdgiReceiverCache(
-            gl_FragCoord.xy,
-            pc.Push.ScreenDimensions);
     finalDiffuseIndirect =
-        (cachedGather.DdgiIrradiance * ambientOcclusion +
-         cachedGather.EnvironmentIrradiance * indirectAo) *
+        (ForwardDdgiReceiverCacheDdgiIrradiance(cachedGather) *
+             ambientOcclusion +
+         ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *
+             indirectAo) *
         diffuseReflectance;
 #elif FORWARD_GLOBAL_ILLUMINATION_DISABLED
     // Benchmark control artifact. This is a separate native program so the
