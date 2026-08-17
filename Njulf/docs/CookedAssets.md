@@ -6,6 +6,7 @@ Njulf resolves versioned, hashed cooked packages before source models. Cooked st
 
 ```powershell
 dotnet run --project Njulf.AssetTool -- cook model NjulfHelloGame/Strut.glb --out NjulfHelloGame/Cooked
+dotnet run --project Njulf.AssetTool -- cook model NjulfHelloGame/Assets/Bistro_v5_2/BistroExterior.fbx --out NjulfHelloGame/Cooked --backend Assimp --assimp-material-texture-convention SpecularGbIsRoughnessMetallic
 dotnet run --project Njulf.AssetTool -- cook folder NjulfHelloGame --out NjulfHelloGame/Cooked
 dotnet run --project Njulf.AssetTool -- cook changed NjulfHelloGame --out NjulfHelloGame/Cooked
 dotnet run --project Njulf.AssetTool -- clean-stale --out NjulfHelloGame/Cooked
@@ -61,6 +62,22 @@ Cooked/
     textures/*.ktx2, *.njtex
     reports/*.cook-report.json
 ```
+
+## Explicit material classification
+
+Material names are not cook-time semantics. Use glTF material extras to opt a
+material into foliage shading:
+
+```json
+"extras": {
+  "NJULF_foliage": true
+}
+```
+
+`NJULF_foliage` is preserved in the cooked material data and controls foliage
+shading only. Alpha-coverage-preserving mipmaps are controlled separately by
+standard glTF `alphaMode: "MASK"`; opaque foliage such as a tree trunk uses
+ordinary mipmaps.
 
 ## Runtime policy
 

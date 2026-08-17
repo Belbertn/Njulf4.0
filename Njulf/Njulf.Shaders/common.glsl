@@ -1550,6 +1550,7 @@ const uint MATERIAL_FEATURE_DISPERSION = 1u << 21;
 const uint MATERIAL_FEATURE_FOLIAGE = 1u << 22;
 const uint MATERIAL_FEATURE_COMPRESSED_NORMAL_BC5 = 1u << 23;
 const uint MATERIAL_FEATURE_IOR = 1u << 24;
+const uint MATERIAL_FEATURE_NORMAL_GREEN_INVERTED = 1u << 25;
 
 // Documented byte offsets for layout-critical fields. These are parsed by
 // tests because GLSL has no portable compile-time offsetof operator.

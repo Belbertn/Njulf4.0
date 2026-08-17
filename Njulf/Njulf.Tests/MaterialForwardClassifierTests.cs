@@ -98,6 +98,23 @@ namespace Njulf.Tests
             Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.SimpleOpaqueNormal));
         }
 
+        [Test]
+        public void Classify_DirectXNormalMap_StaysOnSimpleOpaqueNormalPath()
+        {
+            GPUMaterialData material = CreateDefaultMaterial();
+            material.NormalTextureIndex = BindlessIndex.FirstDynamicTextureIndex;
+            material.NormalScaleBias = new Vector4(1f, 0f, 0.5f, 0f);
+            material.FeatureFlags = (uint)(
+                MaterialFeatureFlags.CompressedNormalBc5 |
+                MaterialFeatureFlags.NormalMapGreenInverted);
+
+            MaterialForwardClass materialClass = MaterialForwardClassifier.Classify(
+                material,
+                MaterialRenderMetadata.FromGpuMaterial(material));
+
+            Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.SimpleOpaqueNormal));
+        }
+
         private static GPUMaterialData CreateDefaultMaterial()
         {
             return new GPUMaterialData

@@ -62,7 +62,9 @@ void main()
     }
     uint stateBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
     uint stateFlags = ReadStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 4u);
-    uint stateAge = ReadStorageWordUniform(pc.ProbeStateBufferIndex, stateBase + 5u);
+    uint persistedStateAge = ReadStorageWordUniform(
+        pc.ProbeStateBufferIndex,
+        stateBase + 5u);
     uint expectedGeneration = (stateFlags & SIMPLE_DDGI_PROBE_FLAG_GENERATION_MASK) >>
         SIMPLE_DDGI_PROBE_FLAG_GENERATION_SHIFT;
     if (expectedGeneration == 0u)
@@ -75,6 +77,9 @@ void main()
 
     uint schedulerStateBase = pc.SchedulerProbeStateOffsetWords +
         probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    uint stateAge = SchedulerProbeUpdateAge(
+        persistedStateAge,
+        SchedulerArenaRead(schedulerStateBase + 0u));
     // Word 8 is the last applied invalidation marker. Dirty-latency start
     // remains in word 6 so the bootstrap ABI retains both pieces of state.
     uint invalidationMarker = SchedulerArenaRead(schedulerStateBase + 8u);

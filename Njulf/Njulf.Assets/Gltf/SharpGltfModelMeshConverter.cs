@@ -37,6 +37,7 @@ namespace Njulf.Assets.Gltf;
 
 internal static class SharpGltfModelMeshConverter
 {
+    internal const string FoliageExtra = "NJULF_foliage";
     internal const string GeometryDecalExtra = "NJULF_geometry_decal";
     internal const string DecalLayerExtra = "NJULF_decal_layer";
     internal const string DecalDepthBiasExtra = "NJULF_decal_depth_bias";
@@ -358,6 +359,20 @@ internal static class SharpGltfModelMeshConverter
             return;
         if (extras is not JsonObject objectExtras)
             return;
+
+        if (objectExtras.TryGetPropertyValue(FoliageExtra, out JsonNode? foliageNode))
+        {
+            if (foliageNode is not JsonValue foliageValue ||
+                !foliageValue.TryGetValue(out bool isFoliage))
+            {
+                throw InvalidMaterialExtra(materialIndex, FoliageExtra, "a boolean");
+            }
+
+            if (isFoliage)
+                imported.FeatureFlags |= ModelMaterialFeatureBits.Foliage;
+            else
+                imported.FeatureFlags &= ~ModelMaterialFeatureBits.Foliage;
+        }
 
         if (objectExtras.TryGetPropertyValue(GeometryDecalExtra, out JsonNode? decalNode))
         {

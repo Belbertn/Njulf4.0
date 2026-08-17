@@ -220,6 +220,7 @@ internal sealed class SampleInputController
     private IReadOnlyList<ParticleEffectInstance> _particleEffects;
     private SamplePerformanceScenarioRunner? _performanceScenarioRunner;
     private readonly System.Action? _cycleScene;
+    private readonly System.Action? _cycleSponzaAndBistro;
     private readonly Func<SampleSceneKind, bool>? _loadSceneKind;
     private readonly System.Action? _toggleDdgiDiagnosticsFilter;
     private readonly Func<SampleDiagnosticsFilter>? _getDiagnosticsFilter;
@@ -315,7 +316,7 @@ internal sealed class SampleInputController
     private bool _cyclePerformanceScenarioPressed;
     private bool _loadCornellPerformanceScenePressed;
     private bool _loadVerticalityPerformanceScenePressed;
-    private bool _loadSponzaPerformanceScenePressed;
+    private bool _cycleSponzaAndBistroPressed;
     private bool _startSponzaGiCapturePressed;
     private bool _startRuntimeBenchmarkPressed;
     private bool _toggleGpuTimingPressed;
@@ -366,6 +367,7 @@ internal sealed class SampleInputController
         IReadOnlyList<ParticleEffectInstance>? particleEffects = null,
         SamplePerformanceScenarioRunner? performanceScenarioRunner = null,
         System.Action? cycleScene = null,
+        System.Action? cycleSponzaAndBistro = null,
         Func<SampleSceneKind, bool>? loadSceneKind = null,
         System.Action? toggleDdgiDiagnosticsFilter = null,
         Func<SampleDiagnosticsFilter>? getDiagnosticsFilter = null,
@@ -383,6 +385,7 @@ internal sealed class SampleInputController
         _particleEffects = particleEffects ?? Array.Empty<ParticleEffectInstance>();
         _performanceScenarioRunner = performanceScenarioRunner;
         _cycleScene = cycleScene;
+        _cycleSponzaAndBistro = cycleSponzaAndBistro;
         _loadSceneKind = loadSceneKind;
         _toggleDdgiDiagnosticsFilter = toggleDdgiDiagnosticsFilter;
         _getDiagnosticsFilter = getDiagnosticsFilter;
@@ -498,27 +501,8 @@ internal sealed class SampleInputController
                 VerticalityRingsYaw,
                 VerticalityRingsPitch);
 
-        if (WasChordPressed(Key.Number4, ref _loadSponzaPerformanceScenePressed))
-        {
-            bool? requestedSceneLoaded =
-                _loadSceneKind?.Invoke(
-                    SampleSceneKind.SponzaPlaza);
-            if (SampleScenePresetPolicy.ShouldApply(
-                    requestedSceneLoaded))
-            {
-                LoadPerformanceScenarioPreset(
-                    SamplePerformanceScenario
-                        .GiSponzaRightWallStationary,
-                    SponzaRightWallPosition,
-                    SponzaRightWallYaw,
-                    SponzaRightWallPitch);
-            }
-            else
-            {
-                Console.WriteLine(
-                    "Sponza performance preset skipped because the scene load recovered to the safe scene.");
-            }
-        }
+        if (WasChordPressed(Key.Number4, ref _cycleSponzaAndBistroPressed))
+            _cycleSponzaAndBistro?.Invoke();
 
         if (_renderer != null && WasChordPressed(Key.B, ref _startRuntimeBenchmarkPressed))
             StartRuntimeBenchmarkCapture();

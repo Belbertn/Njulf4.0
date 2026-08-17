@@ -680,6 +680,45 @@ public sealed class TextureTransportStatisticsTests
     }
 
     [Test]
+    public void TextureCooker_DecodesDdsForStatisticsAndCooking()
+    {
+        byte[] dds = CreateRgbaDds(width: 4, height: 4, red: 32, green: 96, blue: 160, alpha: 255);
+        string path = Path.Combine(_directory, "source-dds.ktx2");
+        var source = new ModelTextureSource
+        {
+            Bytes = dds,
+            CacheIdentity = "source.dds",
+            DebugName = "source.dds",
+            ContainerKind = TextureContainerKind.StandardImage
+        };
+        var options = new TextureCookOptions(
+            MaxDimension: 16,
+            ColorSpace: TextureColorSpace.Linear,
+            TargetFormatPolicy: TextureTargetFormatPolicy.Rgba8,
+            Semantic: TextureSemantic.Data);
+
+        TextureTransportStatistics statistics =
+            TextureCooker.AnalyzeTransportStatistics(source, options);
+        CookedTextureReport report = new TextureCooker().Cook(source, path, options);
+        (int width, int height, _, uint format) = TextureCooker.Inspect(
+            File.ReadAllBytes(path),
+            path);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(statistics.IsValid, Is.True);
+            Assert.That(statistics.Decoder, Is.EqualTo(TextureTransportStatistics.DdsDecoderVersion));
+            Assert.That(statistics.Width, Is.EqualTo(4));
+            Assert.That(statistics.Height, Is.EqualTo(4));
+            Assert.That(statistics.LinearChannelMean.X, Is.EqualTo(32.0 / 255.0).Within(1e-12));
+            Assert.That(report.TransportStatistics.Decoder, Is.EqualTo(TextureTransportStatistics.DdsDecoderVersion));
+            Assert.That(width, Is.EqualTo(4));
+            Assert.That(height, Is.EqualTo(4));
+            Assert.That(format, Is.EqualTo(37u));
+        });
+    }
+
+    [Test]
     public void AnalyzeTransportStatistics_DoesNotWriteAndReturnsExplicitUnsupportedState()
     {
         TextureTransportStatistics statistics = TextureCooker.AnalyzeTransportStatistics(
@@ -896,6 +935,53 @@ public sealed class TextureTransportStatisticsTests
             bytes.AsSpan(96, 8),
             uncompressedLength ?? (supercompression == 1 ? 0 : (ulong)level.Length));
         level.CopyTo(bytes, levelOffset);
+        return bytes;
+    }
+
+    private static byte[] CreateRgbaDds(
+        int width,
+        int height,
+        byte red,
+        byte green,
+        byte blue,
+        byte alpha)
+    {
+        const int headerLength = 128;
+        const uint ddsdCaps = 0x00000001;
+        const uint ddsdHeight = 0x00000002;
+        const uint ddsdWidth = 0x00000004;
+        const uint ddsdPitch = 0x00000008;
+        const uint ddsdPixelFormat = 0x00001000;
+        const uint ddpfAlphaPixels = 0x00000001;
+        const uint ddpfRgb = 0x00000040;
+        const uint ddsCapsTexture = 0x00001000;
+        int pixelByteCount = checked(width * height * 4);
+        var bytes = new byte[headerLength + pixelByteCount];
+        "DDS "u8.CopyTo(bytes);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4, 4), 124);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(8, 4),
+            ddsdCaps | ddsdHeight | ddsdWidth | ddsdPitch | ddsdPixelFormat);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(12, 4), checked((uint)height));
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16, 4), checked((uint)width));
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(20, 4), checked((uint)(width * 4)));
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(76, 4), 32);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(80, 4), ddpfAlphaPixels | ddpfRgb);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(88, 4), 32);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(92, 4), 0x000000ff);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(96, 4), 0x0000ff00);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(100, 4), 0x00ff0000);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(104, 4), 0xff000000);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(108, 4), ddsCapsTexture);
+
+        for (int offset = headerLength; offset < bytes.Length; offset += 4)
+        {
+            bytes[offset] = red;
+            bytes[offset + 1] = green;
+            bytes[offset + 2] = blue;
+            bytes[offset + 3] = alpha;
+        }
+
         return bytes;
     }
 

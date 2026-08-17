@@ -376,8 +376,12 @@ public sealed class DdgiEmissiveTransportCacheTests
             Assert.That(renderer, Does.Contain("mutually exclusive, so disabling the feature cannot double energy."));
             Assert.That(renderer, Does.Contain("_materialManager.MaterialDataRevision"));
             Assert.That(renderer, Does.Contain("_ddgiEmissiveTableCache.TryGet("));
-            Assert.That(sceneBuilder, Does.Contain("hash.Add(renderObject.Enabled);"));
-            Assert.That(sceneBuilder, Does.Contain("hash.Add(renderObject.IsStatic);"));
+            Assert.That(
+                sceneBuilder.Split("hash.Add(scene.RenderPayloadRevision);").Length - 1,
+                Is.EqualTo(2),
+                "Both stable-payload signatures must use the scene's O(1) render revision.");
+            Assert.That(sceneBuilder, Does.Not.Contain("hash.Add(renderObject.Enabled);"));
+            Assert.That(sceneBuilder, Does.Not.Contain("hash.Add(renderObject.IsStatic);"));
         });
     }
 

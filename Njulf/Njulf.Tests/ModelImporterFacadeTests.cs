@@ -32,6 +32,72 @@ public sealed class ModelImporterFacadeTests
     }
 
     [Test]
+    public void ImportDetailed_AssimpPackedRoughnessMetallicConventionDoesNotAliasOcclusion()
+    {
+        string path = WriteTexturedTriangleObj();
+        using var importer = new ModelImporter();
+
+        ModelImportResult result = importer.ImportDetailed(
+            path,
+            new ImporterOptions
+            {
+                Backend = ModelImportBackend.Assimp,
+                AssimpMaterialTextureConvention =
+                    AssimpMaterialTextureConvention.SpecularGbIsRoughnessMetallic
+            });
+        ModelMaterial material = result.Mesh!.Materials.Single(
+            candidate => candidate.BaseColorTexture?.Source?.FilePath?.EndsWith(
+                "base.png",
+                StringComparison.OrdinalIgnoreCase) == true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ImportedSuccessfully, Is.True, result.FailureMessage);
+            Assert.That(material.BaseColorTexture?.Source?.FilePath, Does.EndWith("base.png").IgnoreCase);
+            Assert.That(material.NormalTexture?.Source?.FilePath, Does.EndWith("normal.png").IgnoreCase);
+            Assert.That(
+                material.MetallicRoughnessTexture?.Source?.FilePath,
+                Does.EndWith("packed-rm.png").IgnoreCase);
+            Assert.That(material.OcclusionTexture, Is.Null);
+            Assert.That(material.OcclusionTexturePath, Is.Null);
+            Assert.That(material.BaseColorTexture?.ColorSpace, Is.EqualTo(TextureColorSpace.Srgb));
+            Assert.That(material.MetallicRoughnessTexture?.ColorSpace, Is.EqualTo(TextureColorSpace.Linear));
+        });
+    }
+
+    [Test]
+    public void ImportDetailed_AmazonBistroConventionMarksDirectXNormalMaps()
+    {
+        string path = WriteTexturedTriangleObj();
+        using var importer = new ModelImporter();
+
+        ModelImportResult result = importer.ImportDetailed(
+            path,
+            new ImporterOptions
+            {
+                Backend = ModelImportBackend.Assimp,
+                AssimpMaterialTextureConvention =
+                    AssimpMaterialTextureConvention.AmazonBistro
+            });
+        ModelMaterial material = result.Mesh!.Materials.Single(
+            candidate => candidate.NormalTexture?.Source?.FilePath?.EndsWith(
+                "normal.png",
+                StringComparison.OrdinalIgnoreCase) == true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ImportedSuccessfully, Is.True, result.FailureMessage);
+            Assert.That(material.FeatureFlags & (1u << 25), Is.Not.Zero);
+            Assert.That(material.Roughness, Is.EqualTo(1f));
+            Assert.That(material.Metallic, Is.EqualTo(1f));
+            Assert.That(
+                material.MetallicRoughnessTexture?.Source?.FilePath,
+                Does.EndWith("packed-rm.png").IgnoreCase);
+            Assert.That(material.OcclusionTexture, Is.Null);
+        });
+    }
+
+    [Test]
     public void ImportDetailed_DefaultGltfBackendUsesSharpGltfAndReturnsCapabilityReport()
     {
         string path = CreateMinimalExternalGltf();
@@ -169,6 +235,38 @@ public sealed class ModelImporterFacadeTests
         });
     }
 
+    [TestCase(ModelImportBackend.SharpGltf)]
+    [TestCase(ModelImportBackend.Assimp)]
+    public void ImportDetailed_ExplicitFoliageExtraSetsPersistentMaterialFeature(
+        ModelImportBackend backend)
+    {
+        string path = CreateMinimalExternalGltf($"-{backend.ToString().ToLowerInvariant()}-foliage");
+        string json = File.ReadAllText(path)
+            .Replace(
+                "\"mode\": 4",
+                "\"mode\": 4,\n                        \"material\": 0",
+                StringComparison.Ordinal)
+            .Replace(
+                "\"buffers\":",
+                "\"materials\": [{ \"name\": \"ExplicitFoliage\", \"extras\": { \"NJULF_foliage\": true } }],\n                \"buffers\":",
+                StringComparison.Ordinal);
+        File.WriteAllText(path, json);
+        using var importer = new ModelImporter();
+
+        ModelImportResult result = importer.ImportDetailed(
+            path,
+            new ImporterOptions { Backend = backend });
+        ModelMaterial? material = result.Mesh?.Materials
+            .SingleOrDefault(candidate => candidate.Name == "ExplicitFoliage");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.ImportedSuccessfully, Is.True, result.FailureMessage);
+            Assert.That(material, Is.Not.Null);
+            Assert.That(material!.FeatureFlags & (1u << 22), Is.Not.EqualTo(0u));
+        });
+    }
+
     [Test]
     public void ImportDetailed_MissingFileReturnsFailureResultWithoutThrowing()
     {
@@ -251,6 +349,43 @@ public sealed class ModelImporterFacadeTests
         File.WriteAllText(
             path,
             """
+            v 0 0 0
+            v 1 0 0
+            v 0 1 0
+            vt 0 0
+            vt 1 0
+            vt 0 1
+            vn 0 0 1
+            f 1/1/1 2/2/1 3/3/1
+            """);
+
+        return path;
+    }
+
+    private static string WriteTexturedTriangleObj()
+    {
+        string directory = CreateTestDirectory();
+        string path = Path.Combine(directory, $"{TestContext.CurrentContext.Test.ID}-textured.obj");
+        string materialPath = Path.Combine(directory, "BistroStyle.mtl");
+        byte[] png = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nWQAAAAASUVORK5CYII=");
+        File.WriteAllBytes(Path.Combine(directory, "base.png"), png);
+        File.WriteAllBytes(Path.Combine(directory, "normal.png"), png);
+        File.WriteAllBytes(Path.Combine(directory, "packed-rm.png"), png);
+        File.WriteAllText(
+            materialPath,
+            """
+            newmtl BistroStyle
+            Kd 1.0 1.0 1.0
+            map_Kd base.png
+            map_Bump normal.png
+            map_Ks packed-rm.png
+            """);
+        File.WriteAllText(
+            path,
+            """
+            mtllib BistroStyle.mtl
+            usemtl BistroStyle
             v 0 0 0
             v 1 0 0
             v 0 1 0

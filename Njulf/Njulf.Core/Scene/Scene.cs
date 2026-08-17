@@ -32,11 +32,18 @@ namespace Njulf.Core.Scene
         private bool _disposed;
         private uint _reflectionProbeRevision;
         private ulong _mutationSerial;
+        private ulong _renderPayloadRevision;
         private Color _ambientLight = new(0.2f, 0.2f, 0.2f, 1f);
 
         public event Action<SceneMutation>? Mutated;
         public event Action<RenderObjectMutation>? RenderObjectMutated;
         public ulong MutationSerial => _mutationSerial;
+        /// <summary>
+        /// O(1) invalidation token for renderer payloads built from render
+        /// objects, static instances, and foliage. Unlike <see cref="MutationSerial"/>,
+        /// particle-only changes do not invalidate the stable geometry payload.
+        /// </summary>
+        public ulong RenderPayloadRevision => _renderPayloadRevision;
 
         public Scene()
         {
@@ -167,6 +174,7 @@ namespace Njulf.Core.Scene
                 _foliagePrototypes.Add(foliagePrototype);
                 foliagePrototype.Changed += OnFoliagePrototypeChanged;
                 AddDisposableReference(foliagePrototype);
+                AdvanceRenderPayloadRevision();
             }
         }
 
@@ -277,6 +285,7 @@ namespace Njulf.Core.Scene
             foliagePrototype.Changed -= OnFoliagePrototypeChanged;
             RemoveDisposableReference(foliagePrototype);
             _foliagePrototypes.Remove(foliagePrototype);
+            AdvanceRenderPayloadRevision();
         }
 
         public void Remove(FoliagePatch foliagePatch)
@@ -412,10 +421,12 @@ namespace Njulf.Core.Scene
 
         private void OnFoliagePrototypeChanged(FoliagePrototype prototype)
         {
+            bool publishedPatchMutation = false;
             foreach (FoliagePatch patch in _foliagePatches)
             {
                 if (!ReferenceEquals(patch.Prototype, prototype))
                     continue;
+                publishedPatchMutation = true;
                 PublishMutation(
                     patch,
                     SceneMutationKind.Foliage | SceneMutationKind.Content,
@@ -423,6 +434,9 @@ namespace Njulf.Core.Scene
                     patch.Bounds,
                     patch.ContentRevision);
             }
+
+            if (!publishedPatchMutation)
+                AdvanceRenderPayloadRevision();
         }
 
         private void PublishMutation(
@@ -435,6 +449,11 @@ namespace Njulf.Core.Scene
             _mutationSerial = _mutationSerial == ulong.MaxValue
                 ? 1UL
                 : _mutationSerial + 1UL;
+            if (producer is RenderObject or StaticInstanceBatch or FoliagePatch ||
+                kind.HasFlag(SceneMutationKind.Global))
+            {
+                AdvanceRenderPayloadRevision();
+            }
             Mutated?.Invoke(new SceneMutation(
                 _mutationSerial,
                 producer.Id,
@@ -444,6 +463,11 @@ namespace Njulf.Core.Scene
                 newWorldBounds,
                 contentRevision));
         }
+
+        private void AdvanceRenderPayloadRevision() =>
+            _renderPayloadRevision = _renderPayloadRevision == ulong.MaxValue
+                ? 1UL
+                : _renderPayloadRevision + 1UL;
 
         private static BoundingBox? TryGetRenderObjectBounds(
             RenderObject renderObject) =>
@@ -596,6 +620,7 @@ namespace Njulf.Core.Scene
             if (_renderObjects.Count == 0 &&
                 _particleEffects.Count == 0 &&
                 _staticInstanceBatches.Count == 0 &&
+                _foliagePrototypes.Count == 0 &&
                 _foliagePatches.Count == 0)
             {
                 return;

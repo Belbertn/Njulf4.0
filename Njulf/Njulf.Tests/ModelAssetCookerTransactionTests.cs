@@ -96,6 +96,85 @@ public sealed class ModelAssetCookerTransactionTests
         });
     }
 
+    [Test]
+    public void CookModel_OpaqueMaterialNamedFoliage_DoesNotPreserveAlphaCoverage()
+    {
+        string sourcePath = Path.Combine(_directory, "foliage-trunk.gltf");
+        WriteTexturedFoliageNamedTriangleGltf(sourcePath);
+        var options = new ModelCookOptions
+        {
+            UsePlatformSubdirectory = false,
+            Force = true,
+            ImporterOptions = new ImporterOptions
+            {
+                Backend = ModelImportBackend.SharpGltf
+            },
+            TextureOptions = new TextureCookOptions(
+                MaxDimension: 16,
+                TargetFormatPolicy: TextureTargetFormatPolicy.Rgba8)
+        };
+        using var cooker = new ModelAssetCooker();
+        cooker.CookModel(sourcePath, _directory, options);
+
+        CookedModelAsset cooked = CookedPackage.LoadModel(
+            Path.Combine(_directory, "models", "foliage-trunk.njmodel"));
+        ModelMaterial material = cooked.Materials.Materials.Single(
+            candidate => candidate.Name == "Foliage_Trunk");
+        CookedTextureMeta texture = CookedPackage.LoadTextureMeta(
+            Path.ChangeExtension(
+                material.BaseColorTexture!.Source!.FilePath!,
+                ".njtex"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cooked.Materials.Pipelines.Single(), Is.EqualTo(CookedMaterialPipeline.Opaque));
+            Assert.That(texture.AlphaCoveragePreserved, Is.False);
+            Assert.That(texture.AlphaCoverageCutoff, Is.Null);
+        });
+    }
+
+    [Test]
+    public void CookModel_ExplicitFoliage_UsesFoliagePipelineWithoutAlphaCoverage()
+    {
+        string sourcePath = Path.Combine(_directory, "explicit-foliage.gltf");
+        WriteTexturedFoliageNamedTriangleGltf(sourcePath);
+        string json = File.ReadAllText(sourcePath).Replace(
+            "\"name\": \"Foliage_Trunk\",",
+            "\"name\": \"Foliage_Trunk\", \"extras\": { \"NJULF_foliage\": true },",
+            StringComparison.Ordinal);
+        File.WriteAllText(sourcePath, json);
+        var options = new ModelCookOptions
+        {
+            UsePlatformSubdirectory = false,
+            Force = true,
+            ImporterOptions = new ImporterOptions
+            {
+                Backend = ModelImportBackend.SharpGltf
+            },
+            TextureOptions = new TextureCookOptions(
+                MaxDimension: 16,
+                TargetFormatPolicy: TextureTargetFormatPolicy.Rgba8)
+        };
+        using var cooker = new ModelAssetCooker();
+        cooker.CookModel(sourcePath, _directory, options);
+
+        CookedModelAsset cooked = CookedPackage.LoadModel(
+            Path.Combine(_directory, "models", "explicit-foliage.njmodel"));
+        ModelMaterial material = cooked.Materials.Materials.Single(
+            candidate => candidate.Name == "Foliage_Trunk");
+        CookedTextureMeta texture = CookedPackage.LoadTextureMeta(
+            Path.ChangeExtension(
+                material.BaseColorTexture!.Source!.FilePath!,
+                ".njtex"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cooked.Materials.Pipelines.Single(), Is.EqualTo(CookedMaterialPipeline.Foliage));
+            Assert.That(texture.AlphaCoveragePreserved, Is.False);
+            Assert.That(texture.AlphaCoverageCutoff, Is.Null);
+        });
+    }
+
     private static string ResolveReference(
         string modelPath,
         string relativePath) =>
@@ -166,5 +245,43 @@ public sealed class ModelAssetCookerTransactionTests
                 ]
               }
               """);
+    }
+
+    private static void WriteTexturedFoliageNamedTriangleGltf(string gltfPath)
+    {
+        WriteTriangleGltf(gltfPath, extent: 1.0f);
+        string directory = Path.GetDirectoryName(gltfPath)!;
+        string texturePath = Path.Combine(
+            directory,
+            Path.GetFileNameWithoutExtension(gltfPath) + ".png");
+        File.WriteAllBytes(
+            texturePath,
+            Convert.FromBase64String(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nWQAAAAASUVORK5CYII="));
+
+        string json = File.ReadAllText(gltfPath)
+            .Replace(
+                "\"mode\": 4",
+                "\"mode\": 4, \"material\": 0",
+                StringComparison.Ordinal)
+            .Replace(
+                "\"buffers\":",
+                $$"""
+                "materials": [
+                  {
+                    "name": "Foliage_Trunk",
+                    "pbrMetallicRoughness": {
+                      "baseColorTexture": { "index": 0 }
+                    }
+                  }
+                ],
+                "images": [
+                  { "uri": "{{Path.GetFileName(texturePath)}}", "mimeType": "image/png" }
+                ],
+                "textures": [{ "source": 0 }],
+                "buffers":
+                """,
+                StringComparison.Ordinal);
+        File.WriteAllText(gltfPath, json);
     }
 }

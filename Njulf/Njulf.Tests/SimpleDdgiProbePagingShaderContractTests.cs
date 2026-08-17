@@ -739,7 +739,7 @@ public sealed class SimpleDdgiProbePagingShaderContractTests
         {
             string candidate = Path.Combine([directory.FullName, .. segments]);
             if (File.Exists(candidate))
-                return File.ReadAllText(candidate);
+                return File.ReadAllText(candidate).ReplaceLineEndings("\n");
             directory = directory.Parent;
         }
 

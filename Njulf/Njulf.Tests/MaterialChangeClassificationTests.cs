@@ -720,6 +720,7 @@ public sealed class MaterialChangeClassificationTests
             MaterialFeatureFlags.SpecularTexture |
             MaterialFeatureFlags.SpecularColorTexture |
             MaterialFeatureFlags.CompressedNormalBc5 |
+            MaterialFeatureFlags.NormalMapGreenInverted |
             MaterialFeatureFlags.Ior;
 
         if (flag is MaterialFeatureFlags.Transmission or MaterialFeatureFlags.Foliage)

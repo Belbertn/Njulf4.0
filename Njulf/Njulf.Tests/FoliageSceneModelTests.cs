@@ -59,6 +59,34 @@ public sealed class FoliageSceneModelTests
     }
 
     [Test]
+    public void Scene_RenderPayloadRevisionTracksFoliagePrototypeAndPatchChanges()
+    {
+        using var scene = new Scene();
+        var prototype = new FoliagePrototype { Mesh = new MeshHandle(1, 1) };
+        ulong initialRevision = scene.RenderPayloadRevision;
+        scene.Add(prototype);
+        ulong addedPrototypeRevision = scene.RenderPayloadRevision;
+        prototype.GeometryMode = FoliageGeometryMode.BillboardCards;
+        ulong changedPrototypeWithoutPatchRevision = scene.RenderPayloadRevision;
+
+        var patch = new FoliagePatch(prototype, UnitBounds());
+        scene.Add(patch);
+        ulong addedPatchRevision = scene.RenderPayloadRevision;
+        patch.Density = 2f;
+        ulong changedPatchRevision = scene.RenderPayloadRevision;
+        prototype.GeometryMode = FoliageGeometryMode.AuthoredMeshlets;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(addedPrototypeRevision, Is.GreaterThan(initialRevision));
+            Assert.That(changedPrototypeWithoutPatchRevision, Is.GreaterThan(addedPrototypeRevision));
+            Assert.That(addedPatchRevision, Is.GreaterThan(changedPrototypeWithoutPatchRevision));
+            Assert.That(changedPatchRevision, Is.GreaterThan(addedPatchRevision));
+            Assert.That(scene.RenderPayloadRevision, Is.GreaterThan(changedPatchRevision));
+        });
+    }
+
+    [Test]
     public void FoliageManager_RegisterSceneTracksCountsAndRevisionChanges()
     {
         var scene = new Scene();

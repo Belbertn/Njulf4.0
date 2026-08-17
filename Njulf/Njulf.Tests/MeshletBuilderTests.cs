@@ -65,6 +65,37 @@ namespace Njulf.Tests
                 Throws.TypeOf<System.ArgumentOutOfRangeException>());
         }
 
+        [Test]
+        public void BuildMeshlets_PacksSpatiallyAdjacentDisconnectedTriangles()
+        {
+            const int triangleCount = 16;
+            var vertices = new Vector3[triangleCount * 3];
+            var indices = new uint[triangleCount * 3];
+            for (int triangle = 0; triangle < triangleCount; triangle++)
+            {
+                int vertex = triangle * 3;
+                float x = triangle * 0.1f;
+                vertices[vertex] = new Vector3(x, 0f, 0f);
+                vertices[vertex + 1] = new Vector3(x + 0.04f, 0f, 0f);
+                vertices[vertex + 2] = new Vector3(x, 0.04f, 0f);
+                indices[vertex] = checked((uint)vertex);
+                indices[vertex + 1] = checked((uint)(vertex + 1));
+                indices[vertex + 2] = checked((uint)(vertex + 2));
+            }
+
+            MeshletMesh mesh = new MeshletBuilder(
+                maxVerticesPerMeshlet: 48,
+                maxTrianglesPerMeshlet: 64).BuildMeshlets(vertices, indices);
+
+            AssertMeshletOutputIsValid(mesh, triangleCount);
+            Assert.Multiple(() =>
+            {
+                Assert.That(mesh.Meshlets, Has.Length.EqualTo(1));
+                Assert.That(mesh.Meshlets[0].VertexCount, Is.EqualTo(48));
+                Assert.That(mesh.Meshlets[0].IndexCount, Is.EqualTo(16));
+            });
+        }
+
         private static void AssertMeshletOutputIsValid(MeshletMesh mesh, int expectedTriangleCount)
         {
             Assert.Multiple(() =>

@@ -2455,6 +2455,8 @@ vec3 ResolveNormal(GPUMaterialData material, vec3 interpolatedNormal, vec4 inter
     float facingSign = gl_FrontFacing ? 1.0 : -1.0;
 
     vec3 tangentNormal = SampleMaterialTexture(material.NormalTextureIndex, uv).xyz * 2.0 - 1.0;
+    if ((material.FeatureFlags & MATERIAL_FEATURE_NORMAL_GREEN_INVERTED) != 0u)
+        tangentNormal.y = -tangentNormal.y;
     if ((material.FeatureFlags & MATERIAL_FEATURE_COMPRESSED_NORMAL_BC5) != 0u)
         tangentNormal.z = sqrt(max(0.0, 1.0 - dot(tangentNormal.xy, tangentNormal.xy)));
     tangentNormal.xy *= material.NormalScaleBias.x;

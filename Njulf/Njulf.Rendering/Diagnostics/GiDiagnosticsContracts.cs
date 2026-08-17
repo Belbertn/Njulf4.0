@@ -2409,7 +2409,13 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "lighting.environment.skyIntensity", diagnostics.SkyIntensity);
             AddSetting(settings, "lighting.environment.diffuseIblIntensity", diagnostics.DiffuseIblIntensity);
             AddSetting(settings, "lighting.environment.specularIblIntensity", diagnostics.SpecularIblIntensity);
-            AddSetting(settings, "lighting.exposure", diagnostics.Exposure);
+            // Exposure is runtime state while auto exposure is active. Recording
+            // that adapting value as configuration makes an otherwise locked
+            // benchmark appear to change its render settings every frame.
+            if (diagnostics.AutoExposureEnabled != 0)
+                AddSetting(settings, "lighting.exposure", "automatic");
+            else
+                AddSetting(settings, "lighting.exposure", diagnostics.Exposure);
             AddSetting(settings, "lighting.autoExposure", diagnostics.AutoExposureEnabled);
             AddSetting(settings, "lighting.toneMapper", diagnostics.ToneMapper.ToString());
             AddSetting(settings, "lighting.directionalShadows", diagnostics.DirectionalShadowsEnabled);

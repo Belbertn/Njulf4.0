@@ -191,7 +191,7 @@ internal static class Program
 
 internal sealed class HelloGame : Game
 {
-    private static readonly SampleAssetManifest AssetManifest = SampleAssetManifest.NewSponza;
+    private static readonly SampleAssetManifest SponzaAssetManifest = SampleAssetManifest.NewSponza;
     private const SampleLightingMode LightingMode = SampleLightingMode.DirectionalKey;
     private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
     private const SamplePerformanceScenario DefaultInteractiveScenario = SamplePerformanceScenario.Normal;
@@ -343,7 +343,7 @@ internal sealed class HelloGame : Game
         ConfigureSceneRenderSettings(renderer);
 
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
-            SampleAssetValidationGate.Validate(AppContext.BaseDirectory, AssetManifest);
+            SampleAssetValidationGate.Validate(AppContext.BaseDirectory, SponzaAssetManifest);
         SampleInputController.Configure(input);
         Console.WriteLine(
             "Debug overlays: Ctrl+Keypad9/Ctrl+Num9 forward, add Shift for reverse; " +
@@ -385,6 +385,7 @@ internal sealed class HelloGame : Game
             _sampleVfxEffects,
             _performanceScenarioRunner,
             () => CycleScene(meshManager, materialManager, lightManager, renderer, camera),
+            () => CycleSponzaAndBistro(meshManager, materialManager, lightManager, renderer, camera),
             sceneKind => LoadSceneKind(sceneKind, meshManager, materialManager, lightManager, renderer, camera),
             () => diagnosticsReporter.ToggleDdgiFilter(),
             () => diagnosticsReporter.Filter,
@@ -467,8 +468,17 @@ internal sealed class HelloGame : Game
         }
         else if (!string.IsNullOrWhiteSpace(_smokeOptions.BaselineSnapshotDirectory))
         {
-            SamplePerformanceScenario baselineScenario = ResolveBaselineSnapshotScenario();
-            _inputController.ApplyBaselineScenario(baselineScenario);
+            if (_sceneKind == SampleSceneKind.Bistro)
+            {
+                // Keep automated screenshots and RenderDoc captures on the same
+                // representative Bistro view used when the scene starts or is cycled.
+                ApplyBistroCameraPreset(camera);
+            }
+            else
+            {
+                SamplePerformanceScenario baselineScenario = ResolveBaselineSnapshotScenario();
+                _inputController.ApplyBaselineScenario(baselineScenario);
+            }
         }
 
         _sceneReloadRunner = new SampleSceneReloadRunner(() =>
@@ -868,10 +878,10 @@ internal sealed class HelloGame : Game
         if (_smokeOptions.Mode == SampleSmokeMode.LongRun)
             _longRunMonitor?.PrepareFrame(_drawnFrames);
 
-        if (AssetManifest.RotationSpeed != 0f)
+        if (GetModelSceneManifest(_sceneKind) is { RotationSpeed: not 0f } assetManifest)
         {
             _modelRotation +=
-                simulationDeltaTime * AssetManifest.RotationSpeed;
+                simulationDeltaTime * assetManifest.RotationSpeed;
             _sceneLoader?.ApplyModelRotation(_modelRotation);
         }
 
@@ -1386,22 +1396,35 @@ internal sealed class HelloGame : Game
             return new Model { Name = "VFX Showcase" };
         }
 
-        _sceneLoader = new SampleSceneLoader(Content!, materialManager, meshManager, lightManager, AssetManifest);
+        SampleAssetManifest assetManifest = GetModelSceneManifest(_sceneKind)
+            ?? throw new InvalidOperationException(
+                $"Scene '{_sceneKind}' does not have a model asset manifest.");
+        _sceneLoader = new SampleSceneLoader(
+            Content!,
+            materialManager,
+            meshManager,
+            lightManager,
+            assetManifest,
+            loadSceneDocument: _sceneKind == SampleSceneKind.SponzaPlaza);
         Model model = _sceneLoader.Load(Scene);
-        if (!_sceneLoader.LoadedFromDocument)
+        if (_sceneKind == SampleSceneKind.SponzaPlaza &&
+            !_sceneLoader.LoadedFromDocument)
         {
             SamplePlazaGlobalIllumination.ConfigureSceneLighting(Scene);
             SampleReflectionProbes.Configure(Scene);
             SampleAnimatedCharacter.Configure(Scene, Content!);
         }
-        TextureManager sponzaTextureManager = Services?.GetRequiredService<TextureManager>()
-            ?? throw new InvalidOperationException(
-                "The Sponza C5 emissive test sphere requires the renderer TextureManager.");
-        SampleSponzaNearFieldResidualTestSphere.Configure(
-            Scene,
-            meshManager,
-            materialManager,
-            sponzaTextureManager);
+        if (_sceneKind == SampleSceneKind.SponzaPlaza)
+        {
+            TextureManager sponzaTextureManager = Services?.GetRequiredService<TextureManager>()
+                ?? throw new InvalidOperationException(
+                    "The Sponza C5 emissive test sphere requires the renderer TextureManager.");
+            SampleSponzaNearFieldResidualTestSphere.Configure(
+                Scene,
+                meshManager,
+                materialManager,
+                sponzaTextureManager);
+        }
         meshManager.CompactStaticBuffers();
         return model;
     }
@@ -1431,12 +1454,22 @@ internal sealed class HelloGame : Game
         {
             SampleVfxShowcaseScene.ConfigureRenderSettings(settings);
         }
-        else
+        else if (_sceneKind == SampleSceneKind.Bistro)
+        {
+            SampleBistroGlobalIlluminationProfile.Configure(settings);
+            settings.Particles.Enabled = false;
+        }
+        else if (_sceneKind == SampleSceneKind.SponzaPlaza)
         {
             SamplePlazaGlobalIllumination.ConfigureRenderSettingsForMemoryProfile(
                 settings,
                 ResolveSponzaGpuMemoryProfile(renderer));
             settings.Particles.Enabled = false;
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"Scene '{_sceneKind}' does not have a render-settings profile.");
         }
 
         _materialGiRolloutBootstrap.Apply(settings, Console.Out);
@@ -1496,6 +1529,25 @@ internal sealed class HelloGame : Game
         int index = Array.IndexOf(sceneKinds, _sceneKind);
         LoadSceneKind(
             sceneKinds[(index + 1) % sceneKinds.Length],
+            meshManager,
+            materialManager,
+            lightManager,
+            renderer,
+            camera);
+    }
+
+    private void CycleSponzaAndBistro(
+        MeshManager meshManager,
+        MaterialManager materialManager,
+        LightManager lightManager,
+        VulkanRenderer renderer,
+        FirstPersonCamera camera)
+    {
+        SampleSceneKind nextScene = _sceneKind == SampleSceneKind.SponzaPlaza
+            ? SampleSceneKind.Bistro
+            : SampleSceneKind.SponzaPlaza;
+        LoadSceneKind(
+            nextScene,
             meshManager,
             materialManager,
             lightManager,
@@ -1593,6 +1645,17 @@ internal sealed class HelloGame : Game
         if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
             return;
 
+        if (_sceneKind == SampleSceneKind.Bistro)
+        {
+            // Bistro's FBX sun carries the scene's intended radiance and
+            // orientation, but imported model lights do not opt into shadows.
+            // Use one canonical shadow-casting copy instead of combining the
+            // unshadowed source with Sponza's unrelated directional key.
+            lightManager.ClearLights();
+            lightManager.AddLight(SampleBistroLightingProfile.CreateDirectionalKey());
+            return;
+        }
+
         if (_sceneKind == SampleSceneKind.SponzaPlaza && _sceneLoader?.LoadedFromDocument == true)
             return;
 
@@ -1649,9 +1712,9 @@ internal sealed class HelloGame : Game
         if (_diagnosticsReporter == null)
             return;
 
-        if (_sceneKind == SampleSceneKind.SponzaPlaza)
+        if (GetModelSceneManifest(_sceneKind) is { } assetManifest)
         {
-            _diagnosticsReporter.PrintModelSummary(model, AssetManifest);
+            _diagnosticsReporter.PrintModelSummary(model, assetManifest);
             return;
         }
 
@@ -1660,10 +1723,31 @@ internal sealed class HelloGame : Game
 
     private static void ApplyCameraPreset(FirstPersonCamera camera, SampleSceneKind sceneKind)
     {
+        if (sceneKind == SampleSceneKind.Bistro)
+        {
+            ApplyBistroCameraPreset(camera);
+            return;
+        }
+
         (CoreVector3 position, float yaw, float pitch, float farPlane) = GetCameraPreset(sceneKind);
         camera.Position = position;
         camera.Yaw = yaw;
         camera.Pitch = pitch;
+        camera.FarPlane = farPlane;
+        camera.Update();
+    }
+
+    private static void ApplyBistroCameraPreset(FirstPersonCamera camera)
+    {
+        (CoreVector3 position, float yaw, float pitch, float farPlane) =
+            GetCameraPreset(SampleSceneKind.Bistro);
+        camera.Position = position;
+        camera.Yaw = yaw;
+        // Performance metadata stores asin(Forward.Y); FirstPersonCamera's
+        // rotation-space X angle has the opposite sign.
+        camera.Pitch = pitch;
+        camera.FieldOfView = MathF.PI / 3.2f;
+        camera.NearPlane = 0.05f;
         camera.FarPlane = farPlane;
         camera.Update();
     }
@@ -1686,11 +1770,14 @@ internal sealed class HelloGame : Game
         camera.Update();
     }
 
-    private static (CoreVector3 Position, float Yaw, float Pitch, float FarPlane) GetCameraPreset(SampleSceneKind sceneKind)
+    internal static (CoreVector3 Position, float Yaw, float Pitch, float FarPlane) GetCameraPreset(
+        SampleSceneKind sceneKind)
     {
         return sceneKind switch
         {
             SampleSceneKind.GlobalIlluminationTest => (new CoreVector3(0f, 1.7f, 1.15f), 0f, -0.08f, 80f),
+            SampleSceneKind.Bistro =>
+                (new CoreVector3(-16.003326f, 2.5132222f, 1.2387409f), 1.6121571f, 0.0660575f, 500f),
             SampleSceneKind.MaterialShowcase => (new CoreVector3(0f, 1.65f, 7.8f), 0f, -0.11f, 120f),
             SampleSceneKind.FoliageShowcase => (new CoreVector3(0f, 1.6f, 5.5f), 0f, -0.14f, 180f),
             SampleSceneKind.VfxShowcase => (new CoreVector3(0f, 1.45f, 6.2f), 0f, -0.16f, 120f),
@@ -1705,12 +1792,21 @@ internal sealed class HelloGame : Game
         return sceneKind switch
         {
             SampleSceneKind.GlobalIlluminationTest => "GI Test Scene",
+            SampleSceneKind.Bistro => "Bistro",
             SampleSceneKind.MaterialShowcase => "Material Showcase",
             SampleSceneKind.FoliageShowcase => "Foliage Showcase",
             SampleSceneKind.VfxShowcase => "VFX Showcase",
             _ => "Sponza Plaza"
         };
     }
+
+    private static SampleAssetManifest? GetModelSceneManifest(SampleSceneKind sceneKind) =>
+        sceneKind switch
+        {
+            SampleSceneKind.SponzaPlaza => SponzaAssetManifest,
+            SampleSceneKind.Bistro => SampleAssetManifest.Bistro,
+            _ => null
+        };
 
     private void ResizeForSmoke(int width, int height)
     {
@@ -1865,6 +1961,9 @@ internal sealed class HelloGame : Game
 
     private (string DirectoryName, string Label) ResolveBaselineSnapshotMetadata()
     {
+        if (_sceneKind == SampleSceneKind.Bistro)
+            return ("bistro", "Baseline Bistro snapshot");
+
         return ResolveBaselineSnapshotScenario() switch
         {
             SamplePerformanceScenario.ForestFoliage => ("forest-foliage", "Baseline forest foliage snapshot"),

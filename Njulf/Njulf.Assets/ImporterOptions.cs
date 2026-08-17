@@ -1,5 +1,32 @@
 namespace Njulf.Assets
 {
+    /// <summary>
+    /// Declares a material texture layout used by an Assimp-imported source.
+    /// Assimp texture slots alone do not specify how legacy packed maps encode
+    /// physically based material channels, so non-standard layouts must be
+    /// selected explicitly by the asset manifest or cooker command.
+    /// </summary>
+    public enum AssimpMaterialTextureConvention
+    {
+        Standard,
+
+        /// <summary>
+        /// The Assimp specular texture stores roughness in green and metallic
+        /// in blue. Red is unused and must not be interpreted as ambient
+        /// occlusion.
+        /// </summary>
+        SpecularGbIsRoughnessMetallic,
+
+        /// <summary>
+        /// Amazon Bistro's specular texture uses the same green/blue packed
+        /// roughness/metallic layout, while its tangent-space normal maps use
+        /// the DirectX (green-down) convention. The red packed channel stores
+        /// occlusion amount rather than glTF occlusion visibility and is not
+        /// bound directly.
+        /// </summary>
+        AmazonBistro
+    }
+
     public class ImporterOptions
     {
         public bool FlipUVs { get; set; } = true;
@@ -13,6 +40,8 @@ namespace Njulf.Assets
         public bool FlipWindingOrder { get; set; } = false;
         public string PreferredFormat { get; set; } = "gltf";
         public ModelImportBackend Backend { get; set; } = ModelImportBackend.Auto;
+        public AssimpMaterialTextureConvention AssimpMaterialTextureConvention { get; set; } =
+            AssimpMaterialTextureConvention.Standard;
         public bool ImportLights { get; set; } = true;
         public float DefaultImportedLightRange { get; set; } = 100f;
         public float MaximumImportedLightRange { get; set; } = 1000f;

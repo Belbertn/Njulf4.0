@@ -112,11 +112,14 @@ void main()
     flags |= maxLights << 6u;
 
     uint publicStateBase = probeIndex * SIMPLE_DDGI_PROBE_STATE_WORDS;
-    uint schedulingAge = ReadStorageWordUniform(
+    uint persistedStateAge = ReadStorageWordUniform(
         pc.ProbeStateBufferIndex,
         publicStateBase + 5u);
     uint schedulerStateBase = pc.SchedulerProbeStateOffsetWords +
         probeIndex * SIMPLE_DDGI_SCHEDULER_PROBE_STATE_WORDS;
+    uint schedulingAge = SchedulerProbeUpdateAge(
+        persistedStateAge,
+        SchedulerArenaRead(schedulerStateBase + 0u));
     uint updateSourceGeneration = sourceWork
         ? SchedulerSourceGeneration()
         : SchedulerArenaRead(schedulerStateBase + 2u);

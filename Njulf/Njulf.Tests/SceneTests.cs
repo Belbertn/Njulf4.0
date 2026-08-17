@@ -191,6 +191,59 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void RenderPayloadRevision_TracksGeometryAndStaticInstanceChanges()
+        {
+            using var scene = new Scene();
+            var renderObject = new RenderObject("mesh", "material");
+            ulong initialRevision = scene.RenderPayloadRevision;
+
+            scene.Add(renderObject);
+            ulong addedObjectRevision = scene.RenderPayloadRevision;
+            renderObject.Position = new Vector3(1f, 2f, 3f);
+            ulong movedObjectRevision = scene.RenderPayloadRevision;
+
+            var batch = new StaticInstanceBatch(new[] { Matrix4x4.Identity });
+            scene.Add(batch);
+            ulong addedBatchRevision = scene.RenderPayloadRevision;
+            batch.ReplaceWorldMatrices(
+                new[] { Matrix4x4.CreateTranslation(new Vector3(4f, 5f, 6f)) });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(addedObjectRevision, Is.GreaterThan(initialRevision));
+                Assert.That(movedObjectRevision, Is.GreaterThan(addedObjectRevision));
+                Assert.That(addedBatchRevision, Is.GreaterThan(movedObjectRevision));
+                Assert.That(scene.RenderPayloadRevision, Is.GreaterThan(addedBatchRevision));
+            });
+        }
+
+        [Test]
+        public void SkinnedPayloadProperties_AdvanceSceneRenderPayloadRevision()
+        {
+            using var scene = new Scene();
+            var renderObject = new SkinnedRenderObject("mesh", "material");
+            scene.Add(renderObject);
+            ulong initialRevision = scene.RenderPayloadRevision;
+
+            renderObject.SkinningBindTransform =
+                Matrix4x4.CreateTranslation(new Vector3(1f, 0f, 0f));
+            ulong bindRevision = scene.RenderPayloadRevision;
+            renderObject.SkinnedVertexOffset = 42;
+            ulong offsetRevision = scene.RenderPayloadRevision;
+            renderObject.SkinningEnabled = true;
+            ulong enabledRevision = scene.RenderPayloadRevision;
+            renderObject.SkinningEnabled = true;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(bindRevision, Is.GreaterThan(initialRevision));
+                Assert.That(offsetRevision, Is.GreaterThan(bindRevision));
+                Assert.That(enabledRevision, Is.GreaterThan(offsetRevision));
+                Assert.That(scene.RenderPayloadRevision, Is.EqualTo(enabledRevision));
+            });
+        }
+
         private sealed class DisposableUpdateable : IUpdateable, System.IDisposable
         {
             public bool Enabled { get; set; } = true;

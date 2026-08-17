@@ -10,10 +10,134 @@ internal enum MeshOptimizerSimplificationOptions : uint
     LockBorder = 1u << 0
 }
 
+internal readonly record struct MeshOptimizerMeshletDescriptor(
+    uint VertexOffset,
+    uint TriangleOffset,
+    uint VertexCount,
+    uint TriangleCount);
+
+internal sealed record MeshOptimizerMeshletBuildResult(
+    MeshOptimizerMeshletDescriptor[] Meshlets,
+    uint[] Vertices,
+    byte[] Triangles);
+
 /// <summary>Thin, bounds-checked access to the meshoptimizer codec shipped by Meshoptimizer.NET.</summary>
 internal static unsafe class MeshOptimizerCodec
 {
     private const string Library = "meshoptimizer";
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMeshlet
+    {
+        public uint VertexOffset;
+        public uint TriangleOffset;
+        public uint VertexCount;
+        public uint TriangleCount;
+    }
+
+    public static MeshOptimizerMeshletBuildResult BuildMeshlets(
+        ReadOnlySpan<uint> indices,
+        ReadOnlySpan<Vector3> positions,
+        int maxVertices,
+        int maxTriangles)
+    {
+        if (indices.IsEmpty || indices.Length % 3 != 0)
+        {
+            throw new ArgumentException(
+                "Meshoptimizer meshlet construction requires a non-empty triangle list.",
+                nameof(indices));
+        }
+        if (positions.IsEmpty)
+            throw new ArgumentException("Meshoptimizer meshlet construction requires positions.", nameof(positions));
+        if (maxVertices is < 3 or > 255)
+            throw new ArgumentOutOfRangeException(nameof(maxVertices));
+        if (maxTriangles is < 4 or > 512 || maxTriangles % 4 != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxTriangles),
+                "Meshoptimizer's triangle limit must be divisible by four and between 4 and 512.");
+        }
+
+        for (int i = 0; i < indices.Length; i++)
+        {
+            if (indices[i] >= positions.Length)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(indices),
+                    $"Index {indices[i]} is outside the vertex buffer.");
+            }
+        }
+
+        nuint bound = MeshoptBuildMeshletsBound(
+            checked((nuint)indices.Length),
+            checked((nuint)maxVertices),
+            checked((nuint)maxTriangles));
+        if (bound == 0 || bound > int.MaxValue)
+            throw new InvalidOperationException($"meshoptimizer returned invalid meshlet bound {bound}.");
+
+        int capacity = checked((int)bound);
+        var nativeMeshlets = GC.AllocateUninitializedArray<NativeMeshlet>(capacity);
+        var meshletVertices = GC.AllocateUninitializedArray<uint>(
+            checked(capacity * maxVertices));
+        var meshletTriangles = GC.AllocateUninitializedArray<byte>(
+            checked(capacity * maxTriangles * 3));
+
+        nuint count;
+        fixed (NativeMeshlet* meshletsPtr = nativeMeshlets)
+        fixed (uint* meshletVerticesPtr = meshletVertices)
+        fixed (byte* meshletTrianglesPtr = meshletTriangles)
+        fixed (uint* indicesPtr = indices)
+        fixed (Vector3* positionsPtr = positions)
+        {
+            count = MeshoptBuildMeshlets(
+                meshletsPtr,
+                meshletVerticesPtr,
+                meshletTrianglesPtr,
+                indicesPtr,
+                checked((nuint)indices.Length),
+                (float*)positionsPtr,
+                checked((nuint)positions.Length),
+                checked((nuint)sizeof(Vector3)),
+                checked((nuint)maxVertices),
+                checked((nuint)maxTriangles),
+                coneWeight: 0.0f);
+        }
+
+        if (count == 0 || count > bound)
+            throw new InvalidOperationException($"meshoptimizer returned invalid meshlet count {count}.");
+
+        var descriptors = new MeshOptimizerMeshletDescriptor[checked((int)count)];
+        int usedVertexCount = 0;
+        int usedTriangleByteCount = 0;
+        for (int i = 0; i < descriptors.Length; i++)
+        {
+            NativeMeshlet native = nativeMeshlets[i];
+            int vertexEnd = checked((int)(native.VertexOffset + native.VertexCount));
+            int triangleEnd = checked((int)(native.TriangleOffset + native.TriangleCount * 3));
+            if (native.VertexCount == 0 || native.VertexCount > maxVertices ||
+                native.TriangleCount == 0 || native.TriangleCount > maxTriangles ||
+                vertexEnd > meshletVertices.Length || triangleEnd > meshletTriangles.Length)
+            {
+                throw new InvalidOperationException(
+                    $"meshoptimizer returned invalid meshlet descriptor {i}.");
+            }
+
+            descriptors[i] = new MeshOptimizerMeshletDescriptor(
+                native.VertexOffset,
+                native.TriangleOffset,
+                native.VertexCount,
+                native.TriangleCount);
+            usedVertexCount = Math.Max(usedVertexCount, vertexEnd);
+            usedTriangleByteCount = Math.Max(usedTriangleByteCount, triangleEnd);
+        }
+
+        Array.Resize(ref meshletVertices, usedVertexCount);
+        Array.Resize(ref meshletTriangles, usedTriangleByteCount);
+        return new MeshOptimizerMeshletBuildResult(
+            descriptors,
+            meshletVertices,
+            meshletTriangles);
+    }
 
     public static uint[] Simplify(
         ReadOnlySpan<uint> indices,
@@ -118,6 +242,26 @@ internal static unsafe class MeshOptimizerCodec
 
     [DllImport(Library, EntryPoint = "meshopt_simplify", CallingConvention = CallingConvention.Cdecl)]
     private static extern nuint MeshoptSimplify(uint* destination, uint* indices, nuint indexCount, float* positions, nuint vertexCount, nuint vertexStride, nuint targetIndexCount, float targetError, uint options, out float resultError);
+
+    [DllImport(Library, EntryPoint = "meshopt_buildMeshletsBound", CallingConvention = CallingConvention.Cdecl)]
+    private static extern nuint MeshoptBuildMeshletsBound(
+        nuint indexCount,
+        nuint maxVertices,
+        nuint maxTriangles);
+
+    [DllImport(Library, EntryPoint = "meshopt_buildMeshlets", CallingConvention = CallingConvention.Cdecl)]
+    private static extern nuint MeshoptBuildMeshlets(
+        NativeMeshlet* meshlets,
+        uint* meshletVertices,
+        byte* meshletTriangles,
+        uint* indices,
+        nuint indexCount,
+        float* vertexPositions,
+        nuint vertexCount,
+        nuint vertexPositionsStride,
+        nuint maxVertices,
+        nuint maxTriangles,
+        float coneWeight);
 
     [DllImport(Library, EntryPoint = "meshopt_encodeVertexBufferBound", CallingConvention = CallingConvention.Cdecl)]
     private static extern nuint MeshoptEncodeVertexBufferBound(nuint vertexCount, nuint vertexSize);

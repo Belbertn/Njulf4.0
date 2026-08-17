@@ -32,6 +32,13 @@
       <ShaderSource Update="debug_ddgi_probe.vert;debug_ddgi_update.vert">
         <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
       </ShaderSource>
+      <!-- common.glsl declares the bindless texture families used by scene
+           shaders. SSAO uses only its pass-local set, so strip the unreachable
+           bindless declarations in Debug as production configurations already
+           do. Otherwise Vulkan reflection sees four unbound set-1 resources. -->
+      <ShaderSource Update="ambient_occlusion.comp;ambient_occlusion_blur.comp">
+        <AdditionalCompileOptions Condition="'$(Configuration)' == 'Debug'">-Os</AdditionalCompileOptions>
+      </ShaderSource>
       <ShaderInclude Include="*.glsl" />
       <SimpleDdgiTraceShaderVariant Include="ddgi_simple_trace_legacy_source.comp">
         <Source>ddgi_simple_trace.comp</Source>

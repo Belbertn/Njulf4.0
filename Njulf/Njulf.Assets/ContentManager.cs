@@ -984,6 +984,7 @@ namespace Njulf.Assets
                 $"scale={importer.GlobalScale:R}",
                 $"flipWinding={importer.FlipWindingOrder}",
                 $"format={importer.PreferredFormat}",
+                $"assimpMaterialTextureConvention={importer.AssimpMaterialTextureConvention}",
                 $"importLights={importer.ImportLights}",
                 $"defaultLightRange={importer.DefaultImportedLightRange:R}",
                 $"maximumLightRange={importer.MaximumImportedLightRange:R}",

@@ -83,6 +83,38 @@ public sealed class SimpleDdgiTransportTailTests
     }
 
     [Test]
+    public void ResidentAtlasFresh_RetiresOnlyAfterAResidentCommit()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRetireResidentAtlasFresh(
+                    SimpleDdgiSchedulerMode.GpuResident,
+                    atlasFresh: true,
+                    committedProbeCount: 1u),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRetireResidentAtlasFresh(
+                    SimpleDdgiSchedulerMode.GpuResident,
+                    atlasFresh: true,
+                    committedProbeCount: 0u),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRetireResidentAtlasFresh(
+                    SimpleDdgiSchedulerMode.GpuMirror,
+                    atlasFresh: true,
+                    committedProbeCount: 1u),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager.ShouldRetireResidentAtlasFresh(
+                    SimpleDdgiSchedulerMode.GpuResident,
+                    atlasFresh: false,
+                    committedProbeCount: 1u),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void SolveDrain_RequiresANewerQuiescedFenceCompleteFeedback()
     {
         Assert.Multiple(() =>

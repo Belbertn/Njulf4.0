@@ -16,6 +16,7 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
     private readonly Scene _scene;
     private readonly IContentManager _content;
     private readonly IMutableSceneLightStore _store;
+    private readonly Func<string, Model> _loadModel;
     private readonly Dictionary<Guid, ActivePlacement> _activePlacements = [];
     private readonly HashSet<Guid> _activeLightIds = [];
     private bool _disposed;
@@ -24,11 +25,13 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
     private ModelLightRuntimeController(
         Scene scene,
         IContentManager content,
-        IMutableSceneLightStore store)
+        IMutableSceneLightStore store,
+        Func<string, Model>? loadModel)
     {
         _scene = scene;
         _content = content;
         _store = store;
+        _loadModel = loadModel ?? LoadModelFromContent;
         _scene.Mutated += OnSceneMutated;
         try
         {
@@ -66,7 +69,8 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
     public static ModelLightRuntimeController Attach(
         Scene scene,
         IContentManager content,
-        IMutableSceneLightStore store)
+        IMutableSceneLightStore store,
+        Func<string, Model>? loadModel = null)
     {
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentNullException.ThrowIfNull(content);
@@ -75,7 +79,11 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
         if (scene.GetComponent<ModelLightRuntimeController>() is { } existing)
             return existing;
 
-        var controller = new ModelLightRuntimeController(scene, content, store);
+        var controller = new ModelLightRuntimeController(
+            scene,
+            content,
+            store,
+            loadModel);
         try
         {
             scene.Add((IUpdateable)controller);
@@ -221,7 +229,7 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
         {
             if (!models.TryGetValue(group.AssetKey, out Model? model))
             {
-                model = _content.Load<Model>(group.AssetPath) ??
+                model = _loadModel(group.AssetPath) ??
                     throw new InvalidOperationException(
                         $"Could not load model '{group.AssetPath}' while discovering imported lights.");
                 models.Add(group.AssetKey, model);
@@ -249,6 +257,11 @@ public sealed class ModelLightRuntimeController : IUpdateable, IDisposable
         ImportedLightDefinitionCount = definitionCount;
         return desired;
     }
+
+    private Model LoadModelFromContent(string assetPath) =>
+        _content.Load<Model>(assetPath) ??
+        throw new InvalidOperationException(
+            $"Could not load model '{assetPath}' while discovering imported lights.");
 
     private void ReconcileEnabledPlacements(
         IReadOnlyDictionary<Guid, DesiredPlacement> desired)

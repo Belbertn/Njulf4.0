@@ -11,10 +11,13 @@ namespace Njulf.Assets.Cooked;
 
 public sealed class ModelAssetCooker : IDisposable
 {
-    private const int MaterialTransportMetadataRevision = 2;
+    private const int MaterialTransportMetadataRevision = 3;
+    // Included in the incremental-cook identity. Bump whenever the authored
+    // material-to-texture mip policy changes without changing file layout.
+    private const int MaterialTexturePolicyRevision = 2;
     // Included in the incremental-cook identity. Bump whenever generated mesh
     // topology or LOD policy changes without changing the binary file layout.
-    private const int MeshLodAlgorithmRevision = 1;
+    private const int MeshLodAlgorithmRevision = 2;
 
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -1178,6 +1181,7 @@ public sealed class ModelAssetCooker : IDisposable
             options.ToolVersion,
             options.Platform,
             MaterialTransportMetadataRevision,
+            MaterialTexturePolicyRevision,
             MeshLodAlgorithmRevision,
             CausticTopologyAlgorithmVersion =
                 ModelGiCausticHeroTopologyAnalyzer.CurrentAlgorithmVersion,
@@ -1191,6 +1195,7 @@ public sealed class ModelAssetCooker : IDisposable
             TextureTransportStatistics.StbDecoderVersion,
             TextureTransportStatistics.WebPDecoderVersion,
             TextureTransportStatistics.BcDecoderVersion,
+            TextureTransportStatistics.DdsDecoderVersion,
             TextureTransportStatistics.KtxStatisticsDecoderVersion
         }));
 
@@ -1393,14 +1398,13 @@ public sealed class ModelAssetCooker : IDisposable
                 ulong sourceHash = sourceSnapshot.ContentHash;
                 string identity = ResolveTextureSourceIdentity(source);
                 TextureSemantic semantic = ClassifyTextureSemantic(property.Name, slot.ColorSpace);
-                bool foliageMaterial =
-                    (material.FeatureFlags & (1u << 22)) != 0 ||
-                    ContainsFoliageToken(material.Name);
-                bool preserveAlphaCoverage =
-                    property.Name == nameof(ModelMaterial.BaseColorTexture) &&
-                    (material.AlphaMode == ModelAlphaMode.Mask || foliageMaterial);
+                ModelTextureMipPolicy mipPolicy =
+                    property.Name == nameof(ModelMaterial.BaseColorTexture)
+                        ? ModelMaterialTexturePolicy.ResolveBaseColorMipPolicy(material)
+                        : ModelTextureMipPolicy.Standard;
+                bool preserveAlphaCoverage = mipPolicy.PreserveAlphaCoverage;
                 string alphaCoverageKey = preserveAlphaCoverage
-                    ? $"enabled:{material.AlphaCutoff:R}"
+                    ? $"enabled:{mipPolicy.AlphaCutoff:R}"
                     : "disabled";
                 string samplerAnisotropy = slot.Sampler.MaxAnisotropy.ToString(
                     "R",
@@ -1414,13 +1418,14 @@ public sealed class ModelAssetCooker : IDisposable
                     $"stats:{TextureTransportStatistics.CurrentAlgorithmVersion}|" +
                     $"decoder:{TextureTransportStatistics.StbDecoderVersion}|" +
                     $"{TextureTransportStatistics.WebPDecoderVersion}|" +
+                    $"{TextureTransportStatistics.DdsDecoderVersion}|" +
                     $"{TextureTransportStatistics.KtxStatisticsDecoderVersion}|{sourceHash:x16}";
                 var textureOptions = defaultOptions with
                 {
                     ColorSpace = slot.ColorSpace,
                     Semantic = semantic,
                     PreserveAlphaCoverage = preserveAlphaCoverage,
-                    AlphaCutoff = material.AlphaCutoff
+                    AlphaCutoff = mipPolicy.AlphaCutoff
                 };
                 TextureTransportImage? transportImage;
                 AssetCookProgressOutcome textureOutcome;
@@ -1892,7 +1897,7 @@ public sealed class ModelAssetCooker : IDisposable
             return CookedMaterialPipeline.Decal;
         if (material.Unlit)
             return CookedMaterialPipeline.Unlit;
-        if ((material.FeatureFlags & (1u << 22)) != 0 || ContainsFoliageToken(material.Name))
+        if ((material.FeatureFlags & ModelMaterialFeatureBits.Foliage) != 0)
             return CookedMaterialPipeline.Foliage;
         return material.AlphaMode switch
         {
@@ -1912,10 +1917,6 @@ public sealed class ModelAssetCooker : IDisposable
         if (material.OcclusionTexture?.Source is null) flags |= CookedMaterialFallbackFlags.OcclusionWhite;
         return flags;
     }
-
-    private static bool ContainsFoliageToken(string? value) =>
-        !string.IsNullOrWhiteSpace(value) && new[] { "foliage", "grass", "leaf", "leaves", "tree", "ivy", "billboard" }
-            .Any(token => value.Contains(token, StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyDictionary<string, ulong> DiscoverDependencies(string sourcePath)
     {

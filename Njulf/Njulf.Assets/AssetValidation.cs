@@ -170,6 +170,8 @@ public sealed class AssetValidationOptions
         "{path}",
         "--backend",
         "{backend}",
+        "--assimp-material-texture-convention",
+        "{assimpMaterialTextureConvention}",
         "--json",
         "-"
     ];
@@ -377,7 +379,14 @@ public sealed class AssetValidator
         };
 
         foreach (string argument in options.ChildProcessArgumentTemplate)
-            process.StartInfo.ArgumentList.Add(ExpandChildArgument(argument, fullPath, backend));
+        {
+            process.StartInfo.ArgumentList.Add(
+                ExpandChildArgument(
+                    argument,
+                    fullPath,
+                    backend,
+                    options.ImporterOptions.AssimpMaterialTextureConvention));
+        }
 
         var stopwatch = Stopwatch.StartNew();
         Task<string>? stdoutTask = null;
@@ -963,11 +972,19 @@ public sealed class AssetValidator
             RejectedTooLargeCount: entries.Count(entry => entry.Status == AssetValidationStatus.RejectedTooLarge));
     }
 
-    private static string ExpandChildArgument(string argument, string path, ModelImportBackend backend)
+    private static string ExpandChildArgument(
+        string argument,
+        string path,
+        ModelImportBackend backend,
+        AssimpMaterialTextureConvention assimpMaterialTextureConvention)
     {
         return argument
             .Replace("{path}", path, StringComparison.Ordinal)
-            .Replace("{backend}", backend.ToString(), StringComparison.Ordinal);
+            .Replace("{backend}", backend.ToString(), StringComparison.Ordinal)
+            .Replace(
+                "{assimpMaterialTextureConvention}",
+                assimpMaterialTextureConvention.ToString(),
+                StringComparison.Ordinal);
     }
 
     private static AssetValidationEntry? TryReadEntry(string stdout)
@@ -1156,6 +1173,7 @@ public sealed class AssetValidator
             FlipWindingOrder = source.FlipWindingOrder,
             PreferredFormat = source.PreferredFormat,
             Backend = source.Backend,
+            AssimpMaterialTextureConvention = source.AssimpMaterialTextureConvention,
             ImportLights = source.ImportLights,
             DefaultImportedLightRange = source.DefaultImportedLightRange,
             MaximumImportedLightRange = source.MaximumImportedLightRange,

@@ -1,29 +1,42 @@
 # Performance Loop Harness
 
-`tools/perf-loop.ps1` runs a repeatable benchmark loop around `NjulfHelloGame`.
-Use it when you want an automated agent or model to try a narrow performance
-change, measure it against the current code, and keep only changes that improve
-the chosen frame-time metric.
+`tools/perf-loop.ps1` runs a quality-gated Bistro benchmark loop around
+`NjulfHelloGame`. Its default contract is Release, 1920×1080, the canonical
+Bistro camera, VSync off, three 240-frame repeats, complete CPU/GPU timestamp
+coverage, and a 0.5% linear-HDR relative-RMSE limit. The default `stress`
+budget profile changes diagnostics thresholds only; the loop owns the explicit
+16.67 ms p95, 20 ms p99, and HDR gates and does not reduce render quality.
 
 ## What It Does
 
 Each iteration:
 
-1. Saves a pre-trial checkpoint of the current worktree with
-   `git stash --include-untracked`, then reapplies it so existing local edits are
-   still visible to the trial command.
+1. Hashes the protected Bistro source-asset tree, then checkpoints code changes
+   while excluding that 1.67 GB tree from stash operations.
 2. Runs one or more baseline benchmark repeats.
 3. Runs `-TrialCommand`.
 4. Runs one or more candidate benchmark repeats.
-5. Compares the median p95 frame time.
-6. Keeps the candidate only when it improves by at least
-   `-MinImprovementPercent` and does not introduce a worse budget status.
+5. Rejects incomplete timing, settling timeouts, non-production captures,
+   scene/camera/settings drift, and HDR differences above the configured limit.
+6. Compares median CPU and GPU p50/p95/p99 independently. It keeps the candidate
+   only when the slower p95 improves by at least `-MinImprovementPercent`, no
+   p95/p99 metric regresses beyond `-MaxRegressionPercent`, and no budget status
+   worsens.
 7. Restores the exact pre-trial worktree when the candidate is rejected.
+8. Stops early once CPU and GPU p95 are at most 16.67 ms and p99 at most 20 ms.
 
-Reports and decisions are written under `.perf-loop-runs/`, which is ignored by
-git. Default benchmark runs also include a smoke-frame watchdog and a process
-timeout so the loop can roll back instead of hanging forever if the sample window
-does not close normally.
+Reports, HDR candidates, and decisions are written under `.perf-loop-runs/`,
+which is ignored by git. Benchmark mode owns the entire warmup, convergence, and
+measurement sequence; the command deliberately does not add smoke-frame options.
+Each phase builds once, then runs all repeats with `dotnet run --no-build` so the
+shader verification matrix is not redundantly rebuilt for every repeat.
+
+Every default benchmark also writes a sibling `*.health.json`. Forward GI is
+integrated into the opaque draw, so the renderer correctly leaves its exclusive
+`GI GPU` budget metric unavailable until an A/B capture supplies attribution.
+Under the diagnostics-only `stress` profile, the loop acknowledges only that
+exact health failure and still requires complete total-frame GPU timing, exact
+capture identity, convergence, HDR equivalence, and every other health check.
 
 ## Before Running
 
@@ -33,16 +46,15 @@ Run from the repository root:
 cd D:\Code\C#\Njulf4.0-Simplified\Njulf
 ```
 
-Make sure the project builds and the benchmark mode can start:
+Build the project, then establish the immutable HDR reference once. The command
+fails rather than overwriting an existing reference:
 
 ```powershell
 dotnet build .\Njulf.sln -c Release
-dotnet run --project .\NjulfHelloGame\NjulfHelloGame.csproj -c Release -- `
-  --benchmark `
-  --benchmark-report .\.perf-loop-runs\manual-check.json `
-  --benchmark-warmup-frames 5 `
-  --benchmark-measure-frames 10 `
-  --performance-scenario Normal
+powershell -ExecutionPolicy Bypass -File .\tools\perf-loop.ps1 `
+  -BaselineOnly `
+  -InitializeHdrReference `
+  -HdrReferencePath .\.perf-loop-runs\bistro-reference.pfm
 ```
 
 Check the working tree before using the loop:
@@ -51,9 +63,10 @@ Check the working tree before using the loop:
 git status --short
 ```
 
-Dirty work is supported, but the loop uses temporary stashes. If you have
-valuable uncommitted work, either commit it first or be prepared to inspect
-`git stash list` if a run is interrupted.
+Dirty code work is supported through recoverable temporary stashes. By default,
+`NjulfHelloGame/Assets/Bistro_v5_2` is excluded and hash-checked before and after
+each trial. Use the durable pre-loop checkpoint ref or make your own checkpoint
+before changing the protected path itself.
 
 ## Basic Use
 
@@ -63,8 +76,7 @@ Run one automatic optimization attempt:
 powershell -ExecutionPolicy Bypass -File .\tools\perf-loop.ps1 `
   -Iterations 1 `
   -RepeatCount 3 `
-  -WarmupFrames 30 `
-  -MeasureFrames 120 `
+  -HdrReferencePath .\.perf-loop-runs\bistro-reference.pfm `
   -TrialCommand "codex exec --model gpt-5-mini 'Find one narrow renderer performance improvement. Keep behavior unchanged, edit the code, and run focused tests if practical.'"
 ```
 
@@ -74,8 +86,7 @@ Run a longer loop:
 powershell -ExecutionPolicy Bypass -File .\tools\perf-loop.ps1 `
   -Iterations 5 `
   -RepeatCount 3 `
-  -WarmupFrames 30 `
-  -MeasureFrames 120 `
+  -HdrReferencePath .\.perf-loop-runs\bistro-reference.pfm `
   -MinImprovementPercent 3 `
   -MaxRegressionPercent 1 `
   -TrialCommand "codex exec --model gpt-5-mini 'Find one narrow renderer performance improvement. Prefer low-risk hot-path allocation, command recording, or shader-side simplifications. Do not change visuals intentionally.'"
@@ -214,7 +225,8 @@ Get-Command vibe-acp
 ## Recommended Workflow
 
 1. Start with `-Iterations 1 -RepeatCount 1 -WarmupFrames 5 -MeasureFrames 10`
-   to prove the benchmark launches on your machine.
+   and `-RequireProductionTiming:$false` to prove the benchmark launches on your
+   machine. Production timing requires at least 120 measured frames.
 2. Move to `-RepeatCount 3` or higher before trusting the decision.
 3. Keep trial prompts narrow. Ask for one small optimization per iteration.
 4. After a `KEEP`, review the diff with `git diff`, run relevant tests, and
@@ -261,16 +273,32 @@ enum-style name is the clearest option.
   for meaningful comparisons.
 - `-WarmupFrames`: frames ignored before measurement begins.
 - `-MeasureFrames`: measured frames per repeat.
+- `-MaximumSettlingFrames`: maximum convergence/readback settling window;
+  defaults to the production minimum of `4096`.
 - `-BenchmarkTimeoutSeconds`: max seconds for each benchmark process. Default
   is `900`; use `0` to disable.
 - `-TrialTimeoutSeconds`: max seconds for `-TrialCommand`. Default is `1800`;
   use `0` to disable.
 - `-Scenario`: `SamplePerformanceScenario` used by `NjulfHelloGame`.
+- `-Scene`: sample scene; defaults to `Bistro`.
+- `-HdrReferencePath`: required immutable linear-RGB PFM reference.
+- `-InitializeHdrReference`: creates that reference once and refuses to
+  overwrite an existing file.
+- `-InitializeHdrReferenceOnly`: exits after creating the reference instead of
+  immediately running baseline repeats.
+- `-MaximumHdrRelativeRmse`: quality gate, default `0.005` (0.5%).
+- `-BenchmarkBudgetProfile`: diagnostics budget profile passed to the sample;
+  defaults to `stress` because this harness applies its own explicit frame-time
+  gates. This setting does not alter scene or render quality.
+- `-RequireProductionTiming`: requires the strict production capture contract;
+  enabled by default.
+- `-BaselineOnly`: captures repeats and writes `baseline-summary.json` without
+  running a trial command.
+- `-ProtectedPath`: path excluded from checkpoint stashes and hash-checked for
+  mutation; defaults to the Bistro source assets.
 - `-TrialShell powershell|git-bash`: shell used for `-TrialCommand`. Use
   `git-bash` for Vibe CLI on Windows.
 - `-GitBashPath`: explicit path to Git Bash when `bash.exe` is not on `PATH`.
-- `-PrimaryMetric auto|cpu|gpu`: `auto` uses GPU p95 only when every report has
-  valid GPU timing; otherwise it uses CPU p95.
 - `-MinImprovementPercent`: minimum improvement required to keep the candidate.
 - `-MaxRegressionPercent`: regression threshold that makes rollback obvious in
   the decision reason.
@@ -281,6 +309,7 @@ enum-style name is the clearest option.
 - `-KeepRejectedStashes`: keeps the temporary stash for rejected candidates.
 - `-RunDirectory`: output directory for benchmark reports and decisions.
 - `-BenchmarkCommand`: replaces the default `dotnet run` benchmark command.
+- `-BuildCommand`: replaces the once-per-phase build command.
 
 ## Custom Benchmark Command
 
@@ -308,15 +337,18 @@ Supported placeholders:
 Each iteration writes:
 
 - `.perf-loop-runs/iteration-###/baseline-##.json`
+- `.perf-loop-runs/iteration-###/baseline-##.health.json`
 - `.perf-loop-runs/iteration-###/candidate-##.json`
+- `.perf-loop-runs/iteration-###/candidate-##.health.json`
 - `.perf-loop-runs/iteration-###/decision.json`
 
 The full run writes:
 
 - `.perf-loop-runs/summary.json`
 
-`decision.json` contains the decision, metric, baseline p95, candidate p95,
-improvement percentage, and any budget regressions. A successful candidate has:
+`decision.json` contains CPU/GPU p50/p95/p99, bottleneck improvement, HDR RMSE,
+target status, timing regressions, and budget regressions. A successful
+candidate has:
 
 ```json
 {

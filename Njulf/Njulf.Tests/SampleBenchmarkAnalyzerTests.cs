@@ -122,6 +122,22 @@ public sealed class SampleBenchmarkAnalyzerTests
     }
 
     [Test]
+    public void BistroStartupCamera_UsesRepresentativePlayBookmark()
+    {
+        var preset = HelloGame.GetCameraPreset(SampleSceneKind.Bistro);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                preset.Position,
+                Is.EqualTo(new Njulf.Core.Math.Vector3(-16.003326f, 2.5132222f, 1.2387409f)));
+            Assert.That(preset.Yaw, Is.EqualTo(1.6121571f));
+            Assert.That(preset.Pitch, Is.EqualTo(0.0660575f));
+            Assert.That(preset.FarPlane, Is.EqualTo(500.0f));
+        });
+    }
+
+    [Test]
     public void FastTraversalBenchmarkCamera_StreamsThenExercisesFullRingCuts()
     {
         var start = HelloGame.ResolveFastTraversalBenchmarkCameraPose(5);
@@ -463,6 +479,42 @@ public sealed class SampleBenchmarkAnalyzerTests
             Assert.That(report.GpuPasses.Any(pass => pass.Name == "SimpleDdgiBlendPass"), Is.True);
             Assert.That(report.GpuPasses.Any(pass => pass.Name == "SimpleDdgiSchedulerCommitPass"), Is.True);
             Assert.That(report.GpuPasses.Any(pass => pass.Name == "GlobalIlluminationCompositePass"), Is.True);
+        });
+    }
+
+    [Test]
+    public void CreateReport_ReconcilesMotionVectorTimingWithGpuFrame()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        analyzer.AddSample(RendererDiagnostics.Empty with
+        {
+            GpuTimingSupported = 1,
+            GpuTimingValid = 1,
+            GpuMotionVectorMicroseconds = 573,
+            GpuFrameMicroseconds = 573
+        }, RenderBudgetSnapshot.Empty);
+
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            new SampleBenchmarkOptions(true, 0, 1, null),
+            SamplePerformanceScenario.Normal,
+            warmupFrameCount: 0,
+            measurementFrameCount: 1,
+            firstMeasurementFrameIndex: 0,
+            lastMeasurementFrameIndex: 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                report.GpuPasses.Single(pass => pass.Name == "MotionVectorPass")
+                    .AverageMilliseconds,
+                Is.EqualTo(0.573));
+            Assert.That(report.GpuIndependentPassSumMilliseconds.AverageMilliseconds,
+                Is.EqualTo(0.573));
+            Assert.That(report.GpuUnexplainedMilliseconds.AverageMilliseconds,
+                Is.Zero);
+            Assert.That(report.CaptureContract.Mismatches.Any(mismatch =>
+                mismatch.Contains("GPU pass sum differs", StringComparison.Ordinal)),
+                Is.False);
         });
     }
 

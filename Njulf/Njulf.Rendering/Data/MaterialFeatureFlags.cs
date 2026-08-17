@@ -30,7 +30,9 @@ namespace Njulf.Rendering.Data
         Dispersion = 1u << 21,
         Foliage = 1u << 22,
         CompressedNormalBc5 = 1u << 23,
-        Ior = 1u << 24
+        Ior = 1u << 24,
+        /// <summary>Decode the tangent-space normal map using DirectX green-down convention.</summary>
+        NormalMapGreenInverted = 1u << 25
     }
 
     public static class MaterialFeatureFlagsExtensions

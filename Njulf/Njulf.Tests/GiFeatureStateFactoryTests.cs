@@ -464,6 +464,24 @@ public sealed class GiFeatureStateFactoryTests
         {
             GlobalIlluminationIndirectIntensity = 1.1f
         });
+        ResolvedGiSettingsMetadata autoExposureFirst =
+            ResolvedGiSettingsMetadataFactory.Create(diagnostics with
+            {
+                AutoExposureEnabled = 1,
+                Exposure = 0.75f
+            });
+        ResolvedGiSettingsMetadata autoExposureAdapted =
+            ResolvedGiSettingsMetadataFactory.Create(diagnostics with
+            {
+                AutoExposureEnabled = 1,
+                Exposure = 1.25f
+            });
+        ResolvedGiSettingsMetadata fixedExposureChanged =
+            ResolvedGiSettingsMetadataFactory.Create(diagnostics with
+            {
+                AutoExposureEnabled = 0,
+                Exposure = 1.25f
+            });
         ResolvedGiSettingsMetadata changedRuntimeTelemetry = ResolvedGiSettingsMetadataFactory.Create(diagnostics with
         {
             SimpleDdgiTransportSourceRefreshFrames = 99,
@@ -520,6 +538,10 @@ public sealed class GiFeatureStateFactoryTests
             Assert.That(changedLayout.StableHash, Is.Not.EqualTo(first.StableHash));
             Assert.That(changedFallback.StableHash, Is.Not.EqualTo(first.StableHash));
             Assert.That(changedLighting.StableHash, Is.Not.EqualTo(first.StableHash));
+            Assert.That(autoExposureAdapted.StableHash, Is.EqualTo(autoExposureFirst.StableHash));
+            Assert.That(fixedExposureChanged.StableHash, Is.Not.EqualTo(first.StableHash));
+            Assert.That(autoExposureFirst.EffectiveSettings,
+                Does.Contain("lighting.exposure=automatic"));
             Assert.That(changedRuntimeTelemetry.StableHash, Is.EqualTo(first.StableHash));
             Assert.That(featureReasonChanged.StableHash, Is.EqualTo(featureReasonFirst.StableHash));
             Assert.That(first.EffectiveSettings, Does.Contain("layout.probeBudget=128"));

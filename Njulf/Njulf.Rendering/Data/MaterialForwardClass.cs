@@ -48,11 +48,12 @@ namespace Njulf.Rendering.Data
         private static bool RequiresFullOpaquePath(GPUMaterialData material)
         {
             MaterialFeatureFlags featureFlags = (MaterialFeatureFlags)material.FeatureFlags;
-            // BC5 is a base normal-map decode mode already supported by the
-            // compact opaque shader. Treating it as extension lighting routed
-            // nearly every cooked Sponza material through the largest variant.
+            // BC5 and normal-map handedness are base normal decode modes already
+            // supported by the compact opaque shader. Treating either as extension
+            // lighting would route ordinary materials through the largest variant.
             MaterialFeatureFlags unsupportedSimpleFlags =
-                featureFlags & ~MaterialFeatureFlags.CompressedNormalBc5;
+                featureFlags & ~(MaterialFeatureFlags.CompressedNormalBc5 |
+                                 MaterialFeatureFlags.NormalMapGreenInverted);
             if (unsupportedSimpleFlags != MaterialFeatureFlags.None || material.ExtensionDataIndex >= 0)
                 return true;
 

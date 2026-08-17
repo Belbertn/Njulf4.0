@@ -136,7 +136,8 @@ public sealed class SampleBenchmarkRunner
 
     private void BeginPostMeasurementEvidence()
     {
-        if (string.IsNullOrWhiteSpace(_options.HdrReferencePath))
+        if (string.IsNullOrWhiteSpace(_options.HdrReferencePath) &&
+            string.IsNullOrWhiteSpace(_options.HdrCandidatePath))
         {
             Complete(SampleBenchmarkHdrDifference.Unavailable(
                 "No benchmark HDR reference path was supplied."));
@@ -191,11 +192,19 @@ public sealed class SampleBenchmarkRunner
         if (result.State == LinearHdrCaptureState.Completed)
         {
             _waitingForHdrCapture = false;
+            if (string.IsNullOrWhiteSpace(_options.HdrReferencePath))
+            {
+                Complete(SampleBenchmarkHdrDifference.Unavailable(
+                    $"HDR candidate captured at '{_hdrCandidatePath}'; no reference was supplied."));
+                return;
+            }
+
             try
             {
                 Complete(SampleBenchmarkHdrComparer.Compare(
                     _options.HdrReferencePath,
-                    _hdrCandidatePath));
+                    _hdrCandidatePath,
+                    _options.HdrMaximumRelativeRmse));
             }
             catch (Exception exception) when (
                 exception is ArgumentException or
@@ -478,6 +487,7 @@ public sealed class SampleBenchmarkAnalyzer
     private static readonly IReadOnlyList<TimingSelector> GpuTimings =
     [
         new("DepthPrePass", d => d.GpuDepthPrePassMicroseconds),
+        new("MotionVectorPass", d => d.GpuMotionVectorMicroseconds),
         new("DirectionalShadowPass", d => d.GpuDirectionalShadowMicroseconds),
         new("SpotShadowPass", d => d.GpuSpotShadowMicroseconds),
         new("PointShadowPass", d => d.GpuPointShadowMicroseconds),

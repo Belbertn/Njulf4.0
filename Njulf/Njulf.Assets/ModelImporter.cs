@@ -460,7 +460,7 @@ namespace Njulf.Assets
             var jointIndices = new List<VertexJointIndices>(vertexCapacity);
             var jointWeights = new List<VertexJointWeights>(vertexCapacity);
             var indices = new List<uint>(indexCapacity);
-            mesh.Materials.AddRange(ProcessMaterials(scene, path, gltfManifest));
+            mesh.Materials.AddRange(ProcessMaterials(scene, path, options, gltfManifest));
 
             ProcessNode(
                 scene,
@@ -1430,7 +1430,11 @@ namespace Njulf.Assets
             return NumericsMatrix4x4.Transpose(assimpTransform);
         }
 
-        private unsafe List<ModelMaterial> ProcessMaterials(Scene* scene, string modelPath, GltfAssetManifest? gltfManifest)
+        private unsafe List<ModelMaterial> ProcessMaterials(
+            Scene* scene,
+            string modelPath,
+            ImporterOptions options,
+            GltfAssetManifest? gltfManifest)
         {
             var materials = new List<ModelMaterial>();
             string modelDirectory = Path.GetDirectoryName(Path.GetFullPath(modelPath)) ?? AppContext.BaseDirectory;
@@ -1438,19 +1442,85 @@ namespace Njulf.Assets
             for (uint i = 0; i < scene->MNumMaterials; i++)
             {
                 Material* material = scene->MMaterials[i];
+                string? albedoTexturePath = ResolveTexturePath(
+                    modelDirectory,
+                    GetFirstTexturePath(material, TextureType.BaseColor, TextureType.Diffuse),
+                    "base-color");
+                string? normalTexturePath = ResolveTexturePath(
+                    modelDirectory,
+                    GetFirstTexturePath(material, TextureType.NormalCamera, TextureType.Normals, TextureType.Height),
+                    "normal");
+                string? metallicRoughnessTexturePath = ResolveTexturePath(
+                    modelDirectory,
+                    GetFirstTexturePath(
+                        material,
+                        TextureType.Metalness,
+                        TextureType.DiffuseRoughness,
+                        TextureType.AmbientOcclusion,
+                        TextureType.Unknown),
+                    "metallic-roughness/occlusion");
+                string? occlusionTexturePath = ResolveTexturePath(
+                    modelDirectory,
+                    GetFirstTexturePath(material, TextureType.AmbientOcclusion),
+                    "occlusion");
+                string? emissiveTexturePath = ResolveTexturePath(
+                    modelDirectory,
+                    GetFirstTexturePath(material, TextureType.EmissionColor, TextureType.Emissive),
+                    "emissive");
+
+                bool usesPackedSpecularRoughnessMetallic =
+                    options.AssimpMaterialTextureConvention is
+                        AssimpMaterialTextureConvention.SpecularGbIsRoughnessMetallic or
+                        AssimpMaterialTextureConvention.AmazonBistro;
+                bool amazonBistroPackedMaterial = false;
+                if (usesPackedSpecularRoughnessMetallic)
+                {
+                    string? packedRoughnessMetallicTexturePath = ResolveTexturePath(
+                        modelDirectory,
+                        GetFirstTexturePath(material, TextureType.Specular),
+                        "packed roughness-metallic");
+                    metallicRoughnessTexturePath ??= packedRoughnessMetallicTexturePath;
+                    amazonBistroPackedMaterial =
+                        options.AssimpMaterialTextureConvention ==
+                            AssimpMaterialTextureConvention.AmazonBistro &&
+                        packedRoughnessMetallicTexturePath != null;
+                }
+
                 var imported = new ModelMaterial
                 {
                     Name = GetMaterialString(material, Assimp.MaterialName, $"Material_{i}"),
+                    FeatureFlags =
+                        options.AssimpMaterialTextureConvention ==
+                            AssimpMaterialTextureConvention.AmazonBistro &&
+                        normalTexturePath != null
+                            ? ModelMaterialFeatureBits.NormalMapGreenInverted
+                            : 0u,
                     Albedo = ToCoreVector(GetMaterialColor(material, Assimp.MaterialColorDiffuse, new NumericsVector4(1f, 1f, 1f, 1f))),
                     Emissive = ToCoreVector(GetMaterialColor(material, Assimp.MaterialColorEmissive, NumericsVector4.Zero)),
-                    Metallic = GetMaterialFloat(material, 0f, "$mat.metallicFactor", "$mat.gltf.pbrMetallicRoughness.metallicFactor"),
-                    Roughness = GetMaterialFloat(material, 1f, "$mat.roughnessFactor", "$mat.gltf.pbrMetallicRoughness.roughnessFactor"),
+                    // Bistro's packed map stores absolute metallic and roughness
+                    // values. Assimp synthesizes a legacy roughness factor from
+                    // FBX/Phong shininess (0.5527864 for this asset) and defaults
+                    // metallic to zero. Multiplying those legacy values into the
+                    // authored G/B channels makes masonry glossy and discards all
+                    // authored metalness.
+                    Metallic = amazonBistroPackedMaterial
+                        ? 1f
+                        : GetMaterialFloat(material, 0f, "$mat.metallicFactor", "$mat.gltf.pbrMetallicRoughness.metallicFactor"),
+                    Roughness = amazonBistroPackedMaterial
+                        ? 1f
+                        : GetMaterialFloat(material, 1f, "$mat.roughnessFactor", "$mat.gltf.pbrMetallicRoughness.roughnessFactor"),
                     AmbientOcclusion = 1f,
                     NormalScale = GetMaterialFloat(material, 1f, "$mat.normalScale"),
-                    AlbedoTexturePath = ResolveTexturePath(modelDirectory, GetFirstTexturePath(material, TextureType.BaseColor, TextureType.Diffuse), "base-color"),
-                    NormalTexturePath = ResolveTexturePath(modelDirectory, GetFirstTexturePath(material, TextureType.NormalCamera, TextureType.Normals, TextureType.Height), "normal"),
-                    MetallicRoughnessTexturePath = ResolveTexturePath(modelDirectory, GetFirstTexturePath(material, TextureType.Metalness, TextureType.DiffuseRoughness, TextureType.AmbientOcclusion, TextureType.Unknown), "metallic-roughness/occlusion"),
-                    EmissiveTexturePath = ResolveTexturePath(modelDirectory, GetFirstTexturePath(material, TextureType.EmissionColor, TextureType.Emissive), "emissive")
+                    AlbedoTexturePath = albedoTexturePath,
+                    NormalTexturePath = normalTexturePath,
+                    MetallicRoughnessTexturePath = metallicRoughnessTexturePath,
+                    OcclusionTexturePath = occlusionTexturePath,
+                    EmissiveTexturePath = emissiveTexturePath,
+                    BaseColorTexture = CreateExternalTextureSlot(albedoTexturePath, TextureColorSpace.Srgb),
+                    NormalTexture = CreateExternalTextureSlot(normalTexturePath, TextureColorSpace.Linear),
+                    MetallicRoughnessTexture = CreateExternalTextureSlot(metallicRoughnessTexturePath, TextureColorSpace.Linear),
+                    OcclusionTexture = CreateExternalTextureSlot(occlusionTexturePath, TextureColorSpace.Linear),
+                    EmissiveTexture = CreateExternalTextureSlot(emissiveTexturePath, TextureColorSpace.Srgb)
                 };
 
                 if (gltfManifest != null && i < gltfManifest.Materials.Count)
@@ -1537,6 +1607,37 @@ namespace Njulf.Assets
             return Path.IsPathRooted(decodedPath)
                 ? Path.GetFullPath(decodedPath)
                 : Path.GetFullPath(Path.Combine(modelDirectory, decodedPath));
+        }
+
+        private static ModelTextureSlot? CreateExternalTextureSlot(
+            string? texturePath,
+            TextureColorSpace colorSpace)
+        {
+            if (string.IsNullOrWhiteSpace(texturePath))
+                return null;
+
+            string fullPath = Path.GetFullPath(texturePath);
+            if (!File.Exists(fullPath))
+            {
+                throw new FileNotFoundException(
+                    $"Required Assimp material texture was not found: {fullPath}",
+                    fullPath);
+            }
+
+            return new ModelTextureSlot
+            {
+                Source = new ModelTextureSource
+                {
+                    DebugName = Path.GetFileName(fullPath),
+                    SourceKind = TextureSourceKind.ExternalFile,
+                    FilePath = fullPath,
+                    ContainerKind = GetTextureContainerKind(fullPath, null),
+                    EncodedByteLength = checked((int)Math.Min(new FileInfo(fullPath).Length, int.MaxValue)),
+                    CacheIdentity = fullPath
+                },
+                Sampler = TextureSamplerDescription.Default,
+                ColorSpace = colorSpace
+            };
         }
 
         private static void ApplyGltfMaterial(ModelMaterial target, GltfMaterial material)
@@ -2265,6 +2366,22 @@ namespace Njulf.Assets
                 return;
             if (extras.ValueKind != JsonValueKind.Object)
                 return;
+
+            if (extras.TryGetProperty(
+                    Gltf.SharpGltfModelMeshConverter.FoliageExtra,
+                    out JsonElement foliage))
+            {
+                if (foliage.ValueKind is not JsonValueKind.True and not JsonValueKind.False)
+                {
+                    throw new InvalidDataException(
+                        $"glTF material extra '{Gltf.SharpGltfModelMeshConverter.FoliageExtra}' must be a boolean.");
+                }
+
+                if (foliage.GetBoolean())
+                    material.FeatureFlags |= ModelMaterialFeatureBits.Foliage;
+                else
+                    material.FeatureFlags &= ~ModelMaterialFeatureBits.Foliage;
+            }
 
             if (extras.TryGetProperty(
                     Gltf.SharpGltfModelMeshConverter.GeometryDecalExtra,
@@ -3011,6 +3128,7 @@ namespace Njulf.Assets
         public const uint Foliage = 1u << 22;
         // Bit 23 is assigned by the cooker to the runtime-only BC5 normal flag.
         public const uint Ior = 1u << 24;
+        public const uint NormalMapGreenInverted = 1u << 25;
     }
 
     public enum ModelAlphaMode

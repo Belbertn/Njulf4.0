@@ -12,8 +12,9 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
     public void RuntimeDiagnostics_ExportExactCommitRejections()
     {
         string renderer = ReadRepoText(
-            "Njulf.Rendering",
-            "VulkanRenderer.cs");
+                "Njulf.Rendering",
+                "VulkanRenderer.cs")
+            .ReplaceLineEndings("\n");
 
         Assert.That(
             renderer,

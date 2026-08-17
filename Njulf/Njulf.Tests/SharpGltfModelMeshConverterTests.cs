@@ -356,6 +356,7 @@ public sealed class SharpGltfModelMeshConverterTests
             Assert.That(material.AlphaMode, Is.EqualTo(ModelAlphaMode.Mask));
             Assert.That(material.AlphaCutoff, Is.EqualTo(0.33f).Within(0.0001f));
             Assert.That(material.DoubleSided, Is.True);
+            Assert.That((material.FeatureFlags & (1u << 22)), Is.Not.EqualTo(0u));
             Assert.That(material.IsGeometryDecal, Is.True);
             Assert.That(material.DecalLayer, Is.EqualTo(7));
             Assert.That(material.DecalDepthBias, Is.EqualTo(0.001f).Within(0.000001f));
@@ -903,6 +904,7 @@ public sealed class SharpGltfModelMeshConverterTests
                     "alphaCutoff": 0.33,
                     "doubleSided": true,
                     "extras": {
+                      "NJULF_foliage": true,
                       "NJULF_geometry_decal": true,
                       "NJULF_decal_layer": 7,
                       "NJULF_decal_depth_bias": 0.001

@@ -849,6 +849,8 @@ namespace Njulf.Rendering.Data
         public string SimpleDdgiSchedulerCommitFailureBreakdown { get; set; } =
             string.Empty;
         public uint SimpleDdgiSchedulerFeedbackPendingFreshCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackPendingExposedCount { get; set; }
+        public uint SimpleDdgiSchedulerFeedbackPendingRelocationCount { get; set; }
         public uint SimpleDdgiSchedulerFeedbackPendingSourceCount { get; set; }
         public uint SimpleDdgiSchedulerFeedbackPendingSourceInvalidFlagCount { get; set; }
         public uint SimpleDdgiSchedulerFeedbackPendingSourcePrivateRepairCount { get; set; }
@@ -2257,6 +2259,8 @@ namespace Njulf.Rendering.Data
             SimpleDdgiSchedulerFeedbackFailedCommitCount = 0;
             SimpleDdgiSchedulerCommitFailureBreakdown = string.Empty;
             SimpleDdgiSchedulerFeedbackPendingFreshCount = 0;
+            SimpleDdgiSchedulerFeedbackPendingExposedCount = 0;
+            SimpleDdgiSchedulerFeedbackPendingRelocationCount = 0;
             SimpleDdgiSchedulerFeedbackPendingSourceCount = 0;
             SimpleDdgiSchedulerFeedbackPendingSourceInvalidFlagCount = 0;
             SimpleDdgiSchedulerFeedbackPendingSourcePrivateRepairCount = 0;

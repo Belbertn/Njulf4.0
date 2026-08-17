@@ -384,9 +384,15 @@ void main()
     // and inactive probes must never retain receiver-valid payload authority.
     if (relocationChanged || relocationWasPending || inactiveProbe)
         state.flags &= ~SIMPLE_DDGI_PROBE_FLAG_VISIBILITY_VALID;
-    state.age = 0u;
     state.classification = inactiveProbe ? SIMPLE_DDGI_CLASSIFICATION_INACTIVE : SIMPLE_DDGI_CLASSIFICATION_ACTIVE;
     state.luminanceChangeEma = previous.luminanceChangeEma;
+    // Resident commits reset their private last-update frame, so preserve the
+    // wall-clock age accumulated before this attempt while relocation remains
+    // pending. This makes the existing 32-frame fail-closed retirement reachable
+    // instead of restarting it at zero on every successful retry.
+    state.age = (state.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u
+        ? SimpleDdgiUpdateAge(update)
+        : 0u;
     if (gpuScheduler)
     {
         // Relocation/classification is a transaction-private proposal. Commit

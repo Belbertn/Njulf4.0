@@ -780,6 +780,20 @@ void SchedulerWriteInvalidCandidate(uint base)
     SchedulerArenaWrite(base, SIMPLE_DDGI_SCHEDULER_INVALID_PROBE);
 }
 
+// Public state stores the age already accumulated by a transaction that must
+// stay pending (notably relocation). The private resident word records the
+// frame of the last successful commit. Combining both gives GPU ownership the
+// same wall-clock retry age as the CPU scheduler without a full-field age pass.
+uint SchedulerProbeUpdateAge(
+    uint persistedAge,
+    uint lastCommittedUpdateFrame)
+{
+    uint elapsed = min(
+        SchedulerFrameIndex() - lastCommittedUpdateFrame,
+        255u);
+    return min(min(persistedAge, 255u) + elapsed, 255u);
+}
+
 void SchedulerReadCandidate(
     uint base,
     out uint probeIndex,

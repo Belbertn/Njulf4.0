@@ -535,6 +535,7 @@ public static class MaterialTransportCompiler
                 MaterialFeatureFlags.SpecularColorTexture |
                 MaterialFeatureFlags.Foliage |
                 MaterialFeatureFlags.CompressedNormalBc5 |
+                MaterialFeatureFlags.NormalMapGreenInverted |
                 MaterialFeatureFlags.Ior;
             if ((changedFeatures & diffuseFeatures) != 0)
                 mask |= MaterialChangeMask.DiffuseTransport;

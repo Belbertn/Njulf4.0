@@ -53,6 +53,7 @@ public sealed record TextureTransportStatistics
     public const string StbDecoderVersion = "StbImageSharp/2.30.15";
     public const string WebPDecoderVersion = WebPTextureDecoder.DecoderVersion;
     public const string BcDecoderVersion = "BCnEncoder.Net/2.3.0";
+    public const string DdsDecoderVersion = "BCnEncoder.Net/2.3.0 DDS/1";
     public const string KtxContainerDecoderVersion = "Njulf KTX2 container/2";
     public const string KtxRawDecoderVersion = "Njulf KTX2 raw/2";
     public const string BasisDecoderVersion = "Ktx2.NET/1.0.5 (libktx RGBA32)";

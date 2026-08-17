@@ -907,7 +907,8 @@ public sealed class SimpleDdgiReceiverFeedbackV2Tests
             Assert.That(gi.DdgiOpacityMicromapMode,
                 Is.EqualTo(DdgiOpacityMicromapMode.ExtFourStateExperiment));
             Assert.That(gi.SimpleDdgiDirectionalGuidingMode,
-                Is.EqualTo(SimpleDdgiDirectionalGuidingMode.Off));
+                Is.EqualTo(SimpleDdgiDirectionalGuidingMode
+                    .PerProbeHistogramExperiment));
             Assert.That(gi.GiCausticMode,
                 Is.EqualTo(GiCausticMode.WorldCacheExperiment));
             Assert.That(gi.SimpleDdgiNearFieldResidualMode,

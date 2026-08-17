@@ -2425,9 +2425,8 @@ namespace Njulf.Rendering.Resources
             if (material == null)
                 throw new ArgumentNullException(nameof(material));
 
-            MaterialFeatureFlags flags = (MaterialFeatureFlags)material.FeatureFlags;
-            return material.AlphaMode == ModelAlphaMode.Mask ||
-                   (flags & MaterialFeatureFlags.Foliage) != MaterialFeatureFlags.None;
+            return ModelMaterialTexturePolicy.ResolveBaseColorMipPolicy(material)
+                .PreserveAlphaCoverage;
         }
 
         public static RuntimeTextureMipPolicy ResolveAlbedoRuntimeMipPolicy(ModelMaterial material)
@@ -2435,9 +2434,11 @@ namespace Njulf.Rendering.Resources
             if (material == null)
                 throw new ArgumentNullException(nameof(material));
 
-            return RequiresAlphaCoveragePreservingMips(material)
+            ModelTextureMipPolicy mipPolicy =
+                ModelMaterialTexturePolicy.ResolveBaseColorMipPolicy(material);
+            return mipPolicy.PreserveAlphaCoverage
                 ? RuntimeTextureMipPolicy.AlphaMask(
-                    ValidateAlphaCutoff(material.AlphaCutoff))
+                    ValidateAlphaCutoff(mipPolicy.AlphaCutoff))
                 : RuntimeTextureMipPolicy.Default;
         }
 

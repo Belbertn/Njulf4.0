@@ -198,6 +198,38 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void LoadModelMesh_AssimpMaterialConventionProducesDistinctCacheEntries()
+        {
+            string path = WriteTriangleObj();
+            using var content = new ContentManager(Path.GetDirectoryName(path));
+
+            ModelMesh standard = content.Load<ModelMesh>(
+                Path.GetFileName(path),
+                new ContentLoadOptions
+                {
+                    ImporterOptions = new ImporterOptions
+                    {
+                        Backend = ModelImportBackend.Assimp,
+                        AssimpMaterialTextureConvention =
+                            AssimpMaterialTextureConvention.Standard
+                    }
+                });
+            ModelMesh bistro = content.Load<ModelMesh>(
+                Path.GetFileName(path),
+                new ContentLoadOptions
+                {
+                    ImporterOptions = new ImporterOptions
+                    {
+                        Backend = ModelImportBackend.Assimp,
+                        AssimpMaterialTextureConvention =
+                            AssimpMaterialTextureConvention.AmazonBistro
+                    }
+                });
+
+            Assert.That(bistro, Is.Not.SameAs(standard));
+        }
+
+        [Test]
         public void ImportGltf_PreservesMaterialsTexturesAndSubmeshAssignments()
         {
             string path = FindRepoFile("NjulfHelloGame", "NewSponza_Main_glTF_003.gltf");

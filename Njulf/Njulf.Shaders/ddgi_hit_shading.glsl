@@ -811,6 +811,13 @@ bool ResolveCommittedHitSurface(
             normalUv,
             normalLod,
             vec4(0.5, 0.5, 1.0, 1.0)).xyz * 2.0 - 1.0;
+        if ((material.FeatureFlags & MATERIAL_FEATURE_NORMAL_GREEN_INVERTED) != 0u)
+            tangentNormal.y = -tangentNormal.y;
+        // BC5 stores only tangent-space X/Y. Match the visible forward path by
+        // rebuilding the positive hemisphere instead of interpreting the
+        // texture view's absent blue channel as a backwards-facing normal.
+        if ((material.FeatureFlags & MATERIAL_FEATURE_COMPRESSED_NORMAL_BC5) != 0u)
+            tangentNormal.z = sqrt(max(0.0, 1.0 - dot(tangentNormal.xy, tangentNormal.xy)));
         tangentNormal.xy *= material.NormalScaleBias.x;
         tangentNormal = GiSafeNormal(tangentNormal, vec3(0.0, 0.0, 1.0));
         shadingNormal = GiSafeNormal(

@@ -32,6 +32,9 @@ public sealed record SampleBenchmarkOptions(
     public string HdrReferencePath { get; init; } = string.Empty;
     /// <summary>Optional destination for the post-measurement linear-RGB PFM capture.</summary>
     public string HdrCandidatePath { get; init; } = string.Empty;
+    /// <summary>Maximum relative RMSE accepted by the linear-HDR comparison gate.</summary>
+    public double HdrMaximumRelativeRmse { get; init; } =
+        SampleBenchmarkHdrDifference.DefaultMaximumRelativeRmse;
     /// <summary>Validated njulf-nsight-shader-profile-v1 JSON artifact.</summary>
     public string ShaderProfileArtifactPath { get; init; } = string.Empty;
     public bool RequireShaderProfileEvidence { get; init; }

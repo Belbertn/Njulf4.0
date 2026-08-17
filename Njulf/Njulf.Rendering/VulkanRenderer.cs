@@ -7400,6 +7400,12 @@ namespace Njulf.Rendering
                 SimpleDdgiSchedulerFeedbackPendingFreshCount = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiSchedulerFeedbackPendingFreshCount
                     : 0u,
+                SimpleDdgiSchedulerFeedbackPendingExposedCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerFeedbackPendingExposedCount
+                    : 0u,
+                SimpleDdgiSchedulerFeedbackPendingRelocationCount = giUsesSimpleDdgi
+                    ? sceneData.SimpleDdgiSchedulerFeedbackPendingRelocationCount
+                    : 0u,
                 SimpleDdgiSchedulerFeedbackPendingSourceCount = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiSchedulerFeedbackPendingSourceCount
                     : 0u,
@@ -8854,6 +8860,7 @@ namespace Njulf.Rendering
                 RuntimeWorstStallMicroseconds = stallSnapshot.WorstMicrosecondsThisFrame,
                 RuntimeWorstStallReason = stallSnapshot.WorstReasonThisFrame,
                 RuntimeDeviceWaitIdleCount = stallSnapshot.DeviceWaitIdleCount,
+                GpuMotionVectorMicroseconds = sceneData.GpuMotionVectorMicroseconds,
                 GpuFrameMicroseconds = gpuFrameMicroseconds,
                 ValidationMode = _context.ValidationSettings.Mode,
                 ValidationVerboseMessageCount = validationMessages.VerboseCount,
@@ -13806,6 +13813,10 @@ namespace Njulf.Rendering
                     .LastCommitFailureBreakdown.ToString();
             sceneData.SimpleDdgiSchedulerFeedbackPendingFreshCount =
                 schedulerFeedback.PendingFreshCount;
+            sceneData.SimpleDdgiSchedulerFeedbackPendingExposedCount =
+                schedulerFeedback.PendingExposedCount;
+            sceneData.SimpleDdgiSchedulerFeedbackPendingRelocationCount =
+                schedulerFeedback.PendingRelocationCount;
             sceneData.SimpleDdgiSchedulerFeedbackPendingSourceCount =
                 schedulerFeedback.PendingSourceCount;
             sceneData.SimpleDdgiSchedulerFeedbackPendingSourceInvalidFlagCount =

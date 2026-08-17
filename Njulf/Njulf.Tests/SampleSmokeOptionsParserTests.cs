@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using Njulf.Assets;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
@@ -106,6 +107,9 @@ public sealed class SampleSmokeOptionsParserTests
             "NJULF_RENDERER_BENCHMARK_HDR_CANDIDATE",
             null);
         Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_HDR_MAX_RELATIVE_RMSE",
+            null);
+        Environment.SetEnvironmentVariable(
             "NJULF_RENDERER_BENCHMARK_SHADER_PROFILE",
             null);
         Environment.SetEnvironmentVariable(
@@ -175,6 +179,7 @@ public sealed class SampleSmokeOptionsParserTests
 
     [TestCase("material-showcase", SampleSceneKind.MaterialShowcase)]
     [TestCase("global-illumination-test", SampleSceneKind.GlobalIlluminationTest)]
+    [TestCase("bistro", SampleSceneKind.Bistro)]
     [TestCase("foliage-showcase", SampleSceneKind.FoliageShowcase)]
     [TestCase("vfx-showcase", SampleSceneKind.VfxShowcase)]
     public void ParsesSceneAndDefaultsToStartupSmoke(string value, SampleSceneKind expected)
@@ -661,6 +666,25 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void BistroFollowsSponzaInTheSceneCycleAndUsesTheAssimpImporter()
+    {
+        SampleSceneKind[] scenes = Enum.GetValues<SampleSceneKind>();
+        int sponzaIndex = Array.IndexOf(scenes, SampleSceneKind.SponzaPlaza);
+        SampleAssetManifest manifest = SampleAssetManifest.Bistro;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scenes[sponzaIndex + 1], Is.EqualTo(SampleSceneKind.Bistro));
+            Assert.That(manifest.ModelPath, Is.EqualTo("Assets/Bistro_v5_2/BistroExterior.fbx"));
+            Assert.That(manifest.ModelAsset.ExpectedBackend, Is.EqualTo(ModelImportBackend.Assimp));
+            Assert.That(
+                manifest.ModelAsset.AssimpMaterialTextureConvention,
+                Is.EqualTo(AssimpMaterialTextureConvention.AmazonBistro));
+            Assert.That(manifest.EnableImportedModelLights, Is.False);
+        });
+    }
+
+    [Test]
     public void DdgiContentConformanceFlag_IsRuntimeOnlyAndDefaultsToStartupSmoke()
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
@@ -931,6 +955,20 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void ParsesStressBenchmarkBudgetForExternallyGatedRuns()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--benchmark",
+            "--benchmark-budget-profile", "stress"
+        ]);
+
+        Assert.That(
+            options.Benchmark.BudgetProfileOverride,
+            Is.EqualTo(RenderBudgetProfileKind.StressUnlimited));
+    }
+
+    [Test]
     public void BenchmarkWithQualityAndSceneOverrides_OwnsTheFullMeasurementSequence()
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
@@ -1042,6 +1080,7 @@ public sealed class SampleSmokeOptionsParserTests
             "--benchmark-variant", "decal-shadows-disabled",
             "--benchmark-hdr-reference", reference,
             "--benchmark-hdr-candidate", candidate,
+            "--benchmark-hdr-max-relative-rmse", "0.005",
             "--benchmark-shader-profile", shaderProfile,
             "--benchmark-require-shader-profile"
         ]);
@@ -1061,6 +1100,7 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(
                 options.Benchmark.HdrCandidatePath,
                 Is.EqualTo(Path.GetFullPath(candidate)));
+            Assert.That(options.Benchmark.HdrMaximumRelativeRmse, Is.EqualTo(0.005));
             Assert.That(
                 options.Benchmark.ShaderProfileArtifactPath,
                 Is.EqualTo(Path.GetFullPath(shaderProfile)));
@@ -1069,16 +1109,35 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
-    public void BenchmarkHdrCandidate_RequiresReferenceGate()
+    public void BenchmarkHdrCandidate_WithoutReference_CreatesOutputOnlyCapture()
+    {
+        string candidate = Path.Combine(Path.GetTempPath(), "candidate.pfm");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--benchmark-hdr-candidate", candidate
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Benchmark.Enabled, Is.True);
+            Assert.That(options.Benchmark.HdrReferencePath, Is.Empty);
+            Assert.That(
+                options.Benchmark.HdrCandidatePath,
+                Is.EqualTo(Path.GetFullPath(candidate)));
+        });
+    }
+
+    [Test]
+    public void BenchmarkHdrMaximumRelativeRmse_RejectsNegativeValue()
     {
         Assert.That(
             () => SampleSmokeOptionsParser.Parse(
             [
-                "--benchmark-hdr-candidate",
-                Path.Combine(Path.GetTempPath(), "candidate.pfm")
+                "--benchmark-hdr-max-relative-rmse", "-0.001"
             ]),
             Throws.ArgumentException.With.Message.Contains(
-                "requires --benchmark-hdr-reference"));
+                "requires a non-negative finite numeric value"));
     }
 
     [Test]

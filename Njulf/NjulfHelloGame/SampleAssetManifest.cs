@@ -7,7 +7,9 @@ namespace NjulfHelloGame;
 
 internal sealed record SampleAssetReference(
     string Path,
-    ModelImportBackend ExpectedBackend);
+    ModelImportBackend ExpectedBackend,
+    AssimpMaterialTextureConvention AssimpMaterialTextureConvention =
+        AssimpMaterialTextureConvention.Standard);
 
 internal sealed record SampleAssetManifest(
     SampleAssetReference ModelAsset,
@@ -16,7 +18,8 @@ internal sealed record SampleAssetManifest(
     float ModelScale,
     CoreVector3 ModelPosition,
     float RotationSpeed,
-    Color AmbientLight)
+    Color AmbientLight,
+    bool EnableImportedModelLights)
 {
     public string ModelPath => ModelAsset.Path;
     public IReadOnlyList<string> AddendumModelPaths => AddendumModelAssets.Select(asset => asset.Path).ToArray();
@@ -29,7 +32,24 @@ internal sealed record SampleAssetManifest(
         1.0f,
         CoreVector3.Zero,
         0.0f,
-        new Color(0.025f, 0.03f, 0.04f, 1f));
+        new Color(0.025f, 0.03f, 0.04f, 1f),
+        EnableImportedModelLights: false);
+
+    public static SampleAssetManifest Bistro { get; } = new(
+        new SampleAssetReference(
+            "Assets/Bistro_v5_2/BistroExterior.fbx",
+            ModelImportBackend.Assimp,
+            AssimpMaterialTextureConvention.AmazonBistro),
+        Array.Empty<SampleAssetReference>(),
+        Array.Empty<SampleAssetReference>(),
+        1.0f,
+        CoreVector3.Zero,
+        0.0f,
+        new Color(0.02f, 0.02f, 0.025f, 1f),
+        // The FBX contains a second, unshadowed directional light whose color
+        // already has a very large source intensity baked into it. Combining it
+        // with the sample's shadow-casting sun erases every cast shadow.
+        EnableImportedModelLights: false);
 
     public CoreMatrix4x4 CreateModelWorld(float rotation)
     {

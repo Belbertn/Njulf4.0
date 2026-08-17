@@ -64,6 +64,7 @@ public static class SampleSmokeOptionsParser
         "--benchmark-require-production",
         "--benchmark-hdr-reference",
         "--benchmark-hdr-candidate",
+        "--benchmark-hdr-max-relative-rmse",
         "--benchmark-shader-profile",
         "--benchmark-require-shader-profile",
         "--startup-log",
@@ -337,6 +338,13 @@ public static class SampleSmokeOptionsParser
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
                     "NJULF_RENDERER_BENCHMARK_HDR_CANDIDATE")) ?? string.Empty;
+        string? benchmarkHdrMaximumRelativeRmseEnvironment =
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_BENCHMARK_HDR_MAX_RELATIVE_RMSE");
+        double benchmarkHdrMaximumRelativeRmse = ParseNonNegativeDouble(
+            benchmarkHdrMaximumRelativeRmseEnvironment,
+            SampleBenchmarkHdrDifference.DefaultMaximumRelativeRmse,
+            "NJULF_RENDERER_BENCHMARK_HDR_MAX_RELATIVE_RMSE");
         string benchmarkShaderProfilePath =
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
@@ -358,6 +366,8 @@ public static class SampleSmokeOptionsParser
         enableBenchmark |= benchmarkRequireProduction;
         enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkHdrReferencePath);
         enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkHdrCandidatePath);
+        enableBenchmark |= !string.IsNullOrWhiteSpace(
+            benchmarkHdrMaximumRelativeRmseEnvironment);
         enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkShaderProfilePath);
         enableBenchmark |= benchmarkRequireShaderProfile;
 
@@ -569,7 +579,7 @@ public static class SampleSmokeOptionsParser
                     benchmarkBudgetProfile =
                         ParseBenchmarkBudgetProfile(value) ??
                         throw new ArgumentException(
-                            "--benchmark-budget-profile requires low, medium, high, or ultra.");
+                            "--benchmark-budget-profile requires low, medium, high, ultra, or stress.");
                     enableBenchmark = true;
                     break;
                 case "--benchmark-pair-id":
@@ -590,6 +600,13 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--benchmark-hdr-candidate":
                     benchmarkHdrCandidatePath = RequirePath(value, optionName);
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-hdr-max-relative-rmse":
+                    benchmarkHdrMaximumRelativeRmse = ParseNonNegativeDouble(
+                        value,
+                        SampleBenchmarkHdrDifference.DefaultMaximumRelativeRmse,
+                        optionName);
                     enableBenchmark = true;
                     break;
                 case "--benchmark-shader-profile":
@@ -1176,12 +1193,6 @@ public static class SampleSmokeOptionsParser
                     throw new ArgumentException(
                         "--benchmark-require-production requires at least 120 measurement frames.");
                 }
-                if (!string.IsNullOrWhiteSpace(benchmarkHdrCandidatePath) &&
-                    string.IsNullOrWhiteSpace(benchmarkHdrReferencePath))
-                {
-                    throw new ArgumentException(
-                        "--benchmark-hdr-candidate requires --benchmark-hdr-reference because HDR capture is a comparison gate.");
-                }
                 if (benchmarkRequireShaderProfile &&
                     string.IsNullOrWhiteSpace(benchmarkShaderProfilePath))
                 {
@@ -1305,6 +1316,7 @@ public static class SampleSmokeOptionsParser
             RequireProductionTiming = benchmarkRequireProduction,
             HdrReferencePath = benchmarkHdrReferencePath,
             HdrCandidatePath = benchmarkHdrCandidatePath,
+            HdrMaximumRelativeRmse = benchmarkHdrMaximumRelativeRmse,
             ShaderProfileArtifactPath = benchmarkShaderProfilePath,
             RequireShaderProfileEvidence = benchmarkRequireShaderProfile,
             MaximumAdditionalSettlingFrameCount = benchmarkMaximumSettlingFrames
@@ -1611,8 +1623,10 @@ public static class SampleSmokeOptionsParser
                 RenderBudgetProfileKind.HighSpec1440p60,
             "ultra" or "ultra4k60" =>
                 RenderBudgetProfileKind.Ultra4k60,
+            "stress" or "stressunlimited" =>
+                RenderBudgetProfileKind.StressUnlimited,
             _ => throw new ArgumentException(
-                $"Invalid benchmark budget profile '{value}'. Valid values: low, medium, high, ultra.")
+                $"Invalid benchmark budget profile '{value}'. Valid values: low, medium, high, ultra, stress.")
         };
     }
 

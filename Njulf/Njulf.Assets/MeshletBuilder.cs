@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Assets.Cooked;
 using Njulf.Core.Geometry;
 using Njulf.Core.Math;
 
@@ -70,6 +71,89 @@ namespace Njulf.Assets
         }
 
         private void BuildMeshletsInternal(
+            Vector3[] vertices,
+            uint[] indices,
+            List<Meshlet> meshlets,
+            List<uint> meshletVertices,
+            List<uint> meshletTriangles)
+        {
+            // meshoptimizer grows clusters spatially even when modelling seams
+            // split otherwise adjacent faces into disjoint index components.
+            // The previous topology-only walk stopped at every such seam and
+            // reduced Bistro to only a few triangles per meshlet.
+            int optimizedTriangleLimit = _maxTrianglesPerMeshlet & ~3;
+            if (optimizedTriangleLimit >= 4)
+            {
+                BuildMeshletsOptimized(
+                    vertices,
+                    indices,
+                    optimizedTriangleLimit,
+                    meshlets,
+                    meshletVertices,
+                    meshletTriangles);
+                return;
+            }
+
+            BuildMeshletsAdjacencyFallback(
+                vertices,
+                indices,
+                meshlets,
+                meshletVertices,
+                meshletTriangles);
+        }
+
+        private void BuildMeshletsOptimized(
+            Vector3[] vertices,
+            uint[] indices,
+            int optimizedTriangleLimit,
+            List<Meshlet> meshlets,
+            List<uint> meshletVertices,
+            List<uint> meshletTriangles)
+        {
+            MeshOptimizerMeshletBuildResult result = MeshOptimizerCodec.BuildMeshlets(
+                indices,
+                vertices,
+                _maxVerticesPerMeshlet,
+                optimizedTriangleLimit);
+
+            foreach (MeshOptimizerMeshletDescriptor descriptor in result.Meshlets)
+            {
+                int sourceVertexOffset = checked((int)descriptor.VertexOffset);
+                int sourceVertexCount = checked((int)descriptor.VertexCount);
+                int sourceTriangleOffset = checked((int)descriptor.TriangleOffset);
+                int sourceTriangleIndexCount = checked((int)descriptor.TriangleCount * 3);
+
+                uint outputVertexOffset = checked((uint)meshletVertices.Count);
+                uint outputTriangleOffset = checked((uint)(meshletTriangles.Count / 3));
+                ReadOnlySpan<uint> globalVertexIndices = result.Vertices.AsSpan(
+                    sourceVertexOffset,
+                    sourceVertexCount);
+                ComputeMeshletBounds(
+                    vertices,
+                    globalVertexIndices,
+                    out Vector3 center,
+                    out float radius);
+
+                meshlets.Add(new Meshlet(
+                    center,
+                    radius,
+                    outputVertexOffset,
+                    descriptor.VertexCount,
+                    outputTriangleOffset,
+                    descriptor.TriangleCount,
+                    outputVertexOffset,
+                    descriptor.VertexCount,
+                    outputTriangleOffset,
+                    descriptor.TriangleCount));
+
+                for (int i = 0; i < globalVertexIndices.Length; i++)
+                    meshletVertices.Add(globalVertexIndices[i]);
+                for (int i = 0; i < sourceTriangleIndexCount; i++)
+                    meshletTriangles.Add(result.Triangles[sourceTriangleOffset + i]);
+            }
+        }
+
+        private void BuildMeshletsAdjacencyFallback(
             Vector3[] vertices,
             uint[] indices,
             List<Meshlet> meshlets,
@@ -262,6 +346,29 @@ namespace Njulf.Assets
             radius = 0f;
             foreach (int vertexIndex in meshletVertexSet)
                 radius = System.Math.Max(radius, Vector3.Distance(center, vertices[vertexIndex]));
+        }
+
+        private static void ComputeMeshletBounds(
+            Vector3[] vertices,
+            ReadOnlySpan<uint> meshletVertexIndices,
+            out Vector3 center,
+            out float radius)
+        {
+            center = Vector3.Zero;
+            for (int i = 0; i < meshletVertexIndices.Length; i++)
+                center += vertices[checked((int)meshletVertexIndices[i])];
+
+            center /= meshletVertexIndices.Length;
+
+            radius = 0f;
+            for (int i = 0; i < meshletVertexIndices.Length; i++)
+            {
+                radius = System.Math.Max(
+                    radius,
+                    Vector3.Distance(
+                        center,
+                        vertices[checked((int)meshletVertexIndices[i])]));
+            }
         }
 
         private static void ComputeBoundingVolume(Vector3[] vertices, out BoundingBox bbox, out BoundingSphere bsphere)

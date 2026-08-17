@@ -1826,6 +1826,8 @@ namespace Njulf.Rendering.Data
         public string SimpleDdgiSchedulerCommitFailureBreakdown { get; init; } =
             string.Empty;
         public uint SimpleDdgiSchedulerFeedbackPendingFreshCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackPendingExposedCount { get; init; }
+        public uint SimpleDdgiSchedulerFeedbackPendingRelocationCount { get; init; }
         public uint SimpleDdgiSchedulerFeedbackPendingSourceCount { get; init; }
         public uint SimpleDdgiSchedulerFeedbackPendingSourceInvalidFlagCount { get; init; }
         public uint SimpleDdgiSchedulerFeedbackPendingSourcePrivateRepairCount { get; init; }
@@ -1987,6 +1989,7 @@ namespace Njulf.Rendering.Data
         public long RuntimeWorstStallMicroseconds { get; init; }
         public RuntimeStallReason RuntimeWorstStallReason { get; init; } = RuntimeStallReason.Unknown;
         public int RuntimeDeviceWaitIdleCount { get; init; }
+        public long GpuMotionVectorMicroseconds { get; init; }
         public long GpuFrameMicroseconds { get; init; }
         public RendererValidationMode ValidationMode { get; init; } = RendererValidationMode.Off;
         public int ValidationVerboseMessageCount { get; init; }

@@ -747,6 +747,17 @@ namespace Njulf.Core.Scene
                 ? BoundingBox.Transform(local, matrix)
                 : null;
 
+        /// <summary>
+        /// Lets derived render-object state participate in the scene's render
+        /// payload revision without exposing the mutation event for arbitrary
+        /// external publication.
+        /// </summary>
+        protected void PublishDerivedChange(SceneMutationKind kind)
+        {
+            BoundingBox? bounds = GetWorldBounds();
+            PublishChange(kind, bounds, bounds);
+        }
+
         private void PublishChange(
             SceneMutationKind kind,
             BoundingBox? oldBounds,

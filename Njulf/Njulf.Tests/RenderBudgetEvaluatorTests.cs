@@ -9,6 +9,24 @@ namespace Njulf.Tests;
 public sealed class RenderBudgetEvaluatorTests
 {
     [Test]
+    public void StressUnlimited_UsesFiniteCapsForStrictReportJson()
+    {
+        RenderBudgetProfile profile = RenderBudgetProfile.StressUnlimited;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(double.IsFinite(profile.TargetFrameMilliseconds), Is.True);
+            Assert.That(double.IsFinite(profile.CpuFrameBudgetMilliseconds), Is.True);
+            Assert.That(double.IsFinite(profile.GpuFrameBudgetMilliseconds), Is.True);
+            Assert.That(double.IsFinite(profile.GlobalIlluminationGpuBudgetMilliseconds), Is.True);
+            Assert.That(double.IsFinite(profile.GlobalIlluminationCpuBudgetMilliseconds), Is.True);
+            Assert.That(
+                () => System.Text.Json.JsonSerializer.Serialize(profile),
+                Throws.Nothing);
+        });
+    }
+
+    [Test]
     public void Classification_UsesWarningAndFailureThresholds()
     {
         Assert.Multiple(() =>

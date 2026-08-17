@@ -2528,32 +2528,6 @@ namespace Njulf.Rendering.Data
                    scene.FoliagePatches.Count;
         }
 
-        private static void AddFoliageSceneSignature(Scene scene, ref HashCode hash)
-        {
-            foreach (var prototype in scene.FoliagePrototypes)
-            {
-                hash.Add(RuntimeHelpers.GetHashCode(prototype));
-                hash.Add(prototype.Name);
-                hash.Add(prototype.Mesh);
-                hash.Add(prototype.Material);
-                hash.Add(prototype.GeometryMode);
-                hash.Add(prototype.Revision);
-            }
-
-            foreach (var patch in scene.FoliagePatches)
-            {
-                hash.Add(RuntimeHelpers.GetHashCode(patch));
-                hash.Add(RuntimeHelpers.GetHashCode(patch.Prototype));
-                hash.Add(patch.Name);
-                hash.Add(patch.Bounds);
-                hash.Add(patch.Density);
-                hash.Add(patch.Seed);
-                hash.Add(patch.Visible);
-                hash.Add(patch.DensityTexture);
-                hash.Add(patch.ContentRevision);
-            }
-        }
-
         public BufferHandle ObjectDataBuffer => _objectDataBuffer.Handle;
         public BufferHandle MaterialDataBuffer => _materialManager.MaterialBuffer;
         public BufferHandle MaterialExtensionDataBuffer => _materialManager.MaterialExtensionBuffer;
@@ -2952,40 +2926,11 @@ namespace Njulf.Rendering.Data
             {
                 var hash = new HashCode();
                 hash.Add(materialDataRevision);
+                hash.Add(scene.RenderPayloadRevision);
                 hash.Add(scene.RenderObjects.Count);
                 hash.Add(scene.StaticInstanceBatches.Count);
                 hash.Add(scene.FoliagePrototypes.Count);
                 hash.Add(scene.FoliagePatches.Count);
-
-                foreach (RenderObject renderObject in scene.RenderObjects)
-                {
-                    hash.Add(RuntimeHelpers.GetHashCode(renderObject));
-                    hash.Add(renderObject.Visible);
-                    hash.Add(renderObject.Enabled);
-                    hash.Add(renderObject.IsStatic);
-                    hash.Add(renderObject.WorldMatrix);
-                    hash.Add(renderObject.Mesh);
-                    hash.Add(renderObject.Material);
-                    if (renderObject is SkinnedRenderObject skinned)
-                    {
-                        hash.Add(skinned.SkinningEnabled);
-                        hash.Add(skinned.SkinnedVertexOffset);
-                    }
-                }
-
-                foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
-                {
-                    hash.Add(RuntimeHelpers.GetHashCode(batch));
-                    hash.Add(batch.Visible);
-                    hash.Add(batch.Mesh);
-                    hash.Add(batch.Material);
-                    hash.Add(batch.WorldMatrices.Count);
-                    hash.Add(batch.Revision);
-                    foreach (Matrix4x4 worldMatrix in batch.WorldMatrices)
-                        hash.Add(worldMatrix);
-                }
-
-                AddFoliageSceneSignature(scene, ref hash);
 
                 return new StaticScenePayloadSignature(GetScenePayloadObjectCount(scene), hash.ToHashCode());
             }
@@ -3075,33 +3020,7 @@ namespace Njulf.Rendering.Data
                 hash.Add(scene.StaticInstanceBatches.Count);
                 hash.Add(scene.FoliagePrototypes.Count);
                 hash.Add(scene.FoliagePatches.Count);
-
-                foreach (RenderObject renderObject in scene.RenderObjects)
-                {
-                    hash.Add(RuntimeHelpers.GetHashCode(renderObject));
-                    hash.Add(renderObject.Visible);
-                    hash.Add(renderObject.Enabled);
-                    hash.Add(renderObject.IsStatic);
-                    hash.Add(renderObject.WorldMatrix);
-                    hash.Add(renderObject.Mesh);
-                    hash.Add(renderObject.Material);
-                    if (renderObject is SkinnedRenderObject skinned)
-                        hash.Add(skinned.SkinningBindTransform);
-                }
-
-                foreach (StaticInstanceBatch batch in scene.StaticInstanceBatches)
-                {
-                    hash.Add(RuntimeHelpers.GetHashCode(batch));
-                    hash.Add(batch.Visible);
-                    hash.Add(batch.Mesh);
-                    hash.Add(batch.Material);
-                    hash.Add(batch.WorldMatrices.Count);
-                    hash.Add(batch.Revision);
-                    foreach (Matrix4x4 worldMatrix in batch.WorldMatrices)
-                        hash.Add(worldMatrix);
-                }
-
-                AddFoliageSceneSignature(scene, ref hash);
+                hash.Add(scene.RenderPayloadRevision);
 
                 return new SceneCullingSignature(GetScenePayloadObjectCount(scene), hash.ToHashCode());
             }

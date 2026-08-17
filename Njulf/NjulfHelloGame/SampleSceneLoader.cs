@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Njulf.Assets;
 using Njulf.Core.Foliage;
 using Njulf.Core.Interfaces;
 using Njulf.Core.Math;
@@ -19,23 +20,27 @@ internal sealed class SampleSceneLoader
     private readonly MeshManager _meshManager;
     private readonly SampleAssetManifest _manifest;
     private readonly LightManager _lightManager;
+    private readonly bool _loadSceneDocument;
     private readonly List<RenderObject> _modelObjects = new();
     private readonly List<RenderObject> _stressObjects = new();
     private readonly List<StaticInstanceBatch> _stressBatches = new();
     private BoundingBox? _loadedModelBounds;
+    private ModelLightRuntimeController? _modelLightController;
 
     public SampleSceneLoader(
         IContentManager content,
         MaterialManager materialManager,
         MeshManager meshManager,
         LightManager lightManager,
-        SampleAssetManifest manifest)
+        SampleAssetManifest manifest,
+        bool loadSceneDocument = false)
     {
         _content = content ?? throw new ArgumentNullException(nameof(content));
         _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
         _meshManager = meshManager ?? throw new ArgumentNullException(nameof(meshManager));
         _lightManager = lightManager ?? throw new ArgumentNullException(nameof(lightManager));
         _manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
+        _loadSceneDocument = loadSceneDocument;
 
         if (string.IsNullOrWhiteSpace(_manifest.ModelPath))
             throw new ArgumentException("The sample asset manifest must specify a model path.", nameof(manifest));
@@ -65,7 +70,7 @@ internal sealed class SampleSceneLoader
         if (scene == null)
             throw new ArgumentNullException(nameof(scene));
 
-        LoadedFromDocument = !string.Equals(
+        LoadedFromDocument = _loadSceneDocument && !string.Equals(
             Environment.GetEnvironmentVariable("NJULF_SAMPLE_CODE_SCENE"),
             "true",
             StringComparison.OrdinalIgnoreCase) && File.Exists(ScenePath);
@@ -115,7 +120,38 @@ internal sealed class SampleSceneLoader
             AddModelAsFoliage(scene, foliageModels[i], _manifest.FoliageModelPaths[i], modelWorld);
         AddStressSceneIfRequested(scene);
 
+        if (_manifest.EnableImportedModelLights)
+        {
+            _modelLightController = ModelLightRuntimeController.Attach(
+                scene,
+                _content,
+                new LightManagerSceneLightStore(_lightManager),
+                LoadModelAsset);
+        }
+
         return model;
+    }
+
+    public void EnableImportedModelLights()
+    {
+        if (_modelLightController == null ||
+            _modelLightController.ImportedModelLightsEnabled)
+        {
+            return;
+        }
+
+        _modelLightController.SetImportedModelLightsEnabled(true);
+        if (_modelLightController.ImportedLightDefinitionCount == 0)
+        {
+            Console.WriteLine(
+                $"'{_manifest.ModelPath}' defines no glTF punctual lights; " +
+                "its emissive materials remain part of the model import.");
+            return;
+        }
+
+        Console.WriteLine(
+            $"Imported model lights: definitions={_modelLightController.ImportedLightDefinitionCount}, " +
+            $"active={_modelLightController.ActiveLightCount}.");
     }
 
     public void ApplyModelRotation(float rotation)
@@ -208,10 +244,46 @@ internal sealed class SampleSceneLoader
 
     private Model LoadModelAsset(string modelPath)
     {
-        Model modelAsset = _content.Load<Model>(modelPath)
+        Model modelAsset = (_content as ContentManager)?.Load<Model>(
+            modelPath,
+            CreateModelLoadOptions(modelPath)) ??
+            _content.Load<Model>(modelPath)
             ?? throw new InvalidOperationException($"Content manager returned null for sample model '{modelPath}'.");
         ValidateUploadedModel(modelAsset, modelPath);
         return modelAsset;
+    }
+
+    private ContentLoadOptions CreateModelLoadOptions(string modelPath)
+    {
+        SampleAssetReference? asset = EnumerateManifestAssets()
+            .FirstOrDefault(candidate => string.Equals(
+                candidate.Path,
+                modelPath,
+                StringComparison.Ordinal));
+        if (asset == null)
+        {
+            throw new InvalidOperationException(
+                $"Model '{modelPath}' is not declared by the sample asset manifest.");
+        }
+
+        return new ContentLoadOptions
+        {
+            ImporterOptions = new ImporterOptions
+            {
+                Backend = asset.ExpectedBackend,
+                AssimpMaterialTextureConvention = asset.AssimpMaterialTextureConvention,
+                ImportLights = true
+            }
+        };
+    }
+
+    private IEnumerable<SampleAssetReference> EnumerateManifestAssets()
+    {
+        yield return _manifest.ModelAsset;
+        foreach (SampleAssetReference asset in _manifest.AddendumModelAssets)
+            yield return asset;
+        foreach (SampleAssetReference asset in _manifest.FoliageModelAssets)
+            yield return asset;
     }
 
     private void AddModelToScene(Scene scene, Model model, string modelPath, CoreMatrix4x4 modelWorld)

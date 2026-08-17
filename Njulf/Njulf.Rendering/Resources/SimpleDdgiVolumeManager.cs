@@ -2318,6 +2318,17 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _gpuSchedulerFeedbackFrameSerial =
                 ((ulong)feedback.FrameSerialHigh << 32) | feedback.FrameSerialLow;
             _gpuSchedulerFeedbackValid = true;
+            if (ShouldRetireResidentAtlasFresh(
+                    _schedulerMode,
+                    _atlasFresh,
+                    feedback.CommittedCount))
+            {
+                // The CPU scheduler retires the volume-wide one-shot after its
+                // first published update. Mirror that ownership boundary only
+                // after a fence-complete resident commit; the public per-probe
+                // FRESH flags remain authoritative for unfinished probes.
+                _atlasFresh = false;
+            }
             if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
             {
                 _receiverRecordsPublishedCount = checked((int)Math.Min(
@@ -2462,6 +2473,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             uint activeParticipantCanonicalMutationCount) =>
             publishedProbeCount != 0u &&
             activeParticipantCanonicalMutationCount != 0u;
+
+        internal static bool ShouldRetireResidentAtlasFresh(
+            SimpleDdgiSchedulerMode schedulerMode,
+            bool atlasFresh,
+            uint committedProbeCount) =>
+            schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+            atlasFresh &&
+            committedProbeCount != 0u;
 
         private void BeginTransportSolveDrain()
         {

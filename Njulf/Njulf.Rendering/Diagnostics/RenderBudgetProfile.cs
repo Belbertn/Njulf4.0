@@ -185,9 +185,9 @@ namespace Njulf.Rendering.Diagnostics
             3840,
             2160,
             1.0f,
-            double.PositiveInfinity,
-            double.PositiveInfinity,
-            double.PositiveInfinity,
+            double.MaxValue,
+            double.MaxValue,
+            double.MaxValue,
             ulong.MaxValue,
             ulong.MaxValue,
             int.MaxValue,
@@ -202,8 +202,8 @@ namespace Njulf.Rendering.Diagnostics
             int.MaxValue,
             int.MaxValue,
             int.MaxValue,
-            double.PositiveInfinity,
-            double.PositiveInfinity,
+            double.MaxValue,
+            double.MaxValue,
             ulong.MaxValue,
             int.MaxValue)
         {

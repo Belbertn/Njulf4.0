@@ -409,6 +409,14 @@ void main()
         uintBitsToFloat(SchedulerArenaRead(proposalBase + 2u)));
     float proposedLuminance = uintBitsToFloat(
         SchedulerArenaRead(proposalBase + 6u));
+    uint proposedAge =
+        (proposedFlags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u
+            ? SchedulerProbeUpdateAge(
+                ReadStorageWordUniform(
+                    pc.ProbeStateBufferIndex,
+                    publicStateBase + 5u),
+                SchedulerArenaRead(stateBase + 0u))
+            : 0u;
     float residual = uintBitsToFloat(SchedulerArenaRead(outcomeBase + 14u));
     proposedLuminance = max(proposedLuminance, residual);
     bool sourceRefresh =
@@ -582,7 +590,13 @@ void main()
             proposedRelocation,
             clamp(proposedActiveWeight, 0.0, 1.0)));
     WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 4u, proposedFlags);
-    WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 5u, 0u);
+    // Commit is the sole public-state owner. Preserve wall-clock retry age for
+    // a relocation transaction before advancing the private last-commit frame;
+    // otherwise every successful retry would restart the 32-frame retirement.
+    WriteStorageWordUniform(
+        pc.ProbeStateBufferIndex,
+        publicStateBase + 5u,
+        proposedAge);
     WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 6u, proposedClassification);
     WriteStorageWordUniform(
         pc.ProbeStateBufferIndex,

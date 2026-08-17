@@ -310,6 +310,43 @@ public sealed class ModelLightImportTests
     }
 
     [Test]
+    public void RuntimeController_UsesTheConfiguredModelLoader()
+    {
+        using Model lightModel = CreateRuntimeModel(lightCount: 1);
+        using Model fallbackModel = CreateRuntimeModel(lightCount: 0);
+        var content = new ModelContentManager(fallbackModel);
+        var store = new MutableMemoryLightStore();
+        using var scene = new Scene();
+        AddPlacement(
+            scene,
+            Guid.Parse("b0170000-0000-0000-0000-000000000010"),
+            "0",
+            Vector3.Zero);
+        int loadCount = 0;
+
+        ModelLightRuntimeController controller =
+            ModelLightRuntimeController.Attach(
+                scene,
+                content,
+                store,
+                path =>
+                {
+                    Assert.That(path, Is.EqualTo("fixture.glb"));
+                    loadCount++;
+                    return lightModel;
+                });
+        controller.SetImportedModelLightsEnabled(true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loadCount, Is.GreaterThanOrEqualTo(2));
+            Assert.That(controller.ImportedLightDefinitionCount, Is.EqualTo(1));
+            Assert.That(controller.ActiveLightCount, Is.EqualTo(1));
+            Assert.That(store.Items, Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void RuntimeController_ActivationFailureRollsBackEveryPlacement()
     {
         using Model model = CreateRuntimeModel(lightCount: 1);

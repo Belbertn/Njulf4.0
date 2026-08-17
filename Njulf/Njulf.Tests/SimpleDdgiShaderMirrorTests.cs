@@ -1156,12 +1156,28 @@ namespace Njulf.Tests
         public void PersistentStateRecoveryContracts_AreBoundedAndObservable()
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
+            string scheduleShared = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_schedule_shared.glsl");
             string relocate = ReadRepoText("Njulf.Shaders", "ddgi_simple_relocate_classify.comp");
+            string commitLocal = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_schedule_commit_local.comp");
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
 
             Assert.Multiple(() =>
             {
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_RELOCATION_PENDING_MAX_RETRY_AGE = 32u"));
+                Assert.That(scheduleShared, Does.Contain("uint SchedulerProbeUpdateAge("));
+                Assert.That(relocate, Does.Contain(
+                    "state.age = (state.flags & SIMPLE_DDGI_PROBE_FLAG_RELOCATION_PENDING) != 0u"));
+                Assert.That(commitLocal, Does.Contain(
+                    "? SchedulerProbeUpdateAge("));
+                Assert.That(commitLocal, Does.Contain(
+                    "publicStateBase + 5u,"));
+                Assert.That(commitLocal, Does.Contain("proposedAge);"));
+                Assert.That(commitLocal, Does.Not.Contain(
+                    "publicStateBase + 5u, 0u"));
                 Assert.That(relocate, Does.Contain("bool relocationTimedOut"));
                 Assert.That(relocate, Does.Contain("state.activeWeight = 0.0;"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_GATHER_REJECTION_COUNTER_BASE"));
@@ -3362,7 +3378,7 @@ namespace Njulf.Tests
             {
                 string candidate = Path.Combine(new[] { directory }.Concat(pathParts).ToArray());
                 if (File.Exists(candidate))
-                    return File.ReadAllText(candidate);
+                    return File.ReadAllText(candidate).ReplaceLineEndings("\n");
 
                 directory = Directory.GetParent(directory)?.FullName;
             }

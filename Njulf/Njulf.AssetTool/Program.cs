@@ -56,6 +56,8 @@ internal static class Program
         ulong highTextureBytes = 256UL * 1024UL * 1024UL;
         bool forceChild = false;
         ModelImportBackend backend = ModelImportBackend.Auto;
+        AssimpMaterialTextureConvention assimpMaterialTextureConvention =
+            AssimpMaterialTextureConvention.Standard;
         AssetValidationPolicy policy = AssetValidationPolicy.GameDefault;
 
         for (int i = 1; i < args.Length; i++)
@@ -80,6 +82,11 @@ internal static class Program
                 case "--backend":
                     backend = Enum.Parse<ModelImportBackend>(RequireValue(args, ref i, "--backend"), ignoreCase: true);
                     break;
+                case "--assimp-material-texture-convention":
+                    assimpMaterialTextureConvention = Enum.Parse<AssimpMaterialTextureConvention>(
+                        RequireValue(args, ref i, "--assimp-material-texture-convention"),
+                        ignoreCase: true);
+                    break;
                 case "--policy":
                     policy = Enum.Parse<AssetValidationPolicy>(RequireValue(args, ref i, "--policy"), ignoreCase: true);
                     break;
@@ -92,7 +99,14 @@ internal static class Program
             throw new ArgumentException("The report command requires --json <output-path>.");
 
         var validator = new AssetValidator();
-        AssetValidationOptions options = CreateOptions(timeout, maxBytes, highTextureBytes, forceChild, backend, policy);
+        AssetValidationOptions options = CreateOptions(
+            timeout,
+            maxBytes,
+            highTextureBytes,
+            forceChild,
+            backend,
+            assimpMaterialTextureConvention,
+            policy);
         AssetValidationReport report = await validator.ValidateAsync(path, options).ConfigureAwait(false);
         PrintSummary(report, singleAsset);
 
@@ -114,6 +128,8 @@ internal static class Program
 
         string path = args[0];
         ModelImportBackend backend = ModelImportBackend.Assimp;
+        AssimpMaterialTextureConvention assimpMaterialTextureConvention =
+            AssimpMaterialTextureConvention.Standard;
         bool writeJson = false;
 
         for (int i = 1; i < args.Length; i++)
@@ -122,6 +138,11 @@ internal static class Program
             {
                 case "--backend":
                     backend = Enum.Parse<ModelImportBackend>(RequireValue(args, ref i, "--backend"), ignoreCase: true);
+                    break;
+                case "--assimp-material-texture-convention":
+                    assimpMaterialTextureConvention = Enum.Parse<AssimpMaterialTextureConvention>(
+                        RequireValue(args, ref i, "--assimp-material-texture-convention"),
+                        ignoreCase: true);
                     break;
                 case "--json":
                     string target = RequireValue(args, ref i, "--json");
@@ -142,6 +163,11 @@ internal static class Program
             File.Exists(path) ? new FileInfo(path).Length : 0,
             new AssetValidationOptions
             {
+                ImporterOptions = new ImporterOptions
+                {
+                    Backend = backend,
+                    AssimpMaterialTextureConvention = assimpMaterialTextureConvention
+                },
                 Timeout = TimeSpan.FromSeconds(30),
                 MaxAssetBytes = 1L * 1024L * 1024L * 1024L,
                 ChildProcessMode = AssetValidationChildProcessMode.Never,
@@ -151,6 +177,7 @@ internal static class Program
                     256UL * 1024UL * 1024UL,
                     forceChild: false,
                     ModelImportBackend.Auto,
+                    AssimpMaterialTextureConvention.Standard,
                     AssetValidationPolicy.GameDefault).TextureBudgetInspector
             });
 
@@ -173,6 +200,8 @@ internal static class Program
         string source = args[1];
         string? output = null;
         ModelImportBackend backend = ModelImportBackend.Auto;
+        AssimpMaterialTextureConvention assimpMaterialTextureConvention =
+            AssimpMaterialTextureConvention.Standard;
         int maxDimension = 2048;
         bool force = false;
         string platform = CookedPlatform.Current;
@@ -197,6 +226,11 @@ internal static class Program
                     break;
                 case "--backend":
                     backend = Enum.Parse<ModelImportBackend>(RequireValue(args, ref i, "--backend"), ignoreCase: true);
+                    break;
+                case "--assimp-material-texture-convention":
+                    assimpMaterialTextureConvention = Enum.Parse<AssimpMaterialTextureConvention>(
+                        RequireValue(args, ref i, "--assimp-material-texture-convention"),
+                        ignoreCase: true);
                     break;
                 case "--max-texture-dimension":
                     maxDimension = int.Parse(RequireValue(args, ref i, "--max-texture-dimension"), CultureInfo.InvariantCulture);
@@ -303,7 +337,11 @@ internal static class Program
 
         var options = new ModelCookOptions
         {
-            ImporterOptions = new ImporterOptions { Backend = backend },
+            ImporterOptions = new ImporterOptions
+            {
+                Backend = backend,
+                AssimpMaterialTextureConvention = assimpMaterialTextureConvention
+            },
             TextureOptions = new TextureCookOptions(MaxDimension: maxDimension, TargetFormatPolicy: textureFormat),
             Force = force,
             Platform = platform,
@@ -502,11 +540,16 @@ internal static class Program
         ulong highTextureBytes,
         bool forceChild,
         ModelImportBackend backend,
+        AssimpMaterialTextureConvention assimpMaterialTextureConvention,
         AssetValidationPolicy policy)
     {
         return new AssetValidationOptions
         {
-            ImporterOptions = new ImporterOptions { Backend = backend },
+            ImporterOptions = new ImporterOptions
+            {
+                Backend = backend,
+                AssimpMaterialTextureConvention = assimpMaterialTextureConvention
+            },
             Policy = policy,
             Timeout = timeout,
             MaxAssetBytes = maxBytes,
@@ -610,10 +653,10 @@ internal static class Program
     private static void PrintUsage()
     {
         Console.WriteLine("Usage:");
-        Console.WriteLine("  Njulf.AssetTool validate <path-or-folder> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--policy <strict|gameDefault|permissive>] [--timeout-ms <ms>] [--max-bytes <bytes>] [--high-texture-bytes <bytes>] [--child-process-all]");
-        Console.WriteLine("  Njulf.AssetTool import <path> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--policy <strict|gameDefault|permissive>]");
-        Console.WriteLine("  Njulf.AssetTool report <path-or-folder> --json <output> [--backend <auto|assimp|sharpgltf>] [--policy <strict|gameDefault|permissive>]");
-        Console.WriteLine("  Njulf.AssetTool cook model <source> --out <folder> [--platform <rid>] [--texture-format <autoBc|rgba8|bc7|bc5|bc4|bc6h>] [--signing-key <pem>] [--backend <auto|assimp|sharpgltf>] [--max-texture-dimension <pixels>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--omm-bridge <native-library> --omm-provenance <json> --omm-subdivision <0..12> --omm-max-subdivision <1..12> --omm-max-workload <count> --omm-max-array-bytes <bytes>]");
+        Console.WriteLine("  Njulf.AssetTool validate <path-or-folder> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>] [--timeout-ms <ms>] [--max-bytes <bytes>] [--high-texture-bytes <bytes>] [--child-process-all]");
+        Console.WriteLine("  Njulf.AssetTool import <path> [--json <output>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>]");
+        Console.WriteLine("  Njulf.AssetTool report <path-or-folder> --json <output> [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--policy <strict|gameDefault|permissive>]");
+        Console.WriteLine("  Njulf.AssetTool cook model <source> --out <folder> [--platform <rid>] [--texture-format <autoBc|rgba8|bc7|bc5|bc4|bc6h>] [--signing-key <pem>] [--backend <auto|assimp|sharpgltf>] [--assimp-material-texture-convention <standard|specularGbIsRoughnessMetallic|amazonBistro>] [--max-texture-dimension <pixels>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--omm-bridge <native-library> --omm-provenance <json> --omm-subdivision <0..12> --omm-max-subdivision <1..12> --omm-max-workload <count> --omm-max-array-bytes <bytes>]");
         Console.WriteLine("  Njulf.AssetTool cook folder|changed <source-folder> --out <folder> [--platform <rid>] [--texture-format <format>] [--signing-key <pem>] [--force] [--progress <plain|jsonl|off>] [--progress-detail <stages|items>] [--jobs <count|auto>] [--max-inflight-bytes <bytes>] [--omm-bridge <native-library> --omm-provenance <json>]");
         Console.WriteLine("  Njulf.AssetTool clean-stale --out <folder> [--platform <rid>]");
         Console.WriteLine("  Njulf.AssetTool migrate <cooked-folder> [--out <folder>] [--signing-key <pem>]");
