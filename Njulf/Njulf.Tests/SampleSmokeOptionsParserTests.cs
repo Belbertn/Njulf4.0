@@ -38,6 +38,8 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_SPONZA_GI_CAPTURE_DIR", null);
+        Environment.SetEnvironmentVariable("NJULF_BISTRO_QUALITY_CAPTURE_DIR", null);
+        Environment.SetEnvironmentVariable("NJULF_BISTRO_QUALITY_VARIANT", null);
         Environment.SetEnvironmentVariable("NJULF_MATERIAL_GI_CAPTURE_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_MATERIAL_GI_QUALIFICATION_MANIFEST", null);
         Environment.SetEnvironmentVariable(
@@ -647,6 +649,64 @@ public sealed class SampleSmokeOptionsParserTests
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(Array.Empty<string>());
 
         Assert.That(options.EnableGpuTiming, Is.True);
+    }
+
+    [Test]
+    public void BistroQualityCapture_OwnsBistroMotionRelightSequence()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--bistro-quality-capture-dir", "bistro-evidence",
+            "--bistro-quality-variant", "sun-direction-step"
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.Bistro));
+            Assert.That(
+                options.PerformanceScenario,
+                Is.EqualTo(
+                    SamplePerformanceScenario.BistroQualityMotionRelight));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.None));
+            Assert.That(options.FrameCount, Is.Zero);
+            Assert.That(options.EnableGpuTiming, Is.True);
+            Assert.That(options.UsesDeterministicSimulationClock, Is.True);
+            Assert.That(
+                options.BistroQualityCaptureVariant,
+                Is.EqualTo(
+                    SampleBistroQualityCaptureVariant.SunDirectionStep));
+        });
+    }
+
+    [Test]
+    public void BistroQualityCapture_RejectsConflictingModesAndScenes()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(new[]
+                {
+                    "--scene", "material-showcase",
+                    "--bistro-quality-capture-dir", "bistro-evidence"
+                }),
+                Throws.ArgumentException.With.Message.Contains(
+                    "requires the Bistro scene"));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(new[]
+                {
+                    "--benchmark=true",
+                    "--bistro-quality-capture-dir", "bistro-evidence"
+                }),
+                Throws.ArgumentException.With.Message.Contains(
+                    "cannot be combined"));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(new[]
+                {
+                    "--bistro-quality-variant", "sun-scale-step"
+                }),
+                Throws.ArgumentException.With.Message.Contains(
+                    "requires --bistro-quality-capture-dir"));
+        });
     }
 
     [Test]

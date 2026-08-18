@@ -565,7 +565,7 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
         {
             CommittedSourceLightingGeneration = 7u,
             SourceEpoch = 11u,
-            OwningVolumeTableGeneration = 13u,
+            OwningTransportTopologyGeneration = 13u,
             CacheProbeBaseWordPlusOne = 1u,
             PackedTransportAndLifecycle =
                 SimpleDdgiSchedulerAbi.PackSchedulerProbeLifecycle(

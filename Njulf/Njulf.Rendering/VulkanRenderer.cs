@@ -609,19 +609,28 @@ namespace Njulf.Rendering
                     _simpleDdgiVolumeManager is { TransportV2Active: true }
                         ? _simpleDdgiVolumeManager.CreateAtmosphereCohortFeedbackSnapshot()
                         : null;
-                uint completedSourceGeneration = cohort is { } source &&
-                                                 !source.SourceCohortActive &&
-                                                 source.StaleParticipatingProbeCount == 0 &&
-                                                 source.SourceCohortGeneration ==
-                                                 source.AdmittedSourceCohortGeneration &&
-                                                 source.QuietPeriodComplete
+                uint livePropagationSourceGeneration =
+                    _simpleDdgiVolumeManager?.LivePropagationSourceGeneration ?? 0u;
+                bool currentLivePropagation = cohort is { } live &&
+                    livePropagationSourceGeneration != 0u &&
+                    livePropagationSourceGeneration == live.SourceCohortGeneration;
+                uint completedSourceGeneration = currentLivePropagation
+                    ? livePropagationSourceGeneration
+                    : cohort is { } source &&
+                      !source.SourceCohortActive &&
+                      source.StaleParticipatingProbeCount == 0 &&
+                      source.SourceCohortGeneration ==
+                          source.AdmittedSourceCohortGeneration &&
+                      source.QuietPeriodComplete
                     ? source.SourceCohortGeneration
                     : 0u;
-                uint convergedGeneration = cohort is { } converged &&
-                                           completedSourceGeneration != 0u &&
-                                           converged.MinimumPropagationBoundaryComplete &&
-                                           converged.PropagationGeneration ==
-                                           converged.PublishedPropagationGeneration
+                uint convergedGeneration = currentLivePropagation
+                    ? livePropagationSourceGeneration
+                    : cohort is { } converged &&
+                      completedSourceGeneration != 0u &&
+                      converged.MinimumPropagationBoundaryComplete &&
+                      converged.PropagationGeneration ==
+                          converged.PublishedPropagationGeneration
                     ? converged.SourceCohortGeneration
                     : 0u;
                 return new LightingVersionSnapshot(
@@ -3568,7 +3577,7 @@ namespace Njulf.Rendering
                     cohort,
                     hardInvalidation: false,
                     currentVolumeResourceGeneration: simpleDdgiConsumesAtmosphere
-                        ? _simpleDdgiVolumeManager!.VolumeTableGeneration
+                        ? _simpleDdgiVolumeManager!.TransportTopologyGeneration
                         : 0U,
                     currentSourceCohortGeneration: simpleDdgiConsumesAtmosphere
                         ? _simpleDdgiVolumeManager!.SourceLightingGeneration
@@ -7027,10 +7036,17 @@ namespace Njulf.Rendering
                 SimpleDdgiTransportSolverInvalidationCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSolverInvalidationCount : 0,
                 SimpleDdgiTransportSolverInvalidationsPerSourceRefresh = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportSolverInvalidationsPerSourceRefresh : 0.0f,
                 SimpleDdgiVolumeResourceGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiVolumeResourceGeneration : 0u,
+                SimpleDdgiTransportTopologyGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportTopologyGeneration : 0u,
+                SimpleDdgiVolumeRemapKind = giUsesSimpleDdgi ? sceneData.SimpleDdgiVolumeRemapKind : SimpleDdgiVolumeRemapKind.None,
+                SimpleDdgiCompatibleToroidalScrollCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiCompatibleToroidalScrollCount : 0UL,
+                SimpleDdgiIncompatibleTopologyChangeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiIncompatibleTopologyChangeCount : 0UL,
+                SimpleDdgiGlobalConvergenceRestartCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiGlobalConvergenceRestartCount : 0UL,
+                SimpleDdgiWholeReadbackDropCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiWholeReadbackDropCount : 0UL,
                 SimpleDdgiSourceLightingGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiSourceLightingGeneration : 0u,
                 SimpleDdgiAdmittedSourceCohortGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiAdmittedSourceCohortGeneration : 0u,
                 SimpleDdgiTransportGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiTransportGeneration : 0u,
                 SimpleDdgiPublishedPropagationGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiPublishedPropagationGeneration : 0u,
+                SimpleDdgiLivePropagationSourceGeneration = giUsesSimpleDdgi ? sceneData.SimpleDdgiLivePropagationSourceGeneration : 0u,
                 SimpleDdgiVisiblePriorityParticipatingProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiVisiblePriorityParticipatingProbeCount : 0,
                 SimpleDdgiVisiblePrioritySourceReadyProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiVisiblePrioritySourceReadyProbeCount : 0,
                 SimpleDdgiVisiblePriorityPublishedProbeCount = giUsesSimpleDdgi ? sceneData.SimpleDdgiVisiblePriorityPublishedProbeCount : 0,
@@ -8832,6 +8848,10 @@ namespace Njulf.Rendering
                  ReflectionProbeRetirementMemoryBudgetRejections = reflectionRetirement.MemoryBudgetRejectionCount,
                  ReflectionProbeRetirementInvalidRecordCount = reflectionRetirement.InvalidRecordCount,
                  ReflectionProbeRetiredCount = reflectionRetirement.RetiredCount,
+                 ReflectionProbeCapturesCompletedTotal =
+                     sceneData.ReflectionProbeCapturesCompletedTotal,
+                 ReflectionProbePublishedCount =
+                     sceneData.ReflectionProbePublishedCount,
                  ReflectionProbeCaptureBudgetUsed = sceneData.ReflectionProbeCapturesCompleted,
                  ReflectionProbeCaptureBudgetExceeded = _reflectionProbeManager?.ReflectionCaptureBudgetExceeded ?? 0,
                 StagingBufferAllocatedBytes = _stagingRing.TotalAllocatedBytes,
@@ -12536,6 +12556,10 @@ namespace Njulf.Rendering
             sceneData.ReflectionProbeEstimatedBytes = _reflectionProbeManager.EstimatedBytes;
             sceneData.ReflectionProbeCapturesQueued = _reflectionProbeManager.CapturesQueued;
             sceneData.ReflectionProbeCapturesCompleted = _reflectionProbeManager.CapturesCompleted;
+            sceneData.ReflectionProbeCapturesCompletedTotal =
+                _reflectionProbeManager.CapturesCompletedTotal;
+            sceneData.ReflectionProbePublishedCount =
+                _reflectionProbeManager.PublishedProbeCount;
             sceneData.CpuReflectionProbeUploadMicroseconds = _reflectionProbeManager.LastUploadMicroseconds;
         }
 
@@ -12833,7 +12857,8 @@ namespace Njulf.Rendering
                 dirtySignature.SourceRelightScale,
                 warmStartIdentity,
                 refinementEmissiveDemands,
-                visibleReceiverFocus);
+                visibleReceiverFocus,
+                camera.Forward);
 
             _simpleDdgiGuidingFrameConfiguration =
                 CompileSimpleDdgiGuidingFrameConfiguration(
@@ -13666,16 +13691,17 @@ namespace Njulf.Rendering
                 simpleDdgiActive && _simpleDdgiVolumeManager is { TransportV2Active: true }
                     ? _simpleDdgiVolumeManager.CreateAtmosphereCohortFeedbackSnapshot()
                     : default;
+            uint livePropagationSourceGeneration =
+                _simpleDdgiVolumeManager?.LivePropagationSourceGeneration ?? 0u;
             bool simpleCohortReady = simpleDdgiActive &&
                                      _simpleDdgiVolumeManager is { TransportV2Active: true } &&
                                      simpleCohort.ParticipatingProbeCount > 0 &&
-                                     simpleCohort.StaleParticipatingProbeCount == 0 &&
-                                     !simpleCohort.SourceCohortActive &&
-                                     simpleCohort.SourceCohortGeneration ==
-                                     simpleCohort.AdmittedSourceCohortGeneration &&
+                                     livePropagationSourceGeneration != 0u &&
+                                     livePropagationSourceGeneration ==
+                                     simpleCohort.SourceCohortGeneration &&
                                      simpleCohort.VisiblePublicationBoundaryComplete &&
                                      simpleCohort.MinimumPropagationBoundaryComplete &&
-                                     simpleCohort.QuietPeriodComplete &&
+                                     simpleCohort.PublishedPropagationGeneration != 0u &&
                                      simpleCohort.PropagationGeneration ==
                                      simpleCohort.PublishedPropagationGeneration;
             bool giReady = simpleDdgiActive
@@ -13690,8 +13716,10 @@ namespace Njulf.Rendering
                 _reflectionProbeManager.RequestRecaptureAll("ddgi-ready");
 
             uint dirtyReasonFlags = simpleDdgiActive ? sceneData.SimpleDdgiDirtyReasonFlags : 0u;
-            if (dirtyReasonFlags != 0u && dirtyReasonFlags != _lastReflectionProbeSimpleDirtyReasonFlags)
-                _reflectionProbeManager.RequestRecaptureAll("simple-ddgi-dirty");
+            // Do not capture a cubemap from a partially propagated lighting
+            // generation. UpdateCaptureVersions pins every scratch ticket to
+            // the converged generation and supersedes incomplete face chains;
+            // this ready edge is the only DDGI-driven recapture admission.
             sceneData.ReflectionProbeCapturesQueued = _reflectionProbeManager.CapturesQueued;
             sceneData.ReflectionProbeCapturesCompleted = _reflectionProbeManager.CapturesCompleted;
             _lastReflectionProbeGiReady = giReady;
@@ -13984,13 +14012,28 @@ namespace Njulf.Rendering
                 _simpleDdgiVolumeManager.SourceRefreshTransportInvalidationsPerRefresh;
             SimpleDdgiAtmosphereCohortFeedback cohort =
                 _simpleDdgiVolumeManager.CreateAtmosphereCohortFeedbackSnapshot();
-            sceneData.SimpleDdgiVolumeResourceGeneration = cohort.VolumeResourceGeneration;
+            sceneData.SimpleDdgiVolumeResourceGeneration =
+                _simpleDdgiVolumeManager.VolumeTableGeneration;
+            sceneData.SimpleDdgiTransportTopologyGeneration =
+                _simpleDdgiVolumeManager.TransportTopologyGeneration;
+            sceneData.SimpleDdgiVolumeRemapKind =
+                _simpleDdgiVolumeManager.VolumeRemapKindThisFrame;
+            sceneData.SimpleDdgiCompatibleToroidalScrollCount =
+                _simpleDdgiVolumeManager.CompatibleToroidalScrollCount;
+            sceneData.SimpleDdgiIncompatibleTopologyChangeCount =
+                _simpleDdgiVolumeManager.IncompatibleTopologyChangeCount;
+            sceneData.SimpleDdgiGlobalConvergenceRestartCount =
+                _simpleDdgiVolumeManager.GlobalConvergenceRestartCount;
+            sceneData.SimpleDdgiWholeReadbackDropCount =
+                _simpleDdgiVolumeManager.WholeReadbackDropCount;
             sceneData.SimpleDdgiSourceLightingGeneration = cohort.SourceCohortGeneration;
             sceneData.SimpleDdgiAdmittedSourceCohortGeneration =
                 cohort.AdmittedSourceCohortGeneration;
             sceneData.SimpleDdgiTransportGeneration = cohort.PropagationGeneration;
             sceneData.SimpleDdgiPublishedPropagationGeneration =
                 cohort.PublishedPropagationGeneration;
+            sceneData.SimpleDdgiLivePropagationSourceGeneration =
+                _simpleDdgiVolumeManager.LivePropagationSourceGeneration;
             sceneData.SimpleDdgiVisiblePriorityParticipatingProbeCount =
                 cohort.VisiblePriorityParticipatingProbeCount;
             sceneData.SimpleDdgiVisiblePrioritySourceReadyProbeCount =
@@ -15054,17 +15097,19 @@ namespace Njulf.Rendering
                 bool schedulerResourceMatches =
                     schedulerFeedback.SchedulerResourceGeneration ==
                     manager.GpuScheduler.ResourceGeneration;
+                bool schedulerTopologyMatches =
+                    manager.GpuScheduler
+                        .LastFeedbackTransportTopologyGeneration ==
+                    manager.TransportTopologyGeneration;
                 bool schedulerTemporalGenerationKnown =
-                    schedulerFeedback.VolumeTableGeneration ==
-                    manager.VolumeTableGeneration &&
+                    schedulerTopologyMatches &&
                     schedulerFeedback.SourceLightingGeneration ==
                     manager.SourceLightingGeneration &&
                     IsCurrentOrNextSimpleDdgiGeneration(
                         schedulerFeedback.TransportGeneration,
                         manager.TransportGeneration);
                 bool schedulerGenerationCurrent = schedulerResourceMatches &&
-                    schedulerFeedback.VolumeTableGeneration ==
-                    manager.VolumeTableGeneration &&
+                    schedulerTopologyMatches &&
                     schedulerFeedback.SourceLightingGeneration ==
                     manager.SourceLightingGeneration &&
                     schedulerFeedback.TransportGeneration ==
@@ -15075,7 +15120,8 @@ namespace Njulf.Rendering
                 // behind an explicit barrier until a new matching packet arrives.
                 feedbackGenerationsCompatible &= schedulerResourceMatches;
                 generationTransition |= !schedulerTemporalGenerationKnown ||
-                    !schedulerGenerationCurrent;
+                    !schedulerGenerationCurrent ||
+                    !manager.GpuSchedulerFeedbackCoversCurrentVolumeTable;
             }
 
             if (sparseResidencyAuthoritative && residencyFeedbackValid)
@@ -15187,6 +15233,7 @@ namespace Njulf.Rendering
                     schedulerFeedback.PendingSolverCount != 0u ||
                     eligibleProbeCount != 0u ||
                     manager.HasPendingUpdateTransaction
+                        || !manager.GpuSchedulerFeedbackCoversCurrentVolumeTable
                         ? 1
                         : 0;
             }
@@ -15261,9 +15308,7 @@ namespace Njulf.Rendering
                 FrameSerial: sceneData.DdgiFrameSerial,
                 SchedulerFeedbackFrameSerial: schedulerFeedbackFrameSerial,
                 ResidencyFeedbackFrameSerial: residencyFeedbackFrameSerial,
-                VolumeTableGeneration: gpuSchedulerAuthoritative && schedulerFeedbackValid
-                    ? schedulerFeedback.VolumeTableGeneration
-                    : manager.VolumeTableGeneration,
+                VolumeTableGeneration: manager.VolumeTableGeneration,
                 SchedulerArenaGeneration: gpuSchedulerAuthoritative && schedulerFeedbackValid
                     ? schedulerFeedback.SchedulerResourceGeneration
                     : manager.GpuScheduler.ResourceGeneration,
@@ -18723,8 +18768,11 @@ namespace Njulf.Rendering
                     atmosphereStepSignature == _lastSimpleDdgiAtmosphereStepSignature &&
                     emissiveSignature == _lastSimpleDdgiEmissiveSignature &&
                     geometrySignature == _lastSimpleDdgiDynamicGeometrySignature;
+                // A sole directional radiance edit is cache-relightable even
+                // for the analytic sky. Cached surface hits scale exactly and
+                // cached misses resample the current sky; direction or any
+                // authored atmosphere setting change still fails closed.
                 bool soleSunRadianceOnlyChange =
-                    !steppedAtmosphere &&
                     lightSignature != _lastSimpleDdgiLightSignature &&
                     hasSoleDirectionalLight &&
                     _hasLastSimpleDdgiSoleDirectionalLight &&
@@ -18734,8 +18782,6 @@ namespace Njulf.Rendering
                         _lastSimpleDdgiSourcePolicySignature &&
                     environmentSignature ==
                         _lastSimpleDdgiEnvironmentSignature &&
-                    atmosphereStepSignature ==
-                        _lastSimpleDdgiAtmosphereStepSignature &&
                     emissiveSignature ==
                         _lastSimpleDdgiEmissiveSignature &&
                     geometrySignature ==

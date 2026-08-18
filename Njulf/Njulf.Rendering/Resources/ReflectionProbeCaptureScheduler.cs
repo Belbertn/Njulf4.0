@@ -424,6 +424,19 @@ public sealed class ReflectionProbeCaptureScheduler
         ulong completedValue,
         uint currentResourceGeneration,
         out ReflectionProbeCaptureTicket ticket,
+        out bool published) =>
+        TryRetireCompleted(
+            completedValue,
+            currentResourceGeneration,
+            default,
+            out ticket,
+            out published);
+
+    public bool TryRetireCompleted(
+        ulong completedValue,
+        uint currentResourceGeneration,
+        ReflectionCaptureVersion currentVersion,
+        out ReflectionProbeCaptureTicket ticket,
         out bool published)
     {
         for (int layer = 0; layer < _entries.Length; layer++)
@@ -436,6 +449,33 @@ public sealed class ReflectionProbeCaptureScheduler
             ticket = CreateTicket(layer, entry);
             entry.CompletionValue = 0UL;
             entry.CopyCommitted = false;
+            if (currentVersion != default &&
+                entry.TicketVersion != currentVersion)
+            {
+                // The lighting generation changed after the copy was queued.
+                // Never advertise that stale ticket as the current publication;
+                // retain the prior logical publication and immediately recapture
+                // from the latest requested generation.
+                _staleCompletionRejections++;
+                if (!entry.HasPendingRequest)
+                {
+                    entry.RequestedSnapshot = entry.TicketSnapshot;
+                    entry.RequestedResourceGeneration =
+                        entry.TicketResourceGeneration;
+                    entry.RequestedSceneRevision =
+                        entry.TicketSceneRevision;
+                }
+                entry.HasPendingRequest = true;
+                entry.RequestedVersion = currentVersion;
+                entry.RequestedReasons |= ReflectionCaptureReason.DdgiChanged;
+                entry.State = ReflectionProbeCaptureState.RetryPending;
+                entry.Serial = 0UL;
+                if (_activeLayer == layer)
+                    _activeLayer = -1;
+                Enqueue(layer, ref entry);
+                published = false;
+                return true;
+            }
             if (!entry.Registered ||
                 (currentResourceGeneration != 0U && entry.TicketResourceGeneration != currentResourceGeneration))
             {

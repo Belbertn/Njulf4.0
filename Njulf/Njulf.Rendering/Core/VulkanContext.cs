@@ -1162,39 +1162,35 @@ namespace Njulf.Rendering.Core
                 TaskShader = true
             };
 
-            var dynamicRenderingFeatures = new PhysicalDeviceDynamicRenderingFeatures
+            // This renderer requires Vulkan 1.3. Enable features promoted into
+            // 1.2/1.3 through the aggregate core structs instead of chaining
+            // their legacy extension structs beside them. Capture layers such
+            // as Nsight append/inspect these aggregates; mixing both forms is
+            // forbidden by VUID-VkDeviceCreateInfo-pNext-02830/06532.
+            var vulkan12Features = new PhysicalDeviceVulkan12Features
             {
-                SType = StructureType.PhysicalDeviceDynamicRenderingFeatures,
-                DynamicRendering = true
-            };
-
-            var sync2Features = new PhysicalDeviceSynchronization2Features
-            {
-                SType = StructureType.PhysicalDeviceSynchronization2Features,
-                Synchronization2 = true
-            };
-
-            var timelineSemaphoreFeatures = new PhysicalDeviceTimelineSemaphoreFeatures
-            {
-                SType = StructureType.PhysicalDeviceTimelineSemaphoreFeatures,
+                SType = StructureType.PhysicalDeviceVulkan12Features,
+                DescriptorIndexing = true,
+                DescriptorBindingSampledImageUpdateAfterBind = true,
+                DescriptorBindingStorageBufferUpdateAfterBind = true,
+                DescriptorBindingPartiallyBound = true,
+                DescriptorBindingVariableDescriptorCount = true,
+                RuntimeDescriptorArray = true,
+                ShaderSampledImageArrayNonUniformIndexing = true,
+                ShaderStorageImageArrayNonUniformIndexing =
+                    _shaderStorageImageArrayNonUniformIndexingSupported,
+                ShaderStorageBufferArrayNonUniformIndexing = true,
+                ShaderUniformBufferArrayNonUniformIndexing = true,
+                BufferDeviceAddress = true,
                 TimelineSemaphore = true
             };
 
-            var bufferDeviceAddressFeatures = new PhysicalDeviceBufferDeviceAddressFeatures
+            var vulkan13Features = new PhysicalDeviceVulkan13Features
             {
-                SType = StructureType.PhysicalDeviceBufferDeviceAddressFeatures,
-                BufferDeviceAddress = true
-            };
-
-            var maintenance4Features = new PhysicalDeviceMaintenance4Features
-            {
-                SType = StructureType.PhysicalDeviceMaintenance4Features,
-                Maintenance4 = true
-            };
-
-            var shaderDemoteFeatures = new PhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT
-            {
-                SType = StructureType.PhysicalDeviceShaderDemoteToHelperInvocationFeaturesExt,
+                SType = StructureType.PhysicalDeviceVulkan13Features,
+                DynamicRendering = true,
+                Synchronization2 = true,
+                Maintenance4 = true,
                 ShaderDemoteToHelperInvocation = true
             };
 
@@ -1228,47 +1224,28 @@ namespace Njulf.Rendering.Core
                     Micromap = enableOpacityMicromapExt
                 };
 
-            var descriptorIndexingFeatures = new PhysicalDeviceDescriptorIndexingFeatures
-            {
-                SType = StructureType.PhysicalDeviceDescriptorIndexingFeatures,
-                DescriptorBindingSampledImageUpdateAfterBind = true,
-                DescriptorBindingStorageBufferUpdateAfterBind = true,
-                DescriptorBindingPartiallyBound = true,
-                DescriptorBindingVariableDescriptorCount = true,
-                RuntimeDescriptorArray = true,
-                ShaderSampledImageArrayNonUniformIndexing = true,
-                ShaderStorageImageArrayNonUniformIndexing =
-                    _shaderStorageImageArrayNonUniformIndexingSupported,
-                ShaderStorageBufferArrayNonUniformIndexing = true,
-                ShaderUniformBufferArrayNonUniformIndexing = true
-            };
-
-            // Chain: descriptorIndexing -> bufferDeviceAddress -> sync2 -> dynamicRendering -> meshShader -> maintenance4 -> shaderDemote
-            descriptorIndexingFeatures.PNext = &bufferDeviceAddressFeatures;
-            bufferDeviceAddressFeatures.PNext = &sync2Features;
-            sync2Features.PNext = &timelineSemaphoreFeatures;
-            timelineSemaphoreFeatures.PNext = &dynamicRenderingFeatures;
-            dynamicRenderingFeatures.PNext = &meshShaderFeatures;
-            meshShaderFeatures.PNext = &maintenance4Features;
-            maintenance4Features.PNext = &shaderDemoteFeatures;
-            shaderDemoteFeatures.PNext = deviceFeatures2.PNext;
+            // Chain: features2 -> Vulkan 1.3 -> Vulkan 1.2 -> mesh shader ->
+            // optional, non-promoted extension features.
+            vulkan13Features.PNext = &vulkan12Features;
+            vulkan12Features.PNext = &meshShaderFeatures;
+            meshShaderFeatures.PNext = deviceFeatures2.PNext;
             if (_imageCompressionControlEnabled)
             {
-                imageCompressionControlFeatures.PNext = shaderDemoteFeatures.PNext;
-                shaderDemoteFeatures.PNext = &imageCompressionControlFeatures;
+                imageCompressionControlFeatures.PNext = meshShaderFeatures.PNext;
+                meshShaderFeatures.PNext = &imageCompressionControlFeatures;
             }
             if (_rayQuerySupported)
             {
-                accelerationStructureFeatures.PNext = shaderDemoteFeatures.PNext;
+                accelerationStructureFeatures.PNext = meshShaderFeatures.PNext;
                 rayQueryFeatures.PNext = &accelerationStructureFeatures;
-                shaderDemoteFeatures.PNext = &rayQueryFeatures;
+                meshShaderFeatures.PNext = &rayQueryFeatures;
             }
             if (enableOpacityMicromapExt)
             {
-                opacityMicromapFeatures.PNext = shaderDemoteFeatures.PNext;
-                shaderDemoteFeatures.PNext = &opacityMicromapFeatures;
+                opacityMicromapFeatures.PNext = meshShaderFeatures.PNext;
+                meshShaderFeatures.PNext = &opacityMicromapFeatures;
             }
-            deviceFeatures2.PNext = &descriptorIndexingFeatures;
+            deviceFeatures2.PNext = &vulkan13Features;
 
             if (!TryGetDeviceRequirements(_physicalDevice, out DeviceRequirements requirements) || !requirements.IsSupported)
             {

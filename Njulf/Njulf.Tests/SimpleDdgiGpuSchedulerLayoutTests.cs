@@ -370,6 +370,12 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(admit, Does.Contain("bool tailSourceOnly"));
             Assert.That(admit, Does.Contain("bool tailSolveOnly"));
             Assert.That(admit, Does.Contain(
+                "pendingTailSourceCount != 0u"));
+            Assert.That(admit, Does.Contain(
+                "!tailSourceOnly &&"));
+            Assert.That(admit, Does.Not.Contain(
+                "SchedulerSolveEpoch() == 0u &&\n        pendingTailSourceCount"));
+            Assert.That(admit, Does.Contain(
                 "SIMPLE_DDGI_SCHEDULER_ADMISSION_ROLE"));
             Assert.That(admit, Does.Contain(
                 "const bool specializedTailPhase = true"));
@@ -540,7 +546,7 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
                 nameof(GPUSimpleDdgiSchedulerProbeState.LastCommittedSourceRefreshFrame),
                 nameof(GPUSimpleDdgiSchedulerProbeState.CommittedSourceLightingGeneration),
                 nameof(GPUSimpleDdgiSchedulerProbeState.SourceEpoch),
-                nameof(GPUSimpleDdgiSchedulerProbeState.OwningVolumeTableGeneration),
+                nameof(GPUSimpleDdgiSchedulerProbeState.OwningTransportTopologyGeneration),
                 nameof(GPUSimpleDdgiSchedulerProbeState.DirtyReasonFlags),
                 nameof(GPUSimpleDdgiSchedulerProbeState.DirtyStartFrame),
                 nameof(GPUSimpleDdgiSchedulerProbeState.PackedTransportAndLifecycle),
@@ -824,6 +830,74 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
                 "SIMPLE_DDGI_SCHEDULER_FEEDBACK_RECEIVER_CONTRIBUTION_OFFSET"));
             Assert.That(graph, Does.Contain(
                 "ReadWriteGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiScheduler)"));
+        });
+    }
+
+    [Test]
+    public void MovingCameraFeedback_SeparatesLogicalTableFromTransportTopology()
+    {
+        string shared = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_schedule_shared.glsl");
+        string feedback = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_schedule_feedback.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Marshal.OffsetOf<GPUSimpleDdgiSchedulerFrame>(
+                    nameof(GPUSimpleDdgiSchedulerFrame
+                        .TransportTopologyGeneration)).ToInt32(),
+                Is.EqualTo(55 * sizeof(uint)));
+            Assert.That(
+                SimpleDdgiSchedulerAbi
+                    .FeedbackTransportTopologyGenerationOffsetWords,
+                Is.EqualTo(998));
+            Assert.That(shared, Does.Contain(
+                "SchedulerTransportTopologyGeneration() { return SchedulerFrame(55u); }"));
+            Assert.That(shared, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_FEEDBACK_TRANSPORT_TOPOLOGY_OFFSET = 998u"));
+            Assert.That(feedback, Does.Contain(
+                "SchedulerVolumeGeneration());"));
+            Assert.That(feedback, Does.Contain(
+                "SchedulerTransportTopologyGeneration());"));
+        });
+    }
+
+    [Test]
+    public void EmptySourceCohort_DoesNotReportUnusedBudgetAsCapacityShortfall()
+    {
+        string feedback = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_schedule_feedback.comp");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(feedback, Does.Contain(
+                "pendingSource != 0u && targetSource > sourceUsed"));
+            Assert.That(feedback, Does.Not.Contain(
+                "SchedulerArenaWrite(base + 19u, targetSource > sourceUsed"));
+        });
+    }
+
+    [Test]
+    public void ToroidalReceiverInvalidation_BatchesSparseRunsWithoutWholeMapClear()
+    {
+        string manager = ReadRepoText(
+            "Njulf.Rendering", "Resources", "SimpleDdgiVolumeManager.cs");
+        string uploader = ReadRepoText(
+            "Njulf.Rendering", "Memory", "GpuBufferUploader.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(manager, Does.Contain(
+                "Exposed toroidal slabs are fragmented in X-major physical"));
+            Assert.That(manager, Does.Not.Contain(
+                "if (_receiverProbeUploadRuns.Count > MaxSparseProbeStateUploadRuns)"));
+            Assert.That(uploader, Does.Contain(
+                "ArrayPool<BufferCopy>.Shared.Rent(runs.Count)"));
+            Assert.That(uploader, Does.Contain(
+                "checked((uint)runs.Count),"));
+            Assert.That(uploader, Does.Contain(
+                "copyRegionPointer);"));
         });
     }
 

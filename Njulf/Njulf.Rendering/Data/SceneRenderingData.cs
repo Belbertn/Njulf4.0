@@ -664,6 +664,8 @@ namespace Njulf.Rendering.Data
         public ulong ReflectionProbeEstimatedBytes { get; set; }
         public int ReflectionProbeCapturesQueued { get; set; }
         public int ReflectionProbeCapturesCompleted { get; set; }
+        public ulong ReflectionProbeCapturesCompletedTotal { get; set; }
+        public int ReflectionProbePublishedCount { get; set; }
         public long CpuReflectionProbeUploadMicroseconds { get; set; }
         public long CpuReflectionProbeCaptureRecordMicroseconds { get; set; }
         public long CpuReflectionProbePrefilterRecordMicroseconds { get; set; }
@@ -933,10 +935,17 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiTransportSolverInvalidationCount { get; set; }
         public float SimpleDdgiTransportSolverInvalidationsPerSourceRefresh { get; set; }
         public uint SimpleDdgiVolumeResourceGeneration { get; set; }
+        public uint SimpleDdgiTransportTopologyGeneration { get; set; }
+        public SimpleDdgiVolumeRemapKind SimpleDdgiVolumeRemapKind { get; set; }
+        public ulong SimpleDdgiCompatibleToroidalScrollCount { get; set; }
+        public ulong SimpleDdgiIncompatibleTopologyChangeCount { get; set; }
+        public ulong SimpleDdgiGlobalConvergenceRestartCount { get; set; }
+        public ulong SimpleDdgiWholeReadbackDropCount { get; set; }
         public uint SimpleDdgiSourceLightingGeneration { get; set; }
         public uint SimpleDdgiAdmittedSourceCohortGeneration { get; set; }
         public uint SimpleDdgiTransportGeneration { get; set; }
         public uint SimpleDdgiPublishedPropagationGeneration { get; set; }
+        public uint SimpleDdgiLivePropagationSourceGeneration { get; set; }
         public int SimpleDdgiVisiblePriorityParticipatingProbeCount { get; set; }
         public int SimpleDdgiVisiblePrioritySourceReadyProbeCount { get; set; }
         public int SimpleDdgiVisiblePriorityPublishedProbeCount { get; set; }
@@ -2095,6 +2104,8 @@ namespace Njulf.Rendering.Data
             ReflectionProbeEstimatedBytes = 0;
             ReflectionProbeCapturesQueued = 0;
             ReflectionProbeCapturesCompleted = 0;
+            ReflectionProbeCapturesCompletedTotal = 0;
+            ReflectionProbePublishedCount = 0;
             CpuReflectionProbeUploadMicroseconds = 0;
             CpuReflectionProbeCaptureRecordMicroseconds = 0;
             CpuReflectionProbePrefilterRecordMicroseconds = 0;
@@ -2342,10 +2353,18 @@ namespace Njulf.Rendering.Data
             SimpleDdgiTransportSolverInvalidationCount = 0;
             SimpleDdgiTransportSolverInvalidationsPerSourceRefresh = 0;
             SimpleDdgiVolumeResourceGeneration = 0;
+            SimpleDdgiTransportTopologyGeneration = 0;
+            SimpleDdgiVolumeRemapKind =
+                global::Njulf.Rendering.Resources.SimpleDdgiVolumeRemapKind.None;
+            SimpleDdgiCompatibleToroidalScrollCount = 0;
+            SimpleDdgiIncompatibleTopologyChangeCount = 0;
+            SimpleDdgiGlobalConvergenceRestartCount = 0;
+            SimpleDdgiWholeReadbackDropCount = 0;
             SimpleDdgiSourceLightingGeneration = 0;
             SimpleDdgiAdmittedSourceCohortGeneration = 0;
             SimpleDdgiTransportGeneration = 0;
             SimpleDdgiPublishedPropagationGeneration = 0;
+            SimpleDdgiLivePropagationSourceGeneration = 0;
             SimpleDdgiVisiblePriorityParticipatingProbeCount = 0;
             SimpleDdgiVisiblePrioritySourceReadyProbeCount = 0;
             SimpleDdgiVisiblePriorityPublishedProbeCount = 0;

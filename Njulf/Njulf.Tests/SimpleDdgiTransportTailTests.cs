@@ -1,6 +1,7 @@
 using Njulf.Core.Math;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
@@ -20,6 +21,20 @@ public sealed class SimpleDdgiTransportTailTests
         Audit: 8u,
         Queue: 9u,
         SchedulerResources: 10u);
+
+    [Test]
+    public void AuditPass_UsesTwoSequentialChunksWithoutGrowingTheWorkspaceAbi()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiTransportAuditPass.MaximumChunksPerFrame,
+                Is.EqualTo(2));
+            Assert.That(
+                SimpleDdgiGpuSchedulerLayout.TransportAuditWorkspaceProbeCapacity,
+                Is.EqualTo(256));
+        });
+    }
 
     [Test]
     public void BlockingSourceWork_IncludesEveryResidentTransientAndPackedCause()
@@ -56,6 +71,41 @@ public sealed class SimpleDdgiTransportTailTests
                     }),
                 Is.EqualTo(7u));
         });
+    }
+
+    [Test]
+    public void LocalSourceRepair_ReopensTheSameSolveEpoch()
+    {
+        var controller = new SimpleDdgiTransportSolveController(2);
+        controller.BeginSourceRepair(Generations);
+        Assert.That(controller.BeginSolveEpoch(Generations, 2), Is.True);
+        uint solveEpoch = controller.SolveEpoch;
+        SimpleDdgiTransportGenerations solveGenerations =
+            controller.FrozenGenerations;
+        Assert.That(
+            controller.MarkGpuEpochComplete(solveEpoch, 2, solveGenerations),
+            Is.True);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                controller.PauseSolveForLocalSourceRepair(solveGenerations),
+                Is.True);
+            Assert.That(controller.SolveEpoch, Is.EqualTo(solveEpoch));
+            Assert.That(controller.Phase,
+                Is.EqualTo(SimpleDdgiTransportPhase.AcceleratedSolve));
+            Assert.That(controller.ExpectedParticipantCount, Is.EqualTo(2));
+            Assert.That(controller.VisitedParticipantCount, Is.Zero);
+            Assert.That(controller.IsSolveEpochComplete, Is.False);
+            Assert.That(controller.LastReason,
+                Is.EqualTo(
+                    SimpleDdgiTransportCertificationReason.SourceRepairRequired));
+        });
+
+        Assert.That(
+            controller.MarkGpuEpochComplete(solveEpoch, 2, solveGenerations),
+            Is.True,
+            "a complete GPU reduction may close the retained epoch after repaired probes reacquire their stamps");
     }
 
     [Test]
@@ -178,6 +228,44 @@ public sealed class SimpleDdgiTransportTailTests
                 auditDeadlineFrames: 27,
                 schedulingMarginFrames: 4),
             Is.EqualTo(197));
+    }
+
+    [Test]
+    public void CompleteFiniteTailAudit_RebasesTheNextEpochDeadline()
+    {
+        var controller = CreateAuditingController(participantCount: 2);
+        SimpleDdgiTransportTailSummary progress = CreateFiniteAuditSummary(
+            controller,
+            expectedParticipants: 2u,
+            auditedParticipants: 2u,
+            reason: SimpleDdgiTransportCertificationReason.TailAboveTolerance);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldRebaseTransportConvergenceDeadline(progress),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldRebaseTransportConvergenceDeadline(
+                        progress with { IsComplete = false }),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldRebaseTransportConvergenceDeadline(
+                        progress with { NonFiniteCount = 1u }),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldRebaseTransportConvergenceDeadline(
+                        progress with
+                        {
+                            Reason = SimpleDdgiTransportCertificationReason
+                                .ParticipantCoverageIncomplete
+                        }),
+                Is.False);
+        });
     }
 
     [TestCase(SimpleDdgiTransportPhase.Certified, false, true)]
@@ -600,6 +688,27 @@ public sealed class SimpleDdgiTransportTailTests
             Is.EqualTo(expectedAuthority));
     }
 
+    [TestCase(true, 17u, 17u, 17u, true)]
+    [TestCase(false, 17u, 17u, 17u, false)]
+    [TestCase(true, 16u, 17u, 17u, false)]
+    [TestCase(true, 17u, 17u, 16u, false)]
+    [TestCase(true, 0u, 0u, 0u, false)]
+    public void ResidentPublication_PromotesOnlyCurrentHostLiveBoundary(
+        bool hasCurrentLiveSourceBoundary,
+        uint feedbackPropagationGeneration,
+        uint currentTransportGeneration,
+        uint hostPublishedPropagationGeneration,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.CanPromoteHostLivePropagationPublication(
+                hasCurrentLiveSourceBoundary,
+                feedbackPropagationGeneration,
+                currentTransportGeneration,
+                hostPublishedPropagationGeneration),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(SimpleDdgiSchedulerMode.CpuReference, false,
         SimpleDdgiTailCertificationFallbackReason.RequiresGpuResidentScheduler)]
     [TestCase(SimpleDdgiSchedulerMode.GpuMirror, false,
@@ -903,6 +1012,61 @@ public sealed class SimpleDdgiTransportTailTests
         Assert.That(
             controller.LastReason,
             Is.EqualTo(SimpleDdgiTransportCertificationReason.GenerationsChanged));
+    }
+
+    [Test]
+    public void Controller_FirstCurrentGpuReductionBindsProvisionalParticipantCount()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        controller.EnsureParticipantCapacity(16);
+        Assert.That(
+            controller.BeginSolveEpoch(Generations, expectedParticipantCount: 0),
+            Is.True);
+        SimpleDdgiTransportGenerations frozen = controller.FrozenGenerations;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                controller.TryBindGpuEpochParticipantCount(
+                    controller.SolveEpoch,
+                    participantCount: 12,
+                    generations: frozen),
+                Is.True);
+            Assert.That(controller.ExpectedParticipantCount, Is.EqualTo(12));
+            Assert.That(
+                controller.MarkGpuEpochComplete(
+                    controller.SolveEpoch,
+                    participantCount: 12,
+                    generations: frozen),
+                Is.True);
+            Assert.That(controller.IsSolveEpochComplete, Is.True);
+        });
+    }
+
+    [Test]
+    public void Controller_DoesNotRebindGpuParticipantCountAfterVisitWitness()
+    {
+        var controller = new SimpleDdgiTransportSolveController();
+        controller.EnsureParticipantCapacity(16);
+        Assert.That(controller.BeginSolveEpoch(Generations, 12), Is.True);
+        SimpleDdgiTransportGenerations frozen = controller.FrozenGenerations;
+        Assert.That(
+            controller.MarkGpuEpochComplete(
+                controller.SolveEpoch,
+                participantCount: 12,
+                generations: frozen),
+            Is.True);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                controller.TryBindGpuEpochParticipantCount(
+                    controller.SolveEpoch,
+                    participantCount: 11,
+                    generations: frozen),
+                Is.False);
+            Assert.That(controller.ExpectedParticipantCount, Is.EqualTo(12));
+        });
     }
 
     [Test]

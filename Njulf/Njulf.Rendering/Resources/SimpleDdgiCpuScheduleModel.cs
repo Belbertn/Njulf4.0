@@ -77,6 +77,11 @@ public static class SimpleDdgiSchedulerAbi
     public const int FeedbackResidualPropagationOffsetWords = 986;
     public const int FeedbackUrgentRelightOffsetWords = 990;
     public const int FeedbackReceiverContributionOffsetWords = 994;
+    // Word 2 in the fixed header remains the logical volume-table transaction
+    // generation. The extended feedback tail carries the scroll-stable
+    // transport-topology generation used to accept delayed summaries while the
+    // camera moves.
+    public const int FeedbackTransportTopologyGenerationOffsetWords = 998;
     public const int FeedbackLivenessWordCount =
         (int)SimpleDdgiSchedulerWorkClass.Count + 3;
     public const uint PhysicalGenerationMask = 0x00ff_ffffu;

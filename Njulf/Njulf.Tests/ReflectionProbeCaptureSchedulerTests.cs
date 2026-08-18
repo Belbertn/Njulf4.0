@@ -224,4 +224,64 @@ public sealed class ReflectionProbeCaptureSchedulerTests
         Assert.That(followUp.Ticket.Version, Is.EqualTo(version));
         Assert.That(followUp.Ticket.Reasons, Is.EqualTo(ReflectionCaptureReason.Manual));
     }
+
+    [Test]
+    public void LightingVersionChangingAfterCopySubmission_NeverPublishesStaleCapture()
+    {
+        var scheduler = new ReflectionProbeCaptureScheduler(1);
+        Guid id = Guid.NewGuid();
+        var publishedVersion = new ReflectionCaptureVersion(1, 1, 1, 1, 1, 1, 1);
+        var capturedVersion = publishedVersion with
+        {
+            CompletedDdgiGeneration = 2
+        };
+        var currentVersion = capturedVersion with
+        {
+            CompletedDdgiGeneration = 3
+        };
+        scheduler.Register(0, id, hasPublishedCapture: true, publishedVersion);
+        scheduler.Request(
+            0,
+            id,
+            capturedVersion,
+            ReflectionCaptureReason.DdgiChanged,
+            default,
+            resourceGeneration: 4,
+            sceneRevision: 2);
+
+        ReflectionProbeWork work;
+        do
+        {
+            Assert.That(
+                scheduler.TryAcquireWork(4, 1, 1, out work),
+                Is.True);
+            if (work.Kind != ReflectionProbeWorkKind.PublishCopy)
+                scheduler.CompleteWork(work);
+        }
+        while (work.Kind != ReflectionProbeWorkKind.PublishCopy);
+        scheduler.MarkCopySubmitted(work, 42UL);
+
+        bool retired = scheduler.TryRetireCompleted(
+            42UL,
+            currentResourceGeneration: 4U,
+            currentVersion,
+            out ReflectionProbeCaptureTicket stale,
+            out bool published);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(retired, Is.True);
+            Assert.That(published, Is.False);
+            Assert.That(stale.Version, Is.EqualTo(capturedVersion));
+            Assert.That(scheduler.HasPublishedCapture(0, id), Is.True);
+            Assert.That(scheduler.CapturesPublishedTotal, Is.Zero);
+            Assert.That(scheduler.StaleCompletionRejections, Is.EqualTo(1UL));
+            Assert.That(
+                scheduler.TryAcquireWork(4, 1, 1, out ReflectionProbeWork retry),
+                Is.True);
+            Assert.That(retry.Kind, Is.EqualTo(ReflectionProbeWorkKind.CaptureFace));
+            Assert.That(retry.Face, Is.Zero);
+            Assert.That(retry.Ticket.Version, Is.EqualTo(currentVersion));
+        });
+    }
 }

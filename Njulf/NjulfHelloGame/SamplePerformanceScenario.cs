@@ -15,6 +15,7 @@ public enum SamplePerformanceScenario
     MixedTreeLineFoliageNoShadows,
     ForestFoliage,
     ReflectionHeavy,
+    BistroQualityMotionRelight,
     GiSponzaRightWallStationary,
     GiSponzaAnimatedAtmosphere,
     GiSponzaFreezeAfterAtmosphereStep,

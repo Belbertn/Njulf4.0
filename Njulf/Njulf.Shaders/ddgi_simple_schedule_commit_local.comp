@@ -654,7 +654,9 @@ void main()
             if (SchedulerTailCertification() && SchedulerSolveEpoch() != 0u)
                 SchedulerArenaWrite(stateBase + 9u, SchedulerSolveEpoch());
         }
-        SchedulerArenaWrite(stateBase + 4u, SchedulerVolumeGeneration());
+        SchedulerArenaWrite(
+            stateBase + 4u,
+            SchedulerTransportTopologyGeneration());
         uint previousSchedulerMetadata = SchedulerArenaRead(stateBase + 5u);
         uint schedulerMetadata = previousSchedulerMetadata &
             SIMPLE_DDGI_SCHEDULER_PROBE_META_VISIBILITY_MASK;

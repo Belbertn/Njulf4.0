@@ -23,6 +23,8 @@ public static class SampleSmokeOptionsParser
         "--baseline-snapshot-dir",
         "--sponza-gi-capture-dir",
         "--sponza-gi-capture-mode",
+        "--bistro-quality-capture-dir",
+        "--bistro-quality-variant",
         "--material-gi-capture-dir",
         "--material-gi-qualification-manifest",
         "--material-gi-qualification-candidate",
@@ -117,6 +119,17 @@ public static class SampleSmokeOptionsParser
         SampleSponzaGiCaptureMode sponzaGiCaptureMode =
             SampleSponzaGiCaptureMode.DetailedDiagnostics;
         bool sponzaGiCaptureModeSpecified = false;
+        string? bistroQualityCaptureDirectory =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_BISTRO_QUALITY_CAPTURE_DIR"));
+        SampleBistroQualityCaptureVariant bistroQualityCaptureVariant =
+            ParseBistroQualityCaptureVariant(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_BISTRO_QUALITY_VARIANT"));
+        bool bistroQualityVariantSpecified = !string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable(
+                "NJULF_BISTRO_QUALITY_VARIANT"));
         string? materialGiCaptureDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_MATERIAL_GI_CAPTURE_DIR"));
         string? materialGiQualificationManifestPath = RendererValidationSettings.NormalizeOptionalPath(
             Environment.GetEnvironmentVariable("NJULF_MATERIAL_GI_QUALIFICATION_MANIFEST"));
@@ -428,6 +441,15 @@ public static class SampleSmokeOptionsParser
                 case "--sponza-gi-capture-mode":
                     sponzaGiCaptureMode = ParseSponzaGiCaptureMode(value);
                     sponzaGiCaptureModeSpecified = true;
+                    break;
+                case "--bistro-quality-capture-dir":
+                    bistroQualityCaptureDirectory =
+                        RequirePath(value, optionName);
+                    break;
+                case "--bistro-quality-variant":
+                    bistroQualityCaptureVariant =
+                        ParseBistroQualityCaptureVariant(value);
+                    bistroQualityVariantSpecified = true;
                     break;
                 case "--material-gi-capture-dir":
                     materialGiCaptureDirectory = RequirePath(value, "--material-gi-capture-dir");
@@ -950,11 +972,14 @@ public static class SampleSmokeOptionsParser
             longRunOptionsSpecified = true;
         }
 
-        if (!string.IsNullOrWhiteSpace(materialGiCaptureDirectory) &&
-            !string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory))
+        int standaloneCaptureModeCount =
+            (!string.IsNullOrWhiteSpace(materialGiCaptureDirectory) ? 1 : 0) +
+            (!string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory) ? 1 : 0) +
+            (!string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory) ? 1 : 0);
+        if (standaloneCaptureModeCount > 1)
         {
             throw new ArgumentException(
-                "--material-gi-capture-dir and --sponza-gi-capture-dir are independent standalone modes and cannot be combined.");
+                "Material, Sponza, and Bistro quality capture directories are independent standalone modes and cannot be combined.");
         }
 
         if (sponzaGiCaptureModeSpecified &&
@@ -962,6 +987,15 @@ public static class SampleSmokeOptionsParser
         {
             throw new ArgumentException(
                 "--sponza-gi-capture-mode requires --sponza-gi-capture-dir.");
+        }
+
+        if (bistroQualityVariantSpecified &&
+            string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory) &&
+            performanceScenario !=
+                SamplePerformanceScenario.BistroQualityMotionRelight)
+        {
+            throw new ArgumentException(
+                "--bistro-quality-variant requires --bistro-quality-capture-dir or the BistroQualityMotionRelight performance scenario.");
         }
 
         if (khronosRenderedGate is not null)
@@ -1110,6 +1144,37 @@ public static class SampleSmokeOptionsParser
             performanceScenario = SamplePerformanceScenario.GiSponzaRightWallStationary;
             enableGpuTiming = true;
         }
+        else if (!string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory))
+        {
+            if (!string.IsNullOrWhiteSpace(baselineSnapshotDirectory))
+            {
+                throw new ArgumentException(
+                    "--bistro-quality-capture-dir emits its own evidence and cannot be combined with --baseline-snapshot-dir.");
+            }
+            if (sceneSpecified && sceneKind != SampleSceneKind.Bistro)
+            {
+                throw new ArgumentException(
+                    "--bistro-quality-capture-dir requires the Bistro scene.");
+            }
+            if (performanceScenario is not (
+                    SamplePerformanceScenario.Normal or
+                    SamplePerformanceScenario.BistroQualityMotionRelight))
+            {
+                throw new ArgumentException(
+                    "--bistro-quality-capture-dir owns the BistroQualityMotionRelight scenario.");
+            }
+            if (mode != SampleSmokeMode.None || frameCount > 0 ||
+                enableBenchmark || longRunOptionsSpecified)
+            {
+                throw new ArgumentException(
+                    "--bistro-quality-capture-dir owns its deterministic frame sequence and cannot be combined with smoke, benchmark, or long-run modes.");
+            }
+
+            sceneKind = SampleSceneKind.Bistro;
+            performanceScenario =
+                SamplePerformanceScenario.BistroQualityMotionRelight;
+            enableGpuTiming = true;
+        }
         else
         {
             if (performanceScenario == SamplePerformanceScenario.GiSponzaRightWallStationary ||
@@ -1122,6 +1187,17 @@ public static class SampleSmokeOptionsParser
                 }
 
                 sceneKind = SampleSceneKind.SponzaPlaza;
+            }
+
+            if (performanceScenario ==
+                SamplePerformanceScenario.BistroQualityMotionRelight)
+            {
+                if (sceneSpecified && sceneKind != SampleSceneKind.Bistro)
+                {
+                    throw new ArgumentException(
+                        "BistroQualityMotionRelight requires the Bistro scene.");
+                }
+                sceneKind = SampleSceneKind.Bistro;
             }
 
             if (enableBenchmark)
@@ -1384,7 +1460,9 @@ public static class SampleSmokeOptionsParser
             giCausticQualificationId,
             nearFieldResidualQualificationId,
             advancedGiRuntimeEvidenceBundlePath,
-            advancedGiStartupProfilePath);
+            advancedGiStartupProfilePath,
+            bistroQualityCaptureDirectory,
+            bistroQualityCaptureVariant);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -1420,6 +1498,33 @@ public static class SampleSmokeOptionsParser
                 SampleSponzaGiCaptureMode.PresentationReview,
             _ => throw new ArgumentException(
                 $"Invalid Sponza GI capture mode '{value}'. Valid values: detailed, production, presentation.")
+        };
+    }
+
+    private static SampleBistroQualityCaptureVariant
+        ParseBistroQualityCaptureVariant(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return SampleBistroQualityCaptureVariant.SunScaleStep;
+
+        string normalized = value.Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant();
+        return normalized switch
+        {
+            "presentation" or "beauty" =>
+                SampleBistroQualityCaptureVariant.Presentation,
+            "steadymotion" or "steady" or "motion" =>
+                SampleBistroQualityCaptureVariant.SteadyMotion,
+            "sunscalestep" or "scalestep" or "radiancestep" =>
+                SampleBistroQualityCaptureVariant.SunScaleStep,
+            "sundirectionstep" or "directionstep" =>
+                SampleBistroQualityCaptureVariant.SunDirectionStep,
+            "reflectionsourceab" or "reflection" =>
+                SampleBistroQualityCaptureVariant.ReflectionSourceAb,
+            _ => throw new ArgumentException(
+                $"Invalid Bistro quality variant '{value}'. Valid values: presentation, steady-motion, sun-scale-step, sun-direction-step, reflection-source-ab.")
         };
     }
 

@@ -109,7 +109,7 @@ void main()
             SchedulerSourceGeneration(),
             sourceEpoch,
             sourceVolumeGeneration,
-            SchedulerVolumeGeneration(),
+            SchedulerTransportTopologyGeneration(),
             schedulerMetadata,
             cacheProbeBaseWordPlusOne);
     // Evaluate geometry readiness against the committed public state before
@@ -124,7 +124,7 @@ void main()
             sourceGeneration,
             sourceEpoch,
             sourceVolumeGeneration,
-            SchedulerVolumeGeneration(),
+            SchedulerTransportTopologyGeneration(),
             schedulerMetadata,
             cacheProbeBaseWordPlusOne);
     bool globalDirtySignal = SchedulerDirtyReasonFlags() != 0u;
@@ -392,26 +392,16 @@ void main()
     }
     if (SchedulerTailCertification() &&
         solveEpoch != 0u &&
-        !stableTailParticipant)
-    {
-        // A solve epoch and its audit certify one frozen source operator. Do
-        // not repair, relocate, classify, or reactivate a probe inside that
-        // epoch. Feedback still reports the pending source participant, which
-        // makes the CPU controller abandon this epoch and return to source
-        // repair before any replacement cache write is admitted.
-        SchedulerWriteInvalidCandidate(candidateBase);
-        return;
-    }
-    if (SchedulerTailCertification() &&
-        solveEpoch != 0u &&
+        stableTailParticipant &&
         lastSolveEpoch == solveEpoch)
     {
         // A tail solve is an exact complete-field sweep, not an open-ended
-        // maintenance queue. Once this participant has published for the
-        // current epoch, exclude it from classification until the controller
-        // advances the epoch. This makes progress independent of lane cursor
-        // stability and prevents a warm prior from repeatedly consuming the
-        // frame budget with the same high-priority subset.
+        // maintenance queue. Once a stable participant has published for the
+        // current epoch, exclude it from classification until its source state
+        // changes or the controller advances the epoch. A compatible toroidal
+        // scroll can therefore repair only its newly exposed slab in place;
+        // the CPU clears the completion witness and waits for those probes to
+        // publish into this same epoch before it can begin another audit.
         SchedulerWriteInvalidCandidate(candidateBase);
         return;
     }

@@ -189,7 +189,7 @@ void main()
                 SchedulerSourceGeneration(),
                 sourceEpoch,
                 volumeGeneration,
-                SchedulerVolumeGeneration(),
+                SchedulerTransportTopologyGeneration(),
                 metadata,
                 cacheProbeBaseWordPlusOne);
         bool hasFresh = (flags & SIMPLE_DDGI_PROBE_FLAG_FRESH) != 0u;
@@ -213,7 +213,7 @@ void main()
             SchedulerSourceGeneration(),
             sourceEpoch,
             volumeGeneration,
-            SchedulerVolumeGeneration(),
+            SchedulerTransportTopologyGeneration(),
             metadata,
             cacheProbeBaseWordPlusOne);
         participatingCount += participating ? 1u : 0u;
@@ -436,7 +436,14 @@ void main()
     SchedulerArenaWrite(base + 16u, primaryUsed);
     SchedulerArenaWrite(base + 17u, targetSource);
     SchedulerArenaWrite(base + 18u, sourceUsed);
-    SchedulerArenaWrite(base + 19u, targetSource > sourceUsed ? targetSource - sourceUsed : 0u);
+    // An unused source budget is not a capacity shortfall once the source
+    // cohort is empty. Reporting it as one kept host-side source readiness
+    // permanently active during cached propagation and camera-only scrolling.
+    SchedulerArenaWrite(
+        base + 19u,
+        pendingSource != 0u && targetSource > sourceUsed
+            ? targetSource - sourceUsed
+            : 0u);
     SchedulerArenaWrite(base + 20u,
         SchedulerArenaRead(pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_INVALID_GENERATION));
     SchedulerArenaWrite(base + 21u, transportUsed);
@@ -610,6 +617,9 @@ void main()
     SchedulerArenaWrite(
         base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_RECEIVER_CONTRIBUTION_OFFSET + 3u,
         receiverConsumerMask);
+    SchedulerArenaWrite(
+        base + SIMPLE_DDGI_SCHEDULER_FEEDBACK_TRANSPORT_TOPOLOGY_OFFSET,
+        SchedulerTransportTopologyGeneration());
     // Consume the mailbox after copying it into this frame-stamped feedback
     // record. Without this clear, an idle lane could reappear as current when
     // the compact 16-bit telemetry stamp wraps after 65,536 frames.

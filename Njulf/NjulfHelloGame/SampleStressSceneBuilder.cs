@@ -58,7 +58,11 @@ internal sealed class SampleStressSceneBuilder
     public SamplePerformanceScenarioSummary Apply(SamplePerformanceScenario scenario)
     {
         Clear();
-        SampleLighting.Configure(_lightManager, _normalLightingMode);
+        // The Bistro quality scenario owns the existing scene-authored sun.
+        // Replacing it with the generic stress-scene key would invalidate both
+        // its radiometric relight event and the visual comparison target.
+        if (scenario != SamplePerformanceScenario.BistroQualityMotionRelight)
+            SampleLighting.Configure(_lightManager, _normalLightingMode);
 
         return scenario switch
         {
@@ -74,6 +78,10 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.MixedTreeLineFoliageNoShadows => BuildForestFoliage(SamplePerformanceScenario.MixedTreeLineFoliageNoShadows, shadowsEnabled: false),
             SamplePerformanceScenario.ForestFoliage => BuildForestFoliage(SamplePerformanceScenario.ForestFoliage, shadowsEnabled: true),
             SamplePerformanceScenario.ReflectionHeavy => BuildReflectionHeavy(),
+            SamplePerformanceScenario.BistroQualityMotionRelight =>
+                ExistingSceneValidationSummary(
+                    SamplePerformanceScenario.BistroQualityMotionRelight,
+                    "Bistro continuous camera motion with deterministic DDGI relighting"),
             SamplePerformanceScenario.GiSponzaRightWallStationary => ExistingSceneValidationSummary(
                 SamplePerformanceScenario.GiSponzaRightWallStationary,
                 "Sponza Plaza right-wall fixed-camera GI baseline"),

@@ -2666,11 +2666,6 @@ vec3 EvaluateReflectionSpecular(
     vec3 globalDirection = EnvironmentUsesAnalyticSky(environment)
         ? normalize(reflectionDirection)
         : RotateEnvironmentDirection(reflectionDirection, environment.RotationRadians);
-    vec3 globalReflection = SampleEnvironmentPrefilteredRadiance(
-        environment,
-        reflectionDirection,
-        globalLod) * header.GlobalFallbackIntensity;
-
     // The global environment and local probes do not necessarily have the
     // same mip count. Mapping a probe through the shorter environment chain
     // leaves rough materials sampling a much sharper local mip, which makes
@@ -2747,6 +2742,18 @@ vec3 EvaluateReflectionSpecular(
         0.0,
         1.0);
     float globalWeight = max(remainingWeight - ddgiWeight, 0.0);
+    // A fully weighted local probe owns the reflected-radiance source. Avoid
+    // an environment cubemap sample whose result would be multiplied by zero;
+    // this keeps local-probe quality at the cost of the previous global-only
+    // path for pixels in an authored volume.
+    vec3 globalReflection = vec3(0.0);
+    if (globalWeight > 0.0001)
+    {
+        globalReflection = SampleEnvironmentPrefilteredRadiance(
+            environment,
+            reflectionDirection,
+            globalLod) * header.GlobalFallbackIntensity;
+    }
     vec3 reflectedRadiance = (
         localReflection * localWeight +
         ddgiDirectionalRadiance * ddgiWeight +

@@ -13,6 +13,8 @@ runtime, memory plan, or 60 FPS target.
 - Emissive mesh
 - RT VFX
 - HDRI
+- Optional ray-query reflection fallback later
+If SSR’s off-screen misses become too visible, trace rays only for invalid SSR pixels. Shade those hits using direct lighting, emissive materials, and DDGI. This remains automatic, but is the more expensive second phase.
 
 
 Yes—if implemented literally, it is a large and risky change. I would split “#4” into three very different scopes:

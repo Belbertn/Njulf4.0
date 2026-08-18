@@ -62,10 +62,15 @@ void main()
     bool sourceBudgetLimited = sourceBudget != 0u;
     uint pendingTailSourceCount = SchedulerArenaRead(
         pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_PENDING_TAIL_SOURCE);
+    // Source validity always precedes cached solving, including probe-local
+    // repair inside an already-open solve epoch. Compatible toroidal scrolling
+    // and a lighting boundary can both expose source-stale participants after
+    // solveEpoch became nonzero. Drain that bounded cohort first, then resume
+    // the retained epoch and its overlapping visit stamps.
     bool tailSourceOnly = SchedulerTailCertification() &&
-        SchedulerSolveEpoch() == 0u &&
         pendingTailSourceCount != 0u;
     bool tailSolveOnly = SchedulerTailCertification() &&
+        !tailSourceOnly &&
         SchedulerSolveEpoch() != 0u;
     bool transactionSpecializedTailPhase = tailSourceOnly || tailSolveOnly;
 #if SIMPLE_DDGI_SCHEDULER_ADMISSION_ROLE == 1

@@ -48,7 +48,45 @@ public sealed class SimpleDdgiSchedulerSettingsTests
             Assert.That(gi.SimpleDdgiSparseMaximumAdmissionsPerFrame, Is.EqualTo(64));
             Assert.That(gi.SimpleDdgiSparseMaximumReceiverFeedbackRequests, Is.EqualTo(2_048));
             Assert.That(gi.SimpleDdgiSparseInactiveRetryFrames, Is.EqualTo(300));
+            Assert.That(gi.SimpleDdgiViewForwardPlacementFraction,
+                Is.EqualTo(0.6f));
         });
+    }
+
+    [Test]
+    public void ViewForwardPlacementFraction_ClampsAndRoundTrips()
+    {
+        string path = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"simple-ddgi-forward-placement-{Guid.NewGuid():N}.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.GlobalIllumination.SimpleDdgiViewForwardPlacementFraction =
+                2.0f;
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiViewForwardPlacementFraction,
+                Is.EqualTo(1.0f));
+
+            settings.GlobalIllumination.SimpleDdgiViewForwardPlacementFraction =
+                0.72f;
+            settings.Save(path);
+            RenderSettings loaded = RenderSettings.Load(path);
+            Assert.That(
+                loaded.GlobalIllumination.SimpleDdgiViewForwardPlacementFraction,
+                Is.EqualTo(0.72f));
+
+            loaded.GlobalIllumination.SimpleDdgiViewForwardPlacementFraction =
+                -1.0f;
+            Assert.That(
+                loaded.GlobalIllumination.SimpleDdgiViewForwardPlacementFraction,
+                Is.Zero);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     [TestCase(DdgiQualityTier.DdgiLow, SimpleDdgiProbeResidencyMode.Dense, 0, 0)]

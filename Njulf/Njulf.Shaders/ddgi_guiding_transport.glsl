@@ -452,18 +452,28 @@ bool TryReadSimpleDdgiGuidingTraceDirection(
         sidecarIndex, baseWord + 4u);
     uint storedPageGeneration = ReadStorageWordUniform(
         sidecarIndex, baseWord + 5u);
-    recordPresent = abiVersion != 0u &&
+    bool ownershipPresent = abiVersion != 0u &&
         any(notEqual(expectedStableProbeId, uvec2(0u))) &&
         all(equal(stableProbeId, expectedStableProbeId)) &&
         storedPhysicalProbeIndex == physicalProbeIndex &&
         storedVirtualProbeId == virtualProbeId &&
         storedPageGeneration == pageGeneration;
-    if (!recordPresent)
+    if (!ownershipPresent)
         return false;
 
     uvec4 payloadIdentity = ReadStorageAlignedUVec4Uniform(
         sidecarIndex,
         baseWord + 8u);
+    // A light/source boundary intentionally retires the old proposal family.
+    // Treat that payload as absent so the new source sequence can use its
+    // deterministic uniform direction. Only a payload claiming the current
+    // source identity is considered present and therefore fail-closed below
+    // when its ABI, slot, ownership tag, or direction is malformed.
+    recordPresent = payloadIdentity.z == expectedSourceEpoch &&
+        payloadIdentity.w == expectedSourceLightingGeneration;
+    if (!recordPresent)
+        return false;
+
     uvec4 payloadTail = ReadStorageAlignedUVec4Uniform(
         sidecarIndex,
         baseWord + 12u);
@@ -572,7 +582,9 @@ bool TryReadSimpleDdgiGuidingTransportPayload(
         all(equal(payload.stableProbeId, expectedStableProbeId)) &&
         payload.physicalProbeIndex == physicalProbeIndex &&
         payload.virtualProbeId == virtualProbeId &&
-        payload.pageGeneration == pageGeneration;
+        payload.pageGeneration == pageGeneration &&
+        payload.sourceEpoch == expectedSourceEpoch &&
+        payload.sourceLightingGeneration == expectedSourceLightingGeneration;
     if (!recordPresent)
         return false;
 

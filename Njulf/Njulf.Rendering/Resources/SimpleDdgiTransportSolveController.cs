@@ -222,6 +222,40 @@ public sealed class SimpleDdgiTransportSolveController
     }
 
     /// <summary>
+    /// Reopens the completion witness for probe-local source repair without
+    /// advancing the field solve epoch. GPU visit stamps for overlapping probes
+    /// remain valid; repaired probes clear and reacquire their stamp in the same
+    /// epoch before <see cref="MarkGpuEpochComplete"/> can close it again.
+    /// </summary>
+    public bool PauseSolveForLocalSourceRepair(
+        SimpleDdgiTransportGenerations generations)
+    {
+        if (Phase != SimpleDdgiTransportPhase.AcceleratedSolve ||
+            !IsSolveGenerationCompatible(generations, FrozenGenerations))
+        {
+            return false;
+        }
+
+        FrozenGenerations = generations with
+        {
+            Solve = _solveEpoch,
+            Audit = NonZeroGeneration(_auditEpoch)
+        };
+        _visitedParticipantCount = 0;
+        _auditCancelled = false;
+        _completedAuditPending = false;
+        RecoveryAction = SimpleDdgiTransportRecoveryAction.None;
+        LastReason = SimpleDdgiTransportCertificationReason.SourceRepairRequired;
+        LastSummary = LastSummary with
+        {
+            Generations = FrozenGenerations,
+            Reason = LastReason,
+            IsComplete = false
+        };
+        return true;
+    }
+
+    /// <summary>
     /// Marks one active participant as visited by the current accelerated
     /// epoch.  Duplicate visits are rejected so a malformed queue cannot make
     /// an incomplete field appear complete.
@@ -301,6 +335,46 @@ public sealed class SimpleDdgiTransportSolveController
             ? SimpleDdgiTransportCertificationReason.None
             : SimpleDdgiTransportCertificationReason.SolveEpochIncomplete;
         return IsSolveEpochComplete;
+    }
+
+    /// <summary>
+    /// Binds the participant cardinality from the first generation-matched GPU
+    /// reduction for a newly uploaded solve epoch. The host necessarily starts
+    /// that epoch from delayed feedback for the preceding epoch, during which
+    /// source-ready membership can still be zero or incomplete. Only an
+    /// unvisited epoch may be rebound; the exact-count check in
+    /// <see cref="MarkGpuEpochComplete"/> remains authoritative afterwards.
+    /// </summary>
+    public bool TryBindGpuEpochParticipantCount(
+        uint solveEpoch,
+        int participantCount,
+        SimpleDdgiTransportGenerations generations)
+    {
+        if (Phase != SimpleDdgiTransportPhase.AcceleratedSolve ||
+            solveEpoch == 0u ||
+            solveEpoch != _solveEpoch ||
+            generations != FrozenGenerations ||
+            participantCount < 0 ||
+            participantCount > _participantVisitEpoch.Length ||
+            _visitedParticipantCount != 0)
+        {
+            LastReason = generations != FrozenGenerations
+                ? SimpleDdgiTransportCertificationReason.GenerationsChanged
+                : SimpleDdgiTransportCertificationReason.SolveEpochIncomplete;
+            return false;
+        }
+
+        _expectedParticipantCount = participantCount;
+        LastReason = participantCount > 0
+            ? SimpleDdgiTransportCertificationReason.None
+            : SimpleDdgiTransportCertificationReason.SolveEpochIncomplete;
+        LastSummary = LastSummary with
+        {
+            Generations = generations,
+            Reason = LastReason,
+            IsComplete = false
+        };
+        return true;
     }
 
     /// <summary>

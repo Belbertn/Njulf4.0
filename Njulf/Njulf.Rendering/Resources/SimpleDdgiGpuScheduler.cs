@@ -126,6 +126,7 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     private SimpleDdgiReceiverContributionEvidence
         _lastReceiverContributionEvidence;
     private SimpleDdgiUrgentRelightEvidence _lastUrgentRelightEvidence;
+    private uint _lastFeedbackTransportTopologyGeneration;
     private ulong _currentPolicyHash;
     private ulong _previousPolicyHash;
     private bool _policiesInitialized;
@@ -159,6 +160,14 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
     public ulong FallbackStateExportBytes => _fallbackExportReadbackBytes;
     public ulong RetiredBytes => _retirement.ActiveBytes;
     public ulong StaleFeedbackCount => _staleFeedbackCount;
+    public uint LastFeedbackTransportTopologyGeneration
+    {
+        get
+        {
+            lock (_lock)
+                return _lastFeedbackTransportTopologyGeneration;
+        }
+    }
     public SimpleDdgiSchedulerCommitFailureBreakdown
         LastCommitFailureBreakdown
     {
@@ -1055,6 +1064,9 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
                 feedbackWords[receiverContributionBase + 1],
                 feedbackWords[receiverContributionBase + 2],
                 feedbackWords[receiverContributionBase + 3]);
+            _lastFeedbackTransportTopologyGeneration = feedbackWords[
+                SimpleDdgiSchedulerAbi
+                    .FeedbackTransportTopologyGenerationOffsetWords];
             int eligibleClassBase =
                 SimpleDdgiSchedulerAbi.FeedbackEligibleClassOffsetWords;
             int eligibleRingBase =

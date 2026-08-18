@@ -326,6 +326,10 @@ namespace Njulf.Tests
                     Is.EqualTo(112));
                 Assert.That(
                     Marshal.SizeOf<GPUSimpleDdgiReceiverCacheResolvePushConstants>(),
+                    Is.EqualTo(28));
+                Assert.That(
+                    Marshal.OffsetOf<GPUSimpleDdgiReceiverCacheResolvePushConstants>(
+                        nameof(GPUSimpleDdgiReceiverCacheResolvePushConstants.DepthTextureIndex)).ToInt32(),
                     Is.EqualTo(24));
             });
         }

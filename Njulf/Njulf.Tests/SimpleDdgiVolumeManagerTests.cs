@@ -621,6 +621,34 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
+    [TestCase(4_096, 128, 512, true, false, false, true, 512)]
+    [TestCase(4_096, 64, 1_024, true, false, false, true, 256)]
+    [TestCase(4_096, 128, 384, true, false, true, true, 384)]
+    [TestCase(256, 128, 512, true, false, false, true, 256)]
+    [TestCase(4_096, 128, 512, true, true, false, true, 512)]
+    [TestCase(4_096, 128, 512, false, false, false, true, 512)]
+    public void TransportV2RadiometricRecoveryFrameBudget_UsesBoundedFourfoldSourceEnvelope(
+        int requestedBudget,
+        int sourceBudget,
+        int requestCapacity,
+        bool transportV2Active,
+        bool acceleratedSolveActive,
+        bool spatialRecoveryActive,
+        bool radiometricRecoveryActive,
+        int expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveTransportV2FrameRequestBudget(
+                requestedBudget,
+                sourceBudget,
+                requestCapacity,
+                transportV2Active,
+                acceleratedSolveActive,
+                spatialRecoveryActive,
+                radiometricRecoveryActive),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(0, 1)]
     [TestCase(1, 1)]
     [TestCase(64, 64)]
@@ -1467,6 +1495,298 @@ public sealed class SimpleDdgiVolumeManagerTests
                     previous,
                     fractional),
                 Is.False);
+        });
+    }
+
+    [TestCase(false, true, true, true, SimpleDdgiVolumeRemapKind.None)]
+    [TestCase(true, true, true, true,
+        SimpleDdgiVolumeRemapKind.CompatibleToroidalScroll)]
+    [TestCase(true, false, true, true,
+        SimpleDdgiVolumeRemapKind.IncompatibleTopologyChange)]
+    [TestCase(true, true, false, true,
+        SimpleDdgiVolumeRemapKind.IncompatibleTopologyChange)]
+    [TestCase(true, true, true, false,
+        SimpleDdgiVolumeRemapKind.IncompatibleTopologyChange)]
+    public void VolumeRemapClassification_OnlyCompatibleScrollPreservesFieldEvidence(
+        bool remapped,
+        bool toroidal,
+        bool topologyCountsMatch,
+        bool allVolumesCompatible,
+        SimpleDdgiVolumeRemapKind expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager.ResolveVolumeRemapKind(
+                remapped,
+                toroidal,
+                topologyCountsMatch,
+                allVolumesCompatible),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void CompatibleToroidalScroll_RepairsExposedSlabsWithoutOpeningGlobalConvergence()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldBeginTransportGlobalConvergenceForInvalidation(
+                        transportV2Active: true,
+                        newlyInvalidatedProbeCount: 2_576,
+                        hasRegionalDirtyWork: false,
+                        requiresGlobalInvalidation: false,
+                        atlasFresh: false,
+                        recenteredThisFrame: true,
+                        remapKind: SimpleDdgiVolumeRemapKind.CompatibleToroidalScroll),
+                Is.False,
+                "a compatible camera scroll must retain the current field solve");
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldBeginTransportGlobalConvergenceForInvalidation(
+                        transportV2Active: true,
+                        newlyInvalidatedProbeCount: 2_576,
+                        hasRegionalDirtyWork: false,
+                        requiresGlobalInvalidation: true,
+                        atlasFresh: false,
+                        recenteredThisFrame: true,
+                        remapKind: SimpleDdgiVolumeRemapKind.CompatibleToroidalScroll),
+                Is.True,
+                "a simultaneous global source boundary must still restart convergence");
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ShouldBeginTransportGlobalConvergenceForInvalidation(
+                        transportV2Active: true,
+                        newlyInvalidatedProbeCount: 2_576,
+                        hasRegionalDirtyWork: false,
+                        requiresGlobalInvalidation: false,
+                        atlasFresh: true,
+                        recenteredThisFrame: true,
+                        remapKind: SimpleDdgiVolumeRemapKind.CompatibleToroidalScroll),
+                Is.True,
+                "an atlas bootstrap cannot reuse scroll history");
+        });
+    }
+
+    [TestCase(
+        SimpleDdgiSchedulerMode.GpuResident,
+        SimpleDdgiVolumeRemapKind.CompatibleToroidalScroll,
+        true,
+        SimpleDdgiTransportPhase.AuditFrozen,
+        true)]
+    [TestCase(
+        SimpleDdgiSchedulerMode.CpuReference,
+        SimpleDdgiVolumeRemapKind.CompatibleToroidalScroll,
+        true,
+        SimpleDdgiTransportPhase.AuditFrozen,
+        false)]
+    [TestCase(
+        SimpleDdgiSchedulerMode.GpuResident,
+        SimpleDdgiVolumeRemapKind.None,
+        true,
+        SimpleDdgiTransportPhase.AuditFrozen,
+        false)]
+    [TestCase(
+        SimpleDdgiSchedulerMode.GpuResident,
+        SimpleDdgiVolumeRemapKind.IncompatibleTopologyChange,
+        true,
+        SimpleDdgiTransportPhase.AuditFrozen,
+        false)]
+    [TestCase(
+        SimpleDdgiSchedulerMode.GpuResident,
+        SimpleDdgiVolumeRemapKind.CompatibleToroidalScroll,
+        false,
+        SimpleDdgiTransportPhase.AuditFrozen,
+        false)]
+    [TestCase(
+        SimpleDdgiSchedulerMode.GpuResident,
+        SimpleDdgiVolumeRemapKind.CompatibleToroidalScroll,
+        true,
+        SimpleDdgiTransportPhase.AcceleratedSolve,
+        false)]
+    public void CompatibleGpuResidentScroll_PreemptsOnlyAFrozenTailAudit(
+        SimpleDdgiSchedulerMode schedulerMode,
+        SimpleDdgiVolumeRemapKind remapKind,
+        bool tailCertificationEnabled,
+        SimpleDdgiTransportPhase phase,
+        bool expected)
+    {
+        Assert.That(
+            SimpleDdgiVolumeManager
+                .ShouldPreemptFrozenTransportAuditForCompatibleScroll(
+                    schedulerMode,
+                    remapKind,
+                    tailCertificationEnabled,
+                    phase),
+            Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void LivePropagationBoundary_SurvivesOnlyTheSameSourceGeneration()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.HasCurrentLivePropagationBoundary(9u, 9u),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.HasCurrentLivePropagationBoundary(9u, 10u),
+                Is.False,
+                "a lighting boundary must retire the old live solve witness");
+            Assert.That(
+                SimpleDdgiVolumeManager.HasCurrentLivePropagationBoundary(0u, 1u),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void LivePropagationBoundary_AcceptsCurrentPublishedSweepWhileAuditCountDrifts()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager.CanEstablishLivePropagationBoundary(
+                    SimpleDdgiTransportPhase.AcceleratedSolve,
+                    currentSolveEpoch: 7u,
+                    feedbackSolveEpoch: 7u,
+                    participantCount: 14_779u,
+                    visitedParticipantCount: 6_656u,
+                    publishedCount: 512u,
+                    blockingSourceWork: false),
+                Is.True,
+                "a source-clean current-epoch publication is usable while the exact audit count catches up");
+            Assert.That(
+                SimpleDdgiVolumeManager.CanEstablishLivePropagationBoundary(
+                    SimpleDdgiTransportPhase.AcceleratedSolve,
+                    currentSolveEpoch: 7u,
+                    feedbackSolveEpoch: 7u,
+                    participantCount: 14_779u,
+                    visitedParticipantCount: 14_779u,
+                    publishedCount: 0u,
+                    blockingSourceWork: false),
+                Is.True,
+                "an already-published complete participant sweep remains a live witness");
+            Assert.That(
+                SimpleDdgiVolumeManager.CanEstablishLivePropagationBoundary(
+                    SimpleDdgiTransportPhase.AcceleratedSolve,
+                    currentSolveEpoch: 7u,
+                    feedbackSolveEpoch: 7u,
+                    participantCount: 14_779u,
+                    visitedParticipantCount: 6_656u,
+                    publishedCount: 512u,
+                    blockingSourceWork: true),
+                Is.False,
+                "unrepaired source probes must keep a new lighting generation behind the boundary");
+            Assert.That(
+                SimpleDdgiVolumeManager.CanEstablishLivePropagationBoundary(
+                    SimpleDdgiTransportPhase.AcceleratedSolve,
+                    currentSolveEpoch: 7u,
+                    feedbackSolveEpoch: 6u,
+                    participantCount: 14_779u,
+                    visitedParticipantCount: 14_779u,
+                    publishedCount: 512u,
+                    blockingSourceWork: false),
+                Is.False,
+                "a delayed solve epoch cannot authorize the current field");
+        });
+    }
+
+    [Test]
+    public void ViewForwardPlacement_MatchesFlaxCardinalCoverageBias()
+    {
+        Vector3 direction =
+            SimpleDdgiVolumeManager.ResolveViewForwardPlacementDirection(
+                new Vector3(0f, -0.25f, -4f),
+                horizontalOnly: true);
+        float offset = SimpleDdgiVolumeManager.ResolveViewForwardPlacementOffset(
+            new Vector3(26f, 12f, 26f),
+            direction,
+            placementFraction: 0.6f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(direction.X, Is.EqualTo(0f).Within(0.0001f));
+            Assert.That(direction.Y, Is.EqualTo(0f).Within(0.0001f));
+            Assert.That(direction.Z, Is.EqualTo(-1f).Within(0.0001f));
+            // A cardinal ray exits the Flax box at 0.5 of its ray length:
+            // 0.5 * 26 * 0.6 = 7.8, leaving 20% behind and 80% ahead.
+            Assert.That(offset, Is.EqualTo(7.8f).Within(0.0001f));
+        });
+    }
+
+    [Test]
+    public void CameraRelativeRingOrigin_FollowsEachHorizontalCellLikeFlax()
+    {
+        bool hasOrigin = false;
+        Vector3 sceneMin = new(-100f, -5f, -100f);
+        Vector3 sceneMax = new(100f, 20f, 100f);
+        Vector3 latticeSize = new(23.625f, 11.375f, 23.625f);
+        const float spacing = 0.875f;
+
+        Vector3 initial = SimpleDdgiVolumeManager.ResolveCameraRelativeRingOrigin(
+            sceneMin,
+            sceneMax,
+            latticeSize,
+            spacing,
+            placementCenter: new Vector3(0.10f, 2.0f, 0.10f),
+            currentOrigin: default,
+            ref hasOrigin,
+            out bool initiallyRecentered);
+        Vector3 insideCell = SimpleDdgiVolumeManager.ResolveCameraRelativeRingOrigin(
+            sceneMin,
+            sceneMax,
+            latticeSize,
+            spacing,
+            placementCenter: new Vector3(0.80f, 2.0f, 0.80f),
+            currentOrigin: initial,
+            ref hasOrigin,
+            out bool insideCellRecentered);
+        Vector3 nextCell = SimpleDdgiVolumeManager.ResolveCameraRelativeRingOrigin(
+            sceneMin,
+            sceneMax,
+            latticeSize,
+            spacing,
+            placementCenter: new Vector3(0.90f, 2.0f, 0.90f),
+            currentOrigin: insideCell,
+            ref hasOrigin,
+            out bool nextCellRecentered);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(initiallyRecentered, Is.False);
+            Assert.That(insideCellRecentered, Is.False);
+            Assert.That(insideCell, Is.EqualTo(initial));
+            Assert.That(nextCellRecentered, Is.True);
+            Assert.That(nextCell.X - initial.X, Is.EqualTo(spacing).Within(1e-5f));
+            Assert.That(nextCell.Z - initial.Z, Is.EqualTo(spacing).Within(1e-5f));
+            Assert.That(
+                nextCell.X + latticeSize.X * 0.5f,
+                Is.EqualTo(spacing).Within(1e-5f),
+                "the physical lattice centre must be the floor-snapped camera-relative centre");
+        });
+    }
+
+    [Test]
+    public void SmoothBlendOrigin_FollowsSubCellCameraMotionAndClampsToScene()
+    {
+        Vector3 interior = SimpleDdgiVolumeManager.ResolveSmoothSceneClampedOrigin(
+            Vector3.Zero,
+            new Vector3(100f, 40f, 100f),
+            new Vector3(20f, 10f, 20f),
+            new Vector3(10.25f, 7.75f, 30.5f));
+        Vector3 edge = SimpleDdgiVolumeManager.ResolveSmoothSceneClampedOrigin(
+            Vector3.Zero,
+            new Vector3(100f, 40f, 100f),
+            new Vector3(20f, 10f, 20f),
+            new Vector3(99f, -4f, 2f));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(interior.X, Is.EqualTo(0.25f).Within(0.0001f));
+            Assert.That(interior.Y, Is.EqualTo(2.75f).Within(0.0001f));
+            Assert.That(interior.Z, Is.EqualTo(20.5f).Within(0.0001f));
+            Assert.That(edge.X, Is.EqualTo(80f).Within(0.0001f));
+            Assert.That(edge.Y, Is.EqualTo(0f).Within(0.0001f));
+            Assert.That(edge.Z, Is.EqualTo(0f).Within(0.0001f));
         });
     }
 

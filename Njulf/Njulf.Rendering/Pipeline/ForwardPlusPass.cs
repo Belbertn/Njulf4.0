@@ -1746,7 +1746,7 @@ namespace Njulf.Rendering.Pipeline
                 _simpleDdgiReceiverCacheOutputSets[frameIndex].Handle == 0)
                 return false;
 
-            // First evaluate one exact structured gather per 8x8 receiver
+            // First evaluate one exact structured gather per receiver lattice
             // block. This compact lattice carries representative depth only
             // until the following compute resolve.
             _context.Api.CmdBindPipeline(
@@ -1828,9 +1828,10 @@ namespace Njulf.Rendering.Pipeline
             _context.Api.CmdPipelineBarrier2(cmd, &gatherDependency);
 
             // Prefilter the exact-gather lattice to a frame-local half-size
-            // packed FP16 buffer. Invalid lattice cells are repaired only from nearby
-            // occupied cells before centered bilinear reconstruction, so
-            // empty depth tiles cannot darken receiver silhouettes.
+            // packed FP16 buffer. Invalid lattice cells are repaired only from
+            // nearby occupied cells, then current receiver depth rejects
+            // incompatible bilinear corners. Empty tiles and unrelated surfaces
+            // therefore cannot darken or illuminate receiver silhouettes.
             _context.Api.CmdBindPipeline(
                 cmd,
                 PipelineBindPoint.Compute,
@@ -1858,7 +1859,8 @@ namespace Njulf.Rendering.Pipeline
                          frameIndex)),
                     PackedScaleAndEdgeExtents =
                         PackSimpleDdgiReceiverCacheResolveDimensions(
-                            renderExtent)
+                            renderExtent),
+                    DepthTextureIndex = BindlessIndex.DepthTexture
                 };
             _context.Api.CmdPushConstants(
                 cmd,

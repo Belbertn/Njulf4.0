@@ -318,6 +318,20 @@ namespace Njulf.Rendering.Data
         public float OriginX { get; init; }
         public float OriginY { get; init; }
         public float OriginZ { get; init; }
+        public float PhysicalCenterX { get; init; }
+        public float PhysicalCenterY { get; init; }
+        public float PhysicalCenterZ { get; init; }
+        public float BlendCenterX { get; init; }
+        public float BlendCenterY { get; init; }
+        public float BlendCenterZ { get; init; }
+        public float CameraOffsetX { get; init; }
+        public float CameraOffsetY { get; init; }
+        public float CameraOffsetZ { get; init; }
+        public float ViewForwardOffset { get; init; }
+        public int ScrollCellDeltaX { get; init; }
+        public int ScrollCellDeltaY { get; init; }
+        public int ScrollCellDeltaZ { get; init; }
+        public int ScrollExposedProbeCount { get; init; }
         public float SizeX { get; init; }
         public float SizeY { get; init; }
         public float SizeZ { get; init; }
@@ -1274,10 +1288,17 @@ namespace Njulf.Rendering.Data
         public int SimpleDdgiTransportSolverInvalidationCount { get; init; }
         public float SimpleDdgiTransportSolverInvalidationsPerSourceRefresh { get; init; }
         public uint SimpleDdgiVolumeResourceGeneration { get; init; }
+        public uint SimpleDdgiTransportTopologyGeneration { get; init; }
+        public SimpleDdgiVolumeRemapKind SimpleDdgiVolumeRemapKind { get; init; }
+        public ulong SimpleDdgiCompatibleToroidalScrollCount { get; init; }
+        public ulong SimpleDdgiIncompatibleTopologyChangeCount { get; init; }
+        public ulong SimpleDdgiGlobalConvergenceRestartCount { get; init; }
+        public ulong SimpleDdgiWholeReadbackDropCount { get; init; }
         public uint SimpleDdgiSourceLightingGeneration { get; init; }
         public uint SimpleDdgiAdmittedSourceCohortGeneration { get; init; }
         public uint SimpleDdgiTransportGeneration { get; init; }
         public uint SimpleDdgiPublishedPropagationGeneration { get; init; }
+        public uint SimpleDdgiLivePropagationSourceGeneration { get; init; }
         public int SimpleDdgiVisiblePriorityParticipatingProbeCount { get; init; }
         public int SimpleDdgiVisiblePrioritySourceReadyProbeCount { get; init; }
         public int SimpleDdgiVisiblePriorityPublishedProbeCount { get; init; }
@@ -1963,6 +1984,8 @@ namespace Njulf.Rendering.Data
         public ulong ReflectionProbeRetirementMemoryBudgetRejections { get; init; }
         public ulong ReflectionProbeRetirementInvalidRecordCount { get; init; }
         public ulong ReflectionProbeRetiredCount { get; init; }
+        public ulong ReflectionProbeCapturesCompletedTotal { get; init; }
+        public int ReflectionProbePublishedCount { get; init; }
         public int ReflectionProbeCaptureBudgetUsed { get; init; }
         public int ReflectionProbeCaptureBudgetExceeded { get; init; }
         public ulong StagingBufferAllocatedBytes { get; init; }

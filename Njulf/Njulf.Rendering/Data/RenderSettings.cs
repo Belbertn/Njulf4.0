@@ -2102,6 +2102,7 @@ namespace Njulf.Rendering.Data
         private int _simpleDdgiRingCount = 3;
         private float _simpleDdgiRingBaseSpacing = 1.25f;
         private float _simpleDdgiRingSpacingMultiplier = 3.0f;
+        private float _simpleDdgiViewForwardPlacementFraction = 0.6f;
         private SimpleDdgiVerticalRingPolicy _simpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
         private float _simpleDdgiReceiverVerticalAnchor = 4.5f;
         private float _simpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
@@ -2883,6 +2884,18 @@ namespace Njulf.Rendering.Data
         {
             get => _simpleDdgiRingSpacingMultiplier;
             set => _simpleDdgiRingSpacingMultiplier = Clamp(value, 1.25f, 8.0f);
+        }
+
+        /// <summary>
+        /// Flax-style camera-forward placement bias for camera-relative DDGI
+        /// rings. Zero keeps the camera at the lattice centre; the default 0.6
+        /// retains roughly one fifth of a cardinal ring behind the camera and
+        /// spends the remaining coverage in front of it.
+        /// </summary>
+        public float SimpleDdgiViewForwardPlacementFraction
+        {
+            get => _simpleDdgiViewForwardPlacementFraction;
+            set => _simpleDdgiViewForwardPlacementFraction = Clamp(value, 0.0f, 1.0f);
         }
 
         /// <summary>
@@ -3998,6 +4011,7 @@ namespace Njulf.Rendering.Data
             SimpleDdgiSourceCacheLayoutMode =
                 SimpleDdgiSourceCacheLayoutMode.Auto;
             SimpleDdgiTransportMaximumSolverGenerations = 8;
+            SimpleDdgiViewForwardPlacementFraction = 0.6f;
             SimpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
             SimpleDdgiVerticalRecenterHysteresisFraction = 0.25f;
             SimpleDdgiReducedBlendEnabled = tier is DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
@@ -5876,6 +5890,7 @@ namespace Njulf.Rendering.Data
             public int SimpleDdgiRingCount { get; init; } = 3;
             public float SimpleDdgiRingBaseSpacing { get; init; } = 1.25f;
             public float SimpleDdgiRingSpacingMultiplier { get; init; } = 3.0f;
+            public float SimpleDdgiViewForwardPlacementFraction { get; init; } = 0.6f;
             public SimpleDdgiVerticalRingPolicy SimpleDdgiVerticalRingPolicy { get; init; } = SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
             public float SimpleDdgiReceiverVerticalAnchor { get; init; } = 4.5f;
             public float SimpleDdgiVerticalRecenterHysteresisFraction { get; init; } = 0.25f;
@@ -6129,6 +6144,7 @@ namespace Njulf.Rendering.Data
                     SimpleDdgiRingCount = settings.SimpleDdgiRingCount,
                     SimpleDdgiRingBaseSpacing = settings.SimpleDdgiRingBaseSpacing,
                     SimpleDdgiRingSpacingMultiplier = settings.SimpleDdgiRingSpacingMultiplier,
+                    SimpleDdgiViewForwardPlacementFraction = settings.SimpleDdgiViewForwardPlacementFraction,
                     SimpleDdgiVerticalRingPolicy = settings.SimpleDdgiVerticalRingPolicy,
                     SimpleDdgiReceiverVerticalAnchor = settings.SimpleDdgiReceiverVerticalAnchor,
                     SimpleDdgiVerticalRecenterHysteresisFraction = settings.SimpleDdgiVerticalRecenterHysteresisFraction,
@@ -6554,6 +6570,7 @@ namespace Njulf.Rendering.Data
                 settings.SimpleDdgiRingCount = SimpleDdgiRingCount;
                 settings.SimpleDdgiRingBaseSpacing = SimpleDdgiRingBaseSpacing;
                 settings.SimpleDdgiRingSpacingMultiplier = SimpleDdgiRingSpacingMultiplier;
+                settings.SimpleDdgiViewForwardPlacementFraction = SimpleDdgiViewForwardPlacementFraction;
                 settings.SimpleDdgiVerticalRingPolicy = SimpleDdgiVerticalRingPolicy;
                 settings.SimpleDdgiReceiverVerticalAnchor = SimpleDdgiReceiverVerticalAnchor;
                 settings.SimpleDdgiVerticalRecenterHysteresisFraction = SimpleDdgiVerticalRecenterHysteresisFraction;

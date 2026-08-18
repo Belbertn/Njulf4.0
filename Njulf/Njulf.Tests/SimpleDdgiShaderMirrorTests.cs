@@ -752,6 +752,14 @@ namespace Njulf.Tests
                 Assert.That(resolve, Does.Contain(
                     "candidateDepthCode > bestDepthCode"));
                 Assert.That(resolve, Does.Contain(
+                    "SelectResolvedReceiverDepthCode("));
+                Assert.That(resolve, Does.Contain(
+                    "ReceiverCacheDepthCompatibility("));
+                Assert.That(resolve, Does.Contain(
+                    "BindlessTextures[nonuniformEXT(pc.DepthTextureIndex)]"));
+                Assert.That(resolve, Does.Contain(
+                    "result.DepthCode = receiverDepthCode"));
+                Assert.That(resolve, Does.Contain(
                     "ReceiverCacheOutput.Entries[entryIndex] = uvec4("));
                 Assert.That(resolve, Does.Contain(
                     "resolved.DdgiIrradiance *= RECEIVER_CACHE_INV_PI"));
@@ -1540,6 +1548,37 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void TraceProducer_RepairsMalformedRayBeforePublishingCacheAndScratch()
+        {
+            string trace = ReadRepoText("Njulf.Shaders", "ddgi_simple_trace.comp");
+            int repairStart = trace.IndexOf(
+                "bool repairedTracePayload = false;",
+                StringComparison.Ordinal);
+            int sourceCacheWrite = trace.IndexOf(
+                "WriteSimpleDdgiTransportRayCache(",
+                repairStart,
+                StringComparison.Ordinal);
+            int scratchWrite = trace.LastIndexOf(
+                "WriteSimpleRayResult(",
+                StringComparison.Ordinal);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(repairStart, Is.GreaterThanOrEqualTo(0));
+                Assert.That(sourceCacheWrite, Is.GreaterThan(repairStart));
+                Assert.That(scratchWrite, Is.GreaterThan(sourceCacheWrite));
+                Assert.That(trace, Does.Contain(
+                    "hitKind = SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE;"));
+                Assert.That(trace, Does.Contain(
+                    "direction = SimpleDdgiReconstructRayDirection("));
+                Assert.That(trace, Does.Contain(
+                    "visibilityDistance = hitDistance;"));
+                Assert.That(trace, Does.Contain(
+                    "DDGI_RAY_METADATA_INVALID_COUNTER"));
+            });
+        }
+
+        [Test]
         public void SourceCacheRadianceDiagnostic_IsNotCompiledIntoReceiverFragmentShader()
         {
             string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
@@ -1808,6 +1847,8 @@ namespace Njulf.Tests
                     "bool TryEvaluateSimpleDdgiExactCachedHitRelight("));
                 Assert.That(trace, Does.Contain(
                     "cacheRead = TryEvaluateSimpleDdgiExactCachedHitRelight("));
+                Assert.That(trace, Does.Contain(
+                    "(environmentMissRelight || cachedHitRelight)"));
                 Assert.That(trace, Does.Not.Contain(
                     "cachedSource.sourceRadiance *= params.sourceRelightScale"));
                 Assert.That(transport, Does.Not.Contain("SampleSimpleDdgiUnifiedIrradiance("));
@@ -2372,6 +2413,9 @@ namespace Njulf.Tests
             string transportShared = ReadRepoText(
                 "Njulf.Shaders",
                 "ddgi_simple_shared.glsl");
+            string guidingTransport = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_guiding_transport.glsl");
             string participant = ReadRepoText(
                 "Njulf.Shaders",
                 "ddgi_simple_transport_participant.glsl");
@@ -2547,9 +2591,22 @@ namespace Njulf.Tests
                 Assert.That(shared, Does.Contain("uint committedSourceEpoch = SchedulerArenaRead(stateBase + 3u);"));
                 Assert.That(shared, Does.Contain("SchedulerUpdatePreservesSourceEpoch(updateFlags)"));
                 Assert.That(shared, Does.Contain(": SchedulerAdvanceSourceEpoch(committedSourceEpoch)"));
+                Assert.That(guidingTransport, Does.Contain(
+                    "A light/source boundary intentionally retires the old proposal family"));
+                Assert.That(guidingTransport, Does.Contain(
+                    "recordPresent = payloadIdentity.z == expectedSourceEpoch &&"));
+                Assert.That(guidingTransport, Does.Contain(
+                    "payload.sourceLightingGeneration == expectedSourceLightingGeneration;"));
+                Assert.That(trace, Does.Contain(
+                    "A payload from an older source identity is absent by"));
                 Assert.That(classify, Does.Contain("bool stableTailParticipant ="));
                 Assert.That(classify, Does.Contain("solveEpoch != 0u &&"));
-                Assert.That(classify, Does.Contain("!stableTailParticipant"));
+                Assert.That(classify, Does.Contain(
+                    "stableTailParticipant &&\n        lastSolveEpoch == solveEpoch"));
+                Assert.That(classify, Does.Not.Contain(
+                    "solveEpoch != 0u &&\n        !stableTailParticipant"));
+                Assert.That(classify, Does.Contain(
+                    "repair only its newly exposed slab in place"));
                 Assert.That(classify, Does.Contain("solveEpoch == 0u"));
                 Assert.That(classify, Does.Contain("!SchedulerGlobalConvergence()"));
                 Assert.That(classify, Does.Contain("solveEpoch == 0u &&"));

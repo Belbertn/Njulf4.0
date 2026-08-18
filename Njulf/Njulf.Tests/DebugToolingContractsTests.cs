@@ -689,7 +689,15 @@ namespace Njulf.Tests
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiSourceCacheRadiance => 125u"));
                 Assert.That(renderer, Does.Contain("ScheduleReflectionProbeRecapturesFromGi(sceneData, simpleDdgiActive: true);"));
                 Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"ddgi-ready\")"));
-                Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"simple-ddgi-dirty\")"));
+                Assert.That(
+                    renderer,
+                    Does.Contain(
+                        "this ready edge is the only DDGI-driven recapture admission"));
+                Assert.That(
+                    renderer,
+                    Does.Not.Contain(
+                        "_reflectionProbeManager.RequestRecaptureAll(\"simple-ddgi-dirty\")"),
+                    "a dirty edge can expose a partially propagated cubemap source");
             });
         }
 

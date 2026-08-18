@@ -454,7 +454,7 @@ uint ResolveSimpleDdgiAuditProbe(
         pc.AuditSourceLightingGeneration,
         context.sourceEpoch,
         volumeGeneration,
-        pc.AuditVolumeTableGeneration,
+        pc.AuditPhysicalOwnershipGeneration,
         schedulerMetadata,
         context.cacheProbeBaseWordPlusOne);
     participantEligible = eligible;
@@ -470,7 +470,7 @@ uint ResolveSimpleDdgiAuditProbe(
             return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_NOT_VISIBLE;
         if (sourceLightingGeneration != pc.AuditSourceLightingGeneration ||
             context.sourceEpoch == 0u ||
-            volumeGeneration != pc.AuditVolumeTableGeneration)
+            volumeGeneration != pc.AuditPhysicalOwnershipGeneration)
         {
             return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_STALE_SOURCE;
         }
@@ -600,7 +600,7 @@ uint ResolveSimpleDdgiAuditRayProbe(
         pc.AuditSourceLightingGeneration,
         context.sourceEpoch,
         volumeGeneration,
-        pc.AuditVolumeTableGeneration,
+        pc.AuditPhysicalOwnershipGeneration,
         schedulerMetadata,
         context.cacheProbeBaseWordPlusOne);
     if (!eligible)
@@ -609,7 +609,7 @@ uint ResolveSimpleDdgiAuditRayProbe(
             return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_NOT_VISIBLE;
         if (sourceLightingGeneration != pc.AuditSourceLightingGeneration ||
             context.sourceEpoch == 0u ||
-            volumeGeneration != pc.AuditVolumeTableGeneration)
+            volumeGeneration != pc.AuditPhysicalOwnershipGeneration)
         {
             return SIMPLE_DDGI_AUDIT_STATUS_EXCLUDED_STALE_SOURCE;
         }

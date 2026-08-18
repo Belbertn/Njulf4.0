@@ -861,6 +861,7 @@ namespace Njulf.Rendering.Resources
             while (_captureScheduler.TryRetireCompleted(
                        completedValue,
                        _cubemapArrayResourceGeneration,
+                       _captureVersion,
                        out ReflectionProbeCaptureTicket ticket,
                        out bool didPublish))
             {

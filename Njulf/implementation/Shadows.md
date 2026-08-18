@@ -38,7 +38,3 @@ The strongest practical configuration would likely be:
 - Ray-query contact shadows near the camera or for selected high-quality receivers.
 - DDGI for indirect diffuse.
 - Optional full ray-query sun shadows on an Ultra tier.
-
-I would not move to virtual shadow maps or ReSTIR DI for this problem. Virtual shadow maps are a much larger system and still suffer cache churn under a moving sun. ReSTIR DI is valuable for many-light selection, not one directional sun.
-
-Most importantly, replacing CSM will only fix direct-shadow movement. The DDGI generation/cohort transition still needs its separate history-preserving solution.

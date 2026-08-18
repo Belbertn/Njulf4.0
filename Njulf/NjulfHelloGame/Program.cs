@@ -217,6 +217,9 @@ internal sealed class HelloGame : Game
         _ddgiResidencySwitchSmokeRunner;
     private SampleTextureHotReloadSmokeRunner? _textureHotReloadSmokeRunner;
     private SampleBenchmarkRunner? _benchmarkRunner;
+    private SampleBistroQualityRuntimeController?
+        _bistroQualityRuntimeController;
+    private SampleBistroQualityCaptureRunner? _bistroQualityCaptureRunner;
     private SampleMaterialGiCaptureRunner? _materialGiCaptureRunner;
     private SampleKhronosMaterialGiRenderedSceneBuild? _khronosMaterialGiRenderedScene;
     private SampleKhronosMaterialGiRenderedGateRunner? _khronosMaterialGiRenderedGateRunner;
@@ -226,6 +229,7 @@ internal sealed class HelloGame : Game
     private int _drawnFrames;
     private bool _sponzaAtmosphereFrozen;
     private bool _benchmarkDynamicScenarioFrozen;
+    private bool _bistroDdgiReflectionPromotionPending;
     private int _baselineScenarioRenderedFrames;
     private bool _baselineSnapshotExported;
     private float _modelRotation;
@@ -262,7 +266,9 @@ internal sealed class HelloGame : Game
         WindowTitle = "Njulf Hello Game - Mesh Shader glTF Sample";
         bool controlledProductionRun =
             _smokeOptions.Benchmark.Enabled ||
-            _smokeOptions.TailDdgiLongSoak;
+            _smokeOptions.TailDdgiLongSoak ||
+            !string.IsNullOrWhiteSpace(
+                _smokeOptions.BistroQualityCaptureDirectory);
         WindowWidth = controlledProductionRun ? 1920 : 1600;
         WindowHeight = controlledProductionRun ? 1080 : 900;
         WindowBorderStyle = controlledProductionRun
@@ -271,7 +277,9 @@ internal sealed class HelloGame : Game
         VSync = _smokeOptions.KhronosMaterialGiRenderedGate is null &&
                 !(_smokeOptions.TailDdgiLongSoak ||
                   (_smokeOptions.Benchmark.Enabled &&
-                   _smokeOptions.Benchmark.DisableVSync));
+                   _smokeOptions.Benchmark.DisableVSync) ||
+                  !string.IsNullOrWhiteSpace(
+                      _smokeOptions.BistroQualityCaptureDirectory));
     }
 
     internal string? RequestedAdvancedGiStartupProfilePath =>
@@ -395,6 +403,37 @@ internal sealed class HelloGame : Game
             , () => _editorController?.SuppressGameInput == true
 #endif
             );
+
+        if (_sceneKind == SampleSceneKind.Bistro &&
+            (startupScenario ==
+                 SamplePerformanceScenario.BistroQualityMotionRelight ||
+             !string.IsNullOrWhiteSpace(
+                 _smokeOptions.BistroQualityCaptureDirectory)))
+        {
+            var contract = new SampleBistroQualityCaptureContract(
+                _smokeOptions.BistroQualityCaptureVariant);
+            _bistroQualityRuntimeController =
+                new SampleBistroQualityRuntimeController(
+                    renderer,
+                    camera,
+                    lightManager,
+                    contract);
+            if (!string.IsNullOrWhiteSpace(
+                    _smokeOptions.BistroQualityCaptureDirectory))
+            {
+                _bistroQualityCaptureRunner =
+                    new SampleBistroQualityCaptureRunner(
+                        renderer,
+                        _bistroQualityRuntimeController,
+                        _smokeOptions.BistroQualityCaptureDirectory,
+                        Exit);
+                Console.WriteLine(
+                    $"Bistro quality capture armed: " +
+                    $"variant={contract.Variant}, " +
+                    $"frames={SampleBistroQualityCaptureContract.TotalCaptureFrameCount}, " +
+                    $"contract={contract.Fingerprint}.");
+            }
+        }
 #if NJULF_EDITOR
         _editorHost = new ImGuiEditorOverlayHost();
         _editorInput = new EditorInputBridge(input, _editorHost);
@@ -799,6 +838,15 @@ internal sealed class HelloGame : Game
             settings.ApplyQualityPreset(
                 _smokeOptions.QualityPresetOverride.Value);
         }
+        if (_smokeOptions.SceneKind == SampleSceneKind.Bistro)
+        {
+            // C5 admission allocates immutable startup resources and cannot be
+            // undone by the ordinary post-device scene profile. Establish the
+            // measured Bistro policy before renderer construction. Explicit
+            // smoke/CLI overrides below retain final authority.
+            SampleBistroGlobalIlluminationProfile
+                .ConfigurePostAdvancedGiRollout(settings);
+        }
         if (_smokeOptions.SimpleDdgiSchedulerModeOverride.HasValue)
         {
             settings.GlobalIllumination.SimpleDdgiSchedulerMode =
@@ -868,7 +916,8 @@ internal sealed class HelloGame : Game
         UpdateEditor(simulationDeltaTime);
 #endif
         if (_materialGiCaptureRunner == null &&
-            _khronosMaterialGiRenderedGateRunner == null)
+            _khronosMaterialGiRenderedGateRunner == null &&
+            _bistroQualityCaptureRunner == null)
             _inputController?.Update(
                 simulationDeltaTime,
                 WindowWidth,
@@ -888,6 +937,10 @@ internal sealed class HelloGame : Game
         ApplySponzaScenarioFrameControls();
         ApplyBenchmarkDynamicScenarioFrameControls();
         ApplyBenchmarkCameraScenarioFrameControls();
+        if (_bistroQualityCaptureRunner != null)
+            _bistroQualityCaptureRunner.PrepareFrame(_drawnFrames);
+        else
+            _bistroQualityRuntimeController?.PrepareFrame(_drawnFrames);
 
         base.Update(simulationDeltaTime);
     }
@@ -1019,6 +1072,9 @@ internal sealed class HelloGame : Game
         CaptureBaselineSnapshotIfRequested();
         if (Renderer is VulkanRenderer benchmarkRenderer)
         {
+            TryPromoteBistroReflectionsToDdgi(
+                benchmarkRenderer,
+                benchmarkRenderer.LastDiagnostics);
             if (_smokeOptions.Mode == SampleSmokeMode.LongRun)
             {
                 _longRunMonitor?.Sample(
@@ -1034,6 +1090,9 @@ internal sealed class HelloGame : Game
                 _drawnFrames,
                 benchmarkRenderer.LastDiagnostics);
             _textureHotReloadSmokeRunner?.OnFrameRendered(_drawnFrames);
+            _bistroQualityCaptureRunner?.OnFrameRendered(
+                _drawnFrames,
+                benchmarkRenderer.LastDiagnostics);
             _benchmarkRunner?.OnFrameRendered(
                 _drawnFrames,
                 benchmarkRenderer.LastDiagnostics,
@@ -1047,6 +1106,71 @@ internal sealed class HelloGame : Game
         _smokeRunner?.OnFrameRendered(_drawnFrames);
         _drawnFrames++;
     }
+
+    private void TryPromoteBistroReflectionsToDdgi(
+        VulkanRenderer renderer,
+        RendererDiagnostics diagnostics)
+    {
+        if (!_bistroDdgiReflectionPromotionPending ||
+            _sceneKind != SampleSceneKind.Bistro ||
+            _smokeOptions.BistroQualityCaptureVariant ==
+                SampleBistroQualityCaptureVariant.ReflectionSourceAb)
+        {
+            return;
+        }
+
+        // Retain a useful direct-lit capture until all of the renderer-owned
+        // generation gates agree. Promotion is monotonic and versioned, so the
+        // probe manager coalesces this into one later DDGI-fed recapture.
+        if (diagnostics.ReflectionProbeCount <= 0 ||
+            diagnostics.ReflectionProbePublishedCount <
+                diagnostics.ReflectionProbeCount)
+        {
+            return;
+        }
+
+        uint sourceGeneration =
+            diagnostics.SimpleDdgiSourceLightingGeneration;
+        bool currentDdgi = IsBistroDdgiReflectionPromotionReady(
+            sourceGeneration,
+            diagnostics.SimpleDdgiLivePropagationSourceGeneration,
+            diagnostics.SimpleDdgiTransportGeneration,
+            diagnostics.SimpleDdgiPublishedPropagationGeneration,
+            diagnostics.SimpleDdgiTransportSourceStaleProbeCount,
+            diagnostics.SimpleDdgiTransportPendingSolverProbeCount);
+        if (!currentDdgi)
+            return;
+
+        renderer.Settings.Reflections.CaptureIncludesDdgi = true;
+        _bistroDdgiReflectionPromotionPending = false;
+        Console.WriteLine(
+            $"Bistro reflection probes promoted to DDGI-fed recapture: " +
+            $"sourceGeneration={sourceGeneration}, " +
+            $"propagationGeneration=" +
+            $"{diagnostics.SimpleDdgiPublishedPropagationGeneration}.");
+    }
+
+    /// <summary>
+    /// A reflection capture needs one complete, current live propagation
+    /// boundary; it does not need the optional frozen whole-field tail audit.
+    /// Resident feedback publishes these generations only when the source
+    /// cohort is current and the solver-pending set is empty. This is the same
+    /// live-GI boundary used by renderer-owned reflection recapture scheduling
+    /// and remains usable while camera scrolling defers an exact audit.
+    /// </summary>
+    internal static bool IsBistroDdgiReflectionPromotionReady(
+        uint sourceGeneration,
+        uint livePropagationSourceGeneration,
+        uint propagationGeneration,
+        uint publishedPropagationGeneration,
+        int staleSourceProbeCount,
+        int pendingSolverProbeCount) =>
+        sourceGeneration != 0u &&
+        livePropagationSourceGeneration == sourceGeneration &&
+        propagationGeneration != 0u &&
+        publishedPropagationGeneration == propagationGeneration &&
+        staleSourceProbeCount == 0 &&
+        pendingSolverProbeCount == 0;
 
     private bool CaptureDiagnosticScreenshot(string path)
     {
@@ -1074,6 +1198,7 @@ internal sealed class HelloGame : Game
 
     protected override void Unload()
     {
+        _bistroQualityRuntimeController?.Restore();
         _materialGiCaptureRunner?.CancelIfIncomplete(
             _startupFailure ?? "The application closed before the material/GI capture completed.");
         _khronosMaterialGiRenderedGateRunner?.CancelIfIncomplete(
@@ -1407,6 +1532,11 @@ internal sealed class HelloGame : Game
             assetManifest,
             loadSceneDocument: _sceneKind == SampleSceneKind.SponzaPlaza);
         Model model = _sceneLoader.Load(Scene);
+        if (_sceneKind == SampleSceneKind.Bistro)
+        {
+            SampleBistroReflectionProbes.Configure(Scene);
+            _bistroDdgiReflectionPromotionPending = true;
+        }
         if (_sceneKind == SampleSceneKind.SponzaPlaza &&
             !_sceneLoader.LoadedFromDocument)
         {
@@ -1457,6 +1587,27 @@ internal sealed class HelloGame : Game
         else if (_sceneKind == SampleSceneKind.Bistro)
         {
             SampleBistroGlobalIlluminationProfile.Configure(settings);
+            // Reuse the exact DDGI diagnostic override in Bistro quality runs.
+            // Debug permutations intentionally bypass the opaque receiver
+            // cache, which lets a deterministic capture distinguish the
+            // canonical per-fragment gather from cache reconstruction defects.
+            if (Enum.TryParse(
+                    Environment.GetEnvironmentVariable(
+                        "NJULF_EXACT_DDGI_DEBUG_VIEW"),
+                    ignoreCase: true,
+                    out GlobalIlluminationDebugView exactDebugView))
+            {
+                settings.GlobalIllumination.DebugView = exactDebugView;
+            }
+            if (bool.TryParse(
+                    Environment.GetEnvironmentVariable(
+                        "NJULF_BISTRO_FORCE_EXACT_DDGI_GATHER"),
+                    out bool forceExactDdgiGather) &&
+                forceExactDdgiGather)
+            {
+                settings.Diagnostics.ForceExactForwardGiGatherForBenchmark =
+                    true;
+            }
             settings.Particles.Enabled = false;
         }
         else if (_sceneKind == SampleSceneKind.SponzaPlaza)
@@ -1473,6 +1624,15 @@ internal sealed class HelloGame : Game
         }
 
         _materialGiRolloutBootstrap.Apply(settings, Console.Out);
+        if (_sceneKind == SampleSceneKind.Bistro)
+        {
+            // The global rollout may admit C5 after the scene profile. Bistro's
+            // measured post-rollout policy removes that visually neutral cost;
+            // ApplySmokeRenderSettings runs after this method so an explicit
+            // command-line experiment can still opt it back in.
+            SampleBistroGlobalIlluminationProfile
+                .ConfigurePostAdvancedGiRollout(settings);
+        }
     }
 
     private void RestoreSceneRenderSettings(VulkanRenderer renderer)

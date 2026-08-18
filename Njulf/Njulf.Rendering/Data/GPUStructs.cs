@@ -1793,9 +1793,9 @@ namespace Njulf.Rendering.Data
         public uint FeedbackMaximumOwnersPerTile;
     }
 
-    // 24-byte ABI for publishing the reduced gather lattice to a frame-local
-    // aligned FP16 cache buffer. Keeping this separate from the gather constants
-    // prevents resolve invocations from carrying matrices or DDGI state.
+    // 28-byte ABI for publishing the reduced gather lattice to a frame-local
+    // aligned FP16 cache buffer. The resolve reads current depth once per cache
+    // entry so its reconstruction cannot blend unrelated receiver surfaces.
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUSimpleDdgiReceiverCacheResolvePushConstants
     {
@@ -1805,6 +1805,7 @@ namespace Njulf.Rendering.Data
         public uint CacheHeight;
         public uint GatherBufferIndex;
         public uint PackedScaleAndEdgeExtents;
+        public uint DepthTextureIndex;
     }
 
     // 80-byte common ABI for reset/classify/prefix/reconcile/initialize/
@@ -2298,7 +2299,9 @@ namespace Njulf.Rendering.Data
         public uint ExactFeedbackSourceFrameSerialLow;
         public uint ExactFeedbackSourceFrameSerialHigh;
         public uint ExactFeedbackFlags;
-        public uint ExactFeedbackReserved0;
+        // Transport topology/ownership epoch. Unlike VolumeTableGeneration,
+        // this remains stable across compatible toroidal address scrolls.
+        public uint TransportTopologyGeneration;
     }
 
     // 176 bytes.  Volume policy is uploaded only when topology, quality, or
@@ -2384,7 +2387,7 @@ namespace Njulf.Rendering.Data
         public uint LastCommittedSourceRefreshFrame;
         public uint CommittedSourceLightingGeneration;
         public uint SourceEpoch;
-        public uint OwningVolumeTableGeneration;
+        public uint OwningTransportTopologyGeneration;
         public uint DirtyReasonFlags;
         public uint DirtyStartFrame;
         public uint PackedTransportAndLifecycle;

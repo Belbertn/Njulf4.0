@@ -33,6 +33,8 @@
             CopyToOutputDirectory="PreserveNewest"
             CopyToPublishDirectory="PreserveNewest" />
       <None Update="Assets\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="Assets\Bistro_v5_2\san_giuseppe_bridge_4k.hdr"
+            CopyToOutputDirectory="PreserveNewest" />
       <None Update="textures\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
       <None Update="textures\IvyLeaf_*.png" CopyToOutputDirectory="Never" />
       <None Update="Cooked\**\*.*" CopyToOutputDirectory="IfDifferent" />

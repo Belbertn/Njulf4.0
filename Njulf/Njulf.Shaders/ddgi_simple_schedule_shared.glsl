@@ -302,6 +302,7 @@ const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_ELIGIBLE_RING_OFFSET = 983u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_RESIDUAL_PROPAGATION_OFFSET = 986u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_URGENT_RELIGHT_OFFSET = 990u;
 const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_RECEIVER_CONTRIBUTION_OFFSET = 994u;
+const uint SIMPLE_DDGI_SCHEDULER_FEEDBACK_TRANSPORT_TOPOLOGY_OFFSET = 998u;
 
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_RESET = 0u;
 const uint SIMPLE_DDGI_SCHEDULER_DISPATCH_CLASSIFY = 1u;
@@ -465,6 +466,7 @@ uint SchedulerResourceGeneration() { return SchedulerFrame(15u); }
 uint SchedulerQueueGeneration() { return SchedulerFrame(16u); }
 uint SchedulerSourceGeneration() { return SchedulerFrame(17u); }
 uint SchedulerTransportGeneration() { return SchedulerFrame(18u); }
+uint SchedulerTransportTopologyGeneration() { return SchedulerFrame(55u); }
 uint SchedulerDirtyRegionCount() { return SchedulerFrame(24u); }
 uint SchedulerDirtyReasonFlags() { return SchedulerFrame(26u); }
 uint SchedulerSourceTargetRays() { return SchedulerFrame(8u); }

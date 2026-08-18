@@ -621,11 +621,14 @@ namespace Njulf.Rendering.Pipeline
     /// clear initializes fail-closed status words, one invocation per cached
     /// ray validates identity and evaluates the frozen operator into bounded
     /// scratch, and the final dispatch reduces those results against the
-    /// canonical field. The compact summary remains resident until the final
-    /// chunk is copied to a delayed readback slot.
+    /// canonical field. Two sequential chunks share the fixed 1 KiB workspace
+    /// per frame; this shortens the frozen audit window without changing its
+    /// ABI, total work, or steady-state cost. The compact summary remains
+    /// resident until the final chunk is copied to a delayed readback slot.
     /// </summary>
     public sealed unsafe class SimpleDdgiTransportAuditPass : RenderPassBase
     {
+        internal const int MaximumChunksPerFrame = 2;
         private const string LegacyShader = "ddgi_simple_transport_audit_legacy.comp.spv";
         private const string ValidateShader = "ddgi_simple_transport_audit_validate.comp.spv";
         private const string PackedShader = "ddgi_simple_transport_audit_packed.comp.spv";
@@ -751,70 +754,81 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
-            if (!_volumeManager.TryGetTransportTailAuditChunk(
-                    out SimpleDdgiTransportAuditChunkDispatch dispatch))
-            {
-                return;
-            }
-
             _rayPipeline = GetOrCreatePipeline(AuditPipelineRole.Rays);
             _reducePipeline = GetOrCreatePipeline(AuditPipelineRole.Reduce);
 
             SimpleDdgiGpuScheduler scheduler = _volumeManager.GpuScheduler;
             SimpleDdgiGpuSchedulerLayout layout = scheduler.Layout ??
                 throw new InvalidOperationException("Simple DDGI audit requires a resident scheduler layout.");
-            if (dispatch.ChunkIndex == 0u && dispatch.ProbeOffset == 0)
-                scheduler.ResetTransportAuditSummary(cmd);
-            if (!scheduler.ResetTransportAuditWorkspace(cmd))
+            for (int chunk = 0; chunk < MaximumChunksPerFrame; chunk++)
             {
-                _volumeManager.CancelTransportTailAudit(
-                    SimpleDdgiTransportCertificationReason.GenerationsChanged);
-                return;
-            }
+                if (!_volumeManager.TryGetTransportTailAuditChunk(
+                        out SimpleDdgiTransportAuditChunkDispatch dispatch))
+                {
+                    break;
+                }
 
-            GPUSimpleDdgiTransportAuditPushConstants pushConstants =
-                CreatePushConstants(dispatch, layout);
-            _context.Api.CmdBindPipeline(
-                cmd,
-                PipelineBindPoint.Compute,
-                _rayPipeline);
-            BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
-            _context.Api.CmdPushConstants(
-                cmd,
-                _pipelineLayout,
-                ShaderStageFlags.ComputeBit,
-                0,
-                (uint)Marshal.SizeOf<GPUSimpleDdgiTransportAuditPushConstants>(),
-                &pushConstants);
-            int dispatchRayCount = checked(
-                dispatch.ProbeCount * _volumeManager.RaysPerProbe);
-            uint rayGroupCount = SimpleDdgiGpuSchedulerLayout.GroupsFor(
-                dispatchRayCount);
-            _context.Api.CmdDispatch(cmd, rayGroupCount, 1, 1);
-            InsertStorageBarrier(cmd);
-            _context.Api.CmdBindPipeline(
-                cmd,
-                PipelineBindPoint.Compute,
-                _reducePipeline);
-            _context.Api.CmdDispatch(cmd, checked((uint)dispatch.ProbeCount), 1, 1);
-            InsertStorageBarrier(cmd);
-            sceneData.SimpleDdgiTransportAuditChunkCount = checked(
-                sceneData.SimpleDdgiTransportAuditChunkCount + 1);
+                if (dispatch.ChunkIndex == 0u && dispatch.ProbeOffset == 0)
+                    scheduler.ResetTransportAuditSummary(cmd);
+                if (!scheduler.ResetTransportAuditWorkspace(cmd))
+                {
+                    _volumeManager.CancelTransportTailAudit(
+                        SimpleDdgiTransportCertificationReason.GenerationsChanged);
+                    return;
+                }
 
-            if (!_volumeManager.MarkTransportTailAuditChunkSubmitted(dispatch))
-            {
-                _volumeManager.CancelTransportTailAudit(
-                    SimpleDdgiTransportCertificationReason.GenerationsChanged);
-                return;
-            }
-
-            if (dispatch.IsFinal)
-            {
-                scheduler.RecordTransportAuditReadback(
+                GPUSimpleDdgiTransportAuditPushConstants pushConstants =
+                    CreatePushConstants(dispatch, layout);
+                _context.Api.CmdBindPipeline(
                     cmd,
-                    frameIndex,
-                    _volumeManager.FrameSerial,
-                    dispatch.AuditEpoch);
+                    PipelineBindPoint.Compute,
+                    _rayPipeline);
+                BindBindlessStorageAndTextures(
+                    cmd,
+                    _pipelineLayout,
+                    PipelineBindPoint.Compute);
+                _context.Api.CmdPushConstants(
+                    cmd,
+                    _pipelineLayout,
+                    ShaderStageFlags.ComputeBit,
+                    0,
+                    (uint)Marshal.SizeOf<GPUSimpleDdgiTransportAuditPushConstants>(),
+                    &pushConstants);
+                int dispatchRayCount = checked(
+                    dispatch.ProbeCount * _volumeManager.RaysPerProbe);
+                uint rayGroupCount = SimpleDdgiGpuSchedulerLayout.GroupsFor(
+                    dispatchRayCount);
+                _context.Api.CmdDispatch(cmd, rayGroupCount, 1, 1);
+                InsertStorageBarrier(cmd);
+                _context.Api.CmdBindPipeline(
+                    cmd,
+                    PipelineBindPoint.Compute,
+                    _reducePipeline);
+                _context.Api.CmdDispatch(
+                    cmd,
+                    checked((uint)dispatch.ProbeCount),
+                    1,
+                    1);
+                InsertStorageBarrier(cmd);
+                sceneData.SimpleDdgiTransportAuditChunkCount = checked(
+                    sceneData.SimpleDdgiTransportAuditChunkCount + 1);
+
+                if (!_volumeManager.MarkTransportTailAuditChunkSubmitted(dispatch))
+                {
+                    _volumeManager.CancelTransportTailAudit(
+                        SimpleDdgiTransportCertificationReason.GenerationsChanged);
+                    return;
+                }
+
+                if (dispatch.IsFinal)
+                {
+                    scheduler.RecordTransportAuditReadback(
+                        cmd,
+                        frameIndex,
+                        _volumeManager.FrameSerial,
+                        dispatch.AuditEpoch);
+                    break;
+                }
             }
         }
 
@@ -870,7 +884,10 @@ namespace Njulf.Rendering.Pipeline
                 AuditExpectedTexelCount = checked((uint)dispatch.ExpectedTexelCount),
                 AuditChunkIndex = dispatch.ChunkIndex,
                 AuditSchedulerFrameOffsetWords = layout.Frame.OffsetWords,
-                AuditVolumeTableGeneration = generations.VolumeTable,
+                // The audit command must match the exact current address
+                // transaction, while source ownership is validated separately
+                // against the scroll-stable transport topology generation.
+                AuditVolumeTableGeneration = _volumeManager.VolumeTableGeneration,
                 AuditPhysicalOwnershipGeneration = generations.PhysicalOwnership,
                 AuditSourceLightingGeneration = generations.SourceLighting,
                 AuditSourceEpochGeneration = generations.SourceEpoch,

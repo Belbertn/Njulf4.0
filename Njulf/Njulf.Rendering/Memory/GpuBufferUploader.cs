@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
@@ -104,18 +105,45 @@ namespace Njulf.Rendering.Memory
 
             VkBuffer stagingVkBuffer = bufferManager.GetBuffer(stagingBuffer);
             VkBuffer destinationVkBuffer = bufferManager.GetBuffer(destination);
-            ulong sourceElementOffset = 0;
-            for (int runIndex = 0; runIndex < runs.Count; runIndex++)
+            BufferCopy[] copyRegions =
+                ArrayPool<BufferCopy>.Shared.Rent(runs.Count);
+            try
             {
-                BufferUploadRun run = runs[runIndex];
-                var copy = new BufferCopy
+                ulong sourceElementOffset = 0;
+                for (int runIndex = 0; runIndex < runs.Count; runIndex++)
                 {
-                    SrcOffset = checked(stagingOffset + sourceElementOffset * (ulong)sizeof(T)),
-                    DstOffset = checked((ulong)run.DestinationElementIndex * (ulong)sizeof(T)),
-                    Size = checked((ulong)run.ElementCount * (ulong)sizeof(T))
-                };
-                context.Api.CmdCopyBuffer(commandBuffer, stagingVkBuffer, destinationVkBuffer, 1, &copy);
-                sourceElementOffset += (ulong)run.ElementCount;
+                    BufferUploadRun run = runs[runIndex];
+                    copyRegions[runIndex] = new BufferCopy
+                    {
+                        SrcOffset = checked(
+                            stagingOffset +
+                            sourceElementOffset * (ulong)sizeof(T)),
+                        DstOffset = checked(
+                            (ulong)run.DestinationElementIndex *
+                            (ulong)sizeof(T)),
+                        Size = checked(
+                            (ulong)run.ElementCount * (ulong)sizeof(T))
+                    };
+                    sourceElementOffset += (ulong)run.ElementCount;
+                }
+
+                // Vulkan accepts a disjoint region array in one copy command.
+                // Recording one command per sparse run made a correct exposed-
+                // slab invalidation needlessly expensive and encouraged callers
+                // to replace it with an unsafe whole-buffer clear.
+                fixed (BufferCopy* copyRegionPointer = copyRegions)
+                {
+                    context.Api.CmdCopyBuffer(
+                        commandBuffer,
+                        stagingVkBuffer,
+                        destinationVkBuffer,
+                        checked((uint)runs.Count),
+                        copyRegionPointer);
+                }
+            }
+            finally
+            {
+                ArrayPool<BufferCopy>.Shared.Return(copyRegions);
             }
 
             if (barrierDescription.HasValue)

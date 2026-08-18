@@ -19,6 +19,7 @@ layout(push_constant) uniform SimpleDdgiReceiverCacheResolvePushBlock
     uint CacheHeight;
     uint GatherBufferIndex;
     uint PackedScaleAndEdgeExtents;
+    uint DepthTextureIndex;
 } pc;
 
 const float RECEIVER_CACHE_INV_PI = 0.31830988618;
@@ -30,6 +31,7 @@ struct ReceiverCacheGatherSample
     float IndirectSpecularVisibility;
     float RoughSpecularMinimumRoughness;
     float RoughSpecularFullWeightRoughness;
+    uint DepthCode;
 };
 
 ReceiverCacheGatherSample EmptyReceiverCacheGatherSample()
@@ -41,36 +43,20 @@ ReceiverCacheGatherSample EmptyReceiverCacheGatherSample()
     result.IndirectSpecularVisibility = 1.0;
     result.RoughSpecularMinimumRoughness = 0.55;
     result.RoughSpecularFullWeightRoughness = 0.70;
+    result.DepthCode = 0u;
     return result;
 }
 
-ReceiverCacheGatherSample MixReceiverCacheGatherSamples(
-    ReceiverCacheGatherSample a,
-    ReceiverCacheGatherSample b,
-    float weight)
+uint EncodeReceiverCacheDepth(float depth)
 {
-    ReceiverCacheGatherSample result;
-    result.DdgiIrradiance = mix(
-        a.DdgiIrradiance,
-        b.DdgiIrradiance,
-        weight);
-    result.EnvironmentIrradiance = mix(
-        a.EnvironmentIrradiance,
-        b.EnvironmentIrradiance,
-        weight);
-    result.IndirectSpecularVisibility = mix(
-        a.IndirectSpecularVisibility,
-        b.IndirectSpecularVisibility,
-        weight);
-    result.RoughSpecularMinimumRoughness = mix(
-        a.RoughSpecularMinimumRoughness,
-        b.RoughSpecularMinimumRoughness,
-        weight);
-    result.RoughSpecularFullWeightRoughness = mix(
-        a.RoughSpecularFullWeightRoughness,
-        b.RoughSpecularFullWeightRoughness,
-        weight);
-    return result;
+    // This mirrors the gather encoder exactly. Code zero remains the invalid
+    // sentinel, while a code delta measures relative rather than absolute
+    // receiver separation across the complete reverse-Z range.
+    float normalized = clamp(
+        (log2(max(depth, 1.0 / 65536.0)) + 16.0) / 16.0,
+        0.0,
+        1.0);
+    return 1u + uint(round(normalized * 1022.0));
 }
 
 uint GatherScale()
@@ -111,6 +97,7 @@ ReceiverCacheGatherSample LoadGatherSample(
     // Gather metadata layout:
     // [ depth:10 | visibility:10 | minimum roughness:6 | full roughness:6 ].
     depthCode = packed.w & 0x3ffu;
+    result.DepthCode = depthCode;
     result.IndirectSpecularVisibility =
         float((packed.w >> 10u) & 0x3ffu) / 1023.0;
     result.RoughSpecularMinimumRoughness =
@@ -134,9 +121,11 @@ uint EncodeResolvedReceiverCacheMetadata(ReceiverCacheGatherSample value)
         value.RoughSpecularFullWeightRoughness,
         0.0,
         1.0) * 63.0));
-    // Depth has served its reconstruction purpose. Leave its low ten bits zero
-    // while retaining the same upper-bit ABI for the forward cache consumer.
-    return (visibilityCode << 10u) |
+    // Forward shading ignores the low bits, but retaining the selected receiver
+    // depth keeps the resolved entry self-describing for captures and future
+    // cache consumers.
+    return (value.DepthCode & 0x3ffu) |
+        (visibilityCode << 10u) |
         (minimumCode << 20u) |
         (fullCode << 26u);
 }
@@ -206,6 +195,135 @@ ReceiverCacheGatherSample ResolveGatherSample(ivec2 requestedCoord)
     return EmptyReceiverCacheGatherSample();
 }
 
+uint SelectResolvedReceiverDepthCode(
+    uvec2 resolvedCoord,
+    uvec2 blockExtent)
+{
+    uvec2 blockBase = resolvedCoord * CacheScale();
+    uvec2 centerOffset = min(blockExtent / 2u, blockExtent - uvec2(1u));
+    ivec2 centerPixel = ivec2(blockBase + centerOffset);
+    float depth = texelFetch(
+        BindlessTextures[nonuniformEXT(pc.DepthTextureIndex)],
+        centerPixel,
+        0).r;
+    if (depth > 0.000001 && !isnan(depth) && !isinf(depth))
+        return EncodeReceiverCacheDepth(depth);
+
+    // A half-resolution cache block can straddle a silhouette. If its center
+    // is clear, select the closest occupied reverse-Z receiver so thin opaque
+    // geometry still receives a depth-compatible reconstruction.
+    float closestDepth = 0.0;
+    for (uint y = 0u; y < blockExtent.y; y++)
+    for (uint x = 0u; x < blockExtent.x; x++)
+    {
+        float candidate = texelFetch(
+            BindlessTextures[nonuniformEXT(pc.DepthTextureIndex)],
+            ivec2(blockBase + uvec2(x, y)),
+            0).r;
+        if (candidate > closestDepth && !isnan(candidate) && !isinf(candidate))
+            closestDepth = candidate;
+    }
+    return closestDepth > 0.000001
+        ? EncodeReceiverCacheDepth(closestDepth)
+        : 0u;
+}
+
+float ReceiverCacheDepthCompatibility(
+    ReceiverCacheGatherSample sampleValue,
+    uint receiverDepthCode)
+{
+    if (sampleValue.DepthCode == 0u || receiverDepthCode == 0u)
+        return 0.0;
+
+    // Eight logarithmic codes are about a nine-percent depth change and keep
+    // ordinary sloped surfaces fully supported. Fade to zero by 32 codes
+    // (roughly 41 percent) so foreground and background receivers do not
+    // exchange irradiance merely because they share a screen-space tile.
+    float codeDelta = float(abs(
+        int(sampleValue.DepthCode) - int(receiverDepthCode)));
+    return 1.0 - smoothstep(8.0, 32.0, codeDelta);
+}
+
+ReceiverCacheGatherSample BlendDepthCompatibleGatherSamples(
+    ReceiverCacheGatherSample topLeft,
+    ReceiverCacheGatherSample topRight,
+    ReceiverCacheGatherSample bottomLeft,
+    ReceiverCacheGatherSample bottomRight,
+    vec2 blend,
+    uint receiverDepthCode)
+{
+    vec4 weights = vec4(
+        (1.0 - blend.x) * (1.0 - blend.y),
+        blend.x * (1.0 - blend.y),
+        (1.0 - blend.x) * blend.y,
+        blend.x * blend.y);
+    weights *= vec4(
+        ReceiverCacheDepthCompatibility(topLeft, receiverDepthCode),
+        ReceiverCacheDepthCompatibility(topRight, receiverDepthCode),
+        ReceiverCacheDepthCompatibility(bottomLeft, receiverDepthCode),
+        ReceiverCacheDepthCompatibility(bottomRight, receiverDepthCode));
+    float weightSum = dot(weights, vec4(1.0));
+
+    if (weightSum <= 0.000001)
+    {
+        // An isolated receiver may have no compatible lattice corner. Fall
+        // back deterministically to the closest valid depth rather than black.
+        int bestDelta = 2147483647;
+        int bestIndex = -1;
+        uint depthCodes[4] = uint[4](
+            topLeft.DepthCode,
+            topRight.DepthCode,
+            bottomLeft.DepthCode,
+            bottomRight.DepthCode);
+        for (int index = 0; index < 4; index++)
+        {
+            if (depthCodes[index] == 0u)
+                continue;
+            int delta = abs(int(depthCodes[index]) - int(receiverDepthCode));
+            if (delta < bestDelta)
+            {
+                bestDelta = delta;
+                bestIndex = index;
+            }
+        }
+        if (bestIndex < 0)
+            return EmptyReceiverCacheGatherSample();
+        weights = vec4(0.0);
+        weights[bestIndex] = 1.0;
+        weightSum = 1.0;
+    }
+
+    weights /= weightSum;
+    ReceiverCacheGatherSample result;
+    result.DdgiIrradiance =
+        topLeft.DdgiIrradiance * weights.x +
+        topRight.DdgiIrradiance * weights.y +
+        bottomLeft.DdgiIrradiance * weights.z +
+        bottomRight.DdgiIrradiance * weights.w;
+    result.EnvironmentIrradiance =
+        topLeft.EnvironmentIrradiance * weights.x +
+        topRight.EnvironmentIrradiance * weights.y +
+        bottomLeft.EnvironmentIrradiance * weights.z +
+        bottomRight.EnvironmentIrradiance * weights.w;
+    result.IndirectSpecularVisibility =
+        topLeft.IndirectSpecularVisibility * weights.x +
+        topRight.IndirectSpecularVisibility * weights.y +
+        bottomLeft.IndirectSpecularVisibility * weights.z +
+        bottomRight.IndirectSpecularVisibility * weights.w;
+    result.RoughSpecularMinimumRoughness =
+        topLeft.RoughSpecularMinimumRoughness * weights.x +
+        topRight.RoughSpecularMinimumRoughness * weights.y +
+        bottomLeft.RoughSpecularMinimumRoughness * weights.z +
+        bottomRight.RoughSpecularMinimumRoughness * weights.w;
+    result.RoughSpecularFullWeightRoughness =
+        topLeft.RoughSpecularFullWeightRoughness * weights.x +
+        topRight.RoughSpecularFullWeightRoughness * weights.y +
+        bottomLeft.RoughSpecularFullWeightRoughness * weights.z +
+        bottomRight.RoughSpecularFullWeightRoughness * weights.w;
+    result.DepthCode = receiverDepthCode;
+    return result;
+}
+
 void main()
 {
     uvec2 resolvedCoord = gl_GlobalInvocationID.xy;
@@ -223,27 +341,29 @@ void main()
     if (resolvedCoord.y + 1u == outputExtent.y)
         blockExtent.y = lastBlockExtent.y;
 
-    // Evaluate the same centered, clamp-to-edge bilinear reconstruction used
-    // by the former fragment texture sample at the mean pixel center of this
-    // (possibly partial) cache block.
-    vec2 screenCoordinate =
-        vec2(resolvedCoord * cacheScale) + vec2(blockExtent) * 0.5;
-    vec2 latticePosition =
-        (screenCoordinate - vec2(0.5)) / float(GatherScale()) - vec2(0.5);
-    ivec2 baseCoord = ivec2(floor(latticePosition));
-    vec2 blend = fract(latticePosition);
-    ReceiverCacheGatherSample top = MixReceiverCacheGatherSamples(
-        ResolveGatherSample(baseCoord),
-        ResolveGatherSample(baseCoord + ivec2(1, 0)),
-        blend.x);
-    ReceiverCacheGatherSample bottom = MixReceiverCacheGatherSamples(
-        ResolveGatherSample(baseCoord + ivec2(0, 1)),
-        ResolveGatherSample(baseCoord + ivec2(1, 1)),
-        blend.x);
-    ReceiverCacheGatherSample resolved = MixReceiverCacheGatherSamples(
-        top,
-        bottom,
-        blend.y);
+    uint receiverDepthCode = SelectResolvedReceiverDepthCode(
+        resolvedCoord,
+        blockExtent);
+    ReceiverCacheGatherSample resolved = EmptyReceiverCacheGatherSample();
+    if (receiverDepthCode != 0u)
+    {
+        // Evaluate the same centered, clamp-to-edge bilinear reconstruction
+        // used by the former fragment texture sample at the mean pixel center
+        // of this (possibly partial) cache block.
+        vec2 screenCoordinate =
+            vec2(resolvedCoord * cacheScale) + vec2(blockExtent) * 0.5;
+        vec2 latticePosition =
+            (screenCoordinate - vec2(0.5)) / float(GatherScale()) - vec2(0.5);
+        ivec2 baseCoord = ivec2(floor(latticePosition));
+        vec2 blend = fract(latticePosition);
+        resolved = BlendDepthCompatibleGatherSamples(
+            ResolveGatherSample(baseCoord),
+            ResolveGatherSample(baseCoord + ivec2(1, 0)),
+            ResolveGatherSample(baseCoord + ivec2(0, 1)),
+            ResolveGatherSample(baseCoord + ivec2(1, 1)),
+            blend,
+            receiverDepthCode);
+    }
 
     // Store both irradiance fields divided by pi so the constant
     // diffuse-Lambert factor is paid once per cache sample instead of once per

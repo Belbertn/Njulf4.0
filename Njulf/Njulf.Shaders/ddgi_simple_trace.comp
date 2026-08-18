@@ -452,6 +452,22 @@ bool TraceSimpleDdgiBackfaceVisibilityDistance(
 }
 #endif
 
+bool SimpleDdgiTraceFinite(float value)
+{
+    return !isnan(value) && !isinf(value);
+}
+
+bool SimpleDdgiTraceFinite(vec3 value)
+{
+    return all(not(isnan(value))) && all(not(isinf(value)));
+}
+
+bool SimpleDdgiTraceFiniteNonNegative(vec3 value)
+{
+    return SimpleDdgiTraceFinite(value) &&
+        all(greaterThanEqual(value, vec3(0.0)));
+}
+
 bool SimpleDdgiRaySegmentIntersectsAabb(
     vec3 origin,
     vec3 direction,
@@ -768,9 +784,12 @@ void main()
     // C3 payloads are source-cache records, not transient guide lookups.  The
     // packed direction and generation-time PDF therefore remain authoritative
     // even if a newer distribution bank is built before this source sequence
-    // is consumed.  A backed-but-invalid payload aborts the probe transaction:
-    // falling back only that ray would mix proposal families without a valid
-    // balance denominator and bias the published irradiance.
+    // is consumed. A payload from an older source identity is absent by
+    // definition and falls back to the deterministic uniform direction. A
+    // backed current-source payload that fails its remaining integrity checks
+    // aborts the probe transaction: falling back only that ray would mix
+    // proposal families without a valid balance denominator and bias the
+    // published irradiance.
 #if SIMPLE_DDGI_DIRECTIONAL_GUIDING_TRANSPORT
     bool guidingRecordPresent = false;
     vec3 guidingDirection;
@@ -889,7 +908,8 @@ void main()
             sourceRayCount,
             cachedSourceRadianceDistance,
             cachedSourceHitKind);
-        if (cacheRead && environmentMissRelight &&
+        if (cacheRead &&
+            (environmentMissRelight || cachedHitRelight) &&
             cachedSourceHitKind == SIMPLE_DDGI_RAY_HIT_KIND_MISS)
         {
             cachedSourceRadianceDistance.rgb =
@@ -974,7 +994,8 @@ void main()
         if (cacheRead && guidingPayloadValid)
             cachedSourceDirection = guidingDirection;
 #endif
-        if (cacheRead && environmentMissRelight &&
+        if (cacheRead &&
+            (environmentMissRelight || cachedHitRelight) &&
             cachedSourceHitKind == SIMPLE_DDGI_RAY_HIT_KIND_MISS)
         {
             cachedSourceRadianceDistance.rgb =
@@ -1075,7 +1096,8 @@ void main()
         if (cacheRead && guidingPayloadValid)
             cachedSource.direction = guidingDirection;
 #endif
-        if (cacheRead && environmentMissRelight &&
+        if (cacheRead &&
+            (environmentMissRelight || cachedHitRelight) &&
             !SimpleDdgiTransportRayCacheIsHit(cachedSource))
         {
             cachedSource.sourceRadiance =
@@ -1744,6 +1766,95 @@ void main()
     }
 #endif
 
+    // A single malformed ray must not hold the entire probe transaction in the
+    // source-repair lane forever. Keep valid geometric evidence, but repair the
+    // storage payload at the producer boundary before either cache record is
+    // published. Invalid geometry is represented as a zero-energy, covered
+    // one-sided backface: that is conservative for visibility and cannot leak
+    // light through a bad triangle/material sample.
+    bool repairedTracePayload = false;
+    float directionLengthSquared = dot(direction, direction);
+    bool invalidTraceDirection = !SimpleDdgiTraceFinite(direction) ||
+        !SimpleDdgiTraceFinite(directionLengthSquared) ||
+        directionLengthSquared <= 1.0e-12;
+    if (invalidTraceDirection)
+    {
+        direction = SimpleDdgiReconstructRayDirection(
+            probeIndex,
+            directionRayIndex,
+            update.sourceEpoch,
+            params);
+        repairedTracePayload = true;
+    }
+
+    bool invalidHitKind = !SimpleDdgiTraceFinite(hitKind) ||
+        hitKind < SIMPLE_DDGI_RAY_HIT_KIND_MISS ||
+        hitKind > SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE ||
+        hitKind != round(hitKind);
+    bool invalidHitDistance = !SimpleDdgiTraceFinite(hitDistance) ||
+        hitDistance < 0.0;
+    if (invalidTraceDirection || invalidHitKind || invalidHitDistance)
+    {
+        hitKind = SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE;
+        hitDistance = 0.0;
+        radiance = vec3(0.0);
+        traceDirectDiffuse = vec3(0.0);
+        traceDirectNoShadowDiffuse = vec3(0.0);
+        traceEmissiveDiffuse = vec3(0.0);
+        traceBounceDiffuse = vec3(0.0);
+        traceSkyDiffuse = vec3(0.0);
+        cacheNormal = -direction;
+        cacheAlbedo = vec3(0.0);
+        cacheTransmission = vec3(0.0);
+        cacheSpecularF0 = vec3(0.0);
+        cacheRoughness = 1.0;
+        cacheMaterialOcclusion = 1.0;
+        traceSurfaceFlags = 0u;
+        repairedTracePayload = true;
+    }
+
+    // Keep the optimizer graph bounded for the many trace variants: one bad
+    // energy channel invalidates the complete radiometric decomposition.
+    bool invalidTraceEnergy =
+        !SimpleDdgiTraceFiniteNonNegative(radiance) ||
+        !SimpleDdgiTraceFiniteNonNegative(traceDirectDiffuse) ||
+        !SimpleDdgiTraceFiniteNonNegative(traceDirectNoShadowDiffuse) ||
+        !SimpleDdgiTraceFiniteNonNegative(traceEmissiveDiffuse) ||
+        !SimpleDdgiTraceFiniteNonNegative(traceBounceDiffuse) ||
+        !SimpleDdgiTraceFiniteNonNegative(traceSkyDiffuse);
+    if (invalidTraceEnergy)
+    {
+        radiance = vec3(0.0);
+        traceDirectDiffuse = vec3(0.0);
+        traceDirectNoShadowDiffuse = vec3(0.0);
+        traceEmissiveDiffuse = vec3(0.0);
+        traceBounceDiffuse = vec3(0.0);
+        traceSkyDiffuse = vec3(0.0);
+        repairedTracePayload = true;
+    }
+
+    float normalLengthSquared = dot(cacheNormal, cacheNormal);
+    bool invalidTraceMaterial = !SimpleDdgiTraceFinite(cacheNormal) ||
+        !SimpleDdgiTraceFinite(normalLengthSquared) ||
+        normalLengthSquared <= 1.0e-12 ||
+        !SimpleDdgiTraceFiniteNonNegative(cacheAlbedo) ||
+        !SimpleDdgiTraceFiniteNonNegative(cacheTransmission) ||
+        !SimpleDdgiTraceFiniteNonNegative(cacheSpecularF0) ||
+        !SimpleDdgiTraceFinite(cacheMaterialOcclusion) ||
+        cacheMaterialOcclusion < 0.0 ||
+        !SimpleDdgiTraceFinite(cacheRoughness) || cacheRoughness < 0.0;
+    if (invalidTraceMaterial)
+    {
+        cacheNormal = -direction;
+        cacheAlbedo = vec3(0.0);
+        cacheTransmission = vec3(0.0);
+        cacheSpecularF0 = vec3(0.0);
+        cacheRoughness = 1.0;
+        cacheMaterialOcclusion = 1.0;
+        traceSurfaceFlags = 0u;
+        repairedTracePayload = true;
+    }
+
     bool recordTraceDiagnostics =
 #if SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_FINAL
         !splitNearHit;
@@ -1808,11 +1919,14 @@ void main()
 #if SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_SINGLE || \
     SIMPLE_DDGI_TRACE_SHADER_ROLE == SIMPLE_DDGI_TRACE_SHADER_ROLE_FINAL
     float backfaceVisibilityDistance;
-    if (TraceSimpleDdgiBackfaceVisibilityDistance(
+    bool tracedBackfaceVisibility = TraceSimpleDdgiBackfaceVisibilityDistance(
             probePosition,
             direction,
             nearTlasMaxDistance,
-            backfaceVisibilityDistance))
+            backfaceVisibilityDistance);
+    if (tracedBackfaceVisibility &&
+        SimpleDdgiTraceFinite(backfaceVisibilityDistance) &&
+        backfaceVisibilityDistance >= 0.0)
     {
         if (backfaceVisibilityDistance < visibilityDistance)
         {
@@ -1821,7 +1935,34 @@ void main()
                 SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE;
         }
     }
+    else if (tracedBackfaceVisibility)
+    {
+        repairedTracePayload = true;
+    }
 #endif
+    if (!SimpleDdgiTraceFinite(visibilityDistance) ||
+        visibilityDistance < 0.0)
+    {
+        visibilityDistance = hitDistance;
+        repairedTracePayload = true;
+    }
+    bool invalidVisibilityHitKind =
+        !SimpleDdgiTraceFinite(visibilityHitKind) ||
+        visibilityHitKind < SIMPLE_DDGI_RAY_HIT_KIND_MISS ||
+        visibilityHitKind > SIMPLE_DDGI_RAY_HIT_KIND_FAR_FIELD_BACK_FACE ||
+        visibilityHitKind != round(visibilityHitKind);
+    if (invalidVisibilityHitKind)
+    {
+        visibilityHitKind = hitKind;
+        repairedTracePayload = true;
+    }
+    if (repairedTracePayload)
+    {
+        AddRendererDiagnostic(
+            pc.CurrentFrameIndex,
+            DDGI_RAY_METADATA_INVALID_COUNTER,
+            1u);
+    }
     // A failed cached lookup may trace a safe scratch result for this frame,
     // but it is not a complete source transaction. Persisting that maintenance
     // subset would replace one cache entry with the wrong cardinality and

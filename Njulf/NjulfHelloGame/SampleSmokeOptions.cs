@@ -68,7 +68,10 @@ public sealed record SampleSmokeOptions(
     string? GiCausticQualificationId = null,
     string? SimpleDdgiNearFieldResidualQualificationId = null,
     string? AdvancedGiRuntimeEvidenceBundlePath = null,
-    string? AdvancedGiStartupProfilePath = null)
+    string? AdvancedGiStartupProfilePath = null,
+    string? BistroQualityCaptureDirectory = null,
+    SampleBistroQualityCaptureVariant BistroQualityCaptureVariant =
+        SampleBistroQualityCaptureVariant.SunScaleStep)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
 
@@ -103,6 +106,7 @@ public sealed record SampleSmokeOptions(
         EnableFarFieldForceAll ||
         !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory) ||
         !string.IsNullOrWhiteSpace(SponzaGiCaptureDirectory) ||
+        !string.IsNullOrWhiteSpace(BistroQualityCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(MaterialGiCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(AdvancedGiPrerequisiteManifestPath) ||
         !string.IsNullOrWhiteSpace(AdvancedGiQualificationManifestPath) ||
@@ -120,5 +124,9 @@ public sealed record SampleSmokeOptions(
         Benchmark.Enabled;
 
     public bool UsesDeterministicSimulationClock =>
-        Benchmark.Enabled || TailDdgiLongSoak;
+        Benchmark.Enabled ||
+        TailDdgiLongSoak ||
+        !string.IsNullOrWhiteSpace(BistroQualityCaptureDirectory) ||
+        PerformanceScenario ==
+            SamplePerformanceScenario.BistroQualityMotionRelight;
 }
