@@ -1,5 +1,6 @@
 using Njulf.Core.Camera;
 using Njulf.Core.Math;
+using Njulf.Rendering;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -26,6 +27,22 @@ namespace Njulf.Tests
                 AssertVector(cameraOrigin, Vector3.Zero);
                 AssertVector(pointInFront, new Vector3(0f, 0f, -1f));
             });
+        }
+
+        [TestCase(-0.145f)]
+        [TestCase(0.31f)]
+        public void PerformanceCapturePitch_RoundTripsCameraPitch(float pitch)
+        {
+            var camera = new FirstPersonCamera(
+                new Vector3(1f, 2f, 3f),
+                yaw: 1.89f,
+                pitch);
+
+            float captured =
+                VulkanRenderer.ExtractPerformanceCapturePitchRadians(
+                    camera.Forward);
+
+            Assert.That(captured, Is.EqualTo(pitch).Within(1.0e-6f));
         }
 
         private static Vector3 TransformPoint(Vector3 point, Matrix4x4 matrix) =>

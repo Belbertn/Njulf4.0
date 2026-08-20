@@ -1571,8 +1571,7 @@ public sealed class SampleSponzaGiCaptureContract
                 new Vector3(6.0f, 1.35f, 0.0f),
                 -MathF.PI * 0.5f,
                 // Exact low-plaza viewpoint from the Sponza right-wall preset.
-                // Capture diagnostics extract view pitch with the opposite sign,
-                // so the supplied +0.16 snapshot corresponds to camera -0.16.
+                // Capture diagnostics round-trip this camera-space pitch.
                 -0.16f,
                 fov,
                 0.05f,

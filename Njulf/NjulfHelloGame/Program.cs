@@ -2240,8 +2240,7 @@ internal sealed class HelloGame : Game
             GetCameraPreset(SampleSceneKind.Bistro);
         camera.Position = position;
         camera.Yaw = yaw;
-        // Performance metadata stores asin(Forward.Y); FirstPersonCamera's
-        // rotation-space X angle has the opposite sign.
+        // Performance metadata round-trips FirstPersonCamera's pitch convention.
         camera.Pitch = pitch;
         camera.FieldOfView = MathF.PI / 3.2f;
         camera.NearPlane = 0.05f;

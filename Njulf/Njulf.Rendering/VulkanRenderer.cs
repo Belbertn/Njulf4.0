@@ -3791,7 +3791,8 @@ namespace Njulf.Rendering
                 _giWarningEvaluator.Reset();
             }
             sceneData.CaptureCameraYawRadians = MathF.Atan2(camera.Forward.X, -camera.Forward.Z);
-            sceneData.CaptureCameraPitchRadians = MathF.Asin(Math.Clamp(camera.Forward.Y, -1.0f, 1.0f));
+            sceneData.CaptureCameraPitchRadians =
+                ExtractPerformanceCapturePitchRadians(camera.Forward);
             sceneData.CaptureCameraFieldOfViewRadians = camera.FieldOfView;
             sceneData.CaptureCameraNearPlane = camera.NearPlane;
             sceneData.CaptureCameraFarPlane = camera.FarPlane;
@@ -9074,6 +9075,9 @@ namespace Njulf.Rendering
                 ComputePerformanceCaptureMatrixHash(sceneData.ProjectionMatrix),
                 sceneData.CaptureCameraCutSerial);
         }
+
+        internal static float ExtractPerformanceCapturePitchRadians(Vector3 forward) =>
+            -MathF.Asin(Math.Clamp(forward.Y, -1.0f, 1.0f));
 
         private static string ComputePerformanceCaptureMatrixHash(Matrix4x4 matrix)
         {
