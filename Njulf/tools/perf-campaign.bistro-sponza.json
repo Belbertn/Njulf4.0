@@ -11,12 +11,16 @@
   "protectedPaths": [
     "tools/perf-campaign.ps1",
     "tools/perf-campaign.bistro-sponza.json",
+    "tools/perf-quality-verify.ps1",
     "tools/perf-loop.ps1",
     "NjulfHelloGame/Program.cs",
     "NjulfHelloGame/SampleBenchmarkRunner.cs",
     "NjulfHelloGame/SampleBenchmarkReport.cs",
     "NjulfHelloGame/SampleBenchmarkEvidence.cs",
+    "NjulfHelloGame/SampleBenchmarkCaptureVariant.cs",
     "NjulfHelloGame/SampleBenchmarkHdrQualityContract.cs",
+    "NjulfHelloGame/SampleBenchmarkQualitySequence.cs",
+    "NjulfHelloGame/SampleBenchmarkQualitySequenceRunner.cs",
     "NjulfHelloGame/SampleBenchmarkOptions.cs",
     "NjulfHelloGame/SampleBenchmarkPairComparer.cs",
     "NjulfHelloGame/SampleBenchmarkTrajectory.cs",
@@ -31,6 +35,7 @@
     "Njulf.Rendering/Data/MaterialGiRolloutPolicy.cs",
     "Njulf.Rendering/Diagnostics/RendererHealthReportWriter.cs",
     "Njulf.Rendering/Debugging/LinearHdrReadback.cs",
+    "Njulf.Tests/SampleBenchmarkQualitySequenceTests.cs",
     ".perf-loop-runs/campaign/beauty-target/manifest.json",
     ".perf-loop-runs/campaign/beauty-target/bistro-beauty-target.jpg",
     "NjulfHelloGame/Assets/Bistro_v5_2",
@@ -54,6 +59,13 @@
     "maximumFlipP95": 0.02,
     "maximumRoiMeanLuminanceShift": 0.02,
     "maximumRoiP95LuminanceShift": 0.03
+  },
+  "qualitySequence": {
+    "baselineRepeatCount": 2,
+    "maximumReadbackDrainFrames": 240,
+    "temporalResidualFloor": 0.000001,
+    "temporalResidualMultiplier": 2.0,
+    "temporalResidualHardCeiling": 0.005
   },
   "acceptance": {
     "minimumFrameImprovementPercent": 1.0,

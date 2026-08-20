@@ -459,10 +459,240 @@ function Invoke-SyntheticComparisonContractCase {
     Write-Host "PASS synthetic-screen-workload-order"
 }
 
+function Invoke-SyntheticQualitySequencePolicyCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver,
+        [ref]$tokens,
+        [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for quality-sequence policy tests."
+    }
+    foreach ($functionName in @(
+            "Assert-FiniteNumber",
+            "Get-QualitySequenceTrajectoryFrameCount",
+            "Get-QualitySequenceCheckpointIndices",
+            "Get-QualitySequenceTemporalPairs",
+            "New-QualitySequenceTemporalGates",
+            "New-QualitySequenceSpatialEnvelope",
+            "Assert-QualitySequenceSpatialEnvelope")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+
+    $expectedCheckpoints = [ordered]@{
+        stationary = @(0)
+        "bistro-loop" = @(0, 59, 60, 61, 68, 76, 179, 180, 181, 239)
+        "sponza-horizontal" = @(0, 1, 118, 119, 120, 121, 178, 179, 180, 181, 298, 299)
+        "sponza-vertical" = @(0, 1, 239, 240, 479, 480, 719, 720, 958, 959)
+    }
+    foreach ($entry in $expectedCheckpoints.GetEnumerator()) {
+        $actual = @(Get-QualitySequenceCheckpointIndices ([string]$entry.Key))
+        if (($actual -join ",") -cne (@($entry.Value) -join ",")) {
+            throw "Quality checkpoint topology differs for '$($entry.Key)'."
+        }
+    }
+    $expectedPairs = [ordered]@{
+        stationary = @()
+        "bistro-loop" = @("59->60", "60->61", "179->180", "180->181")
+        "sponza-horizontal" = @(
+            "0->1", "118->119", "119->120", "120->121",
+            "178->179", "179->180", "180->181", "298->299")
+        "sponza-vertical" = @(
+            "0->1", "239->240", "479->480", "719->720", "958->959")
+    }
+    foreach ($entry in $expectedPairs.GetEnumerator()) {
+        $actual = @(Get-QualitySequenceTemporalPairs ([string]$entry.Key) |
+            ForEach-Object {
+                "$([int]$_.fromRouteFrameIndex)->$([int]$_.toRouteFrameIndex)"
+            })
+        if (($actual -join ",") -cne (@($entry.Value) -join ",")) {
+            throw "Quality temporal-pair topology differs for '$($entry.Key)'."
+        }
+    }
+
+    $manifest = Get-Content -LiteralPath $sourceManifest -Raw | ConvertFrom-Json
+    $workload = [pscustomobject]@{ trajectory = "bistro-loop" }
+    $repeatOne = [pscustomobject]@{
+        temporal = @(
+            [pscustomobject]@{ relativeResidual = 0.0000001 },
+            [pscustomobject]@{ relativeResidual = 0.0010 },
+            [pscustomobject]@{ relativeResidual = 0.0020 },
+            [pscustomobject]@{ relativeResidual = 0.0024 })
+    }
+    $repeatTwo = [pscustomobject]@{
+        temporal = @(
+            [pscustomobject]@{ relativeResidual = 0.0000002 },
+            [pscustomobject]@{ relativeResidual = 0.0015 },
+            [pscustomobject]@{ relativeResidual = 0.0010 },
+            [pscustomobject]@{ relativeResidual = 0.0020 })
+    }
+    $gates = @(New-QualitySequenceTemporalGates `
+        $manifest $workload @($repeatOne, $repeatTwo))
+    $expectedGates = @(0.000001, 0.003, 0.004, 0.0048)
+    if ($gates.Count -ne $expectedGates.Count) {
+        throw "Temporal gate topology differs."
+    }
+    for ($index = 0; $index -lt $gates.Count; $index++) {
+        if ([double]$gates[$index].maximumRelativeResidual -ne
+            [double]$expectedGates[$index]) {
+            throw "Temporal gate $index did not use max(floor, max(repeats)*2)."
+        }
+    }
+    $repeatTwo.temporal[3].relativeResidual = 0.0026
+    $ceilingFailedClosed = $false
+    try {
+        $null = New-QualitySequenceTemporalGates `
+            $manifest $workload @($repeatOne, $repeatTwo)
+    } catch {
+        $ceilingFailedClosed = $_.Exception.Message -match "hard ceiling"
+    }
+    if (-not $ceilingFailedClosed) {
+        throw "Derived temporal gate above 0.005 did not fail closed."
+    }
+
+    function New-SyntheticSpatialMetrics {
+        param([double]$Offset)
+        $indices = @(Get-QualitySequenceCheckpointIndices "bistro-loop")
+        return [pscustomobject]@{
+            spatial = @($indices | ForEach-Object {
+                [pscustomobject]@{
+                    ordinal = [array]::IndexOf($indices, $_)
+                    routeFrameIndex = [int]$_
+                    relativeRmse = 0.001 + $Offset
+                    flipP95 = 0.002 + $Offset
+                    rois = @([pscustomobject]@{
+                        name = "all"
+                        meanLuminanceShift = 0.003 + $Offset
+                        p95LuminanceShift = 0.004 + $Offset
+                    })
+                }
+            })
+        }
+    }
+    $spatialOne = New-SyntheticSpatialMetrics 0.0
+    $spatialTwo = New-SyntheticSpatialMetrics 0.0001
+    $envelope = @(New-QualitySequenceSpatialEnvelope `
+        $manifest $workload @($spatialOne, $spatialTwo))
+    Assert-QualitySequenceSpatialEnvelope $spatialTwo $envelope "Synthetic spatial"
+    $degraded = New-SyntheticSpatialMetrics 0.0002
+    $spatialFailedClosed = $false
+    try {
+        Assert-QualitySequenceSpatialEnvelope $degraded $envelope "Synthetic degraded"
+    } catch {
+        $spatialFailedClosed = $_.Exception.Message -match "baseline"
+    }
+    if (-not $spatialFailedClosed) {
+        throw "Candidate spatial repeatability regression did not fail closed."
+    }
+    $nullFailedClosed = $false
+    try { $null = Assert-FiniteNumber $null "Synthetic null metric" } catch {
+        $nullFailedClosed = $_.Exception.Message -match "absent"
+    }
+    if (-not $nullFailedClosed) {
+        throw "Null quality metric did not fail closed."
+    }
+    Write-Host "PASS synthetic-quality-sequence-policy"
+}
+
+function Invoke-QualityVerifierSmokeCase {
+    $buildRoot = Join-Path $solutionRoot "NjulfHelloGame/bin/Release/net10.0"
+    if (-not (Test-Path -LiteralPath (Join-Path $buildRoot "NjulfHelloGame.dll") -PathType Leaf)) {
+        throw "Release build is required before the quality verifier smoke test."
+    }
+    $caseRoot = Join-Path $testRoot "quality-verifier"
+    New-Item -ItemType Directory -Path $caseRoot | Out-Null
+    $pfmPath = Join-Path $caseRoot "one.pfm"
+    $header = [System.Text.Encoding]::ASCII.GetBytes(
+        "PF`n# NJULF_LINEAR_FLOAT_IMAGE_VERSION=1 COLOR_SPACE=linear-scRGB LOGICAL_ORIGIN=top-left`n1 1`n-1.0`n")
+    $payload = [byte[]]::new(12)
+    [System.Buffer]::BlockCopy([single[]]@(1, 1, 1), 0, $payload, 0, 12)
+    $pfmBytes = [byte[]]::new($header.Length + $payload.Length)
+    [System.Buffer]::BlockCopy($header, 0, $pfmBytes, 0, $header.Length)
+    [System.Buffer]::BlockCopy($payload, 0, $pfmBytes, $header.Length, $payload.Length)
+    [System.IO.File]::WriteAllBytes($pfmPath, $pfmBytes)
+    $qualityPath = Join-Path $caseRoot "quality.json"
+    [System.IO.File]::WriteAllText(
+        $qualityPath,
+        '{"schema":"njulf-benchmark-hdr-quality/v1","width":1,"height":1,"rois":[{"name":"all","x":0,"y":0,"width":1,"height":1,"maximumMeanLuminanceShift":0.01,"maximumP95LuminanceShift":0.01}]}',
+        [System.Text.UTF8Encoding]::new($false))
+    $pfmSha = [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData($pfmBytes)).ToLowerInvariant()
+    $qualitySha = [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData(
+            [System.IO.File]::ReadAllBytes($qualityPath))).ToLowerInvariant()
+    $operations = @(
+        [ordered]@{
+            id = "spatial-0"; kind = "spatial"
+            referencePath = $pfmPath; referenceSha256 = $pfmSha
+            candidatePath = $pfmPath; candidateSha256 = $pfmSha
+            maximumRelativeRmse = 0.005; maximumFlipP95 = 0.02
+            qualityContractPath = $qualityPath
+            qualityContractSha256 = $qualitySha
+        },
+        [ordered]@{
+            id = "temporal-0"; kind = "temporal"
+            referenceFromPath = $pfmPath; referenceFromSha256 = $pfmSha
+            referenceToPath = $pfmPath; referenceToSha256 = $pfmSha
+            candidateFromPath = $pfmPath; candidateFromSha256 = $pfmSha
+            candidateToPath = $pfmPath; candidateToSha256 = $pfmSha
+        })
+    $request = [ordered]@{
+        schema = "njulf-perf-quality-verify-request/v1"
+        operations = $operations
+    } | ConvertTo-Json -Depth 10 -Compress
+    $helperBytes = [System.IO.File]::ReadAllBytes(
+        (Join-Path $PSScriptRoot "perf-quality-verify.ps1"))
+    $helperText = [System.Text.UTF8Encoding]::new($false, $true).GetString(
+        $helperBytes)
+    $encoded = [Convert]::ToBase64String(
+        [System.Text.Encoding]::Unicode.GetBytes($helperText))
+    $savedBuildRoot = [string]$env:NJULF_PERF_VERIFY_BUILD_ROOT
+    try {
+        $env:NJULF_PERF_VERIFY_BUILD_ROOT = $buildRoot
+        $output = $request | & (Join-Path $PSHOME "pwsh.exe") `
+            -NoProfile -NonInteractive -EncodedCommand $encoded
+        if ($LASTEXITCODE -ne 0) {
+            throw "Quality verifier smoke exited $LASTEXITCODE."
+        }
+        $result = $output | ConvertFrom-Json
+        if ([string]$result.schema -cne "njulf-perf-quality-verify-result/v1" -or
+            @($result.results).Count -ne 2 -or
+            [double]$result.results[0].value.FlipP95 -ne 0.0 -or
+            [double]$result.results[1].value.relativeResidual -ne 0.0) {
+            throw "Quality verifier smoke returned unexpected metrics."
+        }
+        $operations[0].referenceSha256 = "0" * 64
+        $badRequest = [ordered]@{
+            schema = "njulf-perf-quality-verify-request/v1"
+            operations = @($operations[0])
+        } | ConvertTo-Json -Depth 10 -Compress
+        $badOutput = $badRequest | & (Join-Path $PSHOME "pwsh.exe") `
+            -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1
+        if ($LASTEXITCODE -eq 0 -or
+            ($badOutput -join "`n") -notmatch "hash differs") {
+            throw "Quality verifier hash mismatch did not fail closed."
+        }
+    } finally {
+        $env:NJULF_PERF_VERIFY_BUILD_ROOT = $savedBuildRoot
+    }
+    Write-Host "PASS quality-verifier-spatial-temporal-pipe"
+}
+
 try {
     Invoke-SyntheticHealthReportCase
     Invoke-SyntheticAcceptanceRefCase
     Invoke-SyntheticComparisonContractCase
+    Invoke-SyntheticQualitySequencePolicyCase
+    Invoke-QualityVerifierSmokeCase
     Invoke-ManifestCase "valid" {} $true
     Invoke-ManifestCase "abba-too-small" {
         param($manifest)
@@ -507,6 +737,38 @@ try {
         $manifest.protectedPaths = @($manifest.protectedPaths | Where-Object {
             [string]$_ -ne "NjulfHelloGame/SampleHealthReportWriter.cs"
         })
+    } $false
+    Invoke-ManifestCase "wrong-quality-repeat-count" {
+        param($manifest)
+        $manifest.qualitySequence.baselineRepeatCount = 3
+    } $false
+    Invoke-ManifestCase "wrong-quality-drain" {
+        param($manifest)
+        $manifest.qualitySequence.maximumReadbackDrainFrames = 239
+    } $false
+    Invoke-ManifestCase "wrong-quality-floor" {
+        param($manifest)
+        $manifest.qualitySequence.temporalResidualFloor = 0.0
+    } $false
+    Invoke-ManifestCase "wrong-quality-multiplier" {
+        param($manifest)
+        $manifest.qualitySequence.temporalResidualMultiplier = 3.0
+    } $false
+    Invoke-ManifestCase "wrong-quality-ceiling" {
+        param($manifest)
+        $manifest.qualitySequence.temporalResidualHardCeiling = 0.02
+    } $false
+    Invoke-ManifestCase "missing-quality-verifier-protection" {
+        param($manifest)
+        $manifest.protectedPaths = @($manifest.protectedPaths | Where-Object {
+            [string]$_ -ne "tools/perf-quality-verify.ps1"
+        })
+    } $false
+    Invoke-ManifestCase "reserved-health-report" {
+        param($manifest)
+        $manifest.workloads[0] | Add-Member `
+            -NotePropertyName arguments `
+            -NotePropertyValue @("--health-report", "forged.json")
     } $false
     $qualificationRunPath = Join-Path $testRoot "qualification-target-run"
     $qualificationOutput = & pwsh -NoProfile -NonInteractive -File $driver `

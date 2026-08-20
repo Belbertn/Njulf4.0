@@ -344,6 +344,13 @@ function Assert-CampaignManifest {
         [double]$Manifest.quality.maximumRoiP95LuminanceShift -gt 0.03) {
         throw "Campaign quality thresholds are weaker than the approved contract."
     }
+    if ([int]$Manifest.qualitySequence.baselineRepeatCount -ne 2 -or
+        [int]$Manifest.qualitySequence.maximumReadbackDrainFrames -ne 240 -or
+        [double]$Manifest.qualitySequence.temporalResidualFloor -ne 0.000001 -or
+        [double]$Manifest.qualitySequence.temporalResidualMultiplier -ne 2.0 -or
+        [double]$Manifest.qualitySequence.temporalResidualHardCeiling -ne 0.005) {
+        throw "Campaign quality-sequence repeatability policy differs from the exact approved contract."
+    }
     if ([double]$Manifest.acceptance.minimumFrameImprovementPercent -lt 1.0 -or
         [double]$Manifest.acceptance.minimumFrameImprovementMilliseconds -lt 0.10 -or
         [double]$Manifest.acceptance.minimumPassImprovementPercent -lt 5.0 -or
@@ -361,12 +368,16 @@ function Assert-CampaignManifest {
     $mandatoryProtectedPaths = @(
         "tools/perf-campaign.ps1",
         "tools/perf-campaign.bistro-sponza.json",
+        "tools/perf-quality-verify.ps1",
         "tools/perf-loop.ps1",
         "NjulfHelloGame/Program.cs",
         "NjulfHelloGame/SampleBenchmarkRunner.cs",
         "NjulfHelloGame/SampleBenchmarkReport.cs",
         "NjulfHelloGame/SampleBenchmarkEvidence.cs",
+        "NjulfHelloGame/SampleBenchmarkCaptureVariant.cs",
         "NjulfHelloGame/SampleBenchmarkHdrQualityContract.cs",
+        "NjulfHelloGame/SampleBenchmarkQualitySequence.cs",
+        "NjulfHelloGame/SampleBenchmarkQualitySequenceRunner.cs",
         "NjulfHelloGame/SampleBenchmarkOptions.cs",
         "NjulfHelloGame/SampleBenchmarkPairComparer.cs",
         "NjulfHelloGame/SampleBenchmarkTrajectory.cs",
@@ -381,6 +392,7 @@ function Assert-CampaignManifest {
         "Njulf.Rendering/Data/MaterialGiRolloutPolicy.cs",
         "Njulf.Rendering/Diagnostics/RendererHealthReportWriter.cs",
         "Njulf.Rendering/Debugging/LinearHdrReadback.cs",
+        "Njulf.Tests/SampleBenchmarkQualitySequenceTests.cs",
         ".perf-loop-runs/campaign/beauty-target/manifest.json",
         ".perf-loop-runs/campaign/beauty-target/bistro-beauty-target.jpg",
         "NjulfHelloGame/Assets/Bistro_v5_2",
@@ -502,7 +514,8 @@ function Assert-CampaignManifest {
         Assert-Text ([string]$workload.captureVariant) "Workload '$id' captureVariant"
         $reservedArguments = @(
             "--scene", "--performance-scenario", "--quality-preset",
-            "--validation", "--gpu-timing", "--bistro-quality-variant")
+            "--validation", "--gpu-timing", "--health-report",
+            "--bistro-quality-variant")
         foreach ($argument in @((Get-PropertyValue $workload "arguments" @()))) {
             $optionName = ([string]$argument).Split('=', 2)[0].ToLowerInvariant()
             if ($optionName -eq "--benchmark" -or
@@ -833,6 +846,1588 @@ function Get-ReferenceBuildIdentity {
         throw "Campaign lock has no '$Configuration' reference build."
     }
     return $property.Value
+}
+
+function Get-QualitySequenceTrajectoryFrameCount {
+    param([string]$Trajectory)
+    switch ($Trajectory) {
+        "bistro-loop" { return 240 }
+        "sponza-horizontal" { return 300 }
+        "sponza-vertical" { return 960 }
+        default { return 1 }
+    }
+}
+
+function Get-QualitySequenceCheckpointIndices {
+    param([string]$Trajectory)
+    switch ($Trajectory) {
+        "bistro-loop" {
+            return @(0, 59, 60, 61, 68, 76, 179, 180, 181, 239)
+        }
+        "sponza-horizontal" {
+            return @(0, 1, 118, 119, 120, 121, 178, 179, 180, 181, 298, 299)
+        }
+        "sponza-vertical" {
+            return @(0, 1, 239, 240, 479, 480, 719, 720, 958, 959)
+        }
+        default { return @(0) }
+    }
+}
+
+function Get-QualitySequenceTemporalPairs {
+    param([string]$Trajectory)
+    $indices = @(Get-QualitySequenceCheckpointIndices $Trajectory)
+    $pairs = @()
+    for ($index = 1; $index -lt $indices.Count; $index++) {
+        if ([int]$indices[$index] -eq ([int]$indices[$index - 1] + 1)) {
+            $pairs += [pscustomobject]@{
+                fromRouteFrameIndex = [int]$indices[$index - 1]
+                toRouteFrameIndex = [int]$indices[$index]
+            }
+        }
+    }
+    return @($pairs)
+}
+
+function Get-QualitySequenceCheckpointFingerprint {
+    param([string]$Trajectory)
+    $frameCount = Get-QualitySequenceTrajectoryFrameCount $Trajectory
+    $indices = @(Get-QualitySequenceCheckpointIndices $Trajectory)
+    $builder = [System.Text.StringBuilder]::new(
+        "njulf-benchmark-quality-checkpoints/v1|")
+    [void]$builder.Append($Trajectory).Append('|')
+    [void]$builder.Append($frameCount.ToString(
+        [Globalization.CultureInfo]::InvariantCulture)).Append('|')
+    [void]$builder.Append(($indices -join ',')).Append('|')
+    foreach ($pair in @(Get-QualitySequenceTemporalPairs $Trajectory)) {
+        [void]$builder.Append([int]$pair.fromRouteFrameIndex)
+            .Append("->")
+            .Append([int]$pair.toRouteFrameIndex)
+            .Append(',')
+    }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($builder.ToString())
+    return "sha256:" + [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+
+function Get-QualitySequenceRoleName {
+    param([int]$Role)
+    switch ($Role) {
+        0 { return "canonical" }
+        1 { return "repeat" }
+        2 { return "candidate" }
+        default { throw "Unknown quality-sequence role '$Role'." }
+    }
+}
+
+function Get-QualitySequenceRoleValue {
+    param([string]$Role)
+    switch ($Role.ToLowerInvariant()) {
+        "canonical" { return 0 }
+        "repeat" { return 1 }
+        "candidate" { return 2 }
+        default { throw "Unknown quality-sequence role '$Role'." }
+    }
+}
+
+function Get-QualitySequenceId {
+    param(
+        $Manifest,
+        [string]$Configuration,
+        [string]$WorkloadId,
+        [string]$Role,
+        [string]$Stage,
+        [string]$Commit,
+        [int]$Ordinal)
+    Assert-Text $Stage "Quality-sequence stage"
+    if ($Commit -notmatch '^[0-9a-f]{40}$') {
+        throw "Quality-sequence commit is not canonical."
+    }
+    return (
+        "$($Manifest.campaignId)-$Configuration-$WorkloadId-" +
+        "$Stage-$Role-$Commit-$Ordinal")
+}
+
+function Get-QualitySequenceArguments {
+    param(
+        $Manifest,
+        $Workload,
+        [string]$Role,
+        [string]$SequenceId,
+        [string]$ReportPath,
+        [string]$HealthPath,
+        [string]$OutputDirectory,
+        [string]$ReferenceContractPath,
+        [string]$QualityContractPath)
+    $arguments = @(
+        "--benchmark-quality-sequence=true",
+        "--benchmark-quality-sequence-role", $Role,
+        "--benchmark-quality-sequence-id", $SequenceId,
+        "--benchmark-quality-sequence-report", $ReportPath,
+        "--benchmark-quality-sequence-output-dir", $OutputDirectory,
+        "--benchmark-quality-sequence-warmup-frames", ([int]$Workload.warmupFrames).ToString(),
+        "--benchmark-quality-sequence-max-settle-frames", ([int]$Manifest.capture.maximumSettlingFrames).ToString(),
+        "--benchmark-quality-sequence-max-drain-frames", ([int]$Manifest.qualitySequence.maximumReadbackDrainFrames).ToString(),
+        "--benchmark-quality-sequence-budget-profile", ([string]$Manifest.capture.budgetProfile),
+        "--benchmark-quality-sequence-variant", ([string]$Workload.captureVariant),
+        "--benchmark-quality-sequence-trajectory", ([string]$Workload.trajectory),
+        "--health-report", $HealthPath,
+        "--scene", ([string]$Workload.scene),
+        "--performance-scenario", ([string]$Workload.scenario),
+        "--quality-preset", "ddgi-high",
+        "--validation", "off",
+        "--gpu-timing")
+    $bistroVariant = [string](Get-PropertyValue $Workload "bistroQualityVariant" "")
+    if (-not [string]::IsNullOrWhiteSpace($bistroVariant)) {
+        $arguments += @("--bistro-quality-variant", $bistroVariant)
+    }
+    foreach ($argument in @((Get-PropertyValue $Workload "arguments" @()))) {
+        $arguments += [string]$argument
+    }
+    if ($Role -ne "canonical") {
+        $arguments += @(
+            "--benchmark-quality-sequence-reference-contract", $ReferenceContractPath,
+            "--benchmark-quality-sequence-hdr-quality-contract", $QualityContractPath,
+            "--benchmark-quality-sequence-hdr-max-relative-rmse", ([double]$Manifest.quality.maximumRelativeRmse).ToString([Globalization.CultureInfo]::InvariantCulture),
+            "--benchmark-quality-sequence-hdr-max-flip-p95", ([double]$Manifest.quality.maximumFlipP95).ToString([Globalization.CultureInfo]::InvariantCulture))
+    }
+    return $arguments
+}
+
+function Read-QualitySequenceReport {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Quality-sequence report was not written: $Path"
+    }
+    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+}
+
+function Assert-CanonicalSha256 {
+    param([string]$Value, [string]$Label, [bool]$Identity = $false)
+    $pattern = if ($Identity) {
+        '^sha256:[0-9a-f]{64}$'
+    } else {
+        '^[0-9a-f]{64}$'
+    }
+    if ($Value -cnotmatch $pattern) {
+        throw "$Label is not a canonical SHA-256 value."
+    }
+}
+
+function Assert-FiniteNumber {
+    param($Value, [string]$Label, [double]$Minimum = 0.0)
+    if ($null -eq $Value -or $Value -is [bool] -or
+        $Value -isnot [byte] -and
+        $Value -isnot [sbyte] -and
+        $Value -isnot [int16] -and
+        $Value -isnot [uint16] -and
+        $Value -isnot [int32] -and
+        $Value -isnot [uint32] -and
+        $Value -isnot [int64] -and
+        $Value -isnot [uint64] -and
+        $Value -isnot [single] -and
+        $Value -isnot [double] -and
+        $Value -isnot [decimal]) {
+        throw "$Label is absent or is not a JSON number."
+    }
+    $number = [double]$Value
+    if (-not [double]::IsFinite($number) -or $number -lt $Minimum) {
+        throw "$Label is non-finite or outside its admitted domain."
+    }
+    return $number
+}
+
+function Assert-QualitySequenceProducer {
+    param($Producer, [string]$ExpectedCommit, [string]$Label)
+    if ($null -eq $Producer -or
+        [string]$Producer.Schema -ne "material-gi-producer-identity/v1" -or
+        -not [string]::Equals(
+            [string]$Producer.BuildCommit,
+            $ExpectedCommit,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        [string]$Producer.ShaderFingerprint -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$Producer.SettingsFingerprint -cnotmatch '^[0-9a-f]{64}$' -or
+        -not (Test-CanonicalIdentityText ([string]$Producer.GpuName)) -or
+        -not (Test-CanonicalIdentityText ([string]$Producer.DriverVersion)) -or
+        [string]$Producer.QualityTier -ne "StressUnlimited") {
+        throw "$Label producer identity is unavailable or inconsistent."
+    }
+    $sources = @($Producer.SourceSettingsFingerprints)
+    if ($sources.Count -ne 1 -or
+        [string]$sources[0] -cne [string]$Producer.SettingsFingerprint) {
+        throw "$Label producer settings sources are invalid."
+    }
+}
+
+function Assert-QualitySequenceCaptureRun {
+    param(
+        $CaptureRun,
+        $BuildIdentity,
+        $Workload,
+        [string]$Configuration,
+        [string]$ExpectedCommit,
+        [string]$Label)
+    if ($null -eq $CaptureRun -or
+        -not [string]::Equals(
+            [string]$CaptureRun.SceneKind,
+            [string]$Workload.scene,
+            [StringComparison]::Ordinal) -or
+        -not [string]::Equals(
+            [string]$CaptureRun.Scenario,
+            [string]$Workload.scenario,
+            [StringComparison]::Ordinal) -or
+        -not [string]::Equals(
+            ([string]$CaptureRun.BuildConfiguration).Split(';', 2)[0].Trim(),
+            $Configuration,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-CanonicalIdentityText ([string]$CaptureRun.ApplicationVersion)) -or
+        -not [string]::Equals(
+            [string]$CaptureRun.Commit,
+            $ExpectedCommit,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Sha256Identity ([string]$CaptureRun.ShaderBundleHash)) -or
+        -not [string]::Equals(
+            [string]$CaptureRun.ExecutableHash,
+            [string]$BuildIdentity.RuntimeExecutableBundleHash,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        [int]$CaptureRun.SettingsSchemaVersion -le 0 -or
+        [string]$CaptureRun.DirtyWorktreeState -cne "clean") {
+        throw "$Label CaptureRun differs from the frozen build/workload."
+    }
+}
+
+function Assert-QualityCaptureRunEqual {
+    param($Actual, $Expected, [bool]$CrossBuild, [string]$Label)
+    $pairs = @(
+        @("scene", [string]$Actual.SceneKind, [string]$Expected.SceneKind),
+        @("scenario", [string]$Actual.Scenario, [string]$Expected.Scenario),
+        @("build", [string]$Actual.BuildConfiguration, [string]$Expected.BuildConfiguration),
+        @("settings schema", [string]$Actual.SettingsSchemaVersion, [string]$Expected.SettingsSchemaVersion))
+    if (-not $CrossBuild) {
+        $pairs += @(
+            ,@("application", [string]$Actual.ApplicationVersion, [string]$Expected.ApplicationVersion),
+            ,@("commit", [string]$Actual.Commit, [string]$Expected.Commit),
+            ,@("shader", [string]$Actual.ShaderBundleHash, [string]$Expected.ShaderBundleHash),
+            ,@("executable", [string]$Actual.ExecutableHash, [string]$Expected.ExecutableHash),
+            ,@("dirty state", [string]$Actual.DirtyWorktreeState, [string]$Expected.DirtyWorktreeState))
+    }
+    foreach ($pair in $pairs) {
+        if (-not [string]::Equals(
+                [string]$pair[1],
+                [string]$pair[2],
+                [StringComparison]::Ordinal)) {
+            throw "$Label CaptureRun $($pair[0]) differs."
+        }
+    }
+}
+
+function Assert-QualityProducerEqual {
+    param($Actual, $Expected, [bool]$CrossBuild, [string]$Label)
+    $pairs = @(
+        @("schema", [string]$Actual.Schema, [string]$Expected.Schema),
+        @("settings", [string]$Actual.SettingsFingerprint, [string]$Expected.SettingsFingerprint),
+        @("GPU", [string]$Actual.GpuName, [string]$Expected.GpuName),
+        @("driver", [string]$Actual.DriverVersion, [string]$Expected.DriverVersion),
+        @("tier", [string]$Actual.QualityTier, [string]$Expected.QualityTier),
+        @("settings sources", (@($Actual.SourceSettingsFingerprints) -join "`n"), (@($Expected.SourceSettingsFingerprints) -join "`n")))
+    if (-not $CrossBuild) {
+        $pairs += @(
+            ,@("commit", [string]$Actual.BuildCommit, [string]$Expected.BuildCommit),
+            ,@("shader", [string]$Actual.ShaderFingerprint, [string]$Expected.ShaderFingerprint))
+    }
+    foreach ($pair in $pairs) {
+        if (-not [string]::Equals(
+                [string]$pair[1],
+                [string]$pair[2],
+                [StringComparison]::Ordinal)) {
+            throw "$Label producer $($pair[0]) differs."
+        }
+    }
+}
+
+function Assert-QualityCameraEqual {
+    param($Actual, $Expected, [string]$Label)
+    $pairs = @(
+        @("position X", [string]$Actual.PositionX, [string]$Expected.PositionX),
+        @("position Y", [string]$Actual.PositionY, [string]$Expected.PositionY),
+        @("position Z", [string]$Actual.PositionZ, [string]$Expected.PositionZ),
+        @("yaw", [string]$Actual.YawRadians, [string]$Expected.YawRadians),
+        @("pitch", [string]$Actual.PitchRadians, [string]$Expected.PitchRadians),
+        @("FOV", [string]$Actual.FieldOfViewRadians, [string]$Expected.FieldOfViewRadians),
+        @("near", [string]$Actual.NearPlane, [string]$Expected.NearPlane),
+        @("far", [string]$Actual.FarPlane, [string]$Expected.FarPlane),
+        @("view hash", [string]$Actual.ViewHash, [string]$Expected.ViewHash),
+        @("projection hash", [string]$Actual.ProjectionHash, [string]$Expected.ProjectionHash))
+    foreach ($pair in $pairs) {
+        if (-not [string]::Equals(
+                [string]$pair[1],
+                [string]$pair[2],
+                [StringComparison]::Ordinal)) {
+            throw "$Label camera $($pair[0]) differs."
+        }
+    }
+}
+
+function Assert-QualitySequenceReport {
+    param(
+        $Manifest,
+        $Workload,
+        $Report,
+        $BuildIdentity,
+        [string]$Configuration,
+        [string]$Role,
+        [string]$SequenceId,
+        [string]$ExpectedCommit,
+        [string]$ReportPath,
+        [string]$OutputDirectory,
+        [string]$ReferenceContractPath,
+        [string]$ExpectedReferenceContractSha256,
+        [string]$QualityContractPath,
+        [string]$ExpectedQualityContractSha256,
+        $ReferenceContract,
+        [string]$Label)
+    if ([string]$Report.Kind -ne
+            "njulf-renderer-benchmark-quality-sequence" -or
+        [string]$Report.Schema -ne
+            "njulf-renderer-benchmark-quality-sequence/v1" -or
+        [string]$Report.Kind -eq "njulf-renderer-benchmark" -or
+        [bool]$Report.TimingEligible -or
+        [bool]$Report.ProductionTiming) {
+        throw "$Label is not a timing-ineligible quality-sequence report."
+    }
+    $roleValue = Get-QualitySequenceRoleValue $Role
+    $expectedFrameCount = Get-QualitySequenceTrajectoryFrameCount (
+        [string]$Workload.trajectory)
+    $expectedIndices = @(Get-QualitySequenceCheckpointIndices (
+        [string]$Workload.trajectory))
+    if ([int]$Report.Role -ne $roleValue -or
+        [string]$Report.SequenceId -cne $SequenceId -or
+        [string]$Report.SceneKind -cne [string]$Workload.scene -or
+        [string]$Report.Scenario -cne [string]$Workload.scenario -or
+        [string]$Report.CaptureVariant -cne [string]$Workload.captureVariant -or
+        [string]$Report.Trajectory -cne [string]$Workload.trajectory -or
+        [int]$Report.TrajectoryFrameCount -ne $expectedFrameCount -or
+        [int]$Report.WarmupFrameCount -ne [int]$Workload.warmupFrames -or
+        [int]$Report.MaximumAdditionalSettlingFrameCount -ne
+            [int]$Manifest.capture.maximumSettlingFrames -or
+        [int]$Report.MaximumReadbackDrainFrameCount -ne
+            [int]$Manifest.qualitySequence.maximumReadbackDrainFrames -or
+        [string]$Report.BuildConfiguration -cne
+            [string]$Report.CaptureRun.BuildConfiguration -or
+        -not [bool]$Report.Passed -or
+        (Get-ItemCount $Report.Failures) -ne 0 -or
+        [bool]$Report.SettlingWaitTimedOut) {
+        throw "$Label quality-sequence envelope failed."
+    }
+    $settling = [int]$Report.AdditionalSettlingFrameCount
+    $first = [int]$Report.FirstRouteAbsoluteFrameIndex
+    $startDelta = $first - [int]$Workload.warmupFrames
+    if ($settling -lt 0 -or
+        $settling -gt [int]$Manifest.capture.maximumSettlingFrames -or
+        $startDelta -lt $settling -or
+        $startDelta -gt ($settling + 1)) {
+        throw "$Label has incoherent quality warmup/settling/route indices."
+    }
+    foreach ($identity in @(
+            [string]$Report.TrajectoryFingerprint,
+            [string]$Report.TrajectoryRouteHash,
+            [string]$Report.TrajectorySequenceHash)) {
+        if (-not (Test-Sha256Identity $identity)) {
+            throw "$Label lacks a canonical trajectory identity."
+        }
+    }
+    if ([string]$Report.CheckpointContractFingerprint -cne
+        (Get-QualitySequenceCheckpointFingerprint ([string]$Workload.trajectory))) {
+        throw "$Label checkpoint contract fingerprint differs."
+    }
+    $actualIndices = @($Report.CheckpointIndices | ForEach-Object { [int]$_ })
+    if (($actualIndices -join ',') -cne ($expectedIndices -join ',')) {
+        throw "$Label checkpoint order differs from the authored contract."
+    }
+    Assert-QualitySequenceCaptureRun `
+        $Report.CaptureRun $BuildIdentity $Workload $Configuration `
+        $ExpectedCommit "$Label top-level"
+    Assert-QualitySequenceProducer `
+        $Report.ProducerIdentity $ExpectedCommit "$Label top-level"
+    if ([string]$Report.CaptureRun.ShaderBundleHash.Substring(7) -cne
+            [string]$Report.ProducerIdentity.ShaderFingerprint -or
+        [string]$Report.CaptureRun.Commit -cne
+            [string]$Report.ProducerIdentity.BuildCommit) {
+        throw "$Label top-level producer/CaptureRun linkage differs."
+    }
+    if ($Role -eq "canonical") {
+        if (-not [string]::IsNullOrEmpty([string]$Report.ReferenceContractPath) -or
+            -not [string]::IsNullOrEmpty([string]$Report.ReferenceContractSha256)) {
+            throw "$Label canonical sequence consumed a reference contract."
+        }
+    } else {
+        if (-not [string]::Equals(
+                [System.IO.Path]::GetFullPath([string]$Report.ReferenceContractPath),
+                [System.IO.Path]::GetFullPath($ReferenceContractPath),
+                [StringComparison]::OrdinalIgnoreCase) -or
+            [string]$Report.ReferenceContractSha256 -cne
+                $ExpectedReferenceContractSha256 -or
+            $null -eq $ReferenceContract -or
+            [string]$Report.TrajectoryFingerprint -cne
+                [string]$ReferenceContract.trajectoryFingerprint -or
+            [string]$Report.TrajectoryRouteHash -cne
+                [string]$ReferenceContract.trajectoryRouteHash -or
+            [string]$Report.TrajectorySequenceHash -cne
+                [string]$ReferenceContract.trajectorySequenceHash) {
+            throw "$Label differs from its immutable quality reference."
+        }
+    }
+    $checkpoints = @($Report.Checkpoints)
+    if ($checkpoints.Count -ne $expectedIndices.Count) {
+        throw "$Label checkpoint evidence is incomplete."
+    }
+    $firstSerial = [UInt64]0
+    $sceneAssetHash = ""
+    for ($index = 0; $index -lt $checkpoints.Count; $index++) {
+        $checkpoint = $checkpoints[$index]
+        $routeFrame = [int]$expectedIndices[$index]
+        $expectedPath = [System.IO.Path]::GetFullPath(
+            (Join-Path $OutputDirectory ("checkpoint-{0:D4}.pfm" -f $routeFrame)))
+        $expectedToken = "${SequenceId}:$($Workload.trajectory):{0:D2}:{1:D4}" -f $index, $routeFrame
+        if ([int]$checkpoint.Ordinal -ne $index -or
+            [int]$checkpoint.RouteFrameIndex -ne $routeFrame -or
+            [int]$checkpoint.AbsoluteFrameIndex -ne ($first + $routeFrame) -or
+            -not [string]::Equals(
+                [System.IO.Path]::GetFullPath([string]$checkpoint.PfmPath),
+                $expectedPath,
+                [StringComparison]::OrdinalIgnoreCase) -or
+            [string]$checkpoint.CaptureToken -cne $expectedToken -or
+            [int]$checkpoint.Width -ne 1920 -or
+            [int]$checkpoint.Height -ne 1080 -or
+            [UInt64]$checkpoint.DdgiFrameSerial -eq [UInt64]::MaxValue) {
+            throw "$Label checkpoint $index identity is invalid."
+        }
+        if ($index -eq 0) { $firstSerial = [UInt64]$checkpoint.DdgiFrameSerial }
+        if ([UInt64]$checkpoint.DdgiFrameSerial -ne
+            [UInt64]($firstSerial + [UInt64]$routeFrame)) {
+            throw "$Label checkpoint $index frame serial is not route-aligned."
+        }
+        Assert-CanonicalSha256 ([string]$checkpoint.PfmSha256) "$Label checkpoint $index PFM"
+        Assert-CanonicalSha256 ([string]$checkpoint.SettingsFingerprint) "$Label checkpoint $index settings" $true
+        Assert-CanonicalSha256 ([string]$checkpoint.SceneAssetHash) "$Label checkpoint $index scene asset" $true
+        Assert-CanonicalSha256 ([string]$checkpoint.SceneStateHash) "$Label checkpoint $index scene state" $true
+        if (-not (Test-Path -LiteralPath $expectedPath -PathType Leaf) -or
+            [string]$checkpoint.PfmSha256 -cne (Get-Sha256 $expectedPath)) {
+            throw "$Label checkpoint $index PFM bytes differ from its report."
+        }
+        Assert-LinearHdrPfm $expectedPath 1920 1080 "$Label checkpoint $index"
+        Assert-QualitySequenceCaptureRun `
+            $checkpoint.CaptureRun $BuildIdentity $Workload $Configuration `
+            $ExpectedCommit "$Label checkpoint $index"
+        Assert-QualitySequenceProducer `
+            $checkpoint.ProducerIdentity $ExpectedCommit "$Label checkpoint $index"
+        if ([string]$checkpoint.SettingsFingerprint.Substring(7) -cne
+                [string]$checkpoint.ProducerIdentity.SettingsFingerprint -or
+            [string]$checkpoint.CaptureRun.ExecutableHash -cne
+                [string]$Report.CaptureRun.ExecutableHash -or
+            [string]$checkpoint.ProducerIdentity.GpuName -cne
+                [string]$Report.ProducerIdentity.GpuName -or
+            [string]$checkpoint.ProducerIdentity.DriverVersion -cne
+                [string]$Report.ProducerIdentity.DriverVersion -or
+            [string]$checkpoint.ProducerIdentity.QualityTier -cne
+                [string]$Report.ProducerIdentity.QualityTier) {
+            throw "$Label checkpoint $index changed producer/build identity."
+        }
+        Assert-QualityCaptureRunEqual `
+            $checkpoint.CaptureRun $Report.CaptureRun $false `
+            "$Label checkpoint $index/top-level"
+        Assert-QualityProducerEqual `
+            $checkpoint.ProducerIdentity $Report.ProducerIdentity $false `
+            "$Label checkpoint $index/top-level"
+        if ([string]$checkpoint.CaptureRun.ShaderBundleHash.Substring(7) -cne
+                [string]$checkpoint.ProducerIdentity.ShaderFingerprint -or
+            [string]$checkpoint.CaptureRun.Commit -cne
+                [string]$checkpoint.ProducerIdentity.BuildCommit) {
+            throw "$Label checkpoint $index producer/CaptureRun linkage differs."
+        }
+        if ($index -eq 0) {
+            $sceneAssetHash = [string]$checkpoint.SceneAssetHash
+        } elseif ([string]$checkpoint.SceneAssetHash -cne $sceneAssetHash) {
+            throw "$Label changed scene asset identity during the route."
+        }
+        if ($Role -eq "canonical") {
+            $unavailable = $checkpoint.HdrDifference
+            foreach ($numericName in @(
+                    "Width", "Height", "Rmse", "RelativeRmse",
+                    "MeanAbsoluteError", "MaximumAbsoluteError",
+                    "MaximumRelativeRmse", "FlipP95", "MaximumFlipP95")) {
+                $null = Assert-FiniteNumber `
+                    $unavailable.$numericName `
+                    "$Label canonical checkpoint $index $numericName"
+            }
+            if ([bool]$unavailable.Available -or
+                [bool]$unavailable.Passed -or
+                -not [string]::IsNullOrEmpty([string]$unavailable.ReferencePath) -or
+                -not [string]::IsNullOrEmpty([string]$unavailable.CandidatePath) -or
+                -not [string]::IsNullOrEmpty([string]$unavailable.ReferenceSha256) -or
+                -not [string]::IsNullOrEmpty([string]$unavailable.CandidateSha256) -or
+                [int]$unavailable.Width -ne 0 -or
+                [int]$unavailable.Height -ne 0 -or
+                [double]$unavailable.Rmse -ne 0.0 -or
+                [double]$unavailable.RelativeRmse -ne 0.0 -or
+                [double]$unavailable.MeanAbsoluteError -ne 0.0 -or
+                [double]$unavailable.MaximumAbsoluteError -ne 0.0 -or
+                [double]$unavailable.MaximumRelativeRmse -ne 0.12 -or
+                [double]$unavailable.FlipP95 -ne 0.0 -or
+                [double]$unavailable.MaximumFlipP95 -ne 0.02 -or
+                -not [string]::IsNullOrEmpty(
+                    [string]$unavailable.QualityContractPath) -or
+                -not [string]::IsNullOrEmpty(
+                    [string]$unavailable.QualityContractSha256) -or
+                (Get-ItemCount $unavailable.RoiResults) -ne 0 -or
+                [string]$unavailable.FailureReason -cne
+                    "Canonical quality checkpoint; no reference comparison requested.") {
+                throw "$Label canonical checkpoint $index unexpectedly contains comparison evidence."
+            }
+        } else {
+            $difference = $checkpoint.HdrDifference
+            $referenceCheckpoint = @($ReferenceContract.checkpoints)[$index]
+            Assert-QualityCameraEqual `
+                $checkpoint.Camera $referenceCheckpoint.camera `
+                "$Label checkpoint $index/reference"
+            if ([string]$checkpoint.SceneAssetHash -cne
+                    [string]$referenceCheckpoint.sceneAssetHash -or
+                [string]$checkpoint.SceneStateHash -cne
+                    [string]$referenceCheckpoint.sceneStateHash -or
+                [UInt64]$checkpoint.SceneContentRevision -ne
+                    [UInt64]$referenceCheckpoint.sceneContentRevision -or
+                [string]$checkpoint.SettingsFingerprint -cne
+                    [string]$referenceCheckpoint.settingsFingerprint) {
+                throw "$Label checkpoint $index scene/settings identity differs from reference."
+            }
+            $crossBuild = $Role -eq "candidate"
+            Assert-QualityCaptureRunEqual `
+                $checkpoint.CaptureRun $referenceCheckpoint.captureRun `
+                $crossBuild "$Label checkpoint $index/reference"
+            Assert-QualityProducerEqual `
+                $checkpoint.ProducerIdentity `
+                $referenceCheckpoint.producerIdentity `
+                $crossBuild "$Label checkpoint $index/reference"
+            if (-not [bool]$difference.Available -or
+                -not [bool]$difference.Passed -or
+                [int]$difference.Width -ne 1920 -or
+                [int]$difference.Height -ne 1080 -or
+                [string]$difference.CandidateSha256 -cne
+                    [string]$checkpoint.PfmSha256 -or
+                [string]$difference.ReferenceSha256 -cne
+                    [string]$referenceCheckpoint.pfmSha256 -or
+                [string]$difference.QualityContractSha256 -cne
+                    $ExpectedQualityContractSha256 -or
+                [double]$difference.MaximumRelativeRmse -ne
+                    [double]$Manifest.quality.maximumRelativeRmse -or
+                [double]$difference.MaximumFlipP95 -ne
+                    [double]$Manifest.quality.maximumFlipP95 -or
+                -not [string]::IsNullOrEmpty(
+                    [string]$difference.FailureReason) -or
+                -not [string]::Equals(
+                    [System.IO.Path]::GetFullPath([string]$difference.CandidatePath),
+                    $expectedPath,
+                    [StringComparison]::OrdinalIgnoreCase) -or
+                -not [string]::Equals(
+                    [System.IO.Path]::GetFullPath([string]$difference.ReferencePath),
+                    [System.IO.Path]::GetFullPath([string]$referenceCheckpoint.pfmPath),
+                    [StringComparison]::OrdinalIgnoreCase) -or
+                -not [string]::Equals(
+                    [System.IO.Path]::GetFullPath([string]$difference.QualityContractPath),
+                    [System.IO.Path]::GetFullPath($QualityContractPath),
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                throw "$Label checkpoint $index HDR comparison provenance is invalid."
+            }
+            foreach ($metric in @(
+                    "Rmse", "RelativeRmse", "MeanAbsoluteError",
+                    "MaximumAbsoluteError", "FlipP95")) {
+                $null = Assert-FiniteNumber `
+                    $difference.$metric `
+                    "$Label checkpoint $index $metric"
+            }
+            if ([double]$difference.RelativeRmse -gt
+                    [double]$Manifest.quality.maximumRelativeRmse -or
+                [double]$difference.FlipP95 -gt
+                    [double]$Manifest.quality.maximumFlipP95) {
+                throw "$Label checkpoint $index exceeds spatial image gates."
+            }
+            $rois = @($difference.RoiResults)
+            $authoredRois = @((Get-PropertyValue $Workload "qualityRois" @()))
+            $expectedRoi = if ($authoredRois.Count -eq 0) {
+                [pscustomobject]@{
+                    name = "$($Workload.id)-full-frame"
+                    x = 0; y = 0; width = 1920; height = 1080
+                }
+            } else {
+                $authoredRois[0]
+            }
+            if ($rois.Count -ne 1 -or -not [bool]$rois[0].Passed -or
+                [string]$rois[0].Name -cne [string]$expectedRoi.name -or
+                [int]$rois[0].X -ne [int]$expectedRoi.x -or
+                [int]$rois[0].Y -ne [int]$expectedRoi.y -or
+                [int]$rois[0].Width -ne [int]$expectedRoi.width -or
+                [int]$rois[0].Height -ne [int]$expectedRoi.height -or
+                [double]$rois[0].MaximumMeanLuminanceShift -ne
+                    [double]$Manifest.quality.maximumRoiMeanLuminanceShift -or
+                [double]$rois[0].MaximumP95LuminanceShift -ne
+                    [double]$Manifest.quality.maximumRoiP95LuminanceShift -or
+                (Assert-FiniteNumber $rois[0].MeanLuminanceShift "$Label checkpoint $index ROI mean") -gt
+                    [double]$Manifest.quality.maximumRoiMeanLuminanceShift -or
+                (Assert-FiniteNumber $rois[0].P95LuminanceShift "$Label checkpoint $index ROI P95") -gt
+                    [double]$Manifest.quality.maximumRoiP95LuminanceShift) {
+                throw "$Label checkpoint $index ROI gate failed."
+            }
+        }
+    }
+    $pairs = @(Get-QualitySequenceTemporalPairs ([string]$Workload.trajectory))
+    $temporal = @($Report.TemporalResiduals)
+    if ($Role -eq "canonical") {
+        if ($temporal.Count -ne 0) {
+            throw "$Label canonical report contains temporal comparisons."
+        }
+    } elseif ($temporal.Count -ne $pairs.Count) {
+        throw "$Label temporal pair evidence is incomplete."
+    } else {
+        for ($index = 0; $index -lt $pairs.Count; $index++) {
+            $result = $temporal[$index]
+            if ([int]$result.FromRouteFrameIndex -ne
+                    [int]$pairs[$index].fromRouteFrameIndex -or
+                [int]$result.ToRouteFrameIndex -ne
+                    [int]$pairs[$index].toRouteFrameIndex -or
+                -not [bool]$result.Passed) {
+                throw "$Label temporal pair $index is invalid."
+            }
+            $null = Assert-FiniteNumber $result.RelativeResidual "$Label temporal pair $index"
+            if ($Role -eq "repeat") {
+                if ($null -ne $result.MaximumRelativeResidual) {
+                    throw "$Label repeat temporal pair $index consumed a candidate gate."
+                }
+            } else {
+                $gate = @($ReferenceContract.temporalGates)[$index]
+                $maximum = Assert-FiniteNumber `
+                    $result.MaximumRelativeResidual `
+                    "$Label temporal pair $index maximum"
+                if ($maximum -ne [double]$gate.maximumRelativeResidual -or
+                    [double]$result.RelativeResidual -gt $maximum) {
+                    throw "$Label temporal pair $index differs from its locked gate."
+                }
+            }
+        }
+    }
+}
+
+function Assert-QualitySequenceHealthReport {
+    param(
+        $Manifest,
+        $Workload,
+        $Health,
+        $Report,
+        $BuildIdentity,
+        [string]$Configuration,
+        [string]$Role,
+        [string]$SequenceId,
+        [string]$ExpectedCommit,
+        [string]$ReportPath,
+        [string]$OutputDirectory,
+        [string]$ReferenceContractPath,
+        [string]$QualityContractPath,
+        [string]$Label)
+    $failure = [string](Get-PropertyValue $Health "failure" "")
+    if ([string]$Health.kind -ne "renderer-health" -or
+        [string]$Health.schema -ne "renderer-health/v2" -or
+        [string]$Health.status -ne "passed" -or
+        -not [string]::IsNullOrEmpty($failure) -or
+        $null -eq $Health.options -or
+        $null -eq $Health.options.BenchmarkQualitySequence -or
+        $null -eq $Health.diagnostics -or
+        $null -eq $Health.diagnostics.CaptureRun -or
+        $null -eq $Health.producerIdentity) {
+        throw "$Label quality health gate failed: $failure"
+    }
+    $options = $Health.options.BenchmarkQualitySequence
+    $roleName = Get-QualitySequenceRoleName (
+        Get-QualitySequenceRoleValue $Role)
+    $expectedRoleName = $roleName.Substring(0, 1).ToUpperInvariant() +
+        $roleName.Substring(1)
+    $expectedTrajectoryName = switch ([string]$Workload.trajectory) {
+        "bistro-presentation" { "BistroPresentation" }
+        "bistro-loop" { "BistroLoop" }
+        "sponza-low" { "SponzaLow" }
+        "sponza-high" { "SponzaHigh" }
+        "sponza-horizontal" { "SponzaHorizontal" }
+        "sponza-vertical" { "SponzaVertical" }
+        default { "Stationary" }
+    }
+    $expectedSceneKind = if ([string]$Workload.scene -eq "Sponza") {
+        "SponzaPlaza"
+    } else {
+        [string]$Workload.scene
+    }
+    $expectedReferencePath = if ($Role -eq "canonical") {
+        ""
+    } else {
+        [System.IO.Path]::GetFullPath($ReferenceContractPath)
+    }
+    $expectedRoiPath = if ($Role -eq "canonical") {
+        ""
+    } else {
+        [System.IO.Path]::GetFullPath($QualityContractPath)
+    }
+    if (-not [bool]$options.Enabled -or
+        [string]$options.Role -cne $expectedRoleName -or
+        [string]$options.SequenceId -cne $SequenceId -or
+        [int]$options.WarmupFrameCount -ne [int]$Workload.warmupFrames -or
+        [int]$options.MaximumAdditionalSettlingFrameCount -ne
+            [int]$Manifest.capture.maximumSettlingFrames -or
+        [int]$options.MaximumReadbackDrainFrameCount -ne
+            [int]$Manifest.qualitySequence.maximumReadbackDrainFrames -or
+        [string]$options.ReportPath -cne
+            [System.IO.Path]::GetFullPath($ReportPath) -or
+        [string]$options.OutputDirectory -cne
+            [System.IO.Path]::GetFullPath($OutputDirectory) -or
+        [string]$options.ReferenceContractPath -cne $expectedReferencePath -or
+        [string]$options.HdrQualityContractPath -cne $expectedRoiPath -or
+        [string]$options.BudgetProfileOverride -cne "Stress" -or
+        [string]$options.CaptureVariant -cne [string]$Workload.captureVariant -or
+        [string]$options.SceneKind -cne $expectedSceneKind -or
+        [string]$options.Scenario -cne [string]$Workload.scenario -or
+        [string]$options.Trajectory -cne $expectedTrajectoryName -or
+        [double]$options.HdrMaximumRelativeRmse -ne
+            [double]$Manifest.quality.maximumRelativeRmse -or
+        [double]$options.HdrMaximumFlipP95 -ne
+            [double]$Manifest.quality.maximumFlipP95) {
+        throw "$Label health options differ from the quality-sequence command."
+    }
+    $bistroVariant = [string](Get-PropertyValue $Workload "bistroQualityVariant" "")
+    if (-not [string]::IsNullOrEmpty($bistroVariant)) {
+        $expectedBistroVariant = switch ($bistroVariant) {
+            "presentation" { "Presentation" }
+            "steady-motion" { "SteadyMotion" }
+            "sun-scale-step" { "SunScaleStep" }
+            default { throw "$Label has unknown Bistro variant '$bistroVariant'." }
+        }
+        if ([string]$options.TrajectoryBistroVariant -cne
+            $expectedBistroVariant) {
+            throw "$Label health Bistro trajectory variant differs."
+        }
+    }
+    $healthRun = $Health.diagnostics.CaptureRun
+    Assert-QualitySequenceCaptureRun `
+        $healthRun $BuildIdentity $Workload $Configuration `
+        $ExpectedCommit "$Label health"
+    $reportRun = $Report.CaptureRun
+    foreach ($pair in @(
+            @([string]$healthRun.SceneKind, [string]$reportRun.SceneKind, "scene"),
+            @([string]$healthRun.Scenario, [string]$reportRun.Scenario, "scenario"),
+            @([string]$healthRun.Commit, [string]$reportRun.Commit, "commit"),
+            @([string]$healthRun.ExecutableHash, [string]$reportRun.ExecutableHash, "executable"),
+            @([string]$healthRun.ShaderBundleHash, [string]$reportRun.ShaderBundleHash, "shader"),
+            @([string]$healthRun.ApplicationVersion, [string]$reportRun.ApplicationVersion, "application"),
+            @([string]$healthRun.SettingsSchemaVersion, [string]$reportRun.SettingsSchemaVersion, "settings schema"))) {
+        if (-not [string]::Equals(
+                [string]$pair[0],
+                [string]$pair[1],
+                [StringComparison]::Ordinal)) {
+            throw "$Label health/report $($pair[2]) provenance differs."
+        }
+    }
+    $producer = $Health.producerIdentity
+    if ([string]$producer.schema -ne "material-gi-producer-identity/v1" -or
+        [string]$producer.buildCommit -cne
+            [string]$Report.ProducerIdentity.BuildCommit -or
+        [string]$producer.shaderFingerprint -cne
+            [string]$Report.ProducerIdentity.ShaderFingerprint -or
+        [string]$producer.gpuName -cne
+            [string]$Report.ProducerIdentity.GpuName -or
+        [string]$producer.driverVersion -cne
+            [string]$Report.ProducerIdentity.DriverVersion -or
+        [string]$producer.settingsFingerprint -cne
+            [string]$Report.ProducerIdentity.SettingsFingerprint -or
+        -not [string]::IsNullOrEmpty([string]$producer.qualityTier) -or
+        [string]$producer.settingsFingerprint -cnotmatch '^[0-9a-f]{64}$' -or
+        @($producer.sourceSettingsFingerprints).Count -ne 1 -or
+        [string]@($producer.sourceSettingsFingerprints)[0] -cne
+            [string]$producer.settingsFingerprint -or
+        [int]$Health.diagnostics.CaptureRenderWidth -ne 1920 -or
+        [int]$Health.diagnostics.CaptureRenderHeight -ne 1080) {
+        throw "$Label health producer/render identity is invalid."
+    }
+}
+
+function Assert-QualitySequenceInputHashes {
+    param(
+        $BuildIdentity,
+        [string]$ReferenceContractPath,
+        [string]$ExpectedReferenceContractSha256,
+        [string]$QualityContractPath,
+        [string]$ExpectedQualityContractSha256,
+        [string]$Role,
+        [string]$Label)
+    Assert-BuildIdentity $BuildIdentity $Label
+    if ($Role -eq "canonical") {
+        if (-not [string]::IsNullOrEmpty($ReferenceContractPath) -or
+            -not [string]::IsNullOrEmpty($QualityContractPath)) {
+            throw "$Label canonical sequence cannot consume comparison inputs."
+        }
+    } else {
+        if (-not (Test-Path -LiteralPath $QualityContractPath -PathType Leaf) -or
+            $ExpectedQualityContractSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            (Get-Sha256 $QualityContractPath) -cne
+                $ExpectedQualityContractSha256) {
+            throw "$Label ROI contract changed or is missing."
+        }
+        if (-not (Test-Path -LiteralPath $ReferenceContractPath -PathType Leaf) -or
+            $ExpectedReferenceContractSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            (Get-Sha256 $ReferenceContractPath) -cne
+                $ExpectedReferenceContractSha256) {
+            throw "$Label reference contract changed or is missing."
+        }
+        $contract = Get-Content -LiteralPath $ReferenceContractPath -Raw |
+            ConvertFrom-Json
+        foreach ($checkpoint in @($contract.checkpoints)) {
+            $path = [string]$checkpoint.pfmPath
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
+                [string]$checkpoint.pfmSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                (Get-Sha256 $path) -cne [string]$checkpoint.pfmSha256) {
+                throw "$Label immutable reference PFM changed: $path"
+            }
+            Assert-LinearHdrPfm $path 1920 1080 "$Label reference PFM"
+        }
+        $repeatHashes = @($contract.baselineRepeatReportSha256 |
+            ForEach-Object { [string]$_ })
+        if ($repeatHashes.Count -gt 0) {
+            if ($repeatHashes.Count -ne 2 -or
+                @($repeatHashes | Select-Object -Unique).Count -ne 2) {
+                throw "$Label candidate contract has invalid repeat-report hashes."
+            }
+            $contractRoot = Split-Path -Parent $ReferenceContractPath
+            for ($repeat = 1; $repeat -le 2; $repeat++) {
+                $repeatPath = Join-Path $contractRoot (
+                    "repeat-{0:D2}/report.json" -f $repeat)
+                if (-not (Test-Path -LiteralPath $repeatPath -PathType Leaf) -or
+                    (Get-Sha256 $repeatPath) -cne $repeatHashes[$repeat - 1]) {
+                    throw "$Label immutable repeat report $repeat changed."
+                }
+                $repeatReport = Read-QualitySequenceReport $repeatPath
+                if ([string]$repeatReport.Kind -cne
+                        "njulf-renderer-benchmark-quality-sequence" -or
+                    [string]$repeatReport.Schema -cne
+                        "njulf-renderer-benchmark-quality-sequence/v1" -or
+                    [int]$repeatReport.Role -ne 1 -or
+                    -not [bool]$repeatReport.Passed) {
+                    throw "$Label immutable repeat report $repeat is not admitted evidence."
+                }
+                foreach ($checkpoint in @($repeatReport.Checkpoints)) {
+                    $repeatPfm = [string]$checkpoint.PfmPath
+                    if (-not (Test-Path -LiteralPath $repeatPfm -PathType Leaf) -or
+                        [string]$checkpoint.PfmSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                        (Get-Sha256 $repeatPfm) -cne
+                            [string]$checkpoint.PfmSha256) {
+                        throw "$Label immutable repeat $repeat PFM changed: $repeatPfm"
+                    }
+                    Assert-LinearHdrPfm `
+                        $repeatPfm 1920 1080 `
+                        "$Label repeat $repeat PFM"
+                }
+            }
+        }
+    }
+    Assert-ProtectedFingerprints $script:ProtectedFingerprints
+    Assert-CampaignLockIntegrity
+}
+
+function Invoke-QualitySequenceCapture {
+    param(
+        $Manifest,
+        $Workload,
+        $BuildIdentity,
+        [string]$Configuration,
+        [string]$Role,
+        [string]$SequenceId,
+        [string]$ReportPath,
+        [string]$OutputDirectory,
+        [string]$ReferenceContractPath,
+        [string]$ExpectedReferenceContractSha256,
+        [string]$QualityContractPath,
+        [string]$ExpectedQualityContractSha256,
+        $ReferenceContract,
+        $VerifierBuildIdentity,
+        $SpatialEnvelope,
+        [string]$ExpectedCommit,
+        [string]$Label)
+    $healthPath = [System.IO.Path]::ChangeExtension(
+        $ReportPath,
+        ".health.json")
+    foreach ($path in @($ReportPath, $healthPath, $OutputDirectory)) {
+        if (Test-Path -LiteralPath $path) {
+            throw "$Label output already exists; refusing to overwrite $path"
+        }
+    }
+    New-Item -ItemType Directory -Force -Path (
+        Split-Path -Parent $ReportPath) | Out-Null
+    $arguments = @(Get-QualitySequenceArguments `
+        $Manifest $Workload $Role $SequenceId $ReportPath $healthPath `
+        $OutputDirectory $ReferenceContractPath $QualityContractPath)
+    Assert-QualitySequenceInputHashes `
+        $BuildIdentity $ReferenceContractPath `
+        $ExpectedReferenceContractSha256 $QualityContractPath `
+        $ExpectedQualityContractSha256 $Role "$Label pre-capture"
+    Invoke-ProcessChecked `
+        ([string]$BuildIdentity.ExecutablePath) `
+        $arguments $Label ([int]$Manifest.capture.benchmarkTimeoutSeconds)
+    Assert-QualitySequenceInputHashes `
+        $BuildIdentity $ReferenceContractPath `
+        $ExpectedReferenceContractSha256 $QualityContractPath `
+        $ExpectedQualityContractSha256 $Role "$Label post-capture"
+    $report = Read-QualitySequenceReport $ReportPath
+    Assert-QualitySequenceReport `
+        $Manifest $Workload $report $BuildIdentity $Configuration $Role `
+        $SequenceId $ExpectedCommit $ReportPath $OutputDirectory `
+        $ReferenceContractPath $ExpectedReferenceContractSha256 `
+        $QualityContractPath $ExpectedQualityContractSha256 `
+        $ReferenceContract $Label
+    if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf)) {
+        throw "$Label did not publish its health report."
+    }
+    $health = Get-Content -LiteralPath $healthPath -Raw | ConvertFrom-Json
+    Assert-QualitySequenceHealthReport `
+        $Manifest $Workload $health $report $BuildIdentity $Configuration `
+        $Role $SequenceId $ExpectedCommit $ReportPath $OutputDirectory `
+        $ReferenceContractPath $QualityContractPath $Label
+    $verifiedMetrics = $null
+    if ($Role -ne "canonical") {
+        $verifiedMetrics = Get-RecomputedQualitySequenceMetrics `
+            $Manifest $Workload $report $ReferenceContract `
+            $VerifierBuildIdentity $QualityContractPath $Label
+        if ($Role -eq "candidate") {
+            Assert-QualitySequenceSpatialEnvelope `
+                $verifiedMetrics @($SpatialEnvelope) $Label
+        }
+    }
+    $checkpointEvidence = @($report.Checkpoints | ForEach-Object {
+        [pscustomobject]@{
+            ordinal = [int]$_.Ordinal
+            routeFrameIndex = [int]$_.RouteFrameIndex
+            pfmPath = [System.IO.Path]::GetFullPath([string]$_.PfmPath)
+            pfmSha256 = Get-Sha256 ([string]$_.PfmPath)
+            captureToken = [string]$_.CaptureToken
+            ddgiFrameSerial = [UInt64]$_.DdgiFrameSerial
+            absoluteFrameIndex = [int]$_.AbsoluteFrameIndex
+            width = [int]$_.Width
+            height = [int]$_.Height
+            camera = $_.Camera
+            sceneAssetHash = [string]$_.SceneAssetHash
+            sceneStateHash = [string]$_.SceneStateHash
+            sceneContentRevision = [UInt64]$_.SceneContentRevision
+            settingsFingerprint = [string]$_.SettingsFingerprint
+            captureRun = $_.CaptureRun
+            producerIdentity = $_.ProducerIdentity
+            hdrDifference = $_.HdrDifference
+        }
+    })
+    return [pscustomobject]@{
+        role = $Role
+        sequenceId = $SequenceId
+        reportPath = [System.IO.Path]::GetFullPath($ReportPath)
+        reportSha256 = Get-Sha256 $ReportPath
+        healthPath = [System.IO.Path]::GetFullPath($healthPath)
+        healthSha256 = Get-Sha256 $healthPath
+        outputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
+        referenceContractPath = $ReferenceContractPath
+        referenceContractSha256 = $ExpectedReferenceContractSha256
+        qualityContractPath = $QualityContractPath
+        qualityContractSha256 = $ExpectedQualityContractSha256
+        buildRootPath = [System.IO.Path]::GetFullPath(
+            [string]$BuildIdentity.RootPath)
+        buildBundleFingerprint = [string]$BuildIdentity.BundleFingerprint
+        runtimeExecutableBundleHash =
+            [string]$BuildIdentity.RuntimeExecutableBundleHash
+        trajectoryRouteHash = [string]$report.TrajectoryRouteHash
+        trajectorySequenceHash = [string]$report.TrajectorySequenceHash
+        producerGpuName = [string]$report.ProducerIdentity.GpuName
+        producerDriverVersion = [string]$report.ProducerIdentity.DriverVersion
+        producerQualityTier = [string]$report.ProducerIdentity.QualityTier
+        captureRun = $report.CaptureRun
+        producerIdentity = $report.ProducerIdentity
+        verifiedMetrics = $verifiedMetrics
+        checkpoints = @($checkpointEvidence)
+    }
+}
+
+function ConvertTo-QualityCaptureRunContract {
+    param($Run)
+    return [ordered]@{
+        sceneKind = [string]$Run.SceneKind
+        scenario = [string]$Run.Scenario
+        buildConfiguration = [string]$Run.BuildConfiguration
+        applicationVersion = [string]$Run.ApplicationVersion
+        commit = [string]$Run.Commit
+        shaderBundleHash = [string]$Run.ShaderBundleHash
+        settingsSchemaVersion = [int]$Run.SettingsSchemaVersion
+        executableHash = [string]$Run.ExecutableHash
+        dirtyWorktreeState = [string]$Run.DirtyWorktreeState
+    }
+}
+
+function ConvertTo-QualityProducerContract {
+    param($Producer)
+    return [ordered]@{
+        schema = [string]$Producer.Schema
+        buildCommit = [string]$Producer.BuildCommit
+        shaderFingerprint = [string]$Producer.ShaderFingerprint
+        settingsFingerprint = [string]$Producer.SettingsFingerprint
+        sourceSettingsFingerprints = @(
+            $Producer.SourceSettingsFingerprints | ForEach-Object { [string]$_ })
+        gpuName = [string]$Producer.GpuName
+        driverVersion = [string]$Producer.DriverVersion
+        qualityTier = [string]$Producer.QualityTier
+    }
+}
+
+function ConvertTo-QualityCameraContract {
+    param($Camera)
+    return [ordered]@{
+        positionX = [single]$Camera.PositionX
+        positionY = [single]$Camera.PositionY
+        positionZ = [single]$Camera.PositionZ
+        yawRadians = [single]$Camera.YawRadians
+        pitchRadians = [single]$Camera.PitchRadians
+        fieldOfViewRadians = [single]$Camera.FieldOfViewRadians
+        nearPlane = [single]$Camera.NearPlane
+        farPlane = [single]$Camera.FarPlane
+        viewHash = [string]$Camera.ViewHash
+        projectionHash = [string]$Camera.ProjectionHash
+        cameraCutSerial = [UInt64]$Camera.CameraCutSerial
+    }
+}
+
+function New-QualitySequenceReferenceContract {
+    param(
+        $Manifest,
+        $Workload,
+        $CanonicalReport,
+        [string]$QualityContractPath,
+        [string]$QualityContractSha256,
+        [object[]]$TemporalGates = @(),
+        [string[]]$BaselineRepeatReportSha256 = @())
+    $checkpoints = @($CanonicalReport.Checkpoints | ForEach-Object {
+        [ordered]@{
+            ordinal = [int]$_.Ordinal
+            routeFrameIndex = [int]$_.RouteFrameIndex
+            absoluteFrameIndex = [int]$_.AbsoluteFrameIndex
+            pfmPath = [System.IO.Path]::GetFullPath([string]$_.PfmPath)
+            pfmSha256 = [string]$_.PfmSha256
+            width = [int]$_.Width
+            height = [int]$_.Height
+            captureToken = [string]$_.CaptureToken
+            ddgiFrameSerial = [UInt64]$_.DdgiFrameSerial
+            camera = ConvertTo-QualityCameraContract $_.Camera
+            sceneAssetHash = [string]$_.SceneAssetHash
+            sceneStateHash = [string]$_.SceneStateHash
+            sceneContentRevision = [UInt64]$_.SceneContentRevision
+            settingsFingerprint = [string]$_.SettingsFingerprint
+            captureRun = ConvertTo-QualityCaptureRunContract $_.CaptureRun
+            producerIdentity = ConvertTo-QualityProducerContract $_.ProducerIdentity
+        }
+    })
+    return [ordered]@{
+        schema = "njulf-benchmark-quality-sequence-reference/v1"
+        sceneKind = [string]$CanonicalReport.SceneKind
+        scenario = [string]$CanonicalReport.Scenario
+        captureVariant = [string]$CanonicalReport.CaptureVariant
+        buildConfiguration = [string]$CanonicalReport.BuildConfiguration
+        trajectory = [string]$CanonicalReport.Trajectory
+        trajectoryFingerprint = [string]$CanonicalReport.TrajectoryFingerprint
+        trajectoryRouteHash = [string]$CanonicalReport.TrajectoryRouteHash
+        trajectorySequenceHash = [string]$CanonicalReport.TrajectorySequenceHash
+        trajectoryFrameCount = [int]$CanonicalReport.TrajectoryFrameCount
+        warmupFrameCount = [int]$CanonicalReport.WarmupFrameCount
+        maximumAdditionalSettlingFrameCount =
+            [int]$CanonicalReport.MaximumAdditionalSettlingFrameCount
+        maximumReadbackDrainFrameCount =
+            [int]$CanonicalReport.MaximumReadbackDrainFrameCount
+        firstRouteAbsoluteFrameIndex = [int]$CanonicalReport.FirstRouteAbsoluteFrameIndex
+        checkpointContractFingerprint =
+            [string]$CanonicalReport.CheckpointContractFingerprint
+        checkpointIndices = @(
+            $CanonicalReport.CheckpointIndices | ForEach-Object { [int]$_ })
+        checkpoints = @($checkpoints)
+        qualityContractPath = [System.IO.Path]::GetFullPath($QualityContractPath)
+        qualityContractSha256 = $QualityContractSha256
+        maximumRelativeRmse = [double]$Manifest.quality.maximumRelativeRmse
+        maximumFlipP95 = [double]$Manifest.quality.maximumFlipP95
+        temporalGates = @($TemporalGates)
+        captureRun = ConvertTo-QualityCaptureRunContract $CanonicalReport.CaptureRun
+        producerIdentity = ConvertTo-QualityProducerContract $CanonicalReport.ProducerIdentity
+        temporalResidualFloor =
+            [double]$Manifest.qualitySequence.temporalResidualFloor
+        temporalResidualMultiplier =
+            [double]$Manifest.qualitySequence.temporalResidualMultiplier
+        temporalResidualHardCeiling =
+            [double]$Manifest.qualitySequence.temporalResidualHardCeiling
+        baselineRepeatReportSha256 = @($BaselineRepeatReportSha256)
+    }
+}
+
+function Write-QualitySequenceReferenceContract {
+    param([string]$Path, $Contract)
+    if (Test-Path -LiteralPath $Path) {
+        throw "Quality-sequence reference contract already exists: $Path"
+    }
+    $directory = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    $temporaryPath = Join-Path $directory (
+        ".{0}.{1}.tmp" -f
+            [System.IO.Path]::GetFileName($Path),
+            [Guid]::NewGuid().ToString("N"))
+    try {
+        $Contract | ConvertTo-Json -Depth 24 |
+            Set-Content -LiteralPath $temporaryPath -Encoding utf8
+        $null = Get-Content -LiteralPath $temporaryPath -Raw |
+            ConvertFrom-Json
+        [System.IO.File]::Move($temporaryPath, $Path, $false)
+    } finally {
+        if (Test-Path -LiteralPath $temporaryPath) {
+            Remove-Item -LiteralPath $temporaryPath -Force
+        }
+    }
+    return [pscustomobject]@{
+        path = [System.IO.Path]::GetFullPath($Path)
+        sha256 = Get-Sha256 $Path
+        contract = $Contract
+    }
+}
+
+function New-QualitySequenceTemporalGates {
+    param(
+        $Manifest,
+        $Workload,
+        [object[]]$VerifiedRepeatMetrics)
+    if ($VerifiedRepeatMetrics.Count -ne
+        [int]$Manifest.qualitySequence.baselineRepeatCount) {
+        throw "Temporal gates require exactly two admitted baseline repeats."
+    }
+    $pairs = @(Get-QualitySequenceTemporalPairs ([string]$Workload.trajectory))
+    $gates = @()
+    for ($pairIndex = 0; $pairIndex -lt $pairs.Count; $pairIndex++) {
+        $residuals = @($VerifiedRepeatMetrics | ForEach-Object {
+            $results = @($_.temporal)
+            if ($results.Count -ne $pairs.Count) {
+                throw "Baseline repeat temporal topology is incomplete."
+            }
+            [double]$results[$pairIndex].relativeResidual
+        })
+        foreach ($residual in $residuals) {
+            $null = Assert-FiniteNumber `
+                $residual `
+                "Baseline repeat temporal residual $pairIndex"
+        }
+        $repeatMaximum = [double](
+            $residuals | Measure-Object -Maximum).Maximum
+        $derived = [Math]::Max(
+            [double]$Manifest.qualitySequence.temporalResidualFloor,
+            $repeatMaximum *
+                [double]$Manifest.qualitySequence.temporalResidualMultiplier)
+        if (-not [double]::IsFinite($derived) -or
+            $derived -gt
+                [double]$Manifest.qualitySequence.temporalResidualHardCeiling) {
+            throw (
+                "Clean-baseline temporal gate $($pairs[$pairIndex].fromRouteFrameIndex)->" +
+                "$($pairs[$pairIndex].toRouteFrameIndex) derived as $derived, exceeding " +
+                "the hard ceiling $($Manifest.qualitySequence.temporalResidualHardCeiling).")
+        }
+        $gates += [ordered]@{
+            fromRouteFrameIndex = [int]$pairs[$pairIndex].fromRouteFrameIndex
+            toRouteFrameIndex = [int]$pairs[$pairIndex].toRouteFrameIndex
+            maximumRelativeResidual = $derived
+        }
+    }
+    return @($gates)
+}
+
+function Invoke-QualityMetricVerifier {
+    param(
+        $Manifest,
+        $BuildIdentity,
+        [object[]]$Operations,
+        [string]$Label)
+    Assert-BuildIdentity $BuildIdentity "$Label verifier build"
+    Assert-ProtectedFingerprints $script:ProtectedFingerprints
+    $request = [ordered]@{
+        schema = "njulf-perf-quality-verify-request/v1"
+        operations = @($Operations)
+    }
+    $requestJson = $request | ConvertTo-Json -Depth 12 -Compress
+    $hostExecutable = Join-Path $PSHOME "pwsh.exe"
+    $helperPath = Join-Path $script:SolutionRoot "tools/perf-quality-verify.ps1"
+    $helperRelativePath = "tools/perf-quality-verify.ps1"
+    $expectedHelperHash = [string]$script:ProtectedFingerprints[$helperRelativePath]
+    [byte[]]$helperBytes = [System.IO.File]::ReadAllBytes($helperPath)
+    $actualHelperHash = [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData($helperBytes)).ToLowerInvariant()
+    if ($expectedHelperHash -cnotmatch '^[0-9a-f]{64}$' -or
+        $actualHelperHash -cne $expectedHelperHash) {
+        throw "$Label verifier helper differs from its admitted bytes."
+    }
+    $helperText = [System.Text.UTF8Encoding]::new(
+        $false,
+        $true).GetString($helperBytes)
+    $encodedHelper = [Convert]::ToBase64String(
+        [System.Text.Encoding]::Unicode.GetBytes($helperText))
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $hostExecutable
+    $startInfo.WorkingDirectory = $script:SolutionRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Environment["NJULF_PERF_VERIFY_BUILD_ROOT"] =
+        [string]$BuildIdentity.RootPath
+    foreach ($argument in @(
+            "-NoProfile", "-NonInteractive",
+            "-EncodedCommand", $encodedHelper)) {
+        [void]$startInfo.ArgumentList.Add([string]$argument)
+    }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "$Label verifier failed to start."
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.StandardInput.Write($requestJson)
+        $process.StandardInput.Close()
+        if (-not $process.WaitForExit(
+                [int]$Manifest.capture.benchmarkTimeoutSeconds * 1000)) {
+            $process.Kill($true)
+            $process.WaitForExit()
+            throw "$Label verifier timed out."
+        }
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            throw "$Label verifier exited $($process.ExitCode): $stderr"
+        }
+        $result = $stdout | ConvertFrom-Json
+        if ([string]$result.schema -cne
+                "njulf-perf-quality-verify-result/v1" -or
+            @($result.results).Count -ne $Operations.Count) {
+            throw "$Label verifier result topology is invalid."
+        }
+        for ($index = 0; $index -lt $Operations.Count; $index++) {
+            if ([string]@($result.results)[$index].id -cne
+                    [string]$Operations[$index].id -or
+                [string]@($result.results)[$index].kind -cne
+                    [string]$Operations[$index].kind) {
+                throw "$Label verifier operation $index was reordered."
+            }
+        }
+        Assert-BuildIdentity $BuildIdentity "$Label verifier build"
+        Assert-ProtectedFingerprints $script:ProtectedFingerprints
+        if ((Get-Sha256 $helperPath) -cne $expectedHelperHash) {
+            throw "$Label verifier helper changed during execution."
+        }
+        return @($result.results)
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Assert-QualityMetricEqual {
+    param($Actual, $Expected, [string]$Label)
+    $actualValue = Assert-FiniteNumber $Actual $Label
+    $expectedValue = Assert-FiniteNumber $Expected "$Label recomputed"
+    if ($actualValue -ne $expectedValue) {
+        throw "$Label differs from the protected verifier ($actualValue vs $expectedValue)."
+    }
+    return $actualValue
+}
+
+function Get-RecomputedQualitySequenceMetrics {
+    param(
+        $Manifest,
+        $Workload,
+        $Report,
+        $ReferenceContract,
+        $VerifierBuildIdentity,
+        [string]$QualityContractPath,
+        [string]$Label)
+    $reportCheckpoints = @($Report.Checkpoints)
+    $referenceCheckpoints = @($ReferenceContract.checkpoints)
+    if ($reportCheckpoints.Count -ne $referenceCheckpoints.Count) {
+        throw "$Label cannot recompute an incomplete checkpoint set."
+    }
+    $operations = @()
+    for ($index = 0; $index -lt $reportCheckpoints.Count; $index++) {
+        $operations += [ordered]@{
+            id = "spatial-$index"
+            kind = "spatial"
+            referencePath = [string]$referenceCheckpoints[$index].pfmPath
+            referenceSha256 = [string]$referenceCheckpoints[$index].pfmSha256
+            candidatePath = [string]$reportCheckpoints[$index].PfmPath
+            candidateSha256 = [string]$reportCheckpoints[$index].PfmSha256
+            maximumRelativeRmse = [double]$Manifest.quality.maximumRelativeRmse
+            maximumFlipP95 = [double]$Manifest.quality.maximumFlipP95
+            qualityContractPath = $QualityContractPath
+            qualityContractSha256 = [string]$ReferenceContract.qualityContractSha256
+        }
+    }
+    $pairs = @(Get-QualitySequenceTemporalPairs ([string]$Workload.trajectory))
+    $ordinalByFrame = @{}
+    for ($index = 0; $index -lt $referenceCheckpoints.Count; $index++) {
+        $ordinalByFrame[[int]$referenceCheckpoints[$index].routeFrameIndex] = $index
+    }
+    for ($index = 0; $index -lt $pairs.Count; $index++) {
+        $fromOrdinal = [int]$ordinalByFrame[
+            [int]$pairs[$index].fromRouteFrameIndex]
+        $toOrdinal = [int]$ordinalByFrame[
+            [int]$pairs[$index].toRouteFrameIndex]
+        $operations += [ordered]@{
+            id = "temporal-$index"
+            kind = "temporal"
+            referenceFromPath = [string]$referenceCheckpoints[$fromOrdinal].pfmPath
+            referenceFromSha256 = [string]$referenceCheckpoints[$fromOrdinal].pfmSha256
+            referenceToPath = [string]$referenceCheckpoints[$toOrdinal].pfmPath
+            referenceToSha256 = [string]$referenceCheckpoints[$toOrdinal].pfmSha256
+            candidateFromPath = [string]$reportCheckpoints[$fromOrdinal].PfmPath
+            candidateFromSha256 = [string]$reportCheckpoints[$fromOrdinal].PfmSha256
+            candidateToPath = [string]$reportCheckpoints[$toOrdinal].PfmPath
+            candidateToSha256 = [string]$reportCheckpoints[$toOrdinal].PfmSha256
+        }
+    }
+    $verified = @(Invoke-QualityMetricVerifier `
+        $Manifest $VerifierBuildIdentity $operations `
+        "$Label protected metric verification")
+    $spatial = @()
+    for ($index = 0; $index -lt $reportCheckpoints.Count; $index++) {
+        $difference = $reportCheckpoints[$index].HdrDifference
+        $recomputed = $verified[$index].value
+        $operation = $operations[$index]
+        $verifiedInputs = @($verified[$index].inputs)
+        if ($verifiedInputs.Count -ne 3) {
+            throw "$Label checkpoint $index verifier input topology differs."
+        }
+        for ($inputIndex = 0; $inputIndex -lt 3; $inputIndex++) {
+            $expectedPath = @(
+                [string]$operation.referencePath,
+                [string]$operation.candidatePath,
+                [string]$operation.qualityContractPath)[$inputIndex]
+            $expectedSha = @(
+                [string]$operation.referenceSha256,
+                [string]$operation.candidateSha256,
+                [string]$operation.qualityContractSha256)[$inputIndex]
+            if (-not [string]::Equals(
+                    [System.IO.Path]::GetFullPath(
+                        [string]$verifiedInputs[$inputIndex].path),
+                    [System.IO.Path]::GetFullPath($expectedPath),
+                    [StringComparison]::OrdinalIgnoreCase) -or
+                [string]$verifiedInputs[$inputIndex].sha256 -cne $expectedSha) {
+                throw "$Label checkpoint $index verifier input $inputIndex differs."
+            }
+        }
+        if (-not [string]::Equals(
+                [System.IO.Path]::GetFullPath([string]$recomputed.ReferencePath),
+                [System.IO.Path]::GetFullPath([string]$operation.referencePath),
+                [StringComparison]::OrdinalIgnoreCase) -or
+            -not [string]::Equals(
+                [System.IO.Path]::GetFullPath([string]$recomputed.CandidatePath),
+                [System.IO.Path]::GetFullPath([string]$operation.candidatePath),
+                [StringComparison]::OrdinalIgnoreCase) -or
+            -not [string]::Equals(
+                [System.IO.Path]::GetFullPath([string]$recomputed.QualityContractPath),
+                [System.IO.Path]::GetFullPath($QualityContractPath),
+                [StringComparison]::OrdinalIgnoreCase) -or
+            [int]$recomputed.Width -ne 1920 -or
+            [int]$recomputed.Height -ne 1080 -or
+            [double]$recomputed.MaximumRelativeRmse -ne
+                [double]$Manifest.quality.maximumRelativeRmse -or
+            [double]$recomputed.MaximumFlipP95 -ne
+                [double]$Manifest.quality.maximumFlipP95) {
+            throw "$Label checkpoint $index verifier output provenance differs."
+        }
+        foreach ($name in @(
+                "Rmse", "RelativeRmse", "MeanAbsoluteError",
+                "MaximumAbsoluteError", "FlipP95")) {
+            $null = Assert-QualityMetricEqual `
+                $difference.$name $recomputed.$name `
+                "$Label checkpoint $index $name"
+        }
+        if ([bool]$difference.Available -ne [bool]$recomputed.Available -or
+            [bool]$difference.Passed -ne [bool]$recomputed.Passed -or
+            [string]$difference.ReferenceSha256 -cne
+                [string]$recomputed.ReferenceSha256 -or
+            [string]$difference.CandidateSha256 -cne
+                [string]$recomputed.CandidateSha256 -or
+            [string]$difference.QualityContractSha256 -cne
+                [string]$recomputed.QualityContractSha256 -or
+            [string]$difference.FailureReason -cne
+                [string]$recomputed.FailureReason) {
+            throw "$Label checkpoint $index spatial verifier provenance differs."
+        }
+        $reportedRois = @($difference.RoiResults)
+        $verifiedRois = @($recomputed.RoiResults)
+        if ($reportedRois.Count -ne $verifiedRois.Count) {
+            throw "$Label checkpoint $index ROI verifier topology differs."
+        }
+        $roiEvidence = @()
+        for ($roiIndex = 0; $roiIndex -lt $reportedRois.Count; $roiIndex++) {
+            $reportedRoi = $reportedRois[$roiIndex]
+            $verifiedRoi = $verifiedRois[$roiIndex]
+            foreach ($name in @(
+                    "Name", "X", "Y", "Width", "Height",
+                    "MaximumMeanLuminanceShift",
+                    "MaximumP95LuminanceShift", "Passed")) {
+                if ([string]$reportedRoi.$name -cne
+                    [string]$verifiedRoi.$name) {
+                    throw "$Label checkpoint $index ROI $roiIndex $name differs from verifier."
+                }
+            }
+            $mean = Assert-QualityMetricEqual `
+                $reportedRoi.MeanLuminanceShift `
+                $verifiedRoi.MeanLuminanceShift `
+                "$Label checkpoint $index ROI $roiIndex mean"
+            $p95 = Assert-QualityMetricEqual `
+                $reportedRoi.P95LuminanceShift `
+                $verifiedRoi.P95LuminanceShift `
+                "$Label checkpoint $index ROI $roiIndex P95"
+            $roiEvidence += [pscustomobject]@{
+                name = [string]$reportedRoi.Name
+                meanLuminanceShift = $mean
+                p95LuminanceShift = $p95
+            }
+        }
+        $spatial += [pscustomobject]@{
+            ordinal = $index
+            routeFrameIndex = [int]$reportCheckpoints[$index].RouteFrameIndex
+            relativeRmse = [double]$recomputed.RelativeRmse
+            flipP95 = [double]$recomputed.FlipP95
+            rois = @($roiEvidence)
+        }
+    }
+    $temporal = @()
+    $reportedTemporal = @($Report.TemporalResiduals)
+    if ($reportedTemporal.Count -ne $pairs.Count) {
+        throw "$Label temporal report topology differs during recomputation."
+    }
+    for ($index = 0; $index -lt $pairs.Count; $index++) {
+        $verifiedTemporal = $verified[$reportCheckpoints.Count + $index].value
+        $verifiedInputs = @($verifiedTemporal.inputs)
+        $operation = $operations[$reportCheckpoints.Count + $index]
+        if ($verifiedInputs.Count -ne 4) {
+            throw "$Label temporal pair $index verifier input topology differs."
+        }
+        for ($inputIndex = 0; $inputIndex -lt 4; $inputIndex++) {
+            $pathName = @(
+                "referenceFromPath", "referenceToPath",
+                "candidateFromPath", "candidateToPath")[$inputIndex]
+            $shaName = @(
+                "referenceFromSha256", "referenceToSha256",
+                "candidateFromSha256", "candidateToSha256")[$inputIndex]
+            if (-not [string]::Equals(
+                    [System.IO.Path]::GetFullPath(
+                        [string]$verifiedInputs[$inputIndex].path),
+                    [System.IO.Path]::GetFullPath(
+                        [string]$operation.$pathName),
+                    [StringComparison]::OrdinalIgnoreCase) -or
+                [string]$verifiedInputs[$inputIndex].sha256 -cne
+                    [string]$operation.$shaName) {
+                throw "$Label temporal pair $index verifier input $inputIndex differs."
+            }
+        }
+        $recomputed = Assert-QualityMetricEqual `
+            $reportedTemporal[$index].RelativeResidual `
+            $verifiedTemporal.relativeResidual `
+            "$Label temporal pair $index"
+        $temporal += [pscustomobject]@{
+            fromRouteFrameIndex = [int]$pairs[$index].fromRouteFrameIndex
+            toRouteFrameIndex = [int]$pairs[$index].toRouteFrameIndex
+            relativeResidual = $recomputed
+        }
+    }
+    return [pscustomobject]@{
+        spatial = @($spatial)
+        temporal = @($temporal)
+    }
+}
+
+function New-QualitySequenceSpatialEnvelope {
+    param($Manifest, $Workload, [object[]]$VerifiedRepeatMetrics)
+    if ($VerifiedRepeatMetrics.Count -ne 2) {
+        throw "Spatial repeatability envelope requires exactly two verified repeats."
+    }
+    $checkpointIndices = @(Get-QualitySequenceCheckpointIndices (
+        [string]$Workload.trajectory))
+    $envelope = @()
+    for ($checkpoint = 0; $checkpoint -lt $checkpointIndices.Count; $checkpoint++) {
+        $repeatValues = @($VerifiedRepeatMetrics | ForEach-Object {
+            @($_.spatial)[$checkpoint]
+        })
+        $roiCount = @($repeatValues[0].rois).Count
+        $rois = @()
+        for ($roi = 0; $roi -lt $roiCount; $roi++) {
+            $name = [string]@($repeatValues[0].rois)[$roi].name
+            if ([string]@($repeatValues[1].rois)[$roi].name -cne $name) {
+                throw "Spatial repeat ROI topology changed."
+            }
+            $rois += [pscustomobject]@{
+                name = $name
+                maximumMeanLuminanceShift = [Math]::Max(
+                    [double]@($repeatValues[0].rois)[$roi].meanLuminanceShift,
+                    [double]@($repeatValues[1].rois)[$roi].meanLuminanceShift)
+                maximumP95LuminanceShift = [Math]::Max(
+                    [double]@($repeatValues[0].rois)[$roi].p95LuminanceShift,
+                    [double]@($repeatValues[1].rois)[$roi].p95LuminanceShift)
+            }
+        }
+        $envelope += [pscustomobject]@{
+            ordinal = $checkpoint
+            routeFrameIndex = [int]$checkpointIndices[$checkpoint]
+            maximumRelativeRmse = [Math]::Max(
+                [double]$repeatValues[0].relativeRmse,
+                [double]$repeatValues[1].relativeRmse)
+            maximumFlipP95 = [Math]::Max(
+                [double]$repeatValues[0].flipP95,
+                [double]$repeatValues[1].flipP95)
+            rois = @($rois)
+        }
+    }
+    return @($envelope)
+}
+
+function Assert-QualitySequenceSpatialEnvelope {
+    param($VerifiedMetrics, [object[]]$Envelope, [string]$Label)
+    $spatial = @($VerifiedMetrics.spatial)
+    if ($spatial.Count -ne $Envelope.Count) {
+        throw "$Label spatial envelope topology differs."
+    }
+    for ($index = 0; $index -lt $Envelope.Count; $index++) {
+        if ([int]$spatial[$index].ordinal -ne [int]$Envelope[$index].ordinal -or
+            [int]$spatial[$index].routeFrameIndex -ne
+                [int]$Envelope[$index].routeFrameIndex -or
+            [double]$spatial[$index].relativeRmse -gt
+                [double]$Envelope[$index].maximumRelativeRmse -or
+            [double]$spatial[$index].flipP95 -gt
+                [double]$Envelope[$index].maximumFlipP95) {
+            throw "$Label checkpoint $index exceeds baseline spatial repeatability."
+        }
+        $actualRois = @($spatial[$index].rois)
+        $expectedRois = @($Envelope[$index].rois)
+        if ($actualRois.Count -ne $expectedRois.Count) {
+            throw "$Label checkpoint $index ROI envelope topology differs."
+        }
+        for ($roi = 0; $roi -lt $actualRois.Count; $roi++) {
+            if ([string]$actualRois[$roi].name -cne
+                    [string]$expectedRois[$roi].name -or
+                [double]$actualRois[$roi].meanLuminanceShift -gt
+                    [double]$expectedRois[$roi].maximumMeanLuminanceShift -or
+                [double]$actualRois[$roi].p95LuminanceShift -gt
+                    [double]$expectedRois[$roi].maximumP95LuminanceShift) {
+                throw "$Label checkpoint $index ROI $roi exceeds baseline repeatability."
+            }
+        }
+    }
 }
 
 function Get-BenchmarkArguments {
@@ -1972,13 +3567,503 @@ function Invoke-ConfigurationMatrix {
     }
 }
 
+function Assert-ConfigurationTimingEvidence {
+    param(
+        $Manifest,
+        $Lock,
+        [object[]]$WinWorkloads,
+        $BaselineBuild,
+        $CandidateBuild,
+        [string]$Configuration,
+        [int]$Iteration,
+        [string]$Stage,
+        [string]$BaselineCommit,
+        [string]$CandidateCommit,
+        $ConfigurationResult,
+        [string]$ArtifactRoot = "",
+        [bool]$RunAllWorkloads = $false,
+        [string]$Label = "Timing matrix")
+    if ([string]$ConfigurationResult.configuration -cne $Configuration -or
+        [string]$ConfigurationResult.stage -cne $Stage -or
+        [string]$ConfigurationResult.decision -cne "keep") {
+        throw "$Label envelope is incomplete."
+    }
+    Assert-BuildIdentity $BaselineBuild "$Label baseline build"
+    Assert-BuildIdentity $CandidateBuild "$Label candidate build"
+    $workloads = @(Get-ConfigurationWorkloadSelection `
+        $Manifest $WinWorkloads $RunAllWorkloads)
+    $winIds = @($WinWorkloads | ForEach-Object { [string]$_.id })
+    $comparisons = @($ConfigurationResult.comparisons)
+    if ($comparisons.Count -ne $workloads.Count) {
+        throw "$Label workload topology differs."
+    }
+    for ($workloadIndex = 0;
+         $workloadIndex -lt $workloads.Count;
+         $workloadIndex++) {
+        $workload = $workloads[$workloadIndex]
+        $comparison = $comparisons[$workloadIndex]
+        $requireWin = $winIds -contains [string]$workload.id
+        $expectedGateMode = if ($requireWin) {
+            "target-win"
+        } else {
+            "qualification-nonregression"
+        }
+        $workloadStage = if ($requireWin) { $Stage } else { "$Stage-nonregression" }
+        if ([string]$comparison.Workload -cne [string]$workload.id -or
+            [string]$comparison.GateMode -cne $expectedGateMode -or
+            [string]$comparison.Decision -cne "keep") {
+            throw "$Label workload $workloadIndex identity/decision differs."
+        }
+        $reference = Get-ReferenceLockEntry `
+            $Lock $Configuration ([string]$workload.id)
+        $captureRoot = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
+            Join-Path $script:RunRoot (
+                "iterations/{0:D6}/{1}/{2}/{3}" -f
+                    $Iteration, $workloadStage, $Configuration,
+                    [string]$workload.id)
+        } else {
+            Join-Path $ArtifactRoot (
+                "captures/{0}/{1}/{2}" -f
+                    $workloadStage, $Configuration, [string]$workload.id)
+        }
+        $slots = @($comparison.SlotEvidence)
+        $expectedSlotCount = [int]$Manifest.capture.abbaCycles * 4
+        if ($slots.Count -ne $expectedSlotCount) {
+            throw "$Label '$($workload.id)' slot topology differs."
+        }
+        $baselineReports = @()
+        $candidateReports = @()
+        $allReports = @()
+        $baselineIdentity = $null
+        $candidateIdentity = $null
+        for ($slotIndex = 0; $slotIndex -lt $slots.Count; $slotIndex++) {
+            $slot = $slots[$slotIndex]
+            $cycle = [int][Math]::Floor($slotIndex / 4) + 1
+            $slotNumber = ($slotIndex % 4) + 1
+            $phase = @("baseline", "candidate", "candidate", "baseline")[$slotNumber - 1]
+            $expectedBuild = if ($phase -eq "baseline") {
+                $BaselineBuild
+            } else {
+                $CandidateBuild
+            }
+            $expectedCommit = if ($phase -eq "baseline") {
+                $BaselineCommit
+            } else {
+                $CandidateCommit
+            }
+            $pairId = Get-AbbaPairId `
+                $Manifest $Configuration ([string]$workload.id) $workloadStage `
+                $BaselineCommit $CandidateCommit $Iteration $cycle
+            $reportPath = Join-Path $captureRoot (
+                "cycle-{0:D2}-slot-{1}-{2}.json" -f
+                    $cycle, $slotNumber, $phase)
+            $healthPath = [System.IO.Path]::ChangeExtension(
+                $reportPath,
+                ".health.json")
+            $candidatePath = [System.IO.Path]::ChangeExtension(
+                $reportPath,
+                ".hdr.pfm")
+            if ([int]$slot.cycle -ne $cycle -or
+                [int]$slot.slot -ne $slotNumber -or
+                [string]$slot.phase -cne $phase -or
+                [string]$slot.pairId -cne $pairId) {
+                throw "$Label '$($workload.id)' slot $slotIndex identity differs."
+            }
+            Assert-PathIdentity ([string]$slot.reportPath) $reportPath `
+                "$Label report"
+            Assert-PathIdentity ([string]$slot.healthPath) $healthPath `
+                "$Label health"
+            Assert-PathIdentity ([string]$slot.candidatePfmPath) $candidatePath `
+                "$Label candidate PFM"
+            Assert-PathIdentity `
+                ([string]$slot.referencePfmPath) ([string]$reference.path) `
+                "$Label reference PFM"
+            Assert-PathIdentity `
+                ([string]$slot.qualityContractPath) `
+                ([string]$reference.qualityContractPath) `
+                "$Label quality contract"
+            Assert-PathIdentity `
+                ([string]$slot.buildRootPath) ([string]$expectedBuild.RootPath) `
+                "$Label slot build"
+            foreach ($item in @(
+                    @($reportPath, [string]$slot.reportSha256, "report"),
+                    @($healthPath, [string]$slot.healthSha256, "health"),
+                    @($candidatePath, [string]$slot.candidatePfmSha256, "candidate PFM"))) {
+                if ([string]$item[1] -cnotmatch '^[0-9a-f]{64}$' -or
+                    -not (Test-Path -LiteralPath ([string]$item[0]) -PathType Leaf) -or
+                    (Get-Sha256 ([string]$item[0])) -cne [string]$item[1]) {
+                    throw "$Label '$($workload.id)' slot $slotIndex $($item[2]) changed."
+                }
+            }
+            if ([string]$slot.referencePfmSha256 -cne [string]$reference.sha256 -or
+                [string]$slot.qualityContractSha256 -cne
+                    [string]$reference.qualityContractSha256 -or
+                [string]$slot.buildBundleFingerprint -cne
+                    [string]$expectedBuild.BundleFingerprint -or
+                [string]$slot.executableFileSha256 -cne
+                    [string]$expectedBuild.ExecutableFileSha256 -or
+                [string]$slot.runtimeExecutableBundleHash -cne
+                    [string]$expectedBuild.RuntimeExecutableBundleHash) {
+                throw "$Label '$($workload.id)' slot $slotIndex frozen input/build differs."
+            }
+            $report = Read-BenchmarkReport $reportPath
+            Assert-BenchmarkReport `
+                $Manifest $workload $report $Configuration `
+                "$Label '$($workload.id)' slot $slotIndex" $false `
+                $pairId $expectedCommit $expectedBuild $reference $candidatePath
+            $health = Get-Content -LiteralPath $healthPath -Raw |
+                ConvertFrom-Json
+            Assert-HealthReport `
+                $Manifest $workload $health $report $expectedBuild `
+                $expectedCommit $pairId `
+                "$Label '$($workload.id)' slot $slotIndex"
+            $recordedPairs = @(
+                @([string]$slot.captureExecutableHash, [string]$report.LastDiagnostics.CaptureRun.ExecutableHash),
+                @([string]$slot.captureShaderBundleHash, [string]$report.LastDiagnostics.CaptureRun.ShaderBundleHash),
+                @([string]$slot.captureApplicationVersion, [string]$report.LastDiagnostics.CaptureRun.ApplicationVersion),
+                @([string]$slot.captureSettingsSchemaVersion, [string]$report.LastDiagnostics.CaptureRun.SettingsSchemaVersion),
+                @([string]$slot.captureCommit, [string]$report.LastDiagnostics.CaptureRun.Commit),
+                @([string]$slot.captureDirtyWorktreeState, [string]$report.LastDiagnostics.CaptureRun.DirtyWorktreeState),
+                @([string]$slot.producerSchema, [string]$report.ProducerIdentity.Schema),
+                @([string]$slot.producerSettingsFingerprint, [string]$report.ProducerIdentity.SettingsFingerprint),
+                @([string]$slot.producerGpuName, [string]$report.ProducerIdentity.GpuName),
+                @([string]$slot.producerDriverVersion, [string]$report.ProducerIdentity.DriverVersion),
+                @([string]$slot.producerQualityTier, [string]$report.ProducerIdentity.QualityTier),
+                @([string]$slot.trajectory, [string]$report.CaptureContract.Trajectory),
+                @([string]$slot.trajectoryFingerprint, [string]$report.CaptureContract.TrajectoryFingerprint),
+                @([string]$slot.trajectoryFrameCount, [string]$report.CaptureContract.TrajectoryFrameCount),
+                @([string]$slot.trajectoryRouteHash, [string]$report.CaptureContract.TrajectoryRouteHash),
+                @([string]$slot.trajectorySequenceHash, [string]$report.CaptureContract.TrajectorySequenceHash))
+            foreach ($pair in $recordedPairs) {
+                if ([string]$pair[0] -cne [string]$pair[1]) {
+                    throw "$Label '$($workload.id)' slot $slotIndex duplicated provenance differs."
+                }
+            }
+            $allReports += $report
+            if ($phase -eq "baseline") {
+                Assert-WithinPhaseIdentity `
+                    $baselineIdentity $report `
+                    "$Label '$($workload.id)' baseline slot $slotIndex"
+                if ($null -eq $baselineIdentity) { $baselineIdentity = $report }
+                $baselineReports += $report
+            } else {
+                Assert-WithinPhaseIdentity `
+                    $candidateIdentity $report `
+                    "$Label '$($workload.id)' candidate slot $slotIndex"
+                if ($null -eq $candidateIdentity) { $candidateIdentity = $report }
+                $candidateReports += $report
+            }
+        }
+        $pairedDifferences = @()
+        for ($cycleIndex = 0;
+             $cycleIndex -lt [int]$Manifest.capture.abbaCycles;
+             $cycleIndex++) {
+            $offset = $cycleIndex * 4
+            $pairedDifferences += [Math]::Max(
+                (Get-Timing $allReports[$offset] "cpu" "p95"),
+                (Get-Timing $allReports[$offset] "gpu" "p95")) -
+                [Math]::Max(
+                    (Get-Timing $allReports[$offset + 1] "cpu" "p95"),
+                    (Get-Timing $allReports[$offset + 1] "gpu" "p95"))
+            $pairedDifferences += [Math]::Max(
+                (Get-Timing $allReports[$offset + 3] "cpu" "p95"),
+                (Get-Timing $allReports[$offset + 3] "gpu" "p95")) -
+                [Math]::Max(
+                    (Get-Timing $allReports[$offset + 2] "cpu" "p95"),
+                    (Get-Timing $allReports[$offset + 2] "gpu" "p95"))
+        }
+        $recomputed = Compare-WorkloadCaptures `
+            $Manifest $workload $baselineReports $candidateReports `
+            ([double[]]$pairedDifferences) $requireWin
+        if ([string]$recomputed.Decision -cne "keep") {
+            throw "$Label '$($workload.id)' no longer recomputes to keep: $($recomputed.Reason)"
+        }
+        foreach ($property in $recomputed.PSObject.Properties) {
+            $stored = $comparison.PSObject.Properties[$property.Name]
+            if ($null -eq $stored -or
+                (($property.Value | ConvertTo-Json -Depth 12 -Compress) -cne
+                 ($stored.Value | ConvertTo-Json -Depth 12 -Compress))) {
+                throw "$Label '$($workload.id)' stored '$($property.Name)' differs from recomputation."
+            }
+        }
+        for ($slotIndex = 0; $slotIndex -lt $slots.Count; $slotIndex++) {
+            foreach ($item in @(
+                    @([string]$slots[$slotIndex].reportPath, [string]$slots[$slotIndex].reportSha256),
+                    @([string]$slots[$slotIndex].healthPath, [string]$slots[$slotIndex].healthSha256),
+                    @([string]$slots[$slotIndex].candidatePfmPath, [string]$slots[$slotIndex].candidatePfmSha256))) {
+                if (-not (Test-Path -LiteralPath ([string]$item[0]) -PathType Leaf) -or
+                    (Get-Sha256 ([string]$item[0])) -cne [string]$item[1]) {
+                    throw "$Label '$($workload.id)' slot $slotIndex changed during re-audit."
+                }
+            }
+        }
+    }
+}
+
+function Complete-ConfigurationQualityMatrix {
+    param(
+        $Manifest,
+        $Lock,
+        [object[]]$WinWorkloads,
+        $CandidateBuild,
+        [string]$Configuration,
+        [int]$Iteration,
+        [string]$Stage,
+        [string]$CandidateCommit,
+        $ConfigurationResult,
+        [string]$ArtifactRoot = "",
+        [bool]$RunAllWorkloads = $false)
+    if ([string]$ConfigurationResult.decision -ne "keep") {
+        throw "Quality sequences cannot qualify a failed timing matrix."
+    }
+    $orderedWorkloads = @(Get-ConfigurationWorkloadSelection `
+        $Manifest $WinWorkloads $RunAllWorkloads)
+    $comparisons = @($ConfigurationResult.comparisons)
+    if ($comparisons.Count -ne $orderedWorkloads.Count) {
+        throw "Quality matrix workload topology differs from completed timing."
+    }
+    $referenceBuild = Get-ReferenceBuildIdentity $Lock $Configuration
+    Assert-BuildIdentity $referenceBuild `
+        "$Configuration locked quality verifier"
+    for ($index = 0; $index -lt $orderedWorkloads.Count; $index++) {
+        $workload = $orderedWorkloads[$index]
+        $comparison = $comparisons[$index]
+        if ([string]$comparison.Workload -cne [string]$workload.id -or
+            [string]$comparison.Decision -cne "keep") {
+            throw "Quality matrix reordered or admitted a failed timing workload."
+        }
+        $reference = Get-ReferenceLockEntry `
+            $Lock $Configuration ([string]$workload.id)
+        $candidateContractPath =
+            [string]$reference.qualitySequence.candidateReferenceContractPath
+        $candidateContractHash =
+            [string]$reference.qualitySequence.candidateReferenceContractSha256
+        if (-not (Test-Path -LiteralPath $candidateContractPath -PathType Leaf) -or
+            (Get-Sha256 $candidateContractPath) -cne $candidateContractHash) {
+            throw "Locked quality candidate contract changed for '$($workload.id)'."
+        }
+        $candidateContract = Get-Content `
+            -LiteralPath $candidateContractPath -Raw | ConvertFrom-Json
+        $qualityStage = if ([string]$comparison.GateMode -eq "target-win") {
+            $Stage
+        } else {
+            "$Stage-nonregression"
+        }
+        $root = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
+            Join-Path $script:RunRoot (
+                "iterations/{0:D6}/quality/{1}/{2}/{3}" -f
+                    $Iteration, $qualityStage, $Configuration,
+                    [string]$workload.id)
+        } else {
+            Join-Path $ArtifactRoot (
+                "quality/{0}/{1}/{2}" -f
+                    $qualityStage, $Configuration, [string]$workload.id)
+        }
+        $sequenceId = Get-QualitySequenceId `
+            $Manifest $Configuration ([string]$workload.id) `
+            "candidate" $qualityStage $CandidateCommit 0
+        $evidence = Invoke-QualitySequenceCapture `
+            -Manifest $Manifest `
+            -Workload $workload `
+            -BuildIdentity $CandidateBuild `
+            -Configuration $Configuration `
+            -Role "candidate" `
+            -SequenceId $sequenceId `
+            -ReportPath (Join-Path $root "report.json") `
+            -OutputDirectory (Join-Path $root "checkpoints") `
+            -ReferenceContractPath $candidateContractPath `
+            -ExpectedReferenceContractSha256 $candidateContractHash `
+            -QualityContractPath ([string]$reference.qualityContractPath) `
+            -ExpectedQualityContractSha256 ([string]$reference.qualityContractSha256) `
+            -ReferenceContract $candidateContract `
+            -VerifierBuildIdentity $referenceBuild `
+            -SpatialEnvelope @($reference.qualitySequence.spatialEnvelope) `
+            -ExpectedCommit $CandidateCommit `
+            -Label "$($workload.id) $Configuration standalone quality sequence"
+        $comparison | Add-Member `
+            -NotePropertyName QualitySequenceEvidence `
+            -NotePropertyValue $evidence
+    }
+    $ConfigurationResult | Add-Member `
+        -NotePropertyName qualitySequenceCompleted `
+        -NotePropertyValue $true
+    $ConfigurationResult.reason =
+        "timing, standalone HDR sequence, and non-regression gates passed"
+    return $ConfigurationResult
+}
+
+function Assert-ConfigurationQualityEvidence {
+    param(
+        $Manifest,
+        $Lock,
+        [object[]]$WinWorkloads,
+        $CandidateBuild,
+        [string]$Configuration,
+        [int]$Iteration,
+        [string]$Stage,
+        [string]$CandidateCommit,
+        $ConfigurationResult,
+        [string]$ArtifactRoot = "",
+        [bool]$RunAllWorkloads = $false,
+        [string]$Label = "Quality matrix")
+    if (-not [bool]$ConfigurationResult.qualitySequenceCompleted -or
+        [string]$ConfigurationResult.decision -cne "keep") {
+        throw "$Label did not complete successfully."
+    }
+    $workloads = @(Get-ConfigurationWorkloadSelection `
+        $Manifest $WinWorkloads $RunAllWorkloads)
+    $comparisons = @($ConfigurationResult.comparisons)
+    if ($comparisons.Count -ne $workloads.Count) {
+        throw "$Label workload topology differs."
+    }
+    $verifierBuild = Get-ReferenceBuildIdentity $Lock $Configuration
+    for ($index = 0; $index -lt $workloads.Count; $index++) {
+        $workload = $workloads[$index]
+        $comparison = $comparisons[$index]
+        $qualityStage = if ([string]$comparison.GateMode -eq "target-win") {
+            $Stage
+        } else {
+            "$Stage-nonregression"
+        }
+        $reference = Get-ReferenceLockEntry `
+            $Lock $Configuration ([string]$workload.id)
+        $contractPath =
+            [string]$reference.qualitySequence.candidateReferenceContractPath
+        $contractHash =
+            [string]$reference.qualitySequence.candidateReferenceContractSha256
+        $contract = Get-Content -LiteralPath $contractPath -Raw |
+            ConvertFrom-Json
+        $root = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
+            Join-Path $script:RunRoot (
+                "iterations/{0:D6}/quality/{1}/{2}/{3}" -f
+                    $Iteration, $qualityStage, $Configuration,
+                    [string]$workload.id)
+        } else {
+            Join-Path $ArtifactRoot (
+                "quality/{0}/{1}/{2}" -f
+                    $qualityStage, $Configuration, [string]$workload.id)
+        }
+        $sequenceId = Get-QualitySequenceId `
+            $Manifest $Configuration ([string]$workload.id) `
+            "candidate" $qualityStage $CandidateCommit 0
+        $null = Assert-QualitySequenceStoredEvidence `
+            $Manifest $workload $comparison.QualitySequenceEvidence `
+            $CandidateBuild $Configuration "candidate" $sequenceId `
+            $CandidateCommit $contractPath $contractHash `
+            ([string]$reference.qualityContractPath) `
+            ([string]$reference.qualityContractSha256) $contract `
+            $verifierBuild @($reference.qualitySequence.spatialEnvelope) `
+            $root "$Label $Configuration/$($workload.id)"
+    }
+}
+
+function Assert-FinalDecisionArtifacts {
+    param(
+        $Manifest,
+        $Lock,
+        [string]$DecisionPath,
+        $ExpectedSummary,
+        [object[]]$WinWorkloads,
+        $CandidateBuilds,
+        [int]$Iteration,
+        [string]$RetainedHead,
+        [string]$FinalRoot,
+        $AcceptanceRefSnapshot,
+        $RetainedChain)
+    if (-not (Test-Path -LiteralPath $DecisionPath -PathType Leaf)) {
+        throw "Final decision artifact is missing."
+    }
+    $decisionSha256 = Get-Sha256 $DecisionPath
+    $decision = Get-Content -LiteralPath $DecisionPath -Raw | ConvertFrom-Json
+    if (($decision | ConvertTo-Json -Depth 24 -Compress) -cne
+        ($ExpectedSummary | ConvertTo-Json -Depth 24 -Compress)) {
+        throw "Final decision bytes differ from the materialized summary."
+    }
+    if ([string]$decision.schema -cne "njulf-perf-campaign-final/v1" -or
+        [string]$decision.campaignId -cne [string]$Manifest.campaignId -or
+        [string]$decision.manifestSha256 -cne (Get-Sha256 $script:ManifestFile) -or
+        [string]$decision.lockSha256 -cne $script:CampaignLockSha256 -or
+        [string]$decision.mode -cne "FinalizeRetainedStack" -or
+        [string]$decision.baselineCommit -cne [string]$Lock.baselineCommit -or
+        [string]$decision.retainedHead -cne $RetainedHead -or
+        [string]$decision.observedHeadAtDecision -cne $RetainedHead -or
+        -not [bool]$decision.headPreserved -or
+        [string]$decision.decision -cne "keep") {
+        throw "Final decision envelope is incomplete or inconsistent."
+    }
+    $configurations = @(Get-CampaignConfigurations $Manifest)
+    $results = @($decision.configurations)
+    if ($results.Count -ne $configurations.Count) {
+        throw "Final decision configuration topology differs."
+    }
+    for ($index = 0; $index -lt $configurations.Count; $index++) {
+        $configuration = [string]$configurations[$index]
+        $candidateBuild = $CandidateBuilds[$configuration]
+        if ($null -eq $candidateBuild) {
+            throw "Final decision lacks the '$configuration' candidate build."
+        }
+        $storedBuildProperty =
+            $decision.candidateBuilds.PSObject.Properties[$configuration]
+        if ($null -eq $storedBuildProperty) {
+            throw "Final decision lacks stored '$configuration' build identity."
+        }
+        $storedBuild = $storedBuildProperty.Value
+        if ($null -eq $storedBuild -or
+            (($storedBuild | ConvertTo-Json -Depth 12 -Compress) -cne
+             ($candidateBuild | ConvertTo-Json -Depth 12 -Compress))) {
+            throw "Final decision '$configuration' build identity differs."
+        }
+        $baselineBuild = Get-ReferenceBuildIdentity $Lock $configuration
+        Assert-ConfigurationTimingEvidence `
+            $Manifest $Lock $WinWorkloads $baselineBuild $candidateBuild `
+            $configuration $Iteration "retained-stack-final" `
+            ([string]$Lock.baselineCommit) $RetainedHead $results[$index] `
+            $FinalRoot $true "Post-publication final timing audit"
+        Assert-ConfigurationQualityEvidence `
+            $Manifest $Lock $WinWorkloads $candidateBuild `
+            $configuration $Iteration "retained-stack-final" `
+            $RetainedHead $results[$index] $FinalRoot $true `
+            "Post-publication final quality audit"
+    }
+    Assert-ExactCampaignHead $RetainedHead "Post-publication final audit"
+    Assert-CleanCampaignWorktree
+    Assert-ProtectedFingerprints $script:ProtectedFingerprints
+    Assert-CampaignLockIntegrity
+    Assert-AcceptanceRefSnapshot `
+        $Manifest $AcceptanceRefSnapshot "Post-publication final audit"
+    $chain = Assert-RetainedAcceptanceChain $Manifest $Lock $RetainedHead
+    if ([string]$chain.LastEvidence -cne [string]$RetainedChain.LastEvidence) {
+        throw "Post-publication final audit changed the accepted-chain tip."
+    }
+    if (-not (Test-Path -LiteralPath $DecisionPath -PathType Leaf) -or
+        (Get-Sha256 $DecisionPath) -cne $decisionSha256) {
+        throw "Final decision bytes changed during post-publication validation."
+    }
+    return $decisionSha256
+}
+
 function Write-JsonArtifact {
     param([string]$Path, $Value)
     if (Test-Path -LiteralPath $Path) {
         throw "Artifact already exists and will not be overwritten: $Path"
     }
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
-    $Value | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Path -Encoding utf8
+    $directory = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    $temporaryPath = Join-Path $directory (
+        ".{0}.{1}.tmp" -f
+            [System.IO.Path]::GetFileName($Path),
+            [Guid]::NewGuid().ToString("N"))
+    try {
+        $Value | ConvertTo-Json -Depth 24 |
+            Set-Content -LiteralPath $temporaryPath -Encoding utf8
+        $null = Get-Content -LiteralPath $temporaryPath -Raw |
+            ConvertFrom-Json
+        [System.IO.File]::Move($temporaryPath, $Path, $false)
+    } finally {
+        if (Test-Path -LiteralPath $temporaryPath) {
+            Remove-Item -LiteralPath $temporaryPath -Force
+        }
+    }
 }
 
 function Assert-AcceptedDecisionEnvelope {
@@ -2349,6 +4434,9 @@ function Assert-AcceptedDecisionArtifacts {
         throw "Accepted decision $iteration is not one successful Release screen."
     }
     $configuration = $configurations[0]
+    if (-not [bool]$configuration.qualitySequenceCompleted) {
+        throw "Accepted decision $iteration did not complete its standalone quality phase."
+    }
     $baselineBuild = $Decision.baselineBuild
     $candidateBuild = $Decision.candidateBuild
     Assert-PathIdentity `
@@ -2592,6 +4680,30 @@ function Assert-AcceptedDecisionArtifacts {
                 throw "Accepted '$($workload.id)' stored '$($property.Name)' differs from recomputed evidence."
             }
         }
+        $qualityRoot = Join-Path $iterationRoot (
+            "quality/{0}/Release/{1}" -f $stage, [string]$workload.id)
+        $qualityReferencePath =
+            [string]$reference.qualitySequence.candidateReferenceContractPath
+        $qualityReferenceHash =
+            [string]$reference.qualitySequence.candidateReferenceContractSha256
+        if (-not (Test-Path -LiteralPath $qualityReferencePath -PathType Leaf) -or
+            (Get-Sha256 $qualityReferencePath) -cne $qualityReferenceHash) {
+            throw "Accepted '$($workload.id)' quality reference changed."
+        }
+        $qualityReference = Get-Content `
+            -LiteralPath $qualityReferencePath -Raw | ConvertFrom-Json
+        $qualitySequenceId = Get-QualitySequenceId `
+            $Manifest "Release" ([string]$workload.id) `
+            "candidate" $stage ([string]$Decision.candidateHead) 0
+        $referenceBuild = Get-ReferenceBuildIdentity $Lock "Release"
+        $null = Assert-QualitySequenceStoredEvidence `
+            $Manifest $workload $comparison.QualitySequenceEvidence `
+            $candidateBuild "Release" "candidate" $qualitySequenceId `
+            ([string]$Decision.candidateHead) $qualityReferencePath `
+            $qualityReferenceHash ([string]$reference.qualityContractPath) `
+            ([string]$reference.qualityContractSha256) $qualityReference `
+            $referenceBuild @($reference.qualitySequence.spatialEnvelope) `
+            $qualityRoot "Accepted '$($workload.id)' quality sequence"
     }
 }
 
@@ -2704,6 +4816,553 @@ function Get-NextCampaignIterationId {
     return $maximum + 1
 }
 
+function Initialize-QualitySequenceReference {
+    param(
+        $Manifest,
+        $Workload,
+        $ReferenceBuild,
+        [string]$Configuration,
+        [string]$BaselineCommit,
+        [string]$QualityContractPath,
+        [string]$QualityContractSha256)
+    $root = Join-Path $script:RunRoot (
+        "references/{0}/{1}/quality-sequence" -f
+            $Configuration, [string]$Workload.id)
+    if (Test-Path -LiteralPath $root) {
+        throw "Quality-sequence reference root already exists: $root"
+    }
+    $canonicalRoot = Join-Path $root "canonical"
+    $canonicalId = Get-QualitySequenceId `
+        $Manifest $Configuration ([string]$Workload.id) `
+        "canonical" "reference-init" $BaselineCommit 0
+    if (-not (Test-Path -LiteralPath $QualityContractPath -PathType Leaf) -or
+        (Get-Sha256 $QualityContractPath) -cne $QualityContractSha256) {
+        throw "Canonical quality ROI source changed before capture."
+    }
+    $canonicalEvidence = Invoke-QualitySequenceCapture `
+        -Manifest $Manifest `
+        -Workload $Workload `
+        -BuildIdentity $ReferenceBuild `
+        -Configuration $Configuration `
+        -Role "canonical" `
+        -SequenceId $canonicalId `
+        -ReportPath (Join-Path $canonicalRoot "report.json") `
+        -OutputDirectory (Join-Path $canonicalRoot "checkpoints") `
+        -ReferenceContractPath "" `
+        -ExpectedReferenceContractSha256 "" `
+        -QualityContractPath "" `
+        -ExpectedQualityContractSha256 "" `
+        -ReferenceContract $null `
+        -VerifierBuildIdentity $ReferenceBuild `
+        -SpatialEnvelope $null `
+        -ExpectedCommit $BaselineCommit `
+        -Label "Initialize quality canonical $Configuration/$($Workload.id)"
+    if ((Get-Sha256 $QualityContractPath) -cne $QualityContractSha256) {
+        throw "Canonical quality ROI source changed during capture."
+    }
+    $canonicalReport = Read-QualitySequenceReport `
+        ([string]$canonicalEvidence.reportPath)
+    $repeatContractValue = New-QualitySequenceReferenceContract `
+        $Manifest $Workload $canonicalReport `
+        $QualityContractPath $QualityContractSha256 @() @()
+    $repeatContract = Write-QualitySequenceReferenceContract `
+        (Join-Path $root "repeat-reference.json") $repeatContractValue
+    $repeatEvidence = @()
+    $repeatReports = @()
+    for ($repeat = 1;
+         $repeat -le [int]$Manifest.qualitySequence.baselineRepeatCount;
+         $repeat++) {
+        $repeatRoot = Join-Path $root ("repeat-{0:D2}" -f $repeat)
+        $repeatId = Get-QualitySequenceId `
+            $Manifest $Configuration ([string]$Workload.id) `
+            "repeat" "reference-init" $BaselineCommit $repeat
+        $evidence = Invoke-QualitySequenceCapture `
+            -Manifest $Manifest `
+            -Workload $Workload `
+            -BuildIdentity $ReferenceBuild `
+            -Configuration $Configuration `
+            -Role "repeat" `
+            -SequenceId $repeatId `
+            -ReportPath (Join-Path $repeatRoot "report.json") `
+            -OutputDirectory (Join-Path $repeatRoot "checkpoints") `
+            -ReferenceContractPath ([string]$repeatContract.path) `
+            -ExpectedReferenceContractSha256 ([string]$repeatContract.sha256) `
+            -QualityContractPath $QualityContractPath `
+            -ExpectedQualityContractSha256 $QualityContractSha256 `
+            -ReferenceContract $repeatContractValue `
+            -VerifierBuildIdentity $ReferenceBuild `
+            -SpatialEnvelope $null `
+            -ExpectedCommit $BaselineCommit `
+            -Label "Initialize quality repeat $repeat $Configuration/$($Workload.id)"
+        $repeatEvidence += $evidence
+        $repeatReports += Read-QualitySequenceReport ([string]$evidence.reportPath)
+    }
+    $repeatHashes = @($repeatEvidence | ForEach-Object {
+        [string]$_.reportSha256
+    })
+    if (@($repeatHashes | Select-Object -Unique).Count -ne 2) {
+        throw "Quality baseline repeats must be two distinct immutable reports."
+    }
+    $verifiedRepeatMetrics = @($repeatEvidence | ForEach-Object {
+        $_.verifiedMetrics
+    })
+    $gates = @(New-QualitySequenceTemporalGates `
+        $Manifest $Workload $verifiedRepeatMetrics)
+    $spatialEnvelope = @(New-QualitySequenceSpatialEnvelope `
+        $Manifest $Workload $verifiedRepeatMetrics)
+    $candidateContractValue = New-QualitySequenceReferenceContract `
+        $Manifest $Workload $canonicalReport `
+        $QualityContractPath $QualityContractSha256 $gates $repeatHashes
+    $candidateContract = Write-QualitySequenceReferenceContract `
+        (Join-Path $root "candidate-reference.json") `
+        $candidateContractValue
+    return [pscustomobject]@{
+        schema = "njulf-perf-campaign-quality-reference/v1"
+        canonical = $canonicalEvidence
+        repeatReferenceContractPath = [string]$repeatContract.path
+        repeatReferenceContractSha256 = [string]$repeatContract.sha256
+        repeats = @($repeatEvidence)
+        candidateReferenceContractPath = [string]$candidateContract.path
+        candidateReferenceContractSha256 = [string]$candidateContract.sha256
+        temporalGates = @($gates)
+        spatialEnvelope = @($spatialEnvelope)
+        baselineRepeatReportSha256 = @($repeatHashes)
+    }
+}
+
+function Assert-QualitySequenceStoredEvidence {
+    param(
+        $Manifest,
+        $Workload,
+        $Evidence,
+        $BuildIdentity,
+        [string]$Configuration,
+        [string]$Role,
+        [string]$SequenceId,
+        [string]$ExpectedCommit,
+        [string]$ReferenceContractPath,
+        [string]$ExpectedReferenceContractSha256,
+        [string]$QualityContractPath,
+        [string]$ExpectedQualityContractSha256,
+        $ReferenceContract,
+        $VerifierBuildIdentity,
+        $SpatialEnvelope,
+        [string]$ExpectedRoot,
+        [string]$Label)
+    if ($null -eq $Evidence -or
+        [string]$Evidence.role -cne $Role -or
+        [string]$Evidence.sequenceId -cne $SequenceId -or
+        [string]$Evidence.reportSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$Evidence.healthSha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw "$Label stored quality evidence envelope is invalid."
+    }
+    if ([string]$Evidence.referenceContractPath -cne
+            $ReferenceContractPath -or
+        [string]$Evidence.referenceContractSha256 -cne
+            $ExpectedReferenceContractSha256 -or
+        [string]$Evidence.qualityContractSha256 -cne
+            $ExpectedQualityContractSha256) {
+        throw "$Label stored reference/ROI inputs differ."
+    }
+    if ($Role -eq "canonical") {
+        if (-not [string]::IsNullOrEmpty(
+                [string]$Evidence.qualityContractPath)) {
+            throw "$Label canonical evidence claims a consumed ROI contract."
+        }
+    } elseif (-not [string]::Equals(
+            [System.IO.Path]::GetFullPath(
+                [string]$Evidence.qualityContractPath),
+            [System.IO.Path]::GetFullPath($QualityContractPath),
+            [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $QualityContractPath -PathType Leaf) -or
+        (Get-Sha256 $QualityContractPath) -cne
+            $ExpectedQualityContractSha256) {
+        throw "$Label stored ROI input differs."
+    }
+    $reportPath = Join-Path $ExpectedRoot "report.json"
+    $healthPath = [System.IO.Path]::ChangeExtension(
+        $reportPath,
+        ".health.json")
+    $outputDirectory = Join-Path $ExpectedRoot "checkpoints"
+    Assert-QualitySequenceInputHashes `
+        $BuildIdentity $ReferenceContractPath `
+        $ExpectedReferenceContractSha256 $QualityContractPath `
+        $ExpectedQualityContractSha256 $Role "$Label stored pre-audit"
+    Assert-PathIdentity ([string]$Evidence.reportPath) $reportPath "$Label report"
+    Assert-PathIdentity ([string]$Evidence.healthPath) $healthPath "$Label health"
+    Assert-PathIdentity `
+        ([string]$Evidence.outputDirectory) $outputDirectory `
+        "$Label checkpoints"
+    foreach ($item in @(
+            @($reportPath, [string]$Evidence.reportSha256, "report"),
+            @($healthPath, [string]$Evidence.healthSha256, "health"))) {
+        if (-not (Test-Path -LiteralPath ([string]$item[0]) -PathType Leaf) -or
+            (Get-Sha256 ([string]$item[0])) -cne [string]$item[1]) {
+            throw "$Label stored $($item[2]) bytes changed."
+        }
+    }
+    if ([string]$Evidence.buildBundleFingerprint -cne
+            [string]$BuildIdentity.BundleFingerprint -or
+        [string]$Evidence.runtimeExecutableBundleHash -cne
+            [string]$BuildIdentity.RuntimeExecutableBundleHash) {
+        throw "$Label stored build identity differs."
+    }
+    Assert-PathIdentity `
+        ([string]$Evidence.buildRootPath) ([string]$BuildIdentity.RootPath) `
+        "$Label build"
+    $report = Read-QualitySequenceReport $reportPath
+    Assert-QualitySequenceReport `
+        $Manifest $Workload $report $BuildIdentity $Configuration $Role `
+        $SequenceId $ExpectedCommit $reportPath $outputDirectory `
+        $ReferenceContractPath $ExpectedReferenceContractSha256 `
+        $QualityContractPath $ExpectedQualityContractSha256 `
+        $ReferenceContract $Label
+    $health = Get-Content -LiteralPath $healthPath -Raw | ConvertFrom-Json
+    Assert-QualitySequenceHealthReport `
+        $Manifest $Workload $health $report $BuildIdentity $Configuration `
+        $Role $SequenceId $ExpectedCommit $reportPath $outputDirectory `
+        $ReferenceContractPath $QualityContractPath $Label
+    $verifiedMetrics = $null
+    if ($Role -ne "canonical") {
+        $verifiedMetrics = Get-RecomputedQualitySequenceMetrics `
+            $Manifest $Workload $report $ReferenceContract `
+            $VerifierBuildIdentity $QualityContractPath $Label
+        if ($Role -eq "candidate") {
+            Assert-QualitySequenceSpatialEnvelope `
+                $verifiedMetrics @($SpatialEnvelope) $Label
+        }
+        if (($verifiedMetrics | ConvertTo-Json -Depth 16 -Compress) -cne
+            ($Evidence.verifiedMetrics | ConvertTo-Json -Depth 16 -Compress)) {
+            throw "$Label stored verified metrics differ from recomputation."
+        }
+    } elseif ($null -ne $Evidence.verifiedMetrics) {
+        throw "$Label canonical evidence unexpectedly stores comparison metrics."
+    }
+    if ([string]$Evidence.trajectoryRouteHash -cne
+            [string]$report.TrajectoryRouteHash -or
+        [string]$Evidence.trajectorySequenceHash -cne
+            [string]$report.TrajectorySequenceHash -or
+        [string]$Evidence.producerGpuName -cne
+            [string]$report.ProducerIdentity.GpuName -or
+        [string]$Evidence.producerDriverVersion -cne
+            [string]$report.ProducerIdentity.DriverVersion -or
+        [string]$Evidence.producerQualityTier -cne
+            [string]$report.ProducerIdentity.QualityTier) {
+        throw "$Label stored route/producer identity differs."
+    }
+    $storedCheckpoints = @($Evidence.checkpoints)
+    $reportCheckpoints = @($report.Checkpoints)
+    if ($storedCheckpoints.Count -ne $reportCheckpoints.Count) {
+        throw "$Label stored checkpoint evidence is incomplete."
+    }
+    for ($index = 0; $index -lt $storedCheckpoints.Count; $index++) {
+        $stored = $storedCheckpoints[$index]
+        $actual = $reportCheckpoints[$index]
+        if ([int]$stored.ordinal -ne [int]$actual.Ordinal -or
+            [int]$stored.routeFrameIndex -ne [int]$actual.RouteFrameIndex -or
+            [string]$stored.pfmSha256 -cne [string]$actual.PfmSha256 -or
+            [string]$stored.captureToken -cne [string]$actual.CaptureToken -or
+            [UInt64]$stored.ddgiFrameSerial -ne [UInt64]$actual.DdgiFrameSerial) {
+            throw "$Label stored checkpoint $index differs from its report."
+        }
+        Assert-PathIdentity `
+            ([string]$stored.pfmPath) ([string]$actual.PfmPath) `
+            "$Label checkpoint $index"
+    }
+    Assert-QualitySequenceInputHashes `
+        $BuildIdentity $ReferenceContractPath `
+        $ExpectedReferenceContractSha256 $QualityContractPath `
+        $ExpectedQualityContractSha256 $Role "$Label stored post-audit"
+    foreach ($checkpoint in $reportCheckpoints) {
+        $pfmPath = [string]$checkpoint.PfmPath
+        if (-not (Test-Path -LiteralPath $pfmPath -PathType Leaf) -or
+            (Get-Sha256 $pfmPath) -cne [string]$checkpoint.PfmSha256) {
+            throw "$Label checkpoint PFM bytes changed during validation."
+        }
+    }
+    foreach ($item in @(
+            @($reportPath, [string]$Evidence.reportSha256, "report"),
+            @($healthPath, [string]$Evidence.healthSha256, "health"))) {
+        if (-not (Test-Path -LiteralPath ([string]$item[0]) -PathType Leaf) -or
+            (Get-Sha256 ([string]$item[0])) -cne [string]$item[1]) {
+            throw "$Label stored $($item[2]) bytes changed during validation."
+        }
+    }
+    return $report
+}
+
+function Assert-QualitySequenceReferenceContract {
+    param(
+        $Manifest,
+        $Workload,
+        $Contract,
+        $CanonicalReport,
+        [string]$QualityContractPath,
+        [string]$QualityContractSha256,
+        [bool]$Candidate,
+        [object[]]$ExpectedGates,
+        [string[]]$ExpectedRepeatHashes,
+        [string]$Label)
+    $expectedContract = New-QualitySequenceReferenceContract `
+        $Manifest $Workload $CanonicalReport $QualityContractPath `
+        $QualityContractSha256 $ExpectedGates $ExpectedRepeatHashes
+    $actualCanonicalJson = $Contract | ConvertTo-Json -Depth 24 -Compress
+    $expectedCanonicalJson = $expectedContract |
+        ConvertTo-Json -Depth 24 -Compress
+    if ($actualCanonicalJson -cne $expectedCanonicalJson) {
+        throw "$Label bytes do not encode the exact canonical-derived contract."
+    }
+    $expectedIndices = @(Get-QualitySequenceCheckpointIndices (
+        [string]$Workload.trajectory))
+    if ([string]$Contract.schema -cne
+            "njulf-benchmark-quality-sequence-reference/v1" -or
+        [string]$Contract.sceneKind -cne [string]$Workload.scene -or
+        [string]$Contract.scenario -cne [string]$Workload.scenario -or
+        [string]$Contract.captureVariant -cne [string]$Workload.captureVariant -or
+        [string]$Contract.trajectory -cne [string]$Workload.trajectory -or
+        [int]$Contract.trajectoryFrameCount -ne
+            (Get-QualitySequenceTrajectoryFrameCount ([string]$Workload.trajectory)) -or
+        [int]$Contract.warmupFrameCount -ne [int]$Workload.warmupFrames -or
+        [int]$Contract.maximumAdditionalSettlingFrameCount -ne
+            [int]$Manifest.capture.maximumSettlingFrames -or
+        [int]$Contract.maximumReadbackDrainFrameCount -ne
+            [int]$Manifest.qualitySequence.maximumReadbackDrainFrames -or
+        [string]$Contract.checkpointContractFingerprint -cne
+            (Get-QualitySequenceCheckpointFingerprint ([string]$Workload.trajectory)) -or
+        [double]$Contract.maximumRelativeRmse -ne
+            [double]$Manifest.quality.maximumRelativeRmse -or
+        [double]$Contract.maximumFlipP95 -ne
+            [double]$Manifest.quality.maximumFlipP95 -or
+        [double]$Contract.temporalResidualFloor -ne
+            [double]$Manifest.qualitySequence.temporalResidualFloor -or
+        [double]$Contract.temporalResidualMultiplier -ne
+            [double]$Manifest.qualitySequence.temporalResidualMultiplier -or
+        [double]$Contract.temporalResidualHardCeiling -ne
+            [double]$Manifest.qualitySequence.temporalResidualHardCeiling) {
+        throw "$Label quality reference contract differs from the exact campaign policy."
+    }
+    if ((@($Contract.checkpointIndices | ForEach-Object { [int]$_ }) -join ',') -cne
+        ($expectedIndices -join ',')) {
+        throw "$Label checkpoint topology differs."
+    }
+    Assert-PathIdentity `
+        ([string]$Contract.qualityContractPath) $QualityContractPath `
+        "$Label ROI contract"
+    if ([string]$Contract.qualityContractSha256 -cne $QualityContractSha256) {
+        throw "$Label ROI contract hash differs."
+    }
+    foreach ($name in @(
+            "trajectoryFingerprint", "trajectoryRouteHash",
+            "trajectorySequenceHash")) {
+        if (-not (Test-Sha256Identity ([string]$Contract.$name)) -or
+            [string]$Contract.$name -cne [string]$CanonicalReport.$name) {
+            throw "$Label $name differs from canonical evidence."
+        }
+    }
+    if ([int]$Contract.firstRouteAbsoluteFrameIndex -ne
+            [int]$CanonicalReport.FirstRouteAbsoluteFrameIndex -or
+        [string]$Contract.buildConfiguration -cne
+            [string]$CanonicalReport.BuildConfiguration -or
+        @($Contract.checkpoints).Count -ne $expectedIndices.Count) {
+        throw "$Label canonical execution identity differs."
+    }
+    for ($index = 0; $index -lt $expectedIndices.Count; $index++) {
+        $contractCheckpoint = @($Contract.checkpoints)[$index]
+        $canonicalCheckpoint = @($CanonicalReport.Checkpoints)[$index]
+        if ([int]$contractCheckpoint.ordinal -ne $index -or
+            [int]$contractCheckpoint.routeFrameIndex -ne
+                [int]$expectedIndices[$index] -or
+            [string]$contractCheckpoint.pfmSha256 -cne
+                [string]$canonicalCheckpoint.PfmSha256 -or
+            [string]$contractCheckpoint.captureToken -cne
+                [string]$canonicalCheckpoint.CaptureToken -or
+            [UInt64]$contractCheckpoint.ddgiFrameSerial -ne
+                [UInt64]$canonicalCheckpoint.DdgiFrameSerial) {
+            throw "$Label checkpoint $index differs from canonical evidence."
+        }
+        Assert-PathIdentity `
+            ([string]$contractCheckpoint.pfmPath) `
+            ([string]$canonicalCheckpoint.PfmPath) `
+            "$Label canonical checkpoint $index"
+    }
+    $actualGates = @($Contract.temporalGates)
+    $actualHashes = @($Contract.baselineRepeatReportSha256 |
+        ForEach-Object { [string]$_ })
+    if ($actualGates.Count -ne $ExpectedGates.Count -or
+        (($actualHashes -join "`n") -cne ($ExpectedRepeatHashes -join "`n"))) {
+        throw "$Label temporal derivation evidence differs."
+    }
+    for ($index = 0; $index -lt $ExpectedGates.Count; $index++) {
+        if ([int]$actualGates[$index].fromRouteFrameIndex -ne
+                [int]$ExpectedGates[$index].fromRouteFrameIndex -or
+            [int]$actualGates[$index].toRouteFrameIndex -ne
+                [int]$ExpectedGates[$index].toRouteFrameIndex -or
+            [double]$actualGates[$index].maximumRelativeResidual -ne
+                [double]$ExpectedGates[$index].maximumRelativeResidual) {
+            throw "$Label temporal gate $index differs."
+        }
+    }
+    if ($Candidate -and $actualHashes.Count -ne 2) {
+        throw "$Label candidate contract lacks two baseline repeats."
+    }
+    if (-not $Candidate -and
+        ($actualGates.Count -ne 0 -or $actualHashes.Count -ne 0)) {
+        throw "$Label repeat contract contains derived candidate gates."
+    }
+}
+
+function Assert-LockedQualitySequenceReference {
+    param(
+        $Manifest,
+        $Workload,
+        $ReferenceEntry,
+        $ReferenceBuild,
+        [string]$Configuration,
+        [string]$BaselineCommit,
+        [string]$Label)
+    $quality = $ReferenceEntry.qualitySequence
+    $root = Join-Path $script:RunRoot (
+        "references/{0}/{1}/quality-sequence" -f
+            $Configuration, [string]$Workload.id)
+    if ($null -eq $quality -or
+        [string]$quality.schema -cne
+            "njulf-perf-campaign-quality-reference/v1" -or
+        @($quality.repeats).Count -ne 2 -or
+        @($quality.baselineRepeatReportSha256).Count -ne 2 -or
+        @($quality.baselineRepeatReportSha256 | Select-Object -Unique).Count -ne 2) {
+        throw "$Label quality reference topology is incomplete."
+    }
+    Assert-ExactPropertyNames $quality @(
+        "schema", "canonical", "repeatReferenceContractPath",
+        "repeatReferenceContractSha256", "repeats",
+        "candidateReferenceContractPath",
+        "candidateReferenceContractSha256", "temporalGates",
+        "spatialEnvelope", "baselineRepeatReportSha256") `
+        "$Label quality reference"
+    $expectedEvidenceProperties = @(
+        "role", "sequenceId", "reportPath", "reportSha256",
+        "healthPath", "healthSha256", "outputDirectory",
+        "referenceContractPath", "referenceContractSha256",
+        "qualityContractPath", "qualityContractSha256", "buildRootPath",
+        "buildBundleFingerprint", "runtimeExecutableBundleHash",
+        "trajectoryRouteHash", "trajectorySequenceHash", "producerGpuName",
+        "producerDriverVersion", "producerQualityTier", "captureRun",
+        "producerIdentity", "verifiedMetrics", "checkpoints")
+    Assert-ExactPropertyNames `
+        $quality.canonical $expectedEvidenceProperties `
+        "$Label canonical evidence"
+    foreach ($repeatEvidence in @($quality.repeats)) {
+        Assert-ExactPropertyNames `
+            $repeatEvidence $expectedEvidenceProperties `
+            "$Label repeat evidence"
+    }
+    $repeatContractPath = Join-Path $root "repeat-reference.json"
+    $candidateContractPath = Join-Path $root "candidate-reference.json"
+    Assert-PathIdentity `
+        ([string]$quality.repeatReferenceContractPath) $repeatContractPath `
+        "$Label repeat contract"
+    Assert-PathIdentity `
+        ([string]$quality.candidateReferenceContractPath) $candidateContractPath `
+        "$Label candidate contract"
+    foreach ($item in @(
+            @($repeatContractPath, [string]$quality.repeatReferenceContractSha256, "repeat contract"),
+            @($candidateContractPath, [string]$quality.candidateReferenceContractSha256, "candidate contract"))) {
+        if (-not (Test-Path -LiteralPath ([string]$item[0]) -PathType Leaf) -or
+            [string]$item[1] -cnotmatch '^[0-9a-f]{64}$' -or
+            (Get-Sha256 ([string]$item[0])) -cne [string]$item[1]) {
+            throw "$Label $($item[2]) bytes changed."
+        }
+    }
+    $repeatContract = Get-Content -LiteralPath $repeatContractPath -Raw |
+        ConvertFrom-Json
+    $candidateContract = Get-Content -LiteralPath $candidateContractPath -Raw |
+        ConvertFrom-Json
+    $canonicalId = Get-QualitySequenceId `
+        $Manifest $Configuration ([string]$Workload.id) `
+        "canonical" "reference-init" $BaselineCommit 0
+    $canonicalReport = Assert-QualitySequenceStoredEvidence `
+        $Manifest $Workload $quality.canonical $ReferenceBuild `
+        $Configuration "canonical" $canonicalId $BaselineCommit `
+        "" "" "" "" $null $ReferenceBuild $null `
+        (Join-Path $root "canonical") `
+        "$Label canonical"
+    Assert-QualitySequenceReferenceContract `
+        $Manifest $Workload $repeatContract $canonicalReport `
+        ([string]$ReferenceEntry.qualityContractPath) `
+        ([string]$ReferenceEntry.qualityContractSha256) `
+        $false @() @() "$Label repeat contract"
+    $repeatReports = @()
+    for ($repeat = 1; $repeat -le 2; $repeat++) {
+        $repeatId = Get-QualitySequenceId `
+            $Manifest $Configuration ([string]$Workload.id) `
+            "repeat" "reference-init" $BaselineCommit $repeat
+        $repeatReport = Assert-QualitySequenceStoredEvidence `
+            $Manifest $Workload @($quality.repeats)[$repeat - 1] `
+            $ReferenceBuild $Configuration "repeat" $repeatId `
+            $BaselineCommit $repeatContractPath `
+            ([string]$quality.repeatReferenceContractSha256) `
+            ([string]$ReferenceEntry.qualityContractPath) `
+            ([string]$ReferenceEntry.qualityContractSha256) `
+            $repeatContract $ReferenceBuild $null `
+            (Join-Path $root ("repeat-{0:D2}" -f $repeat)) `
+            "$Label repeat $repeat"
+        $repeatReports += $repeatReport
+        if ([string]@($quality.baselineRepeatReportSha256)[$repeat - 1] -cne
+            [string]@($quality.repeats)[$repeat - 1].reportSha256) {
+            throw "$Label repeat $repeat report hash is not locked."
+        }
+    }
+    $verifiedRepeatMetrics = @($quality.repeats | ForEach-Object {
+        $_.verifiedMetrics
+    })
+    $derivedGates = @(New-QualitySequenceTemporalGates `
+        $Manifest $Workload $verifiedRepeatMetrics)
+    $derivedSpatialEnvelope = @(New-QualitySequenceSpatialEnvelope `
+        $Manifest $Workload $verifiedRepeatMetrics)
+    Assert-QualitySequenceReferenceContract `
+        $Manifest $Workload $candidateContract $canonicalReport `
+        ([string]$ReferenceEntry.qualityContractPath) `
+        ([string]$ReferenceEntry.qualityContractSha256) `
+        $true $derivedGates `
+        @($quality.baselineRepeatReportSha256 | ForEach-Object { [string]$_ }) `
+        "$Label candidate contract"
+    if (@($quality.temporalGates).Count -ne $derivedGates.Count) {
+        throw "$Label stored temporal gate count differs."
+    }
+    if (($quality.spatialEnvelope | ConvertTo-Json -Depth 12 -Compress) -cne
+        ($derivedSpatialEnvelope | ConvertTo-Json -Depth 12 -Compress)) {
+        throw "$Label stored spatial envelope differs from recomputed repeats."
+    }
+    for ($index = 0; $index -lt $derivedGates.Count; $index++) {
+        if ([double]@($quality.temporalGates)[$index].maximumRelativeResidual -ne
+            [double]$derivedGates[$index].maximumRelativeResidual) {
+            throw "$Label stored temporal gate $index differs from repeats."
+        }
+    }
+    if ([string]$canonicalReport.TrajectoryFingerprint -cne
+            [string]$ReferenceEntry.trajectoryFingerprint -or
+        [string]$canonicalReport.TrajectoryRouteHash -cne
+            [string]$ReferenceEntry.trajectoryRouteHash -or
+        [int]$canonicalReport.TrajectoryFrameCount -ne
+            [int]$ReferenceEntry.trajectoryFrameCount) {
+        throw "$Label quality/timing authored trajectory differs."
+    }
+    Assert-QualityCaptureRunEqual `
+        $canonicalReport.CaptureRun $ReferenceEntry.captureRun $false `
+        "$Label quality/timing"
+    Assert-QualityProducerEqual `
+        $canonicalReport.ProducerIdentity `
+        $ReferenceEntry.producerIdentity $false `
+        "$Label quality/timing"
+    return [pscustomobject]@{
+        repeatContract = $repeatContract
+        candidateContract = $candidateContract
+        canonicalReport = $canonicalReport
+        repeatReports = @($repeatReports)
+        derivedGates = @($derivedGates)
+    }
+}
+
 function Assert-InitializedCampaignReferences {
     param(
         $Manifest,
@@ -2744,6 +5403,17 @@ function Assert-InitializedCampaignReferences {
                 $Manifest $workload $health $report $build `
                 $BaselineCommit ([string]$entry.pairId) `
                 "Initialized $configuration/$($workload.id) reference"
+            if ($null -eq $entry.qualitySequence -or
+                [string]$entry.qualitySequence.schema -ne
+                    "njulf-perf-campaign-quality-reference/v1" -or
+                @($entry.qualitySequence.repeats).Count -ne 2 -or
+                @($entry.qualitySequence.baselineRepeatReportSha256).Count -ne 2) {
+                throw "Initialized $configuration/$($workload.id) quality sequence is incomplete."
+            }
+            $null = Assert-LockedQualitySequenceReference `
+                $Manifest $workload $entry $build $configuration `
+                $BaselineCommit `
+                "Initialized $configuration/$($workload.id)"
         }
     }
     Assert-ExactCampaignHead $BaselineCommit "Reference initialization final audit"
@@ -2839,10 +5509,29 @@ function Initialize-CampaignReferences {
         }
         $references[$configuration] = $configurationReferences
     }
+    # Global phase boundary: every Release and ShippingPerformance endpoint
+    # timing reference is complete before any standalone quality readback.
+    foreach ($configuration in @(Get-CampaignConfigurations $Manifest)) {
+        $referenceBuild = $referenceBuilds[$configuration]
+        $configurationReferences = $references[$configuration]
+        foreach ($workload in @($Manifest.workloads)) {
+            $quality = $qualityContracts[[string]$workload.id]
+            $configurationReferences[[string]$workload.id]["qualitySequence"] =
+                Initialize-QualitySequenceReference `
+                    $Manifest $workload $referenceBuild $configuration `
+                    $baselineCommit ([string]$quality.path) `
+                    ([string]$quality.sha256)
+            Assert-ProtectedFingerprints $ProtectedFingerprints
+            Assert-ExactCampaignHead `
+                $baselineCommit `
+                "Quality reference $configuration/$($workload.id)"
+            Assert-CleanCampaignWorktree
+        }
+    }
     Assert-InitializedCampaignReferences `
         $Manifest $baselineCommit $referenceBuilds $references
     $lock = [ordered]@{
-        schema = "njulf-perf-campaign-lock/v4"
+        schema = "njulf-perf-campaign-lock/v5"
         campaignId = [string]$Manifest.campaignId
         createdAtUtc = [DateTimeOffset]::UtcNow
         manifestPath = $script:ManifestFile
@@ -2864,7 +5553,7 @@ function Initialize-CampaignReferences {
     Write-JsonArtifact $lockPath $lock
     $script:CampaignLockPath = $lockPath
     $script:CampaignLockSha256 = Get-Sha256 $lockPath
-    return $lock
+    return Read-CampaignLock $Manifest $BeautyTarget
 }
 
 function Read-CampaignLock {
@@ -2876,7 +5565,7 @@ function Read-CampaignLock {
     $lock = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     $script:CampaignLockPath = $path
     $script:CampaignLockSha256 = Get-Sha256 $path
-    if ([string]$lock.schema -ne "njulf-perf-campaign-lock/v4" -or
+    if ([string]$lock.schema -ne "njulf-perf-campaign-lock/v5" -or
         [string]$lock.campaignId -ne [string]$Manifest.campaignId -or
         [string]$lock.manifestSha256 -ne (Get-Sha256 $script:ManifestFile)) {
         throw "Campaign lock does not match the current manifest. References must be re-established deliberately."
@@ -2954,7 +5643,8 @@ function Read-CampaignLock {
         "pairId", "trajectory", "trajectoryFingerprint",
         "trajectoryFrameCount", "trajectoryRouteHash",
         "trajectorySequenceHash", "producerIdentity", "captureRun",
-        "detailedCountersCompiled", "detailedCountersEnabled")
+        "detailedCountersCompiled", "detailedCountersEnabled",
+        "qualitySequence")
     foreach ($configuration in $expectedConfigurations) {
         $referenceBuild = Get-ReferenceBuildIdentity $lock $configuration
         Assert-ExactPropertyNames $referenceBuild @(
@@ -3096,6 +5786,10 @@ function Read-CampaignLock {
                     [int]$report.LastDiagnostics.DdgiDetailedCountersEnabled) {
                 throw "Locked reference producer source settings differ for '$configuration/$($workload.id)'."
             }
+            $null = Assert-LockedQualitySequenceReference `
+                $Manifest $workload $entry $referenceBuild $configuration `
+                ([string]$lock.baselineCommit) `
+                "Locked $configuration/$($workload.id)"
         }
     }
     return $lock
@@ -3408,6 +6102,7 @@ if ($FinalizeRetainedStack) {
     $retainedChain = $null
     $winWorkloads = @()
     $finalAcceptanceRefSnapshot = $null
+    $finalCandidateBuilds = [ordered]@{}
     try {
         $finalIteration = Get-NextCampaignIterationId
         $finalAcceptanceRefSnapshot = Get-AcceptanceRefSnapshot $manifest
@@ -3446,6 +6141,7 @@ if ($FinalizeRetainedStack) {
                 (Join-Path $finalRoot "build-candidate/$configuration") `
                 "Final retained-stack $configuration candidate build" `
                 $retainedHead
+            $finalCandidateBuilds[$configuration] = $candidateBuild
             $result = Invoke-ConfigurationMatrix `
                 $manifest $lock $winWorkloads $baselineBuild $candidateBuild `
                 $configuration $finalIteration "retained-stack-final" `
@@ -3454,6 +6150,48 @@ if ($FinalizeRetainedStack) {
             if ($result.decision -ne "keep") {
                 $reason = "$configuration retained-stack final rejected: $($result.reason)"
                 break
+            }
+        }
+        # Release and ShippingPerformance timing both finish before any
+        # timing-ineligible quality readback process is launched.
+        if ($configurationResults.Count -eq
+                @(Get-CampaignConfigurations $manifest).Count -and
+            @($configurationResults | Where-Object {
+                $_.decision -ne "keep"
+            }).Count -eq 0) {
+            $finalConfigurations = @(Get-CampaignConfigurations $manifest)
+            for ($configurationIndex = 0;
+                 $configurationIndex -lt $finalConfigurations.Count;
+                 $configurationIndex++) {
+                $configuration = [string]$finalConfigurations[$configurationIndex]
+                $configurationResults[$configurationIndex] =
+                    Complete-ConfigurationQualityMatrix `
+                        $manifest $lock $winWorkloads `
+                        $finalCandidateBuilds[$configuration] `
+                        $configuration $finalIteration "retained-stack-final" `
+                        $retainedHead $configurationResults[$configurationIndex] `
+                        $finalRoot $true
+            }
+            # Re-read every earlier configuration only after the last quality
+            # process has exited, so Shipping cannot invalidate Release evidence.
+            for ($configurationIndex = 0;
+                 $configurationIndex -lt $finalConfigurations.Count;
+                 $configurationIndex++) {
+                $configuration = [string]$finalConfigurations[$configurationIndex]
+                $baselineBuild = Get-ReferenceBuildIdentity $lock $configuration
+                Assert-ConfigurationTimingEvidence `
+                    $manifest $lock $winWorkloads $baselineBuild `
+                    $finalCandidateBuilds[$configuration] `
+                    $configuration $finalIteration "retained-stack-final" `
+                    ([string]$lock.baselineCommit) $retainedHead `
+                    $configurationResults[$configurationIndex] `
+                    $finalRoot $true "Retained-stack final timing audit"
+                Assert-ConfigurationQualityEvidence `
+                    $manifest $lock $winWorkloads `
+                    $finalCandidateBuilds[$configuration] `
+                    $configuration $finalIteration "retained-stack-final" `
+                    $retainedHead $configurationResults[$configurationIndex] `
+                    $finalRoot $true "Retained-stack final quality audit"
             }
         }
         if ($configurationResults.Count -eq
@@ -3560,9 +6298,70 @@ if ($FinalizeRetainedStack) {
         decision = $decision
         reason = $reason
         winWorkloads = @($winWorkloads | ForEach-Object { [string]$_.id })
+        candidateBuilds = $finalCandidateBuilds
         configurations = $configurationResults
     }
-    Write-JsonArtifact (Join-Path $finalRoot "decision.json") $summary
+    $finalDecisionPath = Join-Path $finalRoot "decision.json"
+    if ($decision -eq "keep") {
+        try {
+            Write-JsonArtifact $finalDecisionPath $summary
+            $finalDecisionSha256 = Assert-FinalDecisionArtifacts `
+                $manifest $lock $finalDecisionPath $summary $winWorkloads `
+                $finalCandidateBuilds $finalIteration $retainedHead $finalRoot `
+                $finalAcceptanceRefSnapshot $retainedChain
+            Write-JsonArtifact `
+                (Join-Path $finalRoot "decision.audit.json") `
+                ([ordered]@{
+                    schema = "njulf-perf-campaign-final-audit/v1"
+                    campaignId = [string]$manifest.campaignId
+                    retainedHead = $retainedHead
+                    decisionSha256 = $finalDecisionSha256
+                    lastAcceptanceEvidence = [string]$retainedChain.LastEvidence
+                    configurations = @(Get-CampaignConfigurations $manifest)
+                    status = "passed"
+                })
+        } catch {
+            $postPublicationFailure = $_.Exception.Message
+            $recoveryFailure = ""
+            try {
+                Restore-AcceptedHead `
+                    $manifest $retainedHead $finalIteration $false `
+                    $protectedFingerprints $finalAcceptanceRefSnapshot
+            } catch {
+                $recoveryFailure = $_.Exception.Message
+            }
+            $postRecoveryInvariantFailures = @(Get-FinalInvariantFailures `
+                $manifest $lock $retainedHead $protectedFingerprints `
+                $finalAcceptanceRefSnapshot $retainedChain)
+            Write-JsonArtifact `
+                (Join-Path $finalRoot "decision.post-publication-failure.json") `
+                ([ordered]@{
+                    schema = "njulf-perf-campaign-final-post-publication-failure/v1"
+                    campaignId = [string]$manifest.campaignId
+                    retainedHead = $retainedHead
+                    decisionPath = [System.IO.Path]::GetFullPath($finalDecisionPath)
+                    decisionSha256 = if (Test-Path -LiteralPath $finalDecisionPath -PathType Leaf) {
+                        Get-Sha256 $finalDecisionPath
+                    } else {
+                        "unavailable"
+                    }
+                    failure = $postPublicationFailure
+                    recoveryFailure = $recoveryFailure
+                    recoverySucceeded =
+                        [string]::IsNullOrEmpty($recoveryFailure) -and
+                        $postRecoveryInvariantFailures.Count -eq 0
+                    postRecoveryInvariantFailures =
+                        @($postRecoveryInvariantFailures)
+                    status = "failed"
+                })
+            Write-Error (
+                "Retained-stack final post-publication audit failed at " +
+                "${retainedHead}: $postPublicationFailure")
+            exit 1
+        }
+    } else {
+        Write-JsonArtifact $finalDecisionPath $summary
+    }
     Write-Host "$($decision.ToUpperInvariant()): $reason"
     if ($decision -ne "keep") {
         $preservationText = if ($headPreserved) {
@@ -3655,6 +6454,17 @@ for ($sequenceIndex = 1; $sequenceIndex -le $Iterations; $sequenceIndex++) {
             $manifest $lock @($target) $baselineBuild $candidateBuild `
             $configuration $iteration "hypothesis-screen" `
             $acceptedHead $candidateHead
+        if ($result.decision -eq "keep") {
+            $result = Complete-ConfigurationQualityMatrix `
+                $manifest $lock @($target) $candidateBuild `
+                $configuration $iteration "hypothesis-screen" `
+                $candidateHead $result
+            Assert-ConfigurationQualityEvidence `
+                $manifest $lock @($target) $candidateBuild `
+                $configuration $iteration "hypothesis-screen" `
+                $candidateHead $result `
+                -Label "Release hypothesis screen quality audit"
+        }
         $configurationResults += $result
         Assert-ExactCampaignHead $candidateHead "Release hypothesis screen"
         Assert-CampaignLockIntegrity
