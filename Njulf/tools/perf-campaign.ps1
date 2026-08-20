@@ -2,14 +2,20 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$ManifestPath,
-    [string]$TrialCommand = "",
-    [int]$Iterations = 1,
+    [string]$CandidateId = "",
+    [string]$CandidateEnvelopePath = "",
+    [switch]$PrepareCandidateEnvelope,
+    [string]$DiscoveryArtifactPath = "",
+    [string]$AutomaticCandidateId = "",
+    [string]$AutomaticCandidateSourceCommit = "",
+    [string]$AutomaticCandidateFocusedTestFilter = "",
+    [string]$CandidateEnvelopeOutputPath = "",
     [string]$RunDirectory = ".perf-loop-runs/campaign",
-    [string]$TargetWorkloadId = "",
-    [string[]]$FinalTargetWorkloadIds = @(),
+    [string]$TargetHypothesisId = "",
     [switch]$InitializeReferences,
     [switch]$InitializeReferencesOnly,
     [switch]$BaselineOnly,
+    [switch]$DiscoverHotspots,
     [switch]$ValidateOnly,
     [switch]$FinalizeRetainedStack,
     [bool]$RollbackRejected = $true,
@@ -18,12 +24,21 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+$Iterations = 1
 
 $script:SolutionRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$script:ManifestFile = if ([System.IO.Path]::IsPathRooted($ManifestPath)) {
+$providedManifestFile = if ([System.IO.Path]::IsPathRooted($ManifestPath)) {
     [System.IO.Path]::GetFullPath($ManifestPath)
 } else {
     [System.IO.Path]::GetFullPath((Join-Path $script:SolutionRoot $ManifestPath))
+}
+$script:ManifestFile = [System.IO.Path]::GetFullPath(
+    (Join-Path $PSScriptRoot "perf-campaign.bistro-sponza.json"))
+if (-not [string]::Equals(
+        $providedManifestFile,
+        $script:ManifestFile,
+        [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Production campaign mode accepts only the built-in pinned manifest '$script:ManifestFile'."
 }
 $script:RunRoot = if ([System.IO.Path]::IsPathRooted($RunDirectory)) {
     [System.IO.Path]::GetFullPath($RunDirectory)
@@ -35,11 +50,16 @@ $script:CampaignBranch = ""
 $script:ProtectedFingerprints = [ordered]@{}
 $script:CampaignLockPath = ""
 $script:CampaignLockSha256 = ""
+$script:CampaignManifestSha256 = ""
 
 function Get-PropertyValue {
     param($Object, [string]$Name, $Default = $null)
     if ($null -eq $Object) {
         return $Default
+    }
+    if ($Object -is [System.Collections.IDictionary]) {
+        if (-not $Object.Contains($Name)) { return $Default }
+        return $Object[$Name]
     }
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) { return $Default }
@@ -57,8 +77,12 @@ function Assert-ExactPropertyNames {
     if ($null -eq $Object) {
         throw "$Label is missing."
     }
-    $actualNames = @($Object.PSObject.Properties |
-        ForEach-Object { [string]$_.Name })
+    $actualNames = if ($Object -is [System.Collections.IDictionary]) {
+        @($Object.Keys | ForEach-Object { [string]$_ })
+    } else {
+        @($Object.PSObject.Properties |
+            ForEach-Object { [string]$_.Name })
+    }
     if (($actualNames -join "`n") -cne ($ExpectedNames -join "`n")) {
         throw "$Label property topology differs. Expected [$($ExpectedNames -join ', ')], got [$($actualNames -join ', ')]."
     }
@@ -84,6 +108,110 @@ function Resolve-SolutionPath {
 function Get-Sha256 {
     param([string]$Path)
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-Sha256Bytes {
+    param([byte[]]$Bytes)
+    if ($null -eq $Bytes) { throw "Cannot hash null bytes." }
+    return [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
+}
+
+function Get-Sha256Text {
+    param([string]$Text)
+    return Get-Sha256Bytes (
+        [System.Text.UTF8Encoding]::new($false).GetBytes($Text))
+}
+
+function Read-BoundedFileBytes {
+    param(
+        [string]$Path,
+        [long]$MaximumLength,
+        [string]$Label)
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $stream = [System.IO.File]::Open(
+        $fullPath,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::Read)
+    try {
+        if ($stream.Length -le 0 -or $stream.Length -gt $MaximumLength) {
+            throw "$Label byte length $($stream.Length) is outside the admitted range."
+        }
+        $bytes = [byte[]]::new([int]$stream.Length)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($read -le 0) { throw "$Label ended before its admitted length." }
+            $offset += $read
+        }
+        return $bytes
+    } finally {
+        $stream.Dispose()
+    }
+}
+
+function Assert-JsonObject {
+    param($Value, [string]$Label)
+    if ($null -eq $Value -or
+        $Value -is [string] -or
+        $Value -is [System.Array] -or
+        $Value -is [ValueType]) {
+        throw "$Label must be a JSON object."
+    }
+    return $Value
+}
+
+function Assert-JsonString {
+    param($Value, [string]$Label)
+    if ($Value -isnot [string] -or [string]::IsNullOrWhiteSpace($Value)) {
+        throw "$Label must be a non-empty JSON string."
+    }
+    return [string]$Value
+}
+
+function Assert-JsonBoolean {
+    param($Value, [string]$Label)
+    if ($Value -isnot [bool]) { throw "$Label must be a JSON boolean." }
+    return [bool]$Value
+}
+
+function Assert-JsonInteger {
+    param($Value, [string]$Label, [long]$Minimum = [long]::MinValue)
+    if ($Value -is [bool] -or $Value -isnot [ValueType] -or
+        $Value -is [single] -or $Value -is [double] -or
+        $Value -is [decimal]) {
+        throw "$Label must be a JSON integer."
+    }
+    try { $integer = [long]$Value } catch { throw "$Label must be a JSON integer." }
+    if ($integer -lt $Minimum) { throw "$Label must be at least $Minimum." }
+    return $integer
+}
+
+function Assert-JsonArray {
+    param($Value, [string]$Label)
+    if ($null -eq $Value -or $Value -isnot [System.Array]) {
+        throw "$Label must be a JSON array."
+    }
+    return $Value
+}
+
+function Assert-NoLinkedPathComponents {
+    param([string]$Path, [string]$Label)
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetPathRoot($fullPath)
+    $relative = $fullPath.Substring($root.Length)
+    $current = $root
+    foreach ($component in @($relative -split '[\\/]' | Where-Object {
+            -not [string]::IsNullOrEmpty($_) })) {
+        $current = Join-Path $current $component
+        if (-not (Test-Path -LiteralPath $current)) { break }
+        $item = Get-Item -LiteralPath $current -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Label contains a reparse/link component: $current"
+        }
+    }
+    return $fullPath
 }
 
 function Get-RuntimeExecutableBundleHash {
@@ -201,21 +329,34 @@ function Test-CanonicalIdentityText {
 
 function Get-CanonicalPathFingerprint {
     param([string]$Path)
-    $fullPath = Resolve-SolutionPath $Path
+    $fullPath = Assert-NoLinkedPathComponents `
+        (Resolve-SolutionPath $Path) "Fingerprint path '$Path'"
     if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
-        return Get-Sha256 $fullPath
+        return "file:sha256:" + (Get-Sha256 $fullPath)
     }
     if (-not (Test-Path -LiteralPath $fullPath -PathType Container)) {
         return "absent"
     }
-
     $builder = [System.Text.StringBuilder]::new()
-    foreach ($file in @(Get-ChildItem -LiteralPath $fullPath -Recurse -File | Sort-Object FullName)) {
-        $relative = $file.FullName.Substring($fullPath.Length + 1).Replace("\", "/")
-        [void]$builder.Append((Get-Sha256 $file.FullName)).Append("  ").Append($relative).Append("`n")
+    foreach ($item in @(Get-ChildItem -LiteralPath $fullPath -Recurse -Force |
+            Sort-Object FullName)) {
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Fingerprint path '$Path' contains reparse/link entry '$($item.FullName)'."
+        }
+        $relative = $item.FullName.Substring(
+            $fullPath.Length + 1).Replace("\", "/")
+        if ($item.PSIsContainer) {
+            [void]$builder.Append("directory  ").Append(
+                $relative).Append("`n")
+        } else {
+            [void]$builder.Append("file:sha256:").Append(
+                (Get-Sha256 $item.FullName)).Append(
+                "  ").Append($relative).Append("`n")
+        }
     }
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($builder.ToString())
-    return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+    return "directory:sha256:" + [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 
 function Get-ProtectedFingerprints {
@@ -227,8 +368,27 @@ function Get-ProtectedFingerprints {
     return $fingerprints
 }
 
+function Assert-CampaignManifestIntegrity {
+    if ([string]::IsNullOrWhiteSpace($script:CampaignManifestSha256)) {
+        return
+    }
+    $null = Assert-NoLinkedPathComponents `
+        $script:ManifestFile "Active campaign manifest"
+    if (-not (Test-Path -LiteralPath $script:ManifestFile -PathType Leaf) -or
+        (Get-Sha256 $script:ManifestFile) -cne
+            $script:CampaignManifestSha256) {
+        throw "Active campaign manifest changed after admission: $script:ManifestFile"
+    }
+}
+
+function Get-AdmittedCampaignManifestSha256 {
+    Assert-CampaignManifestIntegrity
+    return $script:CampaignManifestSha256
+}
+
 function Assert-ProtectedFingerprints {
     param($Expected)
+    Assert-CampaignManifestIntegrity
     foreach ($entry in $Expected.GetEnumerator()) {
         $actual = Get-CanonicalPathFingerprint ([string]$entry.Key)
         if (-not [string]::Equals(
@@ -241,6 +401,7 @@ function Assert-ProtectedFingerprints {
 }
 
 function Assert-CampaignLockIntegrity {
+    Assert-CampaignManifestIntegrity
     if ([string]::IsNullOrWhiteSpace($script:CampaignLockSha256)) { return }
     if (-not (Test-Path -LiteralPath $script:CampaignLockPath -PathType Leaf) -or
         -not [string]::Equals(
@@ -259,7 +420,8 @@ function Assert-AdvisoryBeautyTarget {
     if (-not (Test-Path -LiteralPath $targetManifestPath -PathType Leaf)) {
         throw "Advisory beauty target manifest is missing: $targetManifestPath"
     }
-    $target = Get-Content -LiteralPath $targetManifestPath -Raw | ConvertFrom-Json
+    $target = Get-Content -LiteralPath $targetManifestPath -Raw |
+        ConvertFrom-Json -DateKind String
     if ([string]$target.schema -ne "njulf-advisory-beauty-target/v1" -or
         [string]$target.role -ne "advisory-display-referred" -or
         [bool]$target.linearHdrGateEligible) {
@@ -302,11 +464,19 @@ function Assert-AdvisoryBeautyTarget {
 
 function Assert-CampaignManifest {
     param($Manifest)
+    $null = Assert-JsonObject $Manifest "Campaign manifest"
+    Assert-ExactPropertyNames $Manifest @(
+        "schema", "campaignId", "projectPath",
+        "iterationConfiguration", "finalConfigurations",
+        "advisoryBeautyTargetManifest", "protectedPaths", "capture",
+        "quality", "qualitySequence", "acceptance", "discoveryPolicy",
+        "candidates", "targetHypotheses", "workloads") `
+        "Campaign manifest"
     if ([string]$Manifest.schema -ne "njulf-perf-campaign/v1") {
         throw "Unsupported campaign schema '$($Manifest.schema)'."
     }
     Assert-Text ([string]$Manifest.campaignId) "campaignId"
-    if ([string]$Manifest.campaignId -notmatch '^[a-z0-9][a-z0-9-]*$') {
+    if ([string]$Manifest.campaignId -cnotmatch '^[a-z0-9][a-z0-9-]*$') {
         throw "campaignId must contain only lowercase letters, digits, and hyphens."
     }
     Assert-Text ([string]$Manifest.projectPath) "projectPath"
@@ -324,8 +494,8 @@ function Assert-CampaignManifest {
         [string]$finalConfigurations[1] -ne "ShippingPerformance") {
         throw "Final timing must contain exactly Release and ShippingPerformance."
     }
-    if ([int]$Manifest.capture.abbaCycles -lt 3) {
-        throw "capture.abbaCycles must be at least three."
+    if ([int]$Manifest.capture.abbaCycles -ne 3) {
+        throw "capture.abbaCycles must be exactly three."
     }
     if ([int]$Manifest.capture.benchmarkTimeoutSeconds -lt 1 -or
         [int]$Manifest.capture.benchmarkTimeoutSeconds -gt 86400) {
@@ -338,10 +508,20 @@ function Assert-CampaignManifest {
     if ([int]$Manifest.capture.maximumSettlingFrames -lt 4096) {
         throw "Production timing requires at least 4096 additional settling frames."
     }
-    if ([double]$Manifest.quality.maximumRelativeRmse -gt 0.005 -or
-        [double]$Manifest.quality.maximumFlipP95 -gt 0.02 -or
-        [double]$Manifest.quality.maximumRoiMeanLuminanceShift -gt 0.02 -or
-        [double]$Manifest.quality.maximumRoiP95LuminanceShift -gt 0.03) {
+    $maximumRelativeRmse = Assert-FiniteNumber `
+        $Manifest.quality.maximumRelativeRmse "quality.maximumRelativeRmse"
+    $maximumFlipP95 = Assert-FiniteNumber `
+        $Manifest.quality.maximumFlipP95 "quality.maximumFlipP95"
+    $maximumRoiMeanLuminanceShift = Assert-FiniteNumber `
+        $Manifest.quality.maximumRoiMeanLuminanceShift `
+        "quality.maximumRoiMeanLuminanceShift"
+    $maximumRoiP95LuminanceShift = Assert-FiniteNumber `
+        $Manifest.quality.maximumRoiP95LuminanceShift `
+        "quality.maximumRoiP95LuminanceShift"
+    if ($maximumRelativeRmse -gt 0.005 -or
+        $maximumFlipP95 -gt 0.02 -or
+        $maximumRoiMeanLuminanceShift -gt 0.02 -or
+        $maximumRoiP95LuminanceShift -gt 0.03) {
         throw "Campaign quality thresholds are weaker than the approved contract."
     }
     if ([int]$Manifest.qualitySequence.baselineRepeatCount -ne 2 -or
@@ -351,14 +531,14 @@ function Assert-CampaignManifest {
         [double]$Manifest.qualitySequence.temporalResidualHardCeiling -ne 0.005) {
         throw "Campaign quality-sequence repeatability policy differs from the exact approved contract."
     }
-    if ([double]$Manifest.acceptance.minimumFrameImprovementPercent -lt 1.0 -or
-        [double]$Manifest.acceptance.minimumFrameImprovementMilliseconds -lt 0.10 -or
-        [double]$Manifest.acceptance.minimumPassImprovementPercent -lt 5.0 -or
-        [double]$Manifest.acceptance.minimumPassImprovementMilliseconds -lt 0.05 -or
-        [double]$Manifest.acceptance.maximumRegressionPercent -gt 1.0 -or
-        [int]$Manifest.acceptance.bootstrapSamples -lt 10000 -or
-        [double]$Manifest.acceptance.bootstrapConfidence -lt 0.95) {
-        throw "Campaign performance/statistical thresholds are weaker than approved."
+    if ([double]$Manifest.acceptance.minimumFrameImprovementPercent -ne 1.0 -or
+        [double]$Manifest.acceptance.minimumFrameImprovementMilliseconds -ne 0.10 -or
+        [double]$Manifest.acceptance.minimumPassImprovementPercent -ne 5.0 -or
+        [double]$Manifest.acceptance.minimumPassImprovementMilliseconds -ne 0.05 -or
+        [double]$Manifest.acceptance.maximumRegressionPercent -ne 1.0 -or
+        [int]$Manifest.acceptance.bootstrapSamples -ne 10000 -or
+        [double]$Manifest.acceptance.bootstrapConfidence -ne 0.95) {
+        throw "Campaign performance/statistical thresholds differ from the approved contract."
     }
 
     if ([string]$Manifest.capture.budgetProfile -ne "stress") {
@@ -368,6 +548,7 @@ function Assert-CampaignManifest {
     $mandatoryProtectedPaths = @(
         "tools/perf-campaign.ps1",
         "tools/perf-campaign.bistro-sponza.json",
+        "tools/perf-campaign.tests.ps1",
         "tools/perf-quality-verify.ps1",
         "tools/perf-loop.ps1",
         "NjulfHelloGame/Program.cs",
@@ -381,6 +562,7 @@ function Assert-CampaignManifest {
         "NjulfHelloGame/SampleBenchmarkOptions.cs",
         "NjulfHelloGame/SampleBenchmarkPairComparer.cs",
         "NjulfHelloGame/SampleBenchmarkTrajectory.cs",
+        "NjulfHelloGame/SampleEvidenceFileIo.cs",
         "NjulfHelloGame/SampleHealthReportWriter.cs",
         "NjulfHelloGame/SampleHealthReportEvaluation.cs",
         "NjulfHelloGame/SampleMaterialGiProducerIdentityFactory.cs",
@@ -389,10 +571,75 @@ function Assert-CampaignManifest {
         "NjulfHelloGame/SampleSmokeOptions.cs",
         "NjulfHelloGame/SampleSmokeOptionsParser.cs",
         "NjulfHelloGame/SampleInputController.cs",
+        "NjulfHelloGame/SampleBenchmarkGateEvaluation.cs",
+        "NjulfHelloGame/SampleBudgetMetricCoverage.cs",
+        "NjulfHelloGame/SampleDdgiProductionGate.cs",
+        "NjulfHelloGame/SampleDdgiBenchmarkSuite.cs",
         "Njulf.Rendering/Data/MaterialGiRolloutPolicy.cs",
+        "Njulf.Rendering/Diagnostics/RenderBudgetEvaluator.cs",
+        "Njulf.Rendering/Diagnostics/RenderBudgetProfile.cs",
+        "Njulf.Rendering/Diagnostics/RenderBudgetSettings.cs",
+        "Njulf.Rendering/Diagnostics/RenderBudgetSnapshot.cs",
+        "Njulf.Rendering/Diagnostics/RenderBudgetStatus.cs",
         "Njulf.Rendering/Diagnostics/RendererHealthReportWriter.cs",
         "Njulf.Rendering/Debugging/LinearHdrReadback.cs",
         "Njulf.Tests/SampleBenchmarkQualitySequenceTests.cs",
+        "NjulfHelloGame/SampleBenchmarkActivation.cs",
+        "NjulfHelloGame/SampleBenchmarkActivationVerificationCli.cs",
+        "NjulfHelloGame/SampleBenchmarkControlledIsolation.cs",
+        "NjulfHelloGame/SampleBenchmarkQualityActivationVerificationCli.cs",
+        "NjulfHelloGame/SampleBenchmarkSponzaSceneAnimation.cs",
+        "NjulfHelloGame/SampleBenchmarkSponzaSceneAnimationSidecar.cs",
+        "NjulfHelloGame/SampleAnimatedCharacter.cs",
+        "NjulfHelloGame/SampleBenchmarkReflectionProbeCaptureEvidence.cs",
+        "NjulfHelloGame/SampleBenchmarkDdgiTransientEvidence.cs",
+        "NjulfHelloGame/SampleBenchmarkDdgiTransientVerificationCli.cs",
+        "NjulfHelloGame/SampleBistroQualityCaptureHarness.cs",
+        "NjulfHelloGame/SampleSponzaGiCaptureHarness.cs",
+        "NjulfHelloGame/SampleTailDdgiQualification.cs",
+        "NjulfHelloGame/Strut.glb",
+        "Njulf.Assets/Scenes/SceneDocumentLoader.cs",
+        "Njulf.Core/Animation/Animator.cs",
+        "Njulf.Core/Scene/Model.cs",
+        "Njulf.Rendering/Data/RenderSettings.cs",
+        "Njulf.Rendering/Data/DirectionalShadowRuntimeDiagnostics.cs",
+        "Njulf.Rendering/Data/RendererDiagnostics.cs",
+        "Njulf.Rendering/Data/SceneRenderingData.cs",
+        "Njulf.Rendering/Data/MaterialGiReleaseEvidenceAuthenticity.cs",
+        "Njulf.Rendering/Data/SimpleDdgiTransientFrameEvidence.cs",
+        "Njulf.Rendering/Data/SimpleDdgiTransportTailSummary.cs",
+        "Njulf.Rendering/Pipeline/DirectionalShadowPass.cs",
+        "Njulf.Rendering/Pipeline/ForwardPlusPass.cs",
+        "Njulf.Rendering/Pipeline/SimpleDdgiPasses.cs",
+        "Njulf.Rendering/Resources/ReflectionProbeCaptureScheduler.cs",
+        "Njulf.Rendering/Resources/ReflectionProbeFrameTelemetry.cs",
+        "Njulf.Rendering/Resources/ReflectionProbeGpuBudgetPlanner.cs",
+        "Njulf.Rendering/Resources/ReflectionProbeManager.cs",
+        "Njulf.Rendering/Resources/SimpleDdgiGpuScheduler.cs",
+        "Njulf.Rendering/Resources/SimpleDdgiVolumeManager.cs",
+        "Njulf.Rendering/Debugging/GpuTimestampRecorder.cs",
+        "Njulf.Rendering/VulkanRenderer.cs",
+        "Njulf.Tests/SampleAnimatedCharacterTests.cs",
+        "Njulf.Tests/SampleBenchmarkSponzaSceneAnimationTests.cs",
+        "Njulf.Tests/SampleBenchmarkControlledIsolationTests.cs",
+        "Njulf.Tests/SampleBenchmarkPairComparerTests.cs",
+        "Njulf.Tests/SampleBenchmarkEvidenceTests.cs",
+        "Njulf.Tests/SampleBenchmarkGateEvaluationTests.cs",
+        "Njulf.Tests/SampleBenchmarkTrajectoryTests.cs",
+        "Njulf.Tests/SampleEvidenceFileIoTests.cs",
+        "Njulf.Tests/SampleBenchmarkAnalyzerTests.cs",
+        "Njulf.Tests/SampleBenchmarkReflectionProbeCaptureEvidenceTests.cs",
+        "Njulf.Tests/SampleBenchmarkDdgiTransientEvidenceTests.cs",
+        "Njulf.Tests/SampleBenchmarkDdgiTransientVerificationTests.cs",
+        "Njulf.Tests/SimpleDdgiTransientFrameEvidenceTests.cs",
+        "Njulf.Tests/ReflectionProbeCaptureSchedulerTests.cs",
+        "Njulf.Tests/ReflectionProbeFrameTelemetryTests.cs",
+        "Njulf.Tests/ReflectionProbeGpuBudgetPlannerTests.cs",
+        "Njulf.Tests/ReflectionProbeRecapturePolicyTests.cs",
+        "Njulf.Tests/SampleBistroQualityCaptureHarnessTests.cs",
+        "Njulf.Tests/SampleSponzaGiCaptureHarnessTests.cs",
+        "Njulf.Tests/DebugToolingContractsTests.cs",
+        "Njulf.Tests/MaterialGiRolloutPolicyTests.cs",
         ".perf-loop-runs/campaign/beauty-target/manifest.json",
         ".perf-loop-runs/campaign/beauty-target/bistro-beauty-target.jpg",
         "NjulfHelloGame/Assets/Bistro_v5_2",
@@ -419,22 +666,18 @@ function Assert-CampaignManifest {
     }
 
     $expectedTopology = [ordered]@{
-        "bistro-stationary" = @("Bistro", "Normal", "bistro-presentation", "baseline", 480, 240, $true, "presentation", "", "", "")
-        "bistro-motion" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "baseline", 480, 240, $true, "steady-motion", "", "", "")
-        "bistro-motion-relight" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "baseline", 480, 240, $true, "sun-scale-step", "", "", "")
-        "sponza-low-stationary" = @("Sponza", "GiSponzaRightWallStationary", "sponza-low", "baseline", 2048, 240, $true, "", "", "", "")
-        "sponza-high-stationary" = @("Sponza", "GiSponzaRightWallStationary", "sponza-high", "baseline", 2688, 240, $true, "", "", "", "")
-        "sponza-horizontal-motion" = @("Sponza", "GiSponzaRightWallStationary", "sponza-horizontal", "baseline", 2688, 300, $true, "", "", "", "")
-        "sponza-vertical-motion" = @("Sponza", "GiSponzaRightWallStationary", "sponza-vertical", "baseline", 2688, 960, $true, "", "", "", "")
-        "bistro-forward-gi-enabled" = @("Bistro", "Normal", "bistro-presentation", "forward-gi-enabled", 480, 240, $false, "presentation", "ForwardPlusPass", "bistro-forward-gi", "enabled")
-        "bistro-forward-gi-disabled" = @("Bistro", "Normal", "bistro-presentation", "forward-gi-disabled", 480, 240, $false, "presentation", "ForwardPlusPass", "bistro-forward-gi", "disabled")
-        "bistro-forward-gi-exact" = @("Bistro", "Normal", "bistro-presentation", "forward-gi-exact", 480, 240, $false, "presentation", "ForwardPlusPass", "bistro-forward-gi", "exact")
-        "bistro-ddgi-tail-jacobi" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "tail-jacobi", 480, 240, $false, "sun-scale-step", "SimpleDdgiAcceleratedSolvePass", "bistro-ddgi-tail", "jacobi")
-        "bistro-ddgi-tail-accelerated" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "tail-accelerated", 480, 240, $false, "sun-scale-step", "SimpleDdgiAcceleratedSolvePass", "bistro-ddgi-tail", "accelerated")
-        "bistro-transparent-stress" = @("Bistro", "ManyTransparentObjects", "stationary", "baseline", 480, 240, $false, "", "TransparentPasses", "", "")
-        "sponza-reflection-lifecycle" = @("Sponza", "GiSponzaReflectionProbeLifecycle", "sponza-low", "baseline", 2688, 240, $false, "", "ReflectionProbeCapture", "", "")
-        "bistro-large-meshlet-count" = @("Bistro", "LargeMeshletCount", "stationary", "baseline", 480, 240, $false, "", "DrawScene", "", "")
-        "bistro-moving-rigid-object" = @("Bistro", "GiMovingRigidObject", "stationary", "baseline", 480, 240, $false, "", "MotionVectorPass", "", "")
+        # scene, scenario, timing trajectory, quality trajectory, variant,
+        # warmup, timing frames, qualification, Bistro variant, activation,
+        # observed pass, isolation group, isolation role
+        "bistro-stationary" = @("Bistro", "Normal", "bistro-presentation", "bistro-presentation", "baseline", 480, 240, $true, "presentation", "none", "", "", "")
+        "bistro-motion" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "bistro-loop", "baseline", 480, 240, $true, "steady-motion", "none", "", "", "")
+        "bistro-motion-relight" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "bistro-loop", "baseline", 480, 240, $true, "sun-scale-step", "none", "", "", "")
+        "sponza-low-stationary" = @("Sponza", "GiSponzaRightWallStationary", "sponza-low", "sponza-low", "baseline", 2048, 240, $true, "", "none", "", "", "")
+        "sponza-high-stationary" = @("Sponza", "GiSponzaRightWallStationary", "sponza-high", "sponza-high", "baseline", 2688, 240, $true, "", "none", "", "", "")
+        "sponza-horizontal-motion" = @("Sponza", "GiSponzaRightWallStationary", "sponza-horizontal", "sponza-horizontal", "baseline", 2688, 300, $true, "", "none", "", "", "")
+        "sponza-vertical-motion" = @("Sponza", "GiSponzaRightWallStationary", "sponza-vertical", "sponza-vertical", "baseline", 2688, 960, $true, "", "none", "", "", "")
+        "bistro-forward-gi-enabled" = @("Bistro", "Normal", "bistro-presentation", "bistro-presentation", "forward-gi-enabled", 480, 240, $false, "presentation", "none", "ForwardPlusPass", "bistro-forward-gi", "enabled")
+        "sponza-forward-gi-enabled" = @("Sponza", "GiSponzaRightWallStationary", "sponza-horizontal", "sponza-horizontal", "forward-gi-enabled", 2688, 300, $false, "", "sponza-forward-gi", "ForwardPlusPass", "sponza-forward-gi", "enabled")
     }
     $workloads = @($Manifest.workloads)
     if ($workloads.Count -ne $expectedTopology.Count) {
@@ -442,7 +685,7 @@ function Assert-CampaignManifest {
     }
     $expectedWorkloadIds = @($expectedTopology.Keys)
     for ($workloadIndex = 0; $workloadIndex -lt $workloads.Count; $workloadIndex++) {
-        if ([string]$workloads[$workloadIndex].id -ne
+        if ([string]$workloads[$workloadIndex].id -cne
             [string]$expectedWorkloadIds[$workloadIndex]) {
             throw "Campaign workload order differs at index $workloadIndex."
         }
@@ -457,8 +700,78 @@ function Assert-CampaignManifest {
         "sponza-horizontal-motion",
         "sponza-vertical-motion")
     foreach ($workload in $workloads) {
-        $id = [string]$workload.id
-        if ($id -notmatch '^[a-z0-9][a-z0-9-]*$') {
+        $null = Assert-JsonObject $workload "Workload"
+        $id = Assert-JsonString $workload.id "Workload id"
+        $expectedWorkloadProperties = switch ($id) {
+            { $_ -in @(
+                    "bistro-stationary", "bistro-motion",
+                    "bistro-motion-relight") } {
+                @(
+                    "id", "scene", "scenario", "trajectory",
+                    "qualityTrajectory", "bistroQualityVariant",
+                    "captureVariant", "activation", "warmupFrames",
+                    "measureFrames", "qualification", "qualityRois")
+                break
+            }
+            { $_ -in @(
+                    "sponza-low-stationary", "sponza-high-stationary",
+                    "sponza-horizontal-motion", "sponza-vertical-motion") } {
+                @(
+                    "id", "scene", "scenario", "trajectory",
+                    "qualityTrajectory", "captureVariant", "activation",
+                    "warmupFrames", "measureFrames", "qualification",
+                    "qualityRois")
+                break
+            }
+            { $_ -in @(
+                    "bistro-forward-gi-enabled") } {
+                @(
+                    "id", "scene", "scenario", "trajectory",
+                    "qualityTrajectory", "bistroQualityVariant",
+                    "captureVariant", "activation", "warmupFrames",
+                    "measureFrames", "qualification", "targetPass",
+                    "isolationGroup", "isolationRole", "qualityRois")
+                break
+            }
+            { $_ -in @(
+                    "sponza-forward-gi-enabled") } {
+                @(
+                    "id", "scene", "scenario", "trajectory",
+                    "qualityTrajectory", "captureVariant", "activation",
+                    "warmupFrames", "measureFrames", "qualification",
+                    "targetPass", "isolationGroup", "isolationRole",
+                    "qualityRois")
+                break
+            }
+            default { @("id") }
+        }
+        Assert-ExactPropertyNames `
+            $workload $expectedWorkloadProperties "Workload '$id'"
+        foreach ($property in @(
+                "scene", "scenario", "trajectory", "qualityTrajectory",
+                "captureVariant", "activation")) {
+            $null = Assert-JsonString `
+                $workload.$property "Workload '$id' $property"
+        }
+        foreach ($property in @(
+                "bistroQualityVariant", "targetPass", "isolationGroup",
+                "isolationRole")) {
+            if ($expectedWorkloadProperties -contains $property) {
+                $null = Assert-JsonString `
+                    $workload.$property "Workload '$id' $property"
+            }
+        }
+        $null = Assert-JsonInteger `
+            $workload.warmupFrames "Workload '$id' warmupFrames" 0
+        $null = Assert-JsonInteger `
+            $workload.measureFrames "Workload '$id' measureFrames" 1
+        $null = Assert-JsonBoolean `
+            $workload.qualification "Workload '$id' qualification"
+        if ($expectedWorkloadProperties -contains "qualityRois") {
+            $null = Assert-JsonArray `
+                $workload.qualityRois "Workload '$id' qualityRois"
+        }
+        if ($id -cnotmatch '^[a-z0-9][a-z0-9-]*$') {
             throw "Workload id '$id' is invalid."
         }
         if ($ids.ContainsKey($id)) {
@@ -473,11 +786,13 @@ function Assert-CampaignManifest {
             [string]$workload.scene,
             [string]$workload.scenario,
             [string]$workload.trajectory,
+            [string]$workload.qualityTrajectory,
             [string]$workload.captureVariant,
             [int]$workload.warmupFrames,
             [int]$workload.measureFrames,
             [bool]$workload.qualification,
             [string](Get-PropertyValue $workload "bistroQualityVariant" ""),
+            [string]$workload.activation,
             [string](Get-PropertyValue $workload "targetPass" ""),
             [string](Get-PropertyValue $workload "isolationGroup" ""),
             [string](Get-PropertyValue $workload "isolationRole" ""))
@@ -508,6 +823,17 @@ function Assert-CampaignManifest {
         if ($expectedFrames -gt 0 -and [int]$workload.measureFrames -ne $expectedFrames) {
             throw "Workload '$id' must measure exactly $expectedFrames trajectory frames."
         }
+        $qualityTrajectory = [string]$workload.qualityTrajectory
+        if ($qualityTrajectory -notin @(
+                "stationary", "bistro-presentation", "bistro-loop",
+                "sponza-low", "sponza-high", "sponza-horizontal", "sponza-vertical")) {
+            throw "Workload '$id' has unsupported quality trajectory '$qualityTrajectory'."
+        }
+        $activation = [string]$workload.activation
+        if ($activation -notin @(
+                "none", "sponza-forward-gi")) {
+            throw "Workload '$id' has unsupported activation '$activation'."
+        }
         if ([int]$workload.measureFrames -lt 120) {
             throw "Workload '$id' must measure at least 120 frames."
         }
@@ -515,8 +841,13 @@ function Assert-CampaignManifest {
         $reservedArguments = @(
             "--scene", "--performance-scenario", "--quality-preset",
             "--validation", "--gpu-timing", "--health-report",
-            "--bistro-quality-variant")
-        foreach ($argument in @((Get-PropertyValue $workload "arguments" @()))) {
+            "--bistro-quality-variant", "--benchmark-activation",
+            "--verify-benchmark-activation-report",
+            "--verify-benchmark-ddgi-transient-report",
+            "--verify-benchmark-quality-activation-report",
+            "--verify-directional-controlled-isolation")
+        $workloadArguments = @((Get-PropertyValue $workload "arguments" @()))
+        foreach ($argument in $workloadArguments) {
             $optionName = ([string]$argument).Split('=', 2)[0].ToLowerInvariant()
             if ($optionName -eq "--benchmark" -or
                 $optionName.StartsWith("--benchmark-", [StringComparison]::Ordinal) -or
@@ -524,12 +855,25 @@ function Assert-CampaignManifest {
                 throw "Workload '$id' arguments may not override reserved option '$optionName'."
             }
         }
+        if ($workloadArguments.Count -ne 0) {
+            throw "Workload '$id' may not add arguments outside the exact approved topology."
+        }
         $qualityRois = @((Get-PropertyValue $workload "qualityRois" @()))
-        if ($qualityRois.Count -gt 1) {
-            throw "Workload '$id' must use one full-frame ROI contract."
+        $expectedRoiCount = if ($expectedWorkloadProperties -contains
+            "qualityRois") { 1 } else { 0 }
+        if ($qualityRois.Count -ne $expectedRoiCount) {
+            throw "Workload '$id' must use exactly $expectedRoiCount full-frame ROI contracts."
         }
         foreach ($roi in $qualityRois) {
-            Assert-Text ([string]$roi.name) "Workload '$id' ROI name"
+            $null = Assert-JsonObject $roi "Workload '$id' ROI"
+            Assert-ExactPropertyNames `
+                $roi @("name", "x", "y", "width", "height") `
+                "Workload '$id' ROI"
+            $null = Assert-JsonString $roi.name "Workload '$id' ROI name"
+            foreach ($property in @("x", "y", "width", "height")) {
+                $null = Assert-JsonInteger `
+                    $roi.$property "Workload '$id' ROI $property" 0
+            }
             if ([int]$roi.x -ne 0 -or [int]$roi.y -ne 0 -or
                 [int]$roi.width -ne 1920 -or [int]$roi.height -ne 1080) {
                 throw "Workload '$id' ROI '$($roi.name)' must cover the full 1920x1080 performance frame."
@@ -540,20 +884,272 @@ function Assert-CampaignManifest {
         if (-not $ids.ContainsKey($id)) {
             throw "Required qualification workload '$id' is missing."
         }
-        $workload = @($workloads | Where-Object { [string]$_.id -eq $id })[0]
+        $workload = @($workloads | Where-Object { [string]$_.id -ceq $id })[0]
         if (-not [bool]$workload.qualification) {
             throw "Required workload '$id' must be a qualification gate."
+        }
+    }
+
+    $discovery = $Manifest.discoveryPolicy
+    $null = Assert-JsonObject $discovery "discoveryPolicy"
+    Assert-ExactPropertyNames $discovery @(
+        "enabled", "domains", "minimumSharePercent",
+        "minimumP95Milliseconds", "requireBothConfigurations",
+        "requireBistroAndSponza", "attemptsPerTiming",
+        "fullMatrixAfterCandidate") "discoveryPolicy"
+    if ((Assert-JsonBoolean $discovery.enabled "discoveryPolicy.enabled") -ne $true -or
+        (Assert-JsonBoolean $discovery.requireBothConfigurations `
+            "discoveryPolicy.requireBothConfigurations") -ne $true -or
+        (Assert-JsonBoolean $discovery.requireBistroAndSponza `
+            "discoveryPolicy.requireBistroAndSponza") -ne $true -or
+        (Assert-JsonBoolean $discovery.fullMatrixAfterCandidate `
+            "discoveryPolicy.fullMatrixAfterCandidate") -ne $true -or
+        (Assert-JsonInteger $discovery.attemptsPerTiming `
+            "discoveryPolicy.attemptsPerTiming" 1) -ne 1 -or
+        (Assert-FiniteNumber $discovery.minimumSharePercent `
+            "discoveryPolicy.minimumSharePercent") -ne 5.0 -or
+        (Assert-FiniteNumber $discovery.minimumP95Milliseconds `
+            "discoveryPolicy.minimumP95Milliseconds") -ne 0.25) {
+        throw "Hotspot discovery policy differs from the approved production contract."
+    }
+    $null = Assert-JsonArray $discovery.domains "discoveryPolicy.domains"
+    if (@($discovery.domains).Count -ne 2 -or
+        [string]$discovery.domains[0] -cne "gpu" -or
+        [string]$discovery.domains[1] -cne "cpu") {
+        throw "Hotspot discovery domains must be exact ordered GPU then CPU."
+    }
+
+    $expectedCandidates = [ordered]@{
+        "receiver-cache-shared-workgroup" = @(
+            "4a9ee4c18d00211571f056a26d2047779d9622fa",
+            "6f54b21b9012d66d434905942552c7f392a9bd31",
+            "receiver-cache",
+            "FullyQualifiedName~SimpleDdgiShaderMirrorTests|FullyQualifiedName~ShaderBuildTests",
+            @(
+                "Njulf.Shaders/ddgi_simple_receiver_cache.comp",
+                "Njulf.Tests/ShaderBuildTests.cs",
+                "Njulf.Tests/SimpleDdgiShaderMirrorTests.cs"))
+        "ao-center-depth-reuse" = @(
+            "f634c59dab0f89f959e3135b6babc531e54720af",
+            "02a27b53fba40845a1c65c6d090f43be61ae8fe3",
+            "ambient-occlusion",
+            "FullyQualifiedName~AmbientOcclusionShaderContractTests|FullyQualifiedName~ShaderBuildTests",
+            @(
+                "Njulf.Shaders/ambient_occlusion.comp",
+                "Njulf.Tests/AmbientOcclusionShaderContractTests.cs",
+                "Njulf.Tests/ShaderBuildTests.cs"))
+        "ao-blur-shared-tile" = @(
+            "d794d3163122b128b2390931e07114202de49223",
+            "b84c0bf960a9a1b4fd930c065441273611714968",
+            "ambient-occlusion-blur",
+            "FullyQualifiedName~AmbientOcclusionBlurSharedTileTests",
+            @(
+                "Njulf.Shaders/ambient_occlusion_blur.comp",
+                "Njulf.Tests/AmbientOcclusionBlurSharedTileTests.cs"))
+        "ddgi-feedback-partial-reduction" = @(
+            "60d6c5f5f96a288a5f71ff856060dc394f78985e",
+            "eec1d6c3201b645585dcb3f292177d5c023f1d0a",
+            "ddgi-scheduler-commit",
+            "FullyQualifiedName~SimpleDdgiFeedbackPartialReductionTests|FullyQualifiedName~SimpleDdgiShaderMirrorTests|FullyQualifiedName~ShaderBuildTests",
+            @(
+                "Njulf.Rendering/Pipeline/SimpleDdgiSchedulerCommitPass.cs",
+                "Njulf.Shaders/Njulf.Shaders.csproj",
+                "Njulf.Shaders/VerifyProductionDiagnosticAtomics.ps1",
+                "Njulf.Shaders/ddgi_simple_schedule_feedback.comp",
+                "Njulf.Tests/SimpleDdgiFeedbackPartialReductionTests.cs",
+                "Njulf.Tests/SimpleDdgiShaderMirrorTests.cs"))
+    }
+    $candidates = @($Manifest.candidates)
+    if ($candidates.Count -ne $expectedCandidates.Count) {
+        throw "Campaign must declare exactly four ordered reviewed candidates."
+    }
+    $candidateIds = @($expectedCandidates.Keys)
+    for ($candidateIndex = 0; $candidateIndex -lt $candidates.Count; $candidateIndex++) {
+        $candidate = $candidates[$candidateIndex]
+        $expectedId = [string]$candidateIds[$candidateIndex]
+        $expected = $expectedCandidates[$expectedId]
+        $null = Assert-JsonObject $candidate "Candidate $candidateIndex"
+        Assert-ExactPropertyNames $candidate @(
+            "id", "sourceCommit", "patchId", "hypothesisId",
+            "allowedPaths", "focusedTestFilter") "Candidate $candidateIndex"
+        foreach ($property in @(
+                "id", "sourceCommit", "patchId", "hypothesisId",
+                "focusedTestFilter")) {
+            $null = Assert-JsonString `
+                $candidate.$property "Candidate '$expectedId' $property"
+        }
+        $null = Assert-JsonArray `
+            $candidate.allowedPaths "Candidate '$expectedId' allowedPaths"
+        if ([string]$candidate.id -cne $expectedId -or
+            [string]$candidate.sourceCommit -cne [string]$expected[0] -or
+            [string]$candidate.patchId -cne [string]$expected[1] -or
+            [string]$candidate.hypothesisId -cne [string]$expected[2] -or
+            [string]$candidate.focusedTestFilter -cne [string]$expected[3] -or
+            (@($candidate.allowedPaths) -join "`n") -cne
+                (@($expected[4]) -join "`n")) {
+            throw "Candidate '$expectedId' differs from the approved patch contract."
+        }
+        if ((Get-StablePatchId ([string]$candidate.sourceCommit)) -cne
+                [string]$candidate.patchId -or
+            (@(Get-CommitChangedPaths ([string]$candidate.sourceCommit)) -join "`n") -cne
+                (@($candidate.allowedPaths) -join "`n")) {
+            throw "Candidate '$expectedId' source patch identity or changed paths differ."
+        }
+        foreach ($path in @($candidate.allowedPaths)) {
+            if ($protectedPathSet.Contains([string]$path)) {
+                throw "Candidate '$expectedId' may not modify protected path '$path'."
+            }
+        }
+    }
+
+    $expectedHypotheses = [ordered]@{
+        "receiver-cache" = @(
+            "SimpleDdgiReceiverCachePass",
+            "Bistro", "bistro-forward-gi-enabled",
+            "Sponza", "sponza-forward-gi-enabled")
+        "ambient-occlusion" = @(
+            "AmbientOcclusionPass",
+            "Bistro", "bistro-motion",
+            "Sponza", "sponza-horizontal-motion")
+        "ambient-occlusion-blur" = @(
+            "AmbientOcclusionBlurPass",
+            "Bistro", "bistro-motion",
+            "Sponza", "sponza-horizontal-motion")
+        "ddgi-scheduler-commit" = @(
+            "SimpleDdgiSchedulerCommitPass",
+            "Bistro", "bistro-motion-relight",
+            "Sponza", "sponza-horizontal-motion")
+    }
+    $hypotheses = @($Manifest.targetHypotheses)
+    if ($hypotheses.Count -ne $expectedHypotheses.Count) {
+        throw "Campaign target hypothesis topology must contain exactly four approved hypotheses."
+    }
+    $expectedHypothesisIds = @($expectedHypotheses.Keys)
+    for ($hypothesisIndex = 0;
+         $hypothesisIndex -lt $hypotheses.Count;
+         $hypothesisIndex++) {
+        $hypothesis = $hypotheses[$hypothesisIndex]
+        $expectedId = [string]$expectedHypothesisIds[$hypothesisIndex]
+        $null = Assert-JsonObject `
+            $hypothesis "Target hypothesis $hypothesisIndex"
+        Assert-ExactPropertyNames $hypothesis @(
+            "id", "targetDomain", "targetPass", "claims") `
+            "Target hypothesis $hypothesisIndex"
+        $null = Assert-JsonString `
+            $hypothesis.id "Target hypothesis $hypothesisIndex id"
+        $null = Assert-JsonString `
+            $hypothesis.targetDomain `
+            "Target hypothesis '$expectedId' targetDomain"
+        $null = Assert-JsonString `
+            $hypothesis.targetPass "Target hypothesis '$expectedId' targetPass"
+        $null = Assert-JsonArray `
+            $hypothesis.claims "Target hypothesis '$expectedId' claims"
+        if ([string]$hypothesis.id -cne $expectedId) {
+            throw "Campaign target hypothesis order differs at index $hypothesisIndex."
+        }
+        $expectedHypothesis = $expectedHypotheses[$expectedId]
+        if ([string]$hypothesis.targetDomain -cne "gpu" -or
+            [string]$hypothesis.targetPass -cne
+            [string]$expectedHypothesis[0]) {
+            throw "Target hypothesis '$expectedId' pass differs from the approved contract."
+        }
+        $claims = @($hypothesis.claims)
+        if ($claims.Count -ne 2) {
+            throw "Target hypothesis '$expectedId' must contain exact Bistro and Sponza claims."
+        }
+        for ($claimIndex = 0; $claimIndex -lt 2; $claimIndex++) {
+            $claim = $claims[$claimIndex]
+            $null = Assert-JsonObject `
+                $claim "Target hypothesis '$expectedId' claim $claimIndex"
+            Assert-ExactPropertyNames $claim @("scene", "workloadId") `
+                "Target hypothesis '$expectedId' claim $claimIndex"
+            $null = Assert-JsonString `
+                $claim.scene `
+                "Target hypothesis '$expectedId' claim $claimIndex scene"
+            $null = Assert-JsonString `
+                $claim.workloadId `
+                "Target hypothesis '$expectedId' claim $claimIndex workloadId"
+            $expectedScene = [string]$expectedHypothesis[1 + ($claimIndex * 2)]
+            $expectedWorkloadId =
+                [string]$expectedHypothesis[2 + ($claimIndex * 2)]
+            if ([string]$claim.scene -cne $expectedScene -or
+                [string]$claim.workloadId -cne $expectedWorkloadId -or
+                -not $ids.ContainsKey($expectedWorkloadId)) {
+                throw "Target hypothesis '$expectedId' claim $claimIndex differs from the approved contract."
+            }
         }
     }
 }
 
 function Read-CampaignManifest {
-    if (-not (Test-Path -LiteralPath $script:ManifestFile -PathType Leaf)) {
-        throw "Campaign manifest is missing: $script:ManifestFile"
+    $bytes = Read-BoundedFileBytes `
+        $script:ManifestFile 4MB "Campaign manifest"
+    $encoding = [System.Text.UTF8Encoding]::new($false, $true)
+    try {
+        $json = $encoding.GetString($bytes)
+    } catch {
+        throw "Campaign manifest is not canonical UTF-8."
     }
-    $manifest = Get-Content -LiteralPath $script:ManifestFile -Raw | ConvertFrom-Json
+    $documentOptions = [System.Text.Json.JsonDocumentOptions]::new()
+    $documentOptions.AllowTrailingCommas = $false
+    $documentOptions.CommentHandling =
+        [System.Text.Json.JsonCommentHandling]::Disallow
+    $documentOptions.MaxDepth = 32
+    try {
+        $document = [System.Text.Json.JsonDocument]::Parse(
+            $json,
+            $documentOptions)
+        try {
+            if ($document.RootElement.ValueKind -ne
+                [System.Text.Json.JsonValueKind]::Object) {
+                throw "Campaign manifest root must be a JSON object."
+            }
+            Assert-NoDuplicateJsonProperties `
+                $document.RootElement "Campaign manifest"
+        } finally {
+            $document.Dispose()
+        }
+        $manifest = $json | ConvertFrom-Json -DateKind String
+    } catch {
+        throw "Campaign manifest is not strict JSON: $($_.Exception.Message)"
+    }
+    $script:CampaignManifestBytes = [byte[]]$bytes
+    $script:CampaignManifestSha256 = Get-Sha256Bytes $bytes
     Assert-CampaignManifest $manifest
+    Assert-CampaignManifestIntegrity
     return $manifest
+}
+
+function Stop-ProcessTreeAndDrain {
+    param(
+        [System.Diagnostics.Process]$Process,
+        $StdoutTask,
+        $StderrTask,
+        [string]$Label)
+    if ($null -eq $Process) { return }
+    try {
+        if (-not $Process.HasExited) {
+            $Process.Kill($true)
+        }
+    } catch {
+        if (-not $Process.HasExited) {
+            throw "$Label process tree could not be terminated: $($_.Exception.Message)"
+        }
+    }
+    if (-not $Process.WaitForExit(30000) -or -not $Process.HasExited) {
+        throw "$Label process tree did not reach a terminal state after termination."
+    }
+    foreach ($task in @($StdoutTask, $StderrTask)) {
+        if ($null -eq $task) { continue }
+        try {
+            if (-not $task.Wait(30000)) {
+                throw "$Label redirected stream did not drain after process termination."
+            }
+            $null = $task.GetAwaiter().GetResult()
+        } catch {
+            if (-not $task.IsCompleted) { throw }
+        }
+    }
 }
 
 function Invoke-ProcessChecked {
@@ -577,28 +1173,1106 @@ function Invoke-ProcessChecked {
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $info
     Write-Host "$Label"
-    if (-not $process.Start()) {
-        throw "$Label failed to start."
+    $started = $false
+    $stdoutTask = $null
+    $stderrTask = $null
+    try {
+        if (-not $process.Start()) {
+            throw "$Label failed to start."
+        }
+        $started = $true
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $completed = if ($TimeoutSeconds -le 0) {
+            $process.WaitForExit()
+            $true
+        } else {
+            $process.WaitForExit($TimeoutSeconds * 1000)
+        }
+        if (-not $completed) {
+            Stop-ProcessTreeAndDrain `
+                $process $stdoutTask $stderrTask $Label
+            throw "$Label timed out after $TimeoutSeconds seconds after terminal process-tree cleanup."
+        }
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            Write-Host $stdout.TrimEnd()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            Write-Warning $stderr.TrimEnd()
+        }
+        if ($process.ExitCode -ne 0) {
+            throw "$Label failed with exit code $($process.ExitCode)."
+        }
+    } finally {
+        if ($started -and -not $process.HasExited) {
+            Stop-ProcessTreeAndDrain `
+                $process $stdoutTask $stderrTask $Label
+        }
+        $process.Dispose()
     }
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-    $completed = if ($TimeoutSeconds -le 0) {
-        $process.WaitForExit()
-        $true
+}
+
+function Write-AtomicByteArtifact {
+    param([string]$Path, [byte[]]$Bytes, [string]$Label)
+    if ($null -eq $Bytes -or $Bytes.Length -eq 0) {
+        throw "$Label has no bytes to publish."
+    }
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if (Test-Path -LiteralPath $fullPath) {
+        throw "$Label artifact already exists; refusing to overwrite $fullPath"
+    }
+    $directory = Split-Path -Parent $fullPath
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    $temporaryPath = Join-Path $directory (
+        ".{0}.{1}.tmp" -f
+            [System.IO.Path]::GetFileName($fullPath),
+            [Guid]::NewGuid().ToString("N"))
+    try {
+        $stream = [System.IO.File]::Open(
+            $temporaryPath,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None)
+        try {
+            $stream.Write($Bytes, 0, $Bytes.Length)
+            $stream.Flush($true)
+        } finally {
+            $stream.Dispose()
+        }
+        [System.IO.File]::Move($temporaryPath, $fullPath, $false)
+    } finally {
+        if (Test-Path -LiteralPath $temporaryPath) {
+            Remove-Item -LiteralPath $temporaryPath -Force
+        }
+    }
+}
+
+function Assert-NoDuplicateJsonProperties {
+    param(
+        [System.Text.Json.JsonElement]$Element,
+        [string]$Label,
+        [string]$Path = '$')
+    if ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Object) {
+        $names = [System.Collections.Generic.HashSet[string]]::new(
+            [StringComparer]::Ordinal)
+        foreach ($property in $Element.EnumerateObject()) {
+            if (-not $names.Add($property.Name)) {
+                throw "$Label contains duplicate JSON property '$($property.Name)' at $Path."
+            }
+            Assert-NoDuplicateJsonProperties `
+                $property.Value $Label "$Path.$($property.Name)"
+        }
+    } elseif ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+        $index = 0
+        foreach ($item in $Element.EnumerateArray()) {
+            Assert-NoDuplicateJsonProperties $item $Label "$Path[$index]"
+            $index++
+        }
+    }
+}
+
+function ConvertFrom-FrozenVerifierBytes {
+    param([byte[]]$Bytes, [string]$Label)
+    if ($null -eq $Bytes -or $Bytes.Length -eq 0 -or
+        $Bytes.Length -gt 16MB) {
+        throw "$Label stdout byte length is outside the admitted range."
+    }
+    $encoding = [System.Text.UTF8Encoding]::new($false, $true)
+    try {
+        $text = $encoding.GetString($Bytes)
+    } catch {
+        throw "$Label stdout is not canonical UTF-8."
+    }
+    $terminatorLength = if ($text.EndsWith("`r`n", [StringComparison]::Ordinal)) {
+        2
+    } elseif ($text.EndsWith("`n", [StringComparison]::Ordinal)) {
+        1
     } else {
-        $process.WaitForExit($TimeoutSeconds * 1000)
+        0
     }
-    if (-not $completed) {
-        try { $process.Kill($true) } catch { }
-        throw "$Label timed out after $TimeoutSeconds seconds."
+    if ($text.Length -le $terminatorLength -or
+        $terminatorLength -eq 0 -or
+        [char]::IsWhiteSpace($text[0])) {
+        throw "$Label stdout must be exactly one compact newline-terminated JSON object."
     }
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
-    if (-not [string]::IsNullOrWhiteSpace($stdout)) { Write-Host $stdout.TrimEnd() }
-    if (-not [string]::IsNullOrWhiteSpace($stderr)) { Write-Warning $stderr.TrimEnd() }
-    if ($process.ExitCode -ne 0) {
-        throw "$Label failed with exit code $($process.ExitCode)."
+    $json = $text.Substring(0, $text.Length - $terminatorLength)
+    if (-not $json.StartsWith("{", [StringComparison]::Ordinal) -or
+        -not $json.EndsWith("}", [StringComparison]::Ordinal) -or
+        $json.Contains("`r", [StringComparison]::Ordinal) -or
+        $json.Contains("`n", [StringComparison]::Ordinal)) {
+        throw "$Label stdout must contain exactly one terminal line ending."
     }
+    $documentOptions = [System.Text.Json.JsonDocumentOptions]::new()
+    $documentOptions.AllowTrailingCommas = $false
+    $documentOptions.CommentHandling =
+        [System.Text.Json.JsonCommentHandling]::Disallow
+    $documentOptions.MaxDepth = 64
+    try {
+        $document = [System.Text.Json.JsonDocument]::Parse(
+            $json,
+            $documentOptions)
+        try {
+            if ($document.RootElement.ValueKind -ne
+                [System.Text.Json.JsonValueKind]::Object) {
+                throw "$Label stdout root must be an object."
+            }
+            Assert-NoDuplicateJsonProperties $document.RootElement $Label
+        } finally {
+            $document.Dispose()
+        }
+        $result = $json | ConvertFrom-Json -DateKind String
+    } catch {
+        throw "$Label stdout is not one strict JSON object: $($_.Exception.Message)"
+    }
+    if ($null -eq $result) {
+        throw "$Label stdout deserialized to null."
+    }
+    return $result
+}
+
+function Read-StrictJsonFile {
+    param(
+        [string]$Path,
+        [long]$MaximumLength,
+        [string]$Label)
+    $bytes = Read-BoundedFileBytes $Path $MaximumLength $Label
+    $encoding = [System.Text.UTF8Encoding]::new($false, $true)
+    try {
+        $json = $encoding.GetString($bytes)
+    } catch {
+        throw "$Label is not canonical UTF-8."
+    }
+    $options = [System.Text.Json.JsonDocumentOptions]::new()
+    $options.AllowTrailingCommas = $false
+    $options.CommentHandling = [System.Text.Json.JsonCommentHandling]::Disallow
+    $options.MaxDepth = 64
+    try {
+        $document = [System.Text.Json.JsonDocument]::Parse($json, $options)
+        try {
+            if ($document.RootElement.ValueKind -ne
+                [System.Text.Json.JsonValueKind]::Object) {
+                throw "$Label root must be a JSON object."
+            }
+            Assert-NoDuplicateJsonProperties $document.RootElement $Label
+        } finally {
+            $document.Dispose()
+        }
+        $value = $json | ConvertFrom-Json -DateKind String
+    } catch {
+        throw "$Label is not strict JSON: $($_.Exception.Message)"
+    }
+    if ($null -eq $value) { throw "$Label deserialized to null." }
+    return [pscustomobject]@{
+        Bytes = [byte[]]$bytes
+        Sha256 = Get-Sha256Bytes $bytes
+        Value = $value
+    }
+}
+
+function Test-ByteSequenceEqual {
+    param([byte[]]$Left, [byte[]]$Right)
+    if ($null -eq $Left -or $null -eq $Right -or
+        $Left.Length -ne $Right.Length) {
+        return $false
+    }
+    for ($index = 0; $index -lt $Left.Length; $index++) {
+        if ($Left[$index] -ne $Right[$index]) { return $false }
+    }
+    return $true
+}
+
+function Invoke-FrozenVerifierProcess {
+    param(
+        $VerifierBuildIdentity,
+        [string[]]$Arguments,
+        [string[]]$InputPaths,
+        [string[]]$ExpectedInputSha256,
+        [string]$Label,
+        [int]$TimeoutSeconds)
+    Assert-BuildIdentity $VerifierBuildIdentity "$Label frozen verifier"
+    Assert-CampaignLockIntegrity
+    if ($InputPaths.Count -ne $ExpectedInputSha256.Count -or
+        $InputPaths.Count -eq 0) {
+        throw "$Label verifier input topology is invalid."
+    }
+    for ($index = 0; $index -lt $InputPaths.Count; $index++) {
+        $path = [System.IO.Path]::GetFullPath([string]$InputPaths[$index])
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
+            [string]$ExpectedInputSha256[$index] -cnotmatch '^[0-9a-f]{64}$' -or
+            (Get-Sha256 $path) -cne [string]$ExpectedInputSha256[$index]) {
+            throw "$Label verifier input $index differs before invocation."
+        }
+    }
+
+    $info = [System.Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = [string]$VerifierBuildIdentity.ExecutablePath
+    $info.WorkingDirectory = [string]$VerifierBuildIdentity.RootPath
+    $info.UseShellExecute = $false
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.CreateNoWindow = $true
+    foreach ($argument in $Arguments) {
+        [void]$info.ArgumentList.Add([string]$argument)
+    }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $info
+    $stdoutStream = [System.IO.MemoryStream]::new()
+    $started = $false
+    $stdoutTask = $null
+    $stderrTask = $null
+    try {
+        if (-not $process.Start()) {
+            throw "$Label frozen verifier failed to start."
+        }
+        $started = $true
+        $stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync(
+            $stdoutStream)
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $completed = if ($TimeoutSeconds -le 0) {
+            $process.WaitForExit()
+            $true
+        } else {
+            $process.WaitForExit($TimeoutSeconds * 1000)
+        }
+        if (-not $completed) {
+            Stop-ProcessTreeAndDrain `
+                $process $stdoutTask $stderrTask "$Label frozen verifier"
+            throw "$Label frozen verifier timed out after $TimeoutSeconds seconds after terminal process-tree cleanup."
+        }
+        $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        $stdoutBytes = $stdoutStream.ToArray()
+        if ($process.ExitCode -ne 0) {
+            throw "$Label frozen verifier failed with exit code $($process.ExitCode): $stderr"
+        }
+        if (-not [string]::IsNullOrEmpty($stderr)) {
+            throw "$Label frozen verifier emitted unexpected stderr: $stderr"
+        }
+    } finally {
+        if ($started -and -not $process.HasExited) {
+            Stop-ProcessTreeAndDrain `
+                $process $stdoutTask $stderrTask "$Label frozen verifier"
+        }
+        $stdoutStream.Dispose()
+        $process.Dispose()
+    }
+
+    Assert-BuildIdentity $VerifierBuildIdentity "$Label frozen verifier post-run"
+    Assert-CampaignLockIntegrity
+    for ($index = 0; $index -lt $InputPaths.Count; $index++) {
+        $path = [System.IO.Path]::GetFullPath([string]$InputPaths[$index])
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
+            (Get-Sha256 $path) -cne [string]$ExpectedInputSha256[$index]) {
+            throw "$Label verifier input $index changed during invocation."
+        }
+    }
+    $result = ConvertFrom-FrozenVerifierBytes $stdoutBytes $Label
+    return [pscustomobject]@{
+        Bytes = [byte[]]$stdoutBytes
+        Result = $result
+    }
+}
+
+function Assert-FrozenVerifierResultHeader {
+    param(
+        $Result,
+        [string[]]$ExpectedProperties,
+        [string]$ExpectedKind,
+        [string]$ExpectedSchema,
+        [string]$Label)
+    Assert-ExactPropertyNames $Result $ExpectedProperties "$Label result"
+    if ([string]$Result.kind -cne $ExpectedKind -or
+        [string]$Result.schema -cne $ExpectedSchema -or
+        $Result.passed -isnot [bool] -or
+        $Result.passed -ne $true -or
+        $null -eq $Result.failures -or
+        $Result.failures -isnot [System.Object[]] -or
+        $Result.failures.Count -ne 0) {
+        throw "$Label frozen verifier rejected its authenticated evidence: $(@($Result.failures) -join '; ')"
+    }
+}
+
+function New-FrozenVerifierArtifact {
+    param(
+        $VerifierBuildIdentity,
+        [string[]]$Arguments,
+        [string[]]$InputPaths,
+        [string[]]$ExpectedInputSha256,
+        [string]$ArtifactPath,
+        [string]$ExpectedKind,
+        [string]$ExpectedSchema,
+        [string[]]$ExpectedProperties,
+        [string]$Label,
+        [int]$TimeoutSeconds = 120)
+    $invocation = Invoke-FrozenVerifierProcess `
+        $VerifierBuildIdentity $Arguments $InputPaths $ExpectedInputSha256 `
+        $Label $TimeoutSeconds
+    Assert-FrozenVerifierResultHeader `
+        $invocation.Result $ExpectedProperties $ExpectedKind $ExpectedSchema $Label
+    Write-AtomicByteArtifact $ArtifactPath $invocation.Bytes $Label
+    $fullArtifactPath = [System.IO.Path]::GetFullPath($ArtifactPath)
+    return [ordered]@{
+        artifactPath = $fullArtifactPath
+        artifactSha256 = Get-Sha256 $fullArtifactPath
+        artifactByteLength = [long]$invocation.Bytes.Length
+        verifierBuildIdentity = $VerifierBuildIdentity
+        result = $invocation.Result
+    }
+}
+
+function Assert-FrozenVerifierArtifact {
+    param(
+        $Evidence,
+        $VerifierBuildIdentity,
+        [string[]]$Arguments,
+        [string[]]$InputPaths,
+        [string[]]$ExpectedInputSha256,
+        [string]$ExpectedArtifactPath,
+        [string]$ExpectedKind,
+        [string]$ExpectedSchema,
+        [string[]]$ExpectedProperties,
+        [string]$Label,
+        [int]$TimeoutSeconds = 120)
+    Assert-ExactPropertyNames $Evidence @(
+        "artifactPath", "artifactSha256", "artifactByteLength",
+        "verifierBuildIdentity", "result") "$Label evidence"
+    Assert-PathIdentity ([string]$Evidence.artifactPath) `
+        $ExpectedArtifactPath "$Label artifact"
+    $artifactPath = [System.IO.Path]::GetFullPath($ExpectedArtifactPath)
+    if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf) -or
+        [string]$Evidence.artifactSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        (Get-Sha256 $artifactPath) -cne [string]$Evidence.artifactSha256) {
+        throw "$Label frozen verifier artifact bytes differ."
+    }
+    $storedBytes = [System.IO.File]::ReadAllBytes($artifactPath)
+    if ([long]$Evidence.artifactByteLength -ne $storedBytes.LongLength) {
+        throw "$Label frozen verifier artifact length differs."
+    }
+    if (($Evidence.verifierBuildIdentity | ConvertTo-Json -Depth 12 -Compress) -cne
+        ($VerifierBuildIdentity | ConvertTo-Json -Depth 12 -Compress)) {
+        throw "$Label frozen verifier build identity differs from the lock."
+    }
+    $storedResult = ConvertFrom-FrozenVerifierBytes $storedBytes "$Label stored"
+    Assert-FrozenVerifierResultHeader `
+        $storedResult $ExpectedProperties $ExpectedKind $ExpectedSchema $Label
+    if (($storedResult | ConvertTo-Json -Depth 32 -Compress) -cne
+        ($Evidence.result | ConvertTo-Json -Depth 32 -Compress)) {
+        throw "$Label duplicated frozen verifier result differs."
+    }
+    $recomputed = Invoke-FrozenVerifierProcess `
+        $VerifierBuildIdentity $Arguments $InputPaths $ExpectedInputSha256 `
+        "$Label replay" $TimeoutSeconds
+    Assert-FrozenVerifierResultHeader `
+        $recomputed.Result $ExpectedProperties $ExpectedKind $ExpectedSchema `
+        "$Label replay"
+    if (-not (Test-ByteSequenceEqual `
+            ([byte[]]$storedBytes) ([byte[]]$recomputed.Bytes))) {
+        throw "$Label frozen verifier stdout differs from durable bytes."
+    }
+    return $storedResult
+}
+
+function Get-ActivationVerifierResultProperties {
+    return @(
+        "kind", "schema", "passed", "reportPath", "reportSha256",
+        "activation", "activationFingerprint",
+        "activationStructuralSequenceHash",
+        "activationExecutionSequenceHash",
+        "reflectionProbeCaptureEvidenceDigest",
+        "reflectionProbeCaptureRawRowCount",
+        "reflectionProbeCaptureResultRowCount",
+        "sponzaSceneAnimationFingerprint", "sponzaSceneAnimationMode",
+        "sponzaSceneAnimationConfigurationFingerprint",
+        "sponzaSceneAnimationSequenceHash",
+        "sponzaSceneAnimationSidecarPath",
+        "sponzaSceneAnimationSidecarSha256", "failures")
+}
+
+function Get-DdgiTransientVerifierResultProperties {
+    return @(
+        "kind", "schema", "passed", "reportPath", "reportSha256",
+        "reportByteLength", "applicable", "available", "rawRowCount",
+        "recomputedWindowCount", "recomputedWindowFrameCount",
+        "semanticDigest", "failures")
+}
+
+function Get-QualityActivationVerifierResultProperties {
+    return @(
+        "kind", "schema", "passed", "reportPath", "reportSha256",
+        "sequenceId", "role", "activation", "activationFingerprint",
+        "activationStructuralSequenceHash",
+        "activationExecutionSequenceHash",
+        "sponzaSceneAnimationFingerprint", "sponzaSceneAnimationMode",
+        "sponzaSceneAnimationConfigurationFingerprint",
+        "sponzaSceneAnimationSequenceHash",
+        "sponzaSceneAnimationSidecarPath",
+        "sponzaSceneAnimationSidecarSha256", "failures")
+}
+
+function Get-ControlledIsolationVerifierResultProperties {
+    return @(
+        "kind", "schema", "passed", "cachedReportPath",
+        "cachedReportSha256", "forcedReportPath", "forcedReportSha256",
+        "artifactIdentityHash", "comparison", "failures")
+}
+
+function Test-WorkloadDdgiTransientApplicable {
+    param($Workload)
+    return [string]$Workload.scenario -ceq
+            "BistroQualityMotionRelight" -and
+        [string]$Workload.trajectory -ceq "bistro-loop" -and
+        [string](Get-PropertyValue `
+            $Workload "bistroQualityVariant" "") -ceq "sun-scale-step"
+}
+
+function Assert-ResultReportIdentity {
+    param($Result, [string]$ReportPath, [string]$ReportSha256, [string]$Label)
+    Assert-PathIdentity ([string]$Result.reportPath) $ReportPath `
+        "$Label report"
+    if ([string]$Result.reportSha256 -cne $ReportSha256) {
+        throw "$Label report hash differs from its frozen input."
+    }
+}
+
+function Assert-SponzaAnimationVerifierIdentity {
+    param($Workload, $ReportAnimation, $Result, [string]$Label)
+    if ([string]$Workload.scene -ceq "Sponza") {
+        if ([string]$Result.sponzaSceneAnimationFingerprint -cne
+                [string]$ReportAnimation.Fingerprint -or
+            [int]$Result.sponzaSceneAnimationMode -ne
+                [int]$ReportAnimation.Mode -or
+            [string]$Result.sponzaSceneAnimationConfigurationFingerprint -cne
+                [string]$ReportAnimation.ConfigurationFingerprint -or
+            [string]$Result.sponzaSceneAnimationSequenceHash -cne
+                [string]$ReportAnimation.SequenceHash -or
+            [string]$Result.sponzaSceneAnimationSidecarSha256 -cne
+                [string]$ReportAnimation.SidecarSha256 -or
+            -not (Test-Sha256Identity `
+                ([string]$Result.sponzaSceneAnimationFingerprint)) -or
+            -not (Test-Sha256Identity `
+                ([string]$Result.sponzaSceneAnimationConfigurationFingerprint)) -or
+            -not (Test-Sha256Identity `
+                ([string]$Result.sponzaSceneAnimationSequenceHash)) -or
+            [string]$Result.sponzaSceneAnimationSidecarSha256 -cnotmatch
+                '^[0-9a-f]{64}$') {
+            throw "$Label common Sponza animation identity differs."
+        }
+        Assert-PathIdentity `
+            ([string]$Result.sponzaSceneAnimationSidecarPath) `
+            ([string]$ReportAnimation.SidecarPath) "$Label animation sidecar"
+        $sidecarPath = [System.IO.Path]::GetFullPath(
+            [string]$Result.sponzaSceneAnimationSidecarPath)
+        if (-not (Test-Path -LiteralPath $sidecarPath -PathType Leaf) -or
+            (Get-Sha256 $sidecarPath) -cne
+                [string]$Result.sponzaSceneAnimationSidecarSha256) {
+            throw "$Label common Sponza animation sidecar bytes differ."
+        }
+        return [ordered]@{
+            path = $sidecarPath
+            sha256 = [string]$Result.sponzaSceneAnimationSidecarSha256
+        }
+    }
+    if ([string]$Result.sponzaSceneAnimationFingerprint -cne
+            [string]$ReportAnimation.Fingerprint -or
+        -not (Test-Sha256Identity (
+            [string]$Result.sponzaSceneAnimationFingerprint)) -or
+        [int]$Result.sponzaSceneAnimationMode -ne 0 -or
+        [int]$ReportAnimation.Mode -ne 0 -or
+        [string]$Result.sponzaSceneAnimationConfigurationFingerprint -cne
+            "unavailable" -or
+        [string]$Result.sponzaSceneAnimationSequenceHash -cne "unavailable" -or
+        -not [string]::IsNullOrEmpty(
+            [string]$Result.sponzaSceneAnimationSidecarPath) -or
+        -not [string]::IsNullOrEmpty(
+            [string]$Result.sponzaSceneAnimationSidecarSha256)) {
+        throw "$Label non-Sponza animation evidence is not canonical unavailable."
+    }
+    return [ordered]@{ path = ""; sha256 = "" }
+}
+
+function Assert-TimingActivationVerifierResult {
+    param(
+        $Workload,
+        $Report,
+        $Result,
+        [string]$ReportPath,
+        [string]$ReportSha256,
+        [string]$Label)
+    Assert-ResultReportIdentity $Result $ReportPath $ReportSha256 $Label
+    if ([string]$Result.activation -cne [string]$Workload.activation -or
+        [string]$Result.activationFingerprint -cne
+            [string]$Report.ActivationEvidence.Fingerprint -or
+        [string]$Result.activationStructuralSequenceHash -cne
+            [string]$Report.ActivationEvidence.ActivationStructuralSequenceHash -or
+        [string]$Result.activationExecutionSequenceHash -cne
+            [string]$Report.ActivationEvidence.ActivationExecutionSequenceHash) {
+        throw "$Label activation evidence differs from the authenticated report."
+    }
+    if ([string]$Workload.activation -ceq "reflection-recapture") {
+        if (-not (Test-Sha256Identity `
+                ([string]$Result.reflectionProbeCaptureEvidenceDigest)) -or
+            [int]$Result.reflectionProbeCaptureRawRowCount -ne
+                [int]$Workload.measureFrames -or
+            [int]$Result.reflectionProbeCaptureResultRowCount -ne 8) {
+            throw "$Label reflection C3 evidence is incomplete."
+        }
+    } elseif ([string]$Result.reflectionProbeCaptureEvidenceDigest -cne
+            "unavailable" -or
+        [int]$Result.reflectionProbeCaptureRawRowCount -ne 0 -or
+        [int]$Result.reflectionProbeCaptureResultRowCount -ne 0) {
+        throw "$Label non-reflection C3 evidence is not canonical unavailable."
+    }
+    $sidecar = Assert-SponzaAnimationVerifierIdentity `
+        $Workload $Report.SponzaSceneAnimationEvidence $Result $Label
+    if ([string]$Workload.scene -ceq "Sponza") {
+        Assert-PathIdentity ([string]$sidecar.path) `
+            (([System.IO.Path]::GetFullPath($ReportPath)) +
+                ".sponza-animation.bin") `
+            "$Label campaign-owned animation sidecar"
+    }
+    return $sidecar
+}
+
+function Assert-DdgiTransientVerifierResult {
+    param(
+        $Workload,
+        $Report,
+        $Result,
+        [string]$ReportPath,
+        [string]$ReportSha256,
+        [string]$Label)
+    Assert-ResultReportIdentity $Result $ReportPath $ReportSha256 $Label
+    $reportLength = (Get-Item -LiteralPath $ReportPath).Length
+    $applicable = Test-WorkloadDdgiTransientApplicable $Workload
+    if ([long]$Result.reportByteLength -ne $reportLength -or
+        $Result.applicable -isnot [bool] -or
+        $Result.available -isnot [bool] -or
+        $Result.applicable -ne $applicable -or
+        $Result.available -ne $applicable -or
+        [bool]$Report.DdgiTransientRawEvidence.Applicable -ne $applicable -or
+        [bool]$Report.DdgiTransientEvidence.Applicable -ne $applicable -or
+        -not (Test-Sha256Identity ([string]$Result.semanticDigest))) {
+        throw "$Label DDGI transient applicability or report identity differs."
+    }
+    if ($applicable) {
+        if ([int]$Result.rawRowCount -ne 240 -or
+            [int]$Result.recomputedWindowCount -ne 2 -or
+            [int]$Result.recomputedWindowFrameCount -le 0) {
+            throw "$Label applicable DDGI transient evidence is incomplete."
+        }
+    } elseif ([int]$Result.rawRowCount -ne 0 -or
+        [int]$Result.recomputedWindowCount -ne 0 -or
+        [int]$Result.recomputedWindowFrameCount -ne 0) {
+        throw "$Label DDGI transient NotApplicable result is noncanonical."
+    }
+}
+
+function New-TimingFrozenVerifierEvidence {
+    param(
+        $Workload,
+        $Report,
+        [string]$ReportPath,
+        $VerifierBuildIdentity,
+        [string]$Label)
+    $reportPath = [System.IO.Path]::GetFullPath($ReportPath)
+    $reportSha256 = Get-Sha256 $reportPath
+    $activationArtifactPath = [System.IO.Path]::ChangeExtension(
+        $reportPath,
+        ".activation-verification.json")
+    $activationInputPaths = @($reportPath)
+    $activationInputSha256 = @($reportSha256)
+    if ([string]$Workload.scene -ceq "Sponza") {
+        $activationInputPaths += [string]$Report.SponzaSceneAnimationEvidence.SidecarPath
+        $activationInputSha256 +=
+            [string]$Report.SponzaSceneAnimationEvidence.SidecarSha256
+    }
+    $activation = New-FrozenVerifierArtifact `
+        $VerifierBuildIdentity `
+        @("--verify-benchmark-activation-report", $reportPath) `
+        $activationInputPaths $activationInputSha256 $activationArtifactPath `
+        "njulf-benchmark-activation-verification" `
+        "njulf-benchmark-activation-verification/v2" `
+        (Get-ActivationVerifierResultProperties) "$Label activation" 120
+    $sidecar = Assert-TimingActivationVerifierResult `
+        $Workload $Report $activation.result $reportPath $reportSha256 `
+        "$Label activation"
+
+    $ddgiArtifactPath = [System.IO.Path]::ChangeExtension(
+        $reportPath,
+        ".ddgi-transient-verification.json")
+    $ddgi = New-FrozenVerifierArtifact `
+        $VerifierBuildIdentity `
+        @("--verify-benchmark-ddgi-transient-report", $reportPath) `
+        @($reportPath) @($reportSha256) $ddgiArtifactPath `
+        "njulf-benchmark-ddgi-transient-verification" `
+        "njulf-benchmark-ddgi-transient-verification/v1" `
+        (Get-DdgiTransientVerifierResultProperties) "$Label DDGI transient" 120
+    Assert-DdgiTransientVerifierResult `
+        $Workload $Report $ddgi.result $reportPath $reportSha256 `
+        "$Label DDGI transient"
+    return [ordered]@{
+        activation = $activation
+        ddgiTransient = $ddgi
+        sponzaAnimationSidecar = $sidecar
+    }
+}
+
+function Assert-TimingFrozenVerifierEvidence {
+    param(
+        $Workload,
+        $Report,
+        [string]$ReportPath,
+        $Evidence,
+        $VerifierBuildIdentity,
+        [string]$Label)
+    Assert-ExactPropertyNames $Evidence @(
+        "activation", "ddgiTransient", "sponzaAnimationSidecar") `
+        "$Label frozen timing evidence"
+    $reportPath = [System.IO.Path]::GetFullPath($ReportPath)
+    $reportSha256 = Get-Sha256 $reportPath
+    $activationArtifactPath = [System.IO.Path]::ChangeExtension(
+        $reportPath,
+        ".activation-verification.json")
+    $activationInputPaths = @($reportPath)
+    $activationInputSha256 = @($reportSha256)
+    if ([string]$Workload.scene -ceq "Sponza") {
+        $activationInputPaths += [string]$Report.SponzaSceneAnimationEvidence.SidecarPath
+        $activationInputSha256 +=
+            [string]$Report.SponzaSceneAnimationEvidence.SidecarSha256
+    }
+    $activationResult = Assert-FrozenVerifierArtifact `
+        $Evidence.activation $VerifierBuildIdentity `
+        @("--verify-benchmark-activation-report", $reportPath) `
+        $activationInputPaths $activationInputSha256 $activationArtifactPath `
+        "njulf-benchmark-activation-verification" `
+        "njulf-benchmark-activation-verification/v2" `
+        (Get-ActivationVerifierResultProperties) "$Label activation" 120
+    $sidecar = Assert-TimingActivationVerifierResult `
+        $Workload $Report $activationResult $reportPath $reportSha256 `
+        "$Label activation"
+    if (($sidecar | ConvertTo-Json -Compress) -cne
+        ($Evidence.sponzaAnimationSidecar | ConvertTo-Json -Compress)) {
+        throw "$Label stored common animation sidecar identity differs."
+    }
+    $ddgiArtifactPath = [System.IO.Path]::ChangeExtension(
+        $reportPath,
+        ".ddgi-transient-verification.json")
+    $ddgiResult = Assert-FrozenVerifierArtifact `
+        $Evidence.ddgiTransient $VerifierBuildIdentity `
+        @("--verify-benchmark-ddgi-transient-report", $reportPath) `
+        @($reportPath) @($reportSha256) $ddgiArtifactPath `
+        "njulf-benchmark-ddgi-transient-verification" `
+        "njulf-benchmark-ddgi-transient-verification/v1" `
+        (Get-DdgiTransientVerifierResultProperties) "$Label DDGI transient" 120
+    Assert-DdgiTransientVerifierResult `
+        $Workload $Report $ddgiResult $reportPath $reportSha256 `
+        "$Label DDGI transient"
+    return $Evidence
+}
+
+function Assert-QualityActivationVerifierResult {
+    param(
+        $Workload,
+        $Report,
+        [string]$Role,
+        [string]$SequenceId,
+        $Result,
+        [string]$ReportPath,
+        [string]$ReportSha256,
+        [string]$Label)
+    Assert-ResultReportIdentity $Result $ReportPath $ReportSha256 $Label
+    if ([string]$Result.sequenceId -cne $SequenceId -or
+        [int]$Result.role -ne (Get-QualitySequenceRoleValue $Role) -or
+        [string]$Result.activation -cne [string]$Workload.activation -or
+        [string]$Result.activation -cne [string]$Report.Activation -or
+        [string]$Result.activationFingerprint -cne
+            [string]$Report.ActivationFingerprint -or
+        [string]$Result.activationFingerprint -cne
+            [string]$Report.ActivationEvidence.Fingerprint -or
+        [string]$Result.activationStructuralSequenceHash -cne
+            [string]$Report.ActivationEvidence.ActivationStructuralSequenceHash -or
+        [string]$Result.activationExecutionSequenceHash -cne
+            [string]$Report.ActivationEvidence.ActivationExecutionSequenceHash) {
+        throw "$Label activation evidence differs from the authenticated quality report."
+    }
+    $sidecar = Assert-SponzaAnimationVerifierIdentity `
+        $Workload $Report.SponzaSceneAnimationEvidence $Result $Label
+    if ([string]$Workload.scene -ceq "Sponza") {
+        Assert-PathIdentity ([string]$sidecar.path) `
+            (([System.IO.Path]::GetFullPath($ReportPath)) +
+                ".sponza-animation.bin") `
+            "$Label campaign-owned animation sidecar"
+    }
+    return $sidecar
+}
+
+function New-QualityFrozenVerifierEvidence {
+    param(
+        $Workload,
+        $Report,
+        [string]$Role,
+        [string]$SequenceId,
+        [string]$ReportPath,
+        $VerifierBuildIdentity,
+        [string]$Label)
+    $reportPath = [System.IO.Path]::GetFullPath($ReportPath)
+    $reportSha256 = Get-Sha256 $reportPath
+    $artifactPath = [System.IO.Path]::ChangeExtension(
+        $reportPath,
+        ".activation-verification.json")
+    $inputPaths = @($reportPath)
+    $inputSha256 = @($reportSha256)
+    if ([string]$Workload.scene -ceq "Sponza") {
+        $inputPaths += [string]$Report.SponzaSceneAnimationEvidence.SidecarPath
+        $inputSha256 +=
+            [string]$Report.SponzaSceneAnimationEvidence.SidecarSha256
+    }
+    $activation = New-FrozenVerifierArtifact `
+        $VerifierBuildIdentity `
+        @("--verify-benchmark-quality-activation-report", $reportPath) `
+        $inputPaths $inputSha256 $artifactPath `
+        "njulf-benchmark-quality-activation-verification" `
+        "njulf-benchmark-quality-activation-verification/v1" `
+        (Get-QualityActivationVerifierResultProperties) `
+        "$Label quality activation" 120
+    $sidecar = Assert-QualityActivationVerifierResult `
+        $Workload $Report $Role $SequenceId $activation.result `
+        $reportPath $reportSha256 "$Label quality activation"
+    return [ordered]@{
+        activation = $activation
+        sponzaAnimationSidecar = $sidecar
+    }
+}
+
+function Assert-QualityFrozenVerifierEvidence {
+    param(
+        $Workload,
+        $Report,
+        [string]$Role,
+        [string]$SequenceId,
+        [string]$ReportPath,
+        $Evidence,
+        $VerifierBuildIdentity,
+        [string]$Label)
+    Assert-ExactPropertyNames $Evidence @(
+        "activation", "sponzaAnimationSidecar") `
+        "$Label frozen quality evidence"
+    $reportPath = [System.IO.Path]::GetFullPath($ReportPath)
+    $reportSha256 = Get-Sha256 $reportPath
+    $artifactPath = [System.IO.Path]::ChangeExtension(
+        $reportPath,
+        ".activation-verification.json")
+    $inputPaths = @($reportPath)
+    $inputSha256 = @($reportSha256)
+    if ([string]$Workload.scene -ceq "Sponza") {
+        $inputPaths += [string]$Report.SponzaSceneAnimationEvidence.SidecarPath
+        $inputSha256 +=
+            [string]$Report.SponzaSceneAnimationEvidence.SidecarSha256
+    }
+    $result = Assert-FrozenVerifierArtifact `
+        $Evidence.activation $VerifierBuildIdentity `
+        @("--verify-benchmark-quality-activation-report", $reportPath) `
+        $inputPaths $inputSha256 $artifactPath `
+        "njulf-benchmark-quality-activation-verification" `
+        "njulf-benchmark-quality-activation-verification/v1" `
+        (Get-QualityActivationVerifierResultProperties) `
+        "$Label quality activation" 120
+    $sidecar = Assert-QualityActivationVerifierResult `
+        $Workload $Report $Role $SequenceId $result $reportPath `
+        $reportSha256 "$Label quality activation"
+    if (($sidecar | ConvertTo-Json -Compress) -cne
+        ($Evidence.sponzaAnimationSidecar | ConvertTo-Json -Compress)) {
+        throw "$Label stored common animation sidecar identity differs."
+    }
+    return $Evidence
+}
+
+function Get-ControlledIsolationComparisonProperties {
+    return @(
+        "kind", "schema", "passed", "controlledIsolationPairId",
+        "cachedPairId", "forcedPairId", "controlledIsolationIdentityHash",
+        "controlledIsolationSettingsFingerprint",
+        "controlledIsolationSequenceHash", "cachedSettingsFingerprint",
+        "forcedSettingsFingerprint", "trajectory", "trajectoryFingerprint",
+        "trajectoryRouteHash", "sponzaSceneAnimationConfigurationFingerprint",
+        "sponzaSceneAnimationSequenceHash", "activationStructuralSequenceHash",
+        "cachedActivationFingerprint",
+        "cachedActivationExecutionSequenceHash",
+        "forcedActivationFingerprint",
+        "forcedActivationExecutionSequenceHash", "buildCommit",
+        "executableHash", "shaderBundleHash", "timing", "failures")
+}
+
+function Assert-ControlledIsolationVerifierResult {
+    param(
+        $CachedReport,
+        $ForcedReport,
+        $Result,
+        [string]$CachedReportPath,
+        [string]$CachedReportSha256,
+        [string]$ForcedReportPath,
+        [string]$ForcedReportSha256,
+        [string]$Label)
+    Assert-PathIdentity ([string]$Result.cachedReportPath) `
+        $CachedReportPath "$Label cached report"
+    Assert-PathIdentity ([string]$Result.forcedReportPath) `
+        $ForcedReportPath "$Label forced report"
+    $comparison = $Result.comparison
+    Assert-ExactPropertyNames $comparison `
+        (Get-ControlledIsolationComparisonProperties) "$Label comparison"
+    Assert-ExactPropertyNames $comparison.timing @(
+        "cachedCpuFrameP95Milliseconds", "forcedCpuFrameP95Milliseconds",
+        "cpuFrameDeltaMilliseconds", "cachedGpuFrameP95Milliseconds",
+        "forcedGpuFrameP95Milliseconds", "gpuFrameDeltaMilliseconds",
+        "cachedDirectionalShadowP95Milliseconds",
+        "forcedDirectionalShadowP95Milliseconds",
+        "directionalShadowDeltaMilliseconds") "$Label timing"
+    if ([string]$Result.cachedReportSha256 -cne $CachedReportSha256 -or
+        [string]$Result.forcedReportSha256 -cne $ForcedReportSha256 -or
+        -not (Test-Sha256Identity ([string]$Result.artifactIdentityHash)) -or
+        $comparison.passed -isnot [bool] -or
+        $comparison.passed -ne $true -or
+        $null -eq $comparison.failures -or
+        $comparison.failures -isnot [System.Object[]] -or
+        $comparison.failures.Count -ne 0 -or
+        [string]$comparison.kind -cne
+            "njulf-benchmark-controlled-isolation" -or
+        [string]$comparison.schema -cne
+            "njulf-benchmark-controlled-isolation/v2" -or
+        -not (Test-Sha256Identity (
+            [string]$comparison.controlledIsolationPairId)) -or
+        -not (Test-Sha256Identity (
+            [string]$comparison.controlledIsolationIdentityHash)) -or
+        -not (Test-Sha256Identity (
+            [string]$comparison.controlledIsolationSettingsFingerprint)) -or
+        -not (Test-Sha256Identity (
+            [string]$comparison.controlledIsolationSequenceHash)) -or
+        [string]$comparison.controlledIsolationIdentityHash -cne
+            [string]$CachedReport.CaptureContract.ControlledIsolationIdentityHash -or
+        [string]$comparison.controlledIsolationIdentityHash -cne
+            [string]$ForcedReport.CaptureContract.ControlledIsolationIdentityHash -or
+        [string]$comparison.controlledIsolationSettingsFingerprint -cne
+            [string]$CachedReport.CaptureContract.ControlledIsolationSettingsFingerprint -or
+        [string]$comparison.controlledIsolationSettingsFingerprint -cne
+            [string]$ForcedReport.CaptureContract.ControlledIsolationSettingsFingerprint -or
+        [string]$comparison.controlledIsolationSequenceHash -cne
+            [string]$CachedReport.CaptureContract.ControlledIsolationSequenceHash -or
+        [string]$comparison.controlledIsolationSequenceHash -cne
+            [string]$ForcedReport.CaptureContract.ControlledIsolationSequenceHash -or
+        [string]$comparison.cachedSettingsFingerprint -cne
+            [string]$CachedReport.ProducerIdentity.SettingsFingerprint -or
+        [string]$comparison.forcedSettingsFingerprint -cne
+            [string]$ForcedReport.ProducerIdentity.SettingsFingerprint -or
+        [string]$comparison.cachedPairId -cne
+            [string]$CachedReport.CaptureContract.PairId -or
+        [string]$comparison.forcedPairId -cne
+            [string]$ForcedReport.CaptureContract.PairId -or
+        [string]$comparison.cachedActivationFingerprint -cne
+            [string]$CachedReport.ActivationEvidence.Fingerprint -or
+        [string]$comparison.forcedActivationFingerprint -cne
+            [string]$ForcedReport.ActivationEvidence.Fingerprint -or
+        [string]$comparison.cachedActivationExecutionSequenceHash -cne
+            [string]$CachedReport.ActivationEvidence.ActivationExecutionSequenceHash -or
+        [string]$comparison.forcedActivationExecutionSequenceHash -cne
+            [string]$ForcedReport.ActivationEvidence.ActivationExecutionSequenceHash -or
+        [string]$comparison.activationStructuralSequenceHash -cne
+            [string]$CachedReport.ActivationEvidence.ActivationStructuralSequenceHash -or
+        [string]$comparison.activationStructuralSequenceHash -cne
+            [string]$ForcedReport.ActivationEvidence.ActivationStructuralSequenceHash -or
+        [string]$comparison.trajectory -cne "sponza-low" -or
+        [string]$comparison.trajectoryFingerprint -cne
+            [string]$CachedReport.CaptureContract.TrajectoryFingerprint -or
+        [string]$comparison.trajectoryFingerprint -cne
+            [string]$ForcedReport.CaptureContract.TrajectoryFingerprint -or
+        [string]$comparison.trajectoryRouteHash -cne
+            [string]$CachedReport.CaptureContract.TrajectoryRouteHash -or
+        [string]$comparison.trajectoryRouteHash -cne
+            [string]$ForcedReport.CaptureContract.TrajectoryRouteHash -or
+        [string]$comparison.sponzaSceneAnimationConfigurationFingerprint -cne
+            [string]$CachedReport.SponzaSceneAnimationEvidence.ConfigurationFingerprint -or
+        [string]$comparison.sponzaSceneAnimationConfigurationFingerprint -cne
+            [string]$ForcedReport.SponzaSceneAnimationEvidence.ConfigurationFingerprint -or
+        [string]$comparison.sponzaSceneAnimationSequenceHash -cne
+            [string]$CachedReport.SponzaSceneAnimationEvidence.SequenceHash -or
+        [string]$comparison.sponzaSceneAnimationSequenceHash -cne
+            [string]$ForcedReport.SponzaSceneAnimationEvidence.SequenceHash -or
+        [string]$comparison.buildCommit -cne
+            [string]$CachedReport.LastDiagnostics.CaptureRun.Commit -or
+        [string]$comparison.buildCommit -cne
+            [string]$ForcedReport.LastDiagnostics.CaptureRun.Commit -or
+        [string]$comparison.executableHash -cne
+            [string]$CachedReport.LastDiagnostics.CaptureRun.ExecutableHash -or
+        [string]$comparison.executableHash -cne
+            [string]$ForcedReport.LastDiagnostics.CaptureRun.ExecutableHash -or
+        [string]$comparison.shaderBundleHash -cne
+            [string]$CachedReport.LastDiagnostics.CaptureRun.ShaderBundleHash -or
+        [string]$comparison.shaderBundleHash -cne
+            [string]$ForcedReport.LastDiagnostics.CaptureRun.ShaderBundleHash) {
+        throw "$Label controlled directional evidence differs from its reports."
+    }
+    foreach ($value in @(
+            $comparison.timing.cachedCpuFrameP95Milliseconds,
+            $comparison.timing.forcedCpuFrameP95Milliseconds,
+            $comparison.timing.cpuFrameDeltaMilliseconds,
+            $comparison.timing.cachedGpuFrameP95Milliseconds,
+            $comparison.timing.forcedGpuFrameP95Milliseconds,
+            $comparison.timing.gpuFrameDeltaMilliseconds,
+            $comparison.timing.cachedDirectionalShadowP95Milliseconds,
+            $comparison.timing.forcedDirectionalShadowP95Milliseconds,
+            $comparison.timing.directionalShadowDeltaMilliseconds)) {
+        $null = Assert-FiniteNumber $value "$Label controlled timing"
+    }
+    $cachedDirectional = Get-PassTiming `
+        $CachedReport "DirectionalShadowPass"
+    $forcedDirectional = Get-PassTiming `
+        $ForcedReport "DirectionalShadowPass"
+    if ([double]$comparison.timing.cachedCpuFrameP95Milliseconds -ne
+            [double]$CachedReport.CpuFrameMilliseconds.P95Milliseconds -or
+        [double]$comparison.timing.forcedCpuFrameP95Milliseconds -ne
+            [double]$ForcedReport.CpuFrameMilliseconds.P95Milliseconds -or
+        [double]$comparison.timing.cpuFrameDeltaMilliseconds -ne
+            ([double]$ForcedReport.CpuFrameMilliseconds.P95Milliseconds -
+             [double]$CachedReport.CpuFrameMilliseconds.P95Milliseconds) -or
+        [double]$comparison.timing.cachedGpuFrameP95Milliseconds -ne
+            [double]$CachedReport.GpuFrameMilliseconds.P95Milliseconds -or
+        [double]$comparison.timing.forcedGpuFrameP95Milliseconds -ne
+            [double]$ForcedReport.GpuFrameMilliseconds.P95Milliseconds -or
+        [double]$comparison.timing.gpuFrameDeltaMilliseconds -ne
+            ([double]$ForcedReport.GpuFrameMilliseconds.P95Milliseconds -
+             [double]$CachedReport.GpuFrameMilliseconds.P95Milliseconds) -or
+        [double]$comparison.timing.cachedDirectionalShadowP95Milliseconds -ne
+            [double]$cachedDirectional -or
+        [double]$comparison.timing.forcedDirectionalShadowP95Milliseconds -ne
+            [double]$forcedDirectional -or
+        [double]$comparison.timing.directionalShadowDeltaMilliseconds -ne
+            ([double]$forcedDirectional - [double]$cachedDirectional)) {
+        throw "$Label controlled timing projection differs from its reports."
+    }
+}
+
+function New-ControlledIsolationFrozenVerifierEvidence {
+    param(
+        $CachedReport,
+        $ForcedReport,
+        [string]$CachedReportPath,
+        [string]$ForcedReportPath,
+        $VerifierBuildIdentity,
+        [string]$ArtifactPath,
+        [string]$Label)
+    $cachedPath = [System.IO.Path]::GetFullPath($CachedReportPath)
+    $forcedPath = [System.IO.Path]::GetFullPath($ForcedReportPath)
+    $cachedSha = Get-Sha256 $cachedPath
+    $forcedSha = Get-Sha256 $forcedPath
+    $inputPaths = @($cachedPath, $forcedPath)
+    $inputHashes = @($cachedSha, $forcedSha)
+    foreach ($report in @($CachedReport, $ForcedReport)) {
+        $inputPaths += [string]$report.SponzaSceneAnimationEvidence.SidecarPath
+        $inputHashes += [string]$report.SponzaSceneAnimationEvidence.SidecarSha256
+    }
+    $artifact = New-FrozenVerifierArtifact `
+        $VerifierBuildIdentity `
+        @("--verify-directional-controlled-isolation", $cachedPath, $forcedPath) `
+        $inputPaths $inputHashes $ArtifactPath `
+        "njulf-benchmark-controlled-isolation-verification" `
+        "njulf-benchmark-controlled-isolation-verification/v2" `
+        (Get-ControlledIsolationVerifierResultProperties) $Label 120
+    Assert-ControlledIsolationVerifierResult `
+        $CachedReport $ForcedReport $artifact.result $cachedPath $cachedSha `
+        $forcedPath $forcedSha $Label
+    return $artifact
+}
+
+function Assert-ControlledIsolationFrozenVerifierEvidence {
+    param(
+        $CachedReport,
+        $ForcedReport,
+        [string]$CachedReportPath,
+        [string]$ForcedReportPath,
+        $Evidence,
+        $VerifierBuildIdentity,
+        [string]$ArtifactPath,
+        [string]$Label)
+    $cachedPath = [System.IO.Path]::GetFullPath($CachedReportPath)
+    $forcedPath = [System.IO.Path]::GetFullPath($ForcedReportPath)
+    $cachedSha = Get-Sha256 $cachedPath
+    $forcedSha = Get-Sha256 $forcedPath
+    $inputPaths = @($cachedPath, $forcedPath)
+    $inputHashes = @($cachedSha, $forcedSha)
+    foreach ($report in @($CachedReport, $ForcedReport)) {
+        $inputPaths += [string]$report.SponzaSceneAnimationEvidence.SidecarPath
+        $inputHashes += [string]$report.SponzaSceneAnimationEvidence.SidecarSha256
+    }
+    $result = Assert-FrozenVerifierArtifact `
+        $Evidence $VerifierBuildIdentity `
+        @("--verify-directional-controlled-isolation", $cachedPath, $forcedPath) `
+        $inputPaths $inputHashes $ArtifactPath `
+        "njulf-benchmark-controlled-isolation-verification" `
+        "njulf-benchmark-controlled-isolation-verification/v2" `
+        (Get-ControlledIsolationVerifierResultProperties) $Label 120
+    Assert-ControlledIsolationVerifierResult `
+        $CachedReport $ForcedReport $result $cachedPath $cachedSha `
+        $forcedPath $forcedSha $Label
+    return $Evidence
+}
+
+function New-ReferenceControlledIsolationEvidence {
+    param(
+        $ConfigurationReferences,
+        $ReferenceBuild,
+        [string]$ArtifactPath,
+        [string]$Label)
+    $cachedId = "sponza-directional-shadow-moving-caster"
+    $forcedId = "sponza-directional-shadow-forced-refresh"
+    $cachedEntry = $ConfigurationReferences[$cachedId]
+    $forcedEntry = $ConfigurationReferences[$forcedId]
+    $cachedReport = Read-BenchmarkReport ([string]$cachedEntry.reportPath)
+    $forcedReport = Read-BenchmarkReport ([string]$forcedEntry.reportPath)
+    $artifact = New-ControlledIsolationFrozenVerifierEvidence `
+        $cachedReport $forcedReport ([string]$cachedEntry.reportPath) `
+        ([string]$forcedEntry.reportPath) $ReferenceBuild $ArtifactPath $Label
+    return [ordered]@{
+        schema = "njulf-perf-campaign-controlled-isolation-evidence/v1"
+        cachedWorkloadId = $cachedId
+        forcedWorkloadId = $forcedId
+        artifact = $artifact
+    }
+}
+
+function Assert-ReferenceControlledIsolationEvidence {
+    param(
+        $ConfigurationReferences,
+        $Evidence,
+        $ReferenceBuild,
+        [string]$ExpectedArtifactPath,
+        [string]$Label)
+    Assert-ExactPropertyNames $Evidence @(
+        "schema", "cachedWorkloadId", "forcedWorkloadId", "artifact") `
+        "$Label envelope"
+    $cachedId = "sponza-directional-shadow-moving-caster"
+    $forcedId = "sponza-directional-shadow-forced-refresh"
+    if ([string]$Evidence.schema -cne
+            "njulf-perf-campaign-controlled-isolation-evidence/v1" -or
+        [string]$Evidence.cachedWorkloadId -cne $cachedId -or
+        [string]$Evidence.forcedWorkloadId -cne $forcedId) {
+        throw "$Label controlled-isolation topology differs."
+    }
+    $cachedProperty = $ConfigurationReferences.PSObject.Properties[$cachedId]
+    $cachedEntry = if ($null -eq $cachedProperty) {
+        $ConfigurationReferences[$cachedId]
+    } else { $cachedProperty.Value }
+    $forcedProperty = $ConfigurationReferences.PSObject.Properties[$forcedId]
+    $forcedEntry = if ($null -eq $forcedProperty) {
+        $ConfigurationReferences[$forcedId]
+    } else { $forcedProperty.Value }
+    $cachedReport = Read-BenchmarkReport ([string]$cachedEntry.reportPath)
+    $forcedReport = Read-BenchmarkReport ([string]$forcedEntry.reportPath)
+    $null = Assert-ControlledIsolationFrozenVerifierEvidence `
+        $cachedReport $forcedReport ([string]$cachedEntry.reportPath) `
+        ([string]$forcedEntry.reportPath) $Evidence.artifact $ReferenceBuild `
+        $ExpectedArtifactPath $Label
+    return $Evidence
 }
 
 function Invoke-Git {
@@ -613,6 +2287,45 @@ function Invoke-Git {
 function Get-GitText {
     param([string[]]$Arguments)
     return ((Invoke-Git $Arguments) -join "`n").Trim()
+}
+
+function Get-StablePatchId {
+    param([string]$Commit)
+    if ($Commit -cnotmatch '^[0-9a-f]{40}$') {
+        throw "Stable patch identity requires an exact lowercase commit."
+    }
+    $null = Invoke-Git @("cat-file", "-e", "$Commit^{commit}")
+    Push-Location $script:SolutionRoot
+    try {
+        $output = & git show --pretty=format: --binary $Commit |
+            & git patch-id --stable
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not compute stable patch identity for $Commit."
+        }
+    } finally {
+        Pop-Location
+    }
+    $fields = @(([string]$output).Trim() -split '\s+')
+    if ($fields.Count -lt 1 -or $fields[0] -cnotmatch '^[0-9a-f]{40}$') {
+        throw "Stable patch identity for $Commit is malformed."
+    }
+    return [string]$fields[0]
+}
+
+function Get-CommitChangedPaths {
+    param([string]$Commit)
+    $prefix = ([string]$script:SolutionRelativePath).Replace("\\", "/").TrimEnd("/") + "/"
+    return @((Get-GitText @(
+        "diff-tree", "--no-commit-id", "--name-only", "-r", "--no-renames",
+        $Commit)) -split "`n" | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_)
+        } | ForEach-Object {
+            $path = ([string]$_).Replace("\\", "/")
+            if (-not $path.StartsWith($prefix, [StringComparison]::Ordinal)) {
+                throw "Candidate commit changes path outside the solution: $path"
+            }
+            $path.Substring($prefix.Length)
+        })
 }
 
 function Invoke-GitUpdateRefTransaction {
@@ -658,9 +2371,78 @@ function Initialize-CampaignRepositoryRoot {
         throw "Solution root '$script:SolutionRoot' is outside git worktree '$fullRoot'."
     }
     $script:RepoRoot = $fullRoot
+    $script:SolutionRelativePath = $relativeSolution
     $branch = Get-GitText @("symbolic-ref", "--quiet", "--short", "HEAD")
     Assert-Text $branch "Campaign branch"
     $script:CampaignBranch = $branch
+    $gitInfoExclude = Get-GitText @("rev-parse", "--git-path", "info/exclude")
+    $script:GitInfoExcludePath = if (
+        [System.IO.Path]::IsPathRooted($gitInfoExclude)) {
+        [System.IO.Path]::GetFullPath($gitInfoExclude)
+    } else {
+        [System.IO.Path]::GetFullPath((Join-Path $script:SolutionRoot $gitInfoExclude))
+    }
+    $script:GitInfoExcludeFingerprint =
+        Get-CanonicalPathFingerprint $script:GitInfoExcludePath
+}
+
+function Test-PathContainedBy {
+    param([string]$Path, [string]$Container)
+    $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar)
+    $fullContainer = [System.IO.Path]::GetFullPath($Container).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar)
+    return [string]::Equals(
+            $fullPath,
+            $fullContainer,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith(
+            $fullContainer + [System.IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-CampaignPathTopology {
+    param($Manifest)
+    $null = Assert-NoLinkedPathComponents `
+        $script:RepoRoot "Campaign repository root"
+    $null = Assert-NoLinkedPathComponents `
+        $script:SolutionRoot "Campaign solution root"
+    $null = Assert-NoLinkedPathComponents `
+        $script:ManifestFile "Active campaign manifest"
+    $null = Assert-NoLinkedPathComponents `
+        $script:RunRoot "Campaign run root"
+    if (Test-Path -LiteralPath $script:RunRoot -PathType Leaf) {
+        throw "Campaign run root is a file: $script:RunRoot"
+    }
+    if ((Test-PathContainedBy $script:RepoRoot $script:RunRoot) -or
+        (Test-PathContainedBy $script:SolutionRoot $script:RunRoot)) {
+        throw "Campaign run root may not contain the repository or solution root."
+    }
+    if (Test-PathContainedBy $script:ManifestFile $script:RunRoot) {
+        throw "Active campaign manifest must be physically outside the mutable run root."
+    }
+    $advisoryExceptions = [System.Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in @(
+            ".perf-loop-runs/campaign/beauty-target/manifest.json",
+            ".perf-loop-runs/campaign/beauty-target/bistro-beauty-target.jpg")) {
+        [void]$advisoryExceptions.Add((Resolve-SolutionPath $path))
+    }
+    foreach ($protectedPath in @($Manifest.protectedPaths)) {
+        $fullProtected = Assert-NoLinkedPathComponents `
+            (Resolve-SolutionPath ([string]$protectedPath)) `
+            "Protected path '$protectedPath'"
+        if ((Test-PathContainedBy $fullProtected $script:RunRoot) -and
+            -not $advisoryExceptions.Contains($fullProtected)) {
+            throw "Protected path '$protectedPath' may not be contained by the mutable run root."
+        }
+        if ((Test-Path -LiteralPath $fullProtected -PathType Container) -and
+            (Test-PathContainedBy $script:RunRoot $fullProtected)) {
+            throw "Campaign run root may not be contained by protected directory '$protectedPath'."
+        }
+    }
 }
 
 function Assert-CampaignRepositoryRoot {
@@ -711,22 +2493,103 @@ function Invoke-BuildOutput {
         [string]$Configuration,
         [string]$OutputPath,
         [string]$Label,
-        [string]$ExpectedCommit)
-    if (Test-Path -LiteralPath $OutputPath) {
-        throw "$Label output already exists; choose a fresh campaign run directory: $OutputPath"
+        [string]$ExpectedCommit,
+        [string]$FocusedTestFilter = "")
+    if ($ExpectedCommit -cnotmatch '^[0-9a-f]{40}$') {
+        throw "$Label requires an exact lowercase commit identity."
     }
-    New-Item -ItemType Directory -Force -Path $OutputPath | Out-Null
-    Invoke-ProcessChecked `
-        "dotnet" `
-        @(
-            "build",
-            (Resolve-SolutionPath ([string]$Manifest.projectPath)),
-            "-c", $Configuration,
-            "-o", $OutputPath,
-            "--nologo") `
-        $Label `
-        1800
-    $executable = Join-Path $OutputPath "NjulfHelloGame.exe"
+    Assert-ExactCampaignHead $ExpectedCommit "$Label pre-build"
+    Assert-CleanCampaignWorktree
+    Assert-ProtectedFingerprints $script:ProtectedFingerprints
+    Assert-CampaignLockIntegrity
+    $fullOutputPath = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath($OutputPath)) "$Label output"
+    if (-not (Test-PathContainedBy $fullOutputPath $script:RunRoot)) {
+        throw "$Label output must be contained by the admitted campaign run root."
+    }
+    if (Test-Path -LiteralPath $fullOutputPath) {
+        throw "$Label output already exists; choose a fresh campaign run directory: $fullOutputPath"
+    }
+    New-Item -ItemType Directory -Path $fullOutputPath | Out-Null
+    $isolatedParent = Join-Path `
+        ([System.IO.Path]::GetTempPath()) `
+        "njulf-perf-campaign-build-worktrees"
+    $isolatedRoot = Join-Path `
+        $isolatedParent ([Guid]::NewGuid().ToString("N"))
+    $null = Assert-NoLinkedPathComponents $isolatedRoot "$Label isolated source"
+    if (Test-Path -LiteralPath $isolatedRoot) {
+        throw "$Label isolated source unexpectedly exists: $isolatedRoot"
+    }
+    $worktreeAdded = $false
+    try {
+        $null = Invoke-Git @(
+            "worktree", "add", "--detach", $isolatedRoot, $ExpectedCommit)
+        $worktreeAdded = $true
+        $isolatedHead = Get-GitText @(
+            "-C", $isolatedRoot, "rev-parse", "HEAD")
+        if ($isolatedHead -cne $ExpectedCommit) {
+            throw "$Label isolated source checked out '$isolatedHead', expected '$ExpectedCommit'."
+        }
+        $isolatedSolution = Join-Path `
+            $isolatedRoot $script:SolutionRelativePath
+        $isolatedProject = Join-Path `
+            $isolatedSolution ([string]$Manifest.projectPath)
+        $isolatedProps = Join-Path $isolatedSolution "Directory.Build.props"
+        $artifactRoot = Join-Path $isolatedRoot ".campaign-build-artifacts"
+        if (-not (Test-Path -LiteralPath $isolatedProject -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $isolatedProps -PathType Leaf) -or
+            (Test-Path -LiteralPath $artifactRoot)) {
+            throw "$Label isolated compile graph is incomplete or already contaminated."
+        }
+        Invoke-ProcessChecked `
+            "dotnet" `
+            @(
+                "build", $isolatedProject,
+                "-c", $Configuration,
+                "-o", $fullOutputPath,
+                "--artifacts-path", $artifactRoot,
+                "--no-incremental",
+                "--nologo",
+                "-p:RestoreLockedMode=true",
+                "-p:UseSharedCompilation=false",
+                "-p:ImportDirectoryBuildTargets=false",
+                "-p:DirectoryBuildPropsPath=$isolatedProps",
+                "-nodeReuse:false") `
+            $Label `
+            1800 `
+            $isolatedSolution
+        if (-not [string]::IsNullOrWhiteSpace($FocusedTestFilter)) {
+            $isolatedTests = Join-Path `
+                $isolatedSolution "Njulf.Tests/Njulf.Tests.csproj"
+            Invoke-ProcessChecked `
+                "dotnet" `
+                @(
+                    "test", $isolatedTests,
+                    "-c", "Release",
+                    "--artifacts-path", $artifactRoot,
+                    "--nologo",
+                    "--filter", $FocusedTestFilter,
+                    "--logger", "console;verbosity=minimal",
+                    "-p:RestoreLockedMode=true",
+                    "-p:UseSharedCompilation=false",
+                    "-p:ImportDirectoryBuildTargets=false",
+                    "-p:DirectoryBuildPropsPath=$isolatedProps",
+                    "-nodeReuse:false") `
+                "$Label focused candidate tests" `
+                3600 `
+                $isolatedSolution
+        }
+    } finally {
+        if ($worktreeAdded) {
+            $null = Invoke-Git @(
+                "worktree", "remove", "--force", $isolatedRoot)
+            $null = Invoke-Git @("worktree", "prune")
+        }
+        if (Test-Path -LiteralPath $isolatedRoot) {
+            throw "$Label isolated source did not cleanly disappear: $isolatedRoot"
+        }
+    }
+    $executable = Join-Path $fullOutputPath "NjulfHelloGame.exe"
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
         throw "$Label did not produce $executable."
     }
@@ -736,11 +2599,15 @@ function Invoke-BuildOutput {
         Assert-CleanCampaignWorktree
     }
     return [pscustomobject]@{
-        RootPath = [System.IO.Path]::GetFullPath($OutputPath)
+        RootPath = $fullOutputPath
         ExecutablePath = [System.IO.Path]::GetFullPath($executable)
         ExecutableFileSha256 = Get-Sha256 $executable
         RuntimeExecutableBundleHash = Get-RuntimeExecutableBundleHash $executable
-        BundleFingerprint = Get-CanonicalPathFingerprint $OutputPath
+        BundleFingerprint = Get-CanonicalPathFingerprint $fullOutputPath
+        BuildCommit = $ExpectedCommit
+        ProjectPath = [string]$Manifest.projectPath
+        SourceProvenance = "git-worktree-exact-commit"
+        IntermediateIsolation = "dotnet-artifacts-path"
     }
 }
 
@@ -761,7 +2628,14 @@ function Assert-BuildIdentity {
             (Get-RuntimeExecutableBundleHash (
                 [string]$BuildIdentity.ExecutablePath)),
             [string]$BuildIdentity.RuntimeExecutableBundleHash,
-            [StringComparison]::OrdinalIgnoreCase)) {
+            [StringComparison]::OrdinalIgnoreCase) -or
+        [string]$BuildIdentity.BuildCommit -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$BuildIdentity.ProjectPath -cne
+            "NjulfHelloGame/NjulfHelloGame.csproj" -or
+        [string]$BuildIdentity.SourceProvenance -cne
+            "git-worktree-exact-commit" -or
+        [string]$BuildIdentity.IntermediateIsolation -cne
+            "dotnet-artifacts-path") {
         throw "$Label build bundle changed after its fresh build lock."
     }
 }
@@ -970,7 +2844,8 @@ function Get-QualitySequenceArguments {
         "--benchmark-quality-sequence-max-drain-frames", ([int]$Manifest.qualitySequence.maximumReadbackDrainFrames).ToString(),
         "--benchmark-quality-sequence-budget-profile", ([string]$Manifest.capture.budgetProfile),
         "--benchmark-quality-sequence-variant", ([string]$Workload.captureVariant),
-        "--benchmark-quality-sequence-trajectory", ([string]$Workload.trajectory),
+        "--benchmark-quality-sequence-trajectory", ([string]$Workload.qualityTrajectory),
+        "--benchmark-activation", ([string]$Workload.activation),
         "--health-report", $HealthPath,
         "--scene", ([string]$Workload.scene),
         "--performance-scenario", ([string]$Workload.scenario),
@@ -999,7 +2874,8 @@ function Read-QualitySequenceReport {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Quality-sequence report was not written: $Path"
     }
-    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    return Get-Content -LiteralPath $Path -Raw |
+        ConvertFrom-Json -DateKind String
 }
 
 function Assert-CanonicalSha256 {
@@ -1197,15 +3073,25 @@ function Assert-QualitySequenceReport {
     }
     $roleValue = Get-QualitySequenceRoleValue $Role
     $expectedFrameCount = Get-QualitySequenceTrajectoryFrameCount (
-        [string]$Workload.trajectory)
+        [string]$Workload.qualityTrajectory)
     $expectedIndices = @(Get-QualitySequenceCheckpointIndices (
-        [string]$Workload.trajectory))
+        [string]$Workload.qualityTrajectory))
     if ([int]$Report.Role -ne $roleValue -or
         [string]$Report.SequenceId -cne $SequenceId -or
         [string]$Report.SceneKind -cne [string]$Workload.scene -or
         [string]$Report.Scenario -cne [string]$Workload.scenario -or
         [string]$Report.CaptureVariant -cne [string]$Workload.captureVariant -or
-        [string]$Report.Trajectory -cne [string]$Workload.trajectory -or
+        [string]$Report.Activation -cne [string]$Workload.activation -or
+        [string]$Report.ActivationEvidence.Activation -cne
+            [string]$Workload.activation -or
+        [string]$Report.ActivationFingerprint -cne
+            [string]$Report.ActivationEvidence.Fingerprint -or
+        -not (Test-Sha256Identity ([string]$Report.ActivationFingerprint)) -or
+        -not [bool]$Report.ActivationEvidence.Passed -or
+        [int]$Report.ActivationEvidence.MeasuredSampleCount -ne
+            $expectedFrameCount -or
+        (Get-ItemCount $Report.ActivationEvidence.Failures) -ne 0 -or
+        [string]$Report.Trajectory -cne [string]$Workload.qualityTrajectory -or
         [int]$Report.TrajectoryFrameCount -ne $expectedFrameCount -or
         [int]$Report.WarmupFrameCount -ne [int]$Workload.warmupFrames -or
         [int]$Report.MaximumAdditionalSettlingFrameCount -ne
@@ -1237,7 +3123,7 @@ function Assert-QualitySequenceReport {
         }
     }
     if ([string]$Report.CheckpointContractFingerprint -cne
-        (Get-QualitySequenceCheckpointFingerprint ([string]$Workload.trajectory))) {
+        (Get-QualitySequenceCheckpointFingerprint ([string]$Workload.qualityTrajectory))) {
         throw "$Label checkpoint contract fingerprint differs."
     }
     $actualIndices = @($Report.CheckpointIndices | ForEach-Object { [int]$_ })
@@ -1273,8 +3159,60 @@ function Assert-QualitySequenceReport {
             [string]$Report.TrajectoryRouteHash -cne
                 [string]$ReferenceContract.trajectoryRouteHash -or
             [string]$Report.TrajectorySequenceHash -cne
-                [string]$ReferenceContract.trajectorySequenceHash) {
+                [string]$ReferenceContract.trajectorySequenceHash -or
+            [string]$Report.Activation -cne
+                [string]$ReferenceContract.activation -or
+            [string]$Report.ActivationFingerprint -cne
+                [string]$ReferenceContract.activationFingerprint -or
+            [string]$Report.ActivationEvidence.AnimationConfigurationFingerprint -cne
+                [string]$ReferenceContract.activationAnimationConfigurationFingerprint -or
+            [string]$Report.ActivationEvidence.AnimationSequenceHash -cne
+                [string]$ReferenceContract.activationAnimationSequenceHash -or
+            [string]$Report.ActivationEvidence.ActivationStructuralSequenceHash -cne
+                [string]$ReferenceContract.activationStructuralSequenceHash -or
+            [string]$Report.ActivationEvidence.ActivationExecutionSequenceHash -cne
+                [string]$ReferenceContract.activationExecutionSequenceHash) {
             throw "$Label differs from its immutable quality reference."
+        }
+        if ([string]$Workload.scene -ceq "Sponza") {
+            if ([string]$Report.SponzaSceneAnimationEvidence.Fingerprint -cne
+                    [string]$ReferenceContract.sponzaSceneAnimationFingerprint -or
+                [int]$Report.SponzaSceneAnimationEvidence.Mode -ne
+                    [int]$ReferenceContract.sponzaSceneAnimationMode -or
+                [string]$Report.SponzaSceneAnimationEvidence.ConfigurationFingerprint -cne
+                    [string]$ReferenceContract.sponzaSceneAnimationConfigurationFingerprint -or
+                [string]$Report.SponzaSceneAnimationEvidence.SequenceHash -cne
+                    [string]$ReferenceContract.sponzaSceneAnimationSequenceHash -or
+                [string]$Report.SponzaSceneAnimationEvidence.SidecarSha256 -cne
+                    [string]$ReferenceContract.sponzaSceneAnimationSidecarSha256) {
+                throw "$Label common Sponza animation identity differs from reference."
+            }
+            Assert-PathIdentity `
+                ([string]$Report.SponzaSceneAnimationEvidence.SidecarPath) `
+                (([System.IO.Path]::GetFullPath($ReportPath)) +
+                    ".sponza-animation.bin") `
+                "$Label common animation sidecar"
+        } elseif (-not [string]::IsNullOrEmpty(
+                [string]$Report.SponzaSceneAnimationEvidence.SidecarPath) -or
+            -not [string]::IsNullOrEmpty(
+                [string]$Report.SponzaSceneAnimationEvidence.SidecarSha256) -or
+            [int]$Report.SponzaSceneAnimationEvidence.Mode -ne 0 -or
+            [string]$Report.SponzaSceneAnimationEvidence.ConfigurationFingerprint -cne
+                "unavailable" -or
+            [string]$Report.SponzaSceneAnimationEvidence.SequenceHash -cne
+                "unavailable" -or
+            [string]$ReferenceContract.sponzaSceneAnimationFingerprint -cne
+                "unavailable" -or
+            [int]$ReferenceContract.sponzaSceneAnimationMode -ne 0 -or
+            [string]$ReferenceContract.sponzaSceneAnimationConfigurationFingerprint -cne
+                "unavailable" -or
+            [string]$ReferenceContract.sponzaSceneAnimationSequenceHash -cne
+                "unavailable" -or
+            -not [string]::IsNullOrEmpty(
+                [string]$ReferenceContract.sponzaSceneAnimationSidecarPath) -or
+            -not [string]::IsNullOrEmpty(
+                [string]$ReferenceContract.sponzaSceneAnimationSidecarSha256)) {
+            throw "$Label non-Sponza reference carries a common animation sidecar."
         }
     }
     $checkpoints = @($Report.Checkpoints)
@@ -1288,7 +3226,7 @@ function Assert-QualitySequenceReport {
         $routeFrame = [int]$expectedIndices[$index]
         $expectedPath = [System.IO.Path]::GetFullPath(
             (Join-Path $OutputDirectory ("checkpoint-{0:D4}.pfm" -f $routeFrame)))
-        $expectedToken = "${SequenceId}:$($Workload.trajectory):{0:D2}:{1:D4}" -f $index, $routeFrame
+        $expectedToken = "${SequenceId}:$($Workload.qualityTrajectory):{0:D2}:{1:D4}" -f $index, $routeFrame
         if ([int]$checkpoint.Ordinal -ne $index -or
             [int]$checkpoint.RouteFrameIndex -ne $routeFrame -or
             [int]$checkpoint.AbsoluteFrameIndex -ne ($first + $routeFrame) -or
@@ -1479,7 +3417,7 @@ function Assert-QualitySequenceReport {
             }
         }
     }
-    $pairs = @(Get-QualitySequenceTemporalPairs ([string]$Workload.trajectory))
+    $pairs = @(Get-QualitySequenceTemporalPairs ([string]$Workload.qualityTrajectory))
     $temporal = @($Report.TemporalResiduals)
     if ($Role -eq "canonical") {
         if ($temporal.Count -ne 0) {
@@ -1534,7 +3472,7 @@ function Assert-QualitySequenceHealthReport {
         [string]$Label)
     $failure = [string](Get-PropertyValue $Health "failure" "")
     if ([string]$Health.kind -ne "renderer-health" -or
-        [string]$Health.schema -ne "renderer-health/v2" -or
+        [string]$Health.schema -ne "renderer-health/v3" -or
         [string]$Health.status -ne "passed" -or
         -not [string]::IsNullOrEmpty($failure) -or
         $null -eq $Health.options -or
@@ -1549,7 +3487,7 @@ function Assert-QualitySequenceHealthReport {
         Get-QualitySequenceRoleValue $Role)
     $expectedRoleName = $roleName.Substring(0, 1).ToUpperInvariant() +
         $roleName.Substring(1)
-    $expectedTrajectoryName = switch ([string]$Workload.trajectory) {
+    $expectedTrajectoryName = switch ([string]$Workload.qualityTrajectory) {
         "bistro-presentation" { "BistroPresentation" }
         "bistro-loop" { "BistroLoop" }
         "sponza-low" { "SponzaLow" }
@@ -1589,6 +3527,9 @@ function Assert-QualitySequenceHealthReport {
         [string]$options.HdrQualityContractPath -cne $expectedRoiPath -or
         [string]$options.BudgetProfileOverride -cne "Stress" -or
         [string]$options.CaptureVariant -cne [string]$Workload.captureVariant -or
+        [string]$options.Activation -cne [string]$Workload.activation -or
+        [string]$options.ActivationFingerprint -cne
+            [string]$Report.ActivationFingerprint -or
         [string]$options.SceneKind -cne $expectedSceneKind -or
         [string]$options.Scenario -cne [string]$Workload.scenario -or
         [string]$options.Trajectory -cne $expectedTrajectoryName -or
@@ -1683,7 +3624,22 @@ function Assert-QualitySequenceInputHashes {
             throw "$Label reference contract changed or is missing."
         }
         $contract = Get-Content -LiteralPath $ReferenceContractPath -Raw |
-            ConvertFrom-Json
+            ConvertFrom-Json -DateKind String
+        if ([string]$contract.sceneKind -ceq "Sponza") {
+            $sidecarPath = [string]$contract.sponzaSceneAnimationSidecarPath
+            $sidecarSha256 = [string]$contract.sponzaSceneAnimationSidecarSha256
+            if ([string]::IsNullOrWhiteSpace($sidecarPath) -or
+                $sidecarSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                -not (Test-Path -LiteralPath $sidecarPath -PathType Leaf) -or
+                (Get-Sha256 $sidecarPath) -cne $sidecarSha256) {
+                throw "$Label immutable common animation sidecar changed."
+            }
+        } elseif (-not [string]::IsNullOrEmpty(
+                [string]$contract.sponzaSceneAnimationSidecarPath) -or
+            -not [string]::IsNullOrEmpty(
+                [string]$contract.sponzaSceneAnimationSidecarSha256)) {
+            throw "$Label non-Sponza contract contains an animation sidecar."
+        }
         foreach ($checkpoint in @($contract.checkpoints)) {
             $path = [string]$checkpoint.pfmPath
             if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
@@ -1758,7 +3714,22 @@ function Invoke-QualitySequenceCapture {
     $healthPath = [System.IO.Path]::ChangeExtension(
         $ReportPath,
         ".health.json")
-    foreach ($path in @($ReportPath, $healthPath, $OutputDirectory)) {
+    $activationArtifactPath = [System.IO.Path]::ChangeExtension(
+        $ReportPath,
+        ".activation-verification.json")
+    $metricArtifactPath = [System.IO.Path]::ChangeExtension(
+        $ReportPath,
+        ".metric-verification.json")
+    $animationSidecarPath =
+        ([System.IO.Path]::GetFullPath($ReportPath)) +
+            ".sponza-animation.bin"
+    $reservedOutputs = @(
+        $ReportPath, $healthPath, $OutputDirectory, $activationArtifactPath)
+    if ($Role -ne "canonical") { $reservedOutputs += $metricArtifactPath }
+    if ([string]$Workload.scene -ceq "Sponza") {
+        $reservedOutputs += $animationSidecarPath
+    }
+    foreach ($path in $reservedOutputs) {
         if (Test-Path -LiteralPath $path) {
             throw "$Label output already exists; refusing to overwrite $path"
         }
@@ -1780,6 +3751,7 @@ function Invoke-QualitySequenceCapture {
         $ExpectedReferenceContractSha256 $QualityContractPath `
         $ExpectedQualityContractSha256 $Role "$Label post-capture"
     $report = Read-QualitySequenceReport $ReportPath
+    $admittedReportSha256 = Get-Sha256 $ReportPath
     Assert-QualitySequenceReport `
         $Manifest $Workload $report $BuildIdentity $Configuration $Role `
         $SequenceId $ExpectedCommit $ReportPath $OutputDirectory `
@@ -1789,20 +3761,52 @@ function Invoke-QualitySequenceCapture {
     if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf)) {
         throw "$Label did not publish its health report."
     }
-    $health = Get-Content -LiteralPath $healthPath -Raw | ConvertFrom-Json
+    $health = Get-Content -LiteralPath $healthPath -Raw |
+        ConvertFrom-Json -DateKind String
+    $admittedHealthSha256 = Get-Sha256 $healthPath
     Assert-QualitySequenceHealthReport `
         $Manifest $Workload $health $report $BuildIdentity $Configuration `
         $Role $SequenceId $ExpectedCommit $ReportPath $OutputDirectory `
         $ReferenceContractPath $QualityContractPath $Label
+    $frozenVerifierEvidence = New-QualityFrozenVerifierEvidence `
+        $Workload $report $Role $SequenceId $ReportPath `
+        $VerifierBuildIdentity $Label
     $verifiedMetrics = $null
     if ($Role -ne "canonical") {
         $verifiedMetrics = Get-RecomputedQualitySequenceMetrics `
             $Manifest $Workload $report $ReferenceContract `
-            $VerifierBuildIdentity $QualityContractPath $Label
+            $VerifierBuildIdentity $QualityContractPath $metricArtifactPath `
+            $null $Label
         if ($Role -eq "candidate") {
             Assert-QualitySequenceSpatialEnvelope `
                 $verifiedMetrics @($SpatialEnvelope) $Label
         }
+    }
+    Assert-QualitySequenceInputHashes `
+        $BuildIdentity $ReferenceContractPath `
+        $ExpectedReferenceContractSha256 $QualityContractPath `
+        $ExpectedQualityContractSha256 $Role "$Label post-verification"
+    if ((Get-Sha256 $ReportPath) -cne $admittedReportSha256 -or
+        (Get-Sha256 $healthPath) -cne $admittedHealthSha256) {
+        throw "$Label report or health bytes changed during frozen verification."
+    }
+    foreach ($checkpoint in @($report.Checkpoints)) {
+        if (-not (Test-Path -LiteralPath ([string]$checkpoint.PfmPath) `
+                -PathType Leaf) -or
+            (Get-Sha256 ([string]$checkpoint.PfmPath)) -cne
+                [string]$checkpoint.PfmSha256) {
+            throw "$Label checkpoint PFM changed during frozen verification."
+        }
+    }
+    if ((Get-Sha256 ([string]$frozenVerifierEvidence.activation.artifactPath)) -cne
+            [string]$frozenVerifierEvidence.activation.artifactSha256 -or
+        ([string]$Workload.scene -ceq "Sponza" -and
+         (Get-Sha256 ([string]$frozenVerifierEvidence.sponzaAnimationSidecar.path)) -cne
+            [string]$frozenVerifierEvidence.sponzaAnimationSidecar.sha256) -or
+        ($Role -ne "canonical" -and
+         (Get-Sha256 ([string]$verifiedMetrics.metricVerifierArtifact.artifactPath)) -cne
+            [string]$verifiedMetrics.metricVerifierArtifact.artifactSha256)) {
+        throw "$Label verifier artifact or animation sidecar changed before admission."
     }
     $checkpointEvidence = @($report.Checkpoints | ForEach-Object {
         [pscustomobject]@{
@@ -1823,15 +3827,16 @@ function Invoke-QualitySequenceCapture {
             captureRun = $_.CaptureRun
             producerIdentity = $_.ProducerIdentity
             hdrDifference = $_.HdrDifference
+            activationFrameState = $_.ActivationFrameState
         }
     })
     return [pscustomobject]@{
         role = $Role
         sequenceId = $SequenceId
         reportPath = [System.IO.Path]::GetFullPath($ReportPath)
-        reportSha256 = Get-Sha256 $ReportPath
+        reportSha256 = $admittedReportSha256
         healthPath = [System.IO.Path]::GetFullPath($healthPath)
-        healthSha256 = Get-Sha256 $healthPath
+        healthSha256 = $admittedHealthSha256
         outputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
         referenceContractPath = $ReferenceContractPath
         referenceContractSha256 = $ExpectedReferenceContractSha256
@@ -1842,6 +3847,8 @@ function Invoke-QualitySequenceCapture {
         buildBundleFingerprint = [string]$BuildIdentity.BundleFingerprint
         runtimeExecutableBundleHash =
             [string]$BuildIdentity.RuntimeExecutableBundleHash
+        buildIdentity = $BuildIdentity
+        frozenVerifierEvidence = $frozenVerifierEvidence
         trajectoryRouteHash = [string]$report.TrajectoryRouteHash
         trajectorySequenceHash = [string]$report.TrajectorySequenceHash
         producerGpuName = [string]$report.ProducerIdentity.GpuName
@@ -1928,8 +3935,33 @@ function New-QualitySequenceReferenceContract {
             settingsFingerprint = [string]$_.SettingsFingerprint
             captureRun = ConvertTo-QualityCaptureRunContract $_.CaptureRun
             producerIdentity = ConvertTo-QualityProducerContract $_.ProducerIdentity
+            activationFrameState = $_.ActivationFrameState
         }
     })
+    $sponzaAnimation = if ([string]$Workload.scene -ceq "Sponza") {
+        [ordered]@{
+            fingerprint =
+                [string]$CanonicalReport.SponzaSceneAnimationEvidence.Fingerprint
+            mode = [int]$CanonicalReport.SponzaSceneAnimationEvidence.Mode
+            configurationFingerprint =
+                [string]$CanonicalReport.SponzaSceneAnimationEvidence.ConfigurationFingerprint
+            sequenceHash =
+                [string]$CanonicalReport.SponzaSceneAnimationEvidence.SequenceHash
+            sidecarPath =
+                [string]$CanonicalReport.SponzaSceneAnimationEvidence.SidecarPath
+            sidecarSha256 =
+                [string]$CanonicalReport.SponzaSceneAnimationEvidence.SidecarSha256
+        }
+    } else {
+        [ordered]@{
+            fingerprint = "unavailable"
+            mode = 0
+            configurationFingerprint = "unavailable"
+            sequenceHash = "unavailable"
+            sidecarPath = ""
+            sidecarSha256 = ""
+        }
+    }
     return [ordered]@{
         schema = "njulf-benchmark-quality-sequence-reference/v1"
         sceneKind = [string]$CanonicalReport.SceneKind
@@ -1959,6 +3991,28 @@ function New-QualitySequenceReferenceContract {
         temporalGates = @($TemporalGates)
         captureRun = ConvertTo-QualityCaptureRunContract $CanonicalReport.CaptureRun
         producerIdentity = ConvertTo-QualityProducerContract $CanonicalReport.ProducerIdentity
+        activation = [string]$CanonicalReport.Activation
+        activationFingerprint = [string]$CanonicalReport.ActivationFingerprint
+        activationAnimationConfigurationFingerprint =
+            [string]$CanonicalReport.ActivationEvidence.AnimationConfigurationFingerprint
+        activationAnimationSequenceHash =
+            [string]$CanonicalReport.ActivationEvidence.AnimationSequenceHash
+        activationStructuralSequenceHash =
+            [string]$CanonicalReport.ActivationEvidence.ActivationStructuralSequenceHash
+        activationExecutionSequenceHash =
+            [string]$CanonicalReport.ActivationEvidence.ActivationExecutionSequenceHash
+        sponzaSceneAnimationFingerprint =
+            [string]$sponzaAnimation.fingerprint
+        sponzaSceneAnimationMode =
+            [int]$sponzaAnimation.mode
+        sponzaSceneAnimationConfigurationFingerprint =
+            [string]$sponzaAnimation.configurationFingerprint
+        sponzaSceneAnimationSequenceHash =
+            [string]$sponzaAnimation.sequenceHash
+        sponzaSceneAnimationSidecarPath =
+            [string]$sponzaAnimation.sidecarPath
+        sponzaSceneAnimationSidecarSha256 =
+            [string]$sponzaAnimation.sidecarSha256
         temporalResidualFloor =
             [double]$Manifest.qualitySequence.temporalResidualFloor
         temporalResidualMultiplier =
@@ -1984,7 +4038,7 @@ function Write-QualitySequenceReferenceContract {
         $Contract | ConvertTo-Json -Depth 24 |
             Set-Content -LiteralPath $temporaryPath -Encoding utf8
         $null = Get-Content -LiteralPath $temporaryPath -Raw |
-            ConvertFrom-Json
+            ConvertFrom-Json -DateKind String
         [System.IO.File]::Move($temporaryPath, $Path, $false)
     } finally {
         if (Test-Path -LiteralPath $temporaryPath) {
@@ -2007,7 +4061,7 @@ function New-QualitySequenceTemporalGates {
         [int]$Manifest.qualitySequence.baselineRepeatCount) {
         throw "Temporal gates require exactly two admitted baseline repeats."
     }
-    $pairs = @(Get-QualitySequenceTemporalPairs ([string]$Workload.trajectory))
+    $pairs = @(Get-QualitySequenceTemporalPairs ([string]$Workload.qualityTrajectory))
     $gates = @()
     for ($pairIndex = 0; $pairIndex -lt $pairs.Count; $pairIndex++) {
         $residuals = @($VerifiedRepeatMetrics | ForEach-Object {
@@ -2045,14 +4099,105 @@ function New-QualitySequenceTemporalGates {
     return @($gates)
 }
 
+function ConvertFrom-QualityMetricVerifierBytes {
+    param([byte[]]$Bytes, [string]$Label)
+    if ($null -eq $Bytes -or $Bytes.Length -eq 0 -or
+        $Bytes.Length -gt 16MB) {
+        throw "$Label stdout byte length is outside the admitted range."
+    }
+    $encoding = [System.Text.UTF8Encoding]::new($false, $true)
+    try { $json = $encoding.GetString($Bytes) } catch {
+        throw "$Label stdout is not canonical UTF-8."
+    }
+    if (-not $json.StartsWith("{", [StringComparison]::Ordinal) -or
+        -not $json.EndsWith("}", [StringComparison]::Ordinal) -or
+        $json.Contains("`r", [StringComparison]::Ordinal) -or
+        $json.Contains("`n", [StringComparison]::Ordinal)) {
+        throw "$Label stdout must be exactly one compact JSON object."
+    }
+    try {
+        $documentOptions = [System.Text.Json.JsonDocumentOptions]::new()
+        $documentOptions.AllowTrailingCommas = $false
+        $documentOptions.CommentHandling =
+            [System.Text.Json.JsonCommentHandling]::Disallow
+        $documentOptions.MaxDepth = 64
+        $document = [System.Text.Json.JsonDocument]::Parse(
+            $json,
+            $documentOptions)
+        try {
+            if ($document.RootElement.ValueKind -ne
+                [System.Text.Json.JsonValueKind]::Object) {
+                throw "$Label stdout root must be an object."
+            }
+            Assert-NoDuplicateJsonProperties $document.RootElement $Label
+        } finally {
+            $document.Dispose()
+        }
+        $result = $json | ConvertFrom-Json -DateKind String
+    } catch {
+        throw "$Label stdout is not one strict JSON object: $($_.Exception.Message)"
+    }
+    return $result
+}
+
+function Assert-QualityMetricVerifierInputs {
+    param([object[]]$Operations, [string]$Label)
+    for ($index = 0; $index -lt $Operations.Count; $index++) {
+        $operation = $Operations[$index]
+        $pairs = switch ([string]$operation.kind) {
+            "spatial" {
+                @(
+                    @([string]$operation.referencePath,
+                        [string]$operation.referenceSha256),
+                    @([string]$operation.candidatePath,
+                        [string]$operation.candidateSha256),
+                    @([string]$operation.qualityContractPath,
+                        [string]$operation.qualityContractSha256))
+                break
+            }
+            "temporal" {
+                @(
+                    @([string]$operation.referenceFromPath,
+                        [string]$operation.referenceFromSha256),
+                    @([string]$operation.referenceToPath,
+                        [string]$operation.referenceToSha256),
+                    @([string]$operation.candidateFromPath,
+                        [string]$operation.candidateFromSha256),
+                    @([string]$operation.candidateToPath,
+                        [string]$operation.candidateToSha256))
+                break
+            }
+            default {
+                throw "$Label operation $index has unknown kind '$($operation.kind)'."
+            }
+        }
+        $inputIndex = 0
+        foreach ($pair in @($pairs)) {
+            $path = [string]$pair[0]
+            $sha256 = [string]$pair[1]
+            if ([string]::IsNullOrWhiteSpace($path) -or
+                $sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+                -not (Test-Path -LiteralPath $path -PathType Leaf) -or
+                (Get-Sha256 $path) -cne $sha256) {
+                throw "$Label operation $index input $inputIndex changed or is invalid."
+            }
+            $inputIndex++
+        }
+    }
+}
+
 function Invoke-QualityMetricVerifier {
     param(
         $Manifest,
         $BuildIdentity,
         [object[]]$Operations,
+        [string]$ArtifactPath,
+        $ExpectedArtifactEvidence,
         [string]$Label)
     Assert-BuildIdentity $BuildIdentity "$Label verifier build"
     Assert-ProtectedFingerprints $script:ProtectedFingerprints
+    Assert-CampaignLockIntegrity
+    Assert-QualityMetricVerifierInputs $Operations "$Label pre-run"
     $request = [ordered]@{
         schema = "njulf-perf-quality-verify-request/v1"
         operations = @($Operations)
@@ -2091,11 +4236,13 @@ function Invoke-QualityMetricVerifier {
     }
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
+    $stdoutStream = $null
     try {
         if (-not $process.Start()) {
             throw "$Label verifier failed to start."
         }
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stdoutStream = [System.IO.MemoryStream]::new()
+        $stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
         $stderrTask = $process.StandardError.ReadToEndAsync()
         $process.StandardInput.Write($requestJson)
         $process.StandardInput.Close()
@@ -2105,32 +4252,154 @@ function Invoke-QualityMetricVerifier {
             $process.WaitForExit()
             throw "$Label verifier timed out."
         }
-        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stdoutTask.GetAwaiter().GetResult()
+        $stdoutBytes = $stdoutStream.ToArray()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0) {
             throw "$Label verifier exited $($process.ExitCode): $stderr"
         }
-        $result = $stdout | ConvertFrom-Json
+        if (-not [string]::IsNullOrEmpty($stderr)) {
+            throw "$Label verifier emitted unexpected stderr: $stderr"
+        }
+        $result = ConvertFrom-QualityMetricVerifierBytes $stdoutBytes $Label
+        Assert-ExactPropertyNames $result @("schema", "results") "$Label result"
         if ([string]$result.schema -cne
                 "njulf-perf-quality-verify-result/v1" -or
-            @($result.results).Count -ne $Operations.Count) {
+            $null -eq $result.results -or
+            $result.results -isnot [System.Object[]] -or
+            $result.results.Count -ne $Operations.Count) {
             throw "$Label verifier result topology is invalid."
         }
         for ($index = 0; $index -lt $Operations.Count; $index++) {
-            if ([string]@($result.results)[$index].id -cne
+            $operationResult = @($result.results)[$index]
+            $expectedResultProperties = if (
+                [string]$Operations[$index].kind -ceq "spatial") {
+                @("id", "kind", "value", "inputs")
+            } else {
+                @("id", "kind", "value")
+            }
+            Assert-ExactPropertyNames $operationResult `
+                $expectedResultProperties "$Label operation $index"
+            if ([string]$operationResult.id -cne
                     [string]$Operations[$index].id -or
-                [string]@($result.results)[$index].kind -cne
+                [string]$operationResult.kind -cne
                     [string]$Operations[$index].kind) {
                 throw "$Label verifier operation $index was reordered."
+            }
+            if ([string]$operationResult.kind -ceq "temporal") {
+                if ($null -eq $operationResult.value) {
+                    throw "$Label temporal operation $index has no value."
+                }
+                Assert-ExactPropertyNames $operationResult.value `
+                    @("relativeResidual", "inputs") `
+                    "$Label temporal operation $index value"
+                if ($null -eq $operationResult.value.inputs -or
+                    $operationResult.value.inputs -isnot [System.Object[]] -or
+                    $operationResult.value.inputs.Count -ne 4) {
+                    throw "$Label temporal operation $index input topology differs."
+                }
+            } else {
+                if ($null -eq $operationResult.value) {
+                    throw "$Label spatial operation $index has no value."
+                }
+                Assert-ExactPropertyNames $operationResult.value @(
+                    "Available", "Passed", "ReferencePath", "CandidatePath",
+                    "ReferenceSha256", "CandidateSha256", "Width", "Height",
+                    "Rmse", "RelativeRmse", "MeanAbsoluteError",
+                    "MaximumAbsoluteError", "MaximumRelativeRmse",
+                    "FailureReason", "FlipP95", "MaximumFlipP95",
+                    "QualityContractPath", "QualityContractSha256",
+                    "RoiResults") "$Label spatial operation $index value"
+                if ($operationResult.value.Available -isnot [bool] -or
+                    $operationResult.value.Passed -isnot [bool] -or
+                    $null -eq $operationResult.value.RoiResults -or
+                    $operationResult.value.RoiResults -isnot
+                        [System.Object[]] -or
+                    $null -eq $operationResult.inputs -or
+                    $operationResult.inputs -isnot [System.Object[]] -or
+                    $operationResult.inputs.Count -ne 3) {
+                    throw "$Label spatial operation $index value topology differs."
+                }
+                foreach ($roi in @($operationResult.value.RoiResults)) {
+                    if ($null -eq $roi) {
+                        throw "$Label spatial operation $index contains a null ROI."
+                    }
+                    Assert-ExactPropertyNames $roi @(
+                        "Name", "X", "Y", "Width", "Height",
+                        "MeanLuminanceShift", "P95LuminanceShift",
+                        "MaximumMeanLuminanceShift",
+                        "MaximumP95LuminanceShift", "Passed") `
+                        "$Label spatial operation $index ROI"
+                    if ($roi.Passed -isnot [bool]) {
+                        throw "$Label spatial operation $index ROI Passed is not Boolean."
+                    }
+                }
+            }
+            $inputs = if ([string]$operationResult.kind -ceq "spatial") {
+                @($operationResult.inputs)
+            } else {
+                @($operationResult.value.inputs)
+            }
+            foreach ($input in $inputs) {
+                if ($null -eq $input) {
+                    throw "$Label operation $index contains a null input."
+                }
+                Assert-ExactPropertyNames $input @("path", "sha256") `
+                    "$Label operation $index input"
             }
         }
         Assert-BuildIdentity $BuildIdentity "$Label verifier build"
         Assert-ProtectedFingerprints $script:ProtectedFingerprints
+        Assert-CampaignLockIntegrity
+        Assert-QualityMetricVerifierInputs $Operations "$Label post-run"
         if ((Get-Sha256 $helperPath) -cne $expectedHelperHash) {
             throw "$Label verifier helper changed during execution."
         }
-        return @($result.results)
+        $fullArtifactPath = [System.IO.Path]::GetFullPath($ArtifactPath)
+        if ($null -eq $ExpectedArtifactEvidence) {
+            Write-AtomicByteArtifact $fullArtifactPath $stdoutBytes $Label
+            $artifact = [ordered]@{
+                artifactPath = $fullArtifactPath
+                artifactSha256 = Get-Sha256 $fullArtifactPath
+                artifactByteLength = [long]$stdoutBytes.Length
+                verifierBuildIdentity = $BuildIdentity
+                result = $result
+            }
+        } else {
+            $artifact = $ExpectedArtifactEvidence
+            Assert-ExactPropertyNames $artifact @(
+                "artifactPath", "artifactSha256", "artifactByteLength",
+                "verifierBuildIdentity", "result") "$Label artifact evidence"
+            Assert-PathIdentity ([string]$artifact.artifactPath) `
+                $fullArtifactPath "$Label artifact"
+            if (-not (Test-Path -LiteralPath $fullArtifactPath -PathType Leaf) -or
+                (Get-Sha256 $fullArtifactPath) -cne
+                    [string]$artifact.artifactSha256) {
+                throw "$Label stored verifier artifact bytes differ."
+            }
+            $storedBytes = [System.IO.File]::ReadAllBytes($fullArtifactPath)
+            if ([long]$artifact.artifactByteLength -ne $storedBytes.LongLength -or
+                -not (Test-ByteSequenceEqual $storedBytes $stdoutBytes)) {
+                throw "$Label verifier replay differs from its durable artifact."
+            }
+            $storedResult = ConvertFrom-QualityMetricVerifierBytes `
+                $storedBytes "$Label stored"
+            if (($storedResult | ConvertTo-Json -Depth 32 -Compress) -cne
+                    ($result | ConvertTo-Json -Depth 32 -Compress) -or
+                ($artifact.result | ConvertTo-Json -Depth 32 -Compress) -cne
+                    ($result | ConvertTo-Json -Depth 32 -Compress) -or
+                ($artifact.verifierBuildIdentity |
+                    ConvertTo-Json -Depth 12 -Compress) -cne
+                    ($BuildIdentity | ConvertTo-Json -Depth 12 -Compress)) {
+                throw "$Label stored verifier result/build identity differs."
+            }
+        }
+        return [pscustomobject]@{
+            artifact = $artifact
+            results = @($result.results)
+        }
     } finally {
+        if ($null -ne $stdoutStream) { $stdoutStream.Dispose() }
         $process.Dispose()
     }
 }
@@ -2153,6 +4422,8 @@ function Get-RecomputedQualitySequenceMetrics {
         $ReferenceContract,
         $VerifierBuildIdentity,
         [string]$QualityContractPath,
+        [string]$ArtifactPath,
+        $ExpectedArtifactEvidence,
         [string]$Label)
     $reportCheckpoints = @($Report.Checkpoints)
     $referenceCheckpoints = @($ReferenceContract.checkpoints)
@@ -2174,7 +4445,7 @@ function Get-RecomputedQualitySequenceMetrics {
             qualityContractSha256 = [string]$ReferenceContract.qualityContractSha256
         }
     }
-    $pairs = @(Get-QualitySequenceTemporalPairs ([string]$Workload.trajectory))
+    $pairs = @(Get-QualitySequenceTemporalPairs ([string]$Workload.qualityTrajectory))
     $ordinalByFrame = @{}
     for ($index = 0; $index -lt $referenceCheckpoints.Count; $index++) {
         $ordinalByFrame[[int]$referenceCheckpoints[$index].routeFrameIndex] = $index
@@ -2197,9 +4468,10 @@ function Get-RecomputedQualitySequenceMetrics {
             candidateToSha256 = [string]$reportCheckpoints[$toOrdinal].PfmSha256
         }
     }
-    $verified = @(Invoke-QualityMetricVerifier `
-        $Manifest $VerifierBuildIdentity $operations `
-        "$Label protected metric verification")
+    $verification = Invoke-QualityMetricVerifier `
+        $Manifest $VerifierBuildIdentity $operations $ArtifactPath `
+        $ExpectedArtifactEvidence "$Label protected metric verification"
+    $verified = @($verification.results)
     $spatial = @()
     for ($index = 0; $index -lt $reportCheckpoints.Count; $index++) {
         $difference = $reportCheckpoints[$index].HdrDifference
@@ -2347,6 +4619,7 @@ function Get-RecomputedQualitySequenceMetrics {
         }
     }
     return [pscustomobject]@{
+        metricVerifierArtifact = $verification.artifact
         spatial = @($spatial)
         temporal = @($temporal)
     }
@@ -2358,7 +4631,7 @@ function New-QualitySequenceSpatialEnvelope {
         throw "Spatial repeatability envelope requires exactly two verified repeats."
     }
     $checkpointIndices = @(Get-QualitySequenceCheckpointIndices (
-        [string]$Workload.trajectory))
+        [string]$Workload.qualityTrajectory))
     $envelope = @()
     for ($checkpoint = 0; $checkpoint -lt $checkpointIndices.Count; $checkpoint++) {
         $repeatValues = @($VerifiedRepeatMetrics | ForEach-Object {
@@ -2451,6 +4724,7 @@ function Get-BenchmarkArguments {
         "--benchmark-pair-id", $PairId,
         "--benchmark-variant", ([string]$Workload.captureVariant),
         "--benchmark-trajectory", ([string]$Workload.trajectory),
+        "--benchmark-activation", ([string]$Workload.activation),
         "--benchmark-budget-profile", ([string]$Manifest.capture.budgetProfile),
         "--scene", ([string]$Workload.scene),
         "--performance-scenario", ([string]$Workload.scenario),
@@ -2484,7 +4758,8 @@ function Read-BenchmarkReport {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Benchmark report was not written: $Path"
     }
-    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    return Get-Content -LiteralPath $Path -Raw |
+        ConvertFrom-Json -DateKind String
 }
 
 function Assert-CaptureInputHashes {
@@ -2579,7 +4854,7 @@ function Assert-BenchmarkReport {
         [string]$ExpectedCandidatePath
     )
     if ([string]$Report.Kind -ne "njulf-renderer-benchmark" -or
-        [string]$Report.Schema -ne "njulf-renderer-benchmark/v3") {
+        [string]$Report.Schema -ne "njulf-renderer-benchmark/v4") {
         throw "$Label has unexpected report kind/schema '$($Report.Kind)'/'$($Report.Schema)'."
     }
     if ([int]$Report.MeasurementFrameCount -ne [int]$Workload.measureFrames) {
@@ -2841,7 +5116,7 @@ function Assert-BenchmarkReport {
             throw "$Label candidate PFM hash differs from the report."
         }
         $qualityContract = Get-Content -LiteralPath $expectedContractPath -Raw |
-            ConvertFrom-Json
+            ConvertFrom-Json -DateKind String
         if ([string]$qualityContract.schema -ne "njulf-benchmark-hdr-quality/v1" -or
             [int]$qualityContract.width -ne 1920 -or
             [int]$qualityContract.height -ne 1080 -or
@@ -2877,7 +5152,7 @@ function Assert-HealthReport {
         [string]$ExpectedPairId,
         [string]$Label)
     if ([string]$Health.kind -ne "renderer-health" -or
-        [string]$Health.schema -ne "renderer-health/v2") {
+        [string]$Health.schema -ne "renderer-health/v3") {
         throw "$Label has an unexpected health-report contract."
     }
     $failure = [string](Get-PropertyValue $Health "failure" "")
@@ -2961,6 +5236,7 @@ function Invoke-BenchmarkCapture {
         $Manifest,
         $Workload,
         $BuildIdentity,
+        $VerifierBuildIdentity,
         [string]$Configuration,
         [string]$ReportPath,
         [string]$PairId,
@@ -2976,8 +5252,22 @@ function Invoke-BenchmarkCapture {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ReportPath) | Out-Null
     $healthPath = [System.IO.Path]::ChangeExtension($ReportPath, ".health.json")
     $candidatePath = [System.IO.Path]::ChangeExtension($ReportPath, ".hdr.pfm")
-    $reservedOutputs = @($ReportPath, $healthPath)
-    if (-not $ReferenceInitialization) { $reservedOutputs += $candidatePath }
+    $activationArtifactPath = [System.IO.Path]::ChangeExtension(
+        $ReportPath, ".activation-verification.json")
+    $ddgiArtifactPath = [System.IO.Path]::ChangeExtension(
+        $ReportPath, ".ddgi-transient-verification.json")
+    $reservedOutputs = @(
+        $ReportPath, $healthPath, $activationArtifactPath, $ddgiArtifactPath)
+    if ($ReferenceInitialization) {
+        $reservedOutputs += $ReferencePath
+    } else {
+        $reservedOutputs += $candidatePath
+    }
+    if ([string]$Workload.scene -ceq "Sponza") {
+        $reservedOutputs +=
+            ([System.IO.Path]::GetFullPath($ReportPath) +
+                ".sponza-animation.bin")
+    }
     foreach ($output in $reservedOutputs) {
         if (Test-Path -LiteralPath $output) {
             throw "$Label output already exists; refusing to overwrite $output"
@@ -3004,7 +5294,8 @@ function Invoke-BenchmarkCapture {
     if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf)) {
         throw "$Label did not publish its health report."
     }
-    $health = Get-Content -LiteralPath $healthPath -Raw | ConvertFrom-Json
+    $health = Get-Content -LiteralPath $healthPath -Raw |
+        ConvertFrom-Json -DateKind String
     $healthFailure = [string](Get-PropertyValue $health "failure" "")
     if ([string]$health.status -ne "passed") {
         throw "$Label health gate failed: $healthFailure"
@@ -3016,6 +5307,37 @@ function Invoke-BenchmarkCapture {
     Assert-HealthReport `
         $Manifest $Workload $health $report $BuildIdentity `
         $ExpectedCommit $PairId $Label
+    $admittedOutputs = [ordered]@{
+        ([System.IO.Path]::GetFullPath($ReportPath)) = Get-Sha256 $ReportPath
+        ([System.IO.Path]::GetFullPath($healthPath)) = Get-Sha256 $healthPath
+    }
+    if ($ReferenceInitialization) {
+        $admittedOutputs[[System.IO.Path]::GetFullPath($ReferencePath)] =
+            Get-Sha256 $ReferencePath
+    } else {
+        $admittedOutputs[[System.IO.Path]::GetFullPath($candidatePath)] =
+            Get-Sha256 $candidatePath
+    }
+    if ([string]$Workload.scene -ceq "Sponza") {
+        $sidecarPath = [System.IO.Path]::GetFullPath($ReportPath) +
+            ".sponza-animation.bin"
+        $admittedOutputs[$sidecarPath] = Get-Sha256 $sidecarPath
+    }
+    $frozenEvidence = New-TimingFrozenVerifierEvidence `
+        $Workload $report $ReportPath $VerifierBuildIdentity $Label
+    $admittedOutputs[[System.IO.Path]::GetFullPath($activationArtifactPath)] =
+        [string]$frozenEvidence.activation.artifactSha256
+    $admittedOutputs[[System.IO.Path]::GetFullPath($ddgiArtifactPath)] =
+        [string]$frozenEvidence.ddgiTransient.artifactSha256
+    foreach ($entry in $admittedOutputs.GetEnumerator()) {
+        if (-not (Test-Path -LiteralPath ([string]$entry.Key) -PathType Leaf) -or
+            (Get-Sha256 ([string]$entry.Key)) -cne [string]$entry.Value) {
+            throw "$Label output '$($entry.Key)' changed during frozen verification."
+        }
+    }
+    $report | Add-Member `
+        -NotePropertyName CampaignFrozenVerifierEvidence `
+        -NotePropertyValue $frozenEvidence
     return $report
 }
 
@@ -3050,6 +5372,804 @@ function Get-PassTiming {
     }
     if ($stats.Count -eq 0) { return $null }
     return [double]$stats[0].P95Milliseconds
+}
+
+function Get-ScopedTiming {
+    param($Report, [string]$Domain, [string]$Name)
+    if ($Domain -notin @("gpu", "cpu") -or
+        [string]::IsNullOrWhiteSpace($Name)) {
+        return $null
+    }
+    $collection = if ($Domain -eq "gpu") {
+        @($Report.GpuPasses)
+    } else {
+        @($Report.CpuStages)
+    }
+    $stats = @($collection | Where-Object {
+        [string]$_.Name -ceq $Name
+    })
+    if ($stats.Count -ne 1) { return $null }
+    return [double]$stats[0].P95Milliseconds
+}
+
+function New-HotspotDiscoveryData {
+    param(
+        $Manifest,
+        [object[]]$CaptureEntries,
+        [string]$RetainedCommit,
+        [DateTimeOffset]$CreatedAtUtc)
+    $expectedConfigurations = @(Get-CampaignConfigurations $Manifest)
+    $expectedEntryCount = $expectedConfigurations.Count *
+        @($Manifest.workloads).Count
+    if ($CaptureEntries.Count -ne $expectedEntryCount -or
+        $RetainedCommit -cnotmatch '^[0-9a-f]{40}$') {
+        throw "Hotspot discovery requires one authenticated report per workload and configuration."
+    }
+    $observations = [System.Collections.Generic.List[object]]::new()
+    $reportRows = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in $CaptureEntries) {
+        $configuration = [string]$entry.Configuration
+        $workload = $entry.Workload
+        $report = $entry.Report
+        if ($configuration -notin $expectedConfigurations -or
+            $null -eq $workload -or $null -eq $report -or
+            [string]$report.LastDiagnostics.CaptureRun.Commit -cne
+                $RetainedCommit -or
+            (Get-Sha256 ([string]$entry.ReportPath)) -cne
+                [string]$entry.ReportSha256) {
+            throw "Hotspot discovery report identity is incomplete."
+        }
+        $cpuFrame = Get-Timing $report "cpu" "p95"
+        $gpuFrame = Get-Timing $report "gpu" "p95"
+        if (-not [double]::IsFinite($cpuFrame) -or $cpuFrame -le 0.0 -or
+            -not [double]::IsFinite($gpuFrame) -or $gpuFrame -le 0.0) {
+            throw "Hotspot discovery requires finite positive CPU and GPU frame p95 timings."
+        }
+        $reportRows.Add([pscustomobject][ordered]@{
+            configuration = $configuration
+            workloadId = [string]$workload.id
+            scene = [string]$workload.scene
+            reportPath = [System.IO.Path]::GetFullPath(
+                [string]$entry.ReportPath)
+            reportSha256 = [string]$entry.ReportSha256
+            cpuFrameP95Milliseconds = $cpuFrame
+            gpuFrameP95Milliseconds = $gpuFrame
+            buildIdentity = $entry.BuildIdentity
+            frozenVerifierEvidence = $report.CampaignFrozenVerifierEvidence
+        })
+        foreach ($domain in @("gpu", "cpu")) {
+            $stats = if ($domain -eq "gpu") {
+                @($report.GpuPasses)
+            } else {
+                @($report.CpuStages)
+            }
+            $names = [System.Collections.Generic.HashSet[string]]::new(
+                [StringComparer]::Ordinal)
+            $frameP95 = if ($domain -eq "gpu") { $gpuFrame } else { $cpuFrame }
+            foreach ($stat in $stats) {
+                $name = [string]$stat.Name
+                $p95 = [double]$stat.P95Milliseconds
+                if ([string]::IsNullOrWhiteSpace($name) -or
+                    -not $names.Add($name) -or
+                    -not [double]::IsFinite($p95) -or $p95 -lt 0.0) {
+                    throw "Hotspot discovery encountered malformed or duplicate $domain timing '$name'."
+                }
+                if ($p95 -le 0.0) { continue }
+                $observations.Add([pscustomobject][ordered]@{
+                    domain = $domain
+                    name = $name
+                    configuration = $configuration
+                    workloadId = [string]$workload.id
+                    scene = [string]$workload.scene
+                    p95Milliseconds = $p95
+                    frameP95Milliseconds = $frameP95
+                    sharePercent = ($p95 / $frameP95) * 100.0
+                })
+            }
+        }
+    }
+    $expectedReportKeys = @($expectedConfigurations | ForEach-Object {
+        $configuration = [string]$_
+        @($Manifest.workloads | ForEach-Object {
+            "${configuration}::$([string]$_.id)"
+        })
+    })
+    $actualReportKeys = @($reportRows | ForEach-Object {
+        "$([string]$_.configuration)::$([string]$_.workloadId)"
+    })
+    if (($actualReportKeys -join "`n") -cne ($expectedReportKeys -join "`n")) {
+        throw "Hotspot discovery report order/topology differs from the manifest."
+    }
+
+    $grouped = [ordered]@{}
+    foreach ($observation in $observations) {
+        $key = "$([string]$observation.domain)`0$([string]$observation.name)"
+        if (-not $grouped.Contains($key)) {
+            $grouped[$key] = [System.Collections.Generic.List[object]]::new()
+        }
+        $grouped[$key].Add($observation)
+    }
+    $eligible = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in $grouped.GetEnumerator()) {
+        $rows = @($entry.Value)
+        $claims = [System.Collections.Generic.List[object]]::new()
+        foreach ($scene in @("Bistro", "Sponza")) {
+            $sceneCandidates = [System.Collections.Generic.List[object]]::new()
+            $sceneRows = @($rows | Where-Object {
+                [string]$_.scene -ceq $scene
+            })
+            foreach ($workloadId in @($sceneRows.workloadId |
+                    Sort-Object -Unique)) {
+                $workloadRows = @($sceneRows | Where-Object {
+                    [string]$_.workloadId -ceq [string]$workloadId
+                })
+                $configurations = @($workloadRows.configuration |
+                    Sort-Object -Unique)
+                if (($configurations -join "`n") -cne
+                    (@($expectedConfigurations | Sort-Object) -join "`n")) {
+                    continue
+                }
+                $sceneCandidates.Add([pscustomobject]@{
+                    Scene = $scene
+                    WorkloadId = [string]$workloadId
+                    MaximumP95Milliseconds = [double](
+                        $workloadRows.p95Milliseconds |
+                            Measure-Object -Maximum).Maximum
+                    MaximumSharePercent = [double](
+                        $workloadRows.sharePercent |
+                            Measure-Object -Maximum).Maximum
+                })
+            }
+            $selected = @($sceneCandidates | Sort-Object `
+                @{ Expression = "MaximumP95Milliseconds"; Descending = $true },
+                @{ Expression = "MaximumSharePercent"; Descending = $true },
+                @{ Expression = "WorkloadId"; Descending = $false } |
+                Select-Object -First 1)
+            if ($selected.Count -eq 1) {
+                $claims.Add([pscustomobject][ordered]@{
+                    scene = [string]$selected[0].Scene
+                    workloadId = [string]$selected[0].WorkloadId
+                })
+            }
+        }
+        $maximumP95 = [double]($rows.p95Milliseconds |
+            Measure-Object -Maximum).Maximum
+        $maximumShare = [double]($rows.sharePercent |
+            Measure-Object -Maximum).Maximum
+        $meetsThreshold = $maximumP95 -ge
+                [double]$Manifest.discoveryPolicy.minimumP95Milliseconds -or
+            $maximumShare -ge
+                [double]$Manifest.discoveryPolicy.minimumSharePercent
+        if ($claims.Count -ne 2 -or -not $meetsThreshold) { continue }
+        $domain = [string]$rows[0].domain
+        $eligible.Add([pscustomobject][ordered]@{
+            domain = $domain
+            name = [string]$rows[0].name
+            maximumP95Milliseconds = $maximumP95
+            maximumSharePercent = $maximumShare
+            domainOrder = if ($domain -eq "gpu") { 0 } else { 1 }
+            claims = @($claims)
+        })
+    }
+    $ranked = @($eligible | Sort-Object `
+        @{ Expression = "MaximumP95Milliseconds"; Descending = $true },
+        @{ Expression = "MaximumSharePercent"; Descending = $true },
+        @{ Expression = "DomainOrder"; Descending = $false },
+        @{ Expression = "Name"; Descending = $false })
+    $rank = 0
+    $rankedRows = @($ranked | ForEach-Object {
+        $rank++
+        [pscustomobject][ordered]@{
+            rank = $rank
+            domain = [string]$_.domain
+            name = [string]$_.name
+            maximumP95Milliseconds = [double]$_.maximumP95Milliseconds
+            maximumSharePercent = [double]$_.maximumSharePercent
+            claims = @($_.claims)
+        }
+    })
+    return [pscustomobject][ordered]@{
+        schema = "njulf-perf-hotspot-discovery/v1"
+        campaignId = [string]$Manifest.campaignId
+        manifestSha256 = Get-AdmittedCampaignManifestSha256
+        retainedCommit = $RetainedCommit
+        createdAtUtc = $CreatedAtUtc.ToString("O")
+        configurations = @($expectedConfigurations)
+        policy = $Manifest.discoveryPolicy
+        reports = @($reportRows)
+        eligibleHotspots = @($rankedRows)
+        recommendedHotspot = if ($rankedRows.Count -eq 0) {
+            $null
+        } else { $rankedRows[0] }
+    }
+}
+
+function Assert-HotspotDiscoveryArtifact {
+    param(
+        $Manifest,
+        $Lock,
+        [string]$Path,
+        [string]$ExpectedSha256,
+        [string]$ExpectedRetainedCommit,
+        [string]$Label)
+    $fullPath = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath($Path)) "$Label path"
+    if (-not (Test-PathContainedBy $fullPath $script:RunRoot)) {
+        throw "$Label must be contained by the admitted campaign run root."
+    }
+    $read = Read-StrictJsonFile $fullPath 8MB $Label
+    if ([string]$read.Sha256 -cne $ExpectedSha256) {
+        throw "$Label SHA-256 differs from its admitted identity."
+    }
+    $artifact = $read.Value
+    Assert-ExactPropertyNames $artifact @(
+        "schema", "campaignId", "manifestSha256", "retainedCommit",
+        "createdAtUtc", "configurations", "policy", "reports",
+        "eligibleHotspots", "recommendedHotspot") $Label
+    $createdAt = [DateTimeOffset]::MinValue
+    if ([string]$artifact.schema -cne "njulf-perf-hotspot-discovery/v1" -or
+        [string]$artifact.campaignId -cne [string]$Manifest.campaignId -or
+        [string]$artifact.manifestSha256 -cne
+            (Get-AdmittedCampaignManifestSha256) -or
+        [string]$artifact.retainedCommit -cne $ExpectedRetainedCommit -or
+        -not [DateTimeOffset]::TryParseExact(
+            [string]$artifact.createdAtUtc,
+            "O",
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind,
+            [ref]$createdAt) -or
+        ((@($artifact.configurations) -join "`n") -cne
+         (@(Get-CampaignConfigurations $Manifest) -join "`n")) -or
+        (($artifact.policy | ConvertTo-Json -Depth 8 -Compress) -cne
+         ($Manifest.discoveryPolicy | ConvertTo-Json -Depth 8 -Compress))) {
+        throw "$Label envelope differs from the admitted campaign contract."
+    }
+    $expectedCount = @(Get-CampaignConfigurations $Manifest).Count *
+        @($Manifest.workloads).Count
+    $rows = @($artifact.reports)
+    if ($rows.Count -ne $expectedCount) {
+        throw "$Label report topology differs."
+    }
+    $entries = [System.Collections.Generic.List[object]]::new()
+    $rowIndex = 0
+    foreach ($configuration in @(Get-CampaignConfigurations $Manifest)) {
+        $verifierBuild = Get-ReferenceBuildIdentity $Lock $configuration
+        foreach ($workload in @($Manifest.workloads)) {
+            $row = $rows[$rowIndex]
+            Assert-ExactPropertyNames $row @(
+                "configuration", "workloadId", "scene", "reportPath",
+                "reportSha256", "cpuFrameP95Milliseconds",
+                "gpuFrameP95Milliseconds", "buildIdentity",
+                "frozenVerifierEvidence") "$Label report $rowIndex"
+            if ([string]$row.configuration -cne $configuration -or
+                [string]$row.workloadId -cne [string]$workload.id -or
+                [string]$row.scene -cne [string]$workload.scene) {
+                throw "$Label report $rowIndex is reordered or relabeled."
+            }
+            $reportPath = Assert-NoLinkedPathComponents `
+                ([System.IO.Path]::GetFullPath([string]$row.reportPath)) `
+                "$Label report $rowIndex path"
+            if (-not (Test-PathContainedBy $reportPath $script:RunRoot) -or
+                (Get-Sha256 $reportPath) -cne [string]$row.reportSha256) {
+                throw "$Label report $rowIndex bytes differ."
+            }
+            Assert-BuildIdentity $row.buildIdentity `
+                "$Label report $rowIndex build"
+            $report = Read-BenchmarkReport $reportPath
+            $reference = Get-ReferenceLockEntry `
+                $Lock $configuration ([string]$workload.id)
+            $candidatePfm = [System.IO.Path]::ChangeExtension(
+                $reportPath, ".hdr.pfm")
+            Assert-BenchmarkReport `
+                $Manifest $workload $report $configuration `
+                "$Label report $rowIndex" $false `
+                ([string]$report.CaptureContract.PairId) `
+                $ExpectedRetainedCommit $row.buildIdentity $reference $candidatePfm
+            $null = Assert-TimingFrozenVerifierEvidence `
+                $workload $report $reportPath $row.frozenVerifierEvidence `
+                $verifierBuild "$Label report $rowIndex"
+            $report | Add-Member `
+                -NotePropertyName CampaignFrozenVerifierEvidence `
+                -NotePropertyValue $row.frozenVerifierEvidence
+            $entries.Add([pscustomobject]@{
+                Configuration = $configuration
+                Workload = $workload
+                ReportPath = $reportPath
+                ReportSha256 = [string]$row.reportSha256
+                Report = $report
+                BuildIdentity = $row.buildIdentity
+            })
+            $rowIndex++
+        }
+    }
+    $recomputed = New-HotspotDiscoveryData `
+        $Manifest @($entries) $ExpectedRetainedCommit $createdAt
+    if (($recomputed | ConvertTo-Json -Depth 32 -Compress) -cne
+        ($artifact | ConvertTo-Json -Depth 32 -Compress)) {
+        throw "$Label differs from independently recomputed hotspot evidence."
+    }
+    Assert-CampaignLockIntegrity
+    Assert-ProtectedFingerprints $script:ProtectedFingerprints
+    return $artifact
+}
+
+function Assert-ReferenceTargetHypothesisPasses {
+    param($Manifest, $ConfigurationReferences, [string]$Label)
+    foreach ($hypothesis in @($Manifest.targetHypotheses)) {
+        foreach ($claim in @($hypothesis.claims)) {
+            $workloadId = [string]$claim.workloadId
+            $property = $ConfigurationReferences.PSObject.Properties[$workloadId]
+            $entry = if ($null -eq $property) {
+                $ConfigurationReferences[$workloadId]
+            } else { $property.Value }
+            if ($null -eq $entry) {
+                throw "$Label target claim '$workloadId' has no reference."
+            }
+            $report = Read-BenchmarkReport ([string]$entry.reportPath)
+            $p95 = Get-ScopedTiming `
+                $report ([string]$hypothesis.targetDomain) `
+                ([string]$hypothesis.targetPass)
+            if ($null -eq $p95 -or
+                -not [double]::IsFinite([double]$p95) -or
+                [double]$p95 -le 0.0) {
+                throw "$Label target hypothesis '$($hypothesis.id)' claim " +
+                    "'$workloadId' lacks finite positive '$($hypothesis.targetPass)' timing."
+            }
+        }
+    }
+}
+
+function Get-TargetHypothesis {
+    param($Manifest, [string]$HypothesisId)
+    $id = if ([string]::IsNullOrWhiteSpace($HypothesisId)) {
+        [string]@($Manifest.targetHypotheses)[0].id
+    } else { $HypothesisId }
+    $matches = @($Manifest.targetHypotheses | Where-Object {
+        [string]$_.id -ceq $id
+    })
+    if ($matches.Count -ne 1) {
+        throw "Target hypothesis '$id' was not found."
+    }
+    return $matches[0]
+}
+
+function Get-ReviewedCandidate {
+    param($Manifest, [string]$Id)
+    Assert-Text $Id "CandidateId"
+    $matches = @($Manifest.candidates | Where-Object {
+        [string]$_.id -ceq $Id
+    })
+    if ($matches.Count -ne 1) {
+        throw "Reviewed candidate '$Id' was not found in the pinned manifest."
+    }
+    return $matches[0]
+}
+
+function New-ReviewedCandidateDecisionIdentity {
+    param($Candidate)
+    return [pscustomobject][ordered]@{
+        kind = "reviewed"
+        id = [string]$Candidate.id
+        sourceCommit = [string]$Candidate.sourceCommit
+        patchId = [string]$Candidate.patchId
+        allowedPaths = @($Candidate.allowedPaths | ForEach-Object { [string]$_ })
+        focusedTestFilter = [string]$Candidate.focusedTestFilter
+        envelopePath = ""
+        envelopeSha256 = ""
+        discoveryArtifactPath = ""
+        discoveryArtifactSha256 = ""
+    }
+}
+
+function Read-CandidateEnvelope {
+    param(
+        $Manifest,
+        $Lock,
+        [string]$Path,
+        [string]$ExpectedAcceptedHead,
+        [bool]$InitialAdmission,
+        [string]$ExpectedSha256 = "")
+    $fullPath = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath($Path)) "Candidate envelope"
+    if (-not (Test-PathContainedBy $fullPath $script:RunRoot)) {
+        throw "Candidate envelope must be contained by the admitted run root."
+    }
+    $read = Read-StrictJsonFile $fullPath 1MB "Candidate envelope"
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256) -and
+        [string]$read.Sha256 -cne $ExpectedSha256) {
+        throw "Candidate envelope bytes differ from the admitted SHA-256."
+    }
+    $envelope = $read.Value
+    Assert-ExactPropertyNames $envelope @(
+        "schema", "campaignId", "manifestSha256", "lockSha256",
+        "acceptedHead", "discoveryArtifactPath", "discoveryArtifactSha256",
+        "hotspot", "attempt", "candidate") "Candidate envelope"
+    Assert-ExactPropertyNames $envelope.hotspot @(
+        "rank", "domain", "name", "maximumP95Milliseconds",
+        "maximumSharePercent", "claims") "Candidate envelope hotspot"
+    Assert-ExactPropertyNames $envelope.candidate @(
+        "id", "sourceCommit", "patchId", "allowedPaths",
+        "focusedTestFilter") "Candidate envelope candidate"
+    $textFields = [ordered]@{
+        schema = $envelope.schema
+        campaignId = $envelope.campaignId
+        manifestSha256 = $envelope.manifestSha256
+        lockSha256 = $envelope.lockSha256
+        acceptedHead = $envelope.acceptedHead
+        discoveryArtifactPath = $envelope.discoveryArtifactPath
+        discoveryArtifactSha256 = $envelope.discoveryArtifactSha256
+        "hotspot.domain" = $envelope.hotspot.domain
+        "hotspot.name" = $envelope.hotspot.name
+        "candidate.id" = $envelope.candidate.id
+        "candidate.sourceCommit" = $envelope.candidate.sourceCommit
+        "candidate.patchId" = $envelope.candidate.patchId
+        "candidate.focusedTestFilter" = $envelope.candidate.focusedTestFilter
+    }
+    foreach ($textField in $textFields.GetEnumerator()) {
+        $null = Assert-JsonString $textField.Value `
+            "Candidate envelope $($textField.Key)"
+    }
+    $null = Assert-JsonInteger $envelope.attempt "Candidate envelope attempt" 1
+    $null = Assert-JsonInteger $envelope.hotspot.rank `
+        "Candidate envelope hotspot rank" 1
+    $null = Assert-JsonArray $envelope.hotspot.claims `
+        "Candidate envelope hotspot claims"
+    $null = Assert-JsonArray $envelope.candidate.allowedPaths `
+        "Candidate envelope candidate allowedPaths"
+    $numberFields = [ordered]@{
+        maximumP95Milliseconds = $envelope.hotspot.maximumP95Milliseconds
+        maximumSharePercent = $envelope.hotspot.maximumSharePercent
+    }
+    foreach ($numberField in $numberFields.GetEnumerator()) {
+        if ($numberField.Value -is [string] -or
+            -not [double]::IsFinite([double]$numberField.Value) -or
+            [double]$numberField.Value -le 0.0) {
+            throw "Candidate envelope hotspot $($numberField.Key) must be a finite positive JSON number."
+        }
+    }
+    if ([string]$envelope.schema -cne "njulf-perf-candidate-envelope/v1" -or
+        [string]$envelope.campaignId -cne [string]$Manifest.campaignId -or
+        [string]$envelope.manifestSha256 -cne
+            (Get-AdmittedCampaignManifestSha256) -or
+        [string]$envelope.lockSha256 -cne $script:CampaignLockSha256 -or
+        [string]$envelope.acceptedHead -cne $ExpectedAcceptedHead -or
+        [int]$envelope.attempt -ne 1) {
+        throw "Candidate envelope identity differs from the admitted campaign."
+    }
+    $discoveryPath = [System.IO.Path]::GetFullPath(
+        [string]$envelope.discoveryArtifactPath)
+    $discovery = Assert-HotspotDiscoveryArtifact `
+        $Manifest $Lock $discoveryPath `
+        ([string]$envelope.discoveryArtifactSha256) $ExpectedAcceptedHead `
+        "Candidate discovery"
+    $eligible = @($discovery.eligibleHotspots)
+    $hotspotMatches = @($eligible | Where-Object {
+        ($_ | ConvertTo-Json -Depth 8 -Compress) -ceq
+            ($envelope.hotspot | ConvertTo-Json -Depth 8 -Compress)
+    })
+    if ($hotspotMatches.Count -ne 1) {
+        throw "Candidate hotspot is not one exact authenticated eligible row."
+    }
+    if ($InitialAdmission) {
+        $next = @($eligible | Where-Object {
+            -not (Test-TimingAttemptReserved `
+                $Manifest ([string]$_.domain) ([string]$_.name))
+        } | Select-Object -First 1)
+        if ($next.Count -ne 1 -or
+            (($next[0] | ConvertTo-Json -Depth 8 -Compress) -cne
+             ($envelope.hotspot | ConvertTo-Json -Depth 8 -Compress))) {
+            throw "Candidate envelope does not target the highest-ranked unattempted hotspot."
+        }
+    }
+    $candidate = $envelope.candidate
+    $allowedPaths = @($candidate.allowedPaths | ForEach-Object { [string]$_ })
+    if ([string]$candidate.id -cnotmatch '^auto-[a-z0-9][a-z0-9-]{2,63}$' -or
+        [string]$candidate.sourceCommit -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$candidate.patchId -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]::IsNullOrWhiteSpace([string]$candidate.focusedTestFilter) -or
+        $allowedPaths.Count -lt 1 -or $allowedPaths.Count -gt 8 -or
+        (@($allowedPaths | Sort-Object -Unique)).Count -ne $allowedPaths.Count -or
+        (Get-StablePatchId ([string]$candidate.sourceCommit)) -cne
+            [string]$candidate.patchId -or
+        (@(Get-CommitChangedPaths ([string]$candidate.sourceCommit)) -join "`n") -cne
+            ($allowedPaths -join "`n")) {
+        throw "Candidate envelope patch identity is malformed or unbounded."
+    }
+    $parentFields = @((Get-GitText @(
+        "rev-list", "--parents", "-n", "1", [string]$candidate.sourceCommit)) -split '\s+')
+    if ($parentFields.Count -ne 2 -or
+        [string]$parentFields[1] -cne $ExpectedAcceptedHead) {
+        throw "Automatic candidate must be one non-merge commit on the admitted head."
+    }
+    $changedLines = 0
+    foreach ($line in @(Invoke-Git @(
+                "diff", "--numstat", "$ExpectedAcceptedHead..$([string]$candidate.sourceCommit)"))) {
+        $fields = @(([string]$line) -split "`t")
+        if ($fields.Count -ne 3 -or $fields[0] -notmatch '^\d+$' -or
+            $fields[1] -notmatch '^\d+$') {
+            throw "Automatic candidate contains a binary or malformed diff."
+        }
+        $changedLines += [int]$fields[0] + [int]$fields[1]
+    }
+    if ($changedLines -gt 1200) {
+        throw "Automatic candidate exceeds the 1,200-line bounded patch limit."
+    }
+    $automaticSourceExtensions = [System.Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($extension in @(
+            ".cs", ".comp", ".frag", ".vert", ".geom", ".tesc", ".tese",
+            ".glsl", ".mesh", ".task")) {
+        [void]$automaticSourceExtensions.Add($extension)
+    }
+    foreach ($relativePath in $allowedPaths) {
+        if ([System.IO.Path]::IsPathRooted($relativePath) -or
+            $relativePath.Contains("..", [StringComparison]::Ordinal) -or
+            $relativePath.Contains("\", [StringComparison]::Ordinal)) {
+            throw "Automatic candidate path '$relativePath' is not canonical."
+        }
+        if (-not $automaticSourceExtensions.Contains(
+                [System.IO.Path]::GetExtension($relativePath))) {
+            throw "Automatic candidate path '$relativePath' is not an admitted source extension; build, package, and campaign wiring are immutable."
+        }
+        $fullCandidatePath = Resolve-SolutionPath $relativePath
+        foreach ($protectedPath in $script:ProtectedFingerprints.Keys) {
+            if ([string]::Equals(
+                    $fullCandidatePath, [string]$protectedPath,
+                    [StringComparison]::OrdinalIgnoreCase) -or
+                (Test-PathContainedBy $fullCandidatePath ([string]$protectedPath))) {
+                throw "Automatic candidate path '$relativePath' intersects a protected root."
+            }
+        }
+    }
+    $identityHash = Get-Sha256Text (
+        "$([string]$envelope.hotspot.domain)`0$([string]$envelope.hotspot.name)")
+    $hypothesis = [pscustomobject][ordered]@{
+        id = "auto-$($identityHash.Substring(0, 16))"
+        targetDomain = [string]$envelope.hotspot.domain
+        targetPass = [string]$envelope.hotspot.name
+        claims = @($envelope.hotspot.claims)
+    }
+    $decisionIdentity = [pscustomobject][ordered]@{
+        kind = "discovered"
+        id = [string]$candidate.id
+        sourceCommit = [string]$candidate.sourceCommit
+        patchId = [string]$candidate.patchId
+        allowedPaths = $allowedPaths
+        focusedTestFilter = [string]$candidate.focusedTestFilter
+        envelopePath = $fullPath
+        envelopeSha256 = [string]$read.Sha256
+        discoveryArtifactPath = $discoveryPath
+        discoveryArtifactSha256 = [string]$envelope.discoveryArtifactSha256
+    }
+    return [pscustomobject]@{
+        Candidate = $candidate
+        Hypothesis = $hypothesis
+        DecisionIdentity = $decisionIdentity
+        Envelope = $envelope
+    }
+}
+
+function New-AutomaticCandidateEnvelope {
+    param(
+        $Manifest,
+        $Lock,
+        [string]$DiscoveryPath,
+        [string]$Id,
+        [string]$SourceCommit,
+        [string]$FocusedTestFilter,
+        [string]$OutputPath,
+        [string]$AcceptedHead)
+    Assert-Text $Id "AutomaticCandidateId"
+    Assert-Text $SourceCommit "AutomaticCandidateSourceCommit"
+    Assert-Text $FocusedTestFilter "AutomaticCandidateFocusedTestFilter"
+    Assert-Text $OutputPath "CandidateEnvelopeOutputPath"
+    $fullDiscoveryPath = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath($DiscoveryPath)) `
+        "Automatic candidate discovery path"
+    $discoverySha256 = Get-Sha256 $fullDiscoveryPath
+    $discovery = Assert-HotspotDiscoveryArtifact `
+        $Manifest $Lock $fullDiscoveryPath $discoverySha256 $AcceptedHead `
+        "Automatic candidate discovery"
+    $next = @($discovery.eligibleHotspots | Where-Object {
+        -not (Test-TimingAttemptReserved `
+            $Manifest ([string]$_.domain) ([string]$_.name))
+    } | Select-Object -First 1)
+    if ($next.Count -ne 1) {
+        throw "No authenticated unattempted hotspot remains."
+    }
+    $candidatePaths = @(Get-CommitChangedPaths $SourceCommit)
+    $envelope = [pscustomobject][ordered]@{
+        schema = "njulf-perf-candidate-envelope/v1"
+        campaignId = [string]$Manifest.campaignId
+        manifestSha256 = Get-AdmittedCampaignManifestSha256
+        lockSha256 = $script:CampaignLockSha256
+        acceptedHead = $AcceptedHead
+        discoveryArtifactPath = $fullDiscoveryPath
+        discoveryArtifactSha256 = $discoverySha256
+        hotspot = $next[0]
+        attempt = 1
+        candidate = [pscustomobject][ordered]@{
+            id = $Id
+            sourceCommit = $SourceCommit
+            patchId = Get-StablePatchId $SourceCommit
+            allowedPaths = $candidatePaths
+            focusedTestFilter = $FocusedTestFilter
+        }
+    }
+    $fullOutputPath = [System.IO.Path]::GetFullPath($OutputPath)
+    if (-not (Test-PathContainedBy $fullOutputPath $script:RunRoot)) {
+        throw "Candidate envelope output must be contained by the admitted run root."
+    }
+    Write-JsonArtifact $fullOutputPath $envelope
+    try {
+        $admission = Read-CandidateEnvelope `
+            $Manifest $Lock $fullOutputPath $AcceptedHead $true
+    } catch {
+        if (Test-Path -LiteralPath $fullOutputPath -PathType Leaf) {
+            Remove-Item -LiteralPath $fullOutputPath -Force
+        }
+        throw
+    }
+    return [pscustomobject][ordered]@{
+        schema = "njulf-perf-candidate-envelope-preparation/v1"
+        path = $fullOutputPath
+        sha256 = Get-Sha256 $fullOutputPath
+        candidate = $admission.DecisionIdentity
+        hypothesis = $admission.Hypothesis
+    }
+}
+
+function Get-HypothesisWorkloads {
+    param($Manifest, [object[]]$Hypotheses)
+    $orderedIds = [System.Collections.Generic.List[string]]::new()
+    $claimsByWorkload = [ordered]@{}
+    foreach ($hypothesis in $Hypotheses) {
+        $manifestMatches = @($Manifest.targetHypotheses | Where-Object {
+            [string]$_.id -ceq [string]$hypothesis.id
+        })
+        if ($manifestMatches.Count -eq 1) {
+            if (($manifestMatches[0] | ConvertTo-Json -Depth 8 -Compress) -cne
+                ($hypothesis | ConvertTo-Json -Depth 8 -Compress)) {
+                throw "Target hypothesis '$($hypothesis.id)' differs from the locked manifest."
+            }
+        } elseif ($manifestMatches.Count -ne 0 -or
+            [string]$hypothesis.id -cnotmatch '^auto-[0-9a-f]{16}$' -or
+            [string]$hypothesis.targetDomain -notin @("gpu", "cpu") -or
+            [string]::IsNullOrWhiteSpace([string]$hypothesis.targetPass) -or
+            @($hypothesis.claims).Count -ne 2) {
+            throw "Target hypothesis '$($hypothesis.id)' is not an admitted manifest or automatic hypothesis."
+        }
+        foreach ($claim in @($hypothesis.claims)) {
+            $workloadId = [string]$claim.workloadId
+            $workloadMatches = @($Manifest.workloads | Where-Object {
+                [string]$_.id -ceq $workloadId
+            })
+            if ($workloadMatches.Count -ne 1 -or
+                [string]$workloadMatches[0].scene -cne [string]$claim.scene) {
+                throw "Target hypothesis '$($hypothesis.id)' claim '$workloadId' differs from the workload topology."
+            }
+            if (-not $claimsByWorkload.Contains($workloadId)) {
+                $claimsByWorkload[$workloadId] =
+                    [System.Collections.Generic.List[object]]::new()
+                $orderedIds.Add($workloadId)
+            }
+            $claimsByWorkload[$workloadId].Add([pscustomobject][ordered]@{
+                hypothesisId = [string]$hypothesis.id
+                scene = [string]$claim.scene
+                workloadId = $workloadId
+                targetDomain = [string]$hypothesis.targetDomain
+                targetPass = [string]$hypothesis.targetPass
+            })
+        }
+    }
+    $result = @()
+    foreach ($workloadId in $orderedIds) {
+        $source = @($Manifest.workloads | Where-Object {
+            [string]$_.id -ceq $workloadId
+        })[0]
+        $copy = [ordered]@{}
+        foreach ($property in $source.PSObject.Properties) {
+            $copy[$property.Name] = $property.Value
+        }
+        $copy["campaignTargetClaims"] = @($claimsByWorkload[$workloadId])
+        $result += [pscustomobject]$copy
+    }
+    return @($result)
+}
+
+function Get-TargetPassPairedDifferences {
+    param($Workload, [object[]]$OrderedCycleReports)
+    if (($OrderedCycleReports.Count % 4) -ne 0) {
+        throw "Workload '$($Workload.id)' has an incomplete ABBA report topology."
+    }
+    $targets = @((Get-PropertyValue $Workload "campaignTargetClaims" @()) |
+        ForEach-Object {
+            [pscustomobject]@{
+                Domain = [string]$_.targetDomain
+                Name = [string]$_.targetPass
+                Identity = "{0}::{1}" -f
+                    [string]$_.targetDomain, [string]$_.targetPass
+            }
+        } | Sort-Object Identity -Unique)
+    $result = [ordered]@{}
+    foreach ($target in $targets) {
+        $differences = @()
+        for ($offset = 0;
+             $offset -lt $OrderedCycleReports.Count;
+             $offset += 4) {
+            $values = @(0, 1, 2, 3 | ForEach-Object {
+                Get-ScopedTiming `
+                    $OrderedCycleReports[$offset + $_] `
+                    ([string]$target.Domain) ([string]$target.Name)
+            })
+            if (@($values | Where-Object { $null -eq $_ }).Count -ne 0) {
+                throw "Workload '$($Workload.id)' lacks '$($target.Identity)' in one or more ABBA slots."
+            }
+            $differences += [double]$values[0] - [double]$values[1]
+            $differences += [double]$values[3] - [double]$values[2]
+        }
+        $result[[string]$target.Identity] = [double[]]$differences
+    }
+    return [pscustomobject]$result
+}
+
+function New-ConfigurationHypothesisResults {
+    param([object[]]$WinWorkloads, [object[]]$Comparisons)
+    $orderedHypothesisIds = [System.Collections.Generic.List[string]]::new()
+    $targetDomainByHypothesis = [ordered]@{}
+    $targetPassByHypothesis = [ordered]@{}
+    $claimsByHypothesis = [ordered]@{}
+    foreach ($workload in $WinWorkloads) {
+        $comparison = @($Comparisons | Where-Object {
+            [string]$_.Workload -ceq [string]$workload.id
+        })
+        if ($comparison.Count -ne 1) {
+            throw "Target workload '$($workload.id)' has no unique comparison."
+        }
+        foreach ($claim in @((Get-PropertyValue $workload "campaignTargetClaims" @()))) {
+            $hypothesisId = [string]$claim.hypothesisId
+            if (-not $claimsByHypothesis.Contains($hypothesisId)) {
+                $claimsByHypothesis[$hypothesisId] =
+                    [System.Collections.Generic.List[object]]::new()
+                $targetDomainByHypothesis[$hypothesisId] =
+                    [string]$claim.targetDomain
+                $targetPassByHypothesis[$hypothesisId] = [string]$claim.targetPass
+                $orderedHypothesisIds.Add($hypothesisId)
+            } elseif ([string]$targetDomainByHypothesis[$hypothesisId] -cne
+                    [string]$claim.targetDomain -or
+                [string]$targetPassByHypothesis[$hypothesisId] -cne
+                    [string]$claim.targetPass) {
+                throw "Target hypothesis '$hypothesisId' changed timing identity."
+            }
+            $matches = @($comparison[0].TargetClaimResults | Where-Object {
+                [string]$_.TargetHypothesisId -ceq $hypothesisId -and
+                [string]$_.Scene -ceq [string]$claim.scene -and
+                [string]$_.WorkloadId -ceq [string]$claim.workloadId -and
+                [string]$_.TargetDomain -ceq [string]$claim.targetDomain -and
+                [string]$_.TargetPass -ceq [string]$claim.targetPass
+            })
+            if ($matches.Count -ne 1) {
+                throw "Target hypothesis '$hypothesisId' claim '$($claim.workloadId)' has no unique result."
+            }
+            $claimsByHypothesis[$hypothesisId].Add($matches[0])
+        }
+    }
+    $results = @()
+    foreach ($hypothesisId in $orderedHypothesisIds) {
+        $claims = @($claimsByHypothesis[$hypothesisId])
+        $decision = if ($claims.Count -eq 2 -and
+            @($claims | Where-Object {
+                [string]$_.Decision -cne "keep"
+            }).Count -eq 0) { "keep" } else { "rollback" }
+        $results += [pscustomobject]@{
+            TargetHypothesisId = $hypothesisId
+            TargetDomain = [string]$targetDomainByHypothesis[$hypothesisId]
+            TargetPass = [string]$targetPassByHypothesis[$hypothesisId]
+            Decision = $decision
+            Claims = @($claims)
+        }
+    }
+    return @($results)
 }
 
 function Get-ImprovementPercent {
@@ -3153,7 +6273,14 @@ function Compare-WorkloadCaptures {
         $BaselineReports,
         $CandidateReports,
         [double[]]$PairedDifferences,
+        $TargetPassPairedDifferences,
         [bool]$RequireWin)
+    $expectedPairCount = [int]$Manifest.capture.abbaCycles * 2
+    if (@($BaselineReports).Count -ne $expectedPairCount -or
+        @($CandidateReports).Count -ne $expectedPairCount -or
+        $PairedDifferences.Count -ne $expectedPairCount) {
+        throw "Workload '$($Workload.id)' has incomplete ABBA report/pair evidence; expected $expectedPairCount per phase."
+    }
     Assert-CrossBuildIdentity $BaselineReports $CandidateReports ([string]$Workload.id)
     $metrics = [ordered]@{}
     foreach ($metric in @("cpu", "gpu")) {
@@ -3169,7 +6296,7 @@ function Compare-WorkloadCaptures {
     $candidateBottleneck = [Math]::Max($metrics["cpu-p95"].Candidate, $metrics["gpu-p95"].Candidate)
     $frameImprovementMs = $baselineBottleneck - $candidateBottleneck
     $frameImprovementPercent = Get-ImprovementPercent $baselineBottleneck $candidateBottleneck
-    $bootstrapLower = Get-BootstrapLowerBound `
+    $frameBootstrapLower = Get-BootstrapLowerBound `
         $PairedDifferences `
         ([int]$Manifest.acceptance.bootstrapSamples) `
         ([double]$Manifest.acceptance.bootstrapConfidence)
@@ -3181,35 +6308,77 @@ function Compare-WorkloadCaptures {
         }
     }
 
-    $targetPass = [string](Get-PropertyValue $Workload "targetPass" "")
-    $passBaseline = $null
-    $passCandidate = $null
-    $passImprovementMs = 0.0
-    $passImprovementPercent = 0.0
-    if (-not [string]::IsNullOrWhiteSpace($targetPass)) {
-        $baselineValues = @($BaselineReports | ForEach-Object { Get-PassTiming $_ $targetPass } | Where-Object { $null -ne $_ })
-        $candidateValues = @($CandidateReports | ForEach-Object { Get-PassTiming $_ $targetPass } | Where-Object { $null -ne $_ })
+    $targetClaims = @((Get-PropertyValue $Workload "campaignTargetClaims" @()))
+    if ($RequireWin -and $targetClaims.Count -eq 0) {
+        throw "Target workload '$($Workload.id)' has no authenticated hypothesis claim."
+    }
+    if (-not $RequireWin -and $targetClaims.Count -ne 0) {
+        throw "Non-target workload '$($Workload.id)' unexpectedly carries target claims."
+    }
+    $frameWin =
+        $frameImprovementPercent -ge [double]$Manifest.acceptance.minimumFrameImprovementPercent -and
+        $frameImprovementMs -ge [double]$Manifest.acceptance.minimumFrameImprovementMilliseconds -and
+        $frameBootstrapLower -gt 0.0
+    $targetClaimResults = @()
+    foreach ($claim in $targetClaims) {
+        $targetDomain = [string]$claim.targetDomain
+        $targetPass = [string]$claim.targetPass
+        $targetIdentity = "${targetDomain}::${targetPass}"
+        $baselineValues = @($BaselineReports | ForEach-Object {
+            Get-ScopedTiming $_ $targetDomain $targetPass
+        } | Where-Object { $null -ne $_ })
+        $candidateValues = @($CandidateReports | ForEach-Object {
+            Get-ScopedTiming $_ $targetDomain $targetPass
+        } | Where-Object { $null -ne $_ })
         $allPassValues = @($baselineValues) + @($candidateValues)
         if ($baselineValues.Count -ne @($BaselineReports).Count -or
             $candidateValues.Count -ne @($CandidateReports).Count -or
             @($allPassValues | Where-Object {
                 -not [double]::IsFinite([double]$_) -or [double]$_ -le 0.0
             }).Count -ne 0) {
-            throw "Workload '$($Workload.id)' lacks a finite positive '$targetPass' sample in every ABBA slot."
+            throw "Workload '$($Workload.id)' lacks a finite positive '$targetIdentity' sample in every ABBA slot."
         }
         $passBaseline = Get-Median $baselineValues
         $passCandidate = Get-Median $candidateValues
         $passImprovementMs = $passBaseline - $passCandidate
         $passImprovementPercent = Get-ImprovementPercent $passBaseline $passCandidate
+        $differenceProperty =
+            $TargetPassPairedDifferences.PSObject.Properties[$targetIdentity]
+        $passDifferences = if ($null -eq $differenceProperty) {
+            @($TargetPassPairedDifferences[$targetIdentity])
+        } else { @($differenceProperty.Value) }
+        if ($passDifferences.Count -ne $PairedDifferences.Count) {
+            throw "Target timing '$targetIdentity' has incomplete paired differences."
+        }
+        $passBootstrapLower = Get-BootstrapLowerBound `
+            ([double[]]$passDifferences) `
+            ([int]$Manifest.acceptance.bootstrapSamples) `
+            ([double]$Manifest.acceptance.bootstrapConfidence)
+        $passWin =
+            $passImprovementPercent -ge
+                [double]$Manifest.acceptance.minimumPassImprovementPercent -and
+            $passImprovementMs -ge
+                [double]$Manifest.acceptance.minimumPassImprovementMilliseconds -and
+            $passBootstrapLower -gt 0.0 -and
+            $candidateBottleneck -le $baselineBottleneck
+        $targetClaimResults += [pscustomobject]@{
+            TargetHypothesisId = [string]$claim.hypothesisId
+            Scene = [string]$claim.scene
+            WorkloadId = [string]$Workload.id
+            TargetDomain = $targetDomain
+            TargetPass = $targetPass
+            TargetPassPairedDifferencesMilliseconds = @(
+                $passDifferences | ForEach-Object { [double]$_ })
+            TargetPassBootstrapLower95Milliseconds = $passBootstrapLower
+            TargetPassBaselineP95Milliseconds = $passBaseline
+            TargetPassCandidateP95Milliseconds = $passCandidate
+            TargetPassImprovementMilliseconds = $passImprovementMs
+            TargetPassImprovementPercent = $passImprovementPercent
+            FrameWin = $frameWin
+            PassWin = $passWin
+            Decision = if ($frameWin -or $passWin) { "keep" } else { "rollback" }
+        }
     }
-
-    $frameWin =
-        $frameImprovementPercent -ge [double]$Manifest.acceptance.minimumFrameImprovementPercent -and
-        $frameImprovementMs -ge [double]$Manifest.acceptance.minimumFrameImprovementMilliseconds
-    $passWin = $null -ne $passBaseline -and
-        $passImprovementPercent -ge [double]$Manifest.acceptance.minimumPassImprovementPercent -and
-        $passImprovementMs -ge [double]$Manifest.acceptance.minimumPassImprovementMilliseconds -and
-        $candidateBottleneck -le $baselineBottleneck
     $qualityRepeatability = [pscustomobject]@{
         BaselineRelativeRmseMaximum = [double](@($BaselineReports | ForEach-Object { [double]$_.HdrDifference.RelativeRmse } | Measure-Object -Maximum).Maximum)
         CandidateRelativeRmseMaximum = [double](@($CandidateReports | ForEach-Object { [double]$_.HdrDifference.RelativeRmse } | Measure-Object -Maximum).Maximum)
@@ -3263,6 +6432,12 @@ function Compare-WorkloadCaptures {
             $qualityRepeatability.BaselineFlipP95Maximum -or
         $roiRegression
 
+    if ($regressions.Count -ne 0 -or $qualityRegression) {
+        foreach ($claimResult in $targetClaimResults) {
+            $claimResult.Decision = "rollback"
+        }
+    }
+
     $decision = "rollback"
     $reason = if ($RequireWin) {
         "no statistically supported frame or isolated-pass win"
@@ -3276,15 +6451,11 @@ function Compare-WorkloadCaptures {
     } elseif (-not $RequireWin) {
         $decision = "keep"
         $reason = "strict quality and cross-metric non-regression passed"
-    } elseif ($bootstrapLower -le 0.0) {
-        $reason = "paired bootstrap 95% lower bound is not positive ($bootstrapLower ms)"
-    } elseif ($frameWin -or $passWin) {
+    } elseif (@($targetClaimResults | Where-Object {
+            [string]$_.Decision -cne "keep"
+        }).Count -eq 0) {
         $decision = "keep"
-        $reason = if ($frameWin) {
-            "frame P95 improved by $([Math]::Round($frameImprovementPercent, 3))% / $([Math]::Round($frameImprovementMs, 3)) ms"
-        } else {
-            "$targetPass improved by $([Math]::Round($passImprovementPercent, 3))% / $([Math]::Round($passImprovementMs, 3)) ms"
-        }
+        $reason = "every authenticated target claim has an independent frame or pass win"
     }
     return [pscustomobject]@{
         Workload = [string]$Workload.id
@@ -3295,12 +6466,10 @@ function Compare-WorkloadCaptures {
         CandidateBottleneckP95Milliseconds = $candidateBottleneck
         FrameImprovementMilliseconds = $frameImprovementMs
         FrameImprovementPercent = $frameImprovementPercent
-        BootstrapLower95Milliseconds = $bootstrapLower
-        TargetPass = $targetPass
-        TargetPassBaselineP95Milliseconds = $passBaseline
-        TargetPassCandidateP95Milliseconds = $passCandidate
-        TargetPassImprovementMilliseconds = $passImprovementMs
-        TargetPassImprovementPercent = $passImprovementPercent
+        FramePairedDifferencesMilliseconds = @(
+            $PairedDifferences | ForEach-Object { [double]$_ })
+        FrameBootstrapLower95Milliseconds = $frameBootstrapLower
+        TargetClaimResults = @($targetClaimResults)
         Metrics = $metrics
         Regressions = $regressions
         QualityRepeatability = $qualityRepeatability
@@ -3329,6 +6498,7 @@ function Invoke-AbbaWorkload {
         $Workload,
         $BaselineBuild,
         $CandidateBuild,
+        $VerifierBuildIdentity,
         [string]$Configuration,
         [int]$Iteration,
         [string]$Stage,
@@ -3343,6 +6513,7 @@ function Invoke-AbbaWorkload {
     $baselinePhaseIdentity = $null
     $candidatePhaseIdentity = $null
     $pairedDifferences = @()
+    $orderedCycleReports = @()
     $slotEvidence = @()
     $root = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
         Join-Path $script:RunRoot (
@@ -3371,6 +6542,7 @@ function Invoke-AbbaWorkload {
                 -Manifest $Manifest `
                 -Workload $Workload `
                 -BuildIdentity $entry.Build `
+                -VerifierBuildIdentity $VerifierBuildIdentity `
                 -Configuration $Configuration `
                 -ReportPath $reportPath `
                 -PairId $pairId `
@@ -3416,6 +6588,7 @@ function Invoke-AbbaWorkload {
                     [string]$ReferenceEntry.qualityContractSha256
                 buildRootPath = [System.IO.Path]::GetFullPath(
                     [string]$entry.Build.RootPath)
+                buildIdentity = $entry.Build
                 buildBundleFingerprint = [string]$entry.Build.BundleFingerprint
                 executableFileSha256 = [string]$entry.Build.ExecutableFileSha256
                 runtimeExecutableBundleHash =
@@ -3449,6 +6622,8 @@ function Invoke-AbbaWorkload {
                     [string]$report.CaptureContract.TrajectoryRouteHash
                 trajectorySequenceHash =
                     [string]$report.CaptureContract.TrajectorySequenceHash
+                frozenVerifierEvidence =
+                    $report.CampaignFrozenVerifierEvidence
             }
             $cycleReports += $report
             if ($entry.Phase -eq "baseline") {
@@ -3461,6 +6636,7 @@ function Invoke-AbbaWorkload {
                 $candidateReports += $report
             }
         }
+        $orderedCycleReports += $cycleReports
         $pairedDifferences += [Math]::Max(
             (Get-Timing $cycleReports[0] "cpu" "p95"),
             (Get-Timing $cycleReports[0] "gpu" "p95")) - [Math]::Max(
@@ -3472,9 +6648,11 @@ function Invoke-AbbaWorkload {
             (Get-Timing $cycleReports[2] "cpu" "p95"),
             (Get-Timing $cycleReports[2] "gpu" "p95"))
     }
+    $targetPassPairedDifferences = Get-TargetPassPairedDifferences `
+        $Workload $orderedCycleReports
     $comparison = Compare-WorkloadCaptures `
         $Manifest $Workload $baselineReports $candidateReports `
-        ([double[]]$pairedDifferences) $RequireWin
+        ([double[]]$pairedDifferences) $targetPassPairedDifferences $RequireWin
     $comparison | Add-Member `
         -NotePropertyName SlotEvidence `
         -NotePropertyValue @($slotEvidence)
@@ -3517,6 +6695,149 @@ function Get-ConfigurationWorkloadSelection {
     return @($orderedWorkloads)
 }
 
+function New-ConfigurationControlledIsolationEvidence {
+    param(
+        [object[]]$Comparisons,
+        $VerifierBuildIdentity,
+        [string]$Root,
+        [bool]$RequireAvailable,
+        [string]$Label)
+    $cachedId = "sponza-directional-shadow-moving-caster"
+    $forcedId = "sponza-directional-shadow-forced-refresh"
+    $cachedComparison = @($Comparisons | Where-Object {
+        [string]$_.Workload -ceq $cachedId
+    })
+    $forcedComparison = @($Comparisons | Where-Object {
+        [string]$_.Workload -ceq $forcedId
+    })
+    if (-not $RequireAvailable) {
+        return [ordered]@{
+            schema = "njulf-perf-campaign-controlled-isolation-matrix/v1"
+            applicable = $false
+            cachedWorkloadId = $cachedId
+            forcedWorkloadId = $forcedId
+            pairs = @()
+        }
+    }
+    if ($cachedComparison.Count -ne 1 -or $forcedComparison.Count -ne 1) {
+        throw "$Label controlled isolation requires both exact workload roles."
+    }
+    $cachedSlots = @($cachedComparison[0].SlotEvidence)
+    $forcedSlots = @($forcedComparison[0].SlotEvidence)
+    if ($cachedSlots.Count -ne $forcedSlots.Count -or
+        $cachedSlots.Count -eq 0) {
+        throw "$Label controlled isolation slot topology differs."
+    }
+    $pairs = @()
+    for ($index = 0; $index -lt $cachedSlots.Count; $index++) {
+        $cachedSlot = $cachedSlots[$index]
+        $forcedSlot = $forcedSlots[$index]
+        if ([int]$cachedSlot.cycle -ne [int]$forcedSlot.cycle -or
+            [int]$cachedSlot.slot -ne [int]$forcedSlot.slot -or
+            [string]$cachedSlot.phase -cne [string]$forcedSlot.phase -or
+            (($cachedSlot.buildIdentity | ConvertTo-Json -Depth 12 -Compress) -cne
+             ($forcedSlot.buildIdentity | ConvertTo-Json -Depth 12 -Compress))) {
+            throw "$Label controlled isolation pair $index crosses a slot/phase/build."
+        }
+        $cachedReport = Read-BenchmarkReport ([string]$cachedSlot.reportPath)
+        $forcedReport = Read-BenchmarkReport ([string]$forcedSlot.reportPath)
+        $artifactPath = Join-Path $Root (
+            "cycle-{0:D2}-slot-{1}-{2}.json" -f
+                [int]$cachedSlot.cycle,
+                [int]$cachedSlot.slot,
+                [string]$cachedSlot.phase)
+        $artifact = New-ControlledIsolationFrozenVerifierEvidence `
+            $cachedReport $forcedReport ([string]$cachedSlot.reportPath) `
+            ([string]$forcedSlot.reportPath) $VerifierBuildIdentity `
+            $artifactPath "$Label pair $index"
+        $pairs += [ordered]@{
+            cycle = [int]$cachedSlot.cycle
+            slot = [int]$cachedSlot.slot
+            phase = [string]$cachedSlot.phase
+            artifact = $artifact
+        }
+    }
+    return [ordered]@{
+        schema = "njulf-perf-campaign-controlled-isolation-matrix/v1"
+        applicable = $true
+        cachedWorkloadId = $cachedId
+        forcedWorkloadId = $forcedId
+        pairs = @($pairs)
+    }
+}
+
+function Assert-ConfigurationControlledIsolationEvidence {
+    param(
+        [object[]]$Comparisons,
+        $Evidence,
+        $VerifierBuildIdentity,
+        [string]$Root,
+        [bool]$ExpectedApplicable,
+        [string]$Label)
+    Assert-ExactPropertyNames $Evidence @(
+        "schema", "applicable", "cachedWorkloadId",
+        "forcedWorkloadId", "pairs") "$Label envelope"
+    $cachedId = "sponza-directional-shadow-moving-caster"
+    $forcedId = "sponza-directional-shadow-forced-refresh"
+    if ([string]$Evidence.schema -cne
+            "njulf-perf-campaign-controlled-isolation-matrix/v1" -or
+        $Evidence.applicable -isnot [bool] -or
+        $Evidence.applicable -ne $ExpectedApplicable -or
+        [string]$Evidence.cachedWorkloadId -cne $cachedId -or
+        [string]$Evidence.forcedWorkloadId -cne $forcedId) {
+        throw "$Label controlled isolation envelope differs."
+    }
+    if (-not $ExpectedApplicable) {
+        if (@($Evidence.pairs).Count -ne 0) {
+            throw "$Label non-applicable controlled isolation contains pairs."
+        }
+        return $Evidence
+    }
+    $cachedComparison = @($Comparisons | Where-Object {
+        [string]$_.Workload -ceq $cachedId
+    })
+    $forcedComparison = @($Comparisons | Where-Object {
+        [string]$_.Workload -ceq $forcedId
+    })
+    if ($cachedComparison.Count -ne 1 -or $forcedComparison.Count -ne 1) {
+        throw "$Label controlled isolation comparison roles differ."
+    }
+    $cachedSlots = @($cachedComparison[0].SlotEvidence)
+    $forcedSlots = @($forcedComparison[0].SlotEvidence)
+    $pairs = @($Evidence.pairs)
+    if ($pairs.Count -ne $cachedSlots.Count -or
+        $pairs.Count -ne $forcedSlots.Count) {
+        throw "$Label controlled isolation pair count differs."
+    }
+    for ($index = 0; $index -lt $pairs.Count; $index++) {
+        $pair = $pairs[$index]
+        $cachedSlot = $cachedSlots[$index]
+        $forcedSlot = $forcedSlots[$index]
+        Assert-ExactPropertyNames $pair @(
+            "cycle", "slot", "phase", "artifact") "$Label pair $index"
+        if ([int]$pair.cycle -ne [int]$cachedSlot.cycle -or
+            [int]$pair.cycle -ne [int]$forcedSlot.cycle -or
+            [int]$pair.slot -ne [int]$cachedSlot.slot -or
+            [int]$pair.slot -ne [int]$forcedSlot.slot -or
+            [string]$pair.phase -cne [string]$cachedSlot.phase -or
+            [string]$pair.phase -cne [string]$forcedSlot.phase -or
+            (($cachedSlot.buildIdentity | ConvertTo-Json -Depth 12 -Compress) -cne
+             ($forcedSlot.buildIdentity | ConvertTo-Json -Depth 12 -Compress))) {
+            throw "$Label controlled isolation pair $index crosses identity."
+        }
+        $cachedReport = Read-BenchmarkReport ([string]$cachedSlot.reportPath)
+        $forcedReport = Read-BenchmarkReport ([string]$forcedSlot.reportPath)
+        $artifactPath = Join-Path $Root (
+            "cycle-{0:D2}-slot-{1}-{2}.json" -f
+                [int]$pair.cycle, [int]$pair.slot, [string]$pair.phase)
+        $null = Assert-ControlledIsolationFrozenVerifierEvidence `
+            $cachedReport $forcedReport ([string]$cachedSlot.reportPath) `
+            ([string]$forcedSlot.reportPath) $pair.artifact `
+            $VerifierBuildIdentity $artifactPath "$Label pair $index"
+    }
+    return $Evidence
+}
+
 function Invoke-ConfigurationMatrix {
     param(
         $Manifest,
@@ -3535,6 +6856,9 @@ function Invoke-ConfigurationMatrix {
     $winIds = @($WinWorkloads | ForEach-Object { [string]$_.id })
     $orderedWorkloads = @(Get-ConfigurationWorkloadSelection `
         $Manifest $WinWorkloads $RunAllWorkloads)
+    $verifierBuild = Get-ReferenceBuildIdentity $Lock $Configuration
+    Assert-BuildIdentity $verifierBuild `
+        "$Configuration immutable timing verifier"
     foreach ($workload in $orderedWorkloads) {
         $requireWin = $winIds -contains [string]$workload.id
         $workloadStage = if ($requireWin) {
@@ -3545,13 +6869,40 @@ function Invoke-ConfigurationMatrix {
         $entry = Get-ReferenceLockEntry `
             $Lock $Configuration ([string]$workload.id)
         $comparison = Invoke-AbbaWorkload `
-            $Manifest $workload $BaselineBuild $CandidateBuild `
+            $Manifest $workload $BaselineBuild $CandidateBuild $verifierBuild `
             $Configuration $Iteration $workloadStage `
             $entry $BaselineCommit $CandidateCommit $requireWin $ArtifactRoot
         $comparisons += $comparison
         if ($comparison.Decision -ne "keep") { break }
     }
     $failures = @($comparisons | Where-Object { $_.Decision -ne "keep" })
+    $hypothesisResults = @()
+    if ($failures.Count -eq 0) {
+        $hypothesisResults = @(New-ConfigurationHypothesisResults `
+            $WinWorkloads $comparisons)
+        if (@($hypothesisResults | Where-Object {
+                [string]$_.Decision -cne "keep"
+            }).Count -ne 0) {
+            throw "One or more target hypotheses contradict kept workload comparisons."
+        }
+    }
+    $controlledRoot = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
+        Join-Path $script:RunRoot (
+            "iterations/{0:D6}/{1}/{2}/controlled-isolation" -f
+                $Iteration, $Stage, $Configuration)
+    } else {
+        Join-Path $ArtifactRoot (
+            "captures/{0}/{1}/controlled-isolation" -f
+                $Stage, $Configuration)
+    }
+    $selectedIds = @($orderedWorkloads | ForEach-Object { [string]$_.id })
+    $controlledApplicable =
+        $failures.Count -eq 0 -and
+        $selectedIds -contains "sponza-directional-shadow-moving-caster" -and
+        $selectedIds -contains "sponza-directional-shadow-forced-refresh"
+    $controlledIsolationEvidence = New-ConfigurationControlledIsolationEvidence `
+        $comparisons $verifierBuild $controlledRoot $controlledApplicable `
+        "$Configuration $Stage directional isolation"
     return [pscustomobject]@{
         configuration = $Configuration
         stage = $Stage
@@ -3564,6 +6915,8 @@ function Invoke-ConfigurationMatrix {
             }) -join '; '
         }
         comparisons = $comparisons
+        hypothesisResults = @($hypothesisResults)
+        controlledIsolationEvidence = $controlledIsolationEvidence
     }
 }
 
@@ -3588,8 +6941,32 @@ function Assert-ConfigurationTimingEvidence {
         [string]$ConfigurationResult.decision -cne "keep") {
         throw "$Label envelope is incomplete."
     }
+    $configurationProperties = @(
+        "configuration", "stage", "decision", "reason", "comparisons",
+        "hypothesisResults", "controlledIsolationEvidence")
+    if ($null -ne
+        $ConfigurationResult.PSObject.Properties["qualitySequenceCompleted"]) {
+        $configurationProperties += "qualitySequenceCompleted"
+    }
+    Assert-ExactPropertyNames $ConfigurationResult $configurationProperties `
+        "$Label configuration result"
+    $qualityCompleted = $null -ne
+        $ConfigurationResult.PSObject.Properties["qualitySequenceCompleted"]
+    $expectedReason = if ($qualityCompleted) {
+        if (-not [bool]$ConfigurationResult.qualitySequenceCompleted) {
+            throw "$Label quality completion flag is false."
+        }
+        "timing, standalone HDR sequence, and non-regression gates passed"
+    } else {
+        "target win plus quality/non-regression passed"
+    }
+    if ([string]$ConfigurationResult.reason -cne $expectedReason) {
+        throw "$Label reason differs from recomputed evidence."
+    }
     Assert-BuildIdentity $BaselineBuild "$Label baseline build"
     Assert-BuildIdentity $CandidateBuild "$Label candidate build"
+    $verifierBuild = Get-ReferenceBuildIdentity $Lock $Configuration
+    Assert-BuildIdentity $verifierBuild "$Label immutable verifier build"
     $workloads = @(Get-ConfigurationWorkloadSelection `
         $Manifest $WinWorkloads $RunAllWorkloads)
     $winIds = @($WinWorkloads | ForEach-Object { [string]$_.id })
@@ -3602,6 +6979,20 @@ function Assert-ConfigurationTimingEvidence {
          $workloadIndex++) {
         $workload = $workloads[$workloadIndex]
         $comparison = $comparisons[$workloadIndex]
+        $comparisonProperties = @(
+            "Workload", "GateMode", "Decision", "Reason",
+            "BaselineBottleneckP95Milliseconds",
+            "CandidateBottleneckP95Milliseconds",
+            "FrameImprovementMilliseconds", "FrameImprovementPercent",
+            "FramePairedDifferencesMilliseconds",
+            "FrameBootstrapLower95Milliseconds", "TargetClaimResults",
+            "Metrics", "Regressions", "QualityRepeatability", "SlotEvidence")
+        if ($null -ne
+            $comparison.PSObject.Properties["QualitySequenceEvidence"]) {
+            $comparisonProperties += "QualitySequenceEvidence"
+        }
+        Assert-ExactPropertyNames $comparison $comparisonProperties `
+            "$Label '$($workload.id)' comparison"
         $requireWin = $winIds -contains [string]$workload.id
         $expectedGateMode = if ($requireWin) {
             "target-win"
@@ -3712,10 +7103,18 @@ function Assert-ConfigurationTimingEvidence {
                 "$Label '$($workload.id)' slot $slotIndex" $false `
                 $pairId $expectedCommit $expectedBuild $reference $candidatePath
             $health = Get-Content -LiteralPath $healthPath -Raw |
-                ConvertFrom-Json
+                ConvertFrom-Json -DateKind String
             Assert-HealthReport `
                 $Manifest $workload $health $report $expectedBuild `
                 $expectedCommit $pairId `
+                "$Label '$($workload.id)' slot $slotIndex"
+            if (($slot.buildIdentity | ConvertTo-Json -Depth 12 -Compress) -cne
+                ($expectedBuild | ConvertTo-Json -Depth 12 -Compress)) {
+                throw "$Label '$($workload.id)' slot $slotIndex full build identity differs."
+            }
+            $null = Assert-TimingFrozenVerifierEvidence `
+                $workload $report $reportPath $slot.frozenVerifierEvidence `
+                $verifierBuild `
                 "$Label '$($workload.id)' slot $slotIndex"
             $recordedPairs = @(
                 @([string]$slot.captureExecutableHash, [string]$report.LastDiagnostics.CaptureRun.ExecutableHash),
@@ -3774,7 +7173,9 @@ function Assert-ConfigurationTimingEvidence {
         }
         $recomputed = Compare-WorkloadCaptures `
             $Manifest $workload $baselineReports $candidateReports `
-            ([double[]]$pairedDifferences) $requireWin
+            ([double[]]$pairedDifferences) `
+            (Get-TargetPassPairedDifferences $workload $allReports) `
+            $requireWin
         if ([string]$recomputed.Decision -cne "keep") {
             throw "$Label '$($workload.id)' no longer recomputes to keep: $($recomputed.Reason)"
         }
@@ -3787,10 +7188,19 @@ function Assert-ConfigurationTimingEvidence {
             }
         }
         for ($slotIndex = 0; $slotIndex -lt $slots.Count; $slotIndex++) {
-            foreach ($item in @(
+            $finalItems = @(
                     @([string]$slots[$slotIndex].reportPath, [string]$slots[$slotIndex].reportSha256),
                     @([string]$slots[$slotIndex].healthPath, [string]$slots[$slotIndex].healthSha256),
-                    @([string]$slots[$slotIndex].candidatePfmPath, [string]$slots[$slotIndex].candidatePfmSha256))) {
+                    @([string]$slots[$slotIndex].candidatePfmPath, [string]$slots[$slotIndex].candidatePfmSha256),
+                    @([string]$slots[$slotIndex].frozenVerifierEvidence.activation.artifactPath,
+                      [string]$slots[$slotIndex].frozenVerifierEvidence.activation.artifactSha256),
+                    @([string]$slots[$slotIndex].frozenVerifierEvidence.ddgiTransient.artifactPath,
+                      [string]$slots[$slotIndex].frozenVerifierEvidence.ddgiTransient.artifactSha256))
+            $sidecar = $slots[$slotIndex].frozenVerifierEvidence.sponzaAnimationSidecar
+            if (-not [string]::IsNullOrWhiteSpace([string]$sidecar.path)) {
+                $finalItems += ,@([string]$sidecar.path, [string]$sidecar.sha256)
+            }
+            foreach ($item in $finalItems) {
                 if (-not (Test-Path -LiteralPath ([string]$item[0]) -PathType Leaf) -or
                     (Get-Sha256 ([string]$item[0])) -cne [string]$item[1]) {
                     throw "$Label '$($workload.id)' slot $slotIndex changed during re-audit."
@@ -3798,6 +7208,33 @@ function Assert-ConfigurationTimingEvidence {
             }
         }
     }
+    $recomputedHypotheses = @(New-ConfigurationHypothesisResults `
+        $WinWorkloads $comparisons)
+    if (($recomputedHypotheses | ConvertTo-Json -Depth 16 -Compress) -cne
+        ($ConfigurationResult.hypothesisResults |
+            ConvertTo-Json -Depth 16 -Compress) -or
+        @($recomputedHypotheses | Where-Object {
+            [string]$_.Decision -cne "keep"
+        }).Count -ne 0) {
+        throw "$Label target hypothesis results differ."
+    }
+    $controlledRoot = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
+        Join-Path $script:RunRoot (
+            "iterations/{0:D6}/{1}/{2}/controlled-isolation" -f
+                $Iteration, $Stage, $Configuration)
+    } else {
+        Join-Path $ArtifactRoot (
+            "captures/{0}/{1}/controlled-isolation" -f
+                $Stage, $Configuration)
+    }
+    $workloadIds = @($workloads | ForEach-Object { [string]$_.id })
+    $controlledApplicable =
+        $workloadIds -contains "sponza-directional-shadow-moving-caster" -and
+        $workloadIds -contains "sponza-directional-shadow-forced-refresh"
+    $null = Assert-ConfigurationControlledIsolationEvidence `
+        $comparisons $ConfigurationResult.controlledIsolationEvidence `
+        $verifierBuild $controlledRoot $controlledApplicable `
+        "$Label directional isolation"
 }
 
 function Complete-ConfigurationQualityMatrix {
@@ -3843,7 +7280,8 @@ function Complete-ConfigurationQualityMatrix {
             throw "Locked quality candidate contract changed for '$($workload.id)'."
         }
         $candidateContract = Get-Content `
-            -LiteralPath $candidateContractPath -Raw | ConvertFrom-Json
+            -LiteralPath $candidateContractPath -Raw |
+            ConvertFrom-Json -DateKind String
         $qualityStage = if ([string]$comparison.GateMode -eq "target-win") {
             $Stage
         } else {
@@ -3932,7 +7370,7 @@ function Assert-ConfigurationQualityEvidence {
         $contractHash =
             [string]$reference.qualitySequence.candidateReferenceContractSha256
         $contract = Get-Content -LiteralPath $contractPath -Raw |
-            ConvertFrom-Json
+            ConvertFrom-Json -DateKind String
         $root = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
             Join-Path $script:RunRoot (
                 "iterations/{0:D6}/quality/{1}/{2}/{3}" -f
@@ -3974,14 +7412,32 @@ function Assert-FinalDecisionArtifacts {
         throw "Final decision artifact is missing."
     }
     $decisionSha256 = Get-Sha256 $DecisionPath
-    $decision = Get-Content -LiteralPath $DecisionPath -Raw | ConvertFrom-Json
+    $decision = Get-Content -LiteralPath $DecisionPath -Raw |
+        ConvertFrom-Json -DateKind String
     if (($decision | ConvertTo-Json -Depth 24 -Compress) -cne
         ($ExpectedSummary | ConvertTo-Json -Depth 24 -Compress)) {
         throw "Final decision bytes differ from the materialized summary."
     }
-    if ([string]$decision.schema -cne "njulf-perf-campaign-final/v1" -or
+    Assert-ExactPropertyNames $decision @(
+        "schema", "campaignId", "manifestSha256",
+        "manifestSnapshotPath", "manifestSnapshotSha256",
+        "lockSha256", "mode",
+        "baselineCommit", "retainedHead", "observedHeadAtDecision",
+        "headPreserved", "recoveryAttempted", "recoverySucceeded",
+        "initialPostAttemptInvariantFailures", "postAttemptInvariantFailures",
+        "authenticatedCommits", "lastAcceptanceEvidence", "decision",
+        "reason", "targetHypotheses", "winWorkloads", "candidateBuilds",
+        "configurations") "Final decision"
+    if ([string]$decision.schema -cne "njulf-perf-campaign-final/v2" -or
         [string]$decision.campaignId -cne [string]$Manifest.campaignId -or
-        [string]$decision.manifestSha256 -cne (Get-Sha256 $script:ManifestFile) -or
+        [string]$decision.manifestSha256 -cne
+            (Get-AdmittedCampaignManifestSha256) -or
+        -not [string]::Equals(
+            [string]$decision.manifestSnapshotPath,
+            $script:CampaignManifestSnapshotPath,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        [string]$decision.manifestSnapshotSha256 -cne
+            $script:CampaignManifestSha256 -or
         [string]$decision.lockSha256 -cne $script:CampaignLockSha256 -or
         [string]$decision.mode -cne "FinalizeRetainedStack" -or
         [string]$decision.baselineCommit -cne [string]$Lock.baselineCommit -or
@@ -3991,7 +7447,22 @@ function Assert-FinalDecisionArtifacts {
         [string]$decision.decision -cne "keep") {
         throw "Final decision envelope is incomplete or inconsistent."
     }
+    $expectedHypotheses = @($RetainedChain.Hypotheses)
+    $expectedWinWorkloads = @(Get-HypothesisWorkloads `
+        $Manifest $expectedHypotheses)
+    if (($decision.targetHypotheses | ConvertTo-Json -Depth 8 -Compress) -cne
+            ($expectedHypotheses | ConvertTo-Json -Depth 8 -Compress) -or
+        (($decision.winWorkloads | ConvertTo-Json -Depth 4 -Compress) -cne
+         (@($expectedWinWorkloads | ForEach-Object {
+            [string]$_.id
+         }) | ConvertTo-Json -Depth 4 -Compress)) -or
+        (($WinWorkloads | ConvertTo-Json -Depth 16 -Compress) -cne
+         ($expectedWinWorkloads | ConvertTo-Json -Depth 16 -Compress))) {
+        throw "Final decision target hypotheses or deduplicated workloads differ."
+    }
     $configurations = @(Get-CampaignConfigurations $Manifest)
+    Assert-ExactPropertyNames $decision.candidateBuilds $configurations `
+        "Final candidate builds"
     $results = @($decision.configurations)
     if ($results.Count -ne $configurations.Count) {
         throw "Final decision configuration topology differs."
@@ -4057,13 +7528,48 @@ function Write-JsonArtifact {
         $Value | ConvertTo-Json -Depth 24 |
             Set-Content -LiteralPath $temporaryPath -Encoding utf8
         $null = Get-Content -LiteralPath $temporaryPath -Raw |
-            ConvertFrom-Json
+            ConvertFrom-Json -DateKind String
         [System.IO.File]::Move($temporaryPath, $Path, $false)
     } finally {
         if (Test-Path -LiteralPath $temporaryPath) {
             Remove-Item -LiteralPath $temporaryPath -Force
         }
     }
+}
+
+function Assert-DecisionCandidateIdentity {
+    param($Manifest, $Lock, $Decision)
+    Assert-ExactPropertyNames $Decision.candidate @(
+        "kind", "id", "sourceCommit", "patchId", "allowedPaths",
+        "focusedTestFilter", "envelopePath", "envelopeSha256",
+        "discoveryArtifactPath", "discoveryArtifactSha256") `
+        "Accepted candidate identity"
+    if ([string]$Decision.candidate.kind -ceq "reviewed") {
+        $candidate = Get-ReviewedCandidate `
+            $Manifest ([string]$Decision.candidate.id)
+        $expected = New-ReviewedCandidateDecisionIdentity $candidate
+        if (($Decision.candidate | ConvertTo-Json -Depth 8 -Compress) -cne
+            ($expected | ConvertTo-Json -Depth 8 -Compress)) {
+            throw "Accepted candidate identity differs from the pinned manifest."
+        }
+        return [pscustomobject]@{
+            Candidate = $candidate
+            Hypothesis = Get-TargetHypothesis `
+                $Manifest ([string]$candidate.hypothesisId)
+        }
+    }
+    if ([string]$Decision.candidate.kind -ceq "discovered") {
+        $admission = Read-CandidateEnvelope `
+            $Manifest $Lock ([string]$Decision.candidate.envelopePath) `
+            ([string]$Decision.acceptedHead) $false `
+            ([string]$Decision.candidate.envelopeSha256)
+        if (($Decision.candidate | ConvertTo-Json -Depth 8 -Compress) -cne
+            ($admission.DecisionIdentity | ConvertTo-Json -Depth 8 -Compress)) {
+            throw "Accepted automatic candidate differs from its frozen envelope."
+        }
+        return $admission
+    }
+    throw "Accepted candidate kind is invalid."
 }
 
 function Assert-AcceptedDecisionEnvelope {
@@ -4074,9 +7580,25 @@ function Assert-AcceptedDecisionEnvelope {
         [string]$ExpectedAcceptedHead,
         [string]$ExpectedCandidateHead,
         [string]$ExpectedPreviousEvidence)
-    if ([string]$Decision.schema -ne "njulf-perf-campaign-decision/v1" -or
+    Assert-ExactPropertyNames $Decision @(
+        "schema", "campaignId", "manifestSha256",
+        "manifestSnapshotPath", "manifestSnapshotSha256", "lockSha256",
+        "iteration", "acceptedHead", "candidateHead",
+        "observedHeadAtDecision", "previousAcceptanceEvidence",
+        "decisionArtifactPath", "decision", "reason", "candidate", "attempt",
+        "targetHypothesisId", "targetDomain", "targetPass", "targetClaims",
+        "baselineBuilds", "candidateBuilds", "configurations") `
+        "Accepted decision"
+    if ([string]$Decision.schema -ne "njulf-perf-campaign-decision/v3" -or
         [string]$Decision.campaignId -ne [string]$Manifest.campaignId -or
-        [string]$Decision.manifestSha256 -ne (Get-Sha256 $script:ManifestFile) -or
+        [string]$Decision.manifestSha256 -ne
+            (Get-AdmittedCampaignManifestSha256) -or
+        -not [string]::Equals(
+            [string]$Decision.manifestSnapshotPath,
+            $script:CampaignManifestSnapshotPath,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        [string]$Decision.manifestSnapshotSha256 -cne
+            $script:CampaignManifestSha256 -or
         [string]$Decision.lockSha256 -ne $script:CampaignLockSha256 -or
         [string]$Decision.decision -ne "keep" -or
         [int]$Decision.iteration -lt 1 -or
@@ -4096,13 +7618,29 @@ function Assert-AcceptedDecisionEnvelope {
             $ExpectedPreviousEvidence) {
         throw "Accepted decision envelope is incomplete or inconsistent."
     }
+    $admission = Assert-DecisionCandidateIdentity $Manifest $Lock $Decision
+    Assert-TimingAttemptEvidence $Manifest $Decision.attempt $Decision
+    $hypothesis = $admission.Hypothesis
+    if ([string]$Decision.targetHypothesisId -cne [string]$hypothesis.id -or
+        [string]$Decision.targetDomain -cne [string]$hypothesis.targetDomain -or
+        [string]$Decision.targetPass -cne [string]$hypothesis.targetPass -or
+        (($Decision.targetClaims | ConvertTo-Json -Depth 8 -Compress) -cne
+         ($hypothesis.claims | ConvertTo-Json -Depth 8 -Compress))) {
+        throw "Accepted decision target hypothesis differs from the manifest."
+    }
     $parentFields = @((Get-GitText @(
         "rev-list", "--parents", "-n", "1", $ExpectedCandidateHead)) -split '\s+')
     if ($parentFields.Count -ne 2 -or
         -not [string]::Equals(
             [string]$parentFields[1],
             $ExpectedAcceptedHead,
-            [StringComparison]::OrdinalIgnoreCase)) {
+            [StringComparison]::OrdinalIgnoreCase) -or
+        (Get-StablePatchId $ExpectedCandidateHead) -cne
+            [string]$Decision.candidate.patchId -or
+        (@(Get-CommitChangedPaths $ExpectedCandidateHead) -join "`n") -cne
+            (@($Decision.candidate.allowedPaths | ForEach-Object {
+                [string]$_
+            }) -join "`n")) {
         throw "Accepted candidate is not one non-merge commit on its admitted parent."
     }
 }
@@ -4129,13 +7667,14 @@ function Write-ValidatedAcceptanceDecisionArtifact {
         [System.IO.File]::WriteAllBytes(
             $temporaryPath,
             [System.Text.UTF8Encoding]::new($false).GetBytes($json))
-        $blob = Get-GitText @("hash-object", "-w", "--", $temporaryPath)
+        $blob = Get-GitText @(
+            "hash-object", "--no-filters", "-w", "--", $temporaryPath)
         if ($blob -notmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' -or
             (Get-GitText @("cat-file", "-t", $blob)) -ne "blob") {
             throw "Acceptance artifact did not produce a Git blob."
         }
         $validated = (Get-GitText @("cat-file", "blob", $blob)) |
-            ConvertFrom-Json
+            ConvertFrom-Json -DateKind String
         Assert-AcceptedDecisionEnvelope `
             $Manifest $Lock $validated `
             $ExpectedAcceptedHead $ExpectedCandidateHead `
@@ -4143,14 +7682,15 @@ function Write-ValidatedAcceptanceDecisionArtifact {
         Assert-AcceptedDecisionArtifacts `
             $Manifest $Lock $validated $temporaryPath
         if (-not [string]::Equals(
-                (Get-GitText @("hash-object", "--", $temporaryPath)),
+                (Get-GitText @(
+                    "hash-object", "--no-filters", "--", $temporaryPath)),
                 $blob,
                 [StringComparison]::OrdinalIgnoreCase)) {
             throw "Acceptance temp file changed after its blob was semantically validated."
         }
         [System.IO.File]::Move($temporaryPath, $Path, $false)
         if (-not [string]::Equals(
-                (Get-GitText @("hash-object", "--", $Path)),
+                (Get-GitText @("hash-object", "--no-filters", "--", $Path)),
                 $blob,
                 [StringComparison]::OrdinalIgnoreCase)) {
             throw "Atomically published decision differs from its validated blob."
@@ -4166,7 +7706,7 @@ function Write-ValidatedAcceptanceDecisionArtifact {
 function Get-AcceptanceRefPrefix {
     param($Manifest)
     $campaignId = [string]$Manifest.campaignId
-    if ($campaignId -notmatch '^[a-z0-9][a-z0-9-]*$') {
+    if ($campaignId -cnotmatch '^[a-z0-9][a-z0-9-]*$') {
         throw "Campaign id '$campaignId' cannot be used in an acceptance ref."
     }
     return "refs/perf-campaign/accepted/$campaignId/"
@@ -4369,7 +7909,8 @@ function Publish-AcceptanceEvidence {
     if ($DecisionBlob -notmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' -or
         (Get-GitText @("cat-file", "-t", $DecisionBlob)) -ne "blob" -or
         -not [string]::Equals(
-            (Get-GitText @("hash-object", "--", $DecisionPath)),
+            (Get-GitText @(
+                "hash-object", "--no-filters", "--", $DecisionPath)),
             $DecisionBlob,
             [StringComparison]::OrdinalIgnoreCase)) {
         throw "Acceptance decision no longer matches its validated Git blob."
@@ -4426,284 +7967,164 @@ function Assert-AcceptedDecisionArtifacts {
         throw "Accepted decision bytes are missing: $DecisionPath"
     }
 
+    $configurationNames = @(Get-CampaignConfigurations $Manifest)
     $configurations = @($Decision.configurations)
-    if ($configurations.Count -ne 1 -or
-        [string]$configurations[0].configuration -ne "Release" -or
-        [string]$configurations[0].stage -ne "hypothesis-screen" -or
-        [string]$configurations[0].decision -ne "keep") {
-        throw "Accepted decision $iteration is not one successful Release screen."
+    if ($configurations.Count -ne $configurationNames.Count) {
+        throw "Accepted decision $iteration configuration topology differs."
     }
-    $configuration = $configurations[0]
-    if (-not [bool]$configuration.qualitySequenceCompleted) {
-        throw "Accepted decision $iteration did not complete its standalone quality phase."
+    Assert-ExactPropertyNames $Decision.baselineBuilds $configurationNames `
+        "Accepted baseline builds"
+    Assert-ExactPropertyNames $Decision.candidateBuilds $configurationNames `
+        "Accepted candidate builds"
+    $hypothesis = [pscustomobject][ordered]@{
+        id = [string]$Decision.targetHypothesisId
+        targetDomain = [string]$Decision.targetDomain
+        targetPass = [string]$Decision.targetPass
+        claims = @($Decision.targetClaims)
     }
-    $baselineBuild = $Decision.baselineBuild
-    $candidateBuild = $Decision.candidateBuild
-    Assert-PathIdentity `
-        ([string]$baselineBuild.RootPath) `
-        (Join-Path $iterationRoot "build-baseline") `
-        "Accepted baseline build"
-    Assert-PathIdentity `
-        ([string]$candidateBuild.RootPath) `
-        (Join-Path $iterationRoot "build-candidate") `
-        "Accepted candidate build"
-    Assert-BuildIdentity $baselineBuild "Accepted iteration $iteration baseline"
-    Assert-BuildIdentity $candidateBuild "Accepted iteration $iteration candidate"
+    $winWorkloads = @(Get-HypothesisWorkloads $Manifest @($hypothesis))
+    for ($index = 0; $index -lt $configurationNames.Count; $index++) {
+        $configuration = [string]$configurationNames[$index]
+        $result = $configurations[$index]
+        if ([string]$result.configuration -cne $configuration -or
+            [string]$result.stage -cne "hypothesis-screen" -or
+            [string]$result.decision -cne "keep" -or
+            -not [bool]$result.qualitySequenceCompleted) {
+            throw "Accepted decision $iteration '$configuration' screen is incomplete."
+        }
+        $baselineBuild = $Decision.baselineBuilds.PSObject.Properties[
+            $configuration].Value
+        $candidateBuild = $Decision.candidateBuilds.PSObject.Properties[
+            $configuration].Value
+        Assert-PathIdentity `
+            ([string]$baselineBuild.RootPath) `
+            (Join-Path $iterationRoot "build-baseline/$configuration") `
+            "Accepted $configuration baseline build"
+        Assert-PathIdentity `
+            ([string]$candidateBuild.RootPath) `
+            (Join-Path $iterationRoot "build-candidate/$configuration") `
+            "Accepted $configuration candidate build"
+        Assert-BuildIdentity $baselineBuild `
+            "Accepted iteration $iteration $configuration baseline"
+        Assert-BuildIdentity $candidateBuild `
+            "Accepted iteration $iteration $configuration candidate"
+        Assert-ConfigurationTimingEvidence `
+            $Manifest $Lock $winWorkloads $baselineBuild $candidateBuild `
+            $configuration $iteration "hypothesis-screen" `
+            ([string]$Decision.acceptedHead) ([string]$Decision.candidateHead) `
+            $result "" $true `
+            "Accepted decision $iteration $configuration timing audit"
+        Assert-ConfigurationQualityEvidence `
+            $Manifest $Lock $winWorkloads $candidateBuild `
+            $configuration $iteration "hypothesis-screen" `
+            ([string]$Decision.candidateHead) $result "" $true `
+            "Accepted decision $iteration $configuration quality audit"
+    }
+}
 
-    $targetWorkloads = @($Manifest.workloads | Where-Object {
-        [string]$_.id -eq [string]$Decision.targetWorkload
-    })
-    if ($targetWorkloads.Count -ne 1 -or
-        [bool]$targetWorkloads[0].qualification) {
-        throw "Accepted decision $iteration has an invalid target workload."
+function Get-TimingAttemptRefName {
+    param($Manifest, [string]$Domain, [string]$Name)
+    if ($Domain -notin @("gpu", "cpu") -or
+        [string]::IsNullOrWhiteSpace($Name)) {
+        throw "Timing attempt identity is invalid."
     }
-    $expectedWorkloads = @(Get-ConfigurationWorkloadSelection `
-        $Manifest @($targetWorkloads[0]) $false)
-    $comparisons = @($configuration.comparisons)
-    if ($comparisons.Count -ne $expectedWorkloads.Count) {
-        throw "Accepted decision $iteration does not contain the exact screen workload count."
-    }
+    $identityHash = Get-Sha256Text ("$Domain`0$Name")
+    return "refs/perf-campaign/attempted/$([string]$Manifest.campaignId)/$identityHash"
+}
 
-    for ($comparisonIndex = 0;
-         $comparisonIndex -lt $expectedWorkloads.Count;
-         $comparisonIndex++) {
-        $comparison = $comparisons[$comparisonIndex]
-        $workload = $expectedWorkloads[$comparisonIndex]
-        if ([string]$comparison.Workload -ne [string]$workload.id -or
-            [string]$comparison.Decision -ne "keep") {
-            throw "Accepted decision $iteration differs from the exact screen workload order at index $comparisonIndex."
+function Test-TimingAttemptReserved {
+    param($Manifest, [string]$Domain, [string]$Name)
+    $refName = Get-TimingAttemptRefName $Manifest $Domain $Name
+    $null = & git -C $script:SolutionRoot show-ref --verify --quiet $refName
+    return $LASTEXITCODE -eq 0
+}
+
+function Reserve-TimingAttempt {
+    param(
+        $Manifest,
+        [string]$Domain,
+        [string]$Name,
+        [string]$CandidateId,
+        [string]$AcceptedHead)
+    $refName = Get-TimingAttemptRefName $Manifest $Domain $Name
+    if (Test-TimingAttemptReserved $Manifest $Domain $Name) {
+        throw "Timing identity '$Domain::$Name' already consumed its one bounded attempt."
+    }
+    $reservation = [pscustomobject][ordered]@{
+        schema = "njulf-perf-timing-attempt/v1"
+        campaignId = [string]$Manifest.campaignId
+        manifestSha256 = Get-AdmittedCampaignManifestSha256
+        lockSha256 = $script:CampaignLockSha256
+        timingDomain = $Domain
+        timingName = $Name
+        candidateId = $CandidateId
+        acceptedHead = $AcceptedHead
+        createdAtUtc = [DateTimeOffset]::UtcNow.ToString("O")
+    }
+    $temporary = Join-Path ([System.IO.Path]::GetTempPath()) (
+        "njulf-attempt-{0}.json" -f [Guid]::NewGuid().ToString("N"))
+    try {
+        $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+            (($reservation | ConvertTo-Json -Depth 6 -Compress) + "`n"))
+        [System.IO.File]::WriteAllBytes($temporary, $bytes)
+        $blob = Get-GitText @(
+            "hash-object", "--no-filters", "-w", "--", $temporary)
+        Invoke-GitUpdateRefTransaction @("create $refName $blob") `
+            "Timing attempt reservation"
+        if ((Get-GitText @("rev-parse", "--verify", $refName)) -cne $blob) {
+            throw "Timing attempt reservation was not published atomically."
         }
-        $requireWin = $comparisonIndex -eq 0
-        $expectedGateMode = if ($requireWin) {
-            "target-win"
-        } else {
-            "qualification-nonregression"
+        return [pscustomobject][ordered]@{
+            refName = $refName
+            blob = $blob
+            reservation = $reservation
         }
-        $stage = if ($requireWin) {
-            "hypothesis-screen"
-        } else {
-            "hypothesis-screen-nonregression"
+    } finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force
         }
-        if ([string]$comparison.GateMode -ne $expectedGateMode) {
-            throw "Accepted decision $iteration has the wrong gate mode for '$($workload.id)'."
-        }
-        $reference = Get-ReferenceLockEntry `
-            $Lock "Release" ([string]$workload.id)
-        if (-not (Test-Path -LiteralPath ([string]$reference.path) -PathType Leaf) -or
-            -not [string]::Equals(
-                (Get-Sha256 ([string]$reference.path)),
-                [string]$reference.sha256,
-                [StringComparison]::OrdinalIgnoreCase) -or
-            -not (Test-Path -LiteralPath ([string]$reference.qualityContractPath) -PathType Leaf) -or
-            -not [string]::Equals(
-                (Get-Sha256 ([string]$reference.qualityContractPath)),
-                [string]$reference.qualityContractSha256,
-                [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Accepted '$($workload.id)' immutable HDR inputs changed."
-        }
-        Assert-LinearHdrPfm `
-            ([string]$reference.path) 1920 1080 `
-            "Accepted '$($workload.id)' reference"
-        $slots = @($comparison.SlotEvidence)
-        $expectedSlotCount = [int]$Manifest.capture.abbaCycles * 4
-        if ($slots.Count -ne $expectedSlotCount) {
-            throw "Accepted '$($workload.id)' evidence has $($slots.Count) slots; expected $expectedSlotCount."
-        }
-        $baselineReports = @()
-        $candidateReports = @()
-        $allSlotReports = @()
-        $baselinePhaseIdentity = $null
-        $candidatePhaseIdentity = $null
-        for ($slotIndex = 0; $slotIndex -lt $slots.Count; $slotIndex++) {
-            $slot = $slots[$slotIndex]
-            $cycle = [int][Math]::Floor($slotIndex / 4) + 1
-            $slotNumber = ($slotIndex % 4) + 1
-            $expectedPhase = @("baseline", "candidate", "candidate", "baseline")[$slotNumber - 1]
-            $expectedBuild = if ($expectedPhase -eq "baseline") {
-                $baselineBuild
-            } else {
-                $candidateBuild
-            }
-            $expectedCommit = if ($expectedPhase -eq "baseline") {
-                [string]$Decision.acceptedHead
-            } else {
-                [string]$Decision.candidateHead
-            }
-            $pairId = Get-AbbaPairId `
-                $Manifest "Release" ([string]$workload.id) $stage `
-                ([string]$Decision.acceptedHead) `
-                ([string]$Decision.candidateHead) $iteration $cycle
-            $reportPath = Join-Path $iterationRoot (
-                "{0}/Release/{1}/cycle-{2:D2}-slot-{3}-{4}.json" -f
-                    $stage,
-                    [string]$workload.id,
-                    $cycle,
-                    $slotNumber,
-                    $expectedPhase)
-            $healthPath = [System.IO.Path]::ChangeExtension(
-                $reportPath,
-                ".health.json")
-            $candidatePath = [System.IO.Path]::ChangeExtension(
-                $reportPath,
-                ".hdr.pfm")
-            if ([int]$slot.cycle -ne $cycle -or
-                [int]$slot.slot -ne $slotNumber -or
-                [string]$slot.phase -ne $expectedPhase -or
-                [string]$slot.pairId -ne $pairId) {
-                throw "Accepted '$($workload.id)' slot $slotIndex has incoherent ABBA identity."
-            }
-            Assert-PathIdentity ([string]$slot.reportPath) $reportPath `
-                "Accepted report"
-            Assert-PathIdentity ([string]$slot.healthPath) $healthPath `
-                "Accepted health report"
-            Assert-PathIdentity ([string]$slot.candidatePfmPath) $candidatePath `
-                "Accepted candidate PFM"
-            Assert-PathIdentity `
-                ([string]$slot.referencePfmPath) ([string]$reference.path) `
-                "Accepted reference PFM"
-            Assert-PathIdentity `
-                ([string]$slot.qualityContractPath) `
-                ([string]$reference.qualityContractPath) `
-                "Accepted quality contract"
-            Assert-PathIdentity `
-                ([string]$slot.buildRootPath) `
-                ([string]$expectedBuild.RootPath) `
-                "Accepted slot build"
-            foreach ($evidence in @(
-                    @($reportPath, [string]$slot.reportSha256, "report"),
-                    @($healthPath, [string]$slot.healthSha256, "health report"),
-                    @($candidatePath, [string]$slot.candidatePfmSha256, "candidate PFM"))) {
-                if (-not (Test-Path -LiteralPath ([string]$evidence[0]) -PathType Leaf) -or
-                    [string]$evidence[1] -notmatch '^[0-9a-f]{64}$' -or
-                    -not [string]::Equals(
-                        (Get-Sha256 ([string]$evidence[0])),
-                        [string]$evidence[1],
-                        [StringComparison]::OrdinalIgnoreCase)) {
-                    throw "Accepted $($evidence[2]) hash failed for '$($workload.id)' slot $slotIndex."
-                }
-            }
-            if ([string]$slot.referencePfmSha256 -ne [string]$reference.sha256 -or
-                [string]$slot.qualityContractSha256 -ne
-                    [string]$reference.qualityContractSha256 -or
-                [string]$slot.buildBundleFingerprint -ne
-                    [string]$expectedBuild.BundleFingerprint -or
-                [string]$slot.executableFileSha256 -ne
-                    [string]$expectedBuild.ExecutableFileSha256 -or
-                [string]$slot.runtimeExecutableBundleHash -ne
-                    [string]$expectedBuild.RuntimeExecutableBundleHash) {
-                throw "Accepted '$($workload.id)' slot $slotIndex differs from locked inputs/build."
-            }
-            $report = Read-BenchmarkReport $reportPath
-            Assert-BenchmarkReport `
-                $Manifest $workload $report "Release" `
-                "Accepted '$($workload.id)' slot $slotIndex" $false `
-                $pairId $expectedCommit $expectedBuild $reference $candidatePath
-            $health = Get-Content -LiteralPath $healthPath -Raw |
-                ConvertFrom-Json
-            Assert-HealthReport `
-                $Manifest $workload $health $report $expectedBuild `
-                $expectedCommit $pairId `
-                "Accepted '$($workload.id)' slot $slotIndex"
-            $recordedPairs = @(
-                @([string]$slot.captureExecutableHash, [string]$report.LastDiagnostics.CaptureRun.ExecutableHash),
-                @([string]$slot.captureShaderBundleHash, [string]$report.LastDiagnostics.CaptureRun.ShaderBundleHash),
-                @([string]$slot.captureApplicationVersion, [string]$report.LastDiagnostics.CaptureRun.ApplicationVersion),
-                @([string]$slot.captureSettingsSchemaVersion, [string]$report.LastDiagnostics.CaptureRun.SettingsSchemaVersion),
-                @([string]$slot.captureCommit, [string]$report.LastDiagnostics.CaptureRun.Commit),
-                @([string]$slot.captureDirtyWorktreeState, [string]$report.LastDiagnostics.CaptureRun.DirtyWorktreeState),
-                @([string]$slot.producerSchema, [string]$report.ProducerIdentity.Schema),
-                @([string]$slot.producerSettingsFingerprint, [string]$report.ProducerIdentity.SettingsFingerprint),
-                @([string]$slot.producerGpuName, [string]$report.ProducerIdentity.GpuName),
-                @([string]$slot.producerDriverVersion, [string]$report.ProducerIdentity.DriverVersion),
-                @([string]$slot.producerQualityTier, [string]$report.ProducerIdentity.QualityTier),
-                @([string]$slot.trajectory, [string]$report.CaptureContract.Trajectory),
-                @([string]$slot.trajectoryFingerprint, [string]$report.CaptureContract.TrajectoryFingerprint),
-                @([string]$slot.trajectoryFrameCount, [string]$report.CaptureContract.TrajectoryFrameCount),
-                @([string]$slot.trajectoryRouteHash, [string]$report.CaptureContract.TrajectoryRouteHash),
-                @([string]$slot.trajectorySequenceHash, [string]$report.CaptureContract.TrajectorySequenceHash))
-            foreach ($pair in $recordedPairs) {
-                if (-not [string]::Equals(
-                        [string]$pair[0],
-                        [string]$pair[1],
-                        [StringComparison]::Ordinal)) {
-                    throw "Accepted '$($workload.id)' slot $slotIndex has forged duplicated provenance."
-                }
-            }
-            $allSlotReports += $report
-            if ($expectedPhase -eq "baseline") {
-                Assert-WithinPhaseIdentity `
-                    $baselinePhaseIdentity $report `
-                    "Accepted '$($workload.id)' baseline slot $slotIndex"
-                if ($null -eq $baselinePhaseIdentity) {
-                    $baselinePhaseIdentity = $report
-                }
-                $baselineReports += $report
-            } else {
-                Assert-WithinPhaseIdentity `
-                    $candidatePhaseIdentity $report `
-                    "Accepted '$($workload.id)' candidate slot $slotIndex"
-                if ($null -eq $candidatePhaseIdentity) {
-                    $candidatePhaseIdentity = $report
-                }
-                $candidateReports += $report
-            }
-        }
-        $pairedDifferences = @()
-        for ($cycleIndex = 0;
-             $cycleIndex -lt [int]$Manifest.capture.abbaCycles;
-             $cycleIndex++) {
-            $offset = $cycleIndex * 4
-            $pairedDifferences += [Math]::Max(
-                (Get-Timing $allSlotReports[$offset] "cpu" "p95"),
-                (Get-Timing $allSlotReports[$offset] "gpu" "p95")) -
-                [Math]::Max(
-                    (Get-Timing $allSlotReports[$offset + 1] "cpu" "p95"),
-                    (Get-Timing $allSlotReports[$offset + 1] "gpu" "p95"))
-            $pairedDifferences += [Math]::Max(
-                (Get-Timing $allSlotReports[$offset + 3] "cpu" "p95"),
-                (Get-Timing $allSlotReports[$offset + 3] "gpu" "p95")) -
-                [Math]::Max(
-                    (Get-Timing $allSlotReports[$offset + 2] "cpu" "p95"),
-                    (Get-Timing $allSlotReports[$offset + 2] "gpu" "p95"))
-        }
-        $recomputed = Compare-WorkloadCaptures `
-            $Manifest $workload $baselineReports $candidateReports `
-            ([double[]]$pairedDifferences) $requireWin
-        if ([string]$recomputed.Decision -ne "keep") {
-            throw "Accepted '$($workload.id)' reports no longer recompute to a keep decision: $($recomputed.Reason)"
-        }
-        foreach ($property in $recomputed.PSObject.Properties) {
-            $storedProperty = $comparison.PSObject.Properties[$property.Name]
-            if ($null -eq $storedProperty -or
-                (($property.Value | ConvertTo-Json -Depth 10 -Compress) -cne
-                 ($storedProperty.Value | ConvertTo-Json -Depth 10 -Compress))) {
-                throw "Accepted '$($workload.id)' stored '$($property.Name)' differs from recomputed evidence."
-            }
-        }
-        $qualityRoot = Join-Path $iterationRoot (
-            "quality/{0}/Release/{1}" -f $stage, [string]$workload.id)
-        $qualityReferencePath =
-            [string]$reference.qualitySequence.candidateReferenceContractPath
-        $qualityReferenceHash =
-            [string]$reference.qualitySequence.candidateReferenceContractSha256
-        if (-not (Test-Path -LiteralPath $qualityReferencePath -PathType Leaf) -or
-            (Get-Sha256 $qualityReferencePath) -cne $qualityReferenceHash) {
-            throw "Accepted '$($workload.id)' quality reference changed."
-        }
-        $qualityReference = Get-Content `
-            -LiteralPath $qualityReferencePath -Raw | ConvertFrom-Json
-        $qualitySequenceId = Get-QualitySequenceId `
-            $Manifest "Release" ([string]$workload.id) `
-            "candidate" $stage ([string]$Decision.candidateHead) 0
-        $referenceBuild = Get-ReferenceBuildIdentity $Lock "Release"
-        $null = Assert-QualitySequenceStoredEvidence `
-            $Manifest $workload $comparison.QualitySequenceEvidence `
-            $candidateBuild "Release" "candidate" $qualitySequenceId `
-            ([string]$Decision.candidateHead) $qualityReferencePath `
-            $qualityReferenceHash ([string]$reference.qualityContractPath) `
-            ([string]$reference.qualityContractSha256) $qualityReference `
-            $referenceBuild @($reference.qualitySequence.spatialEnvelope) `
-            $qualityRoot "Accepted '$($workload.id)' quality sequence"
+    }
+}
+
+function Assert-TimingAttemptEvidence {
+    param($Manifest, $Evidence, $Decision)
+    Assert-ExactPropertyNames $Evidence @("refName", "blob", "reservation") `
+        "Timing attempt evidence"
+    $expectedRef = Get-TimingAttemptRefName `
+        $Manifest ([string]$Decision.targetDomain) ([string]$Decision.targetPass)
+    if ([string]$Evidence.refName -cne $expectedRef -or
+        [string]$Evidence.blob -cnotmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' -or
+        (Get-GitText @("rev-parse", "--verify", $expectedRef)) -cne
+            [string]$Evidence.blob -or
+        (Get-GitText @("cat-file", "-t", [string]$Evidence.blob)) -cne "blob") {
+        throw "Timing attempt ref/blob identity differs."
+    }
+    $stored = (Get-GitText @("cat-file", "blob", [string]$Evidence.blob)) |
+        ConvertFrom-Json -DateKind String
+    if (($stored | ConvertTo-Json -Depth 8 -Compress) -cne
+        ($Evidence.reservation | ConvertTo-Json -Depth 8 -Compress)) {
+        throw "Timing attempt reservation bytes differ from the stored blob."
+    }
+    Assert-ExactPropertyNames $stored @(
+        "schema", "campaignId", "manifestSha256", "lockSha256",
+        "timingDomain", "timingName", "candidateId", "acceptedHead",
+        "createdAtUtc") "Timing attempt reservation"
+    $createdAt = [DateTimeOffset]::MinValue
+    if ([string]$stored.schema -cne "njulf-perf-timing-attempt/v1" -or
+        [string]$stored.campaignId -cne [string]$Manifest.campaignId -or
+        [string]$stored.manifestSha256 -cne
+            (Get-AdmittedCampaignManifestSha256) -or
+        [string]$stored.lockSha256 -cne $script:CampaignLockSha256 -or
+        [string]$stored.timingDomain -cne [string]$Decision.targetDomain -or
+        [string]$stored.timingName -cne [string]$Decision.targetPass -or
+        [string]$stored.candidateId -cne [string]$Decision.candidate.id -or
+        [string]$stored.acceptedHead -cne [string]$Decision.acceptedHead -or
+        -not [DateTimeOffset]::TryParseExact(
+            [string]$stored.createdAtUtc, "O",
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind,
+            [ref]$createdAt)) {
+        throw "Timing attempt reservation semantics differ."
     }
 }
 
@@ -4715,7 +8136,7 @@ function Assert-RetainedAcceptanceChain {
             $RetainedHead,
             [StringComparison]::OrdinalIgnoreCase)) {
         return [pscustomobject]@{
-            Targets = @()
+            Hypotheses = @()
             LastEvidence = "baseline:$baseline"
             Commits = @()
         }
@@ -4727,7 +8148,7 @@ function Assert-RetainedAcceptanceChain {
     if ($commits.Count -eq 0) {
         throw "Retained HEAD '$RetainedHead' has no first-parent commits beyond '$baseline'."
     }
-    $targets = [System.Collections.Generic.List[string]]::new()
+    $hypotheses = [System.Collections.Generic.List[object]]::new()
     $previousCommit = $baseline
     $previousEvidence = "baseline:$baseline"
     foreach ($commit in $commits) {
@@ -4747,18 +8168,26 @@ function Assert-RetainedAcceptanceChain {
             throw "Acceptance ref '$refName' does not point to a decision blob."
         }
         $decision = (Get-GitText @("cat-file", "blob", $blob)) |
-            ConvertFrom-Json
+            ConvertFrom-Json -DateKind String
         $iteration = [int]$decision.iteration
         $decisionPath = Join-Path $script:RunRoot (
             "iterations/{0:D6}/decision.json" -f $iteration)
         if (-not (Test-Path -LiteralPath $decisionPath -PathType Leaf) -or
             -not [string]::Equals(
-                (Get-GitText @("hash-object", "--", $decisionPath)),
+                (Get-GitText @(
+                    "hash-object", "--no-filters", "--", $decisionPath)),
                 $blob,
                 [StringComparison]::OrdinalIgnoreCase) -or
-            [string]$decision.schema -ne "njulf-perf-campaign-decision/v1" -or
+            [string]$decision.schema -ne "njulf-perf-campaign-decision/v3" -or
             [string]$decision.campaignId -ne [string]$Manifest.campaignId -or
-            [string]$decision.manifestSha256 -ne (Get-Sha256 $script:ManifestFile) -or
+            [string]$decision.manifestSha256 -ne
+                (Get-AdmittedCampaignManifestSha256) -or
+            -not [string]::Equals(
+                [string]$decision.manifestSnapshotPath,
+                $script:CampaignManifestSnapshotPath,
+                [StringComparison]::OrdinalIgnoreCase) -or
+            [string]$decision.manifestSnapshotSha256 -cne
+                $script:CampaignManifestSha256 -or
             [string]$decision.lockSha256 -ne $script:CampaignLockSha256 -or
             [string]$decision.decision -ne "keep" -or
             -not [string]::Equals(
@@ -4780,8 +8209,17 @@ function Assert-RetainedAcceptanceChain {
             $Manifest $Lock $decision $previousCommit $commit $previousEvidence
         Assert-AcceptedDecisionArtifacts `
             $Manifest $Lock $decision $decisionPath
-        $targetId = [string]$decision.targetWorkload
-        if (-not $targets.Contains($targetId)) { $targets.Add($targetId) }
+        $hypothesis = [pscustomobject][ordered]@{
+            id = [string]$decision.targetHypothesisId
+            targetDomain = [string]$decision.targetDomain
+            targetPass = [string]$decision.targetPass
+            claims = @($decision.targetClaims)
+        }
+        if (@($hypotheses | Where-Object {
+                [string]$_.id -ceq [string]$hypothesis.id
+            }).Count -eq 0) {
+            $hypotheses.Add($hypothesis)
+        }
         $previousCommit = $commit
         $previousEvidence = $blob
     }
@@ -4792,7 +8230,7 @@ function Assert-RetainedAcceptanceChain {
         throw "Authenticated acceptance chain does not terminate at '$RetainedHead'."
     }
     return [pscustomobject]@{
-        Targets = @($targets)
+        Hypotheses = @($hypotheses)
         LastEvidence = $previousEvidence
         Commits = @($commits)
     }
@@ -4930,6 +8368,19 @@ function Initialize-QualitySequenceReference {
     }
 }
 
+function Get-QualitySequenceEvidencePropertyNames {
+    return @(
+        "role", "sequenceId", "reportPath", "reportSha256",
+        "healthPath", "healthSha256", "outputDirectory",
+        "referenceContractPath", "referenceContractSha256",
+        "qualityContractPath", "qualityContractSha256", "buildRootPath",
+        "buildBundleFingerprint", "runtimeExecutableBundleHash",
+        "buildIdentity", "frozenVerifierEvidence",
+        "trajectoryRouteHash", "trajectorySequenceHash", "producerGpuName",
+        "producerDriverVersion", "producerQualityTier", "captureRun",
+        "producerIdentity", "verifiedMetrics", "checkpoints")
+}
+
 function Assert-QualitySequenceStoredEvidence {
     param(
         $Manifest,
@@ -4949,6 +8400,8 @@ function Assert-QualitySequenceStoredEvidence {
         $SpatialEnvelope,
         [string]$ExpectedRoot,
         [string]$Label)
+    Assert-ExactPropertyNames $Evidence `
+        (Get-QualitySequenceEvidencePropertyNames) "$Label evidence"
     if ($null -eq $Evidence -or
         [string]$Evidence.role -cne $Role -or
         [string]$Evidence.sequenceId -cne $SequenceId -or
@@ -5007,6 +8460,10 @@ function Assert-QualitySequenceStoredEvidence {
             [string]$BuildIdentity.RuntimeExecutableBundleHash) {
         throw "$Label stored build identity differs."
     }
+    if (($Evidence.buildIdentity | ConvertTo-Json -Depth 12 -Compress) -cne
+        ($BuildIdentity | ConvertTo-Json -Depth 12 -Compress)) {
+        throw "$Label stored full build identity differs."
+    }
     Assert-PathIdentity `
         ([string]$Evidence.buildRootPath) ([string]$BuildIdentity.RootPath) `
         "$Label build"
@@ -5017,16 +8474,27 @@ function Assert-QualitySequenceStoredEvidence {
         $ReferenceContractPath $ExpectedReferenceContractSha256 `
         $QualityContractPath $ExpectedQualityContractSha256 `
         $ReferenceContract $Label
-    $health = Get-Content -LiteralPath $healthPath -Raw | ConvertFrom-Json
+    $health = Get-Content -LiteralPath $healthPath -Raw |
+        ConvertFrom-Json -DateKind String
     Assert-QualitySequenceHealthReport `
         $Manifest $Workload $health $report $BuildIdentity $Configuration `
         $Role $SequenceId $ExpectedCommit $reportPath $outputDirectory `
         $ReferenceContractPath $QualityContractPath $Label
+    $null = Assert-QualityFrozenVerifierEvidence `
+        $Workload $report $Role $SequenceId $reportPath `
+        $Evidence.frozenVerifierEvidence $VerifierBuildIdentity $Label
     $verifiedMetrics = $null
     if ($Role -ne "canonical") {
+        Assert-ExactPropertyNames $Evidence.verifiedMetrics @(
+            "metricVerifierArtifact", "spatial", "temporal") `
+            "$Label verified metrics"
+        $metricArtifactPath = [System.IO.Path]::ChangeExtension(
+            $reportPath,
+            ".metric-verification.json")
         $verifiedMetrics = Get-RecomputedQualitySequenceMetrics `
             $Manifest $Workload $report $ReferenceContract `
-            $VerifierBuildIdentity $QualityContractPath $Label
+            $VerifierBuildIdentity $QualityContractPath $metricArtifactPath `
+            $Evidence.verifiedMetrics.metricVerifierArtifact $Label
         if ($Role -eq "candidate") {
             Assert-QualitySequenceSpatialEnvelope `
                 $verifiedMetrics @($SpatialEnvelope) $Label
@@ -5050,6 +8518,12 @@ function Assert-QualitySequenceStoredEvidence {
             [string]$report.ProducerIdentity.QualityTier) {
         throw "$Label stored route/producer identity differs."
     }
+    if (($Evidence.captureRun | ConvertTo-Json -Depth 16 -Compress) -cne
+            ($report.CaptureRun | ConvertTo-Json -Depth 16 -Compress) -or
+        ($Evidence.producerIdentity | ConvertTo-Json -Depth 16 -Compress) -cne
+            ($report.ProducerIdentity | ConvertTo-Json -Depth 16 -Compress)) {
+        throw "$Label stored top-level provenance differs from its report."
+    }
     $storedCheckpoints = @($Evidence.checkpoints)
     $reportCheckpoints = @($report.Checkpoints)
     if ($storedCheckpoints.Count -ne $reportCheckpoints.Count) {
@@ -5058,11 +8532,35 @@ function Assert-QualitySequenceStoredEvidence {
     for ($index = 0; $index -lt $storedCheckpoints.Count; $index++) {
         $stored = $storedCheckpoints[$index]
         $actual = $reportCheckpoints[$index]
-        if ([int]$stored.ordinal -ne [int]$actual.Ordinal -or
-            [int]$stored.routeFrameIndex -ne [int]$actual.RouteFrameIndex -or
-            [string]$stored.pfmSha256 -cne [string]$actual.PfmSha256 -or
-            [string]$stored.captureToken -cne [string]$actual.CaptureToken -or
-            [UInt64]$stored.ddgiFrameSerial -ne [UInt64]$actual.DdgiFrameSerial) {
+        Assert-ExactPropertyNames $stored @(
+            "ordinal", "routeFrameIndex", "pfmPath", "pfmSha256",
+            "captureToken", "ddgiFrameSerial", "absoluteFrameIndex",
+            "width", "height", "camera", "sceneAssetHash",
+            "sceneStateHash", "sceneContentRevision", "settingsFingerprint",
+            "captureRun", "producerIdentity", "hdrDifference",
+            "activationFrameState") "$Label checkpoint $index evidence"
+        $expectedStored = [ordered]@{
+            ordinal = [int]$actual.Ordinal
+            routeFrameIndex = [int]$actual.RouteFrameIndex
+            pfmPath = [System.IO.Path]::GetFullPath([string]$actual.PfmPath)
+            pfmSha256 = [string]$actual.PfmSha256
+            captureToken = [string]$actual.CaptureToken
+            ddgiFrameSerial = [UInt64]$actual.DdgiFrameSerial
+            absoluteFrameIndex = [int]$actual.AbsoluteFrameIndex
+            width = [int]$actual.Width
+            height = [int]$actual.Height
+            camera = $actual.Camera
+            sceneAssetHash = [string]$actual.SceneAssetHash
+            sceneStateHash = [string]$actual.SceneStateHash
+            sceneContentRevision = [UInt64]$actual.SceneContentRevision
+            settingsFingerprint = [string]$actual.SettingsFingerprint
+            captureRun = $actual.CaptureRun
+            producerIdentity = $actual.ProducerIdentity
+            hdrDifference = $actual.HdrDifference
+            activationFrameState = $actual.ActivationFrameState
+        }
+        if (($stored | ConvertTo-Json -Depth 32 -Compress) -cne
+            ($expectedStored | ConvertTo-Json -Depth 32 -Compress)) {
             throw "$Label stored checkpoint $index differs from its report."
         }
         Assert-PathIdentity `
@@ -5082,10 +8580,31 @@ function Assert-QualitySequenceStoredEvidence {
     }
     foreach ($item in @(
             @($reportPath, [string]$Evidence.reportSha256, "report"),
-            @($healthPath, [string]$Evidence.healthSha256, "health"))) {
+            @($healthPath, [string]$Evidence.healthSha256, "health"),
+            @([string]$Evidence.frozenVerifierEvidence.activation.artifactPath,
+                [string]$Evidence.frozenVerifierEvidence.activation.artifactSha256,
+                "quality activation verifier artifact"),
+            @([string]$Evidence.frozenVerifierEvidence.sponzaAnimationSidecar.path,
+                [string]$Evidence.frozenVerifierEvidence.sponzaAnimationSidecar.sha256,
+                "common animation sidecar"))) {
+        if ([string]::IsNullOrEmpty([string]$item[0])) {
+            if (-not [string]::IsNullOrEmpty([string]$item[1])) {
+                throw "$Label stored $($item[2]) has a hash without a path."
+            }
+            continue
+        }
         if (-not (Test-Path -LiteralPath ([string]$item[0]) -PathType Leaf) -or
             (Get-Sha256 ([string]$item[0])) -cne [string]$item[1]) {
             throw "$Label stored $($item[2]) bytes changed during validation."
+        }
+    }
+    if ($Role -ne "canonical") {
+        $metricArtifact = $Evidence.verifiedMetrics.metricVerifierArtifact
+        if (-not (Test-Path -LiteralPath ([string]$metricArtifact.artifactPath) `
+                -PathType Leaf) -or
+            (Get-Sha256 ([string]$metricArtifact.artifactPath)) -cne
+                [string]$metricArtifact.artifactSha256) {
+            throw "$Label stored metric verifier artifact bytes changed during validation."
         }
     }
     return $report
@@ -5113,22 +8632,22 @@ function Assert-QualitySequenceReferenceContract {
         throw "$Label bytes do not encode the exact canonical-derived contract."
     }
     $expectedIndices = @(Get-QualitySequenceCheckpointIndices (
-        [string]$Workload.trajectory))
+        [string]$Workload.qualityTrajectory))
     if ([string]$Contract.schema -cne
             "njulf-benchmark-quality-sequence-reference/v1" -or
         [string]$Contract.sceneKind -cne [string]$Workload.scene -or
         [string]$Contract.scenario -cne [string]$Workload.scenario -or
         [string]$Contract.captureVariant -cne [string]$Workload.captureVariant -or
-        [string]$Contract.trajectory -cne [string]$Workload.trajectory -or
+        [string]$Contract.trajectory -cne [string]$Workload.qualityTrajectory -or
         [int]$Contract.trajectoryFrameCount -ne
-            (Get-QualitySequenceTrajectoryFrameCount ([string]$Workload.trajectory)) -or
+            (Get-QualitySequenceTrajectoryFrameCount ([string]$Workload.qualityTrajectory)) -or
         [int]$Contract.warmupFrameCount -ne [int]$Workload.warmupFrames -or
         [int]$Contract.maximumAdditionalSettlingFrameCount -ne
             [int]$Manifest.capture.maximumSettlingFrames -or
         [int]$Contract.maximumReadbackDrainFrameCount -ne
             [int]$Manifest.qualitySequence.maximumReadbackDrainFrames -or
         [string]$Contract.checkpointContractFingerprint -cne
-            (Get-QualitySequenceCheckpointFingerprint ([string]$Workload.trajectory)) -or
+            (Get-QualitySequenceCheckpointFingerprint ([string]$Workload.qualityTrajectory)) -or
         [double]$Contract.maximumRelativeRmse -ne
             [double]$Manifest.quality.maximumRelativeRmse -or
         [double]$Contract.maximumFlipP95 -ne
@@ -5239,15 +8758,7 @@ function Assert-LockedQualitySequenceReference {
         "candidateReferenceContractSha256", "temporalGates",
         "spatialEnvelope", "baselineRepeatReportSha256") `
         "$Label quality reference"
-    $expectedEvidenceProperties = @(
-        "role", "sequenceId", "reportPath", "reportSha256",
-        "healthPath", "healthSha256", "outputDirectory",
-        "referenceContractPath", "referenceContractSha256",
-        "qualityContractPath", "qualityContractSha256", "buildRootPath",
-        "buildBundleFingerprint", "runtimeExecutableBundleHash",
-        "trajectoryRouteHash", "trajectorySequenceHash", "producerGpuName",
-        "producerDriverVersion", "producerQualityTier", "captureRun",
-        "producerIdentity", "verifiedMetrics", "checkpoints")
+    $expectedEvidenceProperties = @(Get-QualitySequenceEvidencePropertyNames)
     Assert-ExactPropertyNames `
         $quality.canonical $expectedEvidenceProperties `
         "$Label canonical evidence"
@@ -5274,9 +8785,9 @@ function Assert-LockedQualitySequenceReference {
         }
     }
     $repeatContract = Get-Content -LiteralPath $repeatContractPath -Raw |
-        ConvertFrom-Json
+        ConvertFrom-Json -DateKind String
     $candidateContract = Get-Content -LiteralPath $candidateContractPath -Raw |
-        ConvertFrom-Json
+        ConvertFrom-Json -DateKind String
     $canonicalId = Get-QualitySequenceId `
         $Manifest $Configuration ([string]$Workload.id) `
         "canonical" "reference-init" $BaselineCommit 0
@@ -5368,7 +8879,11 @@ function Assert-InitializedCampaignReferences {
         $Manifest,
         [string]$BaselineCommit,
         $ReferenceBuilds,
-        $References)
+        $References,
+        $ControlledIsolations)
+    if ($null -eq $ControlledIsolations -or $ControlledIsolations.Count -ne 0) {
+        throw "Lean campaign references must not contain controlled directional isolation artifacts."
+    }
     foreach ($configuration in @(Get-CampaignConfigurations $Manifest)) {
         $build = $ReferenceBuilds[$configuration]
         Assert-BuildIdentity $build "Initialized $configuration reference"
@@ -5398,10 +8913,18 @@ function Assert-InitializedCampaignReferences {
                 $true ([string]$entry.pairId) $BaselineCommit `
                 $build $null ""
             $health = Get-Content -LiteralPath ([string]$entry.healthPath) -Raw |
-                ConvertFrom-Json
+                ConvertFrom-Json -DateKind String
             Assert-HealthReport `
                 $Manifest $workload $health $report $build `
                 $BaselineCommit ([string]$entry.pairId) `
+                "Initialized $configuration/$($workload.id) reference"
+            if (($entry.buildIdentity | ConvertTo-Json -Depth 12 -Compress) -cne
+                ($build | ConvertTo-Json -Depth 12 -Compress)) {
+                throw "Initialized $configuration/$($workload.id) build identity differs."
+            }
+            $null = Assert-TimingFrozenVerifierEvidence `
+                $workload $report ([string]$entry.reportPath) `
+                $entry.frozenVerifierEvidence $build `
                 "Initialized $configuration/$($workload.id) reference"
             if ($null -eq $entry.qualitySequence -or
                 [string]$entry.qualitySequence.schema -ne
@@ -5415,6 +8938,9 @@ function Assert-InitializedCampaignReferences {
                 $BaselineCommit `
                 "Initialized $configuration/$($workload.id)"
         }
+        Assert-ReferenceTargetHypothesisPasses `
+            $Manifest $References[$configuration] `
+            "Initialized $configuration"
     }
     Assert-ExactCampaignHead $BaselineCommit "Reference initialization final audit"
     Assert-CleanCampaignWorktree
@@ -5439,6 +8965,7 @@ function Initialize-CampaignReferences {
     }
     $references = [ordered]@{}
     $referenceBuilds = [ordered]@{}
+    $referenceControlledIsolations = [ordered]@{}
     foreach ($configuration in @(Get-CampaignConfigurations $Manifest)) {
         $buildRoot = Join-Path $script:RunRoot "reference-build/$configuration"
         $referenceBuild = Invoke-BuildOutput `
@@ -5459,6 +8986,7 @@ function Initialize-CampaignReferences {
                 -Manifest $Manifest `
                 -Workload $workload `
                 -BuildIdentity $referenceBuild `
+                -VerifierBuildIdentity $referenceBuild `
                 -Configuration $configuration `
                 -ReportPath $reportPath `
                 -PairId $pairId `
@@ -5500,6 +9028,9 @@ function Initialize-CampaignReferences {
                 captureRun = $report.LastDiagnostics.CaptureRun
                 detailedCountersCompiled = [int]$report.LastDiagnostics.DdgiDetailedCountersCompiled
                 detailedCountersEnabled = [int]$report.LastDiagnostics.DdgiDetailedCountersEnabled
+                frozenVerifierEvidence =
+                    $report.CampaignFrozenVerifierEvidence
+                buildIdentity = $referenceBuild
             }
             Assert-ProtectedFingerprints $ProtectedFingerprints
             Assert-ExactCampaignHead `
@@ -5508,6 +9039,11 @@ function Initialize-CampaignReferences {
             Assert-CleanCampaignWorktree
         }
         $references[$configuration] = $configurationReferences
+    }
+    foreach ($configuration in @(Get-CampaignConfigurations $Manifest)) {
+        Assert-ReferenceTargetHypothesisPasses `
+            $Manifest $references[$configuration] `
+            "Initialize $configuration"
     }
     # Global phase boundary: every Release and ShippingPerformance endpoint
     # timing reference is complete before any standalone quality readback.
@@ -5529,13 +9065,19 @@ function Initialize-CampaignReferences {
         }
     }
     Assert-InitializedCampaignReferences `
-        $Manifest $baselineCommit $referenceBuilds $references
+        $Manifest $baselineCommit $referenceBuilds $references `
+        $referenceControlledIsolations
     $lock = [ordered]@{
-        schema = "njulf-perf-campaign-lock/v5"
+        schema = "njulf-perf-campaign-lock/v8"
         campaignId = [string]$Manifest.campaignId
         createdAtUtc = [DateTimeOffset]::UtcNow
         manifestPath = $script:ManifestFile
-        manifestSha256 = Get-Sha256 $script:ManifestFile
+        manifestSha256 = Get-AdmittedCampaignManifestSha256
+        manifestSnapshotPath = $script:CampaignManifestSnapshotPath
+        manifestSnapshotSha256 = Get-Sha256 `
+            $script:CampaignManifestSnapshotPath
+        gitInfoExcludePath = $script:GitInfoExcludePath
+        gitInfoExcludeFingerprint = $script:GitInfoExcludeFingerprint
         baselineCommit = $baselineCommit
         baselineStatus = "clean"
         configurations = @(Get-CampaignConfigurations $Manifest)
@@ -5543,6 +9085,10 @@ function Initialize-CampaignReferences {
         protectedFingerprints = $ProtectedFingerprints
         referenceBuilds = $referenceBuilds
         references = $references
+        controlledIsolations = $referenceControlledIsolations
+        discoveryPolicy = $Manifest.discoveryPolicy
+        reviewedCandidates = @($Manifest.candidates)
+        targetHypotheses = @($Manifest.targetHypotheses)
     }
     Assert-ExactCampaignHead $baselineCommit "Campaign lock publication"
     Assert-CleanCampaignWorktree
@@ -5562,12 +9108,14 @@ function Read-CampaignLock {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Campaign lock is missing. Run with -InitializeReferences first."
     }
-    $lock = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $lock = Get-Content -LiteralPath $path -Raw |
+        ConvertFrom-Json -DateKind String
     $script:CampaignLockPath = $path
     $script:CampaignLockSha256 = Get-Sha256 $path
-    if ([string]$lock.schema -ne "njulf-perf-campaign-lock/v5" -or
+    if ([string]$lock.schema -ne "njulf-perf-campaign-lock/v8" -or
         [string]$lock.campaignId -ne [string]$Manifest.campaignId -or
-        [string]$lock.manifestSha256 -ne (Get-Sha256 $script:ManifestFile)) {
+        [string]$lock.manifestSha256 -ne
+            (Get-AdmittedCampaignManifestSha256)) {
         throw "Campaign lock does not match the current manifest. References must be re-established deliberately."
     }
     if ([string]$lock.baselineStatus -ne "clean" -or
@@ -5576,9 +9124,13 @@ function Read-CampaignLock {
     }
     Assert-ExactPropertyNames $lock @(
         "schema", "campaignId", "createdAtUtc", "manifestPath",
-        "manifestSha256", "baselineCommit", "baselineStatus",
+        "manifestSha256", "manifestSnapshotPath",
+        "manifestSnapshotSha256", "gitInfoExcludePath",
+        "gitInfoExcludeFingerprint", "baselineCommit", "baselineStatus",
         "configurations", "advisoryBeautyTarget", "protectedFingerprints",
-        "referenceBuilds", "references") "Campaign lock"
+        "referenceBuilds", "references", "controlledIsolations",
+        "discoveryPolicy", "reviewedCandidates", "targetHypotheses") `
+        "Campaign lock"
     $createdAtUtc = [DateTimeOffset]::MinValue
     $expectedConfigurations = @(Get-CampaignConfigurations $Manifest)
     if (-not [DateTimeOffset]::TryParse(
@@ -5588,6 +9140,19 @@ function Read-CampaignLock {
             [System.IO.Path]::GetFullPath([string]$lock.manifestPath),
             $script:ManifestFile,
             [StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals(
+            [System.IO.Path]::GetFullPath(
+                [string]$lock.manifestSnapshotPath),
+            $script:CampaignManifestSnapshotPath,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        [string]$lock.manifestSnapshotSha256 -cne
+            $script:CampaignManifestSha256 -or
+        -not [string]::Equals(
+            [System.IO.Path]::GetFullPath([string]$lock.gitInfoExcludePath),
+            $script:GitInfoExcludePath,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        [string]$lock.gitInfoExcludeFingerprint -cne
+            $script:GitInfoExcludeFingerprint -or
         ((@($lock.configurations | ForEach-Object { [string]$_ }) -join "`n") -cne
          ($expectedConfigurations -join "`n"))) {
         throw "Campaign lock metadata/configuration topology is invalid."
@@ -5623,6 +9188,18 @@ function Read-CampaignLock {
     Assert-ExactPropertyNames `
         $lock.references $expectedConfigurations `
         "Campaign lock references"
+    if ($null -eq $lock.controlledIsolations -or
+        @($lock.controlledIsolations.PSObject.Properties).Count -ne 0) {
+        throw "Lean campaign lock must not contain directional controlled-isolation artifacts."
+    }
+    if (($lock.discoveryPolicy | ConvertTo-Json -Depth 12 -Compress) -cne
+            ($Manifest.discoveryPolicy | ConvertTo-Json -Depth 12 -Compress) -or
+        ($lock.reviewedCandidates | ConvertTo-Json -Depth 12 -Compress) -cne
+            ($Manifest.candidates | ConvertTo-Json -Depth 12 -Compress) -or
+        ($lock.targetHypotheses | ConvertTo-Json -Depth 12 -Compress) -cne
+        ($Manifest.targetHypotheses | ConvertTo-Json -Depth 12 -Compress)) {
+        throw "Campaign lock policy, candidates, or hypotheses differ from the manifest."
+    }
     foreach ($path in @($Manifest.protectedPaths)) {
         $lockedProperty =
             $lock.protectedFingerprints.PSObject.Properties[[string]$path]
@@ -5644,7 +9221,7 @@ function Read-CampaignLock {
         "trajectoryFrameCount", "trajectoryRouteHash",
         "trajectorySequenceHash", "producerIdentity", "captureRun",
         "detailedCountersCompiled", "detailedCountersEnabled",
-        "qualitySequence")
+        "frozenVerifierEvidence", "buildIdentity", "qualitySequence")
     foreach ($configuration in $expectedConfigurations) {
         $referenceBuild = Get-ReferenceBuildIdentity $lock $configuration
         Assert-ExactPropertyNames $referenceBuild @(
@@ -5726,10 +9303,18 @@ function Read-CampaignLock {
                 ([string]$entry.pairId) ([string]$lock.baselineCommit) `
                 $referenceBuild $null ""
             $health = Get-Content -LiteralPath ([string]$entry.healthPath) -Raw |
-                ConvertFrom-Json
+                ConvertFrom-Json -DateKind String
             Assert-HealthReport `
                 $Manifest $workload $health $report $referenceBuild `
                 ([string]$lock.baselineCommit) ([string]$entry.pairId) `
+                "Locked reference $configuration/$($workload.id)"
+            if (($entry.buildIdentity | ConvertTo-Json -Depth 12 -Compress) -cne
+                ($referenceBuild | ConvertTo-Json -Depth 12 -Compress)) {
+                throw "Locked reference build identity differs for '$configuration/$($workload.id)'."
+            }
+            $null = Assert-TimingFrozenVerifierEvidence `
+                $workload $report ([string]$entry.reportPath) `
+                $entry.frozenVerifierEvidence $referenceBuild `
                 "Locked reference $configuration/$($workload.id)"
             if (-not [string]::Equals(
                     [string]$report.CaptureContract.Trajectory,
@@ -5791,6 +9376,8 @@ function Read-CampaignLock {
                 ([string]$lock.baselineCommit) `
                 "Locked $configuration/$($workload.id)"
         }
+        Assert-ReferenceTargetHypothesisPasses `
+            $Manifest $configurationEntries "Locked $configuration"
     }
     return $lock
 }
@@ -5804,22 +9391,52 @@ function Assert-LockBaselineAncestor {
     }
 }
 
-function Invoke-Trial {
+function Invoke-PinnedCandidate {
     param(
-        [string]$Command,
-        [int]$Iteration,
         $Manifest,
-        [string]$ScratchDirectory)
-    Assert-Text $Command "TrialCommand"
-    New-Item -ItemType Directory -Force -Path $ScratchDirectory | Out-Null
-    $expanded = $Command.Replace("{Iteration}", $Iteration.ToString()).Replace("{SolutionRoot}", $script:SolutionRoot).Replace("{RunDirectory}", $ScratchDirectory)
-    $hostExecutable = Join-Path $PSHOME "pwsh.exe"
-    if (-not (Test-Path -LiteralPath $hostExecutable)) { $hostExecutable = "powershell.exe" }
-    Invoke-ProcessChecked `
-        $hostExecutable `
-        @("-NoProfile", "-NonInteractive", "-Command", $expanded) `
-        "Trial command iteration $Iteration" `
-        ([int]$Manifest.capture.trialTimeoutSeconds)
+        $Candidate,
+        [string]$AcceptedHead)
+    Assert-ExactCampaignHead $AcceptedHead "Pinned candidate admission"
+    Assert-CleanCampaignWorktree
+    Assert-ProtectedFingerprints $script:ProtectedFingerprints
+    Assert-CampaignLockIntegrity
+    $sourceCommit = [string]$Candidate.sourceCommit
+    $expectedPatchId = [string]$Candidate.patchId
+    $expectedPaths = @($Candidate.allowedPaths | ForEach-Object {
+        [string]$_
+    })
+    if ((Get-StablePatchId $sourceCommit) -cne $expectedPatchId -or
+        (@(Get-CommitChangedPaths $sourceCommit) -join "`n") -cne
+            ($expectedPaths -join "`n")) {
+        throw "Pinned candidate '$($Candidate.id)' source patch changed after manifest admission."
+    }
+    try {
+        $null = Invoke-Git @("cherry-pick", "--no-edit", $sourceCommit)
+    } catch {
+        $cherryPickHead = Get-GitText @("rev-parse", "--git-path", "CHERRY_PICK_HEAD")
+        $fullCherryPickHead = if ([System.IO.Path]::IsPathRooted($cherryPickHead)) {
+            $cherryPickHead
+        } else {
+            Join-Path $script:SolutionRoot $cherryPickHead
+        }
+        if (Test-Path -LiteralPath $fullCherryPickHead) {
+            try { $null = Invoke-Git @("cherry-pick", "--abort") } catch { }
+        }
+        Assert-ExactCampaignHead $AcceptedHead "Failed pinned candidate recovery"
+        throw
+    }
+    $candidateHead = Get-GitText @("rev-parse", "HEAD")
+    $candidateParent = Get-GitText @("rev-parse", "$candidateHead^")
+    if ($candidateParent -cne $AcceptedHead -or
+        (Get-StablePatchId $candidateHead) -cne $expectedPatchId -or
+        (@(Get-CommitChangedPaths $candidateHead) -join "`n") -cne
+            ($expectedPaths -join "`n")) {
+        throw "Pinned candidate '$($Candidate.id)' produced an unauthenticated commit."
+    }
+    Assert-CleanCampaignWorktree
+    Assert-ProtectedFingerprints $script:ProtectedFingerprints
+    Assert-CampaignLockIntegrity
+    return $candidateHead
 }
 
 function Get-CurrentCampaignBranch {
@@ -5981,32 +9598,65 @@ function Get-FinalInvariantFailures {
     return @($failures)
 }
 
+function Assert-CampaignModeContract {
+    $hasCandidate = -not [string]::IsNullOrWhiteSpace($CandidateId)
+    $hasEnvelope = -not [string]::IsNullOrWhiteSpace($CandidateEnvelopePath)
+    $hasPreparationArguments = @(@(
+        $DiscoveryArtifactPath,
+        $AutomaticCandidateId,
+        $AutomaticCandidateSourceCommit,
+        $AutomaticCandidateFocusedTestFilter,
+        $CandidateEnvelopeOutputPath) | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_)
+        })
+    if (($hasCandidate -and $hasEnvelope) -or
+        ($PrepareCandidateEnvelope -and ($hasCandidate -or $hasEnvelope))) {
+        throw "Reviewed, enveloped, and envelope-preparation candidate modes are mutually exclusive."
+    }
+    if (($PrepareCandidateEnvelope -and $hasPreparationArguments.Count -ne 5) -or
+        (-not $PrepareCandidateEnvelope -and $hasPreparationArguments.Count -ne 0)) {
+        throw "Candidate-envelope preparation requires exactly its five preparation arguments."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TargetHypothesisId)) {
+        throw "TargetHypothesisId is derived from the admitted candidate and may not be supplied."
+    }
+    if ($InitializeReferences -xor $InitializeReferencesOnly) {
+        throw "Reference initialization requires both InitializeReferences and InitializeReferencesOnly."
+    }
+    $modes = @(
+        [bool]$ValidateOnly,
+        [bool]($InitializeReferences -and $InitializeReferencesOnly),
+        [bool]$BaselineOnly,
+        [bool]$DiscoverHotspots,
+        [bool]$PrepareCandidateEnvelope,
+        [bool]$FinalizeRetainedStack,
+        [bool]($hasCandidate -or $hasEnvelope))
+    $modeCount = @($modes | Where-Object { $_ }).Count
+    if ($modeCount -ne 1) {
+        throw "Choose exactly one campaign mode: validation, reference initialization, baseline, hotspot discovery, envelope preparation, retained finalization, or one candidate."
+    }
+}
+
+Assert-CampaignModeContract
 Initialize-CampaignRepositoryRoot
 $manifest = Read-CampaignManifest
+Assert-CampaignPathTopology $manifest
 $beautyTarget = Assert-AdvisoryBeautyTarget $manifest
 $protectedFingerprints = Get-ProtectedFingerprints $manifest
 $script:ProtectedFingerprints = $protectedFingerprints
 
-if ($InitializeReferencesOnly -and -not $InitializeReferences) {
-    throw "InitializeReferencesOnly requires InitializeReferences."
-}
-if ($FinalizeRetainedStack -and
-    ($InitializeReferences -or $InitializeReferencesOnly -or $BaselineOnly -or
-     -not [string]::IsNullOrWhiteSpace($TrialCommand))) {
-    throw "FinalizeRetainedStack is a separate no-trial mode using existing locked references."
-}
-
-$target = if ([string]::IsNullOrWhiteSpace($TargetWorkloadId)) {
-    @($manifest.workloads | Where-Object { -not [bool]$_.qualification })[0]
-} else {
-    @($manifest.workloads | Where-Object { [string]$_.id -eq $TargetWorkloadId })[0]
-}
-if ($null -eq $target) {
-    throw "Target workload '$TargetWorkloadId' was not found."
-}
-if ([bool]$target.qualification) {
-    throw "Qualification workload '$($target.id)' cannot be selected as a target hypothesis."
-}
+$candidateDefinition = if (-not [string]::IsNullOrWhiteSpace($CandidateId)) {
+    Get-ReviewedCandidate $manifest $CandidateId
+} else { $null }
+$candidateDecisionIdentity = if ($null -ne $candidateDefinition) {
+    New-ReviewedCandidateDecisionIdentity $candidateDefinition
+} else { $null }
+$targetHypothesis = if ($null -ne $candidateDefinition) {
+    Get-TargetHypothesis $manifest ([string]$candidateDefinition.hypothesisId)
+} else { $null }
+$screenWinWorkloads = if ($null -ne $targetHypothesis) {
+    @(Get-HypothesisWorkloads $manifest @($targetHypothesis))
+} else { @() }
 
 if ($ValidateOnly) {
     Write-Host "Campaign manifest valid: $script:ManifestFile"
@@ -6015,26 +9665,60 @@ if ($ValidateOnly) {
     exit 0
 }
 New-Item -ItemType Directory -Force -Path $script:RunRoot | Out-Null
+if ($InitializeReferences) {
+    Initialize-CampaignManifestSnapshot
+} else {
+    $script:CampaignManifestSnapshotPath = [System.IO.Path]::GetFullPath(
+        (Join-Path $script:RunRoot "campaign.manifest.snapshot.json"))
+    Assert-CampaignManifestIntegrity
+}
 
 $lock = $null
 if ($InitializeReferences) {
     $lock = Initialize-CampaignReferences $manifest $beautyTarget $protectedFingerprints
     Write-Host "Campaign references initialized: $(Join-Path $script:RunRoot 'campaign.lock.json')"
-    if ($InitializeReferencesOnly) { exit 0 }
+    exit 0
 } else {
     $lock = Read-CampaignLock $manifest $beautyTarget
 }
 Assert-LockBaselineAncestor $lock
 
-if ($BaselineOnly) {
+if ($PrepareCandidateEnvelope) {
+    Assert-CleanCampaignWorktree
+    $acceptedHead = Get-GitText @("rev-parse", "HEAD")
+    $prepared = New-AutomaticCandidateEnvelope `
+        $manifest $lock $DiscoveryArtifactPath $AutomaticCandidateId `
+        $AutomaticCandidateSourceCommit $AutomaticCandidateFocusedTestFilter `
+        $CandidateEnvelopeOutputPath $acceptedHead
+    Write-Host ($prepared | ConvertTo-Json -Depth 12 -Compress)
+    exit 0
+}
+
+if (-not [string]::IsNullOrWhiteSpace($CandidateEnvelopePath)) {
+    $envelopeAdmission = Read-CandidateEnvelope `
+        $manifest $lock $CandidateEnvelopePath `
+        (Get-GitText @("rev-parse", "HEAD")) $true
+    $candidateDefinition = $envelopeAdmission.Candidate
+    $candidateDecisionIdentity = $envelopeAdmission.DecisionIdentity
+    $targetHypothesis = $envelopeAdmission.Hypothesis
+    $screenWinWorkloads = @(
+        Get-HypothesisWorkloads $manifest @($targetHypothesis))
+}
+
+if ($BaselineOnly -or $DiscoverHotspots) {
     Assert-CleanCampaignWorktree
     $summaries = @()
+    $captureEntries = [System.Collections.Generic.List[object]]::new()
     $baselineCommit = Get-GitText @("rev-parse", "HEAD")
-    $baselineRoot = Join-Path $script:RunRoot "baseline-only/$baselineCommit"
+    $modeDirectory = if ($DiscoverHotspots) {
+        "hotspot-discovery"
+    } else { "baseline-only" }
+    $baselineRoot = Join-Path $script:RunRoot "$modeDirectory/$baselineCommit"
     if (Test-Path -LiteralPath $baselineRoot) {
         throw "Baseline-only evidence already exists for $baselineCommit."
     }
     foreach ($configuration in @(Get-CampaignConfigurations $manifest)) {
+        $verifierBuild = Get-ReferenceBuildIdentity $lock $configuration
         $build = Invoke-BuildOutput `
             $manifest $configuration `
             (Join-Path $baselineRoot "build/$configuration") `
@@ -6050,6 +9734,7 @@ if ($BaselineOnly) {
                 -Manifest $manifest `
                 -Workload $workload `
                 -BuildIdentity $build `
+                -VerifierBuildIdentity $verifierBuild `
                 -Configuration $configuration `
                 -ReportPath $reportPath `
                 -PairId $pairId `
@@ -6070,11 +9755,43 @@ if ($BaselineOnly) {
                 gpuP99Milliseconds = [double]$report.GpuFrameMilliseconds.P99Milliseconds
                 relativeRmse = [double]$report.HdrDifference.RelativeRmse
                 flipP95 = [double]$report.HdrDifference.FlipP95
+                frozenVerifierEvidence =
+                    $report.CampaignFrozenVerifierEvidence
             }
+            $captureEntries.Add([pscustomobject]@{
+                Configuration = $configuration
+                Workload = $workload
+                ReportPath = [System.IO.Path]::GetFullPath($reportPath)
+                ReportSha256 = Get-Sha256 $reportPath
+                Report = $report
+                BuildIdentity = $build
+            })
             Assert-ProtectedFingerprints $protectedFingerprints
         }
     }
     Write-JsonArtifact (Join-Path $baselineRoot "summary.json") $summaries
+    if ($DiscoverHotspots) {
+        $hotspots = New-HotspotDiscoveryData `
+            $manifest @($captureEntries) $baselineCommit `
+            ([DateTimeOffset]::UtcNow)
+        $hotspotPath = Join-Path $baselineRoot "hotspots.json"
+        Write-JsonArtifact $hotspotPath $hotspots
+        $nextHotspot = @($hotspots.eligibleHotspots | Where-Object {
+            -not (Test-TimingAttemptReserved `
+                $manifest ([string]$_.domain) ([string]$_.name))
+        } | Select-Object -First 1)
+        if ($nextHotspot.Count -eq 0) {
+            Write-Host "No eligible authenticated CPU/GPU hotspot remains."
+        } else {
+            Write-Host (
+                "Recommended hotspot: {0}::{1} p95={2:N3} ms share={3:N2}%" -f
+                    [string]$nextHotspot[0].domain,
+                    [string]$nextHotspot[0].name,
+                    [double]$nextHotspot[0].maximumP95Milliseconds,
+                    [double]$nextHotspot[0].maximumSharePercent)
+        }
+        Write-Host "Hotspot discovery artifact: $hotspotPath"
+    }
     exit 0
 }
 
@@ -6108,31 +9825,12 @@ if ($FinalizeRetainedStack) {
         $finalAcceptanceRefSnapshot = Get-AcceptanceRefSnapshot $manifest
         $retainedChain = Assert-RetainedAcceptanceChain `
             $manifest $lock $retainedHead
-        $requestedFinalTargetIds = @($FinalTargetWorkloadIds |
-            ForEach-Object { ([string]$_).Trim() } |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-            Select-Object -Unique)
-        if ($requestedFinalTargetIds.Count -eq 0) {
-            throw "FinalizeRetainedStack requires explicit -FinalTargetWorkloadIds for every retained target-win hypothesis."
+        $authenticatedHypotheses = @($retainedChain.Hypotheses)
+        if ($authenticatedHypotheses.Count -eq 0) {
+            throw "Retained stack contains no authenticated target hypotheses."
         }
-        $authenticatedTargetIds = @($retainedChain.Targets)
-        if ($requestedFinalTargetIds.Count -ne $authenticatedTargetIds.Count -or
-            @($requestedFinalTargetIds | Where-Object {
-                $authenticatedTargetIds -notcontains $_
-            }).Count -ne 0 -or
-            @($authenticatedTargetIds | Where-Object {
-                $requestedFinalTargetIds -notcontains $_
-            }).Count -ne 0) {
-            throw (
-                "FinalTargetWorkloadIds must exactly match authenticated retained targets: " +
-                ($authenticatedTargetIds -join ", "))
-        }
-        $winWorkloads = @($manifest.workloads | Where-Object {
-            $requestedFinalTargetIds -contains [string]$_.id
-        })
-        if ($winWorkloads.Count -ne $requestedFinalTargetIds.Count) {
-            throw "One or more FinalTargetWorkloadIds are absent from the locked manifest topology."
-        }
+        $winWorkloads = @(Get-HypothesisWorkloads `
+            $manifest $authenticatedHypotheses)
         foreach ($configuration in @(Get-CampaignConfigurations $manifest)) {
             $baselineBuild = Get-ReferenceBuildIdentity $lock $configuration
             Assert-BuildIdentity $baselineBuild "Final $configuration baseline"
@@ -6272,9 +9970,11 @@ if ($FinalizeRetainedStack) {
             $retainedHead,
             [StringComparison]::OrdinalIgnoreCase)
     $summary = [pscustomobject]@{
-        schema = "njulf-perf-campaign-final/v1"
+        schema = "njulf-perf-campaign-final/v2"
         campaignId = [string]$manifest.campaignId
-        manifestSha256 = Get-Sha256 $script:ManifestFile
+        manifestSha256 = Get-AdmittedCampaignManifestSha256
+        manifestSnapshotPath = $script:CampaignManifestSnapshotPath
+        manifestSnapshotSha256 = $script:CampaignManifestSha256
         lockSha256 = $script:CampaignLockSha256
         mode = "FinalizeRetainedStack"
         baselineCommit = [string]$lock.baselineCommit
@@ -6297,6 +9997,11 @@ if ($FinalizeRetainedStack) {
         }
         decision = $decision
         reason = $reason
+        targetHypotheses = if ($null -eq $retainedChain) {
+            @()
+        } else {
+            @($retainedChain.Hypotheses)
+        }
         winWorkloads = @($winWorkloads | ForEach-Object { [string]$_.id })
         candidateBuilds = $finalCandidateBuilds
         configurations = $configurationResults
@@ -6375,8 +10080,10 @@ if ($FinalizeRetainedStack) {
     exit 0
 }
 
-if ($Iterations -lt 1) { throw "Iterations must be at least one." }
-Assert-Text $TrialCommand "TrialCommand"
+if ($null -eq $candidateDefinition -and
+    [string]::IsNullOrWhiteSpace($CandidateEnvelopePath)) {
+    throw "Candidate evaluation requires an admitted reviewed candidate or frozen candidate envelope."
+}
 $campaignSummaries = @()
 $firstIterationId = 0
 $lastIterationId = 0
@@ -6394,34 +10101,47 @@ for ($sequenceIndex = 1; $sequenceIndex -le $Iterations; $sequenceIndex++) {
     $acceptanceRefSnapshot = Get-AcceptanceRefSnapshot $manifest
     $iterationRoot = Join-Path $script:RunRoot (
         "iterations/{0:D6}" -f $iteration)
-    $configuration = "Release"
-    $baselineBuild = Invoke-BuildOutput `
-        $manifest $configuration `
-        (Join-Path $iterationRoot "build-baseline") `
-        "Iteration $iteration Release baseline build" $acceptedHead
-    Assert-ExactCampaignHead $acceptedHead "Iteration $iteration baseline build"
-    Assert-CleanCampaignWorktree
-    Assert-ProtectedFingerprints $protectedFingerprints
-    Assert-CampaignLockIntegrity
-    Assert-AcceptanceRefSnapshot `
-        $manifest $acceptanceRefSnapshot "Iteration $iteration baseline build"
+    $baselineBuilds = [ordered]@{}
+    foreach ($configuration in @(Get-CampaignConfigurations $manifest)) {
+        $baselineBuilds[$configuration] = Invoke-BuildOutput `
+            $manifest $configuration `
+            (Join-Path $iterationRoot "build-baseline/$configuration") `
+            "Iteration $iteration $configuration baseline build" $acceptedHead
+        Assert-ExactCampaignHead `
+            $acceptedHead "Iteration $iteration $configuration baseline build"
+        Assert-CleanCampaignWorktree
+        Assert-ProtectedFingerprints $protectedFingerprints
+        Assert-CampaignLockIntegrity
+        Assert-AcceptanceRefSnapshot `
+            $manifest $acceptanceRefSnapshot `
+            "Iteration $iteration $configuration baseline build"
+    }
     $decision = "rollback"
     $reason = "trial did not complete"
     $configurationResults = @()
     $candidateHead = ""
-    $candidateBuild = $null
+    $candidateBuilds = [ordered]@{}
+    $attemptEvidence = $null
     try {
         Assert-CampaignLockIntegrity
-        Invoke-Trial `
-            $TrialCommand $iteration $manifest `
-            (Join-Path $iterationRoot "trial-scratch")
+        if ($null -eq $candidateDefinition -or
+            $null -eq $candidateDecisionIdentity -or
+            $null -eq $targetHypothesis) {
+            throw "Candidate identity was not admitted."
+        }
+        $attemptEvidence = Reserve-TimingAttempt `
+            $manifest ([string]$targetHypothesis.targetDomain) `
+            ([string]$targetHypothesis.targetPass) `
+            ([string]$candidateDefinition.id) $acceptedHead
+        $candidateHead = Invoke-PinnedCandidate `
+            $manifest $candidateDefinition $acceptedHead
         Assert-AcceptanceRefSnapshot `
-            $manifest $acceptanceRefSnapshot "Trial command"
+            $manifest $acceptanceRefSnapshot "Pinned candidate application"
         $postTrialChain = Assert-RetainedAcceptanceChain `
             $manifest $lock $acceptedHead
         if ([string]$postTrialChain.LastEvidence -ne
             [string]$acceptedChain.LastEvidence) {
-            throw "Trial command changed the authenticated accepted chain."
+            throw "Candidate application changed the authenticated accepted chain."
         }
         Assert-CampaignLockIntegrity
         Assert-CampaignWorktreeRoot
@@ -6430,7 +10150,7 @@ for ($sequenceIndex = 1; $sequenceIndex -le $Iterations; $sequenceIndex++) {
         Assert-ProtectedFingerprints $protectedFingerprints
         Assert-CleanCampaignWorktree
         if ($candidateHead -eq $acceptedHead) {
-            throw "Trial command must create one focused candidate commit."
+            throw "Candidate application must create one focused candidate commit."
         }
         $candidateCount = [int](Get-GitText @(
             "rev-list", "--count", "$acceptedHead..$candidateHead"))
@@ -6443,36 +10163,75 @@ for ($sequenceIndex = 1; $sequenceIndex -le $Iterations; $sequenceIndex++) {
                 $candidateParent,
                 $acceptedHead,
                 [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Trial command must create exactly one non-merge commit directly on $acceptedHead."
+            throw "Candidate application must create exactly one non-merge commit directly on $acceptedHead."
         }
         Assert-LockBaselineAncestor $lock $candidateHead
-        $candidateBuild = Invoke-BuildOutput `
-            $manifest $configuration `
-            (Join-Path $iterationRoot "build-candidate") `
-            "Iteration $iteration Release candidate build" $candidateHead
-        $result = Invoke-ConfigurationMatrix `
-            $manifest $lock @($target) $baselineBuild $candidateBuild `
-            $configuration $iteration "hypothesis-screen" `
-            $acceptedHead $candidateHead
-        if ($result.decision -eq "keep") {
-            $result = Complete-ConfigurationQualityMatrix `
-                $manifest $lock @($target) $candidateBuild `
-                $configuration $iteration "hypothesis-screen" `
-                $candidateHead $result
-            Assert-ConfigurationQualityEvidence `
-                $manifest $lock @($target) $candidateBuild `
-                $configuration $iteration "hypothesis-screen" `
-                $candidateHead $result `
-                -Label "Release hypothesis screen quality audit"
+        $configurations = @(Get-CampaignConfigurations $manifest)
+        foreach ($configuration in $configurations) {
+            $focusedFilter = if ($configuration -ceq "Release") {
+                [string]$candidateDefinition.focusedTestFilter
+            } else { "" }
+            $candidateBuilds[$configuration] = Invoke-BuildOutput `
+                $manifest $configuration `
+                (Join-Path $iterationRoot "build-candidate/$configuration") `
+                "Iteration $iteration $configuration candidate build" `
+                $candidateHead $focusedFilter
         }
-        $configurationResults += $result
-        Assert-ExactCampaignHead $candidateHead "Release hypothesis screen"
-        Assert-CampaignLockIntegrity
-        if ($result.decision -eq "keep") {
+
+        # Every configuration completes the full timing matrix before the first
+        # quality capture. This prevents a quality workload from warming or
+        # otherwise perturbing the second configuration's timing evidence.
+        foreach ($configuration in $configurations) {
+            $result = Invoke-ConfigurationMatrix `
+                $manifest $lock $screenWinWorkloads `
+                $baselineBuilds[$configuration] $candidateBuilds[$configuration] `
+                $configuration $iteration "hypothesis-screen" `
+                $acceptedHead $candidateHead "" $true
+            $configurationResults += $result
+            if ($result.decision -ne "keep") {
+                $reason = "$configuration hypothesis rejected: $($result.reason)"
+                break
+            }
+            Assert-ConfigurationTimingEvidence `
+                $manifest $lock $screenWinWorkloads `
+                $baselineBuilds[$configuration] $candidateBuilds[$configuration] `
+                $configuration $iteration "hypothesis-screen" `
+                $acceptedHead $candidateHead $result "" $true `
+                "$configuration full-matrix timing audit"
+        }
+
+        if ($configurationResults.Count -eq $configurations.Count -and
+            @($configurationResults | Where-Object {
+                [string]$_.decision -cne "keep"
+            }).Count -eq 0) {
+            for ($configurationIndex = 0;
+                 $configurationIndex -lt $configurations.Count;
+                 $configurationIndex++) {
+                $configuration = [string]$configurations[$configurationIndex]
+                $result = Complete-ConfigurationQualityMatrix `
+                    $manifest $lock $screenWinWorkloads `
+                    $candidateBuilds[$configuration] $configuration $iteration `
+                    "hypothesis-screen" $candidateHead `
+                    $configurationResults[$configurationIndex] "" $true
+                $configurationResults[$configurationIndex] = $result
+                Assert-ConfigurationTimingEvidence `
+                    $manifest $lock $screenWinWorkloads `
+                    $baselineBuilds[$configuration] $candidateBuilds[$configuration] `
+                    $configuration $iteration "hypothesis-screen" `
+                    $acceptedHead $candidateHead $result "" $true `
+                    "$configuration post-quality timing audit"
+                Assert-ConfigurationQualityEvidence `
+                    $manifest $lock $screenWinWorkloads `
+                    $candidateBuilds[$configuration] $configuration $iteration `
+                    "hypothesis-screen" $candidateHead $result "" $true `
+                    "$configuration full-matrix quality audit"
+            }
+            Assert-ExactCampaignHead $candidateHead "Candidate full-matrix screen"
+            Assert-CampaignLockIntegrity
             Assert-CleanCampaignWorktree
             Assert-ProtectedFingerprints $protectedFingerprints
             Assert-AcceptanceRefSnapshot `
-                $manifest $acceptanceRefSnapshot "Release hypothesis screen"
+                $manifest $acceptanceRefSnapshot "Candidate full-matrix screen"
             $postCaptureChain = Assert-RetainedAcceptanceChain `
                 $manifest $lock $acceptedHead
             if ([string]$postCaptureChain.LastEvidence -ne
@@ -6480,9 +10239,7 @@ for ($sequenceIndex = 1; $sequenceIndex -le $Iterations; $sequenceIndex++) {
                 throw "Capture phase changed the authenticated accepted chain."
             }
             $decision = "keep"
-            $reason = "Release target improvement and Bistro/Sponza quality/non-regression passed"
-        } else {
-            $reason = "Release hypothesis rejected: $($result.reason)"
+            $reason = "Both timing configurations and the full Bistro/Sponza quality/non-regression matrix passed"
         }
     } catch {
         $reason = $_.Exception.Message
@@ -6500,9 +10257,11 @@ for ($sequenceIndex = 1; $sequenceIndex -le $Iterations; $sequenceIndex++) {
     try { $observedHead = Get-GitText @("rev-parse", "HEAD") } catch { }
     $decisionPath = Join-Path $iterationRoot "decision.json"
     $summary = [pscustomobject]@{
-        schema = "njulf-perf-campaign-decision/v1"
+        schema = "njulf-perf-campaign-decision/v3"
         campaignId = [string]$manifest.campaignId
-        manifestSha256 = Get-Sha256 $script:ManifestFile
+        manifestSha256 = Get-AdmittedCampaignManifestSha256
+        manifestSnapshotPath = $script:CampaignManifestSnapshotPath
+        manifestSnapshotSha256 = $script:CampaignManifestSha256
         lockSha256 = $script:CampaignLockSha256
         iteration = $iteration
         acceptedHead = $acceptedHead
@@ -6512,9 +10271,14 @@ for ($sequenceIndex = 1; $sequenceIndex -le $Iterations; $sequenceIndex++) {
         decisionArtifactPath = [System.IO.Path]::GetFullPath($decisionPath)
         decision = $decision
         reason = $reason
-        targetWorkload = [string]$target.id
-        baselineBuild = $baselineBuild
-        candidateBuild = $candidateBuild
+        candidate = $candidateDecisionIdentity
+        attempt = $attemptEvidence
+        targetHypothesisId = [string]$targetHypothesis.id
+        targetDomain = [string]$targetHypothesis.targetDomain
+        targetPass = [string]$targetHypothesis.targetPass
+        targetClaims = @($targetHypothesis.claims)
+        baselineBuilds = $baselineBuilds
+        candidateBuilds = $candidateBuilds
         configurations = $configurationResults
     }
     $campaignSummaries += $summary
@@ -6577,5 +10341,5 @@ $invocationSummaryPath = Join-Path $script:RunRoot (
     "invocations/screen-{0:D6}-{1:D6}.json" -f
         $firstIterationId, $lastIterationId)
 Write-JsonArtifact $invocationSummaryPath $campaignSummaries
-Write-Host "Release hypothesis sequence complete: $invocationSummaryPath"
+Write-Host "Candidate evaluation complete: $invocationSummaryPath"
 Write-Host "Run -FinalizeRetainedStack once after the retained candidate sequence."

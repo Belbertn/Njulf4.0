@@ -4,11 +4,18 @@ param(
 
     [string]$CampaignManifestPath = "",
     [string]$CampaignRunDirectory = ".perf-loop-runs/campaign",
-    [string]$CampaignTargetWorkloadId = "",
-    [string[]]$CampaignFinalTargetWorkloadIds = @(),
+    [string]$CampaignCandidateId = "",
+    [string]$CampaignCandidateEnvelopePath = "",
+    [switch]$PrepareCampaignCandidateEnvelope,
+    [string]$CampaignDiscoveryArtifactPath = "",
+    [string]$CampaignAutomaticCandidateId = "",
+    [string]$CampaignAutomaticCandidateSourceCommit = "",
+    [string]$CampaignAutomaticCandidateFocusedTestFilter = "",
+    [string]$CampaignCandidateEnvelopeOutputPath = "",
     [switch]$InitializeCampaignReferences,
     [switch]$InitializeCampaignReferencesOnly,
     [switch]$ValidateCampaign,
+    [switch]$DiscoverCampaignHotspots,
     [switch]$FinalizeRetainedStack,
     [bool]$CampaignKeepRejectedCommits = $true,
 
@@ -53,6 +60,25 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
 if (-not [string]::IsNullOrWhiteSpace($CampaignManifestPath)) {
+    $campaignParametersAllowed = @(
+        "CampaignManifestPath", "CampaignRunDirectory",
+        "CampaignCandidateId", "CampaignCandidateEnvelopePath",
+        "PrepareCampaignCandidateEnvelope",
+        "CampaignDiscoveryArtifactPath", "CampaignAutomaticCandidateId",
+        "CampaignAutomaticCandidateSourceCommit",
+        "CampaignAutomaticCandidateFocusedTestFilter",
+        "CampaignCandidateEnvelopeOutputPath",
+        "InitializeCampaignReferences",
+        "InitializeCampaignReferencesOnly", "ValidateCampaign",
+        "DiscoverCampaignHotspots",
+        "FinalizeRetainedStack", "CampaignKeepRejectedCommits",
+        "BaselineOnly", "RollbackRejected")
+    $legacyParameters = @($PSBoundParameters.Keys | Where-Object {
+        $campaignParametersAllowed -notcontains [string]$_
+    })
+    if ($legacyParameters.Count -ne 0) {
+        throw "Campaign mode rejects explicitly bound legacy parameters: $($legacyParameters -join ', ')."
+    }
     $campaignDriver = Join-Path $PSScriptRoot "perf-campaign.ps1"
     if (-not (Test-Path -LiteralPath $campaignDriver -PathType Leaf)) {
         throw "Campaign driver is missing: $campaignDriver"
@@ -60,10 +86,15 @@ if (-not [string]::IsNullOrWhiteSpace($CampaignManifestPath)) {
     $campaignParameters = @{
         ManifestPath = $CampaignManifestPath
         RunDirectory = $CampaignRunDirectory
-        TrialCommand = $TrialCommand
-        Iterations = $Iterations
-        TargetWorkloadId = $CampaignTargetWorkloadId
-        FinalTargetWorkloadIds = $CampaignFinalTargetWorkloadIds
+        CandidateId = $CampaignCandidateId
+        CandidateEnvelopePath = $CampaignCandidateEnvelopePath
+        PrepareCandidateEnvelope = $PrepareCampaignCandidateEnvelope
+        DiscoveryArtifactPath = $CampaignDiscoveryArtifactPath
+        AutomaticCandidateId = $CampaignAutomaticCandidateId
+        AutomaticCandidateSourceCommit = $CampaignAutomaticCandidateSourceCommit
+        AutomaticCandidateFocusedTestFilter =
+            $CampaignAutomaticCandidateFocusedTestFilter
+        CandidateEnvelopeOutputPath = $CampaignCandidateEnvelopeOutputPath
         RollbackRejected = $RollbackRejected
         KeepRejectedCommits = $CampaignKeepRejectedCommits
     }
@@ -76,11 +107,28 @@ if (-not [string]::IsNullOrWhiteSpace($CampaignManifestPath)) {
     }
     if ($BaselineOnly) { $campaignParameters.BaselineOnly = $true }
     if ($ValidateCampaign) { $campaignParameters.ValidateOnly = $true }
+    if ($DiscoverCampaignHotspots) {
+        $campaignParameters.DiscoverHotspots = $true
+    }
     if ($FinalizeRetainedStack) {
         $campaignParameters.FinalizeRetainedStack = $true
     }
     & $campaignDriver @campaignParameters
     exit $LASTEXITCODE
+}
+
+$orphanedCampaignParameters = @($PSBoundParameters.Keys | Where-Object {
+    ([string]$_).StartsWith("Campaign", [StringComparison]::Ordinal) -or
+    [string]$_ -in @(
+        "InitializeCampaignReferences",
+        "InitializeCampaignReferencesOnly",
+        "ValidateCampaign",
+        "DiscoverCampaignHotspots",
+        "PrepareCampaignCandidateEnvelope",
+        "FinalizeRetainedStack")
+})
+if ($orphanedCampaignParameters.Count -ne 0) {
+    throw "Campaign-only parameters require CampaignManifestPath: $($orphanedCampaignParameters -join ', ')."
 }
 
 if ($Iterations -lt 1) {
@@ -509,7 +557,8 @@ function Invoke-ValidatedBenchmarkCommand {
         throw "$Label did not publish its required health report: $HealthReportPath"
     }
 
-    $health = Get-Content -LiteralPath $HealthReportPath -Raw | ConvertFrom-Json
+    $health = Get-Content -LiteralPath $HealthReportPath -Raw |
+        ConvertFrom-Json -DateKind String
     if ([string]$health.status -eq "passed") {
         if ($null -ne $commandFailure) {
             throw $commandFailure
@@ -788,7 +837,8 @@ function Read-BenchmarkReport {
         throw "Benchmark report was not written: $Path"
     }
 
-    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    return Get-Content -LiteralPath $Path -Raw |
+        ConvertFrom-Json -DateKind String
 }
 
 function Get-WorkloadIdentity {

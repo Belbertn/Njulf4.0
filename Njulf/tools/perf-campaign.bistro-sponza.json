@@ -11,6 +11,7 @@
   "protectedPaths": [
     "tools/perf-campaign.ps1",
     "tools/perf-campaign.bistro-sponza.json",
+    "tools/perf-campaign.tests.ps1",
     "tools/perf-quality-verify.ps1",
     "tools/perf-loop.ps1",
     "NjulfHelloGame/Program.cs",
@@ -24,6 +25,7 @@
     "NjulfHelloGame/SampleBenchmarkOptions.cs",
     "NjulfHelloGame/SampleBenchmarkPairComparer.cs",
     "NjulfHelloGame/SampleBenchmarkTrajectory.cs",
+    "NjulfHelloGame/SampleEvidenceFileIo.cs",
     "NjulfHelloGame/SampleHealthReportWriter.cs",
     "NjulfHelloGame/SampleHealthReportEvaluation.cs",
     "NjulfHelloGame/SampleMaterialGiProducerIdentityFactory.cs",
@@ -32,10 +34,75 @@
     "NjulfHelloGame/SampleSmokeOptions.cs",
     "NjulfHelloGame/SampleSmokeOptionsParser.cs",
     "NjulfHelloGame/SampleInputController.cs",
+    "NjulfHelloGame/SampleBenchmarkGateEvaluation.cs",
+    "NjulfHelloGame/SampleBudgetMetricCoverage.cs",
+    "NjulfHelloGame/SampleDdgiProductionGate.cs",
+    "NjulfHelloGame/SampleDdgiBenchmarkSuite.cs",
     "Njulf.Rendering/Data/MaterialGiRolloutPolicy.cs",
+    "Njulf.Rendering/Diagnostics/RenderBudgetEvaluator.cs",
+    "Njulf.Rendering/Diagnostics/RenderBudgetProfile.cs",
+    "Njulf.Rendering/Diagnostics/RenderBudgetSettings.cs",
+    "Njulf.Rendering/Diagnostics/RenderBudgetSnapshot.cs",
+    "Njulf.Rendering/Diagnostics/RenderBudgetStatus.cs",
     "Njulf.Rendering/Diagnostics/RendererHealthReportWriter.cs",
     "Njulf.Rendering/Debugging/LinearHdrReadback.cs",
     "Njulf.Tests/SampleBenchmarkQualitySequenceTests.cs",
+    "NjulfHelloGame/SampleBenchmarkActivation.cs",
+    "NjulfHelloGame/SampleBenchmarkActivationVerificationCli.cs",
+    "NjulfHelloGame/SampleBenchmarkControlledIsolation.cs",
+    "NjulfHelloGame/SampleBenchmarkQualityActivationVerificationCli.cs",
+    "NjulfHelloGame/SampleBenchmarkSponzaSceneAnimation.cs",
+    "NjulfHelloGame/SampleBenchmarkSponzaSceneAnimationSidecar.cs",
+    "NjulfHelloGame/SampleAnimatedCharacter.cs",
+    "NjulfHelloGame/SampleBenchmarkReflectionProbeCaptureEvidence.cs",
+    "NjulfHelloGame/SampleBenchmarkDdgiTransientEvidence.cs",
+    "NjulfHelloGame/SampleBenchmarkDdgiTransientVerificationCli.cs",
+    "NjulfHelloGame/SampleBistroQualityCaptureHarness.cs",
+    "NjulfHelloGame/SampleSponzaGiCaptureHarness.cs",
+    "NjulfHelloGame/SampleTailDdgiQualification.cs",
+    "NjulfHelloGame/Strut.glb",
+    "Njulf.Assets/Scenes/SceneDocumentLoader.cs",
+    "Njulf.Core/Animation/Animator.cs",
+    "Njulf.Core/Scene/Model.cs",
+    "Njulf.Rendering/Data/RenderSettings.cs",
+    "Njulf.Rendering/Data/DirectionalShadowRuntimeDiagnostics.cs",
+    "Njulf.Rendering/Data/RendererDiagnostics.cs",
+    "Njulf.Rendering/Data/SceneRenderingData.cs",
+    "Njulf.Rendering/Data/MaterialGiReleaseEvidenceAuthenticity.cs",
+    "Njulf.Rendering/Data/SimpleDdgiTransientFrameEvidence.cs",
+    "Njulf.Rendering/Data/SimpleDdgiTransportTailSummary.cs",
+    "Njulf.Rendering/Pipeline/DirectionalShadowPass.cs",
+    "Njulf.Rendering/Pipeline/ForwardPlusPass.cs",
+    "Njulf.Rendering/Pipeline/SimpleDdgiPasses.cs",
+    "Njulf.Rendering/Resources/ReflectionProbeCaptureScheduler.cs",
+    "Njulf.Rendering/Resources/ReflectionProbeFrameTelemetry.cs",
+    "Njulf.Rendering/Resources/ReflectionProbeGpuBudgetPlanner.cs",
+    "Njulf.Rendering/Resources/ReflectionProbeManager.cs",
+    "Njulf.Rendering/Resources/SimpleDdgiGpuScheduler.cs",
+    "Njulf.Rendering/Resources/SimpleDdgiVolumeManager.cs",
+    "Njulf.Rendering/Debugging/GpuTimestampRecorder.cs",
+    "Njulf.Rendering/VulkanRenderer.cs",
+    "Njulf.Tests/SampleAnimatedCharacterTests.cs",
+    "Njulf.Tests/SampleBenchmarkSponzaSceneAnimationTests.cs",
+    "Njulf.Tests/SampleBenchmarkControlledIsolationTests.cs",
+    "Njulf.Tests/SampleBenchmarkPairComparerTests.cs",
+    "Njulf.Tests/SampleBenchmarkEvidenceTests.cs",
+    "Njulf.Tests/SampleBenchmarkGateEvaluationTests.cs",
+    "Njulf.Tests/SampleBenchmarkTrajectoryTests.cs",
+    "Njulf.Tests/SampleEvidenceFileIoTests.cs",
+    "Njulf.Tests/SampleBenchmarkAnalyzerTests.cs",
+    "Njulf.Tests/SampleBenchmarkReflectionProbeCaptureEvidenceTests.cs",
+    "Njulf.Tests/SampleBenchmarkDdgiTransientEvidenceTests.cs",
+    "Njulf.Tests/SampleBenchmarkDdgiTransientVerificationTests.cs",
+    "Njulf.Tests/SimpleDdgiTransientFrameEvidenceTests.cs",
+    "Njulf.Tests/ReflectionProbeCaptureSchedulerTests.cs",
+    "Njulf.Tests/ReflectionProbeFrameTelemetryTests.cs",
+    "Njulf.Tests/ReflectionProbeGpuBudgetPlannerTests.cs",
+    "Njulf.Tests/ReflectionProbeRecapturePolicyTests.cs",
+    "Njulf.Tests/SampleBistroQualityCaptureHarnessTests.cs",
+    "Njulf.Tests/SampleSponzaGiCaptureHarnessTests.cs",
+    "Njulf.Tests/DebugToolingContractsTests.cs",
+    "Njulf.Tests/MaterialGiRolloutPolicyTests.cs",
     ".perf-loop-runs/campaign/beauty-target/manifest.json",
     ".perf-loop-runs/campaign/beauty-target/bistro-beauty-target.jpg",
     "NjulfHelloGame/Assets/Bistro_v5_2",
@@ -76,14 +143,119 @@
     "bootstrapSamples": 10000,
     "bootstrapConfidence": 0.95
   },
+  "discoveryPolicy": {
+    "enabled": true,
+    "domains": [
+      "gpu",
+      "cpu"
+    ],
+    "minimumSharePercent": 5.0,
+    "minimumP95Milliseconds": 0.25,
+    "requireBothConfigurations": true,
+    "requireBistroAndSponza": true,
+    "attemptsPerTiming": 1,
+    "fullMatrixAfterCandidate": true
+  },
+  "candidates": [
+    {
+      "id": "receiver-cache-shared-workgroup",
+      "sourceCommit": "4a9ee4c18d00211571f056a26d2047779d9622fa",
+      "patchId": "6f54b21b9012d66d434905942552c7f392a9bd31",
+      "hypothesisId": "receiver-cache",
+      "allowedPaths": [
+        "Njulf.Shaders/ddgi_simple_receiver_cache.comp",
+        "Njulf.Tests/ShaderBuildTests.cs",
+        "Njulf.Tests/SimpleDdgiShaderMirrorTests.cs"
+      ],
+      "focusedTestFilter": "FullyQualifiedName~SimpleDdgiShaderMirrorTests|FullyQualifiedName~ShaderBuildTests"
+    },
+    {
+      "id": "ao-center-depth-reuse",
+      "sourceCommit": "f634c59dab0f89f959e3135b6babc531e54720af",
+      "patchId": "02a27b53fba40845a1c65c6d090f43be61ae8fe3",
+      "hypothesisId": "ambient-occlusion",
+      "allowedPaths": [
+        "Njulf.Shaders/ambient_occlusion.comp",
+        "Njulf.Tests/AmbientOcclusionShaderContractTests.cs",
+        "Njulf.Tests/ShaderBuildTests.cs"
+      ],
+      "focusedTestFilter": "FullyQualifiedName~AmbientOcclusionShaderContractTests|FullyQualifiedName~ShaderBuildTests"
+    },
+    {
+      "id": "ao-blur-shared-tile",
+      "sourceCommit": "d794d3163122b128b2390931e07114202de49223",
+      "patchId": "b84c0bf960a9a1b4fd930c065441273611714968",
+      "hypothesisId": "ambient-occlusion-blur",
+      "allowedPaths": [
+        "Njulf.Shaders/ambient_occlusion_blur.comp",
+        "Njulf.Tests/AmbientOcclusionBlurSharedTileTests.cs"
+      ],
+      "focusedTestFilter": "FullyQualifiedName~AmbientOcclusionBlurSharedTileTests"
+    },
+    {
+      "id": "ddgi-feedback-partial-reduction",
+      "sourceCommit": "60d6c5f5f96a288a5f71ff856060dc394f78985e",
+      "patchId": "eec1d6c3201b645585dcb3f292177d5c023f1d0a",
+      "hypothesisId": "ddgi-scheduler-commit",
+      "allowedPaths": [
+        "Njulf.Rendering/Pipeline/SimpleDdgiSchedulerCommitPass.cs",
+        "Njulf.Shaders/Njulf.Shaders.csproj",
+        "Njulf.Shaders/VerifyProductionDiagnosticAtomics.ps1",
+        "Njulf.Shaders/ddgi_simple_schedule_feedback.comp",
+        "Njulf.Tests/SimpleDdgiFeedbackPartialReductionTests.cs",
+        "Njulf.Tests/SimpleDdgiShaderMirrorTests.cs"
+      ],
+      "focusedTestFilter": "FullyQualifiedName~SimpleDdgiFeedbackPartialReductionTests|FullyQualifiedName~SimpleDdgiShaderMirrorTests|FullyQualifiedName~ShaderBuildTests"
+    }
+  ],
+  "targetHypotheses": [
+    {
+      "id": "receiver-cache",
+      "targetDomain": "gpu",
+      "targetPass": "SimpleDdgiReceiverCachePass",
+      "claims": [
+        { "scene": "Bistro", "workloadId": "bistro-forward-gi-enabled" },
+        { "scene": "Sponza", "workloadId": "sponza-forward-gi-enabled" }
+      ]
+    },
+    {
+      "id": "ambient-occlusion",
+      "targetDomain": "gpu",
+      "targetPass": "AmbientOcclusionPass",
+      "claims": [
+        { "scene": "Bistro", "workloadId": "bistro-motion" },
+        { "scene": "Sponza", "workloadId": "sponza-horizontal-motion" }
+      ]
+    },
+    {
+      "id": "ambient-occlusion-blur",
+      "targetDomain": "gpu",
+      "targetPass": "AmbientOcclusionBlurPass",
+      "claims": [
+        { "scene": "Bistro", "workloadId": "bistro-motion" },
+        { "scene": "Sponza", "workloadId": "sponza-horizontal-motion" }
+      ]
+    },
+    {
+      "id": "ddgi-scheduler-commit",
+      "targetDomain": "gpu",
+      "targetPass": "SimpleDdgiSchedulerCommitPass",
+      "claims": [
+        { "scene": "Bistro", "workloadId": "bistro-motion-relight" },
+        { "scene": "Sponza", "workloadId": "sponza-horizontal-motion" }
+      ]
+    }
+  ],
   "workloads": [
     {
       "id": "bistro-stationary",
       "scene": "Bistro",
       "scenario": "Normal",
       "trajectory": "bistro-presentation",
+      "qualityTrajectory": "bistro-presentation",
       "bistroQualityVariant": "presentation",
       "captureVariant": "baseline",
+      "activation": "none",
       "warmupFrames": 480,
       "measureFrames": 240,
       "qualification": true,
@@ -96,8 +268,10 @@
       "scene": "Bistro",
       "scenario": "BistroQualityMotionRelight",
       "trajectory": "bistro-loop",
+      "qualityTrajectory": "bistro-loop",
       "bistroQualityVariant": "steady-motion",
       "captureVariant": "baseline",
+      "activation": "none",
       "warmupFrames": 480,
       "measureFrames": 240,
       "qualification": true,
@@ -110,8 +284,10 @@
       "scene": "Bistro",
       "scenario": "BistroQualityMotionRelight",
       "trajectory": "bistro-loop",
+      "qualityTrajectory": "bistro-loop",
       "bistroQualityVariant": "sun-scale-step",
       "captureVariant": "baseline",
+      "activation": "none",
       "warmupFrames": 480,
       "measureFrames": 240,
       "qualification": true,
@@ -124,7 +300,9 @@
       "scene": "Sponza",
       "scenario": "GiSponzaRightWallStationary",
       "trajectory": "sponza-low",
+      "qualityTrajectory": "sponza-low",
       "captureVariant": "baseline",
+      "activation": "none",
       "warmupFrames": 2048,
       "measureFrames": 240,
       "qualification": true,
@@ -137,7 +315,9 @@
       "scene": "Sponza",
       "scenario": "GiSponzaRightWallStationary",
       "trajectory": "sponza-high",
+      "qualityTrajectory": "sponza-high",
       "captureVariant": "baseline",
+      "activation": "none",
       "warmupFrames": 2688,
       "measureFrames": 240,
       "qualification": true,
@@ -150,7 +330,9 @@
       "scene": "Sponza",
       "scenario": "GiSponzaRightWallStationary",
       "trajectory": "sponza-horizontal",
+      "qualityTrajectory": "sponza-horizontal",
       "captureVariant": "baseline",
+      "activation": "none",
       "warmupFrames": 2688,
       "measureFrames": 300,
       "qualification": true,
@@ -163,7 +345,9 @@
       "scene": "Sponza",
       "scenario": "GiSponzaRightWallStationary",
       "trajectory": "sponza-vertical",
+      "qualityTrajectory": "sponza-vertical",
       "captureVariant": "baseline",
+      "activation": "none",
       "warmupFrames": 2688,
       "measureFrames": 960,
       "qualification": true,
@@ -176,8 +360,10 @@
       "scene": "Bistro",
       "scenario": "Normal",
       "trajectory": "bistro-presentation",
+      "qualityTrajectory": "bistro-presentation",
       "bistroQualityVariant": "presentation",
       "captureVariant": "forward-gi-enabled",
+      "activation": "none",
       "warmupFrames": 480,
       "measureFrames": 240,
       "qualification": false,
@@ -189,122 +375,22 @@
       ]
     },
     {
-      "id": "bistro-forward-gi-disabled",
-      "scene": "Bistro",
-      "scenario": "Normal",
-      "trajectory": "bistro-presentation",
-      "bistroQualityVariant": "presentation",
-      "captureVariant": "forward-gi-disabled",
-      "warmupFrames": 480,
-      "measureFrames": 240,
-      "qualification": false,
-      "targetPass": "ForwardPlusPass",
-      "isolationGroup": "bistro-forward-gi",
-      "isolationRole": "disabled",
-      "qualityRois": [
-        { "name": "bistro-forward-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
-      ]
-    },
-    {
-      "id": "bistro-forward-gi-exact",
-      "scene": "Bistro",
-      "scenario": "Normal",
-      "trajectory": "bistro-presentation",
-      "bistroQualityVariant": "presentation",
-      "captureVariant": "forward-gi-exact",
-      "warmupFrames": 480,
-      "measureFrames": 240,
-      "qualification": false,
-      "targetPass": "ForwardPlusPass",
-      "isolationGroup": "bistro-forward-gi",
-      "isolationRole": "exact",
-      "qualityRois": [
-        { "name": "bistro-forward-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
-      ]
-    },
-    {
-      "id": "bistro-ddgi-tail-jacobi",
-      "scene": "Bistro",
-      "scenario": "BistroQualityMotionRelight",
-      "trajectory": "bistro-loop",
-      "bistroQualityVariant": "sun-scale-step",
-      "captureVariant": "tail-jacobi",
-      "warmupFrames": 480,
-      "measureFrames": 240,
-      "qualification": false,
-      "targetPass": "SimpleDdgiAcceleratedSolvePass",
-      "isolationGroup": "bistro-ddgi-tail",
-      "isolationRole": "jacobi",
-      "qualityRois": [
-        { "name": "bistro-tail-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
-      ]
-    },
-    {
-      "id": "bistro-ddgi-tail-accelerated",
-      "scene": "Bistro",
-      "scenario": "BistroQualityMotionRelight",
-      "trajectory": "bistro-loop",
-      "bistroQualityVariant": "sun-scale-step",
-      "captureVariant": "tail-accelerated",
-      "warmupFrames": 480,
-      "measureFrames": 240,
-      "qualification": false,
-      "targetPass": "SimpleDdgiAcceleratedSolvePass",
-      "isolationGroup": "bistro-ddgi-tail",
-      "isolationRole": "accelerated",
-      "qualityRois": [
-        { "name": "bistro-tail-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
-      ]
-    },
-    {
-      "id": "bistro-transparent-stress",
-      "scene": "Bistro",
-      "scenario": "ManyTransparentObjects",
-      "trajectory": "stationary",
-      "captureVariant": "baseline",
-      "warmupFrames": 480,
-      "measureFrames": 240,
-      "qualification": false,
-      "targetPass": "TransparentPasses",
-      "qualityRois": [
-        { "name": "bistro-transparent-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
-      ]
-    },
-    {
-      "id": "sponza-reflection-lifecycle",
+      "id": "sponza-forward-gi-enabled",
       "scene": "Sponza",
-      "scenario": "GiSponzaReflectionProbeLifecycle",
-      "trajectory": "sponza-low",
-      "captureVariant": "baseline",
+      "scenario": "GiSponzaRightWallStationary",
+      "trajectory": "sponza-horizontal",
+      "qualityTrajectory": "sponza-horizontal",
+      "captureVariant": "forward-gi-enabled",
+      "activation": "sponza-forward-gi",
       "warmupFrames": 2688,
-      "measureFrames": 240,
+      "measureFrames": 300,
       "qualification": false,
-      "targetPass": "ReflectionProbeCapture",
+      "targetPass": "ForwardPlusPass",
+      "isolationGroup": "sponza-forward-gi",
+      "isolationRole": "enabled",
       "qualityRois": [
-        { "name": "sponza-reflection-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+        { "name": "sponza-forward-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
       ]
-    },
-    {
-      "id": "bistro-large-meshlet-count",
-      "scene": "Bistro",
-      "scenario": "LargeMeshletCount",
-      "trajectory": "stationary",
-      "captureVariant": "baseline",
-      "warmupFrames": 480,
-      "measureFrames": 240,
-      "qualification": false,
-      "targetPass": "DrawScene"
-    },
-    {
-      "id": "bistro-moving-rigid-object",
-      "scene": "Bistro",
-      "scenario": "GiMovingRigidObject",
-      "trajectory": "stationary",
-      "captureVariant": "baseline",
-      "warmupFrames": 480,
-      "measureFrames": 240,
-      "qualification": false,
-      "targetPass": "MotionVectorPass"
     }
   ]
 }

@@ -17,22 +17,36 @@ function Invoke-ManifestCase {
         [string]$Name,
         [scriptblock]$Mutate,
         [bool]$ExpectSuccess)
-    $manifest = Get-Content -LiteralPath $sourceManifest -Raw | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath $sourceManifest -Raw |
+        ConvertFrom-Json -DateKind String
     if ($null -ne $Mutate) { & $Mutate $manifest }
-    $manifestPath = Join-Path $testRoot "$Name.json"
-    $manifest | ConvertTo-Json -Depth 20 |
-        Set-Content -LiteralPath $manifestPath -Encoding utf8
-    $runPath = Join-Path $testRoot "run-$Name"
-    $output = & pwsh -NoProfile -NonInteractive -File $driver `
-        -ManifestPath $manifestPath `
-        -RunDirectory $runPath `
-        -ValidateOnly 2>&1
-    $succeeded = $LASTEXITCODE -eq 0
-    if ($succeeded -ne $ExpectSuccess) {
-        throw "Case '$Name' success=$succeeded, expected $ExpectSuccess.`n$($output -join "`n")"
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for manifest case '$Name'."
     }
-    if (Test-Path -LiteralPath $runPath) {
-        throw "ValidateOnly case '$Name' created its run directory."
+    foreach ($definition in @($driverAst.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+            }, $true))) {
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    $script:SolutionRoot = $solutionRoot
+    $script:SolutionRelativePath = "Njulf"
+    $script:ManifestFile = $sourceManifest
+    $script:CampaignManifestSha256 = Get-Sha256 $sourceManifest
+    $succeeded = $true
+    $failure = ""
+    try {
+        Assert-CampaignManifest $manifest
+    } catch {
+        $succeeded = $false
+        $failure = $_.Exception.Message
+    }
+    if ($succeeded -ne $ExpectSuccess) {
+        throw "Case '$Name' success=$succeeded, expected $ExpectSuccess. $failure"
     }
     Write-Host "PASS $Name"
 }
@@ -52,6 +66,7 @@ function Invoke-SyntheticHealthReportCase {
         "Get-Sha256",
         "Get-RuntimeExecutableBundleHash",
         "Test-CanonicalIdentityText",
+        "Assert-BenchmarkReport",
         "Assert-HealthReport")
     foreach ($functionName in $requiredFunctions) {
         $definition = @($driverAst.FindAll({
@@ -81,6 +96,8 @@ function Invoke-SyntheticHealthReportCase {
         Scenario = "Normal"
     }
     $report = [pscustomobject]@{
+        Kind = "njulf-renderer-benchmark"
+        Schema = "njulf-renderer-benchmark/v4"
         ProducerIdentity = [pscustomobject]@{
             Schema = "material-gi-producer-identity/v1"
             BuildCommit = $commit
@@ -96,7 +113,7 @@ function Invoke-SyntheticHealthReportCase {
     }
     $healthJson = [ordered]@{
         kind = "renderer-health"
-        schema = "renderer-health/v2"
+        schema = "renderer-health/v3"
         producerIdentity = [ordered]@{
             schema = "material-gi-producer-identity/v1"
             buildCommit = $commit
@@ -121,7 +138,7 @@ function Invoke-SyntheticHealthReportCase {
             CaptureRun = $captureRun
         }
     } | ConvertTo-Json -Depth 8
-    $health = $healthJson | ConvertFrom-Json
+    $health = $healthJson | ConvertFrom-Json -DateKind String
     $workload = [pscustomobject]@{
         warmupFrames = 480
         measureFrames = 240
@@ -132,6 +149,39 @@ function Invoke-SyntheticHealthReportCase {
     Assert-HealthReport `
         $null $workload $health $report $build $commit `
         "synthetic-pair" "Synthetic health"
+
+    $legacyBenchmarkFailedClosed = $false
+    try {
+        Assert-BenchmarkReport `
+            $null $null `
+            ([pscustomobject]@{
+                Kind = "njulf-renderer-benchmark"
+                Schema = "njulf-renderer-benchmark/v3"
+            }) `
+            "Release" "Synthetic legacy benchmark" $true `
+            "synthetic-pair" $commit $null $null ""
+    } catch {
+        $legacyBenchmarkFailedClosed = $_.Exception.Message -match
+            "unexpected report kind/schema"
+    }
+    if (-not $legacyBenchmarkFailedClosed) {
+        throw "Legacy benchmark schema did not fail closed against v4."
+    }
+
+    $health.schema = "renderer-health/v2"
+    $legacyHealthFailedClosed = $false
+    try {
+        Assert-HealthReport `
+            $null $workload $health $report $build $commit `
+            "synthetic-pair" "Synthetic legacy health"
+    } catch {
+        $legacyHealthFailedClosed = $_.Exception.Message -match
+            "unexpected health-report contract"
+    }
+    if (-not $legacyHealthFailedClosed) {
+        throw "Legacy health schema did not fail closed against v3."
+    }
+    $health.schema = "renderer-health/v3"
 
     $health.status = "failed"
     $health | Add-Member -NotePropertyName failure -NotePropertyValue "synthetic failure"
@@ -146,7 +196,7 @@ function Invoke-SyntheticHealthReportCase {
     if (-not $failedClosed) {
         throw "Synthetic failed health report did not fail closed."
     }
-    Write-Host "PASS synthetic-health-contract"
+    Write-Host "PASS synthetic-benchmark-v4-health-v3-contract"
 
     $bundleRoot = Join-Path $testRoot "runtime-bundle"
     New-Item -ItemType Directory -Path $bundleRoot | Out-Null
@@ -192,7 +242,10 @@ function Invoke-SyntheticAcceptanceRefCase {
         [ref]$tokens,
         [ref]$parseErrors)
     $requiredFunctions = @(
+        "Assert-ExactPropertyNames",
         "Assert-Text",
+        "Get-Sha256Bytes",
+        "Get-Sha256Text",
         "Invoke-Git",
         "Get-GitText",
         "Invoke-GitUpdateRefTransaction",
@@ -203,7 +256,11 @@ function Invoke-SyntheticAcceptanceRefCase {
         "Get-AcceptanceRefSnapshot",
         "Assert-AcceptanceRefSnapshot",
         "Restore-AcceptanceRefSnapshot",
-        "Publish-AcceptanceEvidence")
+        "Publish-AcceptanceEvidence",
+        "Get-TimingAttemptRefName",
+        "Test-TimingAttemptReserved",
+        "Reserve-TimingAttempt",
+        "Assert-TimingAttemptEvidence")
     foreach ($functionName in $requiredFunctions) {
         $definition = @($driverAst.FindAll({
             param($node)
@@ -247,8 +304,30 @@ function Invoke-SyntheticAcceptanceRefCase {
             '{"decision":"keep"}',
             [System.Text.UTF8Encoding]::new($false))
         $commit = Get-GitText @("rev-parse", "HEAD")
+        $script:CampaignLockSha256 = "d" * 64
+        function Get-AdmittedCampaignManifestSha256 { return "e" * 64 }
+        $attempt = Reserve-TimingAttempt `
+            $manifest "gpu" "SyntheticPass" "synthetic-candidate" $commit
+        $attemptDecision = [pscustomobject]@{
+            targetDomain = "gpu"
+            targetPass = "SyntheticPass"
+            candidate = [pscustomobject]@{ id = "synthetic-candidate" }
+            acceptedHead = $commit
+        }
+        Assert-TimingAttemptEvidence $manifest $attempt $attemptDecision
+        $duplicateAttemptFailed = $false
+        try {
+            $null = Reserve-TimingAttempt `
+                $manifest "gpu" "SyntheticPass" "second" $commit
+        } catch {
+            $duplicateAttemptFailed = $_.Exception.Message -match
+                "already consumed its one bounded attempt"
+        }
+        if (-not $duplicateAttemptFailed) {
+            throw "Duplicate timing-identity attempt was not rejected atomically."
+        }
         $decisionBlob = Get-GitText @(
-            "hash-object", "-w", "--", $decisionPath)
+            "hash-object", "--no-filters", "-w", "--", $decisionPath)
         $blob = Publish-AcceptanceEvidence `
             $manifest $decisionPath $commit $decisionBlob $emptySnapshot
         $acceptedSnapshot = Get-AcceptanceRefSnapshot $manifest
@@ -303,7 +382,7 @@ function Invoke-SyntheticAcceptanceRefCase {
         if ((Get-AcceptanceRefSnapshot $manifest).Count -ne 0) {
             throw "Acceptance namespace rollback did not restore the empty snapshot."
         }
-        Write-Host "PASS synthetic-acceptance-ref"
+        Write-Host "PASS synthetic-acceptance-ref-and-attempt-ledger"
     } finally {
         $script:SolutionRoot = $originalSolutionRoot
         if ($null -eq $originalRepoRootVariable) {
@@ -312,6 +391,408 @@ function Invoke-SyntheticAcceptanceRefCase {
             $script:RepoRoot = $originalRepoRootVariable.Value
         }
     }
+}
+
+function Invoke-SyntheticVerifierByteContractCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver,
+        [ref]$tokens,
+        [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for verifier byte-contract tests."
+    }
+    foreach ($functionName in @(
+            "Get-PropertyValue",
+            "Get-ItemCount",
+            "Assert-ExactPropertyNames",
+            "Assert-NoDuplicateJsonProperties",
+            "ConvertFrom-FrozenVerifierBytes",
+            "ConvertFrom-QualityMetricVerifierBytes",
+            "Assert-FrozenVerifierResultHeader")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+
+    $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+    $expectedHeader = @("kind", "schema", "passed", "failures")
+    $frozenJson =
+        '{"kind":"synthetic-verifier","schema":"synthetic-verifier/v1","passed":true,"failures":[]}'
+    $crlfResult = ConvertFrom-FrozenVerifierBytes `
+        ($utf8.GetBytes($frozenJson + "`r`n")) "Synthetic CRLF verifier"
+    Assert-FrozenVerifierResultHeader `
+        $crlfResult $expectedHeader "synthetic-verifier" `
+        "synthetic-verifier/v1" "Synthetic CRLF verifier"
+
+    $orderedArtifact = [ordered]@{
+        artifactPath = "synthetic.json"
+        artifactSha256 = "a" * 64
+    }
+    Assert-ExactPropertyNames `
+        $orderedArtifact @("artifactPath", "artifactSha256") `
+        "Synthetic in-memory ordered artifact"
+    if ([string](Get-PropertyValue $orderedArtifact "artifactPath" "") -cne
+            "synthetic.json" -or
+        [string](Get-PropertyValue $orderedArtifact "missing" "fallback") -cne
+            "fallback") {
+        throw "In-memory ordered artifact property lookup differs."
+    }
+    $orderedArtifact["unknown"] = 1
+    $orderedArtifactFailedClosed = $false
+    try {
+        Assert-ExactPropertyNames `
+            $orderedArtifact @("artifactPath", "artifactSha256") `
+            "Synthetic forged ordered artifact"
+    } catch {
+        $orderedArtifactFailedClosed = $_.Exception.Message -match
+            "property topology differs"
+    }
+    if (-not $orderedArtifactFailedClosed) {
+        throw "In-memory ordered artifact topology did not fail closed."
+    }
+
+    $missingTerminatorFailedClosed = $false
+    try {
+        $null = ConvertFrom-FrozenVerifierBytes `
+            ($utf8.GetBytes($frozenJson)) "Synthetic unterminated verifier"
+    } catch {
+        $missingTerminatorFailedClosed = $_.Exception.Message -match
+            "newline-terminated JSON object"
+    }
+    if (-not $missingTerminatorFailedClosed) {
+        throw "Frozen verifier stdout without a line terminator did not fail closed."
+    }
+
+    $duplicateFailedClosed = $false
+    try {
+        $null = ConvertFrom-FrozenVerifierBytes `
+            ($utf8.GetBytes(
+                '{"kind":"synthetic-verifier","schema":"synthetic-verifier/v1","passed":true,"failures":[],"nested":{"value":1,"value":2}}' +
+                "`n")) `
+            "Synthetic duplicate verifier"
+    } catch {
+        $duplicateFailedClosed = $_.Exception.Message -match
+            "duplicate JSON property 'value'"
+    }
+    if (-not $duplicateFailedClosed) {
+        throw "Duplicate frozen-verifier JSON property did not fail closed."
+    }
+
+    $unknownResult = ConvertFrom-FrozenVerifierBytes `
+        ($utf8.GetBytes(
+            '{"kind":"synthetic-verifier","schema":"synthetic-verifier/v1","passed":true,"failures":[],"unknown":1}' +
+            "`n")) `
+        "Synthetic unknown verifier"
+    $unknownFailedClosed = $false
+    try {
+        Assert-FrozenVerifierResultHeader `
+            $unknownResult $expectedHeader "synthetic-verifier" `
+            "synthetic-verifier/v1" "Synthetic unknown verifier"
+    } catch {
+        $unknownFailedClosed = $_.Exception.Message -match
+            "property topology differs"
+    }
+    if (-not $unknownFailedClosed) {
+        throw "Unknown frozen-verifier result property did not fail closed."
+    }
+
+    $failedTopology = ConvertFrom-FrozenVerifierBytes `
+        ($utf8.GetBytes(
+            '{"kind":"synthetic-verifier","schema":"synthetic-verifier/v1","passed":false,"failures":["corrupt"]}' +
+            "`n")) `
+        "Synthetic failed verifier"
+    $failedResultFailedClosed = $false
+    try {
+        Assert-FrozenVerifierResultHeader `
+            $failedTopology $expectedHeader "synthetic-verifier" `
+            "synthetic-verifier/v1" "Synthetic failed verifier"
+    } catch {
+        $failedResultFailedClosed = $_.Exception.Message -match
+            "rejected its authenticated evidence"
+    }
+    if (-not $failedResultFailedClosed) {
+        throw "Failed frozen-verifier result topology did not fail closed."
+    }
+
+    foreach ($scalarCorruption in @(
+            [pscustomobject]@{
+                name = "string passed"
+                json = '{"kind":"synthetic-verifier","schema":"synthetic-verifier/v1","passed":"false","failures":[]}'
+            },
+            [pscustomobject]@{
+                name = "numeric passed"
+                json = '{"kind":"synthetic-verifier","schema":"synthetic-verifier/v1","passed":1,"failures":[]}'
+            },
+            [pscustomobject]@{
+                name = "null failures"
+                json = '{"kind":"synthetic-verifier","schema":"synthetic-verifier/v1","passed":true,"failures":null}'
+            })) {
+        $corruptResult = ConvertFrom-FrozenVerifierBytes `
+            ($utf8.GetBytes([string]$scalarCorruption.json + "`n")) `
+            "Synthetic $($scalarCorruption.name) verifier"
+        $scalarFailedClosed = $false
+        try {
+            Assert-FrozenVerifierResultHeader `
+                $corruptResult $expectedHeader "synthetic-verifier" `
+                "synthetic-verifier/v1" `
+                "Synthetic $($scalarCorruption.name) verifier"
+        } catch {
+            $scalarFailedClosed = $true
+        }
+        if (-not $scalarFailedClosed) {
+            throw "Frozen verifier admitted $($scalarCorruption.name) topology."
+        }
+    }
+
+    $metricJson =
+        '{"schema":"njulf-perf-quality-verify-result/v1","results":[]}'
+    $metricResult = ConvertFrom-QualityMetricVerifierBytes `
+        ($utf8.GetBytes($metricJson)) "Synthetic metric verifier"
+    Assert-ExactPropertyNames `
+        $metricResult @("schema", "results") "Synthetic metric verifier"
+    if ([string]$metricResult.schema -cne
+        "njulf-perf-quality-verify-result/v1") {
+        throw "Unterminated compact metric-verifier JSON was not preserved."
+    }
+
+    $metricNewlineFailedClosed = $false
+    try {
+        $null = ConvertFrom-QualityMetricVerifierBytes `
+            ($utf8.GetBytes($metricJson + "`n")) `
+            "Synthetic newline metric verifier"
+    } catch {
+        $metricNewlineFailedClosed = $_.Exception.Message -match
+            "exactly one compact JSON object"
+    }
+    if (-not $metricNewlineFailedClosed) {
+        throw "Metric-verifier JSON with a line terminator did not fail closed."
+    }
+
+    $metricDuplicateFailedClosed = $false
+    try {
+        $null = ConvertFrom-QualityMetricVerifierBytes `
+            ($utf8.GetBytes(
+                '{"schema":"njulf-perf-quality-verify-result/v1","results":[{"value":{"relativeResidual":0,"relativeResidual":1}}]}')) `
+            "Synthetic duplicate metric verifier"
+    } catch {
+        $metricDuplicateFailedClosed = $_.Exception.Message -match
+            "duplicate JSON property 'relativeResidual'"
+    }
+    if (-not $metricDuplicateFailedClosed) {
+        throw "Duplicate metric-verifier JSON property did not fail closed."
+    }
+    $metricUnknown = ConvertFrom-QualityMetricVerifierBytes `
+        ($utf8.GetBytes(
+            '{"schema":"njulf-perf-quality-verify-result/v1","results":[],"unknown":1}')) `
+        "Synthetic unknown metric verifier"
+    $metricUnknownFailedClosed = $false
+    try {
+        Assert-ExactPropertyNames `
+            $metricUnknown @("schema", "results") `
+            "Synthetic unknown metric verifier"
+    } catch {
+        $metricUnknownFailedClosed = $_.Exception.Message -match
+            "property topology differs"
+    }
+    if (-not $metricUnknownFailedClosed) {
+        throw "Unknown metric-verifier result property did not fail closed."
+    }
+    Write-Host "PASS synthetic-frozen-and-metric-verifier-byte-contracts"
+}
+
+function Invoke-SyntheticQualityAnimationContractCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver,
+        [ref]$tokens,
+        [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for quality animation tests."
+    }
+    foreach ($functionName in @(
+            "Get-Sha256",
+            "Test-Sha256Identity",
+            "Assert-PathIdentity",
+            "Get-QualitySequenceRoleValue",
+            "Assert-ResultReportIdentity",
+            "Assert-SponzaAnimationVerifierIdentity",
+            "Assert-QualityActivationVerifierResult",
+            "ConvertTo-QualityCaptureRunContract",
+            "ConvertTo-QualityProducerContract",
+            "ConvertTo-QualityCameraContract",
+            "New-QualitySequenceReferenceContract")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+
+    $manifest = Get-Content -LiteralPath $sourceManifest -Raw |
+        ConvertFrom-Json -DateKind String
+    $qualityContractPath = Join-Path $testRoot "synthetic-quality-contract.json"
+    [System.IO.File]::WriteAllText(
+        $qualityContractPath,
+        '{}',
+        [System.Text.UTF8Encoding]::new($false))
+    $canonicalReport = [pscustomobject]@{
+        SceneKind = "Bistro"
+        Scenario = "Normal"
+        CaptureVariant = "baseline"
+        BuildConfiguration = "Release"
+        Trajectory = "bistro-presentation"
+        TrajectoryFingerprint = "sha256:" + ("1" * 64)
+        TrajectoryRouteHash = "sha256:" + ("2" * 64)
+        TrajectorySequenceHash = "sha256:" + ("3" * 64)
+        TrajectoryFrameCount = 1
+        WarmupFrameCount = 480
+        MaximumAdditionalSettlingFrameCount =
+            [int]$manifest.capture.maximumSettlingFrames
+        MaximumReadbackDrainFrameCount =
+            [int]$manifest.qualitySequence.maximumReadbackDrainFrames
+        FirstRouteAbsoluteFrameIndex = 480
+        CheckpointContractFingerprint = "sha256:" + ("4" * 64)
+        CheckpointIndices = @()
+        Checkpoints = @()
+        CaptureRun = [pscustomobject]@{
+            SceneKind = "Bistro"
+            Scenario = "Normal"
+            BuildConfiguration = "Release"
+            ApplicationVersion = "1.0.0+synthetic"
+            Commit = "9" * 40
+            ShaderBundleHash = "sha256:" + ("a" * 64)
+            SettingsSchemaVersion = 1
+            ExecutableHash = "sha256:" + ("b" * 64)
+            DirtyWorktreeState = "clean"
+        }
+        ProducerIdentity = [pscustomobject]@{
+            Schema = "material-gi-producer-identity/v1"
+            BuildCommit = "9" * 40
+            ShaderFingerprint = "a" * 64
+            SettingsFingerprint = "c" * 64
+            SourceSettingsFingerprints = @("c" * 64)
+            GpuName = "Synthetic GPU"
+            DriverVersion = "1.2.3"
+            QualityTier = "StressUnlimited"
+        }
+        Activation = "none"
+        ActivationFingerprint = "sha256:" + ("5" * 64)
+        ActivationEvidence = [pscustomobject]@{
+            AnimationConfigurationFingerprint = "unavailable"
+            AnimationSequenceHash = "unavailable"
+            ActivationStructuralSequenceHash = "sha256:" + ("6" * 64)
+            ActivationExecutionSequenceHash = "sha256:" + ("7" * 64)
+        }
+    }
+    $bistroWorkload = [pscustomobject]@{ scene = "Bistro" }
+    $contract = New-QualitySequenceReferenceContract `
+        $manifest $bistroWorkload $canonicalReport `
+        $qualityContractPath ("8" * 64)
+    if ([string]$contract.sponzaSceneAnimationFingerprint -cne "unavailable" -or
+        [int]$contract.sponzaSceneAnimationMode -ne 0 -or
+        [string]$contract.sponzaSceneAnimationConfigurationFingerprint -cne
+            "unavailable" -or
+        [string]$contract.sponzaSceneAnimationSequenceHash -cne "unavailable" -or
+        -not [string]::IsNullOrEmpty(
+            [string]$contract.sponzaSceneAnimationSidecarPath) -or
+        -not [string]::IsNullOrEmpty(
+            [string]$contract.sponzaSceneAnimationSidecarSha256)) {
+        throw "Non-Sponza quality contract does not use canonical sentinels."
+    }
+
+    $reportPath = [System.IO.Path]::GetFullPath(
+        (Join-Path $testRoot "sponza-quality-report.json"))
+    [System.IO.File]::WriteAllText(
+        $reportPath,
+        '{}',
+        [System.Text.UTF8Encoding]::new($false))
+    $sidecarPath = $reportPath + ".sponza-animation.bin"
+    [System.IO.File]::WriteAllBytes($sidecarPath, [byte[]]@(1, 2, 3, 4))
+    $sidecarSha256 = Get-Sha256 $sidecarPath
+    $animationFingerprint = "sha256:" + ("a" * 64)
+    $configurationFingerprint = "sha256:" + ("b" * 64)
+    $sequenceHash = "sha256:" + ("c" * 64)
+    $activationFingerprint = "sha256:" + ("d" * 64)
+    $activationStructural = "sha256:" + ("e" * 64)
+    $activationExecution = "sha256:" + ("f" * 64)
+    $sponzaWorkload = [pscustomobject]@{
+        scene = "Sponza"
+        activation = "sponza-forward-gi"
+    }
+    $sponzaReport = [pscustomobject]@{
+        Activation = "sponza-forward-gi"
+        ActivationFingerprint = $activationFingerprint
+        ActivationEvidence = [pscustomobject]@{
+            Fingerprint = $activationFingerprint
+            ActivationStructuralSequenceHash = $activationStructural
+            ActivationExecutionSequenceHash = $activationExecution
+        }
+        SponzaSceneAnimationEvidence = [pscustomobject]@{
+            Fingerprint = $animationFingerprint
+            Mode = 1
+            ConfigurationFingerprint = $configurationFingerprint
+            SequenceHash = $sequenceHash
+            SidecarPath = $sidecarPath
+            SidecarSha256 = $sidecarSha256
+        }
+    }
+    $sponzaResult = [pscustomobject]@{
+        reportPath = $reportPath
+        reportSha256 = Get-Sha256 $reportPath
+        sequenceId = "synthetic-sequence"
+        role = 2
+        activation = "sponza-forward-gi"
+        activationFingerprint = $activationFingerprint
+        activationStructuralSequenceHash = $activationStructural
+        activationExecutionSequenceHash = $activationExecution
+        sponzaSceneAnimationFingerprint = $animationFingerprint
+        sponzaSceneAnimationMode = 1
+        sponzaSceneAnimationConfigurationFingerprint =
+            $configurationFingerprint
+        sponzaSceneAnimationSequenceHash = $sequenceHash
+        sponzaSceneAnimationSidecarPath = $sidecarPath
+        sponzaSceneAnimationSidecarSha256 = $sidecarSha256
+    }
+    $sidecar = Assert-QualityActivationVerifierResult `
+        $sponzaWorkload $sponzaReport "candidate" "synthetic-sequence" `
+        $sponzaResult $reportPath (Get-Sha256 $reportPath) `
+        "Synthetic Sponza activation"
+    if ([string]$sidecar.path -cne $sidecarPath -or
+        [string]$sidecar.sha256 -cne $sidecarSha256) {
+        throw "Sponza per-run sidecar identity was not preserved."
+    }
+
+    $wrongSidecarPath = Join-Path $testRoot "shared-reference-sidecar.bin"
+    [System.IO.File]::WriteAllBytes($wrongSidecarPath, [byte[]]@(1, 2, 3, 4))
+    $sponzaReport.SponzaSceneAnimationEvidence.SidecarPath = $wrongSidecarPath
+    $sponzaResult.sponzaSceneAnimationSidecarPath = $wrongSidecarPath
+    $sharedSidecarFailedClosed = $false
+    try {
+        $null = Assert-QualityActivationVerifierResult `
+            $sponzaWorkload $sponzaReport "candidate" "synthetic-sequence" `
+            $sponzaResult $reportPath (Get-Sha256 $reportPath) `
+            "Synthetic shared Sponza activation"
+    } catch {
+        $sharedSidecarFailedClosed = $_.Exception.Message -match
+            "campaign-owned animation sidecar"
+    }
+    if (-not $sharedSidecarFailedClosed) {
+        throw "Sponza verifier accepted a non-per-run sidecar path."
+    }
+    Write-Host "PASS synthetic-quality-animation-contract"
 }
 
 function Invoke-SyntheticComparisonContractCase {
@@ -323,13 +804,19 @@ function Invoke-SyntheticComparisonContractCase {
         [ref]$parseErrors)
     $requiredFunctions = @(
         "Get-PropertyValue",
+        "Get-BootstrapLowerBound",
+        "Assert-TimingStats",
         "Get-Median",
         "Get-Timing",
         "Get-PassTiming",
+        "Get-ScopedTiming",
+        "Get-TargetHypothesis",
+        "Get-HypothesisWorkloads",
+        "Get-TargetPassPairedDifferences",
         "Get-ImprovementPercent",
-        "Get-BootstrapLowerBound",
-        "Assert-TimingStats",
+        "Assert-CrossBuildIdentity",
         "Compare-WorkloadCaptures",
+        "New-ConfigurationHypothesisResults",
         "Get-ConfigurationWorkloadSelection")
     foreach ($functionName in $requiredFunctions) {
         $definition = @($driverAst.FindAll({
@@ -342,66 +829,6 @@ function Invoke-SyntheticComparisonContractCase {
         }
         . ([scriptblock]::Create($definition.Extent.Text))
     }
-    function Assert-CrossBuildIdentity { param($a, $b, $c) }
-
-    function New-SyntheticTimingReport {
-        param([bool]$IncludeTargetPass)
-        $timing = [pscustomobject]@{
-            P50Milliseconds = 10.0
-            P95Milliseconds = 11.0
-            P99Milliseconds = 12.0
-        }
-        $passes = if ($IncludeTargetPass) {
-            @([pscustomobject]@{
-                Name = "SyntheticPass"
-                P95Milliseconds = 3.0
-            })
-        } else {
-            @()
-        }
-        return [pscustomobject]@{
-            CpuFrameMilliseconds = $timing
-            GpuFrameMilliseconds = $timing
-            GpuPasses = $passes
-            CpuStages = @()
-        }
-    }
-
-    $comparisonManifest = [pscustomobject]@{
-        acceptance = [pscustomobject]@{
-            bootstrapSamples = 10000
-            bootstrapConfidence = 0.95
-            maximumRegressionPercent = 1.0
-            minimumFrameImprovementPercent = 1.0
-            minimumFrameImprovementMilliseconds = 0.1
-            minimumPassImprovementPercent = 5.0
-            minimumPassImprovementMilliseconds = 0.05
-        }
-    }
-    $comparisonWorkload = [pscustomobject]@{
-        id = "synthetic-pass"
-        targetPass = "SyntheticPass"
-    }
-    $missingPassFailedClosed = $false
-    try {
-        $null = Compare-WorkloadCaptures `
-            $comparisonManifest $comparisonWorkload `
-            @(
-                (New-SyntheticTimingReport $true),
-                (New-SyntheticTimingReport $true)) `
-            @(
-                (New-SyntheticTimingReport $true),
-                (New-SyntheticTimingReport $false)) `
-            ([double[]]@(0.1, 0.1)) $true
-    } catch {
-        $missingPassFailedClosed = $_.Exception.Message -match
-            "finite positive 'SyntheticPass' sample in every ABBA slot"
-    }
-    if (-not $missingPassFailedClosed) {
-        throw "Missing target-pass slot did not fail closed."
-    }
-    Write-Host "PASS synthetic-target-pass-completeness"
-
     $invalidTiming = [pscustomobject]@{
         Count = 240
         AverageMilliseconds = 10.0
@@ -436,16 +863,14 @@ function Invoke-SyntheticComparisonContractCase {
     Write-Host "PASS synthetic-timing-domain"
 
     $manifest = Get-Content -LiteralPath $sourceManifest -Raw |
-        ConvertFrom-Json
+        ConvertFrom-Json -DateKind String
     $target = @($manifest.workloads | Where-Object {
-        [string]$_.id -eq "bistro-forward-gi-disabled"
+        [string]$_.id -eq "bistro-forward-gi-enabled"
     })[0]
     $selectedIds = @(Get-ConfigurationWorkloadSelection `
         $manifest @($target) $false | ForEach-Object { [string]$_.id })
     $expectedIds = @(
-        "bistro-forward-gi-disabled",
         "bistro-forward-gi-enabled",
-        "bistro-forward-gi-exact",
         "bistro-stationary",
         "bistro-motion",
         "bistro-motion-relight",
@@ -457,6 +882,135 @@ function Invoke-SyntheticComparisonContractCase {
         throw "Screen workload selection does not match target+isolation+qualification order."
     }
     Write-Host "PASS synthetic-screen-workload-order"
+
+    $aoHypotheses = @(
+        Get-TargetHypothesis $manifest "ambient-occlusion"
+        Get-TargetHypothesis $manifest "ambient-occlusion-blur")
+    $hypothesisWorkloads = @(Get-HypothesisWorkloads `
+        $manifest $aoHypotheses)
+    if (($hypothesisWorkloads.id -join ',') -cne
+            "bistro-motion,sponza-horizontal-motion" -or
+        @($hypothesisWorkloads[0].campaignTargetClaims).Count -ne 2 -or
+        @($hypothesisWorkloads[1].campaignTargetClaims).Count -ne 2) {
+        throw "Hypothesis expansion did not deduplicate workloads while retaining claims."
+    }
+    Write-Host "PASS synthetic-hypothesis-workload-deduplication"
+
+    $passReports = @(
+        [pscustomobject]@{ GpuPasses = @([pscustomobject]@{
+            Name = "SyntheticPass"; P95Milliseconds = 10.0 }) ; CpuStages = @() },
+        [pscustomobject]@{ GpuPasses = @([pscustomobject]@{
+            Name = "SyntheticPass"; P95Milliseconds = 8.0 }) ; CpuStages = @() },
+        [pscustomobject]@{ GpuPasses = @([pscustomobject]@{
+            Name = "SyntheticPass"; P95Milliseconds = 7.0 }) ; CpuStages = @() },
+        [pscustomobject]@{ GpuPasses = @([pscustomobject]@{
+            Name = "SyntheticPass"; P95Milliseconds = 11.0 }) ; CpuStages = @() })
+    $passWorkload = [pscustomobject]@{
+        id = "synthetic-target"
+        campaignTargetClaims = @([pscustomobject]@{
+            hypothesisId = "synthetic-hypothesis"
+            scene = "Synthetic"
+            workloadId = "synthetic-target"
+            targetDomain = "gpu"
+            targetPass = "SyntheticPass"
+        })
+    }
+    $passDifferences = Get-TargetPassPairedDifferences `
+        $passWorkload $passReports
+    $syntheticPassDifferences = Get-PropertyValue `
+        $passDifferences "gpu::SyntheticPass" @()
+    if ((@($syntheticPassDifferences) -join ',') -cne "2,4") {
+        throw "Target-pass ABBA differences do not use independent B1-C1/B2-C2 pairs."
+    }
+
+    function New-SyntheticComparisonReport {
+        param([double]$PassP95)
+        return [pscustomobject]@{
+            Scenario = "Synthetic"
+            CaptureContract = [pscustomobject]@{
+                Trajectory = "synthetic"
+                TrajectoryFingerprint = "same"
+                TrajectoryFrameCount = 1
+                TrajectoryRouteHash = "same"
+            }
+            LastDiagnostics = [pscustomobject]@{
+                CaptureSceneAssetHash = "same"
+                CaptureRun = [pscustomobject]@{ SettingsSchemaVersion = 1 }
+                ActiveQualityPreset = "same"
+                ResolvedGiSettings = [pscustomobject]@{ StableHash = "same" }
+                ActiveFeatureIsolation = "same"
+                GlobalIlluminationDebugView = "same"
+            }
+            ProducerIdentity = [pscustomobject]@{
+                Schema = "same"
+                SettingsFingerprint = "same"
+                GpuName = "same"
+                DriverVersion = "same"
+                QualityTier = "same"
+            }
+            CpuFrameMilliseconds = [pscustomobject]@{
+                P50Milliseconds = 10.0
+                P95Milliseconds = 10.0
+                P99Milliseconds = 10.0
+            }
+            GpuFrameMilliseconds = [pscustomobject]@{
+                P50Milliseconds = 10.0
+                P95Milliseconds = 10.0
+                P99Milliseconds = 10.0
+            }
+            GpuPasses = @([pscustomobject]@{
+                Name = "SyntheticPass"
+                P95Milliseconds = $PassP95
+            })
+            CpuStages = @()
+            HdrDifference = [pscustomobject]@{
+                RelativeRmse = 0.0
+                FlipP95 = 0.0
+                RoiResults = @()
+            }
+        }
+    }
+    $comparisonManifest = [pscustomobject]@{
+        capture = [pscustomobject]@{ abbaCycles = 3 }
+        acceptance = [pscustomobject]@{
+            minimumFrameImprovementPercent = 1.0
+            minimumFrameImprovementMilliseconds = 0.1
+            minimumPassImprovementPercent = 5.0
+            minimumPassImprovementMilliseconds = 0.05
+            maximumRegressionPercent = 1.0
+            bootstrapSamples = 100
+            bootstrapConfidence = 0.95
+        }
+    }
+    $baselineReports = @(1..6 | ForEach-Object {
+        New-SyntheticComparisonReport 5.0
+    })
+    $candidateReports = @(1..6 | ForEach-Object {
+        New-SyntheticComparisonReport 4.0
+    })
+    $positivePass = [pscustomobject]([ordered]@{
+        "gpu::SyntheticPass" = [double[]]@(1, 1, 1, 1, 1, 1)
+    })
+    $negativePass = [pscustomobject]([ordered]@{
+        "gpu::SyntheticPass" = [double[]]@(-1, -1, -1, -1, -1, -1)
+    })
+    $positive = Compare-WorkloadCaptures `
+        $comparisonManifest $passWorkload $baselineReports $candidateReports `
+        ([double[]]@(1, 1, 1, 1, 1, 1)) $positivePass $true
+    $negative = Compare-WorkloadCaptures `
+        $comparisonManifest $passWorkload $baselineReports $candidateReports `
+        ([double[]]@(1, 1, 1, 1, 1, 1)) $negativePass $true
+    if ([string]$positive.Decision -cne "keep" -or
+        [bool]$positive.TargetClaimResults[0].FrameWin -or
+        -not [bool]$positive.TargetClaimResults[0].PassWin -or
+        [double]$positive.FrameBootstrapLower95Milliseconds -le 0.0 -or
+        [double]$positive.TargetClaimResults[0].TargetPassBootstrapLower95Milliseconds -le 0.0 -or
+        [string]$negative.Decision -cne "rollback" -or
+        [double]$negative.FrameBootstrapLower95Milliseconds -le 0.0 -or
+        [double]$negative.TargetClaimResults[0].TargetPassBootstrapLower95Milliseconds -ge 0.0) {
+        throw "Target-pass acceptance reused frame bootstrap evidence."
+    }
+    Write-Host "PASS synthetic-independent-frame-pass-bootstrap"
 }
 
 function Invoke-SyntheticQualitySequencePolicyCase {
@@ -519,8 +1073,9 @@ function Invoke-SyntheticQualitySequencePolicyCase {
         }
     }
 
-    $manifest = Get-Content -LiteralPath $sourceManifest -Raw | ConvertFrom-Json
-    $workload = [pscustomobject]@{ trajectory = "bistro-loop" }
+    $manifest = Get-Content -LiteralPath $sourceManifest -Raw |
+        ConvertFrom-Json -DateKind String
+    $workload = [pscustomobject]@{ qualityTrajectory = "bistro-loop" }
     $repeatOne = [pscustomobject]@{
         temporal = @(
             [pscustomobject]@{ relativeResidual = 0.0000001 },
@@ -603,6 +1158,339 @@ function Invoke-SyntheticQualitySequencePolicyCase {
     Write-Host "PASS synthetic-quality-sequence-policy"
 }
 
+function Invoke-SyntheticHotspotDiscoveryCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for hotspot discovery test."
+    }
+    foreach ($functionName in @(
+            "Get-PropertyValue", "Get-Sha256", "Get-Timing",
+            "Get-CampaignConfigurations", "New-HotspotDiscoveryData")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    function Get-AdmittedCampaignManifestSha256 { return "a" * 64 }
+
+    $manifest = [pscustomobject]@{
+        campaignId = "synthetic-hotspots"
+        iterationConfiguration = "Release"
+        finalConfigurations = @("Release", "ShippingPerformance")
+        discoveryPolicy = [pscustomobject][ordered]@{
+            enabled = $true
+            domains = @("gpu", "cpu")
+            minimumSharePercent = 5.0
+            minimumP95Milliseconds = 0.25
+            requireBothConfigurations = $true
+            requireBistroAndSponza = $true
+            attemptsPerTiming = 1
+            fullMatrixAfterCandidate = $true
+        }
+        workloads = @(
+            [pscustomobject]@{ id = "bistro"; scene = "Bistro" },
+            [pscustomobject]@{ id = "sponza"; scene = "Sponza" })
+    }
+    $entries = [System.Collections.Generic.List[object]]::new()
+    $entryIndex = 0
+    foreach ($configuration in @("Release", "ShippingPerformance")) {
+        foreach ($workload in @($manifest.workloads)) {
+            $reportPath = Join-Path $testRoot (
+                "hotspot-$entryIndex.json")
+            [System.IO.File]::WriteAllText(
+                $reportPath, "{}", [System.Text.UTF8Encoding]::new($false))
+            $gpuHot = if ([string]$workload.scene -ceq "Bistro") {
+                2.0
+            } else { 1.5 }
+            $report = [pscustomobject]@{
+                LastDiagnostics = [pscustomobject]@{
+                    CaptureRun = [pscustomobject]@{ Commit = "b" * 40 }
+                }
+                CpuFrameMilliseconds = [pscustomobject]@{ P95Milliseconds = 10.0 }
+                GpuFrameMilliseconds = [pscustomobject]@{ P95Milliseconds = 10.0 }
+                GpuPasses = @(
+                    [pscustomobject]@{ Name = "GpuHot"; P95Milliseconds = $gpuHot },
+                    [pscustomobject]@{ Name = "Tiny"; P95Milliseconds = 0.1 },
+                    [pscustomobject]@{
+                        Name = "ReleaseOnly"
+                        P95Milliseconds = if ($configuration -ceq "Release") {
+                            3.0
+                        } else { 0.0 }
+                    })
+                CpuStages = @([pscustomobject]@{
+                    Name = "CpuHot"; P95Milliseconds = 1.0
+                })
+                CampaignFrozenVerifierEvidence = [pscustomobject]@{ marker = $entryIndex }
+            }
+            $entries.Add([pscustomobject]@{
+                Configuration = $configuration
+                Workload = $workload
+                ReportPath = $reportPath
+                ReportSha256 = Get-Sha256 $reportPath
+                Report = $report
+                BuildIdentity = [pscustomobject]@{ marker = $entryIndex }
+            })
+            $entryIndex++
+        }
+    }
+    $artifact = New-HotspotDiscoveryData `
+        $manifest @($entries) ("b" * 40) `
+        ([DateTimeOffset]::Parse("2026-08-20T00:00:00.0000000+00:00"))
+    if ([string]$artifact.schema -cne "njulf-perf-hotspot-discovery/v1" -or
+        @($artifact.reports).Count -ne 4 -or
+        @($artifact.eligibleHotspots).Count -ne 2 -or
+        [string]$artifact.eligibleHotspots[0].domain -cne "gpu" -or
+        [string]$artifact.eligibleHotspots[0].name -cne "GpuHot" -or
+        [string]$artifact.eligibleHotspots[1].domain -cne "cpu" -or
+        [string]$artifact.eligibleHotspots[1].name -cne "CpuHot" -or
+        ((@($artifact.eligibleHotspots[0].claims).workloadId -join ',') -cne
+            "bistro,sponza")) {
+        throw "Hotspot discovery did not rank exact cross-config CPU/GPU evidence."
+    }
+    $missingFailed = $false
+    try {
+        $null = New-HotspotDiscoveryData `
+            $manifest @($entries | Select-Object -Skip 1) ("b" * 40) `
+            ([DateTimeOffset]::UtcNow)
+    } catch { $missingFailed = $_.Exception.Message -match "one authenticated report" }
+    $entries[0].Report.GpuPasses += [pscustomobject]@{
+        Name = "GpuHot"; P95Milliseconds = 1.0
+    }
+    $duplicateFailed = $false
+    try {
+        $null = New-HotspotDiscoveryData `
+            $manifest @($entries) ("b" * 40) ([DateTimeOffset]::UtcNow)
+    } catch { $duplicateFailed = $_.Exception.Message -match "malformed or duplicate" }
+    if (-not $missingFailed -or -not $duplicateFailed) {
+        throw "Hotspot discovery did not fail closed on missing/duplicate rows."
+    }
+    Write-Host "PASS synthetic-hotspot-discovery"
+}
+
+function Invoke-ProcessTimeoutContainmentCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for timeout containment test."
+    }
+    foreach ($functionName in @(
+            "Stop-ProcessTreeAndDrain", "Invoke-ProcessChecked")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    $caseRoot = Join-Path $testRoot "timeout-containment"
+    New-Item -ItemType Directory -Path $caseRoot | Out-Null
+    $marker = Join-Path $caseRoot "late-write.txt"
+    $childPath = Join-Path $caseRoot "child.ps1"
+    $parentPath = Join-Path $caseRoot "parent.ps1"
+    [System.IO.File]::WriteAllText(
+        $childPath,
+        "Start-Sleep -Seconds 4`n[System.IO.File]::WriteAllText('$($marker.Replace("'", "''"))','late')`n",
+        [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText(
+        $parentPath,
+        @"
+`$info = [System.Diagnostics.ProcessStartInfo]::new()
+`$info.FileName = (Join-Path `$PSHOME 'pwsh.exe')
+`$info.UseShellExecute = `$false
+`$info.CreateNoWindow = `$true
+[void]`$info.ArgumentList.Add('-NoProfile')
+[void]`$info.ArgumentList.Add('-File')
+[void]`$info.ArgumentList.Add('$($childPath.Replace("'", "''"))')
+`$child = [System.Diagnostics.Process]::Start(`$info)
+Start-Sleep -Seconds 30
+"@,
+        [System.Text.UTF8Encoding]::new($false))
+    $timedOut = $false
+    try {
+        Invoke-ProcessChecked `
+            (Join-Path $PSHOME "pwsh.exe") `
+            @("-NoProfile", "-File", $parentPath) `
+            "Synthetic child-writer timeout" 1 $caseRoot
+    } catch {
+        $timedOut = $_.Exception.Message -match
+            "timed out.*terminal process-tree cleanup"
+    }
+    Start-Sleep -Seconds 5
+    if (-not $timedOut -or (Test-Path -LiteralPath $marker)) {
+        throw "Timed-out process tree wrote after terminal cleanup returned."
+    }
+    Write-Host "PASS process-timeout-tree-containment"
+}
+
+function Invoke-SyntheticCandidateEnvelopeCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for candidate envelope test."
+    }
+    foreach ($functionName in @(
+            "Get-Sha256Bytes", "Get-Sha256Text", "Read-BoundedFileBytes",
+            "Assert-NoDuplicateJsonProperties", "Read-StrictJsonFile",
+            "Assert-JsonString", "Assert-JsonInteger", "Assert-JsonArray",
+            "Assert-ExactPropertyNames", "Test-PathContainedBy",
+            "Read-CandidateEnvelope")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    $script:RunRoot = [System.IO.Path]::GetFullPath($testRoot)
+    $script:CampaignLockSha256 = "d" * 64
+    $script:ProtectedFingerprints = [ordered]@{}
+    function Assert-NoLinkedPathComponents {
+        param([string]$Path, [string]$Label)
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+    function Get-AdmittedCampaignManifestSha256 { return "a" * 64 }
+    function Get-StablePatchId { param([string]$Commit); return "e" * 40 }
+    function Get-CommitChangedPaths {
+        param([string]$Commit)
+        return @($script:SyntheticCandidateChangedPaths)
+    }
+    function Resolve-SolutionPath {
+        param([string]$Path)
+        return [System.IO.Path]::GetFullPath((Join-Path $script:SolutionRoot $Path))
+    }
+    function Get-GitText {
+        param([string[]]$Arguments)
+        if ($Arguments[0] -ceq "rev-list") {
+            return ("c" * 40) + " " + ("b" * 40)
+        }
+        throw "Unexpected synthetic git text command: $($Arguments -join ' ')"
+    }
+    function Invoke-Git {
+        param([string[]]$Arguments)
+        if ($Arguments[0] -ceq "diff") {
+            return @("10`t5`tNjulf.Shaders/synthetic.comp")
+        }
+        throw "Unexpected synthetic git command: $($Arguments -join ' ')"
+    }
+    function Test-TimingAttemptReserved {
+        param($Manifest, [string]$Domain, [string]$Name)
+        return $false
+    }
+    $script:SyntheticCandidateChangedPaths = @(
+        "Njulf.Shaders/synthetic.comp")
+    $hotspot = [pscustomobject][ordered]@{
+        rank = 1
+        domain = "gpu"
+        name = "SyntheticPass"
+        maximumP95Milliseconds = 2.0
+        maximumSharePercent = 20.0
+        claims = @(
+            [pscustomobject][ordered]@{ scene = "Bistro"; workloadId = "bistro" },
+            [pscustomobject][ordered]@{ scene = "Sponza"; workloadId = "sponza" })
+    }
+    $secondHotspot = [pscustomobject][ordered]@{
+        rank = 2
+        domain = "cpu"
+        name = "SecondPass"
+        maximumP95Milliseconds = 1.0
+        maximumSharePercent = 10.0
+        claims = $hotspot.claims
+    }
+    function Assert-HotspotDiscoveryArtifact {
+        param($Manifest, $Lock, [string]$Path, [string]$ExpectedSha256,
+            [string]$ExpectedRetainedCommit, [string]$Label)
+        return [pscustomobject]@{
+            eligibleHotspots = @($hotspot, $secondHotspot)
+        }
+    }
+    $manifest = [pscustomobject]@{ campaignId = "synthetic-envelope" }
+    $envelope = [pscustomobject][ordered]@{
+        schema = "njulf-perf-candidate-envelope/v1"
+        campaignId = "synthetic-envelope"
+        manifestSha256 = "a" * 64
+        lockSha256 = "d" * 64
+        acceptedHead = "b" * 40
+        discoveryArtifactPath = (Join-Path $testRoot "synthetic-discovery.json")
+        discoveryArtifactSha256 = "f" * 64
+        hotspot = $hotspot
+        attempt = 1
+        candidate = [pscustomobject][ordered]@{
+            id = "auto-synthetic"
+            sourceCommit = "c" * 40
+            patchId = "e" * 40
+            allowedPaths = @("Njulf.Shaders/synthetic.comp")
+            focusedTestFilter = "FullyQualifiedName~Synthetic"
+        }
+    }
+    $path = Join-Path $testRoot "synthetic-envelope.json"
+    [System.IO.File]::WriteAllText(
+        $path,
+        ($envelope | ConvertTo-Json -Depth 12),
+        [System.Text.UTF8Encoding]::new($false))
+    $admission = Read-CandidateEnvelope `
+        $manifest ([pscustomobject]@{}) $path ("b" * 40) $true
+    if ([string]$admission.DecisionIdentity.kind -cne "discovered" -or
+        [string]$admission.Hypothesis.targetDomain -cne "gpu" -or
+        [string]$admission.Hypothesis.targetPass -cne "SyntheticPass" -or
+        @($admission.Hypothesis.claims).Count -ne 2) {
+        throw "Automatic candidate envelope was not admitted exactly."
+    }
+    $envelope.attempt = "1"
+    $badPath = Join-Path $testRoot "synthetic-envelope-bad.json"
+    [System.IO.File]::WriteAllText(
+        $badPath,
+        ($envelope | ConvertTo-Json -Depth 12),
+        [System.Text.UTF8Encoding]::new($false))
+    $wrongTypeFailed = $false
+    try {
+        $null = Read-CandidateEnvelope `
+            $manifest ([pscustomobject]@{}) $badPath ("b" * 40) $true
+    } catch { $wrongTypeFailed = $_.Exception.Message -match "must be a JSON integer" }
+    if (-not $wrongTypeFailed) {
+        throw "Candidate envelope accepted a coercible string attempt."
+    }
+    $envelope.attempt = 1
+    $envelope.candidate.allowedPaths = @(
+        "Njulf.Shaders/Njulf.Shaders.csproj")
+    $script:SyntheticCandidateChangedPaths = @(
+        "Njulf.Shaders/Njulf.Shaders.csproj")
+    $buildGraphPath = Join-Path $testRoot "synthetic-envelope-build-graph.json"
+    [System.IO.File]::WriteAllText(
+        $buildGraphPath,
+        ($envelope | ConvertTo-Json -Depth 12),
+        [System.Text.UTF8Encoding]::new($false))
+    $buildGraphFailed = $false
+    try {
+        $null = Read-CandidateEnvelope `
+            $manifest ([pscustomobject]@{}) $buildGraphPath ("b" * 40) $true
+    } catch {
+        $buildGraphFailed = $_.Exception.Message -match
+            "not an admitted source extension"
+    }
+    if (-not $buildGraphFailed) {
+        throw "Automatic candidate envelope admitted build-graph mutation."
+    }
+    Write-Host "PASS synthetic-candidate-envelope"
+}
+
 function Invoke-QualityVerifierSmokeCase {
     $buildRoot = Join-Path $solutionRoot "NjulfHelloGame/bin/Release/net10.0"
     if (-not (Test-Path -LiteralPath (Join-Path $buildRoot "NjulfHelloGame.dll") -PathType Leaf)) {
@@ -663,7 +1551,7 @@ function Invoke-QualityVerifierSmokeCase {
         if ($LASTEXITCODE -ne 0) {
             throw "Quality verifier smoke exited $LASTEXITCODE."
         }
-        $result = $output | ConvertFrom-Json
+        $result = $output | ConvertFrom-Json -DateKind String
         if ([string]$result.schema -cne "njulf-perf-quality-verify-result/v1" -or
             @($result.results).Count -ne 2 -or
             [double]$result.results[0].value.FlipP95 -ne 0.0 -or
@@ -690,8 +1578,13 @@ function Invoke-QualityVerifierSmokeCase {
 try {
     Invoke-SyntheticHealthReportCase
     Invoke-SyntheticAcceptanceRefCase
+    Invoke-SyntheticVerifierByteContractCase
+    Invoke-SyntheticQualityAnimationContractCase
     Invoke-SyntheticComparisonContractCase
     Invoke-SyntheticQualitySequencePolicyCase
+    Invoke-SyntheticHotspotDiscoveryCase
+    Invoke-SyntheticCandidateEnvelopeCase
+    Invoke-ProcessTimeoutContainmentCase
     Invoke-QualityVerifierSmokeCase
     Invoke-ManifestCase "valid" {} $true
     Invoke-ManifestCase "abba-too-small" {
@@ -718,11 +1611,35 @@ try {
         param($manifest)
         $manifest.workloads = @($manifest.workloads | Select-Object -Skip 1)
     } $false
+    Invoke-ManifestCase "workload-order-change" {
+        param($manifest)
+        $first = $manifest.workloads[0]
+        $manifest.workloads[0] = $manifest.workloads[1]
+        $manifest.workloads[1] = $first
+    } $false
+    Invoke-ManifestCase "activation-topology-change" {
+        param($manifest)
+        $manifest.workloads[8].activation = "none"
+    } $false
+    Invoke-ManifestCase "quality-trajectory-topology-change" {
+        param($manifest)
+        $manifest.workloads[8].qualityTrajectory = "sponza-low"
+    } $false
     Invoke-ManifestCase "reserved-argument" {
         param($manifest)
         $manifest.workloads[0] | Add-Member `
             -NotePropertyName arguments `
             -NotePropertyValue @("--benchmark-measure-frames", "1")
+    } $false
+    Invoke-ManifestCase "unapproved-workload-argument" {
+        param($manifest)
+        $manifest.workloads[0] | Add-Member `
+            -NotePropertyName arguments `
+            -NotePropertyValue @("--simple-ddgi-scheduler-mode", "cpu-reference")
+    } $false
+    Invoke-ManifestCase "nonfinite-quality-threshold" {
+        param($manifest)
+        $manifest.quality.maximumRelativeRmse = "NaN"
     } $false
     Invoke-ManifestCase "partial-roi" {
         param($manifest)
@@ -770,20 +1687,117 @@ try {
             -NotePropertyName arguments `
             -NotePropertyValue @("--health-report", "forged.json")
     } $false
-    $qualificationRunPath = Join-Path $testRoot "qualification-target-run"
-    $qualificationOutput = & pwsh -NoProfile -NonInteractive -File $driver `
+    foreach ($reservedVerifierSwitch in @(
+            "--benchmark-activation",
+            "--verify-benchmark-activation-report",
+            "--verify-benchmark-ddgi-transient-report",
+            "--verify-benchmark-quality-activation-report",
+            "--verify-directional-controlled-isolation")) {
+        $caseName = "reserved-" +
+            $reservedVerifierSwitch.TrimStart('-').Replace('-', '_')
+        Invoke-ManifestCase $caseName {
+            param($manifest)
+            $manifest.workloads[0] | Add-Member `
+                -NotePropertyName arguments `
+                -NotePropertyValue @($reservedVerifierSwitch, "forged.json")
+        } $false
+    }
+    Invoke-ManifestCase "missing-target-hypothesis" {
+        param($manifest)
+        $manifest.targetHypotheses = @(
+            $manifest.targetHypotheses | Select-Object -First 3)
+    } $false
+    Invoke-ManifestCase "target-hypothesis-order-change" {
+        param($manifest)
+        $first = $manifest.targetHypotheses[0]
+        $manifest.targetHypotheses[0] = $manifest.targetHypotheses[1]
+        $manifest.targetHypotheses[1] = $first
+    } $false
+    Invoke-ManifestCase "target-hypothesis-pass-change" {
+        param($manifest)
+        $manifest.targetHypotheses[0].targetPass = "ForwardPlusPass"
+    } $false
+    Invoke-ManifestCase "target-hypothesis-claim-change" {
+        param($manifest)
+        $manifest.targetHypotheses[1].claims[1].workloadId =
+            "sponza-vertical-motion"
+    } $false
+    Invoke-ManifestCase "target-hypothesis-unknown-property" {
+        param($manifest)
+        $manifest.targetHypotheses[0] | Add-Member `
+            -NotePropertyName workloadId `
+            -NotePropertyValue "bistro-forward-gi-enabled"
+    } $false
+    Invoke-ManifestCase "missing-reviewed-candidate" {
+        param($manifest)
+        $manifest.candidates = @($manifest.candidates | Select-Object -Skip 1)
+    } $false
+    Invoke-ManifestCase "reviewed-candidate-patch-change" {
+        param($manifest)
+        $manifest.candidates[0].patchId = "0" * 40
+    } $false
+    Invoke-ManifestCase "reviewed-candidate-path-change" {
+        param($manifest)
+        $manifest.candidates[0].allowedPaths[0] = "Njulf.Shaders/forged.comp"
+    } $false
+    Invoke-ManifestCase "discovery-threshold-change" {
+        param($manifest)
+        $manifest.discoveryPolicy.minimumP95Milliseconds = 0.5
+    } $false
+    foreach ($requiredTrustRoot in @(
+            "NjulfHelloGame/SampleBenchmarkGateEvaluation.cs",
+            "NjulfHelloGame/SampleBudgetMetricCoverage.cs",
+            "NjulfHelloGame/SampleDdgiProductionGate.cs",
+            "NjulfHelloGame/SampleDdgiBenchmarkSuite.cs",
+            "Njulf.Rendering/Diagnostics/RenderBudgetEvaluator.cs",
+            "tools/perf-campaign.tests.ps1")) {
+        $caseName = "missing-trust-" +
+            ([System.IO.Path]::GetFileNameWithoutExtension($requiredTrustRoot))
+        Invoke-ManifestCase $caseName {
+            param($manifest)
+            $manifest.protectedPaths = @($manifest.protectedPaths | Where-Object {
+                [string]$_ -cne $requiredTrustRoot
+            })
+        } $false
+    }
+    $unknownHypothesisRun = Join-Path $testRoot "unknown-hypothesis-run"
+    $unknownHypothesisOutput = & pwsh -NoProfile -NonInteractive `
+        -File $driver `
         -ManifestPath $sourceManifest `
-        -RunDirectory $qualificationRunPath `
-        -TargetWorkloadId "bistro-stationary" `
+        -RunDirectory $unknownHypothesisRun `
+        -TargetHypothesisId "not-an-approved-hypothesis" `
         -ValidateOnly 2>&1
-    if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $qualificationRunPath)) {
-        throw "Qualification target selection did not fail before campaign state mutation.`n$($qualificationOutput -join "`n")"
+    if ($LASTEXITCODE -eq 0 -or
+        (Test-Path -LiteralPath $unknownHypothesisRun) -or
+        ($unknownHypothesisOutput -join "`n") -notmatch
+            "TargetHypothesisId is derived from the admitted candidate") {
+        throw "Explicit target hypothesis did not fail before run-directory mutation."
     }
-    if (($qualificationOutput -join "`n") -notmatch
-        "cannot be selected as a target hypothesis") {
-        throw "Qualification target selection failed for the wrong reason.`n$($qualificationOutput -join "`n")"
+    Write-Host "PASS unknown-target-hypothesis-preflight"
+    $modeConflictRun = Join-Path $testRoot "mode-conflict-run"
+    $modeConflictOutput = & pwsh -NoProfile -NonInteractive -File $driver `
+        -ManifestPath $sourceManifest `
+        -RunDirectory $modeConflictRun `
+        -CandidateId "ao-center-depth-reuse" `
+        -ValidateOnly 2>&1
+    if ($LASTEXITCODE -eq 0 -or
+        (Test-Path -LiteralPath $modeConflictRun) -or
+        ($modeConflictOutput -join "`n") -notmatch "Choose exactly one campaign mode") {
+        throw "Conflicting campaign modes did not fail before run-directory mutation."
     }
-    Write-Host "PASS qualification-target-rejected"
+    Write-Host "PASS campaign-mode-conflict-preflight"
+    $externalManifest = Join-Path $testRoot "external-manifest.json"
+    Copy-Item -LiteralPath $sourceManifest -Destination $externalManifest
+    $externalRun = Join-Path $testRoot "external-manifest-run"
+    $externalOutput = & pwsh -NoProfile -NonInteractive -File $driver `
+        -ManifestPath $externalManifest `
+        -RunDirectory $externalRun `
+        -ValidateOnly 2>&1
+    if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $externalRun) -or
+        ($externalOutput -join "`n") -notmatch "only the built-in pinned manifest") {
+        throw "External manifest path did not fail before run-directory mutation."
+    }
+    Write-Host "PASS pinned-manifest-path-preflight"
     $wrapperRunPath = Join-Path $testRoot "wrapper-run"
     $wrapperOutput = & pwsh -NoProfile -NonInteractive -File $wrapper `
         -CampaignManifestPath $sourceManifest `
@@ -793,6 +1807,17 @@ try {
         throw "perf-loop campaign dispatch failed or mutated ValidateOnly state.`n$($wrapperOutput -join "`n")"
     }
     Write-Host "PASS perf-loop-dispatch"
+    $wrapperConflictRun = Join-Path $testRoot "wrapper-conflict-run"
+    $wrapperConflictOutput = & pwsh -NoProfile -NonInteractive -File $wrapper `
+        -CampaignManifestPath $sourceManifest `
+        -CampaignRunDirectory $wrapperConflictRun `
+        -TrialCommand "Write-Output forged" `
+        -ValidateCampaign 2>&1
+    if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $wrapperConflictRun) -or
+        ($wrapperConflictOutput -join "`n") -notmatch "rejects explicitly bound legacy parameters") {
+        throw "Campaign wrapper accepted a legacy trial command."
+    }
+    Write-Host "PASS perf-loop-legacy-mode-conflict"
 } finally {
     $fullTestRoot = [System.IO.Path]::GetFullPath($testRoot)
     $fullParent = [System.IO.Path]::GetFullPath(
