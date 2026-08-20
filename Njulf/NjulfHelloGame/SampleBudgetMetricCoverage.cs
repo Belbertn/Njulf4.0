@@ -207,7 +207,20 @@ internal readonly record struct SampleBudgetMetricCoverage(
         yield return "Material GI non-finite values";
         yield return "Material GI clamped values";
         yield return "Material alpha candidate limit";
-        yield return "GI GPU";
+
+        bool forwardGiRequired =
+            diagnostics.GlobalIlluminationDdgiActive != 0 ||
+            diagnostics.SimpleDdgiActive != 0;
+        bool hasForwardGiIncrementalTiming =
+            diagnostics.GpuForwardGiIncrementalAttribution is
+                GiTimingAttribution.Exclusive or
+                GiTimingAttribution.PairedEstimate;
+        if (diagnostics.GpuTimingValid != 0 &&
+            (!forwardGiRequired || hasForwardGiIncrementalTiming))
+        {
+            yield return "GI GPU";
+        }
+
         yield return "GI CPU scheduling and upload";
         yield return "GI unique residency";
 

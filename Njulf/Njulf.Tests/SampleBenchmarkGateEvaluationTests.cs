@@ -102,6 +102,49 @@ public sealed class SampleBenchmarkGateEvaluationTests
         });
     }
 
+    [TestCase(GiTimingAttribution.Unavailable, false)]
+    [TestCase(GiTimingAttribution.Inclusive, false)]
+    [TestCase(GiTimingAttribution.Exclusive, true)]
+    [TestCase(GiTimingAttribution.PairedEstimate, true)]
+    public void RequiredMetrics_GiGpuMatchesIncrementalAttributionAvailability(
+        GiTimingAttribution attribution,
+        bool expectedRequired)
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationDdgiActive = 1,
+            SimpleDdgiActive = 1,
+            GpuTimingValid = 1,
+            GpuForwardGiIncrementalAttribution = attribution
+        };
+
+        string[] required = SampleBudgetMetricCoverage
+            .GetRequiredMetricNames(diagnostics)
+            .ToArray();
+
+        Assert.That(required.Contains("GI GPU"), Is.EqualTo(expectedRequired));
+    }
+
+    [Test]
+    public void RequiredMetrics_DoesNotRequireGiGpuWithoutValidGpuTiming()
+    {
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationDdgiActive = 1,
+            SimpleDdgiActive = 1,
+            GpuTimingValid = 0,
+            GpuForwardGiIncrementalAttribution = GiTimingAttribution.Exclusive
+        };
+
+        string[] required = SampleBudgetMetricCoverage
+            .GetRequiredMetricNames(diagnostics)
+            .ToArray();
+
+        Assert.That(required, Does.Not.Contain("GI GPU"));
+    }
+
     [Test]
     public void Evaluate_FailsWhenADeclaredHardBudgetIsExceeded()
     {
