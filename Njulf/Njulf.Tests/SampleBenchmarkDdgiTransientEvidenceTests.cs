@@ -103,6 +103,10 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         });
 
         SimpleDdgiCompletedFrameEvidence sourceRepair = first.Frames[0].Completed;
+        SimpleDdgiCompletedFrameEvidence sourceAdmission =
+            first.Frames[1].Completed;
+        SimpleDdgiCompletedFrameEvidence postAdmission =
+            first.Frames[RenderingConstants.FramesInFlight].Completed;
         SimpleDdgiCompletedFrameEvidence ordinary =
             first.Frames[SolveOffset].Completed;
         SimpleDdgiCompletedFrameEvidence trigger =
@@ -139,6 +143,27 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                 Is.EqualTo(5_000 + firstEdge));
             Assert.That(sourceRepair.SchedulerActiveSourceMutationCount,
                 Is.GreaterThan(0u));
+            Assert.That(sourceRepair.SchedulerBlockingTailSourceWorkCount,
+                Is.GreaterThan(0u));
+            Assert.That(sourceAdmission.Submitted.TailCertificate.Phase,
+                Is.EqualTo(SimpleDdgiTransportPhase.SourceRepair));
+            Assert.That(sourceAdmission.SchedulerActiveSourceMutationCount,
+                Is.GreaterThan(0u));
+            Assert.That(sourceAdmission.SchedulerPublishedWorkCount,
+                Is.GreaterThan(0u));
+            Assert.That(sourceAdmission.SchedulerActiveCanonicalMutationCount,
+                Is.GreaterThan(0u));
+            Assert.That(sourceAdmission.SchedulerSolveParticipantCount,
+                Is.EqualTo(AuditParticipantCount));
+            Assert.That(sourceAdmission.SchedulerSolveVisitedCount, Is.Zero);
+            Assert.That(sourceAdmission.SchedulerBlockingTailSourceWorkCount,
+                Is.Zero);
+            Assert.That(sourceAdmission.SchedulerFeedbackTransportGeneration,
+                Is.EqualTo(sourceRepair.SchedulerFeedbackTransportGeneration));
+            Assert.That(AdvanceNonZero(
+                    sourceAdmission.SchedulerFeedbackTransportGeneration),
+                Is.EqualTo(
+                    postAdmission.SchedulerFeedbackTransportGeneration));
             Assert.That(ordinary.Submitted.TailCertificate.Phase,
                 Is.EqualTo(SimpleDdgiTransportPhase.AcceleratedSolve));
             Assert.That(ordinary.Submitted.FrameSerialsValid, Is.True);
@@ -337,6 +362,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
 
     [TestCase("frozen-canonical", 68)]
     [TestCase("frozen-source", 68)]
+    [TestCase("frozen-admitted-source", 68)]
+    [TestCase("frozen-live-source", 68)]
     [TestCase("frozen-physical", 68)]
     [TestCase("frozen-queue", 68)]
     [TestCase("frozen-logical-volume", 68)]
@@ -1790,6 +1817,20 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                                 completed.Submitted.SourceLightingGeneration)
                         }
                     },
+                    "frozen-admitted-source" => completed with
+                    {
+                        Submitted = completed.Submitted with
+                        {
+                            AdmittedSourceCohortGeneration = 0u
+                        }
+                    },
+                    "frozen-live-source" => completed with
+                    {
+                        Submitted = completed.Submitted with
+                        {
+                            LivePropagationSourceGeneration = 0u
+                        }
+                    },
                     "frozen-physical" => completed with
                     {
                         Submitted = completed.Submitted with
@@ -2032,7 +2073,12 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
             (ulong)RenderingConstants.FramesInFlight;
         bool solveFeedbackWitness =
             schedulerFrameSerial == solveFeedbackFrameSerial;
+        int sourceAdmissionOrigin = acceleratedSolveOrigin -
+            RenderingConstants.FramesInFlight;
         bool sourceRepairMutation = hasSourceRepairPhase &&
+            (originIndex == sourceEdgeOrigin ||
+             originIndex == sourceAdmissionOrigin);
+        bool sourceRepairBlocking = hasSourceRepairPhase &&
             originIndex == sourceEdgeOrigin;
         bool canonicalMutation = sourceRepairMutation ||
             solveFeedbackWitness ||
@@ -2184,7 +2230,7 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                 ? (uint)(5 + exactIndex)
                 : 0u,
             SchedulerSolveParticipantCount = scheduler
-                ? sourceRepairMutation
+                ? sourceRepairBlocking
                     ? AuditParticipantCount - 128u
                     : AuditParticipantCount
                 : 0u,
@@ -2209,7 +2255,7 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
             SchedulerActiveSourceMutationCount = sourceRepairMutation
                 ? 1u
                 : 0u,
-            SchedulerBlockingTailSourceWorkCount = sourceRepairMutation
+            SchedulerBlockingTailSourceWorkCount = sourceRepairBlocking
                 ? 1u
                 : 0u,
             SchedulerCachedRayCount = scheduler
