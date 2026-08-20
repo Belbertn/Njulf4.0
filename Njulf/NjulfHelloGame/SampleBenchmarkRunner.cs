@@ -1103,6 +1103,15 @@ public sealed class SampleBenchmarkAnalyzer
         SampleReflectionProbeCaptureEvidence reflectionCaptureEvidence =
             SampleBenchmarkReflectionProbeCaptureEvaluator.Recompute(
                 reflectionRawEvidence);
+        SampleBenchmarkDdgiTransientEvidence ddgiTransientEvidence =
+            BuildDdgiTransientEvidence(options, measurementFrameCount);
+        SampleBenchmarkCaptureContract captureContract =
+            ApplyDdgiTransientEvidenceContract(
+                BuildCaptureContract(
+                    options,
+                    scenario,
+                    controlledIsolationSettingsFingerprint),
+                ddgiTransientEvidence);
 
         return new SampleBenchmarkReport(
             Kind: "njulf-renderer-benchmark",
@@ -1125,10 +1134,7 @@ public sealed class SampleBenchmarkAnalyzer
             LastDiagnostics: last)
         {
             AccuracyOracleResults = SampleGiAccuracyOracleEvaluator.Evaluate(scenario, _samples),
-            CaptureContract = BuildCaptureContract(
-                options,
-                scenario,
-                controlledIsolationSettingsFingerprint),
+            CaptureContract = captureContract,
             GpuIndependentPassSumMilliseconds = gpuPassSum,
             GpuUnexplainedMilliseconds = gpuUnexplained,
             SimpleDdgiTransportBlendMilliseconds = simpleDdgiTransportBlend,
@@ -1136,6 +1142,7 @@ public sealed class SampleBenchmarkAnalyzer
             CpuSpikeEvidence = BuildCpuSpikeEvidence(),
             ReflectionProbeCaptureRawEvidence = reflectionRawEvidence,
             ReflectionProbeCaptureEvidence = reflectionCaptureEvidence,
+            DdgiTransientEvidence = ddgiTransientEvidence,
             TailDdgiEvidence = SampleTailDdgiRuntimeEvidenceBuilder.Create(
                 _samples,
                 tailObservation ?? SampleTailDdgiRunObservation.Empty,
@@ -1147,6 +1154,322 @@ public sealed class SampleBenchmarkAnalyzer
                     materialTiming.Pipeline,
                     materialTiming.CompileExact,
                     materialTiming.UploadExact)
+        };
+    }
+
+    private SampleBenchmarkDdgiTransientEvidence BuildDdgiTransientEvidence(
+        SampleBenchmarkOptions options,
+        int measurementFrameCount)
+    {
+        bool applicable =
+            options.Trajectory == SampleBenchmarkTrajectoryKind.BistroLoop &&
+            options.TrajectoryBistroVariant ==
+                SampleBistroQualityCaptureVariant.SunScaleStep;
+        if (!applicable)
+            return SampleBenchmarkDdgiTransientEvidence.NotApplicable;
+
+        var failures = new List<string>();
+        int expectedFrameCount = SampleBistroQualityCaptureContract.LoopFrameCount;
+        if (measurementFrameCount != expectedFrameCount ||
+            _samples.Count != expectedFrameCount)
+        {
+            failures.Add(
+                $"DDGI transient evidence requires exactly {expectedFrameCount} " +
+                $"measured Bistro route frames; report={measurementFrameCount}, " +
+                $"observed={_samples.Count}.");
+            return CreateUnavailableDdgiTransientEvidence(failures);
+        }
+
+        var originBySerial = new Dictionary<ulong, int>(expectedFrameCount);
+        for (int index = 0; index < _samples.Count; index++)
+        {
+            ulong frameSerial = _samples[index].CaptureFrame.FrameSerial;
+            if (frameSerial == ulong.MaxValue)
+            {
+                failures.Add(
+                    $"DDGI transient route frame {index} has the invalid submitted frame serial sentinel.");
+                continue;
+            }
+            if (!originBySerial.TryAdd(frameSerial, index))
+            {
+                failures.Add(
+                    $"DDGI transient route frame serial {frameSerial} is duplicated.");
+            }
+        }
+
+        var generationEdges = new List<int>(2);
+        uint previousGeneration = _samples[0].SimpleDdgiSourceLightingGeneration;
+        if (previousGeneration == 0u)
+        {
+            failures.Add(
+                "DDGI transient route frame 0 has no source-lighting generation.");
+        }
+        for (int index = 1; index < _samples.Count; index++)
+        {
+            uint generation = _samples[index].SimpleDdgiSourceLightingGeneration;
+            if (generation == 0u)
+            {
+                failures.Add(
+                    $"DDGI transient route frame {index} has no source-lighting generation.");
+            }
+            if (generation != previousGeneration)
+                generationEdges.Add(index);
+            previousGeneration = generation;
+        }
+
+        int[] authoredEvents =
+        [
+            SampleBistroQualityCaptureContract.LightingEventStartFrame,
+            SampleBistroQualityCaptureContract.LightingEventEndFrame
+        ];
+        if (generationEdges.Count != authoredEvents.Length)
+        {
+            failures.Add(
+                $"DDGI transient evidence expected exactly two source-lighting " +
+                $"generation edges, but observed {generationEdges.Count}: " +
+                $"{string.Join(",", generationEdges)}.");
+        }
+        else
+        {
+            for (int windowIndex = 0; windowIndex < authoredEvents.Length; windowIndex++)
+            {
+                int edge = generationEdges[windowIndex];
+                int authored = authoredEvents[windowIndex];
+                if (edge < authored || edge > authored + 1)
+                {
+                    failures.Add(
+                        $"DDGI source-lighting edge {windowIndex} occurred at route " +
+                        $"frame {edge}; expected [{authored},{authored + 1}].");
+                }
+            }
+        }
+
+        var completedBySubmittedSerial =
+            new Dictionary<ulong, (int CompletionIndex, SimpleDdgiCompletedFrameEvidence Evidence)>(
+                expectedFrameCount);
+        for (int completionIndex = 0; completionIndex < _samples.Count; completionIndex++)
+        {
+            SimpleDdgiCompletedFrameEvidence completed =
+                _samples[completionIndex].SimpleDdgiCompletedFrameEvidence;
+            if (!completed.Valid || !completed.Submitted.Valid)
+                continue;
+
+            ulong submittedSerial = completed.Submitted.FrameSerial;
+            // The first in-flight completions belong to the warmup route and
+            // deliberately fall outside this measured-window join.
+            if (!originBySerial.TryGetValue(submittedSerial, out int originIndex))
+                continue;
+            if (completionIndex <= originIndex)
+            {
+                failures.Add(
+                    $"DDGI frame serial {submittedSerial} completed at measurement " +
+                    $"sample {completionIndex} before/at its origin {originIndex}.");
+            }
+            if (!completedBySubmittedSerial.TryAdd(
+                    submittedSerial,
+                    (completionIndex, completed)))
+            {
+                failures.Add(
+                    $"DDGI frame serial {submittedSerial} has more than one completed record.");
+            }
+        }
+
+        if (failures.Count != 0 || generationEdges.Count != authoredEvents.Length)
+            return CreateUnavailableDdgiTransientEvidence(failures);
+
+        var windows = new List<SampleBenchmarkDdgiTransientWindow>(2);
+        for (int windowIndex = 0; windowIndex < authoredEvents.Length; windowIndex++)
+        {
+            int edgeIndex = generationEdges[windowIndex];
+            int endExclusive = windowIndex + 1 < generationEdges.Count
+                ? generationEdges[windowIndex + 1]
+                : expectedFrameCount;
+            uint sourceGeneration =
+                _samples[edgeIndex].SimpleDdgiSourceLightingGeneration;
+            uint priorSourceGeneration =
+                _samples[edgeIndex - 1].SimpleDdgiSourceLightingGeneration;
+            var frames = new List<SampleBenchmarkDdgiTransientFrame>();
+            int certificateIndex = -1;
+
+            for (int originIndex = edgeIndex;
+                 originIndex < endExclusive;
+                 originIndex++)
+            {
+                RendererDiagnostics origin = _samples[originIndex];
+                ulong submittedSerial = origin.CaptureFrame.FrameSerial;
+                if (!completedBySubmittedSerial.TryGetValue(
+                        submittedSerial,
+                        out (int CompletionIndex, SimpleDdgiCompletedFrameEvidence Evidence) joined))
+                {
+                    failures.Add(
+                        $"DDGI transient window {windowIndex} is missing completed " +
+                        $"evidence for route frame {originIndex}, serial {submittedSerial}.");
+                    break;
+                }
+
+                SimpleDdgiCompletedFrameEvidence completed = joined.Evidence;
+                ValidateDdgiTransientFrame(
+                    failures,
+                    windowIndex,
+                    originIndex,
+                    sourceGeneration,
+                    submittedSerial,
+                    completed);
+                frames.Add(new SampleBenchmarkDdgiTransientFrame(
+                    originIndex,
+                    originIndex,
+                    joined.CompletionIndex,
+                    joined.CompletionIndex,
+                    completed));
+
+                if (completed.Submitted.TailCertificate.IsAcceptedFor(
+                        completed.Submitted))
+                {
+                    certificateIndex = originIndex;
+                    break;
+                }
+            }
+
+            if (certificateIndex < 0)
+            {
+                failures.Add(
+                    windowIndex + 1 < authoredEvents.Length
+                        ? $"DDGI transient window {windowIndex} overlapped the next " +
+                          $"source-lighting edge without an accepted current tail certificate."
+                        : $"DDGI transient window {windowIndex} did not complete with " +
+                          $"an accepted current tail certificate inside the route.");
+                continue;
+            }
+
+            windows.Add(new SampleBenchmarkDdgiTransientWindow(
+                windowIndex,
+                authoredEvents[windowIndex],
+                edgeIndex,
+                edgeIndex - authoredEvents[windowIndex],
+                priorSourceGeneration,
+                sourceGeneration,
+                certificateIndex,
+                certificateIndex - edgeIndex,
+                frames[0].Completed.Submitted.FrameSerial,
+                frames[^1].Completed.Submitted.FrameSerial,
+                Array.AsReadOnly(frames.ToArray())));
+        }
+
+        if (failures.Count != 0 || windows.Count != authoredEvents.Length)
+            return CreateUnavailableDdgiTransientEvidence(failures);
+
+        return new SampleBenchmarkDdgiTransientEvidence(
+            Applicable: true,
+            Available: true,
+            Array.Empty<string>(),
+            Array.AsReadOnly(windows.ToArray()));
+    }
+
+    private static void ValidateDdgiTransientFrame(
+        ICollection<string> failures,
+        int windowIndex,
+        int routeFrameIndex,
+        uint sourceGeneration,
+        ulong submittedSerial,
+        in SimpleDdgiCompletedFrameEvidence completed)
+    {
+        string prefix =
+            $"DDGI transient window {windowIndex} route frame {routeFrameIndex}";
+        if (completed.Submitted.FrameSerial != submittedSerial)
+            failures.Add($"{prefix} joined the wrong submitted frame serial.");
+        if (completed.Submitted.SourceLightingGeneration != sourceGeneration)
+        {
+            failures.Add(
+                $"{prefix} retained source generation " +
+                $"{completed.Submitted.SourceLightingGeneration}; expected {sourceGeneration}.");
+        }
+        if (!completed.GpuTimingAvailable ||
+            !completed.GpuDdgiTotalTimingAvailable)
+        {
+            failures.Add($"{prefix} has no same-slot completed total DDGI GPU timing.");
+        }
+        if (!completed.GpuSchedulerCommitTimingAvailable)
+            failures.Add($"{prefix} has no scheduler-commit GPU timing.");
+        if (completed.Submitted.CachedSweepCount > 0 &&
+            !completed.GpuAcceleratedSolveTimingAvailable)
+        {
+            failures.Add(
+                $"{prefix} recorded {completed.Submitted.CachedSweepCount} cached " +
+                "sweeps without accelerated-solve GPU timing.");
+        }
+        if (completed.SchedulerCompactedCandidateCount > 0u &&
+            !completed.GpuSchedulerTailAdmitTimingAvailable)
+        {
+            failures.Add(
+                $"{prefix} compacted {completed.SchedulerCompactedCandidateCount} " +
+                "scheduler candidates without tail-admit GPU timing.");
+        }
+        if ((completed.SchedulerAcceptedWorkCount > 0u ||
+             completed.SchedulerCommittedWorkCount > 0u ||
+             completed.SchedulerPublishedWorkCount > 0u) &&
+            !completed.GpuSchedulerEmitTimingAvailable)
+        {
+            failures.Add(
+                $"{prefix} retained emitted/committed scheduler work without " +
+                "emit GPU timing.");
+        }
+        if (!completed.SchedulerFeedbackAvailable)
+            failures.Add($"{prefix} has no same-slot scheduler feedback.");
+        if (!completed.SchedulerFeedbackFrameAligned)
+            failures.Add($"{prefix} scheduler feedback frame serial is not aligned.");
+        if (completed.SchedulerFeedbackFrameSerial != submittedSerial)
+            failures.Add($"{prefix} scheduler feedback retained the wrong frame serial.");
+        if (!completed.SchedulerFeedbackGenerationAligned)
+            failures.Add($"{prefix} scheduler feedback generations are not aligned.");
+        if (completed.SchedulerFeedbackVolumeResourceGeneration !=
+                completed.Submitted.VolumeResourceGeneration ||
+            completed.SchedulerFeedbackSchedulerResourceGeneration !=
+                completed.Submitted.SchedulerResourceGeneration ||
+            completed.SchedulerFeedbackSourceLightingGeneration !=
+                completed.Submitted.SourceLightingGeneration ||
+            completed.SchedulerFeedbackTransportGeneration !=
+                completed.Submitted.TransportGeneration)
+        {
+            failures.Add($"{prefix} scheduler feedback retained mismatched generation values.");
+        }
+        if (completed.SchedulerFeedbackStatusFlags != 0u)
+        {
+            failures.Add(
+                $"{prefix} scheduler feedback status is " +
+                $"0x{completed.SchedulerFeedbackStatusFlags:x8}.");
+        }
+    }
+
+    private static SampleBenchmarkDdgiTransientEvidence
+        CreateUnavailableDdgiTransientEvidence(IReadOnlyList<string> failures)
+    {
+        string[] distinct = failures
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return new SampleBenchmarkDdgiTransientEvidence(
+            Applicable: true,
+            Available: false,
+            Array.AsReadOnly(distinct),
+            Array.Empty<SampleBenchmarkDdgiTransientWindow>());
+    }
+
+    private static SampleBenchmarkCaptureContract
+        ApplyDdgiTransientEvidenceContract(
+            SampleBenchmarkCaptureContract contract,
+            SampleBenchmarkDdgiTransientEvidence evidence)
+    {
+        if (!evidence.Applicable || evidence.Available)
+            return contract;
+
+        string[] mismatches = contract.Mismatches
+            .Concat(evidence.Failures.Select(static failure =>
+                "DDGI transient evidence unavailable: " + failure))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return contract with
+        {
+            Comparable = false,
+            Mismatches = Array.AsReadOnly(mismatches)
         };
     }
 

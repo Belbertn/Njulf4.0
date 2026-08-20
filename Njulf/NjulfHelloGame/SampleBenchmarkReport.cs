@@ -65,6 +65,8 @@ public sealed record SampleBenchmarkReport(
         SampleBenchmarkMaterialTimingEvidence.Unavailable;
     public SampleBenchmarkCpuSpikeEvidence CpuSpikeEvidence { get; init; } =
         SampleBenchmarkCpuSpikeEvidence.Empty;
+    public SampleBenchmarkDdgiTransientEvidence DdgiTransientEvidence { get; init; } =
+        SampleBenchmarkDdgiTransientEvidence.NotApplicable;
     public SampleBenchmarkActivationEvidence ActivationEvidence { get; init; } =
         SampleBenchmarkActivationEvidence.Unavailable;
     public SampleBenchmarkSponzaSceneAnimationEvidence
@@ -77,6 +79,57 @@ public sealed record SampleBenchmarkReport(
     [JsonRequired]
     public SampleReflectionProbeCaptureEvidence ReflectionProbeCaptureEvidence { get; init; } =
         SampleReflectionProbeCaptureEvidence.NotApplicable;
+}
+
+/// <summary>
+/// One completed timing/counter record joined backward to the measured frame
+/// serial that submitted it. Completion-observed indices make the frame-slot
+/// delay explicit instead of phase-shifting the values onto a later frame.
+/// </summary>
+public sealed record SampleBenchmarkDdgiTransientFrame(
+    int MeasurementSampleIndex,
+    int RouteFrameIndex,
+    int CompletionObservedMeasurementSampleIndex,
+    int CompletionObservedRouteFrameIndex,
+    SimpleDdgiCompletedFrameEvidence Completed);
+
+/// <summary>
+/// Deterministic relight interval from an observed source-generation edge
+/// through the first accepted complete certificate for that generation.
+/// </summary>
+public sealed record SampleBenchmarkDdgiTransientWindow(
+    int WindowIndex,
+    int AuthoredEventRouteFrameIndex,
+    int ObservedGenerationEdgeRouteFrameIndex,
+    int GenerationResponseLatencyFrames,
+    uint PreviousSourceLightingGeneration,
+    uint SourceLightingGeneration,
+    int AcceptedCertificateRouteFrameIndex,
+    int CertificateLatencyFrames,
+    ulong FirstSubmittedFrameSerial,
+    ulong LastSubmittedFrameSerial,
+    IReadOnlyList<SampleBenchmarkDdgiTransientFrame> Frames);
+
+public sealed record SampleBenchmarkDdgiTransientEvidence(
+    bool Applicable,
+    bool Available,
+    IReadOnlyList<string> Failures,
+    IReadOnlyList<SampleBenchmarkDdgiTransientWindow> Windows)
+{
+    public static SampleBenchmarkDdgiTransientEvidence NotApplicable { get; } =
+        new(
+            Applicable: false,
+            Available: false,
+            Array.Empty<string>(),
+            Array.Empty<SampleBenchmarkDdgiTransientWindow>());
+
+    public static SampleBenchmarkDdgiTransientEvidence Unavailable(
+        params string[] failures) =>
+        new(
+            Applicable: true,
+            Available: false,
+            Array.AsReadOnly(failures ?? Array.Empty<string>()),
+            Array.Empty<SampleBenchmarkDdgiTransientWindow>());
 }
 
 public sealed record SampleBenchmarkTimingStats(

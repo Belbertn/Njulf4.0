@@ -838,6 +838,11 @@ namespace Njulf.Rendering.Data
         public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; set; } = SimpleDdgiSchedulerMode.CpuReference;
         public int SimpleDdgiSchedulerReady { get; set; }
         /// <summary>
+        /// Fence-complete DDGI work paired with the exact successfully
+        /// submitted renderer frame slot that produced it.
+        /// </summary>
+        public SimpleDdgiCompletedFrameEvidence SimpleDdgiCompletedFrameEvidence { get; set; }
+        /// <summary>
         /// Generation-aligned scheduler/residency/publication evidence used by
         /// the diagnostic-only liveness watchdog.
         /// </summary>
@@ -2266,6 +2271,7 @@ namespace Njulf.Rendering.Data
             SimpleDdgiActive = 0;
             SimpleDdgiSchedulerMode = SimpleDdgiSchedulerMode.CpuReference;
             SimpleDdgiSchedulerReady = 0;
+            SimpleDdgiCompletedFrameEvidence = default;
             SimpleDdgiLivenessTelemetry =
                 global::Njulf.Rendering.Data.SimpleDdgiLivenessTelemetry.Empty;
             SimpleDdgiLivenessWatchdog = SimpleDdgiLivenessWatchdogResult.Empty;

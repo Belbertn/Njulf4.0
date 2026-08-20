@@ -1840,6 +1840,11 @@ namespace Njulf.Rendering.Data
         public long GpuSimpleDdgiUrgentRelightMicroseconds { get; init; }
         public SimpleDdgiSchedulerMode SimpleDdgiSchedulerMode { get; init; } = SimpleDdgiSchedulerMode.CpuReference;
         public int SimpleDdgiSchedulerReady { get; init; }
+        /// <summary>
+        /// Fence-complete DDGI evidence. Its nested Submitted identity names
+        /// the earlier frame/slot that owns these timings and counters.
+        /// </summary>
+        public SimpleDdgiCompletedFrameEvidence SimpleDdgiCompletedFrameEvidence { get; init; }
         public int SimpleDdgiSchedulerFeedbackValid { get; init; }
         public ulong SimpleDdgiSchedulerFeedbackFrameSerial { get; init; }
         public uint SimpleDdgiSchedulerFeedbackConsideredCount { get; init; }

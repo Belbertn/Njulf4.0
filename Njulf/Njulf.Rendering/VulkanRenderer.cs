@@ -449,8 +449,10 @@ namespace Njulf.Rendering
             publicationReadbackLatencyFrames: FramesInFlight);
         private readonly SimpleDdgiSchedulerCostModel _simpleDdgiSchedulerCostModel =
             new();
-        private readonly SimpleDdgiSubmittedWorkload[] _simpleDdgiSubmittedWorkloads =
-            new SimpleDdgiSubmittedWorkload[FramesInFlight];
+        private readonly SimpleDdgiSubmittedFrameRing _simpleDdgiSubmittedFrameRing =
+            new();
+        private SimpleDdgiSubmittedFrameEvidence _pendingSimpleDdgiSubmittedFrameEvidence;
+        private SimpleDdgiCompletedFrameEvidence _completedSimpleDdgiFrameEvidence;
         // Generation-rejection counters are cumulative. Keep a renderer-local
         // baseline so the liveness record reports only a rejection observed in
         // the current diagnostic interval, rather than attributing an old
@@ -3184,6 +3186,8 @@ namespace Njulf.Rendering
                     out _);
             }
             RecordCompletedAsyncComputeTimingFrame(_currentFrame, _gpuTimestamps.LastCompletedSnapshot);
+            bool completedSchedulerFeedbackAvailable = false;
+            GPUSimpleDdgiSchedulerFeedback completedSchedulerFeedback = default;
             if (_simpleDdgiVolumeManager != null &&
                 _ddgiFrameSerial < ulong.MaxValue)
             {
@@ -3191,9 +3195,16 @@ namespace Njulf.Rendering
                 // frame slot. The strict +1 serial is intentional: it keeps a
                 // fence-complete result frame-late even when the CPU reaches
                 // BeginFrame immediately after submission.
-                _simpleDdgiVolumeManager.TryConsumeGpuSchedulerFeedback(
-                    _currentFrame,
-                    _ddgiFrameSerial + 1UL);
+                completedSchedulerFeedbackAvailable =
+                    _simpleDdgiVolumeManager.TryConsumeGpuSchedulerFeedback(
+                        _currentFrame,
+                        _ddgiFrameSerial + 1UL) &&
+                    _simpleDdgiVolumeManager.GpuSchedulerFeedbackValid;
+                if (completedSchedulerFeedbackAvailable)
+                {
+                    completedSchedulerFeedback =
+                        _simpleDdgiVolumeManager.LastGpuSchedulerFeedback;
+                }
                 _simpleDdgiVolumeManager.TryConsumeProbeResidencyFeedback(
                     _currentFrame,
                     _ddgiFrameSerial + 1UL);
@@ -3201,6 +3212,11 @@ namespace Njulf.Rendering
                     _currentFrame,
                     _ddgiFrameSerial + 1UL);
             }
+            CompleteSimpleDdgiSubmittedFrame(
+                _currentFrame,
+                _gpuTimestamps.LastCompletedSnapshot,
+                completedSchedulerFeedbackAvailable,
+                completedSchedulerFeedback);
 
             // Process completed frame deletions
             _deleter.ProcessCompletedFrame(_sync.GetInFlightFence(_currentFrame));
@@ -3427,6 +3443,7 @@ namespace Njulf.Rendering
                 else if (result != Result.ErrorDeviceLost)
                     failureReason += $" Fence recovery submission also failed: {recoveryResult}.";
 
+                _pendingSimpleDdgiSubmittedFrameEvidence = default;
                 MarkFrameSubmissionFault(failureReason, result);
                 throw new VulkanException("Failed to submit queue", result);
             }
@@ -3435,6 +3452,13 @@ namespace Njulf.Rendering
                 _ddgiFrameSerial == ulong.MaxValue
                     ? ulong.MaxValue
                     : _ddgiFrameSerial + 1UL;
+            if (_pendingSimpleDdgiSubmittedFrameEvidence.Valid)
+            {
+                _simpleDdgiSubmittedFrameRing.MarkSubmitted(
+                    _currentFrame,
+                    _pendingSimpleDdgiSubmittedFrameEvidence);
+            }
+            _pendingSimpleDdgiSubmittedFrameEvidence = default;
             _reflectionProbeManager?.CommitCaptureFrameSubmission(
                 _currentFrame,
                 _ddgiFrameSerial,
@@ -4207,6 +4231,8 @@ namespace Njulf.Rendering
             ApplyHiZCounterDiagnostics(sceneData);
             UpdateHiZFallbackDiagnostics(sceneData);
             FrameTimingSnapshot completedGpuTimings = _gpuTimestamps.LastCompletedSnapshot;
+            sceneData.SimpleDdgiCompletedFrameEvidence =
+                _completedSimpleDdgiFrameEvidence;
             ApplyCompletedGpuTimings(sceneData, completedGpuTimings);
             sceneData.AsyncComputeEstimatedOverlapMicroseconds = EstimateAsyncComputeOverlapMicroseconds(
                 frameAsyncComputePlan.SubmissionPlan,
@@ -4242,7 +4268,7 @@ namespace Njulf.Rendering
             sceneData.CpuTotalDrawSceneMicroseconds = ElapsedMicroseconds(drawSceneStart);
             UpdateGlobalIlluminationCpuTiming(sceneData);
             CaptureAsyncComputeTimingFrame(frameAsyncComputePlan, sceneData);
-            RecordSimpleDdgiSubmittedWorkload(_currentFrame, sceneData);
+            CapturePendingSimpleDdgiSubmittedFrame(_currentFrame, sceneData);
             _lastSceneData = sceneData;
             _lastDiagnostics = BuildDiagnostics(sceneData);
             _debugDraw.ClearFrame();
@@ -7429,6 +7455,8 @@ namespace Njulf.Rendering
                     ? sceneData.SimpleDdgiSchedulerMode
                     : SimpleDdgiSchedulerMode.CpuReference,
                 SimpleDdgiSchedulerReady = giUsesSimpleDdgi ? sceneData.SimpleDdgiSchedulerReady : 0,
+                SimpleDdgiCompletedFrameEvidence =
+                    sceneData.SimpleDdgiCompletedFrameEvidence,
                 SimpleDdgiSchedulerFeedbackValid = giUsesSimpleDdgi
                     ? sceneData.SimpleDdgiSchedulerFeedbackValid
                     : 0,
@@ -13732,14 +13760,10 @@ namespace Njulf.Rendering
 
         private void ObserveCompletedSimpleDdgiWorkload(int frameIndex)
         {
-            if ((uint)frameIndex >= (uint)_simpleDdgiSubmittedWorkloads.Length)
-                throw new ArgumentOutOfRangeException(nameof(frameIndex));
-
-            SimpleDdgiSubmittedWorkload workload =
-                _simpleDdgiSubmittedWorkloads[frameIndex];
-            if (!workload.Valid)
+            if (!_simpleDdgiSubmittedFrameRing.TryPeek(
+                    frameIndex,
+                    out SimpleDdgiSubmittedFrameEvidence workload))
                 return;
-            _simpleDdgiSubmittedWorkloads[frameIndex] = default;
 
             ulong farFieldSteps =
                 (ulong)_completedDdgiInvestigationCounters.FarFieldStepBucket0Count * 2UL +
@@ -13790,25 +13814,40 @@ namespace Njulf.Rendering
                 workload.FrameSerial);
         }
 
-        private void RecordSimpleDdgiSubmittedWorkload(
+        private void CapturePendingSimpleDdgiSubmittedFrame(
             int frameIndex,
             SceneRenderingData sceneData)
         {
-            if ((uint)frameIndex >= (uint)_simpleDdgiSubmittedWorkloads.Length)
-                throw new ArgumentOutOfRangeException(nameof(frameIndex));
-
             SimpleDdgiVolumeManager? manager = _simpleDdgiVolumeManager;
-            _simpleDdgiSubmittedWorkloads[frameIndex] =
-                manager != null && sceneData.SimpleDdgiActive != 0
-                    ? new SimpleDdgiSubmittedWorkload(
-                        Valid: true,
-                        FrameSerial: sceneData.DdgiFrameSerial,
-                        SourceCacheLayoutIdentity:
-                            manager.SourceCacheAdmissionIdentity,
-                        ScheduledPrimaryRayCount:
-                            sceneData.DdgiScheduledPrimaryRayCount,
-                        VisibilityRayCount: sceneData.DdgiVisibilityRayCount)
-                    : default;
+            _pendingSimpleDdgiSubmittedFrameEvidence = manager == null
+                ? default
+                : SimpleDdgiFrameEvidenceFactory.CaptureSubmitted(
+                    frameIndex,
+                    sceneData,
+                    _gpuTimestamps.EnabledThisFrame,
+                    manager.SourceCacheAdmissionIdentity);
+        }
+
+        private void CompleteSimpleDdgiSubmittedFrame(
+            int frameIndex,
+            FrameTimingSnapshot timings,
+            bool schedulerFeedbackAvailable,
+            in GPUSimpleDdgiSchedulerFeedback schedulerFeedback)
+        {
+            _completedSimpleDdgiFrameEvidence = default;
+            if (!_simpleDdgiSubmittedFrameRing.TryConsume(
+                    frameIndex,
+                    out SimpleDdgiSubmittedFrameEvidence submitted))
+            {
+                return;
+            }
+
+            _completedSimpleDdgiFrameEvidence =
+                SimpleDdgiFrameEvidenceFactory.Complete(
+                    submitted,
+                    timings,
+                    schedulerFeedbackAvailable,
+                    schedulerFeedback);
         }
 
 
@@ -13872,13 +13911,6 @@ namespace Njulf.Rendering
             ulong SourceRayCount,
             ulong TransportRayCount,
             int PublishedProbeCount);
-
-        internal readonly record struct SimpleDdgiSubmittedWorkload(
-            bool Valid,
-            ulong FrameSerial,
-            ulong SourceCacheLayoutIdentity,
-            ulong ScheduledPrimaryRayCount,
-            ulong VisibilityRayCount);
 
         /// <summary>
         /// Selects the authority for per-frame work diagnostics. Resident mode
