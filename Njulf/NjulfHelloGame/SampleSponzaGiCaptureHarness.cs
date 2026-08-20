@@ -343,7 +343,7 @@ public sealed record SampleSponzaGiVisualMetricGate(
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v19";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v20";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
     public const int LockedWidth = 1600;
@@ -1727,6 +1727,8 @@ public sealed class SampleSponzaGiCaptureContract
         Append(builder, MotionReturnFrameCount);
         Append(builder, MotionTraversalName);
         Append(builder, VerticalTraversalName);
+        Append(builder, SampleSponzaGiTemporalTrace.SchemaVersion);
+        Append(builder, SampleSponzaGiTemporalTrace.Capacity);
         Append(builder, FramesPerEndpointOutput);
         Append(
             builder,
@@ -2049,14 +2051,14 @@ public sealed class SampleSponzaGiCaptureContract
 }
 
 /// <summary>
-/// Compact per-frame evidence retained entirely in a fixed 512-entry ring.
+/// Compact per-frame evidence retained entirely in a fixed 960-entry ring.
 /// Recording reads only already-materialized, fence-complete diagnostics; it
 /// never scans probe or page arrays and performs no per-frame allocation.
 /// </summary>
 public sealed class SampleSponzaGiTemporalTrace
 {
-    public const string SchemaVersion = "simple-ddgi-sponza-temporal-trace/v3";
-    public const int Capacity = 512;
+    public const string SchemaVersion = "simple-ddgi-sponza-temporal-trace/v4";
+    public const int Capacity = 960;
 
     private static readonly JsonSerializerOptions TraceJsonOptions = new()
     {
@@ -2073,6 +2075,18 @@ public sealed class SampleSponzaGiTemporalTrace
 
     public int Count => _count;
     public ulong TotalSampleCount => _totalSampleCount;
+
+    /// <summary>
+    /// Starts a new bounded trace without clearing the fixed backing store.
+    /// Old entries are unreachable as soon as the indices are reset, keeping
+    /// traversal transitions allocation-free and independent of capacity.
+    /// </summary>
+    public void Reset()
+    {
+        _nextIndex = 0;
+        _count = 0;
+        _totalSampleCount = 0;
+    }
 
     public void Record(
         SampleSponzaGiCaptureInstruction instruction,

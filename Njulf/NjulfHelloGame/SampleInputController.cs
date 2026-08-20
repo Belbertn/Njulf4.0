@@ -1720,6 +1720,12 @@ internal sealed class SampleInputController
         }
 
         SampleSponzaGiCaptureInstruction instruction = _sponzaGiCaptureSequence.CurrentInstruction;
+        if (instruction.StageFrameIndex == 0 &&
+            instruction.Stage is SampleSponzaGiCaptureStage.MotionTraversal or
+                SampleSponzaGiCaptureStage.VerticalTraversal)
+        {
+            _sponzaGiTemporalTrace?.Reset();
+        }
         _sponzaGiTemporalTrace?.Record(instruction, diagnostics);
         if (RequiresSponzaGiTransportReadiness(instruction) &&
             (!_sponzaGiTransportCaptureArmedThisFrame ||

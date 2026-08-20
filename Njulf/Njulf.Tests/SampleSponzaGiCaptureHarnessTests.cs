@@ -198,7 +198,10 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
             Assert.That(contract.MotionTraversalFrameCount, Is.EqualTo(300));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v19"));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v20"));
+            Assert.That(SampleSponzaGiTemporalTrace.SchemaVersion,
+                Is.EqualTo("simple-ddgi-sponza-temporal-trace/v4"));
+            Assert.That(SampleSponzaGiTemporalTrace.Capacity, Is.EqualTo(960));
             Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_164));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
             Assert.That(contract.LowBookmark.Position.Y, Is.EqualTo(1.35f));
@@ -374,9 +377,153 @@ public sealed class SampleSponzaGiCaptureHarnessTests
         Assert.Multiple(() =>
         {
             Assert.That(trace.Count, Is.EqualTo(SampleSponzaGiTemporalTrace.Capacity));
-            Assert.That(trace.TotalSampleCount, Is.EqualTo(549));
+            Assert.That(trace.TotalSampleCount,
+                Is.EqualTo((ulong)(SampleSponzaGiTemporalTrace.Capacity + 37)));
             Assert.That(snapshot[0].SampleIndex, Is.EqualTo(37));
-            Assert.That(snapshot[^1].SampleIndex, Is.EqualTo(548));
+            Assert.That(snapshot[^1].SampleIndex,
+                Is.EqualTo((ulong)(SampleSponzaGiTemporalTrace.Capacity + 36)));
+        });
+    }
+
+    [Test]
+    public void TemporalTrace_RetainsEveryFrameOfTheVerticalTraversal()
+    {
+        var trace = new SampleSponzaGiTemporalTrace();
+        SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
+
+        trace.Reset();
+        for (int frameIndex = 0;
+             frameIndex < contract.VerticalTraversalFrameCount;
+             frameIndex++)
+        {
+            trace.Record(
+                new SampleSponzaGiCaptureInstruction(
+                    SampleSponzaGiCaptureStage.VerticalTraversal,
+                    frameIndex,
+                    contract.VerticalTraversalFrameCount,
+                    contract.SampleVerticalTraversalFrame(frameIndex),
+                    null,
+                    SampleSponzaGiCaptureContract.VerticalTraversalName,
+                    false),
+                RendererDiagnostics.Empty);
+        }
+
+        IReadOnlyList<SampleSponzaGiTemporalTraceEntry> snapshot = trace.Snapshot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(contract.VerticalTraversalFrameCount,
+                Is.EqualTo(SampleSponzaGiTemporalTrace.Capacity));
+            Assert.That(trace.Count, Is.EqualTo(contract.VerticalTraversalFrameCount));
+            Assert.That(trace.TotalSampleCount,
+                Is.EqualTo((ulong)contract.VerticalTraversalFrameCount));
+            Assert.That(snapshot, Has.Count.EqualTo(contract.VerticalTraversalFrameCount));
+            Assert.That(snapshot[0].SampleIndex, Is.Zero);
+            Assert.That(snapshot[0].StageFrameIndex, Is.Zero);
+            Assert.That(snapshot[^1].SampleIndex,
+                Is.EqualTo((ulong)(contract.VerticalTraversalFrameCount - 1)));
+            Assert.That(snapshot[^1].StageFrameIndex,
+                Is.EqualTo(contract.VerticalTraversalFrameCount - 1));
+            Assert.That(snapshot.Select(static entry => entry.Stage),
+                Is.All.EqualTo(SampleSponzaGiCaptureStage.VerticalTraversal));
+            Assert.That(snapshot.Select(static entry => entry.StageFrameIndex),
+                Is.EqualTo(Enumerable.Range(0, contract.VerticalTraversalFrameCount)));
+        });
+    }
+
+    [Test]
+    public void TemporalTrace_ResetIsolatesTheCompleteVerticalTraversalFromMotion()
+    {
+        var trace = new SampleSponzaGiTemporalTrace();
+        SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
+        for (int frameIndex = 0;
+             frameIndex < contract.MotionTraversalFrameCount;
+             frameIndex++)
+        {
+            trace.Record(
+                new SampleSponzaGiCaptureInstruction(
+                    SampleSponzaGiCaptureStage.MotionTraversal,
+                    frameIndex,
+                    contract.MotionTraversalFrameCount,
+                    contract.SampleMotionTraversalFrame(frameIndex),
+                    null,
+                    SampleSponzaGiCaptureContract.MotionTraversalName,
+                    false),
+                RendererDiagnostics.Empty);
+        }
+
+        trace.Reset();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(trace.Count, Is.Zero);
+            Assert.That(trace.TotalSampleCount, Is.Zero);
+            Assert.That(trace.Snapshot(), Is.Empty);
+        });
+
+        for (int frameIndex = 0;
+             frameIndex < contract.VerticalTraversalFrameCount;
+             frameIndex++)
+        {
+            trace.Record(
+                new SampleSponzaGiCaptureInstruction(
+                    SampleSponzaGiCaptureStage.VerticalTraversal,
+                    frameIndex,
+                    contract.VerticalTraversalFrameCount,
+                    contract.SampleVerticalTraversalFrame(frameIndex),
+                    null,
+                    SampleSponzaGiCaptureContract.VerticalTraversalName,
+                    false),
+                RendererDiagnostics.Empty);
+        }
+
+        IReadOnlyList<SampleSponzaGiTemporalTraceEntry> snapshot = trace.Snapshot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(trace.Count, Is.EqualTo(960));
+            Assert.That(trace.TotalSampleCount, Is.EqualTo(960));
+            Assert.That(snapshot, Has.Count.EqualTo(960));
+            Assert.That(snapshot.Select(static entry => entry.Stage),
+                Is.All.EqualTo(SampleSponzaGiCaptureStage.VerticalTraversal));
+            Assert.That(snapshot.Select(static entry => entry.SampleIndex),
+                Is.EqualTo(Enumerable.Range(0, 960).Select(static index => (ulong)index)));
+            Assert.That(snapshot.Select(static entry => entry.StageFrameIndex),
+                Is.EqualTo(Enumerable.Range(0, 960)));
+        });
+    }
+
+    [Test]
+    public void TemporalTrace_ResetDoesNotAllocateOrClearTheBackingStore()
+    {
+        var trace = new SampleSponzaGiTemporalTrace();
+        SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
+        trace.Record(
+            new SampleSponzaGiCaptureInstruction(
+                SampleSponzaGiCaptureStage.MotionTraversal,
+                23,
+                contract.MotionTraversalFrameCount,
+                contract.SampleMotionTraversalFrame(23),
+                null,
+                SampleSponzaGiCaptureContract.MotionTraversalName,
+                false),
+            RendererDiagnostics.Empty);
+        var backingStore = (SampleSponzaGiTemporalTraceEntry[])typeof(
+                SampleSponzaGiTemporalTrace)
+            .GetField("_entries", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(trace)!;
+        trace.Reset();
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int iteration = 0; iteration < 1_000; iteration++)
+            trace.Reset();
+        long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(allocatedBytes, Is.Zero);
+            Assert.That(trace.Count, Is.Zero);
+            Assert.That(trace.TotalSampleCount, Is.Zero);
+            Assert.That(backingStore[0].StageFrameIndex, Is.EqualTo(23));
         });
     }
 
