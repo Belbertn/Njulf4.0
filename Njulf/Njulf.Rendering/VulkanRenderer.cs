@@ -13841,6 +13841,8 @@ namespace Njulf.Rendering
                     frameIndex,
                     sceneData,
                     _gpuTimestamps.EnabledThisFrame,
+                    manager.FrameSerial,
+                    manager.ProbeCount,
                     _gpuTimestamps.GetIntendedSimpleDdgiPasses(frameIndex),
                     _gpuTimestamps.GetAdmittedSimpleDdgiTimingPasses(frameIndex),
                     manager.CurrentQueueTransactionGeneration,

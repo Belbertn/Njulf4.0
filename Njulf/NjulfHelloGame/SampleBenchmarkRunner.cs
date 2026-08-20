@@ -1186,6 +1186,11 @@ public sealed class SampleBenchmarkAnalyzer
         for (int index = 0; index < _samples.Count; index++)
         {
             ulong frameSerial = _samples[index].CaptureFrame.FrameSerial;
+            if (_samples[index].SimpleDdgiActive == 0)
+            {
+                failures.Add(
+                    $"DDGI transient route frame {index} is not Simple-DDGI active.");
+            }
             if (frameSerial == ulong.MaxValue)
             {
                 failures.Add(
@@ -1322,6 +1327,69 @@ public sealed class SampleBenchmarkAnalyzer
             }
         }
 
+        ulong previousSchedulerSerial = 0UL;
+        int previousSchedulerOrigin = -1;
+        int completableOriginCount = Math.Max(
+            0,
+            expectedFrameCount - RenderingConstants.FramesInFlight);
+        for (int originIndex = 0;
+             originIndex < completableOriginCount;
+             originIndex++)
+        {
+            if (_samples[originIndex].SimpleDdgiActive == 0)
+            {
+                continue;
+            }
+
+            ulong routeSerial = _samples[originIndex].CaptureFrame.FrameSerial;
+            if (!completedBySubmittedSerial.TryGetValue(
+                    routeSerial,
+                    out (int CompletionIndex,
+                        SimpleDdgiCompletedFrameEvidence Evidence) joined))
+            {
+                failures.Add(
+                    $"DDGI active route frame {originIndex}, serial {routeSerial}, " +
+                    "has no exact completed scheduler identity.");
+                previousSchedulerSerial = 0UL;
+                previousSchedulerOrigin = -1;
+                continue;
+            }
+
+            SimpleDdgiSubmittedFrameEvidence submitted = joined.Evidence.Submitted;
+            ulong schedulerSerial = submitted.SchedulerFrameSerial;
+            if (!submitted.FrameSerialsValid)
+            {
+                failures.Add(
+                    $"DDGI active route frame {originIndex} retained invalid " +
+                    $"renderer/scheduler serials {routeSerial}/{schedulerSerial}.");
+            }
+            if (previousSchedulerOrigin >= 0)
+            {
+                if (previousSchedulerSerial >= ulong.MaxValue - 1UL)
+                {
+                    failures.Add(
+                        $"DDGI scheduler serial at active route frame " +
+                        $"{previousSchedulerOrigin} cannot advance without " +
+                        "entering a sentinel or wrapping.");
+                }
+                else
+                {
+                    ulong expectedSchedulerSerial = previousSchedulerSerial + 1UL;
+                    if (schedulerSerial != expectedSchedulerSerial)
+                    {
+                        failures.Add(
+                            $"DDGI active route frame {originIndex} retained " +
+                            $"scheduler serial {schedulerSerial}; expected " +
+                            $"contiguous serial {expectedSchedulerSerial} after " +
+                            $"active route frame {previousSchedulerOrigin}.");
+                    }
+                }
+            }
+
+            previousSchedulerSerial = schedulerSerial;
+            previousSchedulerOrigin = originIndex;
+        }
+
         if (failures.Count != 0 || generationEdges.Count != authoredEvents.Length)
             return CreateUnavailableDdgiTransientEvidence(failures);
 
@@ -1362,6 +1430,7 @@ public sealed class SampleBenchmarkAnalyzer
                     originIndex,
                     sourceGeneration,
                     submittedSerial,
+                    originIndex == edgeIndex,
                     completed);
                 frames.Add(new SampleBenchmarkDdgiTransientFrame(
                     originIndex,
@@ -1389,6 +1458,11 @@ public sealed class SampleBenchmarkAnalyzer
                 continue;
             }
 
+            ValidateDdgiTransientAuditLifecycle(
+                failures,
+                windowIndex,
+                frames);
+
             windows.Add(new SampleBenchmarkDdgiTransientWindow(
                 windowIndex,
                 authoredEvents[windowIndex],
@@ -1400,6 +1474,8 @@ public sealed class SampleBenchmarkAnalyzer
                 certificateIndex - edgeIndex,
                 frames[0].Completed.Submitted.FrameSerial,
                 frames[^1].Completed.Submitted.FrameSerial,
+                frames[0].Completed.Submitted.SchedulerFrameSerial,
+                frames[^1].Completed.Submitted.SchedulerFrameSerial,
                 Array.AsReadOnly(frames.ToArray())));
         }
 
@@ -1419,12 +1495,20 @@ public sealed class SampleBenchmarkAnalyzer
         int routeFrameIndex,
         uint sourceGeneration,
         ulong submittedSerial,
+        bool observedGenerationEdge,
         in SimpleDdgiCompletedFrameEvidence completed)
     {
         string prefix =
             $"DDGI transient window {windowIndex} route frame {routeFrameIndex}";
         if (completed.Submitted.FrameSerial != submittedSerial)
             failures.Add($"{prefix} joined the wrong submitted frame serial.");
+        if (!completed.Submitted.FrameSerialsValid)
+        {
+            failures.Add(
+                $"{prefix} retained invalid renderer/scheduler serials " +
+                $"{completed.Submitted.FrameSerial}/" +
+                $"{completed.Submitted.SchedulerFrameSerial}.");
+        }
         if (completed.Submitted.SourceLightingGeneration != sourceGeneration)
         {
             failures.Add(
@@ -1472,6 +1556,28 @@ public sealed class SampleBenchmarkAnalyzer
         bool auditFrozen = tail.Phase == SimpleDdgiTransportPhase.AuditFrozen;
         bool auditIntended =
             (intended & SimpleDdgiGpuPassMask.TransportAudit) != 0;
+        bool urgentRelightIntended =
+            (intended & SimpleDdgiGpuPassMask.UrgentRelight) != 0;
+        if (observedGenerationEdge && !urgentRelightIntended)
+        {
+            failures.Add(
+                $"{prefix} is the Bistro radiometric generation edge but has " +
+                "no urgent-relight parent timing scope.");
+        }
+        if (urgentRelightIntended !=
+            completed.GpuUrgentRelightTimingAvailable)
+        {
+            failures.Add(
+                $"{prefix} urgent-relight timing availability does not match " +
+                "the exact completed pass mask.");
+        }
+        if (tail.Phase == SimpleDdgiTransportPhase.Certified &&
+            !tail.IsAcceptedFor(completed.Submitted))
+        {
+            failures.Add(
+                $"{prefix} retained a Certified tail row without an exact " +
+                "current numerical/lifecycle certificate.");
+        }
 
         if (auditFrozen)
         {
@@ -1482,7 +1588,6 @@ public sealed class SampleBenchmarkAnalyzer
             ValidateSchedulerDdgiTransientFrame(
                 failures,
                 prefix,
-                submittedSerial,
                 completed);
             if (auditIntended)
                 failures.Add($"{prefix} mixed scheduler work with a frozen audit.");
@@ -1503,6 +1608,7 @@ public sealed class SampleBenchmarkAnalyzer
             SimpleDdgiGpuPassMask.Blend |
             SimpleDdgiGpuPassMask.RelocateClassify |
             SimpleDdgiGpuPassMask.Publish |
+            SimpleDdgiGpuPassMask.UrgentRelight |
             SimpleDdgiGpuPassMask.SchedulerCommit |
             SimpleDdgiGpuPassMask.ScheduleTailAdmit |
             SimpleDdgiGpuPassMask.ScheduleEmit;
@@ -1519,6 +1625,9 @@ public sealed class SampleBenchmarkAnalyzer
             completed.Submitted.TailCertificate;
         if (tail.Reason !=
                 SimpleDdgiTransportCertificationReason.AuditInProgress ||
+            tail.AuditComplete ||
+            tail.CertificateCurrent ||
+            tail.Summary.IsComplete ||
             !tail.HasCompleteIdentity ||
             !tail.HasDurableSummary)
         {
@@ -1528,10 +1637,35 @@ public sealed class SampleBenchmarkAnalyzer
         if (tail.AuditPlannedChunkCount == 0u ||
             tail.AuditSubmittedChunkCount == 0u ||
             tail.AuditSubmittedChunkCount > tail.AuditPlannedChunkCount ||
-            tail.AuditFirstSubmissionFrameSerial == ulong.MaxValue)
+            tail.AuditFirstSubmissionFrameSerial == 0UL ||
+            tail.AuditFirstSubmissionFrameSerial == ulong.MaxValue ||
+            tail.AuditFinalSubmissionFrameSerial == 0UL ||
+            tail.AuditFinalSubmissionFrameSerial == ulong.MaxValue ||
+            tail.AuditFirstSubmissionFrameSerial !=
+                tail.Summary.FirstFrameSerial ||
+            tail.AuditFinalSubmissionFrameSerial !=
+                tail.Summary.FinalFrameSerial ||
+            tail.AuditSubmittedChunkCount != tail.Summary.ChunkCount)
         {
             failures.Add(
                 $"{prefix} has invalid frozen-audit cursor/lifecycle state.");
+        }
+        if (!SimpleDdgiAuditCardinalityContract.TryResolve(
+                completed.Submitted.ActiveProbeCount,
+                completed.Submitted.AuditPhysicalProbeCount,
+                tail.ExpectedParticipantCount,
+                out uint expectedChunkCount,
+                out uint expectedTexelCount,
+                out _) ||
+            tail.AuditPlannedChunkCount != expectedChunkCount ||
+            tail.ExpectedTexelCount != expectedTexelCount ||
+            tail.Summary.ExpectedParticipantCount !=
+                tail.ExpectedParticipantCount ||
+            tail.Summary.ExpectedTexelCount != expectedTexelCount)
+        {
+            failures.Add(
+                $"{prefix} frozen-audit cardinality/texel evidence does not " +
+                "match the submitted active field.");
         }
 
         bool auditDispatch =
@@ -1547,13 +1681,12 @@ public sealed class SampleBenchmarkAnalyzer
                     $"{prefix} audit dispatch has no exact transport-audit " +
                     "GPU timing/total.");
             }
-            if (tail.AuditDispatchComplete &&
-                tail.AuditFinalSubmissionFrameSerial !=
-                    completed.Submitted.FrameSerial)
+            if (tail.AuditFinalSubmissionFrameSerial !=
+                completed.Submitted.SchedulerFrameSerial)
             {
                 failures.Add(
-                    $"{prefix} final audit dispatch does not own the frozen " +
-                    "cursor's final submission serial.");
+                    $"{prefix} audit dispatch does not own the frozen cursor's " +
+                    "latest scheduler-frame serial.");
             }
         }
         else
@@ -1576,7 +1709,7 @@ public sealed class SampleBenchmarkAnalyzer
                 tail.AuditSubmittedChunkCount != tail.AuditPlannedChunkCount ||
                 tail.AuditFinalSubmissionFrameSerial == ulong.MaxValue ||
                 tail.AuditFinalSubmissionFrameSerial >=
-                    completed.Submitted.FrameSerial)
+                    completed.Submitted.SchedulerFrameSerial)
             {
                 failures.Add(
                     $"{prefix} frozen-audit await row lacks a completed prior " +
@@ -1593,7 +1726,6 @@ public sealed class SampleBenchmarkAnalyzer
     private static void ValidateSchedulerDdgiTransientFrame(
         ICollection<string> failures,
         string prefix,
-        ulong submittedSerial,
         in SimpleDdgiCompletedFrameEvidence completed)
     {
         SimpleDdgiGpuPassMask intended =
@@ -1657,7 +1789,8 @@ public sealed class SampleBenchmarkAnalyzer
             failures.Add($"{prefix} has no same-slot scheduler feedback.");
         if (!completed.SchedulerFeedbackFrameAligned)
             failures.Add($"{prefix} scheduler feedback frame serial is not aligned.");
-        if (completed.SchedulerFeedbackFrameSerial != submittedSerial)
+        if (completed.SchedulerFeedbackFrameSerial !=
+            completed.Submitted.SchedulerFrameSerial)
             failures.Add($"{prefix} scheduler feedback retained the wrong frame serial.");
         if (!completed.SchedulerFeedbackGenerationAligned)
             failures.Add($"{prefix} scheduler feedback generations are not aligned.");
@@ -1681,6 +1814,130 @@ public sealed class SampleBenchmarkAnalyzer
             failures.Add(
                 $"{prefix} scheduler feedback status is " +
                 $"0x{completed.SchedulerFeedbackStatusFlags:x8}.");
+        }
+        SimpleDdgiTailCertificateFrameEvidence tail =
+            completed.Submitted.TailCertificate;
+        if (tail.Phase == SimpleDdgiTransportPhase.Certified &&
+            (completed.SchedulerSolveEpoch != tail.SolveEpoch ||
+             completed.SchedulerSolveParticipantCount !=
+                 tail.ExpectedParticipantCount ||
+             completed.SchedulerSolveVisitedCount !=
+                 tail.ExpectedParticipantCount))
+        {
+            failures.Add(
+                $"{prefix} Certified tail population/epoch is not bound to " +
+                "the exact same-slot scheduler feedback reduction.");
+        }
+    }
+
+    private static void ValidateDdgiTransientAuditLifecycle(
+        ICollection<string> failures,
+        int windowIndex,
+        IReadOnlyList<SampleBenchmarkDdgiTransientFrame> frames)
+    {
+        uint submittedChunkCount = 0u;
+        uint plannedChunkCount = 0u;
+        ulong firstSchedulerSerial = 0UL;
+        ulong finalSchedulerSerial = 0UL;
+        bool sawDispatch = false;
+        bool sawAwait = false;
+
+        foreach (SampleBenchmarkDdgiTransientFrame frame in frames)
+        {
+            SimpleDdgiCompletedFrameEvidence completed = frame.Completed;
+            SimpleDdgiTailCertificateFrameEvidence tail =
+                completed.Submitted.TailCertificate;
+            bool auditFrozen =
+                tail.Phase == SimpleDdgiTransportPhase.AuditFrozen;
+            bool auditDispatch = auditFrozen &&
+                (completed.Submitted.IntendedGpuPasses &
+                 SimpleDdgiGpuPassMask.TransportAudit) != 0;
+            if (auditDispatch)
+            {
+                uint delta = tail.AuditSubmittedChunkCount >= submittedChunkCount
+                    ? tail.AuditSubmittedChunkCount - submittedChunkCount
+                    : uint.MaxValue;
+                if (delta == 0u ||
+                    delta > SimpleDdgiAuditCardinalityContract
+                        .MaximumChunksPerSubmittedFrame)
+                {
+                    failures.Add(
+                        $"DDGI transient window {windowIndex} route frame " +
+                        $"{frame.RouteFrameIndex} advanced the frozen audit by " +
+                        $"{delta} chunks; expected one or two.");
+                }
+
+                if (!sawDispatch)
+                {
+                    firstSchedulerSerial =
+                        completed.Submitted.SchedulerFrameSerial;
+                    plannedChunkCount = tail.AuditPlannedChunkCount;
+                    if (tail.AuditFirstSubmissionFrameSerial !=
+                        firstSchedulerSerial)
+                    {
+                        failures.Add(
+                            $"DDGI transient window {windowIndex} first audit " +
+                            "dispatch does not own the first scheduler-frame serial.");
+                    }
+                }
+                else if (tail.AuditPlannedChunkCount != plannedChunkCount ||
+                         tail.AuditFirstSubmissionFrameSerial !=
+                            firstSchedulerSerial)
+                {
+                    failures.Add(
+                        $"DDGI transient window {windowIndex} changed its " +
+                        "frozen audit plan/first serial between dispatches.");
+                }
+
+                finalSchedulerSerial =
+                    completed.Submitted.SchedulerFrameSerial;
+                submittedChunkCount = tail.AuditSubmittedChunkCount;
+                bool expectedComplete =
+                    submittedChunkCount == tail.AuditPlannedChunkCount;
+                if (tail.AuditDispatchComplete != expectedComplete)
+                {
+                    failures.Add(
+                        $"DDGI transient window {windowIndex} route frame " +
+                        $"{frame.RouteFrameIndex} retained a mismatched audit " +
+                        "dispatch-complete state.");
+                }
+                sawDispatch = true;
+                continue;
+            }
+
+            if (auditFrozen)
+            {
+                sawAwait = true;
+                if (!sawDispatch ||
+                    submittedChunkCount != plannedChunkCount ||
+                    tail.AuditSubmittedChunkCount != submittedChunkCount ||
+                    tail.AuditFirstSubmissionFrameSerial !=
+                        firstSchedulerSerial ||
+                    tail.AuditFinalSubmissionFrameSerial !=
+                        finalSchedulerSerial)
+                {
+                    failures.Add(
+                        $"DDGI transient window {windowIndex} route frame " +
+                        $"{frame.RouteFrameIndex} has an await row that does " +
+                        "not preserve the completed dispatch lifecycle.");
+                }
+                continue;
+            }
+
+            if (tail.Phase != SimpleDdgiTransportPhase.Certified)
+                continue;
+
+            if (!sawDispatch || !sawAwait ||
+                submittedChunkCount != plannedChunkCount ||
+                tail.AuditPlannedChunkCount != plannedChunkCount ||
+                tail.AuditSubmittedChunkCount != submittedChunkCount ||
+                tail.AuditFirstSubmissionFrameSerial != firstSchedulerSerial ||
+                tail.AuditFinalSubmissionFrameSerial != finalSchedulerSerial)
+            {
+                failures.Add(
+                    $"DDGI transient window {windowIndex} certificate does not " +
+                    "close the exact observed dispatch/await lifecycle.");
+            }
         }
     }
 

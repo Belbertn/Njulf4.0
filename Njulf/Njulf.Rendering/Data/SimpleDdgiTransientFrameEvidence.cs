@@ -1,5 +1,6 @@
 using System;
 using Njulf.Rendering.Debug;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Data;
 
@@ -22,7 +23,8 @@ public enum SimpleDdgiGpuPassMask : uint
     Publish = 1u << 12,
     SchedulerCommit = 1u << 13,
     ScheduleTailAdmit = 1u << 14,
-    ScheduleEmit = 1u << 15
+    ScheduleEmit = 1u << 15,
+    UrgentRelight = 1u << 16
 }
 
 internal static class SimpleDdgiGpuPassContract
@@ -41,7 +43,8 @@ internal static class SimpleDdgiGpuPassContract
         SimpleDdgiGpuPassMask.TransportAudit |
         SimpleDdgiGpuPassMask.RelocateClassify |
         SimpleDdgiGpuPassMask.Publish |
-        SimpleDdgiGpuPassMask.SchedulerCommit;
+        SimpleDdgiGpuPassMask.SchedulerCommit |
+        SimpleDdgiGpuPassMask.UrgentRelight;
 
     public const SimpleDdgiGpuPassMask SchedulerPasses =
         SimpleDdgiGpuPassMask.Schedule |
@@ -75,6 +78,8 @@ internal static class SimpleDdgiGpuPassContract
             "SimpleDdgiSchedule.TailAdmit" =>
                 SimpleDdgiGpuPassMask.ScheduleTailAdmit,
             "SimpleDdgiSchedule.Emit" => SimpleDdgiGpuPassMask.ScheduleEmit,
+            "SimpleDdgiUrgentRelightPass" =>
+                SimpleDdgiGpuPassMask.UrgentRelight,
             _ => SimpleDdgiGpuPassMask.None
         };
 
@@ -163,6 +168,11 @@ internal static class SimpleDdgiGpuPassContract
             "SimpleDdgiSchedule.Emit",
             SimpleDdgiGpuPassMask.ScheduleEmit,
             ref result);
+        AddIfRecorded(
+            timings,
+            "SimpleDdgiUrgentRelightPass",
+            SimpleDdgiGpuPassMask.UrgentRelight,
+            ref result);
         return result;
     }
 
@@ -212,6 +222,12 @@ internal static class SimpleDdgiGpuPassContract
             "SimpleDdgiPublishPass", ref total);
         AddIfActive(timings, activePasses, SimpleDdgiGpuPassMask.SchedulerCommit,
             "SimpleDdgiSchedulerCommitPass", ref total);
+        // Urgent relight is one parent timing scope around an additional set of
+        // cache-only child commands. Those child Execute overloads do not
+        // receive the timestamp recorder, so adding the parent once neither
+        // omits its work nor double-counts the ordinary post-forward passes.
+        AddIfActive(timings, activePasses, SimpleDdgiGpuPassMask.UrgentRelight,
+            "SimpleDdgiUrgentRelightPass", ref total);
         return total;
     }
 
@@ -294,6 +310,7 @@ public readonly record struct SimpleDdgiTailCertificateFrameEvidence
     public bool IsAcceptedFor(
         in SimpleDdgiSubmittedFrameEvidence submitted) =>
         submitted.Valid &&
+        submitted.FrameSerialsValid &&
         submitted.TailCertificationEnabled &&
         Phase == SimpleDdgiTransportPhase.Certified &&
         Reason == SimpleDdgiTransportCertificationReason.Certified &&
@@ -302,6 +319,20 @@ public readonly record struct SimpleDdgiTailCertificateFrameEvidence
         CertificateCurrent &&
         AuditComplete &&
         ExpectedParticipantCount > 0u &&
+        SimpleDdgiAuditCardinalityContract.TryResolve(
+            submitted.ActiveProbeCount,
+            submitted.AuditPhysicalProbeCount,
+            ExpectedParticipantCount,
+            out uint expectedChunkCount,
+            out uint recomputedExpectedTexelCount,
+            out ulong expectedDispatchFrameSpan) &&
+        SimpleDdgiAuditCardinalityContract.HasExactCertifiedPopulation(
+            submitted.AuditPhysicalProbeCount,
+            ExpectedParticipantCount,
+            ExcludedInactiveCount,
+            ExcludedNotVisibleCount) &&
+        AuditPlannedChunkCount == expectedChunkCount &&
+        ExpectedTexelCount == recomputedExpectedTexelCount &&
         AuditedParticipantCount == ExpectedParticipantCount &&
         ExpectedTexelCount > 0u &&
         AuditedTexelCount == ExpectedTexelCount &&
@@ -333,15 +364,23 @@ public readonly record struct SimpleDdgiTailCertificateFrameEvidence
             CachePhysicalGenerationFailureCount &&
         Summary.NonFiniteCount == NonFiniteCount &&
         Summary.CounterOverflowCount == CounterOverflowCount &&
+        Summary.HasPerChannelEvidence &&
+        Summary.ChannelEvidenceVersion ==
+            SimpleDdgiTransportTailSummary.PerChannelEvidenceVersion &&
         Summary.ChunkCount > 0u &&
         AuditDispatchComplete &&
         AuditPlannedChunkCount == Summary.ChunkCount &&
         AuditSubmittedChunkCount == Summary.ChunkCount &&
         AuditFirstSubmissionFrameSerial == Summary.FirstFrameSerial &&
         AuditFinalSubmissionFrameSerial == Summary.FinalFrameSerial &&
+        Summary.FirstFrameSerial != 0UL &&
+        Summary.FinalFrameSerial != 0UL &&
         Summary.FirstFrameSerial != ulong.MaxValue &&
         Summary.FinalFrameSerial != ulong.MaxValue &&
         Summary.FinalFrameSerial >= Summary.FirstFrameSerial &&
+        Summary.FinalFrameSerial - Summary.FirstFrameSerial + 1UL ==
+            expectedDispatchFrameSpan &&
+        Summary.FinalFrameSerial < submitted.SchedulerFrameSerial &&
         submitted.AdmittedSourceCohortGeneration ==
             submitted.SourceLightingGeneration &&
         submitted.LivePropagationSourceGeneration ==
@@ -368,9 +407,25 @@ public readonly record struct SimpleDdgiSubmittedFrameEvidence
     public bool Valid { get; init; }
     public int FrameSlot { get; init; }
     public ulong FrameSerial { get; init; }
+    /// <summary>
+    /// Serial authored by SimpleDdgiVolumeManager after its per-frame begin.
+    /// Scheduler feedback uses this domain; <see cref="FrameSerial"/> remains
+    /// the renderer/route identity used for frame-slot and measurement joins.
+    /// </summary>
+    public ulong SchedulerFrameSerial { get; init; }
+    public bool FrameSerialsValid =>
+        SimpleDdgiFrameSerialContract.AreValid(
+            FrameSerial,
+            SchedulerFrameSerial);
     public bool GpuTimingRecorded { get; init; }
     public SimpleDdgiSchedulerMode SchedulerMode { get; init; }
     public int ActiveProbeCount { get; init; }
+    /// <summary>
+    /// Exact physical field extent traversed by the frozen audit. This is
+    /// intentionally distinct from <see cref="ActiveProbeCount"/>, which can
+    /// be the smaller probe-state-readback scheduler workload.
+    /// </summary>
+    public int AuditPhysicalProbeCount { get; init; }
     public uint VolumeResourceGeneration { get; init; }
     public uint TransportTopologyGeneration { get; init; }
     public uint SourceLightingGeneration { get; init; }
@@ -423,12 +478,14 @@ public readonly record struct SimpleDdgiCompletedFrameEvidence
     public bool GpuSchedulerEmitTimingAvailable { get; init; }
     public bool GpuSchedulerCommitTimingAvailable { get; init; }
     public bool GpuTransportAuditTimingAvailable { get; init; }
+    public bool GpuUrgentRelightTimingAvailable { get; init; }
     public bool GpuDdgiTotalTimingAvailable { get; init; }
     public long GpuAcceleratedSolveMicroseconds { get; init; }
     public long GpuSchedulerTailAdmitMicroseconds { get; init; }
     public long GpuSchedulerEmitMicroseconds { get; init; }
     public long GpuSchedulerCommitMicroseconds { get; init; }
     public long GpuTransportAuditMicroseconds { get; init; }
+    public long GpuUrgentRelightMicroseconds { get; init; }
     public long GpuDdgiTotalMicroseconds { get; init; }
 
     public bool SchedulerFeedbackAvailable { get; init; }
@@ -528,6 +585,8 @@ internal static class SimpleDdgiFrameEvidenceFactory
         int frameSlot,
         SceneRenderingData sceneData,
         bool gpuTimingRecorded,
+        ulong schedulerFrameSerial,
+        int auditPhysicalProbeCount,
         SimpleDdgiGpuPassMask intendedGpuPasses,
         SimpleDdgiGpuPassMask admittedGpuTimingPasses,
         uint queueTransactionGeneration,
@@ -543,9 +602,11 @@ internal static class SimpleDdgiFrameEvidenceFactory
             Valid = true,
             FrameSlot = frameSlot,
             FrameSerial = sceneData.DdgiFrameSerial,
+            SchedulerFrameSerial = schedulerFrameSerial,
             GpuTimingRecorded = gpuTimingRecorded,
             SchedulerMode = sceneData.SimpleDdgiSchedulerMode,
             ActiveProbeCount = Math.Max(0, sceneData.DdgiActiveProbeCount),
+            AuditPhysicalProbeCount = Math.Max(0, auditPhysicalProbeCount),
             VolumeResourceGeneration = sceneData.SimpleDdgiVolumeResourceGeneration,
             TransportTopologyGeneration = sceneData.SimpleDdgiTransportTopologyGeneration,
             SourceLightingGeneration = sceneData.SimpleDdgiSourceLightingGeneration,
@@ -580,7 +641,8 @@ internal static class SimpleDdgiFrameEvidenceFactory
         ulong feedbackSerial =
             ((ulong)feedback.FrameSerialHigh << 32) | feedback.FrameSerialLow;
         bool frameAligned = schedulerFeedbackAvailable &&
-            feedbackSerial == submitted.FrameSerial;
+            submitted.FrameSerialsValid &&
+            feedbackSerial == submitted.SchedulerFrameSerial;
         bool generationAligned = frameAligned &&
             feedback.VolumeTableGeneration == submitted.VolumeResourceGeneration &&
             schedulerFeedbackTransportTopologyGeneration ==
@@ -611,6 +673,8 @@ internal static class SimpleDdgiFrameEvidenceFactory
             (completedGpuTimingPasses & SimpleDdgiGpuPassMask.SchedulerCommit) != 0;
         bool transportAuditTimingAvailable =
             (completedGpuTimingPasses & SimpleDdgiGpuPassMask.TransportAudit) != 0;
+        bool urgentRelightTimingAvailable =
+            (completedGpuTimingPasses & SimpleDdgiGpuPassMask.UrgentRelight) != 0;
         uint activeWork = SaturatingAdd(
             feedback.SourceProbeUsed,
             feedback.CachedSolverProbeUsed);
@@ -631,6 +695,7 @@ internal static class SimpleDdgiFrameEvidenceFactory
             GpuSchedulerEmitTimingAvailable = emitTimingAvailable,
             GpuSchedulerCommitTimingAvailable = commitTimingAvailable,
             GpuTransportAuditTimingAvailable = transportAuditTimingAvailable,
+            GpuUrgentRelightTimingAvailable = urgentRelightTimingAvailable,
             GpuDdgiTotalTimingAvailable = gpuDdgiTotalTimingAvailable,
             GpuAcceleratedSolveMicroseconds =
                 acceleratedSolveTimingAvailable
@@ -651,6 +716,10 @@ internal static class SimpleDdgiFrameEvidenceFactory
             GpuTransportAuditMicroseconds =
                 transportAuditTimingAvailable
                     ? timings.GetGpuMicrosecondsOrZero("SimpleDdgiTransportAuditPass")
+                    : 0,
+            GpuUrgentRelightMicroseconds =
+                urgentRelightTimingAvailable
+                    ? timings.GetGpuMicrosecondsOrZero("SimpleDdgiUrgentRelightPass")
                     : 0,
             GpuDdgiTotalMicroseconds = gpuDdgiTotalTimingAvailable
                 ? SimpleDdgiGpuPassContract.CalculateTopLevelMicroseconds(
@@ -691,6 +760,155 @@ internal static class SimpleDdgiFrameEvidenceFactory
 
     private static uint SaturatingAdd(uint left, uint right) =>
         uint.MaxValue - left < right ? uint.MaxValue : left + right;
+}
+
+internal static class SimpleDdgiFrameSerialContract
+{
+    /// <summary>
+    /// Renderer and scheduler serials are independent domains. Renderer zero is
+    /// a valid first route identity; manager zero and MaxValue are lifecycle
+    /// sentinels. Sequence validation belongs to the measured route rather than
+    /// an arithmetic offset, because disabled or aborted prehistory can advance
+    /// the two producers differently.
+    /// </summary>
+    public static bool AreValid(
+        ulong rendererFrameSerial,
+        ulong schedulerFrameSerial) =>
+        rendererFrameSerial != ulong.MaxValue &&
+        schedulerFrameSerial != 0UL &&
+        schedulerFrameSerial != ulong.MaxValue;
+
+    public static uint LowWord(ulong frameSerial) =>
+        unchecked((uint)frameSerial);
+
+    public static uint HighWord(ulong frameSerial) =>
+        unchecked((uint)(frameSerial >> 32));
+
+    public static ulong FromWords(uint lowWord, uint highWord) =>
+        ((ulong)highWord << 32) | lowWord;
+}
+
+public static class SimpleDdgiAuditCardinalityContract
+{
+    public const uint MaximumChunksPerSubmittedFrame = 2u;
+
+    /// <summary>
+    /// Recomputes the production audit geometry without trusting copied tail
+    /// fields. The dispatch walks every physical probe slot in fixed 256
+    /// probe chunks, while each frozen participant contributes the complete
+    /// 8x8 irradiance interior to the numerical certificate.
+    /// </summary>
+    public static bool TryResolve(
+        int activeProbeCount,
+        int auditPhysicalProbeCount,
+        uint expectedParticipantCount,
+        out uint expectedChunkCount,
+        out uint expectedTexelCount,
+        out ulong expectedDispatchFrameSpan)
+    {
+        expectedChunkCount = 0u;
+        expectedTexelCount = 0u;
+        expectedDispatchFrameSpan = 0UL;
+        if (activeProbeCount <= 0 ||
+            auditPhysicalProbeCount <= 0 ||
+            activeProbeCount > auditPhysicalProbeCount ||
+            expectedParticipantCount == 0u ||
+            expectedParticipantCount > (uint)activeProbeCount ||
+            expectedParticipantCount > (uint)auditPhysicalProbeCount)
+        {
+            return false;
+        }
+
+        const uint chunkCapacity =
+            SimpleDdgiGpuSchedulerLayout.TransportAuditWorkspaceProbeCapacity;
+        const uint irradianceTexelsPerProbe =
+            SimpleDdgiVolumeManager.IrradianceTexelsPerProbe *
+            SimpleDdgiVolumeManager.IrradianceTexelsPerProbe;
+        expectedChunkCount = checked(
+            ((uint)auditPhysicalProbeCount + chunkCapacity - 1u) /
+            chunkCapacity);
+        ulong texelCount =
+            (ulong)expectedParticipantCount * irradianceTexelsPerProbe;
+        if (texelCount > uint.MaxValue)
+        {
+            expectedChunkCount = 0u;
+            return false;
+        }
+
+        expectedTexelCount = (uint)texelCount;
+        expectedDispatchFrameSpan =
+            (expectedChunkCount + MaximumChunksPerSubmittedFrame - 1u) /
+            MaximumChunksPerSubmittedFrame;
+        return true;
+    }
+
+    /// <summary>
+    /// A successful reduce audit visits every physical probe exactly once.
+    /// Once stale, invalid-cache, and non-finite outcomes have been rejected,
+    /// every probe must be either a certified participant, inactive, or not
+    /// visible. Sum in 64 bits so a forged overflowing counter tuple fails
+    /// rather than wrapping into the physical extent.
+    /// </summary>
+    public static bool HasExactCertifiedPopulation(
+        int auditPhysicalProbeCount,
+        uint expectedParticipantCount,
+        uint excludedInactiveCount,
+        uint excludedNotVisibleCount) =>
+        auditPhysicalProbeCount > 0 &&
+        (ulong)expectedParticipantCount + excludedInactiveCount +
+            excludedNotVisibleCount == (ulong)auditPhysicalProbeCount;
+}
+
+internal static class SimpleDdgiAuditLifecycleContract
+{
+    /// <summary>
+    /// Stamps only a successfully submitted audit chunk. Audit freeze may
+    /// begin while polling feedback in renderer BeginFrame, before the manager
+    /// advances to the new scheduler frame; therefore freeze itself must leave
+    /// both lifecycle serials unset.
+    /// </summary>
+    public static SimpleDdgiTransportTailSummary StampSuccessfulChunk(
+        ulong schedulerFrameSerial,
+        uint chunkIndex,
+        ref ulong firstSubmissionFrameSerial,
+        ref ulong finalSubmissionFrameSerial,
+        in SimpleDdgiTransportTailSummary summary)
+    {
+        if (schedulerFrameSerial is 0UL or ulong.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(schedulerFrameSerial));
+        }
+        if (chunkIndex == 0u)
+        {
+            if (firstSubmissionFrameSerial != 0UL ||
+                finalSubmissionFrameSerial != 0UL ||
+                summary.ChunkCount != 0u)
+            {
+                throw new InvalidOperationException(
+                    "The first audit chunk cannot overwrite an existing lifecycle.");
+            }
+            firstSubmissionFrameSerial = schedulerFrameSerial;
+        }
+        else if (firstSubmissionFrameSerial == 0UL ||
+                 finalSubmissionFrameSerial == 0UL ||
+                 summary.ChunkCount != chunkIndex ||
+                 schedulerFrameSerial < finalSubmissionFrameSerial)
+        {
+            throw new InvalidOperationException(
+                "Later audit chunks require an exact, nondecreasing prior lifecycle.");
+        }
+
+        finalSubmissionFrameSerial = schedulerFrameSerial;
+        return summary with
+        {
+            FirstFrameSerial = firstSubmissionFrameSerial,
+            FinalFrameSerial = finalSubmissionFrameSerial,
+            ChunkCount = checked(chunkIndex + 1u),
+            IsComplete = false,
+            Reason = SimpleDdgiTransportCertificationReason.AuditInProgress
+        };
+    }
 }
 
 /// <summary>

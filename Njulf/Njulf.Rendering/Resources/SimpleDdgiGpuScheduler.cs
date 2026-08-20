@@ -996,8 +996,10 @@ public sealed unsafe class SimpleDdgiGpuScheduler : IDisposable
             uint* feedbackWords = (uint*)_bufferManager.GetMappedPointer(readback);
             feedback = *(GPUSimpleDdgiSchedulerFeedback*)feedbackWords;
 
-            uint expectedLow = checked((uint)_feedbackSubmittedFrameSerial[frameIndex]);
-            uint expectedHigh = checked((uint)(_feedbackSubmittedFrameSerial[frameIndex] >> 32));
+            uint expectedLow = SimpleDdgiFrameSerialContract.LowWord(
+                _feedbackSubmittedFrameSerial[frameIndex]);
+            uint expectedHigh = SimpleDdgiFrameSerialContract.HighWord(
+                _feedbackSubmittedFrameSerial[frameIndex]);
             bool generationMatches = feedback.SchedulerResourceGeneration ==
                 _feedbackSubmittedResourceGeneration[frameIndex];
             // A resize, mode transition, or descriptor replacement invalidates

@@ -628,7 +628,14 @@ namespace Njulf.Rendering.Pipeline
     /// </summary>
     public sealed unsafe class SimpleDdgiTransportAuditPass : RenderPassBase
     {
-        internal const int MaximumChunksPerFrame = 2;
+        internal const int MaximumChunksPerFrame =
+            (int)SimpleDdgiAuditCardinalityContract
+                .MaximumChunksPerSubmittedFrame;
+        internal const AccessFlags2 InterChunkDestinationAccess =
+            AccessFlags2.ShaderStorageReadBit |
+            AccessFlags2.ShaderStorageWriteBit |
+            AccessFlags2.TransferReadBit |
+            AccessFlags2.TransferWriteBit;
         private const string LegacyShader = "ddgi_simple_transport_audit_legacy.comp.spv";
         private const string ValidateShader = "ddgi_simple_transport_audit_validate.comp.spv";
         private const string PackedShader = "ddgi_simple_transport_audit_packed.comp.spv";
@@ -916,9 +923,10 @@ namespace Njulf.Rendering.Pipeline
                 SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
                 DstStageMask = PipelineStageFlags2.ComputeShaderBit |
                                PipelineStageFlags2.TransferBit,
-                DstAccessMask = AccessFlags2.ShaderStorageReadBit |
-                                AccessFlags2.ShaderStorageWriteBit |
-                                AccessFlags2.TransferReadBit
+                // The next chunk begins by clearing the reused workspace with
+                // CmdFillBuffer. Include transfer write as well as the final
+                // readback path so compute writes cannot race that WAW reuse.
+                DstAccessMask = InterChunkDestinationAccess
             };
             var dependencyInfo = new DependencyInfo
             {

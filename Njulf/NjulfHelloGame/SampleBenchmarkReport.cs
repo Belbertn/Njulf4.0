@@ -108,6 +108,8 @@ public sealed record SampleBenchmarkDdgiTransientWindow(
     int CertificateLatencyFrames,
     ulong FirstSubmittedFrameSerial,
     ulong LastSubmittedFrameSerial,
+    ulong FirstSubmittedSchedulerFrameSerial,
+    ulong LastSubmittedSchedulerFrameSerial,
     IReadOnlyList<SampleBenchmarkDdgiTransientFrame> Frames);
 
 public sealed record SampleBenchmarkDdgiTransientEvidence(

@@ -3335,7 +3335,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 1,
                 (Math.Max(0, _probeCount) + TransportAuditProbeChunkSize - 1) /
                 TransportAuditProbeChunkSize));
-            _transportAuditFirstFrameSerial = _frameSerial;
+            // Feedback can open the audit before Upload advances the manager
+            // into this submission's scheduler-frame domain. The first
+            // successful chunk submission owns the real first serial.
+            _transportAuditFirstFrameSerial = 0UL;
             _transportAuditFinalSubmissionFrameSerial = 0UL;
             _transportAuditExpectedParticipantCount = Math.Max(
                 0,
@@ -3350,6 +3353,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 Generations = _transportAuditGenerations,
                 ExpectedParticipantCount = checked((uint)_transportAuditExpectedParticipantCount),
                 ExpectedTexelCount = checked((uint)_transportAuditExpectedTexelCount),
+                FirstFrameSerial = 0UL,
+                FinalFrameSerial = 0UL,
+                ChunkCount = 0u,
+                IsComplete = false,
                 Reason = SimpleDdgiTransportCertificationReason.AuditInProgress
             };
             return true;
@@ -3399,8 +3406,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
             _transportAuditProbeCursor = checked(
                 _transportAuditProbeCursor + dispatch.ProbeCount);
-            if (dispatch.IsFinal)
-                _transportAuditFinalSubmissionFrameSerial = _frameSerial;
+            _transportTailSummary =
+                SimpleDdgiAuditLifecycleContract.StampSuccessfulChunk(
+                    _frameSerial,
+                    dispatch.ChunkIndex,
+                    ref _transportAuditFirstFrameSerial,
+                    ref _transportAuditFinalSubmissionFrameSerial,
+                    _transportTailSummary);
             return true;
         }
 
@@ -14155,8 +14167,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _transportPeriodicSourceRefreshWavePending
                         ? _transportPeriodicSourceRefreshWaveCutoffFrame
                         : _transportNextPeriodicSourceRefreshFrame,
-                FrameSerialLow = ClampToUint(_frameSerial),
-                FrameSerialHigh = ClampToUint(_frameSerial >> 32),
+                FrameSerialLow =
+                    SimpleDdgiFrameSerialContract.LowWord(_frameSerial),
+                FrameSerialHigh =
+                    SimpleDdgiFrameSerialContract.HighWord(_frameSerial),
                 VolumeTableGeneration = _volumeTableGeneration,
                 SchedulerResourceGeneration = _gpuScheduler.ResourceGeneration,
                 // A resident frame has no CPU-authored queue transaction. The
@@ -19621,6 +19635,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
         private void BeginFrameResourceRetirement()
         {
+            if (_frameSerial >= ulong.MaxValue - 1UL)
+            {
+                throw new InvalidOperationException(
+                    "Simple-DDGI scheduler frame serial exhausted; entering " +
+                    "the MaxValue sentinel or wrapping to zero would alias " +
+                    "delayed feedback and audit lifecycle state.");
+            }
             _frameSerial++;
             long retirementStart = Stopwatch.GetTimestamp();
             int destroyed = DrainRetiredResources(force: false);
