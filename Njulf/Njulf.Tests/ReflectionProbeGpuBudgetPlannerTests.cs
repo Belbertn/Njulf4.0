@@ -87,6 +87,7 @@ public sealed class ReflectionProbeGpuBudgetPlannerTests
         var planner = new ReflectionProbeGpuBudgetPlanner();
         ReflectionProbeLifecycleSnapshot lifecycle = default;
         var slotZero = new ReflectionProbeSubmittedFrameTelemetry(
+            FrameSlot: 0,
             FrameSerial: 20UL,
             CaptureFaceUnitCount: 1,
             PrefilterMipUnitCount: 0,
@@ -94,6 +95,7 @@ public sealed class ReflectionProbeGpuBudgetPlannerTests
             GpuTimingRecorded: true,
             Lifecycle: lifecycle);
         var slotOne = new ReflectionProbeSubmittedFrameTelemetry(
+            FrameSlot: 1,
             FrameSerial: 21UL,
             CaptureFaceUnitCount: 4,
             PrefilterMipUnitCount: 0,
@@ -139,6 +141,7 @@ public sealed class ReflectionProbeGpuBudgetPlannerTests
     {
         var planner = new ReflectionProbeGpuBudgetPlanner();
         var submitted = new ReflectionProbeSubmittedFrameTelemetry(
+            FrameSlot: 0,
             FrameSerial: 30UL,
             CaptureFaceUnitCount: 1,
             PrefilterMipUnitCount: 0,

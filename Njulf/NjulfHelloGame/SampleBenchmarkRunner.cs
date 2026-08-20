@@ -613,6 +613,7 @@ public sealed class SampleBenchmarkAnalyzer
         new("SkinningPass", d => d.GpuSkinningMicroseconds),
         new("ReflectionProbeCapture", d => d.GpuReflectionProbeCaptureMicroseconds),
         new("ReflectionProbePrefilter", d => d.GpuReflectionProbePrefilterMicroseconds),
+        new("ReflectionProbePublish", d => d.GpuReflectionProbePublishMicroseconds),
         new("FoliageCullPass", d => d.GpuFoliageCullMicroseconds),
         new("FoliageDepth", d => d.GpuFoliageDepthMicroseconds),
         new("FoliageForward", d => d.GpuFoliageForwardMicroseconds),

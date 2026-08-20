@@ -86,8 +86,10 @@ namespace Njulf.Rendering.Resources
         private ReflectionProbeCaptureFrameCounters _captureFrameCounters;
         private readonly ReflectionProbeSubmittedFrameRing _submittedCaptureFrames = new();
         private ReflectionProbeSubmittedFrameTelemetry _lastCompletedCaptureFrame;
+        private bool _lastCompletedCaptureFrameValid;
         private int _captureFrameSlot = -1;
         private ulong _captureFrameSerial;
+        private bool _captureFrameGpuTimingRecorded;
         private bool _captureFrameBegun;
         private uint _lastAuthoredRevision;
         private ulong _lastSelectionSettingsSignature;
@@ -171,6 +173,19 @@ namespace Njulf.Rendering.Resources
                 _capturedProbeIds.Count,
                 _capturesCompletedTotal,
                 _captureFrameCounters);
+        public ReflectionProbeLifecycleFrameSnapshot CurrentCaptureLifecycle =>
+            _captureFrameBegun
+                ? new ReflectionProbeLifecycleFrameSnapshot(
+                    Valid: true,
+                    _captureFrameSlot,
+                    _captureFrameSerial,
+                    _captureFrameGpuTimingRecorded,
+                    CaptureLifecycle)
+                : default;
+        public ReflectionProbeLifecycleFrameSnapshot CompletedCaptureLifecycle =>
+            _lastCompletedCaptureFrameValid
+                ? _lastCompletedCaptureFrame.ToLifecycleFrameSnapshot()
+                : default;
         internal ReflectionProbeSubmittedFrameTelemetry LastCompletedCaptureFrame =>
             _lastCompletedCaptureFrame;
         public ReflectionProbeGpuBudgetSnapshot CaptureGpuBudget => _gpuBudgetPlanner.GetSnapshot();
@@ -508,7 +523,10 @@ namespace Njulf.Rendering.Resources
         /// and lifecycle pulses. It must run after this frame slot's timestamp
         /// queries are read and before completion polling or new work.
         /// </summary>
-        public void BeginCaptureFrame(int frameSlot, ulong frameSerial)
+        public void BeginCaptureFrame(
+            int frameSlot,
+            ulong frameSerial,
+            bool gpuTimingRecorded)
         {
             RenderingConstants.ValidateFrameIndex(frameSlot);
             if (_captureFrameBegun)
@@ -519,6 +537,7 @@ namespace Njulf.Rendering.Resources
 
             _captureFrameSlot = frameSlot;
             _captureFrameSerial = frameSerial;
+            _captureFrameGpuTimingRecorded = gpuTimingRecorded;
             _captureFrameBegun = true;
             _gpuBudgetPlanner.BeginFrame(
                 _settings.Reflections.ReflectionCaptureGpuBudgetMicroseconds);
@@ -710,10 +729,12 @@ namespace Njulf.Rendering.Resources
                     out ReflectionProbeSubmittedFrameTelemetry submittedFrame))
             {
                 _lastCompletedCaptureFrame = default;
+                _lastCompletedCaptureFrameValid = false;
                 return;
             }
 
             _lastCompletedCaptureFrame = submittedFrame;
+            _lastCompletedCaptureFrameValid = true;
             _gpuBudgetPlanner.RecordTiming(
                 submittedFrame,
                 captureMicroseconds,
@@ -733,7 +754,8 @@ namespace Njulf.Rendering.Resources
             RenderingConstants.ValidateFrameIndex(frameSlot);
             if (!_captureFrameBegun ||
                 frameSlot != _captureFrameSlot ||
-                frameSerial != _captureFrameSerial)
+                frameSerial != _captureFrameSerial ||
+                gpuTimingRecorded != _captureFrameGpuTimingRecorded)
             {
                 throw new InvalidOperationException(
                     "Reflection capture submission does not match the active frame boundary.");
@@ -743,6 +765,7 @@ namespace Njulf.Rendering.Resources
             _submittedCaptureFrames.MarkSubmitted(
                 frameSlot,
                 new ReflectionProbeSubmittedFrameTelemetry(
+                    frameSlot,
                     frameSerial,
                     _captureFrameCounters.CaptureFaceUnitsThisFrame,
                     _captureFrameCounters.PrefilterMipUnitsThisFrame,

@@ -600,7 +600,8 @@ namespace Njulf.Rendering.Data
         long CpuReflectionProbeCaptureRecordMicroseconds,
         long CpuReflectionProbePrefilterRecordMicroseconds,
         long GpuReflectionProbeCaptureMicroseconds,
-        long GpuReflectionProbePrefilterMicroseconds)
+        long GpuReflectionProbePrefilterMicroseconds,
+        long GpuReflectionProbePublishMicroseconds)
     {
         [Obsolete("This value is addressable receiver capacity, not emitted work. Use ForwardShadowReceiverMeshletCapacity.")]
         public int ForwardShadowReceiverMeshletCount => ForwardShadowReceiverMeshletCapacity;
@@ -1986,7 +1987,11 @@ namespace Njulf.Rendering.Data
         public ulong ReflectionProbeRetiredCount { get; init; }
         public ulong ReflectionProbeCapturesCompletedTotal { get; init; }
         public int ReflectionProbePublishedCount { get; init; }
+        public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCurrentLifecycle { get; init; }
+        public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCompletedLifecycle { get; init; }
+        /// <summary>Current-frame planner reservation in microseconds.</summary>
         public int ReflectionProbeCaptureBudgetUsed { get; init; }
+        /// <summary>One when the current-frame planner reservation exhausted its budget.</summary>
         public int ReflectionProbeCaptureBudgetExceeded { get; init; }
         public ulong StagingBufferAllocatedBytes { get; init; }
         public ulong StagingBytesUsedThisFrame { get; init; }
@@ -2267,7 +2272,8 @@ namespace Njulf.Rendering.Data
             CpuReflectionProbeCaptureRecordMicroseconds: 0,
             CpuReflectionProbePrefilterRecordMicroseconds: 0,
             GpuReflectionProbeCaptureMicroseconds: 0,
-            GpuReflectionProbePrefilterMicroseconds: 0);
+            GpuReflectionProbePrefilterMicroseconds: 0,
+            GpuReflectionProbePublishMicroseconds: 0);
 
         public uint TileCount => TileCountX * TileCountY;
     }

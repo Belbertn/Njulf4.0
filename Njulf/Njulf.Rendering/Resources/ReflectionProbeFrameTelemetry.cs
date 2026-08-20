@@ -25,10 +25,23 @@ public readonly record struct ReflectionProbeLifecycleSnapshot(
     ulong PublishCopyUnitsTotal);
 
 /// <summary>
+/// Lifecycle evidence pinned to an explicit renderer frame-slot identity.
+/// Current and completed snapshots use the same shape so consumers cannot
+/// accidentally interpret a completed workload as current-frame state.
+/// </summary>
+public readonly record struct ReflectionProbeLifecycleFrameSnapshot(
+    bool Valid,
+    int FrameSlot,
+    ulong FrameSerial,
+    bool GpuTimingRecorded,
+    ReflectionProbeLifecycleSnapshot Lifecycle);
+
+/// <summary>
 /// Work and lifecycle state owned by one successfully submitted renderer frame
 /// slot. The matching completed timestamp query must consume this exact slot.
 /// </summary>
 internal readonly record struct ReflectionProbeSubmittedFrameTelemetry(
+    int FrameSlot,
     ulong FrameSerial,
     int CaptureFaceUnitCount,
     int PrefilterMipUnitCount,
@@ -40,6 +53,14 @@ internal readonly record struct ReflectionProbeSubmittedFrameTelemetry(
         CaptureFaceUnitCount > 0 ||
         PrefilterMipUnitCount > 0 ||
         PublishCopyUnitCount > 0;
+
+    public ReflectionProbeLifecycleFrameSnapshot ToLifecycleFrameSnapshot() =>
+        new(
+            Valid: true,
+            FrameSlot,
+            FrameSerial,
+            GpuTimingRecorded,
+            Lifecycle);
 }
 
 /// <summary>
@@ -65,6 +86,12 @@ internal sealed class ReflectionProbeSubmittedFrameRing
         in ReflectionProbeSubmittedFrameTelemetry frame)
     {
         ValidateFrameSlot(frameSlot);
+        if (frame.FrameSlot != frameSlot)
+        {
+            throw new ArgumentException(
+                $"Reflection frame identity names slot {frame.FrameSlot}, but was submitted to slot {frameSlot}.",
+                nameof(frame));
+        }
         if (_pending[frameSlot])
         {
             throw new InvalidOperationException(
@@ -103,6 +130,17 @@ internal sealed class ReflectionProbeSubmittedFrameRing
         if ((uint)frameSlot >= (uint)_frames.Length)
             throw new ArgumentOutOfRangeException(nameof(frameSlot));
     }
+}
+
+internal static class ReflectionProbeTelemetryValueMapper
+{
+    public static int CaptureBudgetUsedMicroseconds(
+        in ReflectionProbeGpuBudgetSnapshot budget) =>
+        Math.Max(0, budget.ReservedMicroseconds);
+
+    public static int CaptureBudgetExceeded(
+        in ReflectionProbeGpuBudgetSnapshot budget) =>
+        budget.BudgetExhausted ? 1 : 0;
 }
 
 /// <summary>

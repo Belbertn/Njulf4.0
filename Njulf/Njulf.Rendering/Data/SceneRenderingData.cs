@@ -666,11 +666,15 @@ namespace Njulf.Rendering.Data
         public int ReflectionProbeCapturesCompleted { get; set; }
         public ulong ReflectionProbeCapturesCompletedTotal { get; set; }
         public int ReflectionProbePublishedCount { get; set; }
+        public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCurrentLifecycle { get; set; }
+        public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCompletedLifecycle { get; set; }
+        public ReflectionProbeGpuBudgetSnapshot ReflectionProbeCaptureBudget { get; set; }
         public long CpuReflectionProbeUploadMicroseconds { get; set; }
         public long CpuReflectionProbeCaptureRecordMicroseconds { get; set; }
         public long CpuReflectionProbePrefilterRecordMicroseconds { get; set; }
         public long GpuReflectionProbeCaptureMicroseconds { get; set; }
         public long GpuReflectionProbePrefilterMicroseconds { get; set; }
+        public long GpuReflectionProbePublishMicroseconds { get; set; }
         public bool AmbientOcclusionEnabled { get; set; }
         public AmbientOcclusionMode AmbientOcclusionMode { get; set; } = AmbientOcclusionMode.Disabled;
         public AmbientOcclusionDebugView AmbientOcclusionDebugView { get; set; } = AmbientOcclusionDebugView.None;
@@ -2106,11 +2110,15 @@ namespace Njulf.Rendering.Data
             ReflectionProbeCapturesCompleted = 0;
             ReflectionProbeCapturesCompletedTotal = 0;
             ReflectionProbePublishedCount = 0;
+            ReflectionProbeCurrentLifecycle = default;
+            ReflectionProbeCompletedLifecycle = default;
+            ReflectionProbeCaptureBudget = default;
             CpuReflectionProbeUploadMicroseconds = 0;
             CpuReflectionProbeCaptureRecordMicroseconds = 0;
             CpuReflectionProbePrefilterRecordMicroseconds = 0;
             GpuReflectionProbeCaptureMicroseconds = 0;
             GpuReflectionProbePrefilterMicroseconds = 0;
+            GpuReflectionProbePublishMicroseconds = 0;
             AmbientOcclusionEnabled = false;
             AmbientOcclusionMode = AmbientOcclusionMode.Disabled;
             AmbientOcclusionDebugView = AmbientOcclusionDebugView.None;

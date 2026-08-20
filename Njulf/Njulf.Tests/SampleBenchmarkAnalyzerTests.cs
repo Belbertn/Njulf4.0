@@ -1015,6 +1015,47 @@ public sealed class SampleBenchmarkAnalyzerTests
     }
 
     [Test]
+    public void CreateReport_ReconcilesReflectionPublishTimingWithGpuFrame()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        analyzer.AddSample(RendererDiagnostics.Empty with
+        {
+            GpuTimingSupported = 1,
+            GpuTimingValid = 1,
+            GpuReflectionProbePublishMicroseconds = 417,
+            GpuFrameMicroseconds = 417
+        }, RenderBudgetSnapshot.Empty);
+
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            new SampleBenchmarkOptions(true, 0, 1, null),
+            SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle,
+            warmupFrameCount: 0,
+            measurementFrameCount: 1,
+            firstMeasurementFrameIndex: 0,
+            lastMeasurementFrameIndex: 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                report.GpuPasses.Single(pass =>
+                        pass.Name == "ReflectionProbePublish")
+                    .AverageMilliseconds,
+                Is.EqualTo(0.417));
+            Assert.That(
+                report.GpuIndependentPassSumMilliseconds.AverageMilliseconds,
+                Is.EqualTo(0.417));
+            Assert.That(
+                report.GpuUnexplainedMilliseconds.AverageMilliseconds,
+                Is.Zero);
+            Assert.That(report.CaptureContract.Mismatches.Any(mismatch =>
+                mismatch.Contains(
+                    "GPU pass sum differs",
+                    StringComparison.Ordinal)),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void CreateReport_EmitsEmptyCpuCohortsAndNoSlowFramesWithoutSamples()
     {
         var analyzer = new SampleBenchmarkAnalyzer();

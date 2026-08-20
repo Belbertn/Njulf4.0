@@ -3270,13 +3270,16 @@ namespace Njulf.Rendering
             _swapchainImageTransitionedThisFrame = false;
             _lastQueueSubmitMicroseconds = 0;
             _lastAsyncComputeSubmitMicroseconds = 0;
-            BeginReflectionProbeCaptureFrame();
+            bool gpuTimingRequested =
+                Settings.Debug.AllowGpuTiming ||
+                _simpleDdgiNearFieldResidualRuntime is { IsActive: true };
+            BeginReflectionProbeCaptureFrame(
+                _gpuTimestamps.Supported && gpuTimingRequested);
             _frameInProgress = true;
             _gpuTimestamps.BeginFrame(
                 _currentCommandBuffer,
                 _currentFrame,
-                Settings.Debug.AllowGpuTiming ||
-                _simpleDdgiNearFieldResidualRuntime is { IsActive: true });
+                gpuTimingRequested);
 
             return true;
         }
@@ -4158,6 +4161,8 @@ namespace Njulf.Rendering
             }
 
             RecordReflectionProbeWork(sceneData);
+            if (reflectionsAllowed)
+                UpdateReflectionProbeTelemetry(sceneData);
             FinalizeSimpleDdgiReceiverFeedbackCapture();
 
             // SceneColor still contains the linear, pre-exposure result here.
@@ -6949,7 +6954,8 @@ namespace Njulf.Rendering
                 CpuReflectionProbeCaptureRecordMicroseconds: sceneData.CpuReflectionProbeCaptureRecordMicroseconds,
                 CpuReflectionProbePrefilterRecordMicroseconds: sceneData.CpuReflectionProbePrefilterRecordMicroseconds,
                 GpuReflectionProbeCaptureMicroseconds: sceneData.GpuReflectionProbeCaptureMicroseconds,
-                GpuReflectionProbePrefilterMicroseconds: sceneData.GpuReflectionProbePrefilterMicroseconds)
+                GpuReflectionProbePrefilterMicroseconds: sceneData.GpuReflectionProbePrefilterMicroseconds,
+                GpuReflectionProbePublishMicroseconds: sceneData.GpuReflectionProbePublishMicroseconds)
             {
                 StableSceneInputUploadBytes = sceneData.StableSceneInputUploadBytes,
                 CpuCandidateListUploadBytes = sceneData.CpuCandidateListUploadBytes,
@@ -8868,8 +8874,16 @@ namespace Njulf.Rendering
                      sceneData.ReflectionProbeCapturesCompletedTotal,
                  ReflectionProbePublishedCount =
                      sceneData.ReflectionProbePublishedCount,
-                 ReflectionProbeCaptureBudgetUsed = sceneData.ReflectionProbeCapturesCompleted,
-                 ReflectionProbeCaptureBudgetExceeded = _reflectionProbeManager?.ReflectionCaptureBudgetExceeded ?? 0,
+                 ReflectionProbeCurrentLifecycle =
+                     sceneData.ReflectionProbeCurrentLifecycle,
+                 ReflectionProbeCompletedLifecycle =
+                     sceneData.ReflectionProbeCompletedLifecycle,
+                 ReflectionProbeCaptureBudgetUsed =
+                     ReflectionProbeTelemetryValueMapper.CaptureBudgetUsedMicroseconds(
+                         sceneData.ReflectionProbeCaptureBudget),
+                 ReflectionProbeCaptureBudgetExceeded =
+                     ReflectionProbeTelemetryValueMapper.CaptureBudgetExceeded(
+                         sceneData.ReflectionProbeCaptureBudget),
                 StagingBufferAllocatedBytes = _stagingRing.TotalAllocatedBytes,
                 StagingBytesUsedThisFrame = _stagingRing.CurrentFrameBytesUsed,
                 StagingBytesPeakThisSession = _stagingRing.PeakBytesThisSession,
@@ -12160,7 +12174,7 @@ namespace Njulf.Rendering
             return 0;
         }
 
-        private static long CalculateGpuFrameMicroseconds(SceneRenderingData sceneData)
+        internal static long CalculateGpuFrameMicroseconds(SceneRenderingData sceneData)
         {
             return sceneData.GpuDepthPrePassMicroseconds +
                 sceneData.GpuDirectionalShadowMicroseconds +
@@ -12191,7 +12205,8 @@ namespace Njulf.Rendering
                 sceneData.GpuCompositeMicroseconds +
                 sceneData.GpuSkinningMicroseconds +
                 sceneData.GpuReflectionProbeCaptureMicroseconds +
-                sceneData.GpuReflectionProbePrefilterMicroseconds;
+                sceneData.GpuReflectionProbePrefilterMicroseconds +
+                sceneData.GpuReflectionProbePublishMicroseconds;
         }
 
         internal static GlobalIlluminationMode ResolveEffectiveGlobalIlluminationMode(
@@ -12259,7 +12274,7 @@ namespace Njulf.Rendering
             return timings.TryGetPass(passName, out PassTiming timing) && timing.GpuAvailable;
         }
 
-        private static void ApplyCompletedGpuTimings(SceneRenderingData sceneData, FrameTimingSnapshot timings)
+        internal static void ApplyCompletedGpuTimings(SceneRenderingData sceneData, FrameTimingSnapshot timings)
         {
             sceneData.GpuSkinningMicroseconds = timings.GetGpuMicrosecondsOrZero("SkinningPass");
             sceneData.GpuDirectionalShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("DirectionalShadowPass");
@@ -12271,10 +12286,21 @@ namespace Njulf.Rendering
                 timings.GetGpuMicrosecondsOrZero("DirectionalShadowSpatialPass");
             sceneData.GpuSpotShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("SpotShadowPass");
             sceneData.GpuPointShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("PointShadowPass");
+            bool reflectionTimingsMatchCompletedLifecycle =
+                sceneData.ReflectionProbeCompletedLifecycle.Valid &&
+                sceneData.ReflectionProbeCompletedLifecycle.GpuTimingRecorded;
             sceneData.GpuReflectionProbeCaptureMicroseconds =
-                timings.GetGpuMicrosecondsOrZero("ReflectionProbeCapturePass");
+                reflectionTimingsMatchCompletedLifecycle
+                    ? timings.GetGpuMicrosecondsOrZero("ReflectionProbeCapturePass")
+                    : 0;
             sceneData.GpuReflectionProbePrefilterMicroseconds =
-                timings.GetGpuMicrosecondsOrZero("ReflectionProbePrefilterPass");
+                reflectionTimingsMatchCompletedLifecycle
+                    ? timings.GetGpuMicrosecondsOrZero("ReflectionProbePrefilterPass")
+                    : 0;
+            sceneData.GpuReflectionProbePublishMicroseconds =
+                reflectionTimingsMatchCompletedLifecycle
+                    ? timings.GetGpuMicrosecondsOrZero("ReflectionProbePublishPass")
+                    : 0;
             sceneData.GpuDepthPrePassMicroseconds = timings.GetGpuMicrosecondsOrZero("DepthPrePass");
             sceneData.GpuMotionVectorMicroseconds = timings.GetGpuMicrosecondsOrZero("MotionVectorPass");
             sceneData.GpuHiZBuildMicroseconds = timings.GetGpuMicrosecondsOrZero("HiZBuildPass");
@@ -12566,13 +12592,49 @@ namespace Njulf.Rendering
             sceneData.ReflectionProbeResolution = _reflectionProbeManager.ProbeResolution;
             sceneData.ReflectionProbeMipCount = _reflectionProbeManager.ProbeMipCount;
             sceneData.ReflectionProbeEstimatedBytes = _reflectionProbeManager.EstimatedBytes;
-            sceneData.ReflectionProbeCapturesQueued = _reflectionProbeManager.CapturesQueued;
-            sceneData.ReflectionProbeCapturesCompleted = _reflectionProbeManager.CapturesCompleted;
-            sceneData.ReflectionProbeCapturesCompletedTotal =
-                _reflectionProbeManager.CapturesCompletedTotal;
-            sceneData.ReflectionProbePublishedCount =
-                _reflectionProbeManager.PublishedProbeCount;
+            UpdateReflectionProbeTelemetry(sceneData);
             sceneData.CpuReflectionProbeUploadMicroseconds = _reflectionProbeManager.LastUploadMicroseconds;
+        }
+
+        private void UpdateReflectionProbeTelemetry(SceneRenderingData sceneData)
+        {
+            if (_reflectionProbeManager == null)
+                return;
+
+            ApplyReflectionProbeTelemetry(
+                sceneData,
+                _reflectionProbeManager.CurrentCaptureLifecycle,
+                _reflectionProbeManager.CompletedCaptureLifecycle,
+                _reflectionProbeManager.CaptureGpuBudget);
+        }
+
+        internal static void ApplyReflectionProbeTelemetry(
+            SceneRenderingData sceneData,
+            in ReflectionProbeLifecycleFrameSnapshot current,
+            in ReflectionProbeLifecycleFrameSnapshot completed,
+            in ReflectionProbeGpuBudgetSnapshot budget)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+            sceneData.ReflectionProbeCurrentLifecycle = current;
+            sceneData.ReflectionProbeCompletedLifecycle = completed;
+            sceneData.ReflectionProbeCaptureBudget = budget;
+
+            ReflectionProbeLifecycleSnapshot lifecycle = current.Lifecycle;
+            sceneData.ReflectionProbeCapturesQueued = current.Valid
+                ? checked(
+                    lifecycle.QueuedCount +
+                    lifecycle.ActiveCount +
+                    lifecycle.AwaitingGpuCompletionCount)
+                : 0;
+            sceneData.ReflectionProbeCapturesCompleted = current.Valid
+                ? lifecycle.CapturesCompletedThisFrame
+                : 0;
+            sceneData.ReflectionProbeCapturesCompletedTotal = current.Valid
+                ? lifecycle.CapturesCompletedTotal
+                : 0UL;
+            sceneData.ReflectionProbePublishedCount = current.Valid
+                ? lifecycle.PublishedCount
+                : 0;
         }
 
         /// <summary>
@@ -12580,14 +12642,15 @@ namespace Njulf.Rendering
         /// completed timestamp snapshot and submitted workload are consumed from the exact same
         /// renderer frame slot before completion polling can emit this frame's lifecycle pulses.
         /// </summary>
-        private void BeginReflectionProbeCaptureFrame()
+        private void BeginReflectionProbeCaptureFrame(bool gpuTimingRecorded)
         {
             if (_reflectionProbeManager == null)
                 return;
 
             _reflectionProbeManager.BeginCaptureFrame(
                 _currentFrame,
-                _ddgiFrameSerial);
+                _ddgiFrameSerial,
+                gpuTimingRecorded);
             FrameTimingSnapshot completedReflectionTimings =
                 _gpuTimestamps.LastCompletedSnapshot;
             _reflectionProbeManager.UpdateCaptureGpuTimingHistory(
@@ -13754,8 +13817,7 @@ namespace Njulf.Rendering
             // generation. UpdateCaptureVersions pins every scratch ticket to
             // the converged generation and supersedes incomplete face chains;
             // this ready edge is the only DDGI-driven recapture admission.
-            sceneData.ReflectionProbeCapturesQueued = _reflectionProbeManager.CapturesQueued;
-            sceneData.ReflectionProbeCapturesCompleted = _reflectionProbeManager.CapturesCompleted;
+            UpdateReflectionProbeTelemetry(sceneData);
             _lastReflectionProbeGiReady = giReady;
             _lastReflectionProbeSimpleDirtyReasonFlags = dirtyReasonFlags;
         }
