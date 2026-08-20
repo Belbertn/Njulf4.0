@@ -24,6 +24,14 @@ internal static class Program
 {
     public static int Main(string[] args)
     {
+        if (SampleBenchmarkDdgiTransientVerificationCli.TryRun(
+                args,
+                Console.Out,
+                Console.Error,
+                out int ddgiTransientVerificationExitCode))
+        {
+            return ddgiTransientVerificationExitCode;
+        }
         if (SampleTailDdgiQualificationCli.TryRun(
                 args,
                 Console.Out,

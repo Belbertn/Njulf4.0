@@ -7,7 +7,7 @@ using NUnit.Framework;
 namespace Njulf.Tests;
 
 [TestFixture]
-public sealed class SampleBenchmarkDdgiTransientEvidenceTests
+public sealed partial class SampleBenchmarkDdgiTransientEvidenceTests
 {
     private const int AuditPhysicalProbeCount = 768;
     private const int AuditActiveProbeCount = 512;
@@ -195,7 +195,15 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
             Assert.That(ordinary.SchedulerCompactedCandidateCount,
                 Is.EqualTo((uint)(70 + firstEdge + SolveOffset)));
             Assert.That(ordinary.SchedulerActiveWorkCount,
-                Is.EqualTo((uint)(10 + firstEdge + SolveOffset)));
+                Is.EqualTo((uint)(50 + firstEdge + SolveOffset)));
+            Assert.That(
+                ordinary.SchedulerHardSourceParticipantCount +
+                ordinary.SchedulerRoutineSourceParticipantCount,
+                Is.EqualTo(ordinary.SchedulerSourceParticipantCount));
+            Assert.That(
+                ordinary.SchedulerSourceParticipantCount +
+                ordinary.SchedulerCachedParticipantCount,
+                Is.EqualTo(ordinary.SchedulerAcceptedWorkCount));
             Assert.That(ordinary.SchedulerSolveEpoch,
                 Is.EqualTo(ordinary.Submitted.TailCertificate.SolveEpoch));
             Assert.That(ordinary.SchedulerSolveParticipantCount,
@@ -730,11 +738,28 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
             firstCertificate: 70,
             secondCertificate: 190,
             serialBase: 0UL);
+        SampleBenchmarkDdgiTransientVerification verification =
+            SampleBenchmarkDdgiTransientEvidenceEvaluator.Verify(report);
 
         Assert.That(report.DdgiTransientEvidence.Available, Is.True,
             string.Join(Environment.NewLine, report.DdgiTransientEvidence.Failures));
-        Assert.That(report.DdgiTransientEvidence.Windows[0]
-            .FirstSubmittedFrameSerial, Is.EqualTo(60UL));
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.DdgiTransientRawEvidence.Frames[0]
+                .CaptureFrameSerial, Is.Zero);
+            Assert.That(report.DdgiTransientRawEvidence.Frames[1]
+                .CaptureFrameSerial, Is.EqualTo(1UL));
+            Assert.That(report.DdgiTransientRawEvidence.Frames[0]
+                .CompletionObserved,
+                Is.EqualTo(default(SimpleDdgiCompletedFrameEvidence)));
+            Assert.That(report.DdgiTransientRawEvidence.Frames[1]
+                .CompletionObserved,
+                Is.EqualTo(default(SimpleDdgiCompletedFrameEvidence)));
+            Assert.That(report.DdgiTransientEvidence.Windows[0]
+                .FirstSubmittedFrameSerial, Is.EqualTo(60UL));
+            Assert.That(verification.Passed, Is.True,
+                string.Join(Environment.NewLine, verification.Failures));
+        });
     }
 
     [TestCase(SimpleDdgiGpuPassMask.Schedule)]
@@ -1209,7 +1234,23 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                          earlyCompletionOrigin + RenderingConstants.FramesInFlight)
                     completedOrigin = int.MinValue;
             }
-
+            int submittedOrigin = completedOrigin;
+            if (submittedOrigin < 0 &&
+                submittedOrigin != int.MinValue &&
+                serialBase < (ulong)(-submittedOrigin))
+            {
+                // A renderer route beginning at serial zero has no representable
+                // pre-route submitted identity for these initial observations.
+                // The producer's canonical unavailable completion is exact.
+                submittedOrigin = int.MinValue;
+                completedOrigin = int.MinValue;
+            }
+            // Mutation selectors use negative values as disabled sentinels.
+            // Keep the two warmup-owned completions disjoint from those
+            // selectors while retaining their real route-relative -2/-1
+            // submitted serial identities.
+            if (completedOrigin < 0 && completedOrigin != int.MinValue)
+                completedOrigin = -1_000 - sampleIndex;
             SimpleDdgiCompletedFrameEvidence completed;
             if (completedOrigin == int.MinValue || completedOrigin == missingOrigin)
             {
@@ -1220,7 +1261,7 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                 bool measuredOrigin = completedOrigin >= 0;
                 int syntheticOrigin = measuredOrigin
                     ? completedOrigin
-                    : -100 + sampleIndex;
+                    : submittedOrigin;
                 uint sourceGeneration = measuredOrigin
                     ? SourceGeneration(
                         completedOrigin,
@@ -1914,6 +1955,13 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                         WarmupState = DdgiRuntimeWarmupState.SteadyState
                     },
                     CaptureCamera = camera,
+                    CaptureRun = PerformanceCaptureRunMetadata.Unknown with
+                    {
+                        Scenario = SamplePerformanceScenario
+                            .BistroQualityMotionRelight.ToString()
+                    },
+                    GpuTimingSupported = 1,
+                    GpuTimingValid = 1,
                     SimpleDdgiActive = sampleIndex == inactiveRouteIndex ? 0 : 1,
                     SimpleDdgiSourceLightingGeneration = SourceGeneration(
                         sampleIndex,
@@ -1941,7 +1989,7 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         };
         return analyzer.CreateReport(
             options,
-            SamplePerformanceScenario.Normal,
+            SamplePerformanceScenario.BistroQualityMotionRelight,
             warmupFrameCount: 0,
             measurementFrameCount: frameCount,
             firstMeasurementFrameIndex: 0,
@@ -1999,10 +2047,10 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
     {
         ulong frameSerial = originIndex >= 0
             ? routeSerialBase + (ulong)originIndex
-            : 9_000UL + (ulong)(originIndex + 100);
+            : checked(routeSerialBase - (ulong)(-originIndex));
         ulong schedulerFrameSerial = originIndex >= 0
             ? unchecked(schedulerSerialBase + (ulong)originIndex)
-            : 8_000UL + (ulong)(originIndex + 100);
+            : checked(schedulerSerialBase - (ulong)(-originIndex));
         uint transportGeneration = initialTransportGeneration;
         int acceleratedSolveOrigin = predecessorSolve
             ? solveOrigin - 1
@@ -2209,6 +2257,9 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
             SchedulerFeedbackTransportGeneration = scheduler
                 ? transportGeneration
                 : 0u,
+            SchedulerConsideredCandidateCount = scheduler
+                ? (uint)(80 + exactIndex)
+                : 0u,
             SchedulerCompactedCandidateCount = scheduler
                 ? (uint)(70 + exactIndex)
                 : 0u,
@@ -2224,7 +2275,16 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                     : 0u
                 : 0u,
             SchedulerActiveWorkCount = scheduler
-                ? (uint)(10 + exactIndex)
+                ? (uint)(50 + exactIndex)
+                : 0u,
+            SchedulerSourceParticipantCount = scheduler
+                ? 45u
+                : 0u,
+            SchedulerHardSourceParticipantCount = scheduler
+                ? 20u
+                : 0u,
+            SchedulerRoutineSourceParticipantCount = scheduler
+                ? 25u
                 : 0u,
             SchedulerCachedParticipantCount = scheduler
                 ? (uint)(5 + exactIndex)
@@ -2257,6 +2317,15 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                 : 0u,
             SchedulerBlockingTailSourceWorkCount = sourceRepairBlocking
                 ? 1u
+                : 0u,
+            SchedulerPrimaryRayCount = scheduler
+                ? (uint)(4_000 + exactIndex)
+                : 0u,
+            SchedulerSourceRayCount = scheduler
+                ? (uint)(2_000 + exactIndex)
+                : 0u,
+            SchedulerTransportRayCount = scheduler
+                ? (uint)(3_000 + 2 * exactIndex)
                 : 0u,
             SchedulerCachedRayCount = scheduler
                 ? (uint)(1_000 + exactIndex)

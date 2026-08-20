@@ -280,6 +280,10 @@ public static class SampleBenchmarkPairComparer
             SampleBenchmarkReflectionProbeCaptureEvaluator.Verify(report);
         foreach (string failure in reflectionVerification.Failures)
             failures.Add("Reflection capture evidence: " + failure);
+        SampleBenchmarkDdgiTransientVerification ddgiTransientVerification =
+            SampleBenchmarkDdgiTransientEvidenceEvaluator.Verify(report);
+        foreach (string failure in ddgiTransientVerification.Failures)
+            failures.Add("DDGI transient evidence: " + failure);
         return Array.AsReadOnly(
             failures.Distinct(StringComparer.Ordinal).ToArray());
     }

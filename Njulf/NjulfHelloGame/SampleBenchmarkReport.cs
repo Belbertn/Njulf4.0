@@ -10,23 +10,24 @@ namespace NjulfHelloGame;
 public sealed record SampleBenchmarkReport(
     string Kind,
     DateTimeOffset CapturedAtUtc,
-    SampleBenchmarkOptions Options,
-    SamplePerformanceScenario Scenario,
+    [property: JsonRequired] SampleBenchmarkOptions Options,
+    [property: JsonRequired] SamplePerformanceScenario Scenario,
     int WarmupFrameCount,
     int MeasurementFrameCount,
     int FirstMeasurementFrameIndex,
     int LastMeasurementFrameIndex,
     SampleBenchmarkTimingStats CpuFrameMilliseconds,
     SampleBenchmarkTimingStats GpuFrameMilliseconds,
-    int GpuTimingSupported,
-    int GpuTimingValidSampleCount,
+    [property: JsonRequired] int GpuTimingSupported,
+    [property: JsonRequired] int GpuTimingValidSampleCount,
     string GpuTimingUnavailableReason,
     IReadOnlyList<SampleBenchmarkTimingStats> GpuPasses,
     IReadOnlyList<SampleBenchmarkTimingStats> CpuStages,
     IReadOnlyList<SampleBenchmarkFinding> Findings,
     IReadOnlyList<BudgetMetric> BudgetMetrics,
-    RendererDiagnostics LastDiagnostics)
+    [property: JsonRequired] RendererDiagnostics LastDiagnostics)
 {
+    [JsonRequired]
     public string Schema { get; init; } =
         MaterialGiReleaseEvidenceContract.BenchmarkProducerSchema;
 
@@ -36,6 +37,7 @@ public sealed record SampleBenchmarkReport(
     public SampleDdgiProductionGateReport? DdgiProductionGate { get; init; }
     public IReadOnlyList<SampleGiAccuracyOracleResult> AccuracyOracleResults { get; init; } =
         Array.Empty<SampleGiAccuracyOracleResult>();
+    [JsonRequired]
     public SampleBenchmarkCaptureContract CaptureContract { get; init; } =
         SampleBenchmarkCaptureContract.Unavailable;
     public SampleBenchmarkTimingStats GpuIndependentPassSumMilliseconds { get; init; } =
@@ -65,6 +67,11 @@ public sealed record SampleBenchmarkReport(
         SampleBenchmarkMaterialTimingEvidence.Unavailable;
     public SampleBenchmarkCpuSpikeEvidence CpuSpikeEvidence { get; init; } =
         SampleBenchmarkCpuSpikeEvidence.Empty;
+    [JsonRequired]
+    public SampleBenchmarkDdgiTransientRawEvidence
+        DdgiTransientRawEvidence { get; init; } =
+            SampleBenchmarkDdgiTransientRawEvidence.NotApplicable;
+    [JsonRequired]
     public SampleBenchmarkDdgiTransientEvidence DdgiTransientEvidence { get; init; } =
         SampleBenchmarkDdgiTransientEvidence.NotApplicable;
     public SampleBenchmarkActivationEvidence ActivationEvidence { get; init; } =
@@ -87,37 +94,44 @@ public sealed record SampleBenchmarkReport(
 /// delay explicit instead of phase-shifting the values onto a later frame.
 /// </summary>
 public sealed record SampleBenchmarkDdgiTransientFrame(
-    int MeasurementSampleIndex,
-    int RouteFrameIndex,
-    int CompletionObservedMeasurementSampleIndex,
-    int CompletionObservedRouteFrameIndex,
-    SimpleDdgiCompletedFrameEvidence Completed);
+    [property: JsonRequired] int MeasurementSampleIndex,
+    [property: JsonRequired] int RouteFrameIndex,
+    [property: JsonRequired] int CompletionObservedMeasurementSampleIndex,
+    [property: JsonRequired] int CompletionObservedRouteFrameIndex,
+    [property: JsonRequired] SimpleDdgiCompletedFrameEvidence Completed);
 
 /// <summary>
 /// Deterministic relight interval from an observed source-generation edge
 /// through the first accepted complete certificate for that generation.
 /// </summary>
 public sealed record SampleBenchmarkDdgiTransientWindow(
-    int WindowIndex,
-    int AuthoredEventRouteFrameIndex,
-    int ObservedGenerationEdgeRouteFrameIndex,
-    int GenerationResponseLatencyFrames,
-    uint PreviousSourceLightingGeneration,
-    uint SourceLightingGeneration,
-    int AcceptedCertificateRouteFrameIndex,
-    int CertificateLatencyFrames,
-    ulong FirstSubmittedFrameSerial,
-    ulong LastSubmittedFrameSerial,
-    ulong FirstSubmittedSchedulerFrameSerial,
-    ulong LastSubmittedSchedulerFrameSerial,
-    IReadOnlyList<SampleBenchmarkDdgiTransientFrame> Frames);
+    [property: JsonRequired] int WindowIndex,
+    [property: JsonRequired] int AuthoredEventRouteFrameIndex,
+    [property: JsonRequired] int ObservedGenerationEdgeRouteFrameIndex,
+    [property: JsonRequired] int GenerationResponseLatencyFrames,
+    [property: JsonRequired] uint PreviousSourceLightingGeneration,
+    [property: JsonRequired] uint SourceLightingGeneration,
+    [property: JsonRequired] int AcceptedCertificateRouteFrameIndex,
+    [property: JsonRequired] int CertificateLatencyFrames,
+    [property: JsonRequired] ulong FirstSubmittedFrameSerial,
+    [property: JsonRequired] ulong LastSubmittedFrameSerial,
+    [property: JsonRequired] ulong FirstSubmittedSchedulerFrameSerial,
+    [property: JsonRequired] ulong LastSubmittedSchedulerFrameSerial,
+    [property: JsonRequired] IReadOnlyList<SampleBenchmarkDdgiTransientFrame> Frames);
 
 public sealed record SampleBenchmarkDdgiTransientEvidence(
-    bool Applicable,
-    bool Available,
-    IReadOnlyList<string> Failures,
-    IReadOnlyList<SampleBenchmarkDdgiTransientWindow> Windows)
+    [property: JsonRequired] bool Applicable,
+    [property: JsonRequired] bool Available,
+    [property: JsonRequired] IReadOnlyList<string> Failures,
+    [property: JsonRequired] IReadOnlyList<SampleBenchmarkDdgiTransientWindow> Windows)
 {
+    public const string CurrentSchema =
+        MaterialGiReleaseEvidenceContract
+            .BenchmarkDdgiTransientEvidenceSchema;
+
+    [JsonRequired]
+    public string Schema { get; init; } = CurrentSchema;
+
     public static SampleBenchmarkDdgiTransientEvidence NotApplicable { get; } =
         new(
             Applicable: false,
@@ -132,6 +146,21 @@ public sealed record SampleBenchmarkDdgiTransientEvidence(
             Available: false,
             Array.AsReadOnly(failures ?? Array.Empty<string>()),
             Array.Empty<SampleBenchmarkDdgiTransientWindow>());
+
+    public static SampleBenchmarkDdgiTransientEvidence Failed(
+        bool applicable,
+        IEnumerable<string> failures)
+    {
+        string[] distinct = failures
+            .Where(static failure => !string.IsNullOrWhiteSpace(failure))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return new SampleBenchmarkDdgiTransientEvidence(
+            applicable,
+            Available: false,
+            Array.AsReadOnly(distinct),
+            Array.Empty<SampleBenchmarkDdgiTransientWindow>());
+    }
 }
 
 public sealed record SampleBenchmarkTimingStats(

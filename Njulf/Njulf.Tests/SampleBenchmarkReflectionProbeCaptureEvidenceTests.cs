@@ -997,6 +997,11 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
                 0);
             frames[index] = RendererDiagnostics.Empty with
             {
+                CaptureRun = RendererDiagnostics.Empty.CaptureRun with
+                {
+                    Scenario = SamplePerformanceScenario
+                        .GiSponzaReflectionProbeLifecycle.ToString()
+                },
                 CaptureFrame = new PerformanceCaptureFrameMetadata(
                     serial,
                     (ulong)index,
@@ -1157,6 +1162,11 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
             copyTotal);
         baseline = RendererDiagnostics.Empty with
         {
+            CaptureRun = RendererDiagnostics.Empty.CaptureRun with
+            {
+                Scenario = SamplePerformanceScenario
+                    .GiSponzaReflectionProbeLifecycle.ToString()
+            },
             ReflectionProbeCount =
                 SampleBenchmarkActivation.SponzaReflectionProbeCount,
             ReflectionProbeResolution =
@@ -1273,6 +1283,11 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
                 : 0L;
             frames[index] = RendererDiagnostics.Empty with
             {
+                CaptureRun = RendererDiagnostics.Empty.CaptureRun with
+                {
+                    Scenario = SamplePerformanceScenario
+                        .GiSponzaReflectionProbeLifecycle.ToString()
+                },
                 CaptureFrame = new PerformanceCaptureFrameMetadata(
                     serial,
                     (ulong)index,

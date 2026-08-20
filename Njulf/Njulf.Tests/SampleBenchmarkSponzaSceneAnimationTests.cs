@@ -752,6 +752,23 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
         string pairId,
         SampleBenchmarkSponzaSceneAnimationEvidence animation)
     {
+        const SamplePerformanceScenario scenario =
+            SamplePerformanceScenario.GiSponzaRightWallStationary;
+        const SampleBenchmarkTrajectoryKind trajectory =
+            SampleBenchmarkTrajectoryKind.SponzaLow;
+        const SampleBistroQualityCaptureVariant bistroVariant =
+            SampleBistroQualityCaptureVariant.SunScaleStep;
+        string trajectoryFingerprint =
+            SampleBenchmarkTrajectory.CreateFingerprint(
+                trajectory,
+                bistroVariant);
+        RendererDiagnostics lastDiagnostics = RendererDiagnostics.Empty with
+        {
+            CaptureRun = RendererDiagnostics.Empty.CaptureRun with
+            {
+                Scenario = scenario.ToString()
+            }
+        };
         SampleBenchmarkTimingStats timing = new(
             "frame",
             1,
@@ -771,8 +788,13 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
                 Enabled: true,
                 WarmupFrameCount: 1,
                 MeasureFrameCount: 1,
-                ReportPath: null),
-            SamplePerformanceScenario.GiSponzaRightWallStationary,
+                ReportPath: null)
+            {
+                Trajectory = trajectory,
+                TrajectoryBistroVariant = bistroVariant,
+                TrajectoryFingerprint = trajectoryFingerprint
+            },
+            scenario,
             WarmupFrameCount: 1,
             MeasurementFrameCount: 1,
             FirstMeasurementFrameIndex: 1,
@@ -786,7 +808,7 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
             CpuStages: [],
             Findings: [],
             BudgetMetrics: [],
-            LastDiagnostics: RendererDiagnostics.Empty)
+            LastDiagnostics: lastDiagnostics)
         {
             ActivationEvidence = new SampleBenchmarkActivationEvidence(
                 SampleBenchmarkActivationEvidence.CurrentSchema,
@@ -807,9 +829,11 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
             {
                 FullIdentityHash = Identity('b'),
                 Trajectory = SampleBenchmarkTrajectory.SponzaLowName,
-                TrajectoryFingerprint = Identity('c'),
+                TrajectoryFingerprint = trajectoryFingerprint,
                 TrajectoryFrameCount = 1,
-                TrajectoryRouteHash = Identity('d'),
+                TrajectoryRouteHash = SampleBenchmarkTrajectory.CreateRouteHash(
+                    trajectory,
+                    bistroVariant),
                 TrajectorySequenceHash = Identity('e'),
                 Activation = SampleBenchmarkActivation.None,
                 ActivationFingerprint =

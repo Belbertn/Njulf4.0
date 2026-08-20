@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json.Serialization;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Resources;
 
@@ -260,34 +261,63 @@ internal static class SimpleDdgiGpuPassContract
 /// </summary>
 public readonly record struct SimpleDdgiTailCertificateFrameEvidence
 {
+    [JsonRequired]
     public SimpleDdgiTransportPhase Phase { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportCertificationReason Reason { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportGenerations Generations { get; init; }
+    [JsonRequired]
     public uint SolveEpoch { get; init; }
+    [JsonRequired]
     public uint AuditEpoch { get; init; }
+    [JsonRequired]
     public uint ExpectedParticipantCount { get; init; }
+    [JsonRequired]
     public uint AuditedParticipantCount { get; init; }
+    [JsonRequired]
     public uint ExcludedInactiveCount { get; init; }
+    [JsonRequired]
     public uint ExcludedNotVisibleCount { get; init; }
+    [JsonRequired]
     public uint ExcludedStaleSourceCount { get; init; }
+    [JsonRequired]
     public uint ExcludedInvalidCacheCount { get; init; }
+    [JsonRequired]
     public uint CacheIdentityFailureCount { get; init; }
+    [JsonRequired]
     public uint CacheCardinalityFailureCount { get; init; }
+    [JsonRequired]
     public uint CacheSourceGenerationFailureCount { get; init; }
+    [JsonRequired]
     public uint CacheSourceEpochFailureCount { get; init; }
+    [JsonRequired]
     public uint CachePhysicalGenerationFailureCount { get; init; }
+    [JsonRequired]
     public uint ExpectedTexelCount { get; init; }
+    [JsonRequired]
     public uint AuditedTexelCount { get; init; }
+    [JsonRequired]
     public uint NonFiniteCount { get; init; }
+    [JsonRequired]
     public uint CounterOverflowCount { get; init; }
+    [JsonRequired]
     public bool AuditComplete { get; init; }
+    [JsonRequired]
     public bool CertificateCurrent { get; init; }
+    [JsonRequired]
     public ulong AuditSolveFeedbackFrameSerial { get; init; }
+    [JsonRequired]
     public ulong AuditTriggerFeedbackFrameSerial { get; init; }
+    [JsonRequired]
     public ulong AuditFirstSubmissionFrameSerial { get; init; }
+    [JsonRequired]
     public ulong AuditFinalSubmissionFrameSerial { get; init; }
+    [JsonRequired]
     public uint AuditPlannedChunkCount { get; init; }
+    [JsonRequired]
     public uint AuditSubmittedChunkCount { get; init; }
+    [JsonRequired]
     public bool AuditDispatchComplete { get; init; }
     /// <summary>
     /// Bounded, reference-free audit result captured from the transport owner
@@ -295,9 +325,12 @@ public readonly record struct SimpleDdgiTailCertificateFrameEvidence
     /// a later report independently auditable instead of trusting a boolean
     /// certificate pulse.
     /// </summary>
+    [JsonRequired]
     public SimpleDdgiTransportTailSummary Summary { get; init; }
+    [JsonRequired]
     public ulong SummaryDigest { get; init; }
 
+    [JsonIgnore]
     public bool HasCompleteIdentity =>
         Generations.IsInitialized &&
         SolveEpoch == Generations.Solve &&
@@ -305,10 +338,12 @@ public readonly record struct SimpleDdgiTailCertificateFrameEvidence
         Summary.Generations == Generations &&
         Summary.AuditEpoch == AuditEpoch;
 
+    [JsonIgnore]
     public bool HasDurableSummary =>
         SummaryDigest != 0UL &&
         SummaryDigest == SimpleDdgiTailSummaryDigest.Compute(Summary);
 
+    [JsonIgnore]
     public bool HasCompleteAuditFeedbackLifecycle =>
         AuditSolveFeedbackFrameSerial ==
             Summary.AuditSolveFeedbackFrameSerial &&
@@ -417,55 +452,81 @@ public readonly record struct SimpleDdgiTailCertificateFrameEvidence
 /// </summary>
 public readonly record struct SimpleDdgiSubmittedFrameEvidence
 {
+    [JsonRequired]
     public bool Valid { get; init; }
+    [JsonRequired]
     public int FrameSlot { get; init; }
+    [JsonRequired]
     public ulong FrameSerial { get; init; }
     /// <summary>
     /// Serial authored by SimpleDdgiVolumeManager after its per-frame begin.
     /// Scheduler feedback uses this domain; <see cref="FrameSerial"/> remains
     /// the renderer/route identity used for frame-slot and measurement joins.
     /// </summary>
+    [JsonRequired]
     public ulong SchedulerFrameSerial { get; init; }
+    [JsonIgnore]
     public bool FrameSerialsValid =>
         SimpleDdgiFrameSerialContract.AreValid(
             FrameSerial,
             SchedulerFrameSerial);
+    [JsonRequired]
     public bool GpuTimingRecorded { get; init; }
+    [JsonRequired]
     public SimpleDdgiSchedulerMode SchedulerMode { get; init; }
+    [JsonRequired]
     public int ActiveProbeCount { get; init; }
     /// <summary>
     /// Exact physical field extent traversed by the frozen audit. This is
     /// intentionally distinct from <see cref="ActiveProbeCount"/>, which can
     /// be the smaller probe-state-readback scheduler workload.
     /// </summary>
+    [JsonRequired]
     public int AuditPhysicalProbeCount { get; init; }
+    [JsonRequired]
     public uint VolumeResourceGeneration { get; init; }
+    [JsonRequired]
     public uint TransportTopologyGeneration { get; init; }
+    [JsonRequired]
     public uint SourceLightingGeneration { get; init; }
+    [JsonRequired]
     public uint AdmittedSourceCohortGeneration { get; init; }
+    [JsonRequired]
     public uint TransportGeneration { get; init; }
+    [JsonRequired]
     public uint PublishedPropagationGeneration { get; init; }
+    [JsonRequired]
     public uint LivePropagationSourceGeneration { get; init; }
+    [JsonRequired]
     public uint SchedulerResourceGeneration { get; init; }
+    [JsonRequired]
     public uint QueueTransactionGeneration { get; init; }
+    [JsonRequired]
     public int CachedSweepCount { get; init; }
+    [JsonRequired]
     public bool TailCertificationEnabled { get; init; }
+    [JsonRequired]
     public SimpleDdgiTailCertificateFrameEvidence TailCertificate { get; init; }
     /// <summary>
     /// Exact DDGI timing scopes whose commands were recorded for this
     /// submission. The recorder retains this mask even when timestamps are
     /// disabled or its fixed query capacity is exhausted.
     /// </summary>
+    [JsonRequired]
     public SimpleDdgiGpuPassMask IntendedGpuPasses { get; init; }
     /// <summary>
     /// Intended scopes that actually acquired a timestamp-query pair. This is
     /// distinct from both command intent and fence-complete query results.
     /// </summary>
+    [JsonRequired]
     public SimpleDdgiGpuPassMask AdmittedGpuTimingPasses { get; init; }
 
     // Existing workload attribution retained in the exact submitted value.
+    [JsonRequired]
     public ulong SourceCacheLayoutIdentity { get; init; }
+    [JsonRequired]
     public ulong ScheduledPrimaryRayCount { get; init; }
+    [JsonRequired]
     public ulong VisibilityRayCount { get; init; }
 }
 
@@ -475,63 +536,114 @@ public readonly record struct SimpleDdgiSubmittedFrameEvidence
 /// </summary>
 public readonly record struct SimpleDdgiCompletedFrameEvidence
 {
+    [JsonRequired]
     public bool Valid { get; init; }
+    [JsonRequired]
     public SimpleDdgiSubmittedFrameEvidence Submitted { get; init; }
     /// <summary>
     /// Compatibility alias for an exact causal DDGI total in the completed
     /// slot. Per-pass presence lives in <see cref="CompletedGpuTimingPasses"/>;
     /// a recorded sub-microsecond pass can legitimately have a zero duration.
     /// </summary>
+    [JsonRequired]
     public bool GpuTimingAvailable { get; init; }
+    [JsonRequired]
     public bool GpuTimingPassSetAligned { get; init; }
+    [JsonRequired]
     public SimpleDdgiGpuPassMask CompletedGpuTimingPasses { get; init; }
+    [JsonRequired]
     public bool GpuScheduleTimingAvailable { get; init; }
+    [JsonRequired]
     public bool GpuAcceleratedSolveTimingAvailable { get; init; }
+    [JsonRequired]
     public bool GpuSchedulerTailAdmitTimingAvailable { get; init; }
+    [JsonRequired]
     public bool GpuSchedulerEmitTimingAvailable { get; init; }
+    [JsonRequired]
     public bool GpuSchedulerCommitTimingAvailable { get; init; }
+    [JsonRequired]
     public bool GpuTransportAuditTimingAvailable { get; init; }
+    [JsonRequired]
     public bool GpuUrgentRelightTimingAvailable { get; init; }
+    [JsonRequired]
     public bool GpuDdgiTotalTimingAvailable { get; init; }
+    [JsonRequired]
     public long GpuAcceleratedSolveMicroseconds { get; init; }
+    [JsonRequired]
     public long GpuSchedulerTailAdmitMicroseconds { get; init; }
+    [JsonRequired]
     public long GpuSchedulerEmitMicroseconds { get; init; }
+    [JsonRequired]
     public long GpuSchedulerCommitMicroseconds { get; init; }
+    [JsonRequired]
     public long GpuTransportAuditMicroseconds { get; init; }
+    [JsonRequired]
     public long GpuUrgentRelightMicroseconds { get; init; }
+    [JsonRequired]
     public long GpuDdgiTotalMicroseconds { get; init; }
 
+    [JsonRequired]
     public bool SchedulerFeedbackAvailable { get; init; }
+    [JsonRequired]
     public bool SchedulerFeedbackFrameAligned { get; init; }
+    [JsonRequired]
     public bool SchedulerFeedbackGenerationAligned { get; init; }
+    [JsonRequired]
     public ulong SchedulerFeedbackFrameSerial { get; init; }
+    [JsonRequired]
     public uint SchedulerFeedbackVolumeResourceGeneration { get; init; }
+    [JsonRequired]
     public uint SchedulerFeedbackSchedulerResourceGeneration { get; init; }
+    [JsonRequired]
     public uint SchedulerFeedbackQueueTransactionGeneration { get; init; }
+    [JsonRequired]
     public uint SchedulerFeedbackTransportTopologyGeneration { get; init; }
+    [JsonRequired]
     public uint SchedulerFeedbackSourceLightingGeneration { get; init; }
+    [JsonRequired]
     public uint SchedulerFeedbackTransportGeneration { get; init; }
+    [JsonRequired]
     public uint SchedulerFeedbackStatusFlags { get; init; }
+    [JsonRequired]
     public uint SchedulerConsideredCandidateCount { get; init; }
     /// <summary>Exact COUNTER_COMPACTED total exposed as EligibleCount.</summary>
+    [JsonRequired]
     public uint SchedulerCompactedCandidateCount { get; init; }
+    [JsonRequired]
     public uint SchedulerAcceptedWorkCount { get; init; }
+    [JsonRequired]
     public uint SchedulerCommittedWorkCount { get; init; }
+    [JsonRequired]
     public uint SchedulerPublishedWorkCount { get; init; }
+    [JsonRequired]
     public uint SchedulerActiveWorkCount { get; init; }
+    [JsonRequired]
     public uint SchedulerSourceParticipantCount { get; init; }
+    [JsonRequired]
     public uint SchedulerHardSourceParticipantCount { get; init; }
+    [JsonRequired]
     public uint SchedulerRoutineSourceParticipantCount { get; init; }
+    [JsonRequired]
     public uint SchedulerCachedParticipantCount { get; init; }
+    [JsonRequired]
     public uint SchedulerSolveParticipantCount { get; init; }
+    [JsonRequired]
     public uint SchedulerSolveVisitedCount { get; init; }
+    [JsonRequired]
     public uint SchedulerSolveEpoch { get; init; }
+    [JsonRequired]
     public uint SchedulerActiveCanonicalMutationCount { get; init; }
+    [JsonRequired]
     public uint SchedulerActiveSourceMutationCount { get; init; }
+    [JsonRequired]
     public uint SchedulerBlockingTailSourceWorkCount { get; init; }
+    [JsonRequired]
     public uint SchedulerPrimaryRayCount { get; init; }
+    [JsonRequired]
     public uint SchedulerSourceRayCount { get; init; }
+    [JsonRequired]
     public uint SchedulerTransportRayCount { get; init; }
+    [JsonRequired]
     public uint SchedulerCachedRayCount { get; init; }
 }
 

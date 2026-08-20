@@ -255,6 +255,38 @@ public sealed class MaterialGiRolloutPolicyTests
     }
 
     [Test]
+    public void RendererHealthSchemaV3IsAcceptedAndV2IsRejected()
+    {
+        Assert.That(
+            MaterialGiReleaseEvidenceContract.HealthProducerSchema,
+            Is.EqualTo("renderer-health/v3"));
+        using (SyntheticMaterialGiQualification accepted =
+               SyntheticMaterialGiQualification.Create())
+        {
+            Assert.That(accepted.Load, Throws.Nothing);
+        }
+
+        using var legacy = SyntheticMaterialGiQualification.Create();
+        legacy.MutateProducerAndRepin(
+            MaterialGiReleaseEvidenceContract.CleanValidationRole,
+            json => json["schema"] = "renderer-health/v2",
+            producer =>
+                string.Equals(
+                    producer.Kind,
+                    MaterialGiReleaseEvidenceContract.HealthProducerKind,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    producer.DeviceId,
+                    SyntheticMaterialGiQualification.AlphaDeviceName,
+                    StringComparison.Ordinal));
+
+        Assert.That(
+            legacy.Load,
+            Throws.TypeOf<InvalidDataException>()
+                .With.Message.Contains("schema"));
+    }
+
+    [Test]
     public void QualifiedRelease_ExpiresAtTheV1RemovalContract()
     {
         using SyntheticMaterialGiQualification artifacts =
@@ -636,6 +668,25 @@ public sealed class MaterialGiRolloutPolicyTests
     [TestCase("benchmark-inflated-threshold")]
     [TestCase("benchmark-missing-gate")]
     [TestCase("benchmark-candidate-intent")]
+    [TestCase("benchmark-missing-trajectory")]
+    [TestCase("benchmark-wrong-trajectory")]
+    [TestCase("benchmark-malformed-trajectory")]
+    [TestCase("benchmark-missing-bistro-variant")]
+    [TestCase("benchmark-wrong-bistro-variant")]
+    [TestCase("benchmark-malformed-bistro-variant")]
+    [TestCase("benchmark-missing-transient-raw")]
+    [TestCase("benchmark-null-transient-raw")]
+    [TestCase("benchmark-malformed-transient-raw")]
+    [TestCase("benchmark-transient-raw-schema")]
+    [TestCase("benchmark-transient-raw-count")]
+    [TestCase("benchmark-transient-raw-frames")]
+    [TestCase("benchmark-missing-transient-derived")]
+    [TestCase("benchmark-null-transient-derived")]
+    [TestCase("benchmark-malformed-transient-derived")]
+    [TestCase("benchmark-transient-derived-schema")]
+    [TestCase("benchmark-transient-derived-applicable")]
+    [TestCase("benchmark-transient-derived-failures")]
+    [TestCase("benchmark-transient-derived-windows")]
     [TestCase("benchmark-conformance-rollout")]
     [TestCase("benchmark-partial-features")]
     [TestCase("benchmark-release-claim")]
@@ -704,7 +755,7 @@ public sealed class MaterialGiRolloutPolicyTests
                 artifacts.MutateProducerAndRepin(
                     MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
                     json => json["Schema"] =
-                        "njulf-renderer-benchmark/v2",
+                        "njulf-renderer-benchmark/v3",
                     producer =>
                         string.Equals(
                             producer.DeviceId,
@@ -761,6 +812,193 @@ public sealed class MaterialGiRolloutPolicyTests
                     MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
                     json => json["Options"]![
                         "MaterialGiQualificationCandidate"] = false,
+                    producer =>
+                        string.Equals(
+                            producer.DeviceId,
+                            SyntheticMaterialGiQualification.AlphaDeviceName,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            producer.QualityTier,
+                            "Low",
+                            StringComparison.Ordinal));
+                break;
+            case "benchmark-missing-trajectory":
+                artifacts.MutateProducerAndRepin(
+                    MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
+                    json => json["Options"]!.AsObject().Remove("Trajectory"),
+                    producer =>
+                        string.Equals(
+                            producer.DeviceId,
+                            SyntheticMaterialGiQualification.AlphaDeviceName,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            producer.QualityTier,
+                            "Low",
+                            StringComparison.Ordinal));
+                break;
+            case "benchmark-missing-bistro-variant":
+                artifacts.MutateProducerAndRepin(
+                    MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
+                    json => json["Options"]!.AsObject().Remove(
+                        "TrajectoryBistroVariant"),
+                    producer =>
+                        string.Equals(
+                            producer.DeviceId,
+                            SyntheticMaterialGiQualification.AlphaDeviceName,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            producer.QualityTier,
+                            "Low",
+                            StringComparison.Ordinal));
+                break;
+            case "benchmark-wrong-trajectory":
+            case "benchmark-malformed-trajectory":
+            case "benchmark-wrong-bistro-variant":
+            case "benchmark-malformed-bistro-variant":
+            case "benchmark-transient-raw-schema":
+            case "benchmark-transient-raw-count":
+            case "benchmark-transient-raw-frames":
+            case "benchmark-transient-derived-schema":
+            case "benchmark-transient-derived-applicable":
+            case "benchmark-transient-derived-failures":
+            case "benchmark-transient-derived-windows":
+                artifacts.MutateProducerAndRepin(
+                    MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
+                    json =>
+                    {
+                        switch (tamper)
+                        {
+                            case "benchmark-wrong-trajectory":
+                                json["Options"]!["Trajectory"] = 2;
+                                break;
+                            case "benchmark-malformed-trajectory":
+                                json["Options"]!["Trajectory"] = true;
+                                break;
+                            case "benchmark-wrong-bistro-variant":
+                                json["Options"]!["TrajectoryBistroVariant"] = 0;
+                                break;
+                            case "benchmark-malformed-bistro-variant":
+                                json["Options"]!["TrajectoryBistroVariant"] =
+                                    new JsonObject();
+                                break;
+                            case "benchmark-transient-raw-schema":
+                                json["DdgiTransientRawEvidence"]!["Schema"] =
+                                    "forged-transient-raw/v1";
+                                break;
+                            case "benchmark-transient-raw-count":
+                                json["DdgiTransientRawEvidence"]![
+                                    "MeasurementFrameCount"] = 1;
+                                break;
+                            case "benchmark-transient-raw-frames":
+                                json["DdgiTransientRawEvidence"]!["Frames"]!
+                                    .AsArray().Add(new JsonObject());
+                                break;
+                            case "benchmark-transient-derived-schema":
+                                json["DdgiTransientEvidence"]!["Schema"] =
+                                    "forged-transient-derived/v1";
+                                break;
+                            case "benchmark-transient-derived-applicable":
+                                json["DdgiTransientEvidence"]!["Applicable"] =
+                                    true;
+                                break;
+                            case "benchmark-transient-derived-failures":
+                                json["DdgiTransientEvidence"]!["Failures"]!
+                                    .AsArray().Add("forged failure");
+                                break;
+                            case "benchmark-transient-derived-windows":
+                                json["DdgiTransientEvidence"]!["Windows"]!
+                                    .AsArray().Add(new JsonObject());
+                                break;
+                            default:
+                                throw new ArgumentOutOfRangeException(
+                                    nameof(tamper));
+                        }
+                    },
+                    producer =>
+                        string.Equals(
+                            producer.DeviceId,
+                            SyntheticMaterialGiQualification.AlphaDeviceName,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            producer.QualityTier,
+                            "Low",
+                            StringComparison.Ordinal));
+                break;
+            case "benchmark-missing-transient-raw":
+                artifacts.MutateProducerAndRepin(
+                    MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
+                    json => json.Remove("DdgiTransientRawEvidence"),
+                    producer =>
+                        string.Equals(
+                            producer.DeviceId,
+                            SyntheticMaterialGiQualification.AlphaDeviceName,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            producer.QualityTier,
+                            "Low",
+                            StringComparison.Ordinal));
+                break;
+            case "benchmark-null-transient-raw":
+                artifacts.MutateProducerAndRepin(
+                    MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
+                    json => json["DdgiTransientRawEvidence"] = null,
+                    producer =>
+                        string.Equals(
+                            producer.DeviceId,
+                            SyntheticMaterialGiQualification.AlphaDeviceName,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            producer.QualityTier,
+                            "Low",
+                            StringComparison.Ordinal));
+                break;
+            case "benchmark-malformed-transient-raw":
+                artifacts.MutateProducerAndRepin(
+                    MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
+                    json => json["DdgiTransientRawEvidence"]!["Applicable"] =
+                        true,
+                    producer =>
+                        string.Equals(
+                            producer.DeviceId,
+                            SyntheticMaterialGiQualification.AlphaDeviceName,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            producer.QualityTier,
+                            "Low",
+                            StringComparison.Ordinal));
+                break;
+            case "benchmark-missing-transient-derived":
+                artifacts.MutateProducerAndRepin(
+                    MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
+                    json => json.Remove("DdgiTransientEvidence"),
+                    producer =>
+                        string.Equals(
+                            producer.DeviceId,
+                            SyntheticMaterialGiQualification.AlphaDeviceName,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            producer.QualityTier,
+                            "Low",
+                            StringComparison.Ordinal));
+                break;
+            case "benchmark-null-transient-derived":
+                artifacts.MutateProducerAndRepin(
+                    MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
+                    json => json["DdgiTransientEvidence"] = null,
+                    producer =>
+                        string.Equals(
+                            producer.DeviceId,
+                            SyntheticMaterialGiQualification.AlphaDeviceName,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            producer.QualityTier,
+                            "Low",
+                            StringComparison.Ordinal));
+                break;
+            case "benchmark-malformed-transient-derived":
+                artifacts.MutateProducerAndRepin(
+                    MaterialGiReleaseEvidenceContract.TierPerformanceMatrixRole,
+                    json => json["DdgiTransientEvidence"]!["Available"] = true,
                     producer =>
                         string.Equals(
                             producer.DeviceId,
@@ -3317,7 +3555,9 @@ internal sealed class SyntheticMaterialGiQualification : IDisposable
                 ReportPath = (string?)null,
                 DisableVSync = true,
                 BudgetProfileOverride = (int)profile.Kind,
-                MaterialGiQualificationCandidate = true
+                MaterialGiQualificationCandidate = true,
+                Trajectory = 0,
+                TrajectoryBistroVariant = 2
             },
             Scenario = 14,
             WarmupFrameCount = 30,
@@ -3329,6 +3569,23 @@ internal sealed class SyntheticMaterialGiQualification : IDisposable
             GpuFrameMilliseconds = new { Count = 120 },
             BudgetMetrics = budget.Metrics,
             LastDiagnostics = diagnostics,
+            DdgiTransientRawEvidence = new
+            {
+                Schema = MaterialGiReleaseEvidenceContract
+                    .BenchmarkDdgiTransientRawEvidenceSchema,
+                Applicable = false,
+                MeasurementFrameCount = 0,
+                Frames = Array.Empty<object>()
+            },
+            DdgiTransientEvidence = new
+            {
+                Schema = MaterialGiReleaseEvidenceContract
+                    .BenchmarkDdgiTransientEvidenceSchema,
+                Applicable = false,
+                Available = false,
+                Failures = Array.Empty<object>(),
+                Windows = Array.Empty<object>()
+            },
             DdgiProductionGate = new
             {
                 Passed = true,

@@ -106,13 +106,17 @@ public static class MaterialGiReleaseEvidenceContract
     public const string BenchmarkProducerKind =
         "njulf-renderer-benchmark";
     public const string BenchmarkProducerSchema =
-        "njulf-renderer-benchmark/v3";
+        "njulf-renderer-benchmark/v4";
+    public const string BenchmarkDdgiTransientRawEvidenceSchema =
+        "njulf-benchmark-ddgi-transient-raw-evidence/v1";
+    public const string BenchmarkDdgiTransientEvidenceSchema =
+        "njulf-benchmark-ddgi-transient-evidence/v1";
     public const string LongRunProducerKind =
         "material-gi-long-run-stability";
     public const string LongRunProducerSchema =
         "material-gi-long-run-stability/v3";
     public const string HealthProducerKind = "renderer-health";
-    public const string HealthProducerSchema = "renderer-health/v2";
+    public const string HealthProducerSchema = "renderer-health/v3";
 
     public static IReadOnlyList<string> RequiredRoles { get; } =
         Array.AsReadOnly(

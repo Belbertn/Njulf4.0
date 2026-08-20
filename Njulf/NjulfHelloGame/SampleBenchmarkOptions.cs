@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Njulf.Rendering.Diagnostics;
 
 namespace NjulfHelloGame;
@@ -32,6 +33,7 @@ public sealed record SampleBenchmarkOptions(
         SampleBenchmarkActivation.CreateFingerprint(
             SampleBenchmarkActivation.None);
     /// <summary>Named deterministic camera program used by this capture.</summary>
+    [JsonRequired]
     public SampleBenchmarkTrajectoryKind Trajectory { get; init; } =
         SampleBenchmarkTrajectoryKind.Stationary;
     /// <summary>Stable contract fingerprint for the selected camera/state program.</summary>
@@ -41,6 +43,7 @@ public sealed record SampleBenchmarkOptions(
     /// It is retained in benchmark options so every measured pose can be
     /// validated without depending on mutable host state.
     /// </summary>
+    [JsonRequired]
     public SampleBistroQualityCaptureVariant TrajectoryBistroVariant { get; init; } =
         SampleBistroQualityCaptureVariant.SunScaleStep;
     /// <summary>Reject captures that are not compiled/validated as ProductionTiming.</summary>

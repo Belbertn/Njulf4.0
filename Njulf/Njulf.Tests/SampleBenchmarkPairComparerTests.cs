@@ -672,6 +672,23 @@ public sealed class SampleBenchmarkPairComparerTests
         double gpuFrameP95,
         double forwardP95)
     {
+        const SamplePerformanceScenario scenario =
+            SamplePerformanceScenario.GiSponzaRightWallStationary;
+        const SampleBenchmarkTrajectoryKind trajectory =
+            SampleBenchmarkTrajectoryKind.Stationary;
+        const SampleBistroQualityCaptureVariant bistroVariant =
+            SampleBistroQualityCaptureVariant.SunScaleStep;
+        RendererDiagnostics lastDiagnostics = RendererDiagnostics.Empty with
+        {
+            CaptureRun = RendererDiagnostics.Empty.CaptureRun with
+            {
+                Scenario = scenario.ToString()
+            }
+        };
+        string trajectoryFingerprint =
+            SampleBenchmarkTrajectory.CreateFingerprint(
+                trajectory,
+                bistroVariant);
         SampleBenchmarkTimingStats cpu = Stats("CPU frame", 5.0);
         SampleBenchmarkTimingStats gpu = Stats("GPU frame", gpuFrameP95);
         return new SampleBenchmarkReport(
@@ -681,8 +698,13 @@ public sealed class SampleBenchmarkPairComparerTests
                 Enabled: true,
                 WarmupFrameCount: 120,
                 MeasureFrameCount: 120,
-                ReportPath: null),
-            SamplePerformanceScenario.GiSponzaRightWallStationary,
+                ReportPath: null)
+            {
+                Trajectory = trajectory,
+                TrajectoryBistroVariant = bistroVariant,
+                TrajectoryFingerprint = trajectoryFingerprint
+            },
+            scenario,
             WarmupFrameCount: 120,
             MeasurementFrameCount: 120,
             FirstMeasurementFrameIndex: 120,
@@ -696,7 +718,7 @@ public sealed class SampleBenchmarkPairComparerTests
             CpuStages: [],
             Findings: [],
             BudgetMetrics: [],
-            LastDiagnostics: RendererDiagnostics.Empty)
+            LastDiagnostics: lastDiagnostics)
         {
             ActivationEvidence = CanonicalNoActivationEvidence(120),
             CaptureContract = new SampleBenchmarkCaptureContract(
@@ -708,10 +730,13 @@ public sealed class SampleBenchmarkPairComparerTests
                 Mismatches: [])
             {
                 FullIdentityHash = identityHash + ":" + variant,
-                Trajectory = SampleBenchmarkTrajectory.StationaryName,
-                TrajectoryFingerprint = Sha256('1'),
+                Trajectory = SampleBenchmarkTrajectory.GetName(trajectory),
+                TrajectoryFingerprint = trajectoryFingerprint,
                 TrajectoryFrameCount = 1,
-                TrajectoryRouteHash = Sha256('3'),
+                TrajectoryRouteHash = SampleBenchmarkTrajectory.CreateRouteHash(
+                    trajectory,
+                    bistroVariant,
+                    lastDiagnostics.CaptureCamera),
                 TrajectorySequenceHash = Sha256('2')
             }
         };
@@ -728,18 +753,50 @@ public sealed class SampleBenchmarkPairComparerTests
             Failures: Array.Empty<string>());
 
     private static SampleBenchmarkReport WithMovingTrajectory(
-        SampleBenchmarkReport report) => report with
+        SampleBenchmarkReport report)
+    {
+        const SampleBenchmarkTrajectoryKind trajectory =
+            SampleBenchmarkTrajectoryKind.BistroLoop;
+        const SampleBistroQualityCaptureVariant bistroVariant =
+            SampleBistroQualityCaptureVariant.SunScaleStep;
+        int frameCount = SampleBenchmarkTrajectory.GetFrameCount(trajectory);
+        string fingerprint = SampleBenchmarkTrajectory.CreateFingerprint(
+            trajectory,
+            bistroVariant);
+        return report with
         {
+            Scenario = SamplePerformanceScenario.Normal,
+            Options = report.Options with
+            {
+                MeasureFrameCount = frameCount,
+                Trajectory = trajectory,
+                TrajectoryBistroVariant = bistroVariant,
+                TrajectoryFingerprint = fingerprint
+            },
+            MeasurementFrameCount = frameCount,
+            LastMeasurementFrameIndex = checked(
+                report.FirstMeasurementFrameIndex + frameCount - 1),
+            GpuTimingValidSampleCount = frameCount,
+            LastDiagnostics = report.LastDiagnostics with
+            {
+                CaptureRun = report.LastDiagnostics.CaptureRun with
+                {
+                    Scenario = SamplePerformanceScenario.Normal.ToString()
+                }
+            },
+            ActivationEvidence = CanonicalNoActivationEvidence(frameCount),
             CaptureContract = report.CaptureContract with
             {
                 Trajectory = SampleBenchmarkTrajectory.BistroLoopName,
-                TrajectoryFingerprint = Sha256('a'),
-                TrajectoryFrameCount = SampleBenchmarkTrajectory.GetFrameCount(
-                    SampleBenchmarkTrajectoryKind.BistroLoop),
-                TrajectoryRouteHash = Sha256('f'),
+                TrajectoryFingerprint = fingerprint,
+                TrajectoryFrameCount = frameCount,
+                TrajectoryRouteHash = SampleBenchmarkTrajectory.CreateRouteHash(
+                    trajectory,
+                    bistroVariant),
                 TrajectorySequenceHash = Sha256('d')
             }
         };
+    }
 
     private static string Sha256(char digit) =>
         "sha256:" + new string(digit, 64);

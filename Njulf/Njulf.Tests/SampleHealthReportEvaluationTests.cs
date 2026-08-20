@@ -291,6 +291,79 @@ public sealed class SampleHealthReportEvaluationTests
         }
     }
 
+    [Test]
+    public void SampleHealthReportWriter_EmitsExactV3TransientWireShape()
+    {
+        string directory = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"health-report-v3-{Guid.NewGuid():N}");
+        string reportPath = Path.Combine(directory, "health.json");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+            [
+                "--health-report",
+                reportPath
+            ]);
+            var writer = new SampleHealthReportWriter();
+            writer.Write(
+                options,
+                startupLogPath: null,
+                Array.Empty<SampleSmokeOperationResult>(),
+                RendererDiagnostics.Empty,
+                status: "failed",
+                failure: "synthetic wire-schema test");
+
+            using JsonDocument document =
+                JsonDocument.Parse(File.ReadAllBytes(reportPath));
+            JsonElement root = document.RootElement;
+            JsonElement completed = root.GetProperty("diagnostics")
+                .GetProperty("SimpleDdgiCompletedFrameEvidence");
+            JsonElement submitted = completed.GetProperty("Submitted");
+            JsonElement tail = submitted.GetProperty("TailCertificate");
+            JsonElement summary = tail.GetProperty("Summary");
+            JsonElement generations = summary.GetProperty("Generations");
+            JsonElement bounds = summary.GetProperty(
+                "FixedPointDefectChannels");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    MaterialGiReleaseEvidenceContract.HealthProducerSchema,
+                    Is.EqualTo("renderer-health/v3"));
+                Assert.That(
+                    root.GetProperty("schema").GetString(),
+                    Is.EqualTo("renderer-health/v3"));
+                Assert.That(
+                    submitted.TryGetProperty("FrameSerialsValid", out _),
+                    Is.False);
+                Assert.That(
+                    tail.TryGetProperty("HasCompleteIdentity", out _),
+                    Is.False);
+                Assert.That(
+                    tail.TryGetProperty("HasDurableSummary", out _),
+                    Is.False);
+                Assert.That(
+                    summary.TryGetProperty("IsCertified", out _),
+                    Is.False);
+                Assert.That(
+                    generations.TryGetProperty("IsInitialized", out _),
+                    Is.False);
+                Assert.That(
+                    bounds.TryGetProperty("Maximum", out _),
+                    Is.False);
+                Assert.That(
+                    bounds.TryGetProperty("IsFiniteNonNegative", out _),
+                    Is.False);
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GiDiagnosticWarning CreateDiagnostic(
         GiDiagnosticWarningCode code,
         GiDiagnosticSeverity severity,

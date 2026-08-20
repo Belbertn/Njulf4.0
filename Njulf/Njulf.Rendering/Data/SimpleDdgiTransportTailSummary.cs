@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json.Serialization;
 
 namespace Njulf.Rendering.Data;
 
@@ -9,12 +10,14 @@ namespace Njulf.Rendering.Data;
 /// with the largest gain observed in a different channel.
 /// </summary>
 public readonly record struct SimpleDdgiTransportRgbBounds(
-    float Red,
-    float Green,
-    float Blue)
+    [property: JsonRequired] float Red,
+    [property: JsonRequired] float Green,
+    [property: JsonRequired] float Blue)
 {
+    [JsonIgnore]
     public float Maximum => MathF.Max(Red, MathF.Max(Green, Blue));
 
+    [JsonIgnore]
     public bool IsFiniteNonNegative =>
         float.IsFinite(Red) && Red >= 0.0f &&
         float.IsFinite(Green) && Green >= 0.0f &&
@@ -116,13 +119,14 @@ public enum SimpleDdgiTransportRecoveryAction : byte
 
 /// <summary>One bounded virtual/physical identity captured for an audit mismatch.</summary>
 public readonly record struct SimpleDdgiTransportMismatchIdentity(
-    uint VirtualProbeIndex,
-    uint PhysicalProbeIndex)
+    [property: JsonRequired] uint VirtualProbeIndex,
+    [property: JsonRequired] uint PhysicalProbeIndex)
 {
     public static SimpleDdgiTransportMismatchIdentity None { get; } = new(
         uint.MaxValue,
         uint.MaxValue);
 
+    [JsonIgnore]
     public bool IsValid => VirtualProbeIndex != uint.MaxValue;
 
     public static SimpleDdgiTransportMismatchIdentity FromPacked(uint packed)
@@ -142,17 +146,18 @@ public readonly record struct SimpleDdgiTransportMismatchIdentity(
 /// epoch through the end of its audit.
 /// </summary>
 public readonly record struct SimpleDdgiTransportGenerations(
-    uint VolumeTable,
-    uint PhysicalOwnership,
-    uint SourceLighting,
-    uint SourceEpoch,
-    uint TransportOperator,
-    uint CanonicalField,
-    uint Solve,
-    uint Audit,
-    uint Queue,
-    uint SchedulerResources)
+    [property: JsonRequired] uint VolumeTable,
+    [property: JsonRequired] uint PhysicalOwnership,
+    [property: JsonRequired] uint SourceLighting,
+    [property: JsonRequired] uint SourceEpoch,
+    [property: JsonRequired] uint TransportOperator,
+    [property: JsonRequired] uint CanonicalField,
+    [property: JsonRequired] uint Solve,
+    [property: JsonRequired] uint Audit,
+    [property: JsonRequired] uint Queue,
+    [property: JsonRequired] uint SchedulerResources)
 {
+    [JsonIgnore]
     public bool IsInitialized =>
         VolumeTable != 0u &&
         PhysicalOwnership != 0u &&
@@ -176,40 +181,70 @@ public readonly record struct SimpleDdgiTransportTailSummary
     public const float MaximumCertifiedContraction = 0.99f;
     public const uint PerChannelEvidenceVersion = 1u;
 
+    [JsonRequired]
     public uint AuditEpoch { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportGenerations Generations { get; init; }
+    [JsonRequired]
     public uint ExpectedParticipantCount { get; init; }
+    [JsonRequired]
     public uint AuditedParticipantCount { get; init; }
+    [JsonRequired]
     public uint ExcludedInactiveCount { get; init; }
     /// <summary>
     /// Virtual probes that were not resident and published when the exact
     /// participant snapshot was frozen. This is expected sparse-domain
     /// exclusion evidence, not incomplete coverage of that snapshot.
     /// </summary>
+    [JsonRequired]
     public uint ExcludedNotVisibleCount { get; init; }
+    [JsonRequired]
     public uint ExcludedStaleSourceCount { get; init; }
+    [JsonRequired]
     public uint ExcludedInvalidCacheCount { get; init; }
+    [JsonRequired]
     public uint CacheIdentityFailureCount { get; init; }
+    [JsonRequired]
     public uint CacheCardinalityFailureCount { get; init; }
+    [JsonRequired]
     public uint CacheSourceGenerationFailureCount { get; init; }
+    [JsonRequired]
     public uint CacheSourceEpochFailureCount { get; init; }
+    [JsonRequired]
     public uint CachePhysicalGenerationFailureCount { get; init; }
+    [JsonRequired]
     public uint NonFiniteCount { get; init; }
+    [JsonRequired]
     public uint CounterOverflowCount { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportMismatchIdentity FirstNotResidentIdentity { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportMismatchIdentity FirstStaleSourceIdentity { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportMismatchIdentity FirstInvalidCacheIdentity { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportMismatchIdentity FirstNonFiniteIdentity { get; init; }
+    [JsonRequired]
     public uint AuditedTexelCount { get; init; }
+    [JsonRequired]
     public uint ExpectedTexelCount { get; init; }
+    [JsonRequired]
     public float FixedPointDefect { get; init; }
+    [JsonRequired]
     public float FieldMagnitude { get; init; }
+    [JsonRequired]
     public float ConfiguredContractionBound { get; init; }
+    [JsonRequired]
     public float ObservedContractionBound { get; init; }
+    [JsonRequired]
     public float CertifiedContractionBound { get; init; }
+    [JsonRequired]
     public float AbsoluteTailBound { get; init; }
+    [JsonRequired]
     public float RelativeTailBound { get; init; }
+    [JsonRequired]
     public float Tolerance { get; init; }
+    [JsonRequired]
     public float CanonicalQuantizationFloor { get; init; }
     /// <summary>
     /// Zero denotes the conservative legacy scalar proof. Version one carries
@@ -217,51 +252,84 @@ public readonly record struct SimpleDdgiTransportTailSummary
     /// The scalar fields remain the maxima for stable diagnostics and ABI
     /// consumers.
     /// </summary>
+    [JsonRequired]
     public uint ChannelEvidenceVersion { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportRgbBounds FixedPointDefectChannels { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportRgbBounds FieldMagnitudeChannels { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportRgbBounds ObservedContractionChannels { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportRgbBounds CertifiedContractionChannels { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportRgbBounds AbsoluteTailBoundChannels { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportRgbBounds RelativeTailBoundChannels { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportRgbBounds CanonicalQuantizationFloorChannels { get; init; }
     /// <summary>
     /// Probe selected from the highest compact defect bucket. This locates a
     /// representative maximum-defect site without weakening or replacing the
     /// exact <see cref="FixedPointDefect"/> reduction.
     /// </summary>
+    [JsonRequired]
     public uint MaximumDefectWitnessProbeIndex { get; init; }
+    [JsonRequired]
     public uint MaximumDefectWitnessTexelIndex { get; init; }
+    [JsonRequired]
     public bool DetailedWitnessValid { get; init; }
+    [JsonRequired]
     public uint DetailedWitnessProbeIndex { get; init; }
+    [JsonRequired]
     public uint DetailedWitnessTexelIndex { get; init; }
+    [JsonRequired]
     public float DetailedWitnessWeightSum { get; init; }
+    [JsonRequired]
     public float DetailedWitnessCandidateR { get; init; }
+    [JsonRequired]
     public float DetailedWitnessCandidateG { get; init; }
+    [JsonRequired]
     public float DetailedWitnessCandidateB { get; init; }
+    [JsonRequired]
     public float DetailedWitnessCanonicalR { get; init; }
+    [JsonRequired]
     public float DetailedWitnessCanonicalG { get; init; }
+    [JsonRequired]
     public float DetailedWitnessCanonicalB { get; init; }
+    [JsonRequired]
     public float DetailedWitnessProbeResidual { get; init; }
+    [JsonRequired]
     public uint DetailedWitnessSourceRayCount { get; init; }
+    [JsonRequired]
     public float DetailedWitnessPrivateR { get; init; }
+    [JsonRequired]
     public float DetailedWitnessPrivateG { get; init; }
+    [JsonRequired]
     public float DetailedWitnessPrivateB { get; init; }
+    [JsonRequired]
     public ulong AuditMicroseconds { get; init; }
     /// <summary>
     /// Scheduler-feedback serial of the complete, nonzero solve-epoch
     /// reduction that armed the drain preceding this audit.
     /// </summary>
+    [JsonRequired]
     public ulong AuditSolveFeedbackFrameSerial { get; init; }
     /// <summary>
     /// Scheduler-feedback serial of the later epoch-zero/quiescent reduction
     /// that completed the drain and allowed this audit to freeze.
     /// </summary>
+    [JsonRequired]
     public ulong AuditTriggerFeedbackFrameSerial { get; init; }
+    [JsonRequired]
     public ulong FirstFrameSerial { get; init; }
+    [JsonRequired]
     public ulong FinalFrameSerial { get; init; }
+    [JsonRequired]
     public uint ChunkCount { get; init; }
+    [JsonRequired]
     public bool IsComplete { get; init; }
+    [JsonRequired]
     public SimpleDdgiTransportCertificationReason Reason { get; init; }
 
     public static SimpleDdgiTransportTailSummary Empty => new()
@@ -273,16 +341,19 @@ public readonly record struct SimpleDdgiTransportTailSummary
         FirstNonFiniteIdentity = SimpleDdgiTransportMismatchIdentity.None
     };
 
+    [JsonIgnore]
     public bool HasExactParticipantCoverage =>
         IsComplete &&
         AuditedParticipantCount == ExpectedParticipantCount &&
         ExcludedStaleSourceCount == 0u &&
         ExcludedInvalidCacheCount == 0u;
 
+    [JsonIgnore]
     public bool HasExactTexelCoverage =>
         (ExpectedTexelCount == 0u && AuditedTexelCount == 0u) ||
         (ExpectedTexelCount > 0u && AuditedTexelCount == ExpectedTexelCount);
 
+    [JsonIgnore]
     public bool HasFiniteEvidence =>
         NonFiniteCount == 0u &&
         CounterOverflowCount == 0u &&
@@ -311,6 +382,7 @@ public readonly record struct SimpleDdgiTransportTailSummary
         ConfiguredContractionBound <= MaximumCertifiedContraction &&
         HasFiniteChannelEvidence;
 
+    [JsonIgnore]
     public bool HasPerChannelEvidence =>
         ChannelEvidenceVersion == PerChannelEvidenceVersion;
 
@@ -327,6 +399,7 @@ public readonly record struct SimpleDdgiTransportTailSummary
          CanonicalQuantizationFloorChannels.IsFiniteNonNegative &&
          ScalarsMatchChannelMaxima());
 
+    [JsonIgnore]
     public bool IsCertified =>
         Reason == SimpleDdgiTransportCertificationReason.Certified &&
         HasExactParticipantCoverage &&

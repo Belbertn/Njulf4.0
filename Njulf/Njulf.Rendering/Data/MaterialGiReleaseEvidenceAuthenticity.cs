@@ -1069,6 +1069,39 @@ internal static class MaterialGiReleaseEvidenceAuthenticity
             "BudgetProfileOverride",
             (int)profile.Kind,
             profile.Kind.ToString());
+        RequireEnumValue(
+            options,
+            "Trajectory",
+            0,
+            "Stationary");
+        RequireEnumValue(
+            options,
+            "TrajectoryBistroVariant",
+            2,
+            "SunScaleStep");
+        JsonElement ddgiTransientRaw = RequireObject(
+            root,
+            "DdgiTransientRawEvidence");
+        RequireString(
+            ddgiTransientRaw,
+            "Schema",
+            MaterialGiReleaseEvidenceContract
+                .BenchmarkDdgiTransientRawEvidenceSchema);
+        RequireFalse(ddgiTransientRaw, "Applicable");
+        RequireInt32(ddgiTransientRaw, "MeasurementFrameCount", 0);
+        RequireEmptyArray(ddgiTransientRaw, "Frames");
+        JsonElement ddgiTransient = RequireObject(
+            root,
+            "DdgiTransientEvidence");
+        RequireString(
+            ddgiTransient,
+            "Schema",
+            MaterialGiReleaseEvidenceContract
+                .BenchmarkDdgiTransientEvidenceSchema);
+        RequireFalse(ddgiTransient, "Applicable");
+        RequireFalse(ddgiTransient, "Available");
+        RequireEmptyArray(ddgiTransient, "Failures");
+        RequireEmptyArray(ddgiTransient, "Windows");
         int requested = checked((int)RequirePositiveInt64(options, "MeasureFrameCount"));
         int measured = checked((int)RequirePositiveInt64(root, "MeasurementFrameCount"));
         if (requested != 120 ||

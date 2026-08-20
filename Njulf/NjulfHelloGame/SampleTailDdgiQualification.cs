@@ -999,6 +999,10 @@ public static class SampleTailDdgiQualificationCli
             path,
             $"{role} benchmark report");
         if (!string.Equals(report.Kind, "njulf-renderer-benchmark", StringComparison.Ordinal) ||
+            !string.Equals(
+                report.Schema,
+                MaterialGiReleaseEvidenceContract.BenchmarkProducerSchema,
+                StringComparison.Ordinal) ||
             report.MeasurementFrameCount <= 0)
         {
             throw new InvalidDataException(
