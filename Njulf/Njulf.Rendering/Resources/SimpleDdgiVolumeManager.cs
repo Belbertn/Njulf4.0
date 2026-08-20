@@ -960,6 +960,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             SimpleDdgiTransportTailSummary.Empty;
         private int _transportAuditProbeCursor;
         private uint _transportAuditChunkCount;
+        private ulong _transportAuditSolveFeedbackFrameSerial;
+        private ulong _transportAuditTriggerFeedbackFrameSerial;
+        private uint _transportAuditSolveFeedbackParticipantCount;
         private ulong _transportAuditFirstFrameSerial;
         private SimpleDdgiTransportGenerations _transportAuditGenerations;
         private int _transportAuditExpectedParticipantCount;
@@ -2582,6 +2585,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
         private void BeginTransportSolveDrain()
         {
+            // A new completed solve owns a new two-packet audit provenance
+            // chain. Do not let an older certificate's feedback serials leak
+            // into this drain if the new transaction is later frozen.
+            _transportAuditSolveFeedbackFrameSerial = 0UL;
+            _transportAuditTriggerFeedbackFrameSerial = 0UL;
+            _transportAuditSolveFeedbackParticipantCount =
+                _lastGpuSchedulerFeedback.SolveEpochParticipantCount;
             _transportSolveDrainPending = true;
             _transportSolveDrainStartFeedbackSerial =
                 _gpuSchedulerFeedbackFrameSerial;
@@ -2608,7 +2618,23 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 return false;
             }
 
+            ulong solveFeedbackFrameSerial =
+                _transportSolveDrainStartFeedbackSerial;
+            ulong triggerFeedbackFrameSerial =
+                _gpuSchedulerFeedbackFrameSerial;
+            if (solveFeedbackFrameSerial is 0UL or ulong.MaxValue ||
+                triggerFeedbackFrameSerial is 0UL or ulong.MaxValue ||
+                solveFeedbackFrameSerial >= triggerFeedbackFrameSerial ||
+                _transportAuditSolveFeedbackParticipantCount == 0u)
+            {
+                return false;
+            }
+
             CancelTransportSolveDrain();
+            _transportAuditSolveFeedbackFrameSerial =
+                solveFeedbackFrameSerial;
+            _transportAuditTriggerFeedbackFrameSerial =
+                triggerFeedbackFrameSerial;
             return true;
         }
 
@@ -3152,6 +3178,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 CounterOverflowCount = summary.CounterOverflowCount,
                 AuditComplete = summary.IsComplete,
                 CertificateCurrent = HasCurrentTransportTailCertificate,
+                AuditSolveFeedbackFrameSerial =
+                    _transportAuditSolveFeedbackFrameSerial,
+                AuditTriggerFeedbackFrameSerial =
+                    _transportAuditTriggerFeedbackFrameSerial,
                 AuditFirstSubmissionFrameSerial =
                     _transportAuditFirstFrameSerial,
                 AuditFinalSubmissionFrameSerial =
@@ -3303,24 +3333,53 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 return true;
 
             SimpleDdgiTransportGenerations generations = CreateTransportTailGenerations();
-            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
-                (!_gpuSchedulerFeedbackValid ||
-                 !_gpuSchedulerFeedbackCoversCurrentVolumeTable ||
-                 HasBlockingTailSourceWork(_lastGpuSchedulerFeedback) ||
-                 _sourceCohortTransitionActive))
+            if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
             {
-                // A delayed local source repair blocks freezing, but it is not
-                // a field boundary. Keep the current epoch so overlapping GPU
-                // visit stamps survive; the exposed slots reacquire that same
-                // epoch before the exact completion reduction can close again.
-                if (_gpuSchedulerFeedbackValid &&
-                    HasBlockingTailSourceWork(_lastGpuSchedulerFeedback) &&
-                    _transportSolveController.PauseSolveForLocalSourceRepair(
-                        generations))
+                bool blockingSourceWork = _gpuSchedulerFeedbackValid &&
+                    HasBlockingTailSourceWork(_lastGpuSchedulerFeedback);
+                bool feedbackCanOpenAudit =
+                    _gpuSchedulerFeedbackValid &&
+                    _gpuSchedulerFeedbackCoversCurrentVolumeTable &&
+                    !_sourceCohortTransitionActive &&
+                    _transportAuditSolveFeedbackFrameSerial is not 0UL and
+                        not ulong.MaxValue &&
+                    _gpuSchedulerFeedbackFrameSerial is not 0UL and
+                        not ulong.MaxValue &&
+                    _transportAuditSolveFeedbackParticipantCount != 0u &&
+                    _lastGpuSchedulerFeedback.SolveEpochParticipantCount ==
+                        _transportAuditSolveFeedbackParticipantCount &&
+                    CanCompleteTransportSolveDrain(
+                        drainPending: true,
+                        _transportAuditSolveFeedbackFrameSerial,
+                        _gpuSchedulerFeedbackFrameSerial,
+                        _lastGpuSchedulerFeedback.SolveEpoch,
+                        _gpuScheduler.LastActiveCanonicalMutationCount,
+                        _gpuScheduler.LastActiveSourceMutationCount,
+                        blockingSourceWork);
+                if (feedbackCanOpenAudit)
                 {
-                    _transportTailSummary = _transportSolveController.LastSummary;
+                    // TryBegin may be deferred by a same-frame cohort boundary.
+                    // In that case a newer exact quiescence packet becomes the
+                    // actual trigger; the earlier nonzero solve witness remains
+                    // immutable.
+                    _transportAuditTriggerFeedbackFrameSerial =
+                        _gpuSchedulerFeedbackFrameSerial;
                 }
-                return false;
+                else
+                {
+                    // A delayed local source repair blocks freezing, but it is not
+                    // a field boundary. Keep the current epoch so overlapping GPU
+                    // visit stamps survive; the exposed slots reacquire that same
+                    // epoch before the exact completion reduction can close again.
+                    if (blockingSourceWork &&
+                        _transportSolveController.PauseSolveForLocalSourceRepair(
+                            generations))
+                    {
+                        _transportTailSummary =
+                            _transportSolveController.LastSummary;
+                    }
+                    return false;
+                }
             }
             if (!_transportSolveController.TryBeginAudit(generations))
                 return false;
@@ -3343,7 +3402,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _transportAuditExpectedParticipantCount = Math.Max(
                 0,
                 _schedulerMode == SimpleDdgiSchedulerMode.GpuResident
-                    ? _transportResidentParticipantCount
+                    ? checked((int)Math.Min(
+                        int.MaxValue,
+                        _transportAuditSolveFeedbackParticipantCount))
                     : _schedulerParticipatingProbeCount);
             _transportAuditExpectedTexelCount = checked(
                 _transportAuditExpectedParticipantCount * IrradianceTexelsPerProbe * IrradianceTexelsPerProbe);
@@ -3353,6 +3414,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 Generations = _transportAuditGenerations,
                 ExpectedParticipantCount = checked((uint)_transportAuditExpectedParticipantCount),
                 ExpectedTexelCount = checked((uint)_transportAuditExpectedTexelCount),
+                AuditSolveFeedbackFrameSerial =
+                    _transportAuditSolveFeedbackFrameSerial,
+                AuditTriggerFeedbackFrameSerial =
+                    _transportAuditTriggerFeedbackFrameSerial,
                 FirstFrameSerial = 0UL,
                 FinalFrameSerial = 0UL,
                 ChunkCount = 0u,
@@ -3661,6 +3726,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 DetailedWitnessPrivateB = BitConverter.UInt32BitsToSingle(
                     gpu.DetailedWitnessPrivateBBits),
                 AuditMicroseconds = 0,
+                AuditSolveFeedbackFrameSerial =
+                    _transportAuditSolveFeedbackFrameSerial,
+                AuditTriggerFeedbackFrameSerial =
+                    _transportAuditTriggerFeedbackFrameSerial,
                 FirstFrameSerial = _transportAuditFirstFrameSerial,
                 FinalFrameSerial = readback.FrameSerial,
                 ChunkCount = _transportAuditChunkCount,
@@ -3737,6 +3806,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             CancelTransportSolveDrain();
             _transportSolveController.CancelAudit(reason);
             _transportTailSummary = _transportSolveController.LastSummary;
+            _transportAuditSolveFeedbackFrameSerial = 0UL;
+            _transportAuditTriggerFeedbackFrameSerial = 0UL;
+            _transportAuditSolveFeedbackParticipantCount = 0u;
             _transportAuditFinalSubmissionFrameSerial = 0UL;
             if (!preserveLivePropagationBoundary ||
                 !HasCurrentLivePropagationBoundary(
@@ -3767,6 +3839,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _transportAuditReadbackTimeoutCount,
                     1UL);
                 _transportTailSummary = _transportSolveController.LastSummary;
+                _transportAuditSolveFeedbackFrameSerial = 0UL;
+                _transportAuditTriggerFeedbackFrameSerial = 0UL;
+                _transportAuditSolveFeedbackParticipantCount = 0u;
                 _transportAuditFinalSubmissionFrameSerial = 0UL;
                 _transportGlobalConvergencePending = true;
                 RequirePersistentSchedulerRebuild();
@@ -20255,6 +20330,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _transportResidentSourceRepairProbeCount = 0;
             _lastGpuSchedulerFeedback = default;
             _gpuSchedulerFeedbackFrameSerial = 0;
+            _transportAuditSolveFeedbackFrameSerial = 0UL;
+            _transportAuditTriggerFeedbackFrameSerial = 0UL;
+            _transportAuditSolveFeedbackParticipantCount = 0u;
             _receiverRecordsPublishedCount = 0;
             _currentReceiverRecordsPublishedCount = 0;
         }

@@ -282,6 +282,8 @@ public readonly record struct SimpleDdgiTailCertificateFrameEvidence
     public uint CounterOverflowCount { get; init; }
     public bool AuditComplete { get; init; }
     public bool CertificateCurrent { get; init; }
+    public ulong AuditSolveFeedbackFrameSerial { get; init; }
+    public ulong AuditTriggerFeedbackFrameSerial { get; init; }
     public ulong AuditFirstSubmissionFrameSerial { get; init; }
     public ulong AuditFinalSubmissionFrameSerial { get; init; }
     public uint AuditPlannedChunkCount { get; init; }
@@ -307,6 +309,16 @@ public readonly record struct SimpleDdgiTailCertificateFrameEvidence
         SummaryDigest != 0UL &&
         SummaryDigest == SimpleDdgiTailSummaryDigest.Compute(Summary);
 
+    public bool HasCompleteAuditFeedbackLifecycle =>
+        AuditSolveFeedbackFrameSerial ==
+            Summary.AuditSolveFeedbackFrameSerial &&
+        AuditTriggerFeedbackFrameSerial ==
+            Summary.AuditTriggerFeedbackFrameSerial &&
+        SimpleDdgiAuditFeedbackLifecycleContract.IsValid(
+            AuditSolveFeedbackFrameSerial,
+            AuditTriggerFeedbackFrameSerial,
+            AuditFirstSubmissionFrameSerial);
+
     public bool IsAcceptedFor(
         in SimpleDdgiSubmittedFrameEvidence submitted) =>
         submitted.Valid &&
@@ -316,6 +328,7 @@ public readonly record struct SimpleDdgiTailCertificateFrameEvidence
         Reason == SimpleDdgiTransportCertificationReason.Certified &&
         HasCompleteIdentity &&
         HasDurableSummary &&
+        HasCompleteAuditFeedbackLifecycle &&
         CertificateCurrent &&
         AuditComplete &&
         ExpectedParticipantCount > 0u &&
@@ -513,6 +526,9 @@ public readonly record struct SimpleDdgiCompletedFrameEvidence
     public uint SchedulerSolveParticipantCount { get; init; }
     public uint SchedulerSolveVisitedCount { get; init; }
     public uint SchedulerSolveEpoch { get; init; }
+    public uint SchedulerActiveCanonicalMutationCount { get; init; }
+    public uint SchedulerActiveSourceMutationCount { get; init; }
+    public uint SchedulerBlockingTailSourceWorkCount { get; init; }
     public uint SchedulerPrimaryRayCount { get; init; }
     public uint SchedulerSourceRayCount { get; init; }
     public uint SchedulerTransportRayCount { get; init; }
@@ -632,7 +648,9 @@ internal static class SimpleDdgiFrameEvidenceFactory
         FrameTimingSnapshot timings,
         bool schedulerFeedbackAvailable,
         in GPUSimpleDdgiSchedulerFeedback feedback,
-        uint schedulerFeedbackTransportTopologyGeneration)
+        uint schedulerFeedbackTransportTopologyGeneration,
+        uint schedulerActiveCanonicalMutationCount = 0u,
+        uint schedulerActiveSourceMutationCount = 0u)
     {
         ArgumentNullException.ThrowIfNull(timings);
         if (!submitted.Valid)
@@ -751,6 +769,13 @@ internal static class SimpleDdgiFrameEvidenceFactory
             SchedulerSolveParticipantCount = feedback.SolveEpochParticipantCount,
             SchedulerSolveVisitedCount = feedback.SolveEpochVisitedCount,
             SchedulerSolveEpoch = feedback.SolveEpoch,
+            SchedulerActiveCanonicalMutationCount =
+                schedulerActiveCanonicalMutationCount,
+            SchedulerActiveSourceMutationCount =
+                schedulerActiveSourceMutationCount,
+            SchedulerBlockingTailSourceWorkCount =
+                SimpleDdgiVolumeManager.ResolveBlockingTailSourceWorkCount(
+                    feedback),
             SchedulerPrimaryRayCount = feedback.PrimaryRayUsed,
             SchedulerSourceRayCount = feedback.SourceAchievedRays,
             SchedulerTransportRayCount = feedback.TransportRayUsed,
@@ -857,6 +882,24 @@ public static class SimpleDdgiAuditCardinalityContract
         auditPhysicalProbeCount > 0 &&
         (ulong)expectedParticipantCount + excludedInactiveCount +
             excludedNotVisibleCount == (ulong)auditPhysicalProbeCount;
+}
+
+internal static class SimpleDdgiAuditFeedbackLifecycleContract
+{
+    /// <summary>
+    /// The complete solve reduction precedes the epoch-zero drain reduction,
+    /// and both must precede the first command submission of the frozen audit.
+    /// Zero and MaxValue are lifecycle sentinels in the scheduler domain.
+    /// </summary>
+    public static bool IsValid(
+        ulong solveFeedbackFrameSerial,
+        ulong triggerFeedbackFrameSerial,
+        ulong firstAuditSubmissionFrameSerial) =>
+        solveFeedbackFrameSerial is not 0UL and not ulong.MaxValue &&
+        triggerFeedbackFrameSerial is not 0UL and not ulong.MaxValue &&
+        firstAuditSubmissionFrameSerial is not 0UL and not ulong.MaxValue &&
+        solveFeedbackFrameSerial < triggerFeedbackFrameSerial &&
+        triggerFeedbackFrameSerial < firstAuditSubmissionFrameSerial;
 }
 
 internal static class SimpleDdgiAuditLifecycleContract
@@ -980,6 +1023,8 @@ internal static class SimpleDdgiTailSummaryDigest
         Add(ref hash, summary.DetailedWitnessPrivateG);
         Add(ref hash, summary.DetailedWitnessPrivateB);
         Add(ref hash, summary.AuditMicroseconds);
+        Add(ref hash, summary.AuditSolveFeedbackFrameSerial);
+        Add(ref hash, summary.AuditTriggerFeedbackFrameSerial);
         Add(ref hash, summary.FirstFrameSerial);
         Add(ref hash, summary.FinalFrameSerial);
         Add(ref hash, summary.ChunkCount);

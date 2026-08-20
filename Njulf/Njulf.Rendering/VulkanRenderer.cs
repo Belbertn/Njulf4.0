@@ -13868,7 +13868,15 @@ namespace Njulf.Rendering
                     timings,
                     schedulerFeedbackAvailable,
                     schedulerFeedback,
-                    schedulerFeedbackTransportTopologyGeneration);
+                    schedulerFeedbackTransportTopologyGeneration,
+                    schedulerFeedbackAvailable
+                        ? _simpleDdgiVolumeManager?.GpuScheduler
+                            .LastActiveCanonicalMutationCount ?? 0u
+                        : 0u,
+                    schedulerFeedbackAvailable
+                        ? _simpleDdgiVolumeManager?.GpuScheduler
+                            .LastActiveSourceMutationCount ?? 0u
+                        : 0u);
         }
 
 

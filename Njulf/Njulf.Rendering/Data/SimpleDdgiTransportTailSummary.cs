@@ -248,6 +248,16 @@ public readonly record struct SimpleDdgiTransportTailSummary
     public float DetailedWitnessPrivateG { get; init; }
     public float DetailedWitnessPrivateB { get; init; }
     public ulong AuditMicroseconds { get; init; }
+    /// <summary>
+    /// Scheduler-feedback serial of the complete, nonzero solve-epoch
+    /// reduction that armed the drain preceding this audit.
+    /// </summary>
+    public ulong AuditSolveFeedbackFrameSerial { get; init; }
+    /// <summary>
+    /// Scheduler-feedback serial of the later epoch-zero/quiescent reduction
+    /// that completed the drain and allowed this audit to freeze.
+    /// </summary>
+    public ulong AuditTriggerFeedbackFrameSerial { get; init; }
     public ulong FirstFrameSerial { get; init; }
     public ulong FinalFrameSerial { get; init; }
     public uint ChunkCount { get; init; }

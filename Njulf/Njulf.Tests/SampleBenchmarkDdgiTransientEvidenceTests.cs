@@ -30,8 +30,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         int firstEdge,
         int secondEdge)
     {
-        int firstCertificate = firstEdge + 4;
-        int secondCertificate = secondEdge + 4;
+        int firstCertificate = firstEdge + 5;
+        int secondCertificate = secondEdge + 5;
         SampleBenchmarkReport report = CreateReport(
             firstEdge,
             secondEdge,
@@ -65,16 +65,16 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
             Assert.That(first.SourceLightingGeneration, Is.EqualTo(2u));
             Assert.That(first.AcceptedCertificateRouteFrameIndex,
                 Is.EqualTo(firstCertificate));
-            Assert.That(first.CertificateLatencyFrames, Is.EqualTo(4));
+            Assert.That(first.CertificateLatencyFrames, Is.EqualTo(5));
             Assert.That(
                 first.Frames.Select(frame => frame.RouteFrameIndex),
-                Is.EqualTo(Enumerable.Range(firstEdge, 5)));
+                Is.EqualTo(Enumerable.Range(firstEdge, 6)));
             Assert.That(
                 first.Frames.Select(frame =>
                     frame.CompletionObservedMeasurementSampleIndex),
                 Is.EqualTo(Enumerable.Range(
                     firstEdge + RenderingConstants.FramesInFlight,
-                    5)));
+                    6)));
             Assert.That(first.FirstSubmittedFrameSerial,
                 Is.EqualTo(10_000UL + (ulong)firstEdge));
             Assert.That(first.LastSubmittedFrameSerial,
@@ -93,10 +93,12 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
             Assert.That(second.SourceLightingGeneration, Is.EqualTo(3u));
             Assert.That(second.AcceptedCertificateRouteFrameIndex,
                 Is.EqualTo(secondCertificate));
-            Assert.That(second.Frames, Has.Count.EqualTo(5));
+            Assert.That(second.Frames, Has.Count.EqualTo(6));
         });
 
         SimpleDdgiCompletedFrameEvidence ordinary = first.Frames[0].Completed;
+        SimpleDdgiCompletedFrameEvidence trigger = first.Frames[1].Completed;
+        SimpleDdgiCompletedFrameEvidence certified = first.Frames[^1].Completed;
         Assert.Multiple(() =>
         {
             Assert.That(ordinary.Submitted.FrameSerial,
@@ -130,6 +132,29 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                 Is.EqualTo((uint)(70 + firstEdge)));
             Assert.That(ordinary.SchedulerActiveWorkCount,
                 Is.EqualTo((uint)(10 + firstEdge)));
+            Assert.That(ordinary.SchedulerSolveEpoch,
+                Is.EqualTo(ordinary.Submitted.TailCertificate.SolveEpoch));
+            Assert.That(ordinary.SchedulerSolveParticipantCount,
+                Is.EqualTo(AuditParticipantCount));
+            Assert.That(ordinary.SchedulerSolveVisitedCount,
+                Is.EqualTo(AuditParticipantCount));
+            Assert.That(trigger.SchedulerFeedbackFrameSerial,
+                Is.EqualTo(ordinary.SchedulerFeedbackFrameSerial + 1UL));
+            Assert.That(trigger.SchedulerSolveEpoch, Is.Zero);
+            Assert.That(trigger.SchedulerSolveParticipantCount,
+                Is.EqualTo(AuditParticipantCount));
+            Assert.That(trigger.SchedulerSolveVisitedCount, Is.Zero);
+            Assert.That(trigger.SchedulerActiveCanonicalMutationCount, Is.Zero);
+            Assert.That(trigger.SchedulerActiveSourceMutationCount, Is.Zero);
+            Assert.That(trigger.SchedulerBlockingTailSourceWorkCount, Is.Zero);
+            Assert.That(certified.SchedulerSolveEpoch, Is.Zero);
+            Assert.That(certified.SchedulerSolveVisitedCount, Is.Zero);
+            Assert.That(certified.Submitted.TailCertificate
+                .AuditSolveFeedbackFrameSerial,
+                Is.EqualTo(ordinary.SchedulerFeedbackFrameSerial));
+            Assert.That(certified.Submitted.TailCertificate
+                .AuditTriggerFeedbackFrameSerial,
+                Is.EqualTo(trigger.SchedulerFeedbackFrameSerial));
         });
 
         SimpleDdgiCompletedFrameEvidence[] auditFrames = first.Frames
@@ -187,8 +212,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             missingOrigin: 62);
 
         AssertUnavailable(
@@ -202,8 +227,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184);
+            firstCertificate: 65,
+            secondCertificate: 185);
 
         string json = System.Text.Json.JsonSerializer.Serialize(report);
         Assert.Multiple(() =>
@@ -218,10 +243,58 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                 "\"FirstSubmittedSchedulerFrameSerial\":"));
             Assert.That(json, Does.Contain("\"AuditPhysicalProbeCount\":"));
             Assert.That(json, Does.Contain("\"SummaryDigest\":"));
+            Assert.That(json, Does.Contain(
+                "\"AuditSolveFeedbackFrameSerial\":"));
+            Assert.That(json, Does.Contain(
+                "\"AuditTriggerFeedbackFrameSerial\":"));
             Assert.That(json, Does.Contain("\"ChannelEvidenceVersion\":1"));
             Assert.That(json, Does.Contain("\"FirstFrameSerial\":"));
             Assert.That(json, Does.Contain("\"FinalFrameSerial\":"));
             Assert.That(json, Does.Contain("\"ChunkCount\":"));
+        });
+    }
+
+    [Test]
+    public void CertifiedCurrentFeedbackUsesPriorSolveAndTriggerPackets()
+    {
+        SampleBenchmarkReport report = CreateReport(
+            firstEdge: 60,
+            secondEdge: 180,
+            firstCertificate: 65,
+            secondCertificate: 185);
+
+        Assert.That(report.DdgiTransientEvidence.Available, Is.True,
+            string.Join(Environment.NewLine,
+                report.DdgiTransientEvidence.Failures));
+        IReadOnlyList<SampleBenchmarkDdgiTransientFrame> frames =
+            report.DdgiTransientEvidence.Windows[0].Frames;
+        SimpleDdgiCompletedFrameEvidence solve = frames[0].Completed;
+        SimpleDdgiCompletedFrameEvidence trigger = frames[1].Completed;
+        SimpleDdgiCompletedFrameEvidence certified = frames[^1].Completed;
+        SimpleDdgiTailCertificateFrameEvidence tail =
+            certified.Submitted.TailCertificate;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(solve.SchedulerFeedbackFrameSerial,
+                Is.EqualTo(tail.AuditSolveFeedbackFrameSerial));
+            Assert.That(solve.SchedulerSolveEpoch,
+                Is.EqualTo(tail.SolveEpoch));
+            Assert.That(solve.SchedulerSolveParticipantCount,
+                Is.EqualTo(tail.ExpectedParticipantCount));
+            Assert.That(solve.SchedulerSolveVisitedCount,
+                Is.EqualTo(tail.ExpectedParticipantCount));
+            Assert.That(trigger.SchedulerFeedbackFrameSerial,
+                Is.EqualTo(tail.AuditTriggerFeedbackFrameSerial));
+            Assert.That(trigger.SchedulerSolveEpoch, Is.Zero);
+            Assert.That(trigger.SchedulerSolveVisitedCount, Is.Zero);
+            Assert.That(certified.SchedulerSolveEpoch, Is.Zero,
+                "Certified Upload writes no active solve epoch.");
+            Assert.That(certified.SchedulerSolveVisitedCount, Is.Zero,
+                "Certified feedback cannot re-prove the earlier solve visit.");
+            Assert.That(certified.SchedulerSolveParticipantCount,
+                Is.EqualTo(tail.ExpectedParticipantCount),
+                "The independent participant reduction may remain populated.");
         });
     }
 
@@ -232,7 +305,7 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
             firstEdge: 60,
             secondEdge: 180,
             firstCertificate: -1,
-            secondCertificate: 184);
+            secondCertificate: 185);
 
         AssertUnavailable(report, "overlapped the next source-lighting edge");
     }
@@ -243,7 +316,7 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
+            firstCertificate: 65,
             secondCertificate: -1);
 
         AssertUnavailable(
@@ -257,8 +330,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 62,
             secondEdge: 182,
-            firstCertificate: 66,
-            secondCertificate: 186);
+            firstCertificate: 67,
+            secondCertificate: 187);
 
         AssertUnavailable(report, "expected [60,61]");
     }
@@ -269,8 +342,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             forceBadGenerationSequence: true);
 
         AssertUnavailable(report, "expected wrap-safe +1 generation");
@@ -282,8 +355,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             initialSourceGeneration: uint.MaxValue);
 
         Assert.That(report.DdgiTransientEvidence.Available, Is.True,
@@ -305,8 +378,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             serialBase: 0UL);
 
         Assert.That(report.DdgiTransientEvidence.Available, Is.True,
@@ -332,8 +405,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             missingPassOrigin: 60,
             missingCompletedPass: missingPass,
             legacyPathOrigin: missingPass is
@@ -353,8 +426,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             omitUrgentRelightOrigin: 60);
 
         AssertUnavailable(report, "no urgent-relight parent timing scope");
@@ -366,8 +439,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             missingAdmissionOrigin: 60);
 
         AssertUnavailable(
@@ -381,8 +454,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             missingPassOrigin: 62,
             missingCompletedPass: SimpleDdgiGpuPassMask.TransportAudit);
 
@@ -397,9 +470,9 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
-            falseAuditWorkOnAwaitOrigin: 63);
+            firstCertificate: 65,
+            secondCertificate: 185,
+            falseAuditWorkOnAwaitOrigin: 64);
 
         AssertUnavailable(report, "advanced the frozen audit by 0 chunks");
     }
@@ -410,8 +483,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             falseOrdinaryWorkOnAuditDispatchOrigin: 62);
 
         AssertUnavailable(report, "scheduler/solve/publication timing scopes");
@@ -423,8 +496,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             legacyPathOrigin: 60);
 
         Assert.That(report.DdgiTransientEvidence.Available, Is.True,
@@ -452,8 +525,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             shiftedRouteSerialIndex: 61);
 
         AssertUnavailable(report, "expected contiguous serial");
@@ -465,8 +538,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             wrongSlotOrigin: 60);
 
         AssertUnavailable(report, "expected renderer slot");
@@ -478,8 +551,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             earlyCompletionOrigin: 60);
 
         AssertUnavailable(report, "expected exact FramesInFlight delay");
@@ -491,8 +564,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             wrongSchedulerSerialOrigin: 60);
 
         AssertUnavailable(report, "expected contiguous serial");
@@ -504,8 +577,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             schedulerSerialBase: 500UL);
 
         Assert.That(report.DdgiTransientEvidence.Available, Is.True,
@@ -523,8 +596,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             skippedSchedulerSerialOrigin: 20);
 
         AssertUnavailable(report, "expected contiguous serial");
@@ -536,8 +609,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             schedulerSerialBase: ulong.MaxValue - 60UL);
 
         AssertUnavailable(report, "cannot advance without entering a sentinel");
@@ -549,8 +622,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             invalidSchedulerSerialOrigin: 20);
 
         AssertUnavailable(report, "retained invalid renderer/scheduler serials");
@@ -562,8 +635,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             inactiveRouteIndex:
                 SampleBistroQualityCaptureContract.LoopFrameCount - 1);
 
@@ -576,8 +649,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             wrongFeedbackSerialOrigin: 60);
 
         AssertUnavailable(report, "scheduler feedback retained the wrong frame serial");
@@ -595,26 +668,52 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
         SampleBenchmarkReport report = CreateReport(
             firstEdge: 60,
             secondEdge: 180,
-            firstCertificate: 64,
-            secondCertificate: 184,
+            firstCertificate: 65,
+            secondCertificate: 185,
             legacyChannelCertificateOrigin: mutation == "legacy-channel"
-                ? 64
+                ? 65
                 : -1,
             falsePhysicalCountCertificateOrigin:
-                mutation == "physical-cardinality" ? 64 : -1,
+                mutation == "physical-cardinality" ? 65 : -1,
             falsePopulationCertificateOrigin:
-                mutation == "population-partition" ? 64 : -1,
+                mutation == "population-partition" ? 65 : -1,
             wrongCertificateFeedbackOrigin: mutation.StartsWith(
                 "feedback-",
-                StringComparison.Ordinal) ? 64 : -1,
+                StringComparison.Ordinal) ? 60 : -1,
             wrongCertificateFeedbackField: mutation,
-            equalFinalCertificateOrigin: mutation == "equal-final" ? 64 : -1);
+            equalFinalCertificateOrigin: mutation == "equal-final" ? 65 : -1);
 
         AssertUnavailable(
             report,
             mutation.StartsWith("feedback-", StringComparison.Ordinal)
-                ? "not bound to the exact same-slot scheduler feedback reduction"
+                ? "solve-feedback packet is not the exact complete"
                 : "Certified tail row without an exact");
+    }
+
+    [TestCase("trigger-epoch", 61, "audit-trigger feedback packet")]
+    [TestCase("trigger-participant", 61, "audit-trigger feedback packet")]
+    [TestCase("trigger-canonical-mutation", 61, "audit-trigger feedback packet")]
+    [TestCase("trigger-source-mutation", 61, "audit-trigger feedback packet")]
+    [TestCase("trigger-blocking-source", 61, "audit-trigger feedback packet")]
+    [TestCase("trigger-missing", 61, "missing the exact earlier audit-trigger")]
+    [TestCase("solve-missing", 60, "missing the exact earlier solve-feedback")]
+    [TestCase("solve-topology", 60, "solve-feedback packet is not the exact complete")]
+    [TestCase("trigger-queue", 61, "audit-trigger feedback packet")]
+    [TestCase("feedback-reordered", 65, "Certified tail row without an exact")]
+    public void TwoPacketAuditFeedbackProvenanceFailsClosed(
+        string mutation,
+        int mutationOrigin,
+        string expectedFailure)
+    {
+        SampleBenchmarkReport report = CreateReport(
+            firstEdge: 60,
+            secondEdge: 180,
+            firstCertificate: 65,
+            secondCertificate: 185,
+            wrongCertificateFeedbackOrigin: mutationOrigin,
+            wrongCertificateFeedbackField: mutation);
+
+        AssertUnavailable(report, expectedFailure);
     }
 
     private static void AssertUnavailable(
@@ -720,14 +819,14 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                     completedOrigin == secondCertificate - 1;
                 int enclosingCertificate =
                     firstCertificate >= 0 &&
-                    completedOrigin >= firstCertificate - 3 &&
+                    completedOrigin >= firstCertificate - 5 &&
                     completedOrigin <= firstCertificate
                         ? firstCertificate
                         : secondCertificate >= 0 &&
-                          completedOrigin >= secondCertificate - 3 &&
+                          completedOrigin >= secondCertificate - 5 &&
                           completedOrigin <= secondCertificate
                             ? secondCertificate
-                            : syntheticOrigin + 4;
+                            : syntheticOrigin + 5;
                 completed = CreateCompleted(
                     syntheticOrigin,
                     sourceGeneration,
@@ -952,6 +1051,61 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                     {
                         SchedulerSolveEpoch = completed.SchedulerSolveEpoch + 1u
                     },
+                    "trigger-epoch" => completed with
+                    {
+                        SchedulerSolveEpoch = 1u
+                    },
+                    "trigger-participant" => completed with
+                    {
+                        SchedulerSolveParticipantCount =
+                            completed.SchedulerSolveParticipantCount - 1u
+                    },
+                    "trigger-canonical-mutation" => completed with
+                    {
+                        SchedulerActiveCanonicalMutationCount = 1u
+                    },
+                    "trigger-source-mutation" => completed with
+                    {
+                        SchedulerActiveSourceMutationCount = 1u
+                    },
+                    "trigger-blocking-source" => completed with
+                    {
+                        SchedulerBlockingTailSourceWorkCount = 1u
+                    },
+                    "trigger-missing" => completed with
+                    {
+                        SchedulerFeedbackAvailable = false,
+                        SchedulerFeedbackFrameAligned = false,
+                        SchedulerFeedbackGenerationAligned = false,
+                        SchedulerFeedbackFrameSerial = 0UL
+                    },
+                    "solve-missing" => completed with
+                    {
+                        SchedulerFeedbackAvailable = false,
+                        SchedulerFeedbackFrameAligned = false,
+                        SchedulerFeedbackGenerationAligned = false,
+                        SchedulerFeedbackFrameSerial = 0UL
+                    },
+                    "solve-topology" => completed with
+                    {
+                        Submitted = completed.Submitted with
+                        {
+                            TransportTopologyGeneration = 7u
+                        },
+                        SchedulerFeedbackTransportTopologyGeneration = 7u
+                    },
+                    "trigger-queue" => completed with
+                    {
+                        Submitted = completed.Submitted with
+                        {
+                            SchedulerResourceGeneration = 15u,
+                            QueueTransactionGeneration = 15u
+                        },
+                        SchedulerFeedbackSchedulerResourceGeneration = 15u,
+                        SchedulerFeedbackQueueTransactionGeneration = 15u
+                    },
+                    "feedback-reordered" =>
+                        MutateAuditFeedbackLifecycle(completed),
                     _ => throw new ArgumentOutOfRangeException(
                         nameof(wrongCertificateFeedbackField))
                 };
@@ -1093,7 +1247,13 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                   : SimpleDdgiGpuPassMask.None);
         ulong certificateSchedulerFrameSerial = originIndex >= 0
             ? unchecked(schedulerSerialBase + (ulong)certificateOrigin)
-            : schedulerFrameSerial + 4UL;
+            : schedulerFrameSerial + 5UL;
+        ulong solveFeedbackFrameSerial = certificateSchedulerFrameSerial - 5UL;
+        ulong triggerFeedbackFrameSerial = certificateSchedulerFrameSerial - 4UL;
+        bool solveFeedbackWitness =
+            schedulerFrameSerial == solveFeedbackFrameSerial;
+        bool triggerFeedbackWitness =
+            schedulerFrameSerial == triggerFeedbackFrameSerial;
         SimpleDdgiTailCertificateFrameEvidence tail = CreateTail(
             generations,
             certificate,
@@ -1204,11 +1364,21 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                 ? AuditParticipantCount
                 : 0u,
             SchedulerSolveVisitedCount = scheduler
-                ? AuditParticipantCount
+                ? certificate || triggerFeedbackWitness
+                    ? 0u
+                    : AuditParticipantCount
                 : 0u,
             SchedulerSolveEpoch = scheduler
-                ? generations.Solve
+                ? certificate || triggerFeedbackWitness
+                    ? 0u
+                    : generations.Solve
                 : 0u,
+            SchedulerActiveCanonicalMutationCount = scheduler &&
+                !triggerFeedbackWitness
+                    ? solveFeedbackWitness ? 1u : 2u
+                    : 0u,
+            SchedulerActiveSourceMutationCount = 0u,
+            SchedulerBlockingTailSourceWorkCount = 0u,
             SchedulerCachedRayCount = scheduler
                 ? (uint)(1_000 + exactIndex)
                 : 0u
@@ -1225,6 +1395,10 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
     {
         ulong firstAuditSchedulerSerial = certificateSchedulerFrameSerial - 3UL;
         ulong finalAuditSchedulerSerial = certificateSchedulerFrameSerial - 2UL;
+        ulong solveFeedbackSchedulerSerial =
+            certificateSchedulerFrameSerial - 5UL;
+        ulong triggerFeedbackSchedulerSerial =
+            certificateSchedulerFrameSerial - 4UL;
         uint submittedChunkCount = certificate || auditAwait
             ? AuditChunkCount
             : schedulerFrameSerial + 3UL == certificateSchedulerFrameSerial
@@ -1244,6 +1418,12 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                 Generations = generations,
                 ExpectedParticipantCount = AuditParticipantCount,
                 ExpectedTexelCount = AuditTexelCount,
+                AuditSolveFeedbackFrameSerial = auditFrozen
+                    ? solveFeedbackSchedulerSerial
+                    : 0UL,
+                AuditTriggerFeedbackFrameSerial = auditFrozen
+                    ? triggerFeedbackSchedulerSerial
+                    : 0UL,
                 FirstFrameSerial = auditFrozen
                     ? firstAuditSchedulerSerial
                     : 0UL,
@@ -1290,6 +1470,12 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
             CounterOverflowCount = summary.CounterOverflowCount,
             AuditComplete = summary.IsComplete,
             CertificateCurrent = certificate,
+            AuditSolveFeedbackFrameSerial = auditFrozen || certificate
+                ? solveFeedbackSchedulerSerial
+                : 0UL,
+            AuditTriggerFeedbackFrameSerial = auditFrozen || certificate
+                ? triggerFeedbackSchedulerSerial
+                : 0UL,
             AuditFirstSubmissionFrameSerial = auditFrozen || certificate
                 ? firstAuditSchedulerSerial
                 : 0UL,
@@ -1349,6 +1535,8 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
             CanonicalQuantizationFloorChannels =
                 SimpleDdgiTransportRgbBounds.Broadcast(0.001f),
             AuditMicroseconds = 40UL,
+            AuditSolveFeedbackFrameSerial = firstAuditSchedulerSerial - 2UL,
+            AuditTriggerFeedbackFrameSerial = firstAuditSchedulerSerial - 1UL,
             FirstFrameSerial = firstAuditSchedulerSerial,
             FinalFrameSerial = finalAuditSchedulerSerial,
             ChunkCount = AuditChunkCount,
@@ -1418,6 +1606,32 @@ public sealed class SampleBenchmarkDdgiTransientEvidenceTests
                 firstFrameSerial ?? tail.AuditFirstSubmissionFrameSerial,
             AuditFinalSubmissionFrameSerial =
                 finalFrameSerial ?? tail.AuditFinalSubmissionFrameSerial,
+            Summary = summary,
+            SummaryDigest = SimpleDdgiTailSummaryDigest.Compute(summary)
+        };
+        return completed with
+        {
+            Submitted = completed.Submitted with
+            {
+                TailCertificate = tail
+            }
+        };
+    }
+
+    private static SimpleDdgiCompletedFrameEvidence
+        MutateAuditFeedbackLifecycle(SimpleDdgiCompletedFrameEvidence completed)
+    {
+        SimpleDdgiTailCertificateFrameEvidence tail =
+            completed.Submitted.TailCertificate;
+        SimpleDdgiTransportTailSummary summary = tail.Summary with
+        {
+            AuditSolveFeedbackFrameSerial =
+                tail.AuditTriggerFeedbackFrameSerial
+        };
+        tail = tail with
+        {
+            AuditSolveFeedbackFrameSerial =
+                summary.AuditSolveFeedbackFrameSerial,
             Summary = summary,
             SummaryDigest = SimpleDdgiTailSummaryDigest.Compute(summary)
         };

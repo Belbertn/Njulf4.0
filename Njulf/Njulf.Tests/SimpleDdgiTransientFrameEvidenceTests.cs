@@ -82,6 +82,7 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
             SolveEpochParticipantCount = 19,
             SolveEpochVisitedCount = 17,
             SolveEpoch = 13,
+            PendingSourceCount = 37,
             PrimaryRayUsed = 1_000,
             SourceAchievedRays = 600,
             TransportRayUsed = 950
@@ -100,7 +101,9 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
                 firstTimings,
                 schedulerFeedbackAvailable: true,
                 firstFeedback,
-                first.TransportTopologyGeneration);
+                first.TransportTopologyGeneration,
+                schedulerActiveCanonicalMutationCount: 23u,
+                schedulerActiveSourceMutationCount: 29u);
 
         Assert.Multiple(() =>
         {
@@ -137,6 +140,12 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
             Assert.That(completed.SchedulerSolveParticipantCount, Is.EqualTo(19));
             Assert.That(completed.SchedulerSolveVisitedCount, Is.EqualTo(17));
             Assert.That(completed.SchedulerSolveEpoch, Is.EqualTo(13));
+            Assert.That(completed.SchedulerActiveCanonicalMutationCount,
+                Is.EqualTo(23u));
+            Assert.That(completed.SchedulerActiveSourceMutationCount,
+                Is.EqualTo(29u));
+            Assert.That(completed.SchedulerBlockingTailSourceWorkCount,
+                Is.EqualTo(37u));
             Assert.That(first.TailCertificate.IsAcceptedFor(first), Is.True);
             Assert.That(first.TailCertificate.Generations.VolumeTable,
                 Is.Not.EqualTo(first.VolumeResourceGeneration));
@@ -466,6 +475,60 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
     }
 
     [Test]
+    public void AuditFeedbackLifecycleRequiresSolveThenQuiescenceThenDispatch()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiAuditFeedbackLifecycleContract.IsValid(
+                    solveFeedbackFrameSerial: 39UL,
+                    triggerFeedbackFrameSerial: 40UL,
+                    firstAuditSubmissionFrameSerial: 41UL),
+                Is.True);
+            Assert.That(
+                SimpleDdgiAuditFeedbackLifecycleContract.IsValid(
+                    40UL,
+                    40UL,
+                    41UL),
+                Is.False);
+            Assert.That(
+                SimpleDdgiAuditFeedbackLifecycleContract.IsValid(
+                    39UL,
+                    41UL,
+                    41UL),
+                Is.False);
+            Assert.That(
+                SimpleDdgiAuditFeedbackLifecycleContract.IsValid(
+                    0UL,
+                    40UL,
+                    41UL),
+                Is.False);
+            Assert.That(
+                SimpleDdgiAuditFeedbackLifecycleContract.IsValid(
+                    ulong.MaxValue,
+                    40UL,
+                    41UL),
+                Is.False);
+        });
+
+        SimpleDdgiTransportGenerations generations =
+            CreateGenerations(21u, 31u);
+        SimpleDdgiTransportTailSummary summary = CreateCertifiedSummary(
+            generations,
+            participantCount: 2_048u,
+            firstFrameSerial: 41UL,
+            finalFrameSerial: 44UL);
+        ulong digest = SimpleDdgiTailSummaryDigest.Compute(summary);
+        Assert.That(
+            SimpleDdgiTailSummaryDigest.Compute(summary with
+            {
+                AuditTriggerFeedbackFrameSerial = 38UL
+            }),
+            Is.Not.EqualTo(digest),
+            "Both prior feedback witnesses must be authenticated by the durable digest.");
+    }
+
+    [Test]
     public void UrgentRelightParentTimingIsCountedExactlyOnce()
     {
         var timings = new FrameTimingSnapshot(
@@ -526,6 +589,10 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
                 "SimpleDdgiFrameSerialContract.HighWord("));
             Assert.That(manager, Does.Contain(
                 "_transportAuditFirstFrameSerial = 0UL;"));
+            Assert.That(manager, Does.Contain(
+                "_transportAuditSolveFeedbackFrameSerial"));
+            Assert.That(manager, Does.Contain(
+                "_transportAuditTriggerFeedbackFrameSerial"));
             Assert.That(manager, Does.Contain(
                 "SimpleDdgiAuditLifecycleContract.StampSuccessfulChunk("));
         });
@@ -776,6 +843,8 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
     [TestCase("legacy-channel-proof")]
     [TestCase("channel-maxima")]
     [TestCase("equal-future-lifecycle")]
+    [TestCase("solve-feedback-lifecycle")]
+    [TestCase("trigger-feedback-lifecycle")]
     public void CertificateAcceptanceRequiresExactDurableIdentity(
         string mutation)
     {
@@ -955,6 +1024,38 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
                 {
                     AuditFirstSubmissionFrameSerial = firstSerial,
                     AuditFinalSubmissionFrameSerial = finalSerial,
+                    Summary = summary,
+                    SummaryDigest = SimpleDdgiTailSummaryDigest.Compute(summary)
+                };
+                break;
+            }
+            case "solve-feedback-lifecycle":
+            {
+                SimpleDdgiTransportTailSummary summary = tail.Summary with
+                {
+                    AuditSolveFeedbackFrameSerial =
+                        tail.AuditTriggerFeedbackFrameSerial
+                };
+                tail = tail with
+                {
+                    AuditSolveFeedbackFrameSerial =
+                        summary.AuditSolveFeedbackFrameSerial,
+                    Summary = summary,
+                    SummaryDigest = SimpleDdgiTailSummaryDigest.Compute(summary)
+                };
+                break;
+            }
+            case "trigger-feedback-lifecycle":
+            {
+                SimpleDdgiTransportTailSummary summary = tail.Summary with
+                {
+                    AuditTriggerFeedbackFrameSerial =
+                        tail.AuditFirstSubmissionFrameSerial
+                };
+                tail = tail with
+                {
+                    AuditTriggerFeedbackFrameSerial =
+                        summary.AuditTriggerFeedbackFrameSerial,
                     Summary = summary,
                     SummaryDigest = SimpleDdgiTailSummaryDigest.Compute(summary)
                 };
@@ -1267,6 +1368,8 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
             AuditedTexelCount = checked(participantCount * 64u),
             AuditComplete = true,
             CertificateCurrent = true,
+            AuditSolveFeedbackFrameSerial = firstFrameSerial - 2UL,
+            AuditTriggerFeedbackFrameSerial = firstFrameSerial - 1UL,
             AuditFirstSubmissionFrameSerial = firstFrameSerial,
             AuditFinalSubmissionFrameSerial = finalFrameSerial,
             AuditPlannedChunkCount = 8u,
@@ -1316,6 +1419,8 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
             CanonicalQuantizationFloorChannels =
                 SimpleDdgiTransportRgbBounds.Broadcast(0.001f),
             AuditMicroseconds = 25UL,
+            AuditSolveFeedbackFrameSerial = firstFrameSerial - 2UL,
+            AuditTriggerFeedbackFrameSerial = firstFrameSerial - 1UL,
             FirstFrameSerial = firstFrameSerial,
             FinalFrameSerial = finalFrameSerial,
             ChunkCount = 8u,

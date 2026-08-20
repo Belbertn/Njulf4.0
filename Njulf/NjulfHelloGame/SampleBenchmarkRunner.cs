@@ -1629,7 +1629,8 @@ public sealed class SampleBenchmarkAnalyzer
             tail.CertificateCurrent ||
             tail.Summary.IsComplete ||
             !tail.HasCompleteIdentity ||
-            !tail.HasDurableSummary)
+            !tail.HasDurableSummary ||
+            !tail.HasCompleteAuditFeedbackLifecycle)
         {
             failures.Add(
                 $"{prefix} has no complete frozen-audit identity/digest.");
@@ -1818,15 +1819,12 @@ public sealed class SampleBenchmarkAnalyzer
         SimpleDdgiTailCertificateFrameEvidence tail =
             completed.Submitted.TailCertificate;
         if (tail.Phase == SimpleDdgiTransportPhase.Certified &&
-            (completed.SchedulerSolveEpoch != tail.SolveEpoch ||
-             completed.SchedulerSolveParticipantCount !=
-                 tail.ExpectedParticipantCount ||
-             completed.SchedulerSolveVisitedCount !=
-                 tail.ExpectedParticipantCount))
+            (completed.SchedulerSolveEpoch != 0u ||
+             completed.SchedulerSolveVisitedCount != 0u))
         {
             failures.Add(
-                $"{prefix} Certified tail population/epoch is not bound to " +
-                "the exact same-slot scheduler feedback reduction.");
+                $"{prefix} Certified scheduler feedback did not retain the " +
+                "production epoch-zero/no-visited solve markers.");
         }
     }
 
@@ -1839,8 +1837,12 @@ public sealed class SampleBenchmarkAnalyzer
         uint plannedChunkCount = 0u;
         ulong firstSchedulerSerial = 0UL;
         ulong finalSchedulerSerial = 0UL;
+        ulong solveFeedbackSerial = 0UL;
+        ulong triggerFeedbackSerial = 0UL;
         bool sawDispatch = false;
         bool sawAwait = false;
+        SimpleDdgiTailCertificateFrameEvidence certificateTail = default;
+        bool sawCertificate = false;
 
         foreach (SampleBenchmarkDdgiTransientFrame frame in frames)
         {
@@ -1871,6 +1873,10 @@ public sealed class SampleBenchmarkAnalyzer
                 {
                     firstSchedulerSerial =
                         completed.Submitted.SchedulerFrameSerial;
+                    solveFeedbackSerial =
+                        tail.AuditSolveFeedbackFrameSerial;
+                    triggerFeedbackSerial =
+                        tail.AuditTriggerFeedbackFrameSerial;
                     plannedChunkCount = tail.AuditPlannedChunkCount;
                     if (tail.AuditFirstSubmissionFrameSerial !=
                         firstSchedulerSerial)
@@ -1882,7 +1888,11 @@ public sealed class SampleBenchmarkAnalyzer
                 }
                 else if (tail.AuditPlannedChunkCount != plannedChunkCount ||
                          tail.AuditFirstSubmissionFrameSerial !=
-                            firstSchedulerSerial)
+                            firstSchedulerSerial ||
+                         tail.AuditSolveFeedbackFrameSerial !=
+                            solveFeedbackSerial ||
+                         tail.AuditTriggerFeedbackFrameSerial !=
+                            triggerFeedbackSerial)
                 {
                     failures.Add(
                         $"DDGI transient window {windowIndex} changed its " +
@@ -1914,7 +1924,11 @@ public sealed class SampleBenchmarkAnalyzer
                     tail.AuditFirstSubmissionFrameSerial !=
                         firstSchedulerSerial ||
                     tail.AuditFinalSubmissionFrameSerial !=
-                        finalSchedulerSerial)
+                        finalSchedulerSerial ||
+                    tail.AuditSolveFeedbackFrameSerial !=
+                        solveFeedbackSerial ||
+                    tail.AuditTriggerFeedbackFrameSerial !=
+                        triggerFeedbackSerial)
                 {
                     failures.Add(
                         $"DDGI transient window {windowIndex} route frame " +
@@ -1932,14 +1946,163 @@ public sealed class SampleBenchmarkAnalyzer
                 tail.AuditPlannedChunkCount != plannedChunkCount ||
                 tail.AuditSubmittedChunkCount != submittedChunkCount ||
                 tail.AuditFirstSubmissionFrameSerial != firstSchedulerSerial ||
-                tail.AuditFinalSubmissionFrameSerial != finalSchedulerSerial)
+                tail.AuditFinalSubmissionFrameSerial != finalSchedulerSerial ||
+                tail.AuditSolveFeedbackFrameSerial != solveFeedbackSerial ||
+                tail.AuditTriggerFeedbackFrameSerial != triggerFeedbackSerial)
             {
                 failures.Add(
                     $"DDGI transient window {windowIndex} certificate does not " +
                     "close the exact observed dispatch/await lifecycle.");
             }
+            certificateTail = tail;
+            sawCertificate = true;
+        }
+
+        if (sawCertificate)
+        {
+            ValidateDdgiTransientAuditFeedbackProvenance(
+                failures,
+                windowIndex,
+                frames,
+                certificateTail);
         }
     }
+
+    private static void ValidateDdgiTransientAuditFeedbackProvenance(
+        ICollection<string> failures,
+        int windowIndex,
+        IReadOnlyList<SampleBenchmarkDdgiTransientFrame> frames,
+        in SimpleDdgiTailCertificateFrameEvidence tail)
+    {
+        int solveIndex = FindDdgiFeedbackFrame(
+            frames,
+            tail.AuditSolveFeedbackFrameSerial);
+        int triggerIndex = FindDdgiFeedbackFrame(
+            frames,
+            tail.AuditTriggerFeedbackFrameSerial);
+        int firstAuditIndex = -1;
+        for (int index = 0; index < frames.Count; index++)
+        {
+            SimpleDdgiCompletedFrameEvidence completed = frames[index].Completed;
+            if (completed.Submitted.TailCertificate.Phase ==
+                    SimpleDdgiTransportPhase.AuditFrozen &&
+                (completed.Submitted.IntendedGpuPasses &
+                 SimpleDdgiGpuPassMask.TransportAudit) != 0)
+            {
+                firstAuditIndex = index;
+                break;
+            }
+        }
+
+        string prefix = $"DDGI transient window {windowIndex}";
+        if (solveIndex < 0)
+        {
+            failures.Add(
+                $"{prefix} is missing the exact earlier solve-feedback " +
+                $"packet {tail.AuditSolveFeedbackFrameSerial}.");
+        }
+        if (triggerIndex < 0)
+        {
+            failures.Add(
+                $"{prefix} is missing the exact earlier audit-trigger " +
+                $"feedback packet {tail.AuditTriggerFeedbackFrameSerial}.");
+        }
+        if (solveIndex < 0 || triggerIndex < 0 || firstAuditIndex < 0)
+            return;
+
+        if (solveIndex >= triggerIndex || triggerIndex >= firstAuditIndex)
+        {
+            failures.Add(
+                $"{prefix} feedback lifecycle is not ordered solve, " +
+                "epoch-zero trigger, then first audit submission.");
+        }
+
+        SimpleDdgiCompletedFrameEvidence solve = frames[solveIndex].Completed;
+        SimpleDdgiCompletedFrameEvidence trigger =
+            frames[triggerIndex].Completed;
+        if (!IsExactOrdinaryFeedbackWitness(solve, tail) ||
+            solve.SchedulerSolveEpoch != tail.SolveEpoch ||
+            solve.SchedulerSolveParticipantCount !=
+                tail.ExpectedParticipantCount ||
+            solve.SchedulerSolveVisitedCount !=
+                tail.ExpectedParticipantCount ||
+            solve.SchedulerBlockingTailSourceWorkCount != 0u)
+        {
+            failures.Add(
+                $"{prefix} solve-feedback packet is not the exact complete " +
+                "solve epoch/population that armed the drain.");
+        }
+
+        if (!IsExactOrdinaryFeedbackWitness(trigger, tail) ||
+            trigger.SchedulerSolveEpoch != 0u ||
+            trigger.SchedulerSolveParticipantCount !=
+                tail.ExpectedParticipantCount ||
+            trigger.SchedulerSolveVisitedCount != 0u ||
+            trigger.SchedulerActiveCanonicalMutationCount != 0u ||
+            trigger.SchedulerActiveSourceMutationCount != 0u ||
+            trigger.SchedulerBlockingTailSourceWorkCount != 0u)
+        {
+            failures.Add(
+                $"{prefix} audit-trigger feedback packet is not the exact " +
+                "epoch-zero/quiescent drain completion.");
+        }
+    }
+
+    private static int FindDdgiFeedbackFrame(
+        IReadOnlyList<SampleBenchmarkDdgiTransientFrame> frames,
+        ulong schedulerFeedbackFrameSerial)
+    {
+        int result = -1;
+        for (int index = 0; index < frames.Count; index++)
+        {
+            if (frames[index].Completed.SchedulerFeedbackFrameSerial !=
+                schedulerFeedbackFrameSerial)
+            {
+                continue;
+            }
+
+            if (result >= 0)
+                return -1;
+            result = index;
+        }
+        return result;
+    }
+
+    private static bool IsExactOrdinaryFeedbackWitness(
+        in SimpleDdgiCompletedFrameEvidence completed,
+        in SimpleDdgiTailCertificateFrameEvidence tail) =>
+        completed.Submitted.TailCertificate.Phase ==
+            SimpleDdgiTransportPhase.AcceleratedSolve &&
+        completed.SchedulerFeedbackAvailable &&
+        completed.SchedulerFeedbackFrameAligned &&
+        completed.SchedulerFeedbackGenerationAligned &&
+        completed.SchedulerFeedbackStatusFlags == 0u &&
+        completed.SchedulerFeedbackFrameSerial ==
+            completed.Submitted.SchedulerFrameSerial &&
+        completed.SchedulerFeedbackVolumeResourceGeneration ==
+            completed.Submitted.VolumeResourceGeneration &&
+        completed.SchedulerFeedbackTransportTopologyGeneration ==
+            completed.Submitted.TransportTopologyGeneration &&
+        completed.SchedulerFeedbackSourceLightingGeneration ==
+            completed.Submitted.SourceLightingGeneration &&
+        completed.SchedulerFeedbackTransportGeneration ==
+            completed.Submitted.TransportGeneration &&
+        completed.SchedulerFeedbackQueueTransactionGeneration ==
+            completed.Submitted.QueueTransactionGeneration &&
+        completed.SchedulerFeedbackSchedulerResourceGeneration ==
+            completed.Submitted.SchedulerResourceGeneration &&
+        completed.SchedulerFeedbackTransportTopologyGeneration ==
+            tail.Generations.VolumeTable &&
+        completed.SchedulerFeedbackTransportTopologyGeneration ==
+            tail.Generations.PhysicalOwnership &&
+        completed.SchedulerFeedbackSourceLightingGeneration ==
+            tail.Generations.SourceLighting &&
+        completed.SchedulerFeedbackTransportGeneration ==
+            tail.Generations.CanonicalField &&
+        completed.SchedulerFeedbackQueueTransactionGeneration ==
+            tail.Generations.Queue &&
+        completed.SchedulerFeedbackSchedulerResourceGeneration ==
+            tail.Generations.SchedulerResources;
 
     private static bool HasAnySchedulerFeedbackPayload(
         in SimpleDdgiCompletedFrameEvidence completed) =>
@@ -1967,6 +2130,9 @@ public sealed class SampleBenchmarkAnalyzer
         completed.SchedulerSolveParticipantCount != 0u ||
         completed.SchedulerSolveVisitedCount != 0u ||
         completed.SchedulerSolveEpoch != 0u ||
+        completed.SchedulerActiveCanonicalMutationCount != 0u ||
+        completed.SchedulerActiveSourceMutationCount != 0u ||
+        completed.SchedulerBlockingTailSourceWorkCount != 0u ||
         completed.SchedulerPrimaryRayCount != 0u ||
         completed.SchedulerSourceRayCount != 0u ||
         completed.SchedulerTransportRayCount != 0u ||
