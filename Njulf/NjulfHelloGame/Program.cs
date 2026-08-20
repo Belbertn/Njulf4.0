@@ -217,6 +217,8 @@ internal sealed class HelloGame : Game
         _ddgiResidencySwitchSmokeRunner;
     private SampleTextureHotReloadSmokeRunner? _textureHotReloadSmokeRunner;
     private SampleBenchmarkRunner? _benchmarkRunner;
+    private SampleBenchmarkQualitySequenceRunner?
+        _benchmarkQualitySequenceRunner;
     private SampleBistroQualityRuntimeController?
         _bistroQualityRuntimeController;
     private SampleBistroQualityCaptureRunner? _bistroQualityCaptureRunner;
@@ -266,6 +268,7 @@ internal sealed class HelloGame : Game
         WindowTitle = "Njulf Hello Game - Mesh Shader glTF Sample";
         bool controlledProductionRun =
             _smokeOptions.Benchmark.Enabled ||
+            _smokeOptions.BenchmarkQualitySequence.Enabled ||
             _smokeOptions.TailDdgiLongSoak ||
             !string.IsNullOrWhiteSpace(
                 _smokeOptions.BistroQualityCaptureDirectory);
@@ -278,6 +281,7 @@ internal sealed class HelloGame : Game
                 !(_smokeOptions.TailDdgiLongSoak ||
                   (_smokeOptions.Benchmark.Enabled &&
                    _smokeOptions.Benchmark.DisableVSync) ||
+                  _smokeOptions.BenchmarkQualitySequence.Enabled ||
                   !string.IsNullOrWhiteSpace(
                       _smokeOptions.BistroQualityCaptureDirectory));
     }
@@ -409,6 +413,8 @@ internal sealed class HelloGame : Game
                  SamplePerformanceScenario.BistroQualityMotionRelight ||
              SampleBenchmarkTrajectory.RequiresBistro(
                  _smokeOptions.Benchmark.Trajectory) ||
+             SampleBenchmarkTrajectory.RequiresBistro(
+                 _smokeOptions.BenchmarkQualitySequence.Trajectory) ||
              !string.IsNullOrWhiteSpace(
                  _smokeOptions.BistroQualityCaptureDirectory)))
         {
@@ -646,6 +652,30 @@ internal sealed class HelloGame : Game
                 $"Benchmark armed: warmup={_smokeOptions.Benchmark.WarmupFrameCount}, " +
                 $"measure={_smokeOptions.Benchmark.MeasureFrameCount}, vsync={(VSync ? "on" : "off")}");
         }
+        if (_smokeOptions.BenchmarkQualitySequence.Enabled)
+        {
+            renderer.Settings.Debug.Enabled = true;
+            renderer.Settings.Debug.AllowScreenshots = true;
+            _benchmarkQualitySequenceRunner =
+                new SampleBenchmarkQualitySequenceRunner(
+                    _smokeOptions.BenchmarkQualitySequence,
+                    _smokeOptions.PerformanceScenario,
+                    Exit,
+                    () => SampleRenderSettingsFingerprint.Capture(
+                        renderer.Settings),
+                    (outputPath, captureToken) =>
+                        renderer.RequestLinearHdrCapture(
+                            outputPath,
+                            captureToken),
+                    renderer.GetLinearHdrCaptureResult);
+            Console.WriteLine(
+                "Benchmark quality sequence armed: " +
+                $"trajectory={SampleBenchmarkTrajectory.GetName(_smokeOptions.BenchmarkQualitySequence.Trajectory)}, " +
+                $"checkpoints={SampleBenchmarkQualityCheckpointCatalog.GetCheckpointIndices(_smokeOptions.BenchmarkQualitySequence.Trajectory).Count}, " +
+                $"extent={SampleBenchmarkQualityCheckpointCatalog.RequiredWidth}x" +
+                $"{SampleBenchmarkQualityCheckpointCatalog.RequiredHeight}, " +
+                "timingEligible=false.");
+        }
 
         PrintLoadedSceneSummary(model);
     }
@@ -701,10 +731,16 @@ internal sealed class HelloGame : Game
             renderer.Settings.ApplyQualityPreset(
                 _smokeOptions.QualityPresetOverride.Value);
         }
-        if (_smokeOptions.Benchmark.BudgetProfileOverride.HasValue)
+        RenderBudgetProfileKind? benchmarkBudgetProfile =
+            _smokeOptions.Benchmark.Enabled
+                ? _smokeOptions.Benchmark.BudgetProfileOverride
+                : _smokeOptions.BenchmarkQualitySequence.Enabled
+                    ? _smokeOptions.BenchmarkQualitySequence.BudgetProfileOverride
+                    : null;
+        if (benchmarkBudgetProfile.HasValue)
         {
             renderer.Settings.PerformanceBudgets.ActiveProfile =
-                _smokeOptions.Benchmark.BudgetProfileOverride.Value;
+                benchmarkBudgetProfile.Value;
         }
         if (_smokeOptions.EnableSceneGpuCompaction)
             renderer.Settings.SceneSubmission.GpuCompactionEnabled = true;
@@ -814,7 +850,8 @@ internal sealed class HelloGame : Game
         {
             SampleTailDdgiLongSoakProfile.Apply(renderer.Settings);
         }
-        else if (_smokeOptions.Benchmark.Enabled)
+        else if (_smokeOptions.Benchmark.Enabled ||
+                 _smokeOptions.BenchmarkQualitySequence.Enabled)
         {
             // A controlled timing window must not let completed GPU timings
             // change the following frame's update population. Adaptive DDGI
@@ -828,7 +865,9 @@ internal sealed class HelloGame : Game
                 BenchmarkSimulationDeltaSeconds;
             SampleBenchmarkCaptureVariant.Apply(
                 renderer.Settings,
-                _smokeOptions.Benchmark.CaptureVariant);
+                _smokeOptions.Benchmark.Enabled
+                    ? _smokeOptions.Benchmark.CaptureVariant
+                    : _smokeOptions.BenchmarkQualitySequence.CaptureVariant);
         }
     }
 
@@ -920,7 +959,8 @@ internal sealed class HelloGame : Game
         if (_materialGiCaptureRunner == null &&
             _khronosMaterialGiRenderedGateRunner == null &&
             _bistroQualityCaptureRunner == null &&
-            !_smokeOptions.Benchmark.Enabled)
+            !_smokeOptions.Benchmark.Enabled &&
+            !_smokeOptions.BenchmarkQualitySequence.Enabled)
             _inputController?.Update(
                 simulationDeltaTime,
                 WindowWidth,
@@ -952,10 +992,32 @@ internal sealed class HelloGame : Game
                 _benchmarkRunner.ResolveBistroControllerFrameIndexForNextRender(
                     _drawnFrames));
         }
+        else if (_benchmarkQualitySequenceRunner != null &&
+                 SampleBenchmarkTrajectory.RequiresBistro(
+                     _smokeOptions.BenchmarkQualitySequence.Trajectory))
+        {
+            _bistroQualityRuntimeController?.PrepareFrame(
+                _benchmarkQualitySequenceRunner
+                    .ResolveBistroControllerFrameIndexForNextRender(
+                        _drawnFrames));
+        }
         else if (_benchmarkRunner?.HoldTrajectoryForPostMeasurementEvidence != true)
             _bistroQualityRuntimeController?.PrepareFrame(_drawnFrames);
 
         base.Update(simulationDeltaTime);
+        if (_benchmarkQualitySequenceRunner != null)
+        {
+            var camera = Camera as FirstPersonCamera ??
+                throw new InvalidOperationException(
+                    "Benchmark quality sequence requires a FirstPersonCamera.");
+            _benchmarkQualitySequenceRunner.PrepareFrame(
+                _drawnFrames,
+                CaptureBenchmarkCameraPose(camera),
+                SampleBenchmarkTrajectory.RequiresBistro(
+                    _smokeOptions.BenchmarkQualitySequence.Trajectory)
+                    ? _bistroQualityRuntimeController?.LastAppliedState
+                    : null);
+        }
     }
 
     private void ApplySponzaScenarioFrameControls()
@@ -983,7 +1045,8 @@ internal sealed class HelloGame : Game
         if (_benchmarkDynamicScenarioFrozen ||
             !ShouldFreezeBenchmarkDynamicScenario(
                 scenario,
-                _smokeOptions.Benchmark.Enabled,
+                _smokeOptions.Benchmark.Enabled ||
+                _smokeOptions.BenchmarkQualitySequence.Enabled,
                 _drawnFrames))
         {
             return;
@@ -1018,7 +1081,8 @@ internal sealed class HelloGame : Game
         SamplePerformanceScenario scenario =
             _performanceScenarioRunner?.CurrentScenario ??
             _smokeOptions.PerformanceScenario;
-        if (!_smokeOptions.Benchmark.Enabled ||
+        if (!(_smokeOptions.Benchmark.Enabled ||
+              _smokeOptions.BenchmarkQualitySequence.Enabled) ||
             scenario != SamplePerformanceScenario.GiFastTraversalTeleport ||
             Camera is not FirstPersonCamera camera)
         {
@@ -1042,9 +1106,16 @@ internal sealed class HelloGame : Game
 
     private void ApplyBenchmarkNamedTrajectoryFrameControls()
     {
-        SampleBenchmarkOptions benchmark = _smokeOptions.Benchmark;
-        if (!benchmark.Enabled ||
-            !SampleBenchmarkTrajectory.RequiresSponza(benchmark.Trajectory) ||
+        bool timingEnabled = _smokeOptions.Benchmark.Enabled;
+        bool qualityEnabled = _smokeOptions.BenchmarkQualitySequence.Enabled;
+        SampleBenchmarkTrajectoryKind trajectory = timingEnabled
+            ? _smokeOptions.Benchmark.Trajectory
+            : _smokeOptions.BenchmarkQualitySequence.Trajectory;
+        SampleBistroQualityCaptureVariant bistroVariant = timingEnabled
+            ? _smokeOptions.Benchmark.TrajectoryBistroVariant
+            : _smokeOptions.BenchmarkQualitySequence.TrajectoryBistroVariant;
+        if (!(timingEnabled || qualityEnabled) ||
+            !SampleBenchmarkTrajectory.RequiresSponza(trajectory) ||
             _benchmarkRunner?.HoldTrajectoryForPostMeasurementEvidence == true ||
             Camera is not FirstPersonCamera camera)
         {
@@ -1052,16 +1123,22 @@ internal sealed class HelloGame : Game
         }
 
         int trajectoryFrame =
-            _benchmarkRunner?.ResolveTrajectoryFrameIndexForNextRender(
-                _drawnFrames) ??
-            SampleBenchmarkTrajectory.GetWarmupFrameIndex(
-                benchmark.Trajectory,
-                _drawnFrames);
+            timingEnabled
+                ? _benchmarkRunner?.ResolveTrajectoryFrameIndexForNextRender(
+                    _drawnFrames) ??
+                  SampleBenchmarkTrajectory.GetWarmupFrameIndex(
+                      trajectory,
+                      _drawnFrames)
+                : _benchmarkQualitySequenceRunner
+                    ?.ResolveTrajectoryFrameIndexForNextRender(_drawnFrames) ??
+                  SampleBenchmarkTrajectory.GetWarmupFrameIndex(
+                      trajectory,
+                      _drawnFrames);
         SampleBenchmarkCameraPose pose =
             SampleBenchmarkTrajectory.ResolveCamera(
-                benchmark.Trajectory,
+                trajectory,
                 trajectoryFrame,
-                benchmark.TrajectoryBistroVariant) ??
+                bistroVariant) ??
             throw new InvalidOperationException(
                 "A named Sponza benchmark trajectory did not resolve a camera pose.");
         camera.Position = pose.Position;
@@ -1095,6 +1172,20 @@ internal sealed class HelloGame : Game
         return (arrival, MathF.PI, pitch);
     }
 
+    internal static SampleBenchmarkCameraPose CaptureBenchmarkCameraPose(
+        FirstPersonCamera camera)
+    {
+        ArgumentNullException.ThrowIfNull(camera);
+        return new SampleBenchmarkCameraPose(
+            "pre-draw-live",
+            camera.Position,
+            camera.Yaw,
+            camera.Pitch,
+            camera.FieldOfView,
+            camera.NearPlane,
+            camera.FarPlane);
+    }
+
     protected override void Draw()
     {
         if (Renderer == null)
@@ -1120,6 +1211,9 @@ internal sealed class HelloGame : Game
         {
             TryPromoteBistroReflectionsToDdgi(
                 benchmarkRenderer,
+                benchmarkRenderer.LastDiagnostics);
+            _benchmarkQualitySequenceRunner?.OnFrameRendered(
+                _drawnFrames,
                 benchmarkRenderer.LastDiagnostics);
             if (_smokeOptions.Mode == SampleSmokeMode.LongRun)
             {
@@ -1239,6 +1333,7 @@ internal sealed class HelloGame : Game
     {
         return _smokeOptions.EnableGpuTiming ||
             _smokeOptions.Benchmark.Enabled ||
+            _smokeOptions.BenchmarkQualitySequence.Enabled ||
             _smokeOptions.Mode is SampleSmokeMode.QualitySwitch or SampleSmokeMode.LongRun;
     }
 
@@ -1305,6 +1400,22 @@ internal sealed class HelloGame : Game
                     SampleBenchmarkGateEvaluation.Evaluate(benchmarkReport);
                 if (!benchmarkGate.Passed)
                     _runtimeSmokeFailure ??= benchmarkGate.Failure;
+            }
+        }
+        if (_smokeOptions.BenchmarkQualitySequence.Enabled)
+        {
+            if (_benchmarkQualitySequenceRunner?.Report is not { } qualityReport)
+            {
+                _runtimeSmokeFailure ??=
+                    "Benchmark quality sequence closed before its authenticated report was published.";
+            }
+            else if (!qualityReport.Passed ||
+                     qualityReport.TimingEligible ||
+                     qualityReport.ProductionTiming)
+            {
+                _runtimeSmokeFailure ??= qualityReport.Failures.Count == 0
+                    ? "Benchmark quality-sequence evidence was invalid or timing-eligible."
+                    : string.Join(" ", qualityReport.Failures);
             }
         }
 

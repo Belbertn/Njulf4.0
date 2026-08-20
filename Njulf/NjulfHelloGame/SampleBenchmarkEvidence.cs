@@ -75,6 +75,32 @@ public static class SampleBenchmarkHdrComparer
             NormalizePfmPath(candidatePath, nameof(candidatePath)),
             SampleEvidenceFileIo.MaximumLinearFloatImageBytes,
             "Benchmark HDR candidate");
+        SampleEvidenceFileContent? qualityContractEvidence =
+            string.IsNullOrWhiteSpace(qualityContractPath)
+                ? null
+                : SampleEvidenceFileIo.Read(
+                    Path.GetFullPath(qualityContractPath),
+                    SampleEvidenceFileIo.MaximumJsonBytes,
+                    "Benchmark HDR quality contract");
+        return Compare(
+            referenceEvidence,
+            candidateEvidence,
+            maximumRelativeRmse,
+            maximumFlipP95,
+            qualityContractEvidence);
+    }
+
+    internal static SampleBenchmarkHdrDifference Compare(
+        SampleEvidenceFileContent referenceEvidence,
+        SampleEvidenceFileContent candidateEvidence,
+        double maximumRelativeRmse,
+        double maximumFlipP95,
+        SampleEvidenceFileContent? qualityContractEvidence)
+    {
+        if (!double.IsFinite(maximumRelativeRmse) || maximumRelativeRmse < 0.0)
+            throw new ArgumentOutOfRangeException(nameof(maximumRelativeRmse));
+        if (!double.IsFinite(maximumFlipP95) || maximumFlipP95 < 0.0)
+            throw new ArgumentOutOfRangeException(nameof(maximumFlipP95));
         LinearFloatImage reference = PfmLinearImageCodec.Decode(referenceEvidence.Bytes);
         LinearFloatImage candidate = PfmLinearImageCodec.Decode(candidateEvidence.Bytes);
         if (reference.Width != candidate.Width || reference.Height != candidate.Height)
@@ -119,7 +145,7 @@ public static class SampleBenchmarkHdrComparer
             SampleMaterialGiHdrFlipMetric.ComputeP95(reference, candidate);
         SampleBenchmarkHdrRoiEvaluation roiEvaluation =
             SampleBenchmarkHdrQualityContractEvaluator.Evaluate(
-                qualityContractPath,
+                qualityContractEvidence,
                 reference,
                 candidate);
         SampleBenchmarkHdrRoiResult[] failedRois =

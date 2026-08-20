@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Globalization;
 using Njulf.Rendering.Data;
 
@@ -34,9 +35,7 @@ public static class SampleBenchmarkCaptureVariant
     public static string Apply(RenderSettings settings, string? variant)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        string normalized = string.IsNullOrWhiteSpace(variant)
-            ? Baseline
-            : variant.Trim().ToLowerInvariant();
+        string normalized = Normalize(variant);
 
         // Explicitly reset all capture-only switches. ApplySmokeRenderSettings
         // can run more than once during startup/reload validation.
@@ -84,6 +83,30 @@ public static class SampleBenchmarkCaptureVariant
 
         if (normalized.StartsWith(DecalMaterialPrefix, StringComparison.Ordinal))
         {
+            settings.Decals.IsolatedMaterialIndex = int.Parse(
+                normalized[DecalMaterialPrefix.Length..],
+                CultureInfo.InvariantCulture);
+            return normalized;
+        }
+
+        throw new UnreachableException(
+            $"Normalized benchmark capture variant '{normalized}' was not applied.");
+    }
+
+    public static string Normalize(string? variant)
+    {
+        string normalized = string.IsNullOrWhiteSpace(variant)
+            ? Baseline
+            : variant.Trim().ToLowerInvariant();
+        if (normalized is Baseline or DecalsDisabled or DecalDdgiDisabled or
+            DecalShadowsDisabled or FarFieldGated or FarFieldForcedOld or
+            TailJacobi or TailAccelerated or ForwardGiEnabled or
+            ForwardGiDisabled or ForwardGiExact)
+        {
+            return normalized;
+        }
+        if (normalized.StartsWith(DecalMaterialPrefix, StringComparison.Ordinal))
+        {
             string indexText = normalized[DecalMaterialPrefix.Length..];
             if (!int.TryParse(
                     indexText,
@@ -96,7 +119,6 @@ public static class SampleBenchmarkCaptureVariant
                     nameof(variant));
             }
 
-            settings.Decals.IsolatedMaterialIndex = materialIndex;
             return $"{DecalMaterialPrefix}{materialIndex.ToString(CultureInfo.InvariantCulture)}";
         }
 

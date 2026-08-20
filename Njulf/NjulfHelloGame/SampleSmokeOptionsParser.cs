@@ -72,6 +72,21 @@ public static class SampleSmokeOptionsParser
         "--benchmark-hdr-quality-contract",
         "--benchmark-shader-profile",
         "--benchmark-require-shader-profile",
+        "--benchmark-quality-sequence",
+        "--benchmark-quality-sequence-role",
+        "--benchmark-quality-sequence-id",
+        "--benchmark-quality-sequence-report",
+        "--benchmark-quality-sequence-output-dir",
+        "--benchmark-quality-sequence-warmup-frames",
+        "--benchmark-quality-sequence-max-settle-frames",
+        "--benchmark-quality-sequence-max-drain-frames",
+        "--benchmark-quality-sequence-budget-profile",
+        "--benchmark-quality-sequence-variant",
+        "--benchmark-quality-sequence-trajectory",
+        "--benchmark-quality-sequence-reference-contract",
+        "--benchmark-quality-sequence-hdr-quality-contract",
+        "--benchmark-quality-sequence-hdr-max-relative-rmse",
+        "--benchmark-quality-sequence-hdr-max-flip-p95",
         "--startup-log",
         "--validation",
         "--force-missing-assets",
@@ -423,6 +438,29 @@ public static class SampleSmokeOptionsParser
         enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkShaderProfilePath);
         enableBenchmark |= benchmarkRequireShaderProfile;
 
+        bool enableBenchmarkQualitySequence = false;
+        bool benchmarkQualitySequenceDetailSpecified = false;
+        bool benchmarkQualitySequenceRoleSpecified = false;
+        SampleBenchmarkQualitySequenceRole benchmarkQualitySequenceRole =
+            SampleBenchmarkQualitySequenceRole.Canonical;
+        string benchmarkQualitySequenceId = string.Empty;
+        string benchmarkQualitySequenceReportPath = string.Empty;
+        string benchmarkQualitySequenceOutputDirectory = string.Empty;
+        int benchmarkQualitySequenceWarmupFrames = 0;
+        int benchmarkQualitySequenceMaximumSettlingFrames =
+            SampleBenchmarkOptions.ProductionMinimumAdditionalSettlingFrameCount;
+        int benchmarkQualitySequenceMaximumDrainFrames = 240;
+        RenderBudgetProfileKind? benchmarkQualitySequenceBudgetProfile = null;
+        string benchmarkQualitySequenceVariant =
+            SampleBenchmarkCaptureVariant.Baseline;
+        bool benchmarkQualitySequenceTrajectorySpecified = false;
+        SampleBenchmarkTrajectoryKind benchmarkQualitySequenceTrajectory =
+            SampleBenchmarkTrajectoryKind.Stationary;
+        string benchmarkQualitySequenceReferenceContractPath = string.Empty;
+        string benchmarkQualitySequenceHdrQualityContractPath = string.Empty;
+        double benchmarkQualitySequenceMaximumRelativeRmse = 0.005;
+        double benchmarkQualitySequenceMaximumFlipP95 = 0.02;
+
         string? validationEnvironment =
             Environment.GetEnvironmentVariable("NJULF_RENDERER_VALIDATION");
         bool validationSpecified = !string.IsNullOrWhiteSpace(validationEnvironment);
@@ -446,6 +484,12 @@ public static class SampleSmokeOptionsParser
             }
 
             string value = ReadValue(args, ref i);
+            if (optionName.StartsWith(
+                    "--benchmark-quality-sequence-",
+                    StringComparison.Ordinal))
+            {
+                benchmarkQualitySequenceDetailSpecified = true;
+            }
             switch (optionName)
             {
                 case "--smoke-frames":
@@ -695,6 +739,87 @@ public static class SampleSmokeOptionsParser
                 case "--benchmark-require-shader-profile":
                     benchmarkRequireShaderProfile = ParseBool(value, optionName);
                     enableBenchmark = true;
+                    break;
+                case "--benchmark-quality-sequence":
+                    enableBenchmarkQualitySequence = ParseBool(value, optionName);
+                    break;
+                case "--benchmark-quality-sequence-role":
+                    benchmarkQualitySequenceRole =
+                        ParseBenchmarkQualitySequenceRole(value);
+                    benchmarkQualitySequenceRoleSpecified = true;
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-id":
+                    benchmarkQualitySequenceId =
+                        RequireNonEmptyValue(value, optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-report":
+                    benchmarkQualitySequenceReportPath =
+                        RequirePath(value, optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-output-dir":
+                    benchmarkQualitySequenceOutputDirectory =
+                        RequirePath(value, optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-warmup-frames":
+                    benchmarkQualitySequenceWarmupFrames =
+                        ParseNonNegativeInt(value, 0, optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-max-settle-frames":
+                    benchmarkQualitySequenceMaximumSettlingFrames =
+                        ParsePositiveInt(
+                            value,
+                            SampleBenchmarkOptions
+                                .ProductionMinimumAdditionalSettlingFrameCount,
+                            optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-max-drain-frames":
+                    benchmarkQualitySequenceMaximumDrainFrames =
+                        ParsePositiveInt(value, 240, optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-budget-profile":
+                    benchmarkQualitySequenceBudgetProfile =
+                        ParseBenchmarkBudgetProfile(value) ??
+                        throw new ArgumentException(
+                            $"{optionName} requires low, medium, high, ultra, or stress.");
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-variant":
+                    benchmarkQualitySequenceVariant =
+                        RequireNonEmptyValue(value, optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-trajectory":
+                    benchmarkQualitySequenceTrajectory =
+                        SampleBenchmarkTrajectory.Parse(value);
+                    benchmarkQualitySequenceTrajectorySpecified = true;
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-reference-contract":
+                    benchmarkQualitySequenceReferenceContractPath =
+                        RequirePath(value, optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-hdr-quality-contract":
+                    benchmarkQualitySequenceHdrQualityContractPath =
+                        RequirePath(value, optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-hdr-max-relative-rmse":
+                    benchmarkQualitySequenceMaximumRelativeRmse =
+                        ParseNonNegativeDouble(value, 0.005, optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-hdr-max-flip-p95":
+                    benchmarkQualitySequenceMaximumFlipP95 =
+                        ParseNonNegativeDouble(value, 0.02, optionName);
+                    enableBenchmarkQualitySequence = true;
                     break;
                 case "--startup-log":
                     startupLogPath = RequirePath(value, "--startup-log");
@@ -1029,14 +1154,94 @@ public static class SampleSmokeOptionsParser
             longRunOptionsSpecified = true;
         }
 
+        if (benchmarkQualitySequenceDetailSpecified &&
+            !enableBenchmarkQualitySequence)
+        {
+            throw new ArgumentException(
+                "Benchmark quality-sequence options cannot be supplied while " +
+                "--benchmark-quality-sequence=false disables their validation.");
+        }
+        if (enableBenchmarkQualitySequence)
+        {
+            if (enableBenchmark)
+            {
+                throw new ArgumentException(
+                    "Benchmark timing and benchmark quality-sequence modes are mutually exclusive.");
+            }
+            if (mode != SampleSmokeMode.None || frameCount > 0 ||
+                longRunOptionsSpecified ||
+                !string.IsNullOrWhiteSpace(materialGiCaptureDirectory) ||
+                !string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory) ||
+                !string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory) ||
+                khronosRenderedGate is not null ||
+                !string.IsNullOrWhiteSpace(baselineSnapshotDirectory))
+            {
+                throw new ArgumentException(
+                    "Benchmark quality-sequence mode owns a standalone deterministic route and cannot be combined with another capture, smoke, benchmark, or long-run mode.");
+            }
+            if (!benchmarkQualitySequenceRoleSpecified ||
+                !benchmarkQualitySequenceTrajectorySpecified ||
+                !benchmarkQualitySequenceBudgetProfile.HasValue ||
+                string.IsNullOrWhiteSpace(benchmarkQualitySequenceId) ||
+                string.IsNullOrWhiteSpace(benchmarkQualitySequenceReportPath) ||
+                string.IsNullOrWhiteSpace(benchmarkQualitySequenceOutputDirectory))
+            {
+                throw new ArgumentException(
+                    "Benchmark quality-sequence mode requires explicit role, id, report, output directory, trajectory, and budget profile.");
+            }
+            if (benchmarkQualitySequenceMaximumSettlingFrames <
+                SampleBenchmarkOptions.ProductionMinimumAdditionalSettlingFrameCount)
+            {
+                throw new ArgumentException(
+                    "Benchmark quality-sequence mode requires at least " +
+                    $"{SampleBenchmarkOptions.ProductionMinimumAdditionalSettlingFrameCount} settling frames.");
+            }
+            if (benchmarkQualitySequenceMaximumDrainFrames < 3)
+            {
+                throw new ArgumentException(
+                    "Benchmark quality-sequence mode requires at least three readback-drain frames.");
+            }
+            bool canonicalQualitySequence = benchmarkQualitySequenceRole ==
+                SampleBenchmarkQualitySequenceRole.Canonical;
+            if (canonicalQualitySequence &&
+                (!string.IsNullOrWhiteSpace(
+                     benchmarkQualitySequenceReferenceContractPath) ||
+                 !string.IsNullOrWhiteSpace(
+                     benchmarkQualitySequenceHdrQualityContractPath)))
+            {
+                throw new ArgumentException(
+                    "A canonical benchmark quality sequence cannot consume reference or ROI contracts.");
+            }
+            if (!canonicalQualitySequence &&
+                (string.IsNullOrWhiteSpace(
+                     benchmarkQualitySequenceReferenceContractPath) ||
+                 string.IsNullOrWhiteSpace(
+                     benchmarkQualitySequenceHdrQualityContractPath)))
+            {
+                throw new ArgumentException(
+                    "Repeat and candidate benchmark quality sequences require reference and ROI contracts.");
+            }
+            if (SampleBenchmarkTrajectory.RequiresBistro(
+                    benchmarkQualitySequenceTrajectory) &&
+                bistroQualityCaptureVariant ==
+                    SampleBistroQualityCaptureVariant.ReflectionSourceAb)
+            {
+                throw new ArgumentException(
+                    "Benchmark quality-sequence mode does not admit the " +
+                    "ReflectionSourceAb Bistro variant because it intentionally " +
+                    "changes the render-settings identity inside the route.");
+            }
+        }
+
         int standaloneCaptureModeCount =
             (!string.IsNullOrWhiteSpace(materialGiCaptureDirectory) ? 1 : 0) +
             (!string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory) ? 1 : 0) +
-            (!string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory) ? 1 : 0);
+            (!string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory) ? 1 : 0) +
+            (enableBenchmarkQualitySequence ? 1 : 0);
         if (standaloneCaptureModeCount > 1)
         {
             throw new ArgumentException(
-                "Material, Sponza, and Bistro quality capture directories are independent standalone modes and cannot be combined.");
+                "Material, Sponza, Bistro, and benchmark quality-sequence captures are independent standalone modes and cannot be combined.");
         }
 
         if (sponzaGiCaptureModeSpecified &&
@@ -1050,7 +1255,10 @@ public static class SampleSmokeOptionsParser
             string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory) &&
             performanceScenario !=
                 SamplePerformanceScenario.BistroQualityMotionRelight &&
-            !SampleBenchmarkTrajectory.RequiresBistro(benchmarkTrajectory))
+            !SampleBenchmarkTrajectory.RequiresBistro(
+                enableBenchmarkQualitySequence
+                    ? benchmarkQualitySequenceTrajectory
+                    : benchmarkTrajectory))
         {
             throw new ArgumentException(
                 "--bistro-quality-variant requires --bistro-quality-capture-dir, " +
@@ -1259,7 +1467,11 @@ public static class SampleSmokeOptionsParser
                 sceneKind = SampleSceneKind.Bistro;
             }
 
-            if (SampleBenchmarkTrajectory.RequiresBistro(benchmarkTrajectory))
+            SampleBenchmarkTrajectoryKind controlledTrajectory =
+                enableBenchmarkQualitySequence
+                    ? benchmarkQualitySequenceTrajectory
+                    : benchmarkTrajectory;
+            if (SampleBenchmarkTrajectory.RequiresBistro(controlledTrajectory))
             {
                 if (performanceScenario ==
                         SamplePerformanceScenario.GiSponzaRightWallStationary ||
@@ -1267,17 +1479,17 @@ public static class SampleSmokeOptionsParser
                         performanceScenario))
                 {
                     throw new ArgumentException(
-                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' " +
+                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(controlledTrajectory)}' " +
                         $"cannot be combined with Sponza-only scenario '{performanceScenario}'.");
                 }
                 if (sceneSpecified && sceneKind != SampleSceneKind.Bistro)
                 {
                     throw new ArgumentException(
-                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' " +
+                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(controlledTrajectory)}' " +
                         "requires the Bistro scene.");
                 }
                 sceneKind = SampleSceneKind.Bistro;
-                if (benchmarkTrajectory ==
+                if (controlledTrajectory ==
                     SampleBenchmarkTrajectoryKind.BistroPresentation)
                 {
                     bistroQualityCaptureVariant =
@@ -1291,25 +1503,25 @@ public static class SampleSmokeOptionsParser
                         "Bistro quality variant.");
                 }
             }
-            if (SampleBenchmarkTrajectory.RequiresSponza(benchmarkTrajectory))
+            if (SampleBenchmarkTrajectory.RequiresSponza(controlledTrajectory))
             {
                 if (performanceScenario ==
                     SamplePerformanceScenario.BistroQualityMotionRelight)
                 {
                     throw new ArgumentException(
-                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' " +
+                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(controlledTrajectory)}' " +
                         "cannot be combined with BistroQualityMotionRelight.");
                 }
                 if (sceneSpecified && sceneKind != SampleSceneKind.SponzaPlaza)
                 {
                     throw new ArgumentException(
-                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' " +
+                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(controlledTrajectory)}' " +
                         "requires the Sponza plaza scene.");
                 }
                 sceneKind = SampleSceneKind.SponzaPlaza;
             }
 
-            if (benchmarkTrajectory !=
+            if (controlledTrajectory !=
                     SampleBenchmarkTrajectoryKind.Stationary &&
                 performanceScenario ==
                     SamplePerformanceScenario.GiFastTraversalTeleport)
@@ -1319,7 +1531,20 @@ public static class SampleSmokeOptionsParser
                     "be combined with a named benchmark trajectory.");
             }
 
-            if (enableBenchmark)
+            if (enableBenchmarkQualitySequence)
+            {
+                mode = SampleSmokeMode.None;
+                frameCount = 0;
+                if (!validationSpecified)
+                    validationMode = RendererValidationMode.Off;
+                if (!asyncComputeModeOverride.HasValue)
+                {
+                    asyncComputeModeOverride = AsyncComputeMode.Disabled;
+                    enableAsyncCompute = false;
+                }
+                enableGpuTiming = true;
+            }
+            else if (enableBenchmark)
             {
                 if (mode != SampleSmokeMode.None || frameCount > 0 || longRunOptionsSpecified)
                 {
@@ -1518,7 +1743,7 @@ public static class SampleSmokeOptionsParser
                 _ => 3
             };
         }
-        if (enableBenchmark)
+        if (enableBenchmark || enableBenchmarkQualitySequence)
             enableGpuTiming = true;
 
         var benchmark = new SampleBenchmarkOptions(
@@ -1550,6 +1775,40 @@ public static class SampleSmokeOptionsParser
             RequireShaderProfileEvidence = benchmarkRequireShaderProfile,
             MaximumAdditionalSettlingFrameCount = benchmarkMaximumSettlingFrames
         };
+        var benchmarkQualitySequence =
+            new SampleBenchmarkQualitySequenceOptions
+            {
+                Enabled = enableBenchmarkQualitySequence,
+                Role = benchmarkQualitySequenceRole,
+                SequenceId = benchmarkQualitySequenceId,
+                ReportPath = benchmarkQualitySequenceReportPath,
+                OutputDirectory = benchmarkQualitySequenceOutputDirectory,
+                WarmupFrameCount = benchmarkQualitySequenceWarmupFrames,
+                MaximumAdditionalSettlingFrameCount =
+                    benchmarkQualitySequenceMaximumSettlingFrames,
+                MaximumReadbackDrainFrameCount =
+                    benchmarkQualitySequenceMaximumDrainFrames,
+                BudgetProfileOverride =
+                    benchmarkQualitySequenceBudgetProfile,
+                CaptureVariant = SampleBenchmarkCaptureVariant.Normalize(
+                    benchmarkQualitySequenceVariant),
+                SceneKind = sceneKind,
+                Scenario = performanceScenario,
+                Trajectory = benchmarkQualitySequenceTrajectory,
+                TrajectoryFingerprint =
+                    SampleBenchmarkTrajectory.CreateFingerprint(
+                        benchmarkQualitySequenceTrajectory,
+                        bistroQualityCaptureVariant),
+                TrajectoryBistroVariant = bistroQualityCaptureVariant,
+                ReferenceContractPath =
+                    benchmarkQualitySequenceReferenceContractPath,
+                HdrQualityContractPath =
+                    benchmarkQualitySequenceHdrQualityContractPath,
+                HdrMaximumRelativeRmse =
+                    benchmarkQualitySequenceMaximumRelativeRmse,
+                HdrMaximumFlipP95 =
+                    benchmarkQualitySequenceMaximumFlipP95
+            };
         return new SampleSmokeOptions(
             mode,
             frameCount,
@@ -1615,7 +1874,8 @@ public static class SampleSmokeOptionsParser
             advancedGiRuntimeEvidenceBundlePath,
             advancedGiStartupProfilePath,
             bistroQualityCaptureDirectory,
-            bistroQualityCaptureVariant);
+            bistroQualityCaptureVariant,
+            benchmarkQualitySequence);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -1627,6 +1887,20 @@ public static class SampleSmokeOptionsParser
             if (string.Equals(path.ToString(), normalized, StringComparison.OrdinalIgnoreCase))
                 return path;
         throw new ArgumentException($"Unknown async compute path '{value}'.");
+    }
+
+    private static SampleBenchmarkQualitySequenceRole
+        ParseBenchmarkQualitySequenceRole(string? value)
+    {
+        string normalized = value?.Trim().ToLowerInvariant() ?? string.Empty;
+        return normalized switch
+        {
+            "canonical" => SampleBenchmarkQualitySequenceRole.Canonical,
+            "repeat" => SampleBenchmarkQualitySequenceRole.Repeat,
+            "candidate" => SampleBenchmarkQualitySequenceRole.Candidate,
+            _ => throw new ArgumentException(
+                "--benchmark-quality-sequence-role requires canonical, repeat, or candidate.")
+        };
     }
 
     private static SampleSponzaGiCaptureMode ParseSponzaGiCaptureMode(
@@ -1779,6 +2053,7 @@ public static class SampleSmokeOptionsParser
         if (arg is "--force-missing-assets" or
             "--fail-on-validation-message" or
             "--benchmark" or
+            "--benchmark-quality-sequence" or
             "--benchmark-require-production" or
             "--benchmark-require-shader-profile" or
             "--material-gi-qualification-candidate" or

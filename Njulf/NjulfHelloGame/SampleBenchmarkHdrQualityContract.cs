@@ -66,6 +66,17 @@ internal static class SampleBenchmarkHdrQualityContractEvaluator
             Path.GetFullPath(contractPath),
             SampleEvidenceFileIo.MaximumJsonBytes,
             "Benchmark HDR quality contract");
+        return Evaluate(evidence, reference, candidate);
+    }
+
+    internal static SampleBenchmarkHdrRoiEvaluation Evaluate(
+        SampleEvidenceFileContent? admittedEvidence,
+        LinearFloatImage reference,
+        LinearFloatImage candidate)
+    {
+        if (!admittedEvidence.HasValue)
+            return SampleBenchmarkHdrRoiEvaluation.None;
+        SampleEvidenceFileContent evidence = admittedEvidence.Value;
         SampleEvidenceFileIo.ValidateStrictJson(
             evidence.Bytes,
             JsonOptions.MaxDepth,

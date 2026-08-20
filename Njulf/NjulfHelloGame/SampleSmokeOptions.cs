@@ -71,9 +71,12 @@ public sealed record SampleSmokeOptions(
     string? AdvancedGiStartupProfilePath = null,
     string? BistroQualityCaptureDirectory = null,
     SampleBistroQualityCaptureVariant BistroQualityCaptureVariant =
-        SampleBistroQualityCaptureVariant.SunScaleStep)
+        SampleBistroQualityCaptureVariant.SunScaleStep,
+    SampleBenchmarkQualitySequenceOptions? BenchmarkQualitySequence = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
+    public SampleBenchmarkQualitySequenceOptions BenchmarkQualitySequence { get; init; } =
+        BenchmarkQualitySequence ?? SampleBenchmarkQualitySequenceOptions.Disabled;
 
     /// <summary>
     /// Reopens the editor after an editor-initiated renderer reconstruction.
@@ -121,10 +124,12 @@ public sealed record SampleSmokeOptions(
         LongRunMinutes > 0.0 ||
         KhronosMaterialGiRenderedGate is not null ||
         TailDdgiLongSoak ||
-        Benchmark.Enabled;
+        Benchmark.Enabled ||
+        BenchmarkQualitySequence.Enabled;
 
     public bool UsesDeterministicSimulationClock =>
         Benchmark.Enabled ||
+        BenchmarkQualitySequence.Enabled ||
         TailDdgiLongSoak ||
         !string.IsNullOrWhiteSpace(BistroQualityCaptureDirectory) ||
         PerformanceScenario ==
