@@ -1780,11 +1780,73 @@ function Invoke-SyntheticCookedAssetStagingCase {
     }
 }
 
+function Invoke-SyntheticFrozenVerifierReturnShapeCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver,
+        [ref]$tokens,
+        [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for the frozen verifier return-shape test."
+    }
+    foreach ($functionName in @(
+            "Get-Sha256",
+            "Assert-NoDuplicateJsonProperties",
+            "ConvertFrom-FrozenVerifierBytes",
+            "Stop-ProcessTreeAndDrain",
+            "Invoke-FrozenVerifierProcess")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    function Assert-BuildIdentity {
+        param($BuildIdentity, [string]$Label)
+    }
+    function Assert-CampaignLockIntegrity {}
+
+    $inputPath = Join-Path $testRoot "frozen-verifier-input.json"
+    [System.IO.File]::WriteAllText(
+        $inputPath,
+        "{}",
+        [System.Text.UTF8Encoding]::new($false))
+    $pwsh = (Get-Command pwsh).Source
+    $build = [pscustomobject]@{
+        RootPath = $testRoot
+        ExecutablePath = $pwsh
+    }
+    $invocation = Invoke-FrozenVerifierProcess `
+        $build `
+        @(
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Console]::Out.Write('{`"kind`":`"synthetic`"}' + [Environment]::NewLine)") `
+        @($inputPath) `
+        @((Get-Sha256 $inputPath)) `
+        "Synthetic frozen verifier" `
+        30
+    if (@($invocation).Count -ne 1 -or
+        $null -eq $invocation.PSObject.Properties["Bytes"] -or
+        $null -eq $invocation.PSObject.Properties["Result"] -or
+        [string]$invocation.Result.kind -cne "synthetic") {
+        throw "Frozen verifier invocation leaked task completion values into its return shape."
+    }
+    Write-Host "PASS frozen-verifier-return-shape"
+}
+
 try {
     Invoke-SyntheticManifestSnapshotCase
     Invoke-SyntheticHealthReportCase
     Invoke-SyntheticAcceptanceRefCase
     Invoke-SyntheticVerifierByteContractCase
+    Invoke-SyntheticFrozenVerifierReturnShapeCase
     Invoke-SyntheticQualityAnimationContractCase
     Invoke-SyntheticComparisonContractCase
     Invoke-SyntheticQualitySequencePolicyCase

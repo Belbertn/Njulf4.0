@@ -1854,7 +1854,7 @@ function Invoke-FrozenVerifierProcess {
                 $process $stdoutTask $stderrTask "$Label frozen verifier"
             throw "$Label frozen verifier timed out after $TimeoutSeconds seconds after terminal process-tree cleanup."
         }
-        $stdoutTask.GetAwaiter().GetResult()
+        $null = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         $stdoutBytes = $stdoutStream.ToArray()
         if ($process.ExitCode -ne 0) {
@@ -4680,7 +4680,7 @@ function Invoke-QualityMetricVerifier {
             $process.WaitForExit()
             throw "$Label verifier timed out."
         }
-        $stdoutTask.GetAwaiter().GetResult()
+        $null = $stdoutTask.GetAwaiter().GetResult()
         $stdoutBytes = $stdoutStream.ToArray()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0) {
