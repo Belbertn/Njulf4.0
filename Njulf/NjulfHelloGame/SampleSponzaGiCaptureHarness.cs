@@ -2052,12 +2052,13 @@ public sealed class SampleSponzaGiCaptureContract
 
 /// <summary>
 /// Compact per-frame evidence retained entirely in a fixed 960-entry ring.
-/// Recording reads only already-materialized, fence-complete diagnostics; it
-/// never scans probe or page arrays and performs no per-frame allocation.
+/// Recording reads only already-materialized diagnostics. Current recorded
+/// reflection work and fence-complete reflection work remain explicitly
+/// separate; recording never scans probe/page arrays or allocates per frame.
 /// </summary>
 public sealed class SampleSponzaGiTemporalTrace
 {
-    public const string SchemaVersion = "simple-ddgi-sponza-temporal-trace/v4";
+    public const string SchemaVersion = "simple-ddgi-sponza-temporal-trace/v5";
     public const int Capacity = 960;
 
     private static readonly JsonSerializerOptions TraceJsonOptions = new()
@@ -2211,7 +2212,19 @@ public sealed class SampleSponzaGiTemporalTrace
             CpuSimpleDdgiRecordMicroseconds = diagnostics.CpuSimpleDdgiRecordMicroseconds,
             CpuGlobalIlluminationRecordMicroseconds =
                 diagnostics.CpuGlobalIlluminationRecordMicroseconds,
-            CpuFenceWaitMicroseconds = diagnostics.CpuWaitForFrameFenceMicroseconds
+            CpuFenceWaitMicroseconds = diagnostics.CpuWaitForFrameFenceMicroseconds,
+            ReflectionProbeCurrentLifecycle =
+                diagnostics.ReflectionProbeCurrentLifecycle,
+            ReflectionProbeCurrentCaptureBudget =
+                diagnostics.ReflectionProbeCurrentCaptureBudget,
+            ReflectionProbeCompletedLifecycle =
+                diagnostics.ReflectionProbeCompletedLifecycle,
+            GpuReflectionProbeCaptureMicroseconds =
+                diagnostics.GpuReflectionProbeCaptureMicroseconds,
+            GpuReflectionProbePrefilterMicroseconds =
+                diagnostics.GpuReflectionProbePrefilterMicroseconds,
+            GpuReflectionProbePublishMicroseconds =
+                diagnostics.GpuReflectionProbePublishMicroseconds
         };
         _nextIndex = (_nextIndex + 1) % Capacity;
         _count = Math.Min(Capacity, _count + 1);
@@ -2346,6 +2359,14 @@ public readonly record struct SampleSponzaGiTemporalTraceEntry
     public long CpuSimpleDdgiRecordMicroseconds { get; init; }
     public long CpuGlobalIlluminationRecordMicroseconds { get; init; }
     public long CpuFenceWaitMicroseconds { get; init; }
+    /// <summary>Recorded work and planner state for this diagnostics frame.</summary>
+    public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCurrentLifecycle { get; init; }
+    public ReflectionProbeGpuBudgetSnapshot ReflectionProbeCurrentCaptureBudget { get; init; }
+    /// <summary>Fence-complete lifecycle aligned with the GPU timings below.</summary>
+    public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCompletedLifecycle { get; init; }
+    public long GpuReflectionProbeCaptureMicroseconds { get; init; }
+    public long GpuReflectionProbePrefilterMicroseconds { get; init; }
+    public long GpuReflectionProbePublishMicroseconds { get; init; }
 }
 
 /// <summary>

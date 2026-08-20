@@ -51,7 +51,7 @@ public sealed record SampleBistroQualityFrameState(
 /// </summary>
 public sealed class SampleBistroQualityCaptureContract
 {
-    public const string Schema = "bistro-quality-run/v5";
+    public const string Schema = "bistro-quality-run/v6";
     public const int Width = 1920;
     public const int Height = 1080;
     public const int FramesPerSecond = 60;
@@ -367,7 +367,19 @@ public sealed record SampleBistroQualityFrameTelemetry(
     int ReflectionProbePublishedCount,
     long GpuReflectionProbeCaptureMicroseconds,
     long GpuReflectionProbePrefilterMicroseconds,
-    int ScreenshotPendingCount);
+    int ScreenshotPendingCount)
+{
+    /// <summary>Recorded work and planner state for this diagnostics frame.</summary>
+    public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCurrentLifecycle { get; init; }
+    public ReflectionProbeGpuBudgetSnapshot ReflectionProbeCurrentCaptureBudget { get; init; }
+
+    /// <summary>
+    /// Fence-complete lifecycle aligned with the reflection GPU timings below.
+    /// It can name an earlier renderer frame than ReflectionProbeCurrentLifecycle.
+    /// </summary>
+    public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCompletedLifecycle { get; init; }
+    public long GpuReflectionProbePublishMicroseconds { get; init; }
+}
 
 public sealed record SampleBistroQualityGateResult(
     bool Passed,
@@ -675,7 +687,7 @@ internal sealed class SampleBistroQualityCaptureRunner
             SampleBistroQualityFrameState state =
                 _controller.LastAppliedState ??
                 _controller.Contract.ResolveFrame(absoluteFrameIndex);
-            _frames.Add(new SampleBistroQualityFrameTelemetry(
+            SampleBistroQualityFrameTelemetry frame = new(
                 absoluteFrameIndex,
                 state.LoopFrameIndex,
                 state.LightingEventActive,
@@ -802,7 +814,18 @@ internal sealed class SampleBistroQualityCaptureRunner
                 diagnostics.ReflectionProbePublishedCount,
                 diagnostics.GpuReflectionProbeCaptureMicroseconds,
                 diagnostics.GpuReflectionProbePrefilterMicroseconds,
-                diagnostics.ScreenshotPendingCount));
+                diagnostics.ScreenshotPendingCount)
+            {
+                ReflectionProbeCurrentLifecycle =
+                    diagnostics.ReflectionProbeCurrentLifecycle,
+                ReflectionProbeCurrentCaptureBudget =
+                    diagnostics.ReflectionProbeCurrentCaptureBudget,
+                ReflectionProbeCompletedLifecycle =
+                    diagnostics.ReflectionProbeCompletedLifecycle,
+                GpuReflectionProbePublishMicroseconds =
+                    diagnostics.GpuReflectionProbePublishMicroseconds
+            };
+            _frames.Add(frame);
         }
 
         if (absoluteFrameIndex <
@@ -1329,14 +1352,19 @@ internal sealed class SampleBistroQualityCaptureRunner
             artifacts,
             gate,
             failure);
-        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(
-            report,
-            JsonOptions);
+        byte[] payload = SerializeReport(report);
         SampleEvidenceFileIo.WriteAtomic(
             Path.Combine(_outputDirectory, "bistro-quality-run.json"),
             payload,
             SampleEvidenceFileIo.MaximumJsonBytes,
             "Bistro quality capture report");
+    }
+
+    internal static byte[] SerializeReport(
+        SampleBistroQualityRunReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        return JsonSerializer.SerializeToUtf8Bytes(report, JsonOptions);
     }
 
     private SampleBistroQualityArtifact CreateArtifact(

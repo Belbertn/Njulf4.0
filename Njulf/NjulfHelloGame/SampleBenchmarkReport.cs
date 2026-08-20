@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
 
@@ -69,6 +70,8 @@ public sealed record SampleBenchmarkReport(
     public SampleBenchmarkSponzaSceneAnimationEvidence
         SponzaSceneAnimationEvidence { get; init; } =
             SampleBenchmarkSponzaSceneAnimationEvidence.Unavailable;
+    public SampleReflectionProbeCaptureEvidence ReflectionProbeCaptureEvidence { get; init; } =
+        SampleReflectionProbeCaptureEvidence.Empty;
 }
 
 public sealed record SampleBenchmarkTimingStats(
@@ -387,6 +390,34 @@ public sealed record SampleBenchmarkCpuSpikeEvidence(
         SampleBenchmarkCpuCohortEvidence.Empty("Rebuilt"),
         SampleBenchmarkCpuCohortEvidence.Empty("Stable"),
         Array.Empty<SampleBenchmarkCpuSlowFrame>());
+}
+
+/// <summary>
+/// One completed reflection workload ranked by its aligned capture, prefilter,
+/// and publish GPU timestamps. CompletedLifecycle owns the unit counts and
+/// frame-slot identity used by those timings. SubmittedBudget is recovered
+/// only by joining that identity to an earlier measured current frame.
+/// </summary>
+public sealed record SampleReflectionProbeSlowFrame(
+    int MeasurementSampleIndex,
+    long CompletedGpuMicroseconds,
+    long GpuCaptureMicroseconds,
+    long GpuPrefilterMicroseconds,
+    long GpuPublishMicroseconds,
+    ReflectionProbeLifecycleFrameSnapshot CompletedLifecycle,
+    bool SubmittedBudgetAvailable,
+    int SubmittedBudgetMeasurementSampleIndex,
+    int SubmittedBudgetFrameSlot,
+    ulong SubmittedBudgetFrameSerial,
+    ReflectionProbeGpuBudgetSnapshot SubmittedBudget);
+
+public sealed record SampleReflectionProbeCaptureEvidence(
+    IReadOnlyList<SampleReflectionProbeSlowFrame> SlowestFrames)
+{
+    public const int SlowFrameLimit = 8;
+
+    public static SampleReflectionProbeCaptureEvidence Empty { get; } =
+        new(Array.Empty<SampleReflectionProbeSlowFrame>());
 }
 
 public sealed record SampleDdgiSchedulerSlowFrame(

@@ -200,7 +200,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.MotionTraversalFrameCount, Is.EqualTo(300));
             Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v20"));
             Assert.That(SampleSponzaGiTemporalTrace.SchemaVersion,
-                Is.EqualTo("simple-ddgi-sponza-temporal-trace/v4"));
+                Is.EqualTo("simple-ddgi-sponza-temporal-trace/v5"));
             Assert.That(SampleSponzaGiTemporalTrace.Capacity, Is.EqualTo(960));
             Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_164));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
@@ -525,6 +525,99 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(trace.TotalSampleCount, Is.Zero);
             Assert.That(backingStore[0].StageFrameIndex, Is.EqualTo(23));
         });
+    }
+
+    [Test]
+    public void TemporalTraceV5_WritesAlignedReflectionLifecycleAndBudgetJson()
+    {
+        var trace = new SampleSponzaGiTemporalTrace();
+        SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
+        ReflectionProbeLifecycleFrameSnapshot current =
+            CreateReflectionLifecycleFrame(
+                frameSlot: 1,
+                frameSerial: 72,
+                captureFaceUnits: 2,
+                prefilterMipUnits: 3,
+                publishCopyUnits: 0);
+        ReflectionProbeLifecycleFrameSnapshot completed =
+            CreateReflectionLifecycleFrame(
+                frameSlot: 1,
+                frameSerial: 70,
+                captureFaceUnits: 6,
+                prefilterMipUnits: 7,
+                publishCopyUnits: 1);
+        ReflectionProbeGpuBudgetSnapshot budget = new(
+            BudgetMicroseconds: 900,
+            ReservedMicroseconds: 325,
+            FaceEstimateMicroseconds: 115,
+            PrefilterEstimateMicroseconds: 135,
+            CopyEstimateMicroseconds: 40,
+            HasTimingHistory: true,
+            BudgetExhausted: false);
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            ReflectionProbeCurrentLifecycle = current,
+            ReflectionProbeCurrentCaptureBudget = budget,
+            ReflectionProbeCompletedLifecycle = completed,
+            GpuReflectionProbeCaptureMicroseconds = 611,
+            GpuReflectionProbePrefilterMicroseconds = 277,
+            GpuReflectionProbePublishMicroseconds = 43
+        };
+        trace.Record(
+            new SampleSponzaGiCaptureInstruction(
+                SampleSponzaGiCaptureStage.VerticalTraversal,
+                0,
+                contract.VerticalTraversalFrameCount,
+                contract.LowBookmark,
+                null,
+                SampleSponzaGiCaptureContract.VerticalTraversalName,
+                false),
+            diagnostics);
+        string path = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            $"sponza-reflection-trace-{Guid.NewGuid():N}.json");
+
+        try
+        {
+            trace.Write(path, contract.Fingerprint, "reflection-alignment");
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(path));
+            JsonElement entry = document.RootElement.GetProperty("entries")[0];
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    document.RootElement.GetProperty("schemaVersion").GetString(),
+                    Is.EqualTo("simple-ddgi-sponza-temporal-trace/v5"));
+                Assert.That(
+                    document.RootElement.GetProperty("contractFingerprint").GetString(),
+                    Is.EqualTo(contract.Fingerprint));
+                Assert.That(trace.Snapshot()[0].ReflectionProbeCurrentLifecycle,
+                    Is.EqualTo(current));
+                Assert.That(trace.Snapshot()[0].ReflectionProbeCompletedLifecycle,
+                    Is.EqualTo(completed));
+                Assert.That(
+                    entry.GetProperty("reflectionProbeCurrentLifecycle")
+                        .GetProperty("frameSerial").GetUInt64(),
+                    Is.EqualTo(72UL));
+                Assert.That(
+                    entry.GetProperty("reflectionProbeCurrentCaptureBudget")
+                        .GetProperty("reservedMicroseconds").GetInt32(),
+                    Is.EqualTo(325));
+                Assert.That(
+                    entry.GetProperty("reflectionProbeCompletedLifecycle")
+                        .GetProperty("lifecycle")
+                        .GetProperty("publishCopyUnitsThisFrame").GetInt32(),
+                    Is.EqualTo(1));
+                Assert.That(
+                    entry.GetProperty("gpuReflectionProbePublishMicroseconds")
+                        .GetInt64(),
+                    Is.EqualTo(43));
+            });
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     [Test]
@@ -1178,6 +1271,34 @@ public sealed class SampleSponzaGiCaptureHarnessTests
         Assert.That(verified, Is.True, reason);
         return result;
     }
+
+    private static ReflectionProbeLifecycleFrameSnapshot CreateReflectionLifecycleFrame(
+        int frameSlot,
+        ulong frameSerial,
+        int captureFaceUnits,
+        int prefilterMipUnits,
+        int publishCopyUnits) => new(
+        Valid: true,
+        FrameSlot: frameSlot,
+        FrameSerial: frameSerial,
+        GpuTimingRecorded: true,
+        Lifecycle: new ReflectionProbeLifecycleSnapshot(
+            QueuedCount: 1,
+            ActiveCount: 1,
+            State: ReflectionProbeCaptureState.CapturingFaces,
+            AwaitingGpuCompletionCount: 0,
+            PublishedCount: 0,
+            CapturesStartedThisFrame: 1,
+            CapturesCompletedThisFrame: 0,
+            CaptureFaceUnitsThisFrame: captureFaceUnits,
+            PrefilterMipUnitsThisFrame: prefilterMipUnits,
+            PublishCopyUnitsThisFrame: publishCopyUnits,
+            CapturesStartedTotal: frameSerial,
+            CapturesCompletedTotal: frameSerial - 1,
+            CapturesPublishedTotal: frameSerial - 1,
+            CaptureFaceUnitsTotal: (ulong)captureFaceUnits,
+            PrefilterMipUnitsTotal: (ulong)prefilterMipUnits,
+            PublishCopyUnitsTotal: (ulong)publishCopyUnits));
 
     private static RendererDiagnostics ReadyTransportDiagnostics() =>
         RendererDiagnostics.Empty with

@@ -1991,6 +1991,12 @@ namespace Njulf.Rendering.Data
         public int ReflectionProbePublishedCount { get; init; }
         public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCurrentLifecycle { get; init; }
         public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCompletedLifecycle { get; init; }
+        /// <summary>
+        /// Planner state for <see cref="ReflectionProbeCurrentLifecycle"/>.
+        /// Consumers must join completed frame serials back to this current
+        /// frame before treating the budget as submission-aligned evidence.
+        /// </summary>
+        public ReflectionProbeGpuBudgetSnapshot ReflectionProbeCurrentCaptureBudget { get; init; }
         /// <summary>Current-frame planner reservation in microseconds.</summary>
         public int ReflectionProbeCaptureBudgetUsed { get; init; }
         /// <summary>One when the current-frame planner reservation exhausted its budget.</summary>

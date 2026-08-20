@@ -1,6 +1,9 @@
 using System;
 using System.Linq;
+using System.Text.Json;
 using Njulf.Core.Math;
+using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
 
@@ -222,6 +225,103 @@ public sealed class SampleBistroQualityCaptureHarnessTests
         });
     }
 
+    [Test]
+    public void SchemaV6_SerializesSeparateCurrentAndCompletedReflectionEvidence()
+    {
+        ReflectionProbeLifecycleFrameSnapshot current =
+            CreateReflectionLifecycleFrame(
+                frameSlot: 1,
+                frameSerial: 52,
+                captureFaceUnits: 3,
+                prefilterMipUnits: 4,
+                publishCopyUnits: 0);
+        ReflectionProbeLifecycleFrameSnapshot completed =
+            CreateReflectionLifecycleFrame(
+                frameSlot: 1,
+                frameSerial: 50,
+                captureFaceUnits: 6,
+                prefilterMipUnits: 7,
+                publishCopyUnits: 1);
+        ReflectionProbeGpuBudgetSnapshot budget = new(
+            BudgetMicroseconds: 800,
+            ReservedMicroseconds: 275,
+            FaceEstimateMicroseconds: 110,
+            PrefilterEstimateMicroseconds: 130,
+            CopyEstimateMicroseconds: 35,
+            HasTimingHistory: true,
+            BudgetExhausted: false);
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            ReflectionProbeCurrentLifecycle = current,
+            ReflectionProbeCurrentCaptureBudget = budget,
+            ReflectionProbeCompletedLifecycle = completed,
+            GpuReflectionProbePublishMicroseconds = 417
+        };
+        SampleBistroQualityFrameTelemetry emptyFrame =
+            JsonSerializer.Deserialize<SampleBistroQualityFrameTelemetry>("{}")!;
+        SampleBistroQualityFrameTelemetry frame = emptyFrame with
+        {
+            ReflectionProbeCurrentLifecycle =
+                diagnostics.ReflectionProbeCurrentLifecycle,
+            ReflectionProbeCurrentCaptureBudget =
+                diagnostics.ReflectionProbeCurrentCaptureBudget,
+            ReflectionProbeCompletedLifecycle =
+                diagnostics.ReflectionProbeCompletedLifecycle,
+            GpuReflectionProbePublishMicroseconds =
+                diagnostics.GpuReflectionProbePublishMicroseconds
+        };
+        var contract = new SampleBistroQualityCaptureContract(
+            SampleBistroQualityCaptureVariant.ReflectionSourceAb);
+        var report = new SampleBistroQualityRunReport(
+            "njulf-bistro-quality-capture",
+            SampleBistroQualityCaptureContract.Schema,
+            DateTimeOffset.UnixEpoch,
+            "completed",
+            contract.Variant,
+            contract.Fingerprint,
+            contract.CameraPathFingerprint,
+            contract.LightingScriptFingerprint,
+            SampleBistroQualityCaptureContract.Width,
+            SampleBistroQualityCaptureContract.Height,
+            SampleBistroQualityCaptureContract.FramesPerSecond,
+            [frame],
+            [],
+            null,
+            string.Empty);
+
+        using JsonDocument document = JsonDocument.Parse(
+            SampleBistroQualityCaptureRunner.SerializeReport(report));
+        JsonElement jsonFrame = document.RootElement.GetProperty("Frames")[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(SampleBistroQualityCaptureContract.Schema,
+                Is.EqualTo("bistro-quality-run/v6"));
+            Assert.That(document.RootElement.GetProperty("Schema").GetString(),
+                Is.EqualTo("bistro-quality-run/v6"));
+            Assert.That(frame.ReflectionProbeCurrentLifecycle, Is.EqualTo(current));
+            Assert.That(frame.ReflectionProbeCompletedLifecycle, Is.EqualTo(completed));
+            Assert.That(frame.ReflectionProbeCurrentCaptureBudget, Is.EqualTo(budget));
+            Assert.That(frame.GpuReflectionProbePublishMicroseconds, Is.EqualTo(417));
+            Assert.That(
+                jsonFrame.GetProperty("ReflectionProbeCurrentLifecycle")
+                    .GetProperty("FrameSerial").GetUInt64(),
+                Is.EqualTo(52UL));
+            Assert.That(
+                jsonFrame.GetProperty("ReflectionProbeCompletedLifecycle")
+                    .GetProperty("Lifecycle")
+                    .GetProperty("PublishCopyUnitsThisFrame").GetInt32(),
+                Is.EqualTo(1));
+            Assert.That(
+                jsonFrame.GetProperty("ReflectionProbeCurrentCaptureBudget")
+                    .GetProperty("ReservedMicroseconds").GetInt32(),
+                Is.EqualTo(275));
+            Assert.That(
+                jsonFrame.GetProperty("GpuReflectionProbePublishMicroseconds")
+                    .GetInt64(),
+                Is.EqualTo(417));
+        });
+    }
+
     private static float Distance(Vector3 left, Vector3 right)
     {
         float x = left.X - right.X;
@@ -229,4 +329,32 @@ public sealed class SampleBistroQualityCaptureHarnessTests
         float z = left.Z - right.Z;
         return MathF.Sqrt(x * x + y * y + z * z);
     }
+
+    private static ReflectionProbeLifecycleFrameSnapshot CreateReflectionLifecycleFrame(
+        int frameSlot,
+        ulong frameSerial,
+        int captureFaceUnits,
+        int prefilterMipUnits,
+        int publishCopyUnits) => new(
+        Valid: true,
+        FrameSlot: frameSlot,
+        FrameSerial: frameSerial,
+        GpuTimingRecorded: true,
+        Lifecycle: new ReflectionProbeLifecycleSnapshot(
+            QueuedCount: 1,
+            ActiveCount: 1,
+            State: ReflectionProbeCaptureState.CapturingFaces,
+            AwaitingGpuCompletionCount: 0,
+            PublishedCount: 0,
+            CapturesStartedThisFrame: 1,
+            CapturesCompletedThisFrame: 0,
+            CaptureFaceUnitsThisFrame: captureFaceUnits,
+            PrefilterMipUnitsThisFrame: prefilterMipUnits,
+            PublishCopyUnitsThisFrame: publishCopyUnits,
+            CapturesStartedTotal: frameSerial,
+            CapturesCompletedTotal: frameSerial - 1,
+            CapturesPublishedTotal: frameSerial - 1,
+            CaptureFaceUnitsTotal: (ulong)captureFaceUnits,
+            PrefilterMipUnitsTotal: (ulong)prefilterMipUnits,
+            PublishCopyUnitsTotal: (ulong)publishCopyUnits));
 }

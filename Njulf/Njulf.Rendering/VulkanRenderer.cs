@@ -8900,6 +8900,8 @@ namespace Njulf.Rendering
                      sceneData.ReflectionProbeCurrentLifecycle,
                  ReflectionProbeCompletedLifecycle =
                      sceneData.ReflectionProbeCompletedLifecycle,
+                 ReflectionProbeCurrentCaptureBudget =
+                     sceneData.ReflectionProbeCaptureBudget,
                  ReflectionProbeCaptureBudgetUsed =
                      ReflectionProbeTelemetryValueMapper.CaptureBudgetUsedMicroseconds(
                          sceneData.ReflectionProbeCaptureBudget),
