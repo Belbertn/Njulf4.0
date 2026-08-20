@@ -664,6 +664,69 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ReflectionProbeMetadataUpload_IsVisibleToOrdinaryAndB1ReceiverCacheCompute()
+        {
+            string manager = ReadRepoText(
+                "Njulf.Rendering",
+                "Resources",
+                "ReflectionProbeManager.cs");
+            string cache = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_receiver_cache.comp");
+            string shaderProject = ReadRepoText(
+                "Njulf.Shaders",
+                "Njulf.Shaders.csproj");
+            string forwardPass = ReadRepoText(
+                "Njulf.Rendering",
+                "Pipeline",
+                "ForwardPlusPass.cs");
+            int uploadStart = manager.IndexOf(
+                "GpuBufferUploader.UploadHeaderAndSpanToBuffer(",
+                StringComparison.Ordinal);
+            int uploadEnd = manager.IndexOf(
+                "_metadataDirty = false;",
+                Math.Max(uploadStart, 0),
+                StringComparison.Ordinal);
+            const string b1VariantDeclaration =
+                "<ReceiverFeedbackShaderVariant Include=\"ddgi_simple_receiver_cache_b1.comp\">";
+            int b1VariantStart = shaderProject.IndexOf(
+                b1VariantDeclaration,
+                StringComparison.Ordinal);
+            int b1VariantEnd = shaderProject.IndexOf(
+                "</ReceiverFeedbackShaderVariant>",
+                Math.Max(b1VariantStart, 0),
+                StringComparison.Ordinal);
+
+            Assert.That(uploadStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(uploadEnd, Is.GreaterThan(uploadStart));
+            Assert.That(b1VariantStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(b1VariantEnd, Is.GreaterThan(b1VariantStart));
+            string metadataUpload = manager[uploadStart..uploadEnd];
+            string b1Variant = shaderProject[b1VariantStart..b1VariantEnd];
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(metadataUpload, Does.Contain(
+                    "PipelineStageFlags2.FragmentShaderBit"));
+                Assert.That(metadataUpload, Does.Contain(
+                    "PipelineStageFlags2.ComputeShaderBit"),
+                    "Transfer-written reflection metadata must be visible before compute receivers read it.");
+                Assert.That(metadataUpload, Does.Contain(
+                    "AccessFlags2.ShaderStorageReadBit"));
+                Assert.That(cache, Does.Contain(
+                    "ReadReflectionProbeHeader()"));
+                Assert.That(b1Variant, Does.Contain(
+                    "<Source>ddgi_simple_receiver_cache.comp</Source>"));
+                Assert.That(b1Variant, Does.Contain(
+                    "-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1"));
+                Assert.That(forwardPass, Does.Contain(
+                    "ddgi_simple_receiver_cache.comp.spv"));
+                Assert.That(forwardPass, Does.Contain(
+                    "ddgi_simple_receiver_cache_b1.comp.spv"));
+            });
+        }
+
+        [Test]
         public void OpaqueReceiverCache_IsFrameLocalDepthAwareAndReadOnly()
         {
             string cache = ReadRepoText(

@@ -700,7 +700,8 @@ namespace Njulf.Rendering.Resources
                 header,
                 _probeScratch.AsSpan(0, _activeProbeCount),
                 barrierDescription: new UploadBarrierDescription(
-                    PipelineStageFlags2.FragmentShaderBit,
+                    PipelineStageFlags2.FragmentShaderBit |
+                        PipelineStageFlags2.ComputeShaderBit,
                     AccessFlags2.ShaderStorageReadBit));
             _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
             _metadataDirty = false;
