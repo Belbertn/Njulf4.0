@@ -1220,6 +1220,15 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public int UpdateStartProbe => _updateStartProbe;
         public int ProbesToUpdate => _probesToUpdate;
         public SimpleDdgiSchedulerMode SchedulerMode => _schedulerMode;
+        /// <summary>
+        /// Queue epoch written into the exact submitted scheduler frame. GPU
+        /// resident scheduling owns no per-frame CPU queue transaction, so its
+        /// immutable scheduler resource generation is the queue identity.
+        /// </summary>
+        public uint CurrentQueueTransactionGeneration =>
+            _schedulerMode == SimpleDdgiSchedulerMode.GpuResident
+                ? _gpuScheduler.ResourceGeneration
+                : _updateTransactionSerial;
         public ulong FrameSerial => _frameSerial;
         public uint FrameIndex => _frameIndex;
         public SimpleDdgiGpuScheduler GpuScheduler => _gpuScheduler;
@@ -3095,6 +3104,65 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         public SimpleDdgiTransportCertificationReason TransportTailCertificationReason =>
             _transportSolveController.LastReason;
         public SimpleDdgiTransportTailSummary TransportTailSummary => _transportTailSummary;
+        /// <summary>
+        /// Captures the post-render-graph tail state without allocating or
+        /// retaining diagnostics collections. This boundary is intentionally
+        /// later than scene-data construction because the audit pass can enter
+        /// AuditFrozen while command recording is in progress.
+        /// </summary>
+        internal SimpleDdgiTailCertificateFrameEvidence
+            CaptureTransportTailCertificateFrameEvidence()
+        {
+            SimpleDdgiTransportTailSummary summary = _transportTailSummary;
+            uint submittedChunkCount = _transportAuditProbeCursor <= 0
+                ? 0u
+                : checked((uint)Math.Min(
+                    _transportAuditChunkCount,
+                    (_transportAuditProbeCursor +
+                     TransportAuditProbeChunkSize - 1) /
+                    TransportAuditProbeChunkSize));
+            bool auditDispatchComplete =
+                _transportAuditChunkCount > 0u &&
+                submittedChunkCount == _transportAuditChunkCount &&
+                _transportAuditProbeCursor >= _probeCount;
+            return new SimpleDdgiTailCertificateFrameEvidence
+            {
+                Phase = _transportSolveController.Phase,
+                Reason = _transportSolveController.LastReason,
+                Generations = summary.Generations,
+                SolveEpoch = _transportSolveController.SolveEpoch,
+                AuditEpoch = _transportSolveController.AuditEpoch,
+                ExpectedParticipantCount = summary.ExpectedParticipantCount,
+                AuditedParticipantCount = summary.AuditedParticipantCount,
+                ExcludedInactiveCount = summary.ExcludedInactiveCount,
+                ExcludedNotVisibleCount = summary.ExcludedNotVisibleCount,
+                ExcludedStaleSourceCount = summary.ExcludedStaleSourceCount,
+                ExcludedInvalidCacheCount = summary.ExcludedInvalidCacheCount,
+                CacheIdentityFailureCount = summary.CacheIdentityFailureCount,
+                CacheCardinalityFailureCount = summary.CacheCardinalityFailureCount,
+                CacheSourceGenerationFailureCount =
+                    summary.CacheSourceGenerationFailureCount,
+                CacheSourceEpochFailureCount =
+                    summary.CacheSourceEpochFailureCount,
+                CachePhysicalGenerationFailureCount =
+                    summary.CachePhysicalGenerationFailureCount,
+                ExpectedTexelCount = summary.ExpectedTexelCount,
+                AuditedTexelCount = summary.AuditedTexelCount,
+                NonFiniteCount = summary.NonFiniteCount,
+                CounterOverflowCount = summary.CounterOverflowCount,
+                AuditComplete = summary.IsComplete,
+                CertificateCurrent = HasCurrentTransportTailCertificate,
+                AuditFirstSubmissionFrameSerial =
+                    _transportAuditFirstFrameSerial,
+                AuditFinalSubmissionFrameSerial =
+                    _transportAuditFinalSubmissionFrameSerial,
+                AuditPlannedChunkCount = _transportAuditChunkCount,
+                AuditSubmittedChunkCount = submittedChunkCount,
+                AuditDispatchComplete = auditDispatchComplete,
+                Summary = summary,
+                SummaryDigest = SimpleDdgiTailSummaryDigest.Compute(summary)
+            };
+        }
         public uint TransportAuditWitnessProbeIndex =>
             _transportAuditWitnessProbeIndex;
         public uint TransportAuditWitnessTexelIndex =>

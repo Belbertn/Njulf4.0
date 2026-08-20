@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Data;
 using Silk.NET.Vulkan;
 using static Njulf.Rendering.RenderingConstants;
 
@@ -20,6 +21,10 @@ namespace Njulf.Rendering.Debug
         private readonly int[] _graphicsPassQueryCounts = new int[FramesInFlight];
         private readonly int[] _computePassQueryCounts = new int[FramesInFlight];
         private readonly bool[] _computeQueryPoolsReset = new bool[FramesInFlight];
+        private readonly SimpleDdgiGpuPassMask[] _intendedSimpleDdgiPasses =
+            new SimpleDdgiGpuPassMask[FramesInFlight];
+        private readonly SimpleDdgiGpuPassMask[] _admittedSimpleDdgiTimingPasses =
+            new SimpleDdgiGpuPassMask[FramesInFlight];
         private readonly FrameTimingSnapshot[] _completedSnapshots = new FrameTimingSnapshot[FramesInFlight];
         private readonly bool[] _framePending = new bool[FramesInFlight];
         private bool _disposed;
@@ -131,6 +136,9 @@ namespace Njulf.Rendering.Debug
             _graphicsPassQueryCounts[frameIndex] = 0;
             _computePassQueryCounts[frameIndex] = 0;
             _computeQueryPoolsReset[frameIndex] = false;
+            _intendedSimpleDdgiPasses[frameIndex] = SimpleDdgiGpuPassMask.None;
+            _admittedSimpleDdgiTimingPasses[frameIndex] =
+                SimpleDdgiGpuPassMask.None;
 
             if (!EnabledThisFrame)
                 return;
@@ -167,14 +175,19 @@ namespace Njulf.Rendering.Debug
 
         private void BeginPass(CommandBuffer commandBuffer, int frameIndex, string passName, TimestampQueue queue)
         {
+            ValidateFrameIndex(frameIndex);
+            SimpleDdgiGpuPassMask simpleDdgiPass =
+                SimpleDdgiGpuPassContract.FromPassName(passName);
+            _intendedSimpleDdgiPasses[frameIndex] |= simpleDdgiPass;
             if (!EnabledThisFrame)
                 return;
-            ValidateFrameIndex(frameIndex);
             int passQueryIndex = queue == TimestampQueue.Compute
                 ? _computePassQueryCounts[frameIndex]
                 : _graphicsPassQueryCounts[frameIndex];
             if (passQueryIndex >= MaxPassesPerFrame)
                 return;
+
+            _admittedSimpleDdgiTimingPasses[frameIndex] |= simpleDdgiPass;
 
             uint query = checked((uint)(passQueryIndex * QueriesPerPass));
             if (queue == TimestampQueue.Compute)
@@ -186,6 +199,20 @@ namespace Njulf.Rendering.Debug
             _activePassQueries[frameIndex].Add(_passQueries[frameIndex].Count - 1);
             QueryPool queryPool = queue == TimestampQueue.Compute ? _computeQueryPools[frameIndex] : _graphicsQueryPools[frameIndex];
             _context.Api.CmdWriteTimestamp2(commandBuffer, PipelineStageFlags2.TopOfPipeBit, queryPool, query);
+        }
+
+        internal SimpleDdgiGpuPassMask GetIntendedSimpleDdgiPasses(
+            int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _intendedSimpleDdgiPasses[frameIndex];
+        }
+
+        internal SimpleDdgiGpuPassMask GetAdmittedSimpleDdgiTimingPasses(
+            int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _admittedSimpleDdgiTimingPasses[frameIndex];
         }
 
         public void EndPass(CommandBuffer commandBuffer, int frameIndex)

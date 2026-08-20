@@ -3091,6 +3091,14 @@ namespace Njulf.Rendering
             {
                 _completedGraphicsFrameFenceValue = completedGraphicsFenceValue;
             }
+            // Consume the exact fence-complete submitted slot before any
+            // workload model observes it. If a later observation throws, a
+            // retry cannot train the scheduler/source-cache models twice.
+            bool completedSimpleDdgiSubmissionAvailable =
+                _simpleDdgiSubmittedFrameRing.TryConsume(
+                    _currentFrame,
+                    out SimpleDdgiSubmittedFrameEvidence
+                        completedSimpleDdgiSubmission);
             _simpleDdgiVolumeManager?.ObserveFrameFenceCompletion(
                 _ddgiFrameSerial,
                 _completedGraphicsFrameFenceValue);
@@ -3161,7 +3169,9 @@ namespace Njulf.Rendering
             _completedDebugDdgiOverlayCounters =
                 _diagnosticsBuffer.GetLastCompletedDebugDdgiOverlayCounters(
                     _currentFrame);
-            ObserveCompletedSimpleDdgiWorkload(_currentFrame);
+            ObserveCompletedSimpleDdgiWorkload(
+                completedSimpleDdgiSubmissionAvailable,
+                completedSimpleDdgiSubmission);
             _completedGpuParticleCounters = _gpuParticleRuntimeManager.GetLastCompletedCounters(_currentFrame);
             _completedFoliageCounters = _foliageManager.GetLastCompletedCounters(_currentFrame);
             _completedSceneSubmissionCounters = _sceneOpaqueCompactionPass?.GetLastCompletedCounters(_currentFrame) ?? SceneSubmissionCounterSnapshot.Invalid;
@@ -3188,6 +3198,7 @@ namespace Njulf.Rendering
             RecordCompletedAsyncComputeTimingFrame(_currentFrame, _gpuTimestamps.LastCompletedSnapshot);
             bool completedSchedulerFeedbackAvailable = false;
             GPUSimpleDdgiSchedulerFeedback completedSchedulerFeedback = default;
+            uint completedSchedulerFeedbackTransportTopologyGeneration = 0u;
             if (_simpleDdgiVolumeManager != null &&
                 _ddgiFrameSerial < ulong.MaxValue)
             {
@@ -3204,6 +3215,9 @@ namespace Njulf.Rendering
                 {
                     completedSchedulerFeedback =
                         _simpleDdgiVolumeManager.LastGpuSchedulerFeedback;
+                    completedSchedulerFeedbackTransportTopologyGeneration =
+                        _simpleDdgiVolumeManager.GpuScheduler
+                            .LastFeedbackTransportTopologyGeneration;
                 }
                 _simpleDdgiVolumeManager.TryConsumeProbeResidencyFeedback(
                     _currentFrame,
@@ -3213,10 +3227,12 @@ namespace Njulf.Rendering
                     _ddgiFrameSerial + 1UL);
             }
             CompleteSimpleDdgiSubmittedFrame(
-                _currentFrame,
+                completedSimpleDdgiSubmissionAvailable,
+                completedSimpleDdgiSubmission,
                 _gpuTimestamps.LastCompletedSnapshot,
                 completedSchedulerFeedbackAvailable,
-                completedSchedulerFeedback);
+                completedSchedulerFeedback,
+                completedSchedulerFeedbackTransportTopologyGeneration);
 
             // Process completed frame deletions
             _deleter.ProcessCompletedFrame(_sync.GetInFlightFence(_currentFrame));
@@ -13758,11 +13774,11 @@ namespace Njulf.Rendering
                     .DefaultMaximumTransparentLayersPerTile);
         }
 
-        private void ObserveCompletedSimpleDdgiWorkload(int frameIndex)
+        private void ObserveCompletedSimpleDdgiWorkload(
+            bool workloadAvailable,
+            in SimpleDdgiSubmittedFrameEvidence workload)
         {
-            if (!_simpleDdgiSubmittedFrameRing.TryPeek(
-                    frameIndex,
-                    out SimpleDdgiSubmittedFrameEvidence workload))
+            if (!workloadAvailable || !workload.Valid)
                 return;
 
             ulong farFieldSteps =
@@ -13825,29 +13841,32 @@ namespace Njulf.Rendering
                     frameIndex,
                     sceneData,
                     _gpuTimestamps.EnabledThisFrame,
+                    _gpuTimestamps.GetIntendedSimpleDdgiPasses(frameIndex),
+                    _gpuTimestamps.GetAdmittedSimpleDdgiTimingPasses(frameIndex),
+                    manager.CurrentQueueTransactionGeneration,
+                    manager.CaptureTransportTailCertificateFrameEvidence(),
                     manager.SourceCacheAdmissionIdentity);
         }
 
         private void CompleteSimpleDdgiSubmittedFrame(
-            int frameIndex,
+            bool submittedAvailable,
+            in SimpleDdgiSubmittedFrameEvidence submitted,
             FrameTimingSnapshot timings,
             bool schedulerFeedbackAvailable,
-            in GPUSimpleDdgiSchedulerFeedback schedulerFeedback)
+            in GPUSimpleDdgiSchedulerFeedback schedulerFeedback,
+            uint schedulerFeedbackTransportTopologyGeneration)
         {
             _completedSimpleDdgiFrameEvidence = default;
-            if (!_simpleDdgiSubmittedFrameRing.TryConsume(
-                    frameIndex,
-                    out SimpleDdgiSubmittedFrameEvidence submitted))
-            {
+            if (!submittedAvailable || !submitted.Valid)
                 return;
-            }
 
             _completedSimpleDdgiFrameEvidence =
                 SimpleDdgiFrameEvidenceFactory.Complete(
                     submitted,
                     timings,
                     schedulerFeedbackAvailable,
-                    schedulerFeedback);
+                    schedulerFeedback,
+                    schedulerFeedbackTransportTopologyGeneration);
         }
 
 

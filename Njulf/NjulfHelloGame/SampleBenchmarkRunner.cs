@@ -6,6 +6,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
@@ -1181,6 +1182,7 @@ public sealed class SampleBenchmarkAnalyzer
         }
 
         var originBySerial = new Dictionary<ulong, int>(expectedFrameCount);
+        ulong firstRouteFrameSerial = _samples[0].CaptureFrame.FrameSerial;
         for (int index = 0; index < _samples.Count; index++)
         {
             ulong frameSerial = _samples[index].CaptureFrame.FrameSerial;
@@ -1189,6 +1191,22 @@ public sealed class SampleBenchmarkAnalyzer
                 failures.Add(
                     $"DDGI transient route frame {index} has the invalid submitted frame serial sentinel.");
                 continue;
+            }
+            if ((ulong)index > ulong.MaxValue - firstRouteFrameSerial)
+            {
+                failures.Add(
+                    $"DDGI transient route frame {index} cannot be represented " +
+                    $"as a contiguous serial after {firstRouteFrameSerial}.");
+            }
+            else
+            {
+                ulong expectedSerial = firstRouteFrameSerial + (ulong)index;
+                if (expectedSerial == ulong.MaxValue || frameSerial != expectedSerial)
+                {
+                    failures.Add(
+                        $"DDGI transient route frame {index} has submitted serial " +
+                        $"{frameSerial}; expected contiguous serial {expectedSerial}.");
+                }
             }
             if (!originBySerial.TryAdd(frameSerial, index))
             {
@@ -1213,7 +1231,19 @@ public sealed class SampleBenchmarkAnalyzer
                     $"DDGI transient route frame {index} has no source-lighting generation.");
             }
             if (generation != previousGeneration)
+            {
+                uint expectedGeneration = AdvanceNonZeroGeneration(
+                    previousGeneration);
+                if (generation != expectedGeneration)
+                {
+                    failures.Add(
+                        $"DDGI source-lighting generation changed from " +
+                        $"{previousGeneration} to {generation} at route frame " +
+                        $"{index}; expected wrap-safe +1 generation " +
+                        $"{expectedGeneration}.");
+                }
                 generationEdges.Add(index);
+            }
             previousGeneration = generation;
         }
 
@@ -1264,6 +1294,24 @@ public sealed class SampleBenchmarkAnalyzer
                 failures.Add(
                     $"DDGI frame serial {submittedSerial} completed at measurement " +
                     $"sample {completionIndex} before/at its origin {originIndex}.");
+            }
+            int expectedCompletionIndex = checked(
+                originIndex + RenderingConstants.FramesInFlight);
+            if (completionIndex != expectedCompletionIndex)
+            {
+                failures.Add(
+                    $"DDGI frame serial {submittedSerial} completed at measurement " +
+                    $"sample {completionIndex}; expected exact " +
+                    $"FramesInFlight delay at {expectedCompletionIndex}.");
+            }
+            int expectedFrameSlot = checked((int)(
+                submittedSerial % (ulong)RenderingConstants.FramesInFlight));
+            if (completed.Submitted.FrameSlot != expectedFrameSlot)
+            {
+                failures.Add(
+                    $"DDGI frame serial {submittedSerial} retained slot " +
+                    $"{completed.Submitted.FrameSlot}; expected renderer slot " +
+                    $"{expectedFrameSlot}.");
             }
             if (!completedBySubmittedSerial.TryAdd(
                     submittedSerial,
@@ -1383,35 +1431,227 @@ public sealed class SampleBenchmarkAnalyzer
                 $"{prefix} retained source generation " +
                 $"{completed.Submitted.SourceLightingGeneration}; expected {sourceGeneration}.");
         }
+        if (!completed.GpuTimingPassSetAligned ||
+            completed.Submitted.AdmittedGpuTimingPasses !=
+                completed.Submitted.IntendedGpuPasses ||
+            completed.CompletedGpuTimingPasses !=
+                completed.Submitted.IntendedGpuPasses)
+        {
+            failures.Add(
+                $"{prefix} does not have exact intended/admitted/completed " +
+                "DDGI GPU pass coverage.");
+        }
+        if (completed.Submitted.SchedulerMode !=
+            SimpleDdgiSchedulerMode.GpuResident)
+        {
+            failures.Add(
+                $"{prefix} is not a GPU-resident scheduler submission.");
+        }
+        if (completed.Submitted.QueueTransactionGeneration == 0u ||
+            completed.Submitted.QueueTransactionGeneration !=
+                completed.Submitted.SchedulerResourceGeneration)
+        {
+            failures.Add(
+                $"{prefix} retained a queue epoch that is not the resident " +
+                "scheduler-resource generation.");
+        }
+        if (completed.Submitted.AdmittedSourceCohortGeneration !=
+                sourceGeneration ||
+            completed.Submitted.LivePropagationSourceGeneration !=
+                sourceGeneration)
+        {
+            failures.Add(
+                $"{prefix} retained a source cohort that is not current for " +
+                "the submitted source-lighting generation.");
+        }
+
+        SimpleDdgiTailCertificateFrameEvidence tail =
+            completed.Submitted.TailCertificate;
+        SimpleDdgiGpuPassMask intended =
+            completed.Submitted.IntendedGpuPasses;
+        bool auditFrozen = tail.Phase == SimpleDdgiTransportPhase.AuditFrozen;
+        bool auditIntended =
+            (intended & SimpleDdgiGpuPassMask.TransportAudit) != 0;
+
+        if (auditFrozen)
+        {
+            ValidateAuditFrozenDdgiTransientFrame(failures, prefix, completed);
+        }
+        else
+        {
+            ValidateSchedulerDdgiTransientFrame(
+                failures,
+                prefix,
+                submittedSerial,
+                completed);
+            if (auditIntended)
+                failures.Add($"{prefix} mixed scheduler work with a frozen audit.");
+        }
+    }
+
+    private static void ValidateAuditFrozenDdgiTransientFrame(
+        ICollection<string> failures,
+        string prefix,
+        in SimpleDdgiCompletedFrameEvidence completed)
+    {
+        SimpleDdgiGpuPassMask forbidden =
+            SimpleDdgiGpuPassMask.Schedule |
+            SimpleDdgiGpuPassMask.Trace |
+            SimpleDdgiGpuPassMask.DirectionalRadiance |
+            SimpleDdgiGpuPassMask.AcceleratedSolve |
+            SimpleDdgiGpuPassMask.Transport |
+            SimpleDdgiGpuPassMask.Blend |
+            SimpleDdgiGpuPassMask.RelocateClassify |
+            SimpleDdgiGpuPassMask.Publish |
+            SimpleDdgiGpuPassMask.SchedulerCommit |
+            SimpleDdgiGpuPassMask.ScheduleTailAdmit |
+            SimpleDdgiGpuPassMask.ScheduleEmit;
+        if ((completed.Submitted.IntendedGpuPasses & forbidden) != 0 ||
+            (completed.Submitted.AdmittedGpuTimingPasses & forbidden) != 0 ||
+            (completed.CompletedGpuTimingPasses & forbidden) != 0)
+        {
+            failures.Add(
+                $"{prefix} is AuditFrozen but retained ordinary " +
+                "scheduler/solve/publication timing scopes.");
+        }
+
+        SimpleDdgiTailCertificateFrameEvidence tail =
+            completed.Submitted.TailCertificate;
+        if (tail.Reason !=
+                SimpleDdgiTransportCertificationReason.AuditInProgress ||
+            !tail.HasCompleteIdentity ||
+            !tail.HasDurableSummary)
+        {
+            failures.Add(
+                $"{prefix} has no complete frozen-audit identity/digest.");
+        }
+        if (tail.AuditPlannedChunkCount == 0u ||
+            tail.AuditSubmittedChunkCount == 0u ||
+            tail.AuditSubmittedChunkCount > tail.AuditPlannedChunkCount ||
+            tail.AuditFirstSubmissionFrameSerial == ulong.MaxValue)
+        {
+            failures.Add(
+                $"{prefix} has invalid frozen-audit cursor/lifecycle state.");
+        }
+
+        bool auditDispatch =
+            (completed.Submitted.IntendedGpuPasses &
+             SimpleDdgiGpuPassMask.TransportAudit) != 0;
+        if (auditDispatch)
+        {
+            if (!completed.GpuTimingAvailable ||
+                !completed.GpuDdgiTotalTimingAvailable ||
+                !completed.GpuTransportAuditTimingAvailable)
+            {
+                failures.Add(
+                    $"{prefix} audit dispatch has no exact transport-audit " +
+                    "GPU timing/total.");
+            }
+            if (tail.AuditDispatchComplete &&
+                tail.AuditFinalSubmissionFrameSerial !=
+                    completed.Submitted.FrameSerial)
+            {
+                failures.Add(
+                    $"{prefix} final audit dispatch does not own the frozen " +
+                    "cursor's final submission serial.");
+            }
+        }
+        else
+        {
+            SimpleDdgiGpuPassMask auditOrScheduler = forbidden |
+                SimpleDdgiGpuPassMask.TransportAudit;
+            if ((completed.Submitted.IntendedGpuPasses & auditOrScheduler) != 0 ||
+                (completed.Submitted.AdmittedGpuTimingPasses & auditOrScheduler) != 0 ||
+                (completed.CompletedGpuTimingPasses & auditOrScheduler) != 0 ||
+                completed.GpuTimingAvailable ||
+                completed.GpuDdgiTotalTimingAvailable ||
+                completed.GpuTransportAuditTimingAvailable ||
+                completed.GpuTransportAuditMicroseconds != 0)
+            {
+                failures.Add(
+                    $"{prefix} frozen-audit await row retained GPU " +
+                    "scheduler/audit work or a DDGI total.");
+            }
+            if (!tail.AuditDispatchComplete ||
+                tail.AuditSubmittedChunkCount != tail.AuditPlannedChunkCount ||
+                tail.AuditFinalSubmissionFrameSerial == ulong.MaxValue ||
+                tail.AuditFinalSubmissionFrameSerial >=
+                    completed.Submitted.FrameSerial)
+            {
+                failures.Add(
+                    $"{prefix} frozen-audit await row lacks a completed prior " +
+                    "audit-dispatch cursor.");
+            }
+        }
+        if (HasAnySchedulerFeedbackPayload(completed))
+        {
+            failures.Add(
+                $"{prefix} is AuditFrozen but retained scheduler feedback.");
+        }
+    }
+
+    private static void ValidateSchedulerDdgiTransientFrame(
+        ICollection<string> failures,
+        string prefix,
+        ulong submittedSerial,
+        in SimpleDdgiCompletedFrameEvidence completed)
+    {
+        SimpleDdgiGpuPassMask intended =
+            completed.Submitted.IntendedGpuPasses;
         if (!completed.GpuTimingAvailable ||
             !completed.GpuDdgiTotalTimingAvailable)
         {
-            failures.Add($"{prefix} has no same-slot completed total DDGI GPU timing.");
+            failures.Add(
+                $"{prefix} has no same-slot completed total DDGI GPU timing.");
         }
-        if (!completed.GpuSchedulerCommitTimingAvailable)
-            failures.Add($"{prefix} has no scheduler-commit GPU timing.");
-        if (completed.Submitted.CachedSweepCount > 0 &&
-            !completed.GpuAcceleratedSolveTimingAvailable)
+        SimpleDdgiGpuPassMask required =
+            SimpleDdgiGpuPassMask.Schedule |
+            SimpleDdgiGpuPassMask.Trace |
+            SimpleDdgiGpuPassMask.RelocateClassify |
+            SimpleDdgiGpuPassMask.Publish |
+            SimpleDdgiGpuPassMask.SchedulerCommit |
+            SimpleDdgiGpuPassMask.ScheduleTailAdmit |
+            SimpleDdgiGpuPassMask.ScheduleEmit;
+        if ((intended & required) != required)
         {
             failures.Add(
-                $"{prefix} recorded {completed.Submitted.CachedSweepCount} cached " +
-                "sweeps without accelerated-solve GPU timing.");
+                $"{prefix} is missing an ordinary scheduler/trace/relocate/" +
+                "publish/commit timing scope.");
         }
-        if (completed.SchedulerCompactedCandidateCount > 0u &&
-            !completed.GpuSchedulerTailAdmitTimingAvailable)
+        if ((intended & SimpleDdgiGpuPassMask.TransportAudit) != 0)
+            failures.Add($"{prefix} mixed scheduler work with a frozen audit.");
+
+        bool accelerated =
+            (intended & SimpleDdgiGpuPassMask.AcceleratedSolve) != 0;
+        SimpleDdgiGpuPassMask legacyMask =
+            SimpleDdgiGpuPassMask.Transport | SimpleDdgiGpuPassMask.Blend;
+        bool completeLegacy = (intended & legacyMask) == legacyMask;
+        bool partialLegacy = (intended & legacyMask) != 0 && !completeLegacy;
+        if (partialLegacy || accelerated == completeLegacy)
         {
             failures.Add(
-                $"{prefix} compacted {completed.SchedulerCompactedCandidateCount} " +
-                "scheduler candidates without tail-admit GPU timing.");
+                $"{prefix} does not identify exactly one complete accelerated " +
+                "or legacy transport/blend path.");
         }
-        if ((completed.SchedulerAcceptedWorkCount > 0u ||
-             completed.SchedulerCommittedWorkCount > 0u ||
-             completed.SchedulerPublishedWorkCount > 0u) &&
+        if (!completed.GpuScheduleTimingAvailable ||
+            !completed.GpuSchedulerCommitTimingAvailable ||
+            !completed.GpuSchedulerTailAdmitTimingAvailable ||
             !completed.GpuSchedulerEmitTimingAvailable)
         {
             failures.Add(
-                $"{prefix} retained emitted/committed scheduler work without " +
-                "emit GPU timing.");
+                $"{prefix} lacks exact schedule/tail-admit/emit/commit GPU timing.");
+        }
+        if (accelerated && !completed.GpuAcceleratedSolveTimingAvailable)
+        {
+            failures.Add(
+                $"{prefix} recorded cached sweeps without accelerated-solve GPU timing.");
+        }
+        if (accelerated && completed.Submitted.TailCertificate.Phase !=
+                SimpleDdgiTransportPhase.AcceleratedSolve)
+        {
+            failures.Add(
+                $"{prefix} recorded accelerated-solve work outside the " +
+                "accelerated transport phase.");
         }
         if (!completed.SchedulerFeedbackAvailable)
             failures.Add($"{prefix} has no same-slot scheduler feedback.");
@@ -1423,8 +1663,12 @@ public sealed class SampleBenchmarkAnalyzer
             failures.Add($"{prefix} scheduler feedback generations are not aligned.");
         if (completed.SchedulerFeedbackVolumeResourceGeneration !=
                 completed.Submitted.VolumeResourceGeneration ||
+            completed.SchedulerFeedbackTransportTopologyGeneration !=
+                completed.Submitted.TransportTopologyGeneration ||
             completed.SchedulerFeedbackSchedulerResourceGeneration !=
                 completed.Submitted.SchedulerResourceGeneration ||
+            completed.SchedulerFeedbackQueueTransactionGeneration !=
+                completed.Submitted.QueueTransactionGeneration ||
             completed.SchedulerFeedbackSourceLightingGeneration !=
                 completed.Submitted.SourceLightingGeneration ||
             completed.SchedulerFeedbackTransportGeneration !=
@@ -1438,6 +1682,43 @@ public sealed class SampleBenchmarkAnalyzer
                 $"{prefix} scheduler feedback status is " +
                 $"0x{completed.SchedulerFeedbackStatusFlags:x8}.");
         }
+    }
+
+    private static bool HasAnySchedulerFeedbackPayload(
+        in SimpleDdgiCompletedFrameEvidence completed) =>
+        completed.SchedulerFeedbackAvailable ||
+        completed.SchedulerFeedbackFrameAligned ||
+        completed.SchedulerFeedbackGenerationAligned ||
+        completed.SchedulerFeedbackFrameSerial != 0UL ||
+        completed.SchedulerFeedbackVolumeResourceGeneration != 0u ||
+        completed.SchedulerFeedbackTransportTopologyGeneration != 0u ||
+        completed.SchedulerFeedbackSchedulerResourceGeneration != 0u ||
+        completed.SchedulerFeedbackQueueTransactionGeneration != 0u ||
+        completed.SchedulerFeedbackSourceLightingGeneration != 0u ||
+        completed.SchedulerFeedbackTransportGeneration != 0u ||
+        completed.SchedulerFeedbackStatusFlags != 0u ||
+        completed.SchedulerConsideredCandidateCount != 0u ||
+        completed.SchedulerCompactedCandidateCount != 0u ||
+        completed.SchedulerAcceptedWorkCount != 0u ||
+        completed.SchedulerCommittedWorkCount != 0u ||
+        completed.SchedulerPublishedWorkCount != 0u ||
+        completed.SchedulerActiveWorkCount != 0u ||
+        completed.SchedulerSourceParticipantCount != 0u ||
+        completed.SchedulerHardSourceParticipantCount != 0u ||
+        completed.SchedulerRoutineSourceParticipantCount != 0u ||
+        completed.SchedulerCachedParticipantCount != 0u ||
+        completed.SchedulerSolveParticipantCount != 0u ||
+        completed.SchedulerSolveVisitedCount != 0u ||
+        completed.SchedulerSolveEpoch != 0u ||
+        completed.SchedulerPrimaryRayCount != 0u ||
+        completed.SchedulerSourceRayCount != 0u ||
+        completed.SchedulerTransportRayCount != 0u ||
+        completed.SchedulerCachedRayCount != 0u;
+
+    private static uint AdvanceNonZeroGeneration(uint generation)
+    {
+        uint next = unchecked(generation + 1u);
+        return next == 0u ? 1u : next;
     }
 
     private static SampleBenchmarkDdgiTransientEvidence
