@@ -3270,6 +3270,7 @@ namespace Njulf.Rendering
             _swapchainImageTransitionedThisFrame = false;
             _lastQueueSubmitMicroseconds = 0;
             _lastAsyncComputeSubmitMicroseconds = 0;
+            BeginReflectionProbeCaptureFrame();
             _frameInProgress = true;
             _gpuTimestamps.BeginFrame(
                 _currentCommandBuffer,
@@ -3413,6 +3414,10 @@ namespace Njulf.Rendering
                 _ddgiFrameSerial == ulong.MaxValue
                     ? ulong.MaxValue
                     : _ddgiFrameSerial + 1UL;
+            _reflectionProbeManager?.CommitCaptureFrameSubmission(
+                _currentFrame,
+                _ddgiFrameSerial,
+                _gpuTimestamps.EnabledThisFrame);
 
             // Static shadow layers recorded by this frame are not reused by
             // another command buffer until the owning graphics submission has
@@ -12539,11 +12544,6 @@ namespace Njulf.Rendering
                 _ddgiFrameSerial,
                 _completedGraphicsFrameFenceValue);
             _reflectionProbeManager.PollCaptureCompletions(_ddgiFrameSerial);
-            FrameTimingSnapshot completedReflectionTimings = _gpuTimestamps.LastCompletedSnapshot;
-            _reflectionProbeManager.UpdateCaptureGpuTimingHistory(
-                completedReflectionTimings.GetGpuMicrosecondsOrZero("ReflectionProbeCapturePass"),
-                completedReflectionTimings.GetGpuMicrosecondsOrZero("ReflectionProbePrefilterPass"),
-                completedReflectionTimings.GetGpuMicrosecondsOrZero("ReflectionProbePublishPass"));
             LightingVersionSnapshot lightingVersions = LightingVersions;
             _reflectionProbeManager.UpdateCaptureVersions(lightingVersions);
             _reflectionProbeManager.Upload(
@@ -12573,6 +12573,28 @@ namespace Njulf.Rendering
             sceneData.ReflectionProbePublishedCount =
                 _reflectionProbeManager.PublishedProbeCount;
             sceneData.CpuReflectionProbeUploadMicroseconds = _reflectionProbeManager.LastUploadMicroseconds;
+        }
+
+        /// <summary>
+        /// Opens reflection capture accounting only after swapchain acquisition succeeds. The
+        /// completed timestamp snapshot and submitted workload are consumed from the exact same
+        /// renderer frame slot before completion polling can emit this frame's lifecycle pulses.
+        /// </summary>
+        private void BeginReflectionProbeCaptureFrame()
+        {
+            if (_reflectionProbeManager == null)
+                return;
+
+            _reflectionProbeManager.BeginCaptureFrame(
+                _currentFrame,
+                _ddgiFrameSerial);
+            FrameTimingSnapshot completedReflectionTimings =
+                _gpuTimestamps.LastCompletedSnapshot;
+            _reflectionProbeManager.UpdateCaptureGpuTimingHistory(
+                _currentFrame,
+                completedReflectionTimings.GetGpuMicrosecondsOrZero("ReflectionProbeCapturePass"),
+                completedReflectionTimings.GetGpuMicrosecondsOrZero("ReflectionProbePrefilterPass"),
+                completedReflectionTimings.GetGpuMicrosecondsOrZero("ReflectionProbePublishPass"));
         }
 
         private void RecordReflectionProbeWork(SceneRenderingData sceneData)

@@ -82,15 +82,13 @@ namespace Njulf.Rendering.Resources
         private uint _probeMipCount;
         private ulong _estimatedBytes;
         private long _lastUploadMicroseconds;
-        private int _capturesCompletedThisFrame;
-        private int _capturesStartedThisFrame;
         private ulong _capturesCompletedTotal;
-        private int _captureFaceUnitsThisFrame;
-        private int _prefilterMipUnitsThisFrame;
-        private int _publishCopyUnitsThisFrame;
-        private ulong _captureFaceUnitsTotal;
-        private ulong _prefilterMipUnitsTotal;
-        private ulong _publishCopyUnitsTotal;
+        private ReflectionProbeCaptureFrameCounters _captureFrameCounters;
+        private readonly ReflectionProbeSubmittedFrameRing _submittedCaptureFrames = new();
+        private ReflectionProbeSubmittedFrameTelemetry _lastCompletedCaptureFrame;
+        private int _captureFrameSlot = -1;
+        private ulong _captureFrameSerial;
+        private bool _captureFrameBegun;
         private uint _lastAuthoredRevision;
         private ulong _lastSelectionSettingsSignature;
         private bool _selectionInitialized;
@@ -148,16 +146,33 @@ namespace Njulf.Rendering.Resources
             MetadataBufferSize + CubemapArrayBytes + ScratchCaptureBytes + CaptureDepthBytes);
         public long LastUploadMicroseconds => _lastUploadMicroseconds;
         public int CapturesQueued => _captureScheduler.QueueDepth +
-            _captureScheduler.ActiveTicketCount +
+            _captureScheduler.ActiveWorkCount +
             _captureScheduler.RetainedCompletionCount;
-        public int CapturesCompleted => _capturesCompletedThisFrame;
+        public int CapturesStarted =>
+            _captureFrameCounters.CapturesStartedThisFrame;
+        public int CapturesCompleted =>
+            _captureFrameCounters.CapturesCompletedThisFrame;
         public ulong CapturesCompletedTotal => _capturesCompletedTotal;
-        public int CaptureFaceUnitsThisFrame => _captureFaceUnitsThisFrame;
-        public int PrefilterMipUnitsThisFrame => _prefilterMipUnitsThisFrame;
-        public int PublishCopyUnitsThisFrame => _publishCopyUnitsThisFrame;
-        public ulong CaptureFaceUnitsTotal => _captureFaceUnitsTotal;
-        public ulong PrefilterMipUnitsTotal => _prefilterMipUnitsTotal;
-        public ulong PublishCopyUnitsTotal => _publishCopyUnitsTotal;
+        public int CaptureFaceUnitsThisFrame =>
+            _captureFrameCounters.CaptureFaceUnitsThisFrame;
+        public int PrefilterMipUnitsThisFrame =>
+            _captureFrameCounters.PrefilterMipUnitsThisFrame;
+        public int PublishCopyUnitsThisFrame =>
+            _captureFrameCounters.PublishCopyUnitsThisFrame;
+        public ulong CaptureFaceUnitsTotal =>
+            _captureFrameCounters.CaptureFaceUnitsTotal;
+        public ulong PrefilterMipUnitsTotal =>
+            _captureFrameCounters.PrefilterMipUnitsTotal;
+        public ulong PublishCopyUnitsTotal =>
+            _captureFrameCounters.PublishCopyUnitsTotal;
+        public ReflectionProbeLifecycleSnapshot CaptureLifecycle =>
+            ReflectionProbeLifecycleSnapshotFactory.Create(
+                _captureScheduler,
+                _capturedProbeIds.Count,
+                _capturesCompletedTotal,
+                _captureFrameCounters);
+        internal ReflectionProbeSubmittedFrameTelemetry LastCompletedCaptureFrame =>
+            _lastCompletedCaptureFrame;
         public ReflectionProbeGpuBudgetSnapshot CaptureGpuBudget => _gpuBudgetPlanner.GetSnapshot();
         public int ReflectionCaptureBudgetExceeded =>
             CaptureGpuBudget.BudgetExhausted ? 1 : 0;
@@ -489,6 +504,28 @@ namespace Njulf.Rendering.Resources
         }
 
         /// <summary>
+        /// Establishes the only per-frame reset boundary for capture planning
+        /// and lifecycle pulses. It must run after this frame slot's timestamp
+        /// queries are read and before completion polling or new work.
+        /// </summary>
+        public void BeginCaptureFrame(int frameSlot, ulong frameSerial)
+        {
+            RenderingConstants.ValidateFrameIndex(frameSlot);
+            if (_captureFrameBegun)
+            {
+                throw new InvalidOperationException(
+                    "A reflection capture frame was begun before the previous frame submission was committed.");
+            }
+
+            _captureFrameSlot = frameSlot;
+            _captureFrameSerial = frameSerial;
+            _captureFrameBegun = true;
+            _gpuBudgetPlanner.BeginFrame(
+                _settings.Reflections.ReflectionCaptureGpuBudgetMicroseconds);
+            _captureFrameCounters.BeginCaptureFrame();
+        }
+
+        /// <summary>
         /// Polls renderer-owned completion state. The renderer calls this after its normal
         /// non-blocking frame-fence observation; no feature-owned wait is performed here.
         /// </summary>
@@ -587,12 +624,6 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentException("A valid command buffer is required for reflection probe upload.", nameof(commandBuffer));
 
             long uploadStart = Stopwatch.GetTimestamp();
-            _gpuBudgetPlanner.BeginFrame(_settings.Reflections.ReflectionCaptureGpuBudgetMicroseconds);
-            _capturesCompletedThisFrame = 0;
-            _capturesStartedThisFrame = 0;
-            _captureFaceUnitsThisFrame = 0;
-            _prefilterMipUnitsThisFrame = 0;
-            _publishCopyUnitsThisFrame = 0;
             _captureScheduler.RetryLimit = _settings.Reflections.ReflectionCaptureRetryLimit;
             ulong selectionSettingsSignature = CreateSelectionSettingsSignature();
             bool selectionChanged = !_selectionInitialized || authoredRevision != _lastAuthoredRevision ||
@@ -657,27 +688,68 @@ namespace Njulf.Rendering.Resources
         }
 
         /// <summary>
-        /// Feeds completed timestamp data back into the per-unit cost estimates. The counts are
-        /// the units recorded in the preceding frame; zero or unavailable timestamps are ignored
-        /// so a missing query result cannot accidentally teach the planner a zero-cost estimate.
+        /// Consumes the submitted workload stored for the exact completed timestamp frame slot.
+        /// Zero or unavailable timestamps are ignored by the planner, but the slot is still
+        /// consumed so it cannot be paired with a later frame's timings.
         /// </summary>
         public void UpdateCaptureGpuTimingHistory(
+            int completedFrameSlot,
             long captureMicroseconds,
             long prefilterMicroseconds,
             long publishMicroseconds)
         {
+            RenderingConstants.ValidateFrameIndex(completedFrameSlot);
+            if (!_captureFrameBegun || completedFrameSlot != _captureFrameSlot)
+            {
+                throw new InvalidOperationException(
+                    "Reflection timing history must be consumed at the active capture frame boundary.");
+            }
+
+            if (!_submittedCaptureFrames.TryConsume(
+                    completedFrameSlot,
+                    out ReflectionProbeSubmittedFrameTelemetry submittedFrame))
+            {
+                _lastCompletedCaptureFrame = default;
+                return;
+            }
+
+            _lastCompletedCaptureFrame = submittedFrame;
             _gpuBudgetPlanner.RecordTiming(
-                ReflectionProbeWorkKind.CaptureFace,
-                _captureFaceUnitsThisFrame,
-                captureMicroseconds);
-            _gpuBudgetPlanner.RecordTiming(
-                ReflectionProbeWorkKind.PrefilterMip,
-                _prefilterMipUnitsThisFrame,
-                prefilterMicroseconds);
-            _gpuBudgetPlanner.RecordTiming(
-                ReflectionProbeWorkKind.PublishCopy,
-                _publishCopyUnitsThisFrame,
+                submittedFrame,
+                captureMicroseconds,
+                prefilterMicroseconds,
                 publishMicroseconds);
+        }
+
+        /// <summary>
+        /// Publishes this frame's workload into its slot only after Vulkan has
+        /// accepted the terminal graphics submission.
+        /// </summary>
+        public void CommitCaptureFrameSubmission(
+            int frameSlot,
+            ulong frameSerial,
+            bool gpuTimingRecorded)
+        {
+            RenderingConstants.ValidateFrameIndex(frameSlot);
+            if (!_captureFrameBegun ||
+                frameSlot != _captureFrameSlot ||
+                frameSerial != _captureFrameSerial)
+            {
+                throw new InvalidOperationException(
+                    "Reflection capture submission does not match the active frame boundary.");
+            }
+
+            ReflectionProbeLifecycleSnapshot lifecycle = CaptureLifecycle;
+            _submittedCaptureFrames.MarkSubmitted(
+                frameSlot,
+                new ReflectionProbeSubmittedFrameTelemetry(
+                    frameSerial,
+                    _captureFrameCounters.CaptureFaceUnitsThisFrame,
+                    _captureFrameCounters.PrefilterMipUnitsThisFrame,
+                    _captureFrameCounters.PublishCopyUnitsThisFrame,
+                    gpuTimingRecorded,
+                    lifecycle));
+            _captureFrameBegun = false;
         }
 
         public void RequestRecaptureAll(string reason)
@@ -766,19 +838,22 @@ namespace Njulf.Rendering.Resources
                 return false;
             }
             if (requiredKind == ReflectionProbeWorkKind.CaptureFace &&
-                (_captureFaceUnitsThisFrame >= maxFaces || maxFaces <= 0))
+                (_captureFrameCounters.CaptureFaceUnitsThisFrame >= maxFaces ||
+                 maxFaces <= 0))
             {
                 work = default;
                 return false;
             }
             if (requiredKind == ReflectionProbeWorkKind.PrefilterMip &&
-                (_prefilterMipUnitsThisFrame >= maxMips || maxMips <= 0))
+                (_captureFrameCounters.PrefilterMipUnitsThisFrame >= maxMips ||
+                 maxMips <= 0))
             {
                 work = default;
                 return false;
             }
             if (requiredKind == ReflectionProbeWorkKind.PublishCopy &&
-                _publishCopyUnitsThisFrame >= Math.Max(1, budget))
+                _captureFrameCounters.PublishCopyUnitsThisFrame >=
+                    Math.Max(1, budget))
             {
                 work = default;
                 return false;
@@ -820,10 +895,12 @@ namespace Njulf.Rendering.Resources
                     work = default;
                     return false;
                 }
-                if (work.Kind == ReflectionProbeWorkKind.CaptureFace && work.Face == 0)
+                bool startsCapture = CountsAsCaptureStart(work);
+                if (startsCapture)
                     _recapturePolicies[work.Ticket.Layer].MarkStarted(work.Ticket.Version, _resourceFrameSerial);
-                _capturesStartedThisFrame++;
-                RecordStartedUnit(work.Kind);
+                _captureFrameCounters.RecordStartedUnit(
+                    work.Kind,
+                    startsCapture);
             }
             return acquired;
         }
@@ -1821,7 +1898,7 @@ namespace Njulf.Rendering.Resources
                 -1,
                 -1);
             _capturedProbeIds.Add(capture.ProbeId);
-            _capturesCompletedThisFrame++;
+            _captureFrameCounters.RecordCompletedCapture();
             _capturesCompletedTotal++;
             _metadataDirty = true;
         }
@@ -1907,24 +1984,10 @@ namespace Njulf.Rendering.Resources
                    _resourceFrameSerial - _recapturePolicies[layer].LastStartedFrame >= ageLimit;
         }
 
-        private void RecordStartedUnit(ReflectionProbeWorkKind kind)
-        {
-            switch (kind)
-            {
-                case ReflectionProbeWorkKind.CaptureFace:
-                    _captureFaceUnitsThisFrame++;
-                    _captureFaceUnitsTotal++;
-                    break;
-                case ReflectionProbeWorkKind.PrefilterMip:
-                    _prefilterMipUnitsThisFrame++;
-                    _prefilterMipUnitsTotal++;
-                    break;
-                case ReflectionProbeWorkKind.PublishCopy:
-                    _publishCopyUnitsThisFrame++;
-                    _publishCopyUnitsTotal++;
-                    break;
-            }
-        }
+        internal static bool CountsAsCaptureStart(
+            in ReflectionProbeWork work) =>
+            work.Kind == ReflectionProbeWorkKind.CaptureFace &&
+            work.Face == 0;
 
         private void UpdateResourceMetrics()
         {

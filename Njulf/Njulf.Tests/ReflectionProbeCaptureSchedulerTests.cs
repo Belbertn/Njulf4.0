@@ -9,6 +9,129 @@ namespace Njulf.Tests;
 public sealed class ReflectionProbeCaptureSchedulerTests
 {
     [Test]
+    public void LifecycleSnapshotTracksQueuedActiveAwaitingAndPublishedExclusively()
+    {
+        var scheduler = new ReflectionProbeCaptureScheduler(1);
+        ReflectionProbeCaptureFrameCounters counters = default;
+        counters.BeginCaptureFrame();
+        Guid id = Guid.Parse("E1006655-4387-4DE8-9AA1-C690FCB778B2");
+        var version = new ReflectionCaptureVersion(1, 1, 1, 1, 1, 1, 1);
+        scheduler.Register(0, id, hasPublishedCapture: false);
+        scheduler.Request(
+            0,
+            id,
+            version,
+            ReflectionCaptureReason.InitialLoad,
+            default,
+            resourceGeneration: 1,
+            sceneRevision: 1);
+
+        ReflectionProbeLifecycleSnapshot queued =
+            ReflectionProbeLifecycleSnapshotFactory.Create(
+                scheduler,
+                publishedCount: 0,
+                capturesCompletedTotal: 0UL,
+                counters);
+
+        Assert.That(
+            scheduler.TryAcquireWork(
+                mipCount: 2,
+                maxFaces: 1,
+                maxMips: 1,
+                out ReflectionProbeWork work),
+            Is.True);
+        counters.RecordStartedUnit(
+            work.Kind,
+            ReflectionProbeManager.CountsAsCaptureStart(work));
+        ReflectionProbeLifecycleSnapshot active =
+            ReflectionProbeLifecycleSnapshotFactory.Create(
+                scheduler,
+                publishedCount: 0,
+                capturesCompletedTotal: 0UL,
+                counters);
+
+        for (int face = 0; face < 6; face++)
+        {
+            if (face > 0)
+            {
+                Assert.That(
+                    scheduler.TryAcquireWork(2, 1, 1, out work),
+                    Is.True);
+                counters.RecordStartedUnit(
+                    work.Kind,
+                    ReflectionProbeManager.CountsAsCaptureStart(work));
+            }
+            Assert.That(work.Face, Is.EqualTo(face));
+            scheduler.CompleteWork(work);
+        }
+
+        Assert.That(scheduler.TryAcquireWork(2, 1, 1, out work), Is.True);
+        Assert.That(work.Kind, Is.EqualTo(ReflectionProbeWorkKind.PrefilterMip));
+        counters.RecordStartedUnit(work.Kind, startsCapture: false);
+        scheduler.CompleteWork(work);
+
+        Assert.That(scheduler.TryAcquireWork(2, 1, 1, out work), Is.True);
+        Assert.That(work.Kind, Is.EqualTo(ReflectionProbeWorkKind.PublishCopy));
+        counters.RecordStartedUnit(work.Kind, startsCapture: false);
+        scheduler.MarkCopySubmitted(work, completionValue: 42UL);
+        ReflectionProbeLifecycleSnapshot awaiting =
+            ReflectionProbeLifecycleSnapshotFactory.Create(
+                scheduler,
+                publishedCount: 0,
+                capturesCompletedTotal: 0UL,
+                counters);
+
+        Assert.That(
+            scheduler.TryRetireCompleted(
+                completedValue: 42UL,
+                currentResourceGeneration: 1U,
+                out _,
+                out bool didPublish),
+            Is.True);
+        Assert.That(didPublish, Is.True);
+        counters.RecordCompletedCapture();
+        ReflectionProbeLifecycleSnapshot published =
+            ReflectionProbeLifecycleSnapshotFactory.Create(
+                scheduler,
+                publishedCount: 1,
+                capturesCompletedTotal: 1UL,
+                counters);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(queued.QueuedCount, Is.EqualTo(1));
+            Assert.That(queued.ActiveCount, Is.Zero);
+            Assert.That(queued.AwaitingGpuCompletionCount, Is.Zero);
+            Assert.That(queued.PublishedCount, Is.Zero);
+            Assert.That(queued.State, Is.EqualTo(ReflectionProbeCaptureState.Queued));
+
+            Assert.That(active.QueuedCount, Is.Zero);
+            Assert.That(active.ActiveCount, Is.EqualTo(1));
+            Assert.That(active.AwaitingGpuCompletionCount, Is.Zero);
+            Assert.That(active.State, Is.EqualTo(ReflectionProbeCaptureState.CapturingFaces));
+
+            Assert.That(awaiting.QueuedCount, Is.Zero);
+            Assert.That(awaiting.ActiveCount, Is.Zero);
+            Assert.That(awaiting.AwaitingGpuCompletionCount, Is.EqualTo(1));
+            Assert.That(awaiting.State, Is.EqualTo(ReflectionProbeCaptureState.AwaitingGpuCompletion));
+
+            Assert.That(published.QueuedCount, Is.Zero);
+            Assert.That(published.ActiveCount, Is.Zero);
+            Assert.That(published.AwaitingGpuCompletionCount, Is.Zero);
+            Assert.That(published.PublishedCount, Is.EqualTo(1));
+            Assert.That(published.State, Is.EqualTo(ReflectionProbeCaptureState.Published));
+            Assert.That(published.CapturesStartedThisFrame, Is.EqualTo(1));
+            Assert.That(published.CapturesCompletedThisFrame, Is.EqualTo(1));
+            Assert.That(published.CaptureFaceUnitsThisFrame, Is.EqualTo(6));
+            Assert.That(published.PrefilterMipUnitsThisFrame, Is.EqualTo(1));
+            Assert.That(published.PublishCopyUnitsThisFrame, Is.EqualTo(1));
+            Assert.That(published.CapturesStartedTotal, Is.EqualTo(1UL));
+            Assert.That(published.CapturesCompletedTotal, Is.EqualTo(1UL));
+            Assert.That(published.CapturesPublishedTotal, Is.EqualTo(1UL));
+        });
+    }
+
+    [Test]
     public void RecaptureRetainsPublishedCaptureUntilGpuCompletion()
     {
         var scheduler = new ReflectionProbeCaptureScheduler(4);

@@ -712,7 +712,7 @@ namespace Njulf.Tests
                 Assert.That(manager, Does.Contain("public bool TryBeginCapture(out ReflectionProbeCapture capture)"));
                 Assert.That(manager, Does.Contain("public void PublishCapture(in ReflectionProbeCapture capture)"));
                 Assert.That(manager, Does.Contain("_capturedProbeIds.Add(capture.ProbeId);"));
-                Assert.That(manager.Split("_capturesCompletedThisFrame++", StringSplitOptions.None), Has.Length.EqualTo(2));
+                Assert.That(manager, Does.Contain("_captureFrameCounters.RecordCompletedCapture();"));
                 Assert.That(manager, Does.Not.Contain("DrainCaptureQueue"));
             });
         }

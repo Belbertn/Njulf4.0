@@ -106,6 +106,27 @@ public sealed class ReflectionProbeCaptureScheduler
     public int Capacity => _entries.Length;
     public int QueueDepth => _queueCount;
     public int ActiveTicketCount => _activeLayer >= 0 ? 1 : 0;
+    /// <summary>Exclusive count of tickets still recording work.</summary>
+    public int ActiveWorkCount =>
+        _activeLayer >= 0 && _entries[_activeLayer].CompletionValue == 0UL
+            ? 1
+            : 0;
+    public ReflectionProbeCaptureState CurrentState
+    {
+        get
+        {
+            if (_activeLayer >= 0)
+                return _entries[_activeLayer].State;
+            if (_queueCount <= 0)
+                return ReflectionProbeCaptureState.Unregistered;
+
+            ReflectionProbeCaptureState queuedState =
+                _entries[_queue[_queueHead]].State;
+            return queuedState == ReflectionProbeCaptureState.Unregistered
+                ? ReflectionProbeCaptureState.Queued
+                : queuedState;
+        }
+    }
     public ulong CapturesStartedTotal => _startedTotal;
     public ulong CapturesPublishedTotal => _publishedTotal;
     public ulong CapturesFailedTotal => _failedTotal;

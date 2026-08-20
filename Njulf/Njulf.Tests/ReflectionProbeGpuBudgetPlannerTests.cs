@@ -79,4 +79,84 @@ public sealed class ReflectionProbeGpuBudgetPlannerTests
         planner.BeginFrame(100);
         Assert.That(planner.TryReserve(ReflectionProbeWorkKind.CaptureFace), Is.True);
     }
+
+    [Test]
+    public void CompletedFrameSlotLearnsFromItsOwnSubmittedWorkload()
+    {
+        var ring = new ReflectionProbeSubmittedFrameRing();
+        var planner = new ReflectionProbeGpuBudgetPlanner();
+        ReflectionProbeLifecycleSnapshot lifecycle = default;
+        var slotZero = new ReflectionProbeSubmittedFrameTelemetry(
+            FrameSerial: 20UL,
+            CaptureFaceUnitCount: 1,
+            PrefilterMipUnitCount: 0,
+            PublishCopyUnitCount: 0,
+            GpuTimingRecorded: true,
+            Lifecycle: lifecycle);
+        var slotOne = new ReflectionProbeSubmittedFrameTelemetry(
+            FrameSerial: 21UL,
+            CaptureFaceUnitCount: 4,
+            PrefilterMipUnitCount: 0,
+            PublishCopyUnitCount: 0,
+            GpuTimingRecorded: true,
+            Lifecycle: lifecycle);
+        ring.MarkSubmitted(0, slotZero);
+        ring.MarkSubmitted(1, slotOne);
+
+        Assert.That(
+            ring.TryConsume(0, out ReflectionProbeSubmittedFrameTelemetry completedZero),
+            Is.True);
+        planner.RecordTiming(
+            completedZero,
+            captureMicroseconds: 800,
+            prefilterMicroseconds: 0,
+            publishMicroseconds: 0);
+        ReflectionProbeGpuBudgetSnapshot afterSlotZero = planner.GetSnapshot();
+
+        Assert.That(
+            ring.TryConsume(1, out ReflectionProbeSubmittedFrameTelemetry completedOne),
+            Is.True);
+        planner.RecordTiming(
+            completedOne,
+            captureMicroseconds: 400,
+            prefilterMicroseconds: 0,
+            publishMicroseconds: 0);
+        ReflectionProbeGpuBudgetSnapshot afterSlotOne = planner.GetSnapshot();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(completedZero.FrameSerial, Is.EqualTo(20UL));
+            Assert.That(completedZero.CaptureFaceUnitCount, Is.EqualTo(1));
+            Assert.That(afterSlotZero.FaceEstimateMicroseconds, Is.EqualTo(275));
+            Assert.That(completedOne.FrameSerial, Is.EqualTo(21UL));
+            Assert.That(completedOne.CaptureFaceUnitCount, Is.EqualTo(4));
+            Assert.That(afterSlotOne.FaceEstimateMicroseconds, Is.EqualTo(231));
+        });
+    }
+
+    [Test]
+    public void SubmittedFrameWithoutRecordedTimestampsCannotTeachFromStaleSnapshot()
+    {
+        var planner = new ReflectionProbeGpuBudgetPlanner();
+        var submitted = new ReflectionProbeSubmittedFrameTelemetry(
+            FrameSerial: 30UL,
+            CaptureFaceUnitCount: 1,
+            PrefilterMipUnitCount: 0,
+            PublishCopyUnitCount: 0,
+            GpuTimingRecorded: false,
+            Lifecycle: default);
+
+        planner.RecordTiming(
+            submitted,
+            captureMicroseconds: 9_000,
+            prefilterMicroseconds: 0,
+            publishMicroseconds: 0);
+
+        ReflectionProbeGpuBudgetSnapshot snapshot = planner.GetSnapshot();
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.HasTimingHistory, Is.False);
+            Assert.That(snapshot.FaceEstimateMicroseconds, Is.EqualTo(100));
+        });
+    }
 }

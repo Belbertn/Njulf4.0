@@ -92,6 +92,29 @@ public sealed class ReflectionProbeGpuBudgetPlanner
         _hasTimingHistory = true;
     }
 
+    internal void RecordTiming(
+        in ReflectionProbeSubmittedFrameTelemetry submittedFrame,
+        long captureMicroseconds,
+        long prefilterMicroseconds,
+        long publishMicroseconds)
+    {
+        if (!submittedFrame.GpuTimingRecorded)
+            return;
+
+        RecordTiming(
+            ReflectionProbeWorkKind.CaptureFace,
+            submittedFrame.CaptureFaceUnitCount,
+            captureMicroseconds);
+        RecordTiming(
+            ReflectionProbeWorkKind.PrefilterMip,
+            submittedFrame.PrefilterMipUnitCount,
+            prefilterMicroseconds);
+        RecordTiming(
+            ReflectionProbeWorkKind.PublishCopy,
+            submittedFrame.PublishCopyUnitCount,
+            publishMicroseconds);
+    }
+
     public ReflectionProbeGpuBudgetSnapshot GetSnapshot() => new(
         _budgetMicroseconds,
         _reservedMicroseconds,
