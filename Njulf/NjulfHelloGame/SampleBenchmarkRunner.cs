@@ -67,6 +67,12 @@ public sealed class SampleBenchmarkRunner
 
     public SampleBenchmarkReport? Report { get; private set; }
     public string? ReportPath { get; private set; }
+    /// <summary>
+    /// The timed interval has ended and the renderer must retain the last
+    /// deterministic trajectory pose while the out-of-band HDR readback runs.
+    /// </summary>
+    public bool HoldTrajectoryForPostMeasurementEvidence =>
+        _waitingForHdrCapture;
 
     public void OnFrameRendered(int frameIndex, RendererDiagnostics diagnostics, RenderBudgetSnapshot budget)
     {
@@ -100,6 +106,20 @@ public sealed class SampleBenchmarkRunner
             }
 
             if (_consecutiveReadyFrameCount < RequiredConsecutiveReadyFrameCount)
+            {
+                if (_additionalSettlingFrameCount <
+                    _options.MaximumAdditionalSettlingFrameCount)
+                {
+                    _additionalSettlingFrameCount++;
+                    _lastPreMeasurementDiagnostics = diagnostics;
+                    return;
+                }
+
+                _settlingWaitTimedOut = true;
+            }
+            else if (!SampleBenchmarkTrajectory.IsMeasurementStartFrame(
+                         _options.Trajectory,
+                         frameIndex))
             {
                 if (_additionalSettlingFrameCount <
                     _options.MaximumAdditionalSettlingFrameCount)
@@ -204,7 +224,9 @@ public sealed class SampleBenchmarkRunner
                 Complete(SampleBenchmarkHdrComparer.Compare(
                     _options.HdrReferencePath,
                     _hdrCandidatePath,
-                    _options.HdrMaximumRelativeRmse));
+                    _options.HdrMaximumRelativeRmse,
+                    _options.HdrMaximumFlipP95,
+                    _options.HdrQualityContractPath));
             }
             catch (Exception exception) when (
                 exception is ArgumentException or
@@ -1225,6 +1247,30 @@ public sealed class SampleBenchmarkAnalyzer
 
         RendererDiagnostics first = _samples[0];
         var mismatches = new List<string>();
+        bool movingTrajectory =
+            SampleBenchmarkTrajectory.IsMoving(options.Trajectory);
+        int trajectoryFrameCount =
+            SampleBenchmarkTrajectory.GetFrameCount(options.Trajectory);
+        string expectedTrajectoryFingerprint =
+            SampleBenchmarkTrajectory.CreateFingerprint(
+                options.Trajectory,
+                options.TrajectoryBistroVariant);
+        if (string.IsNullOrWhiteSpace(options.TrajectoryFingerprint) ||
+            !string.Equals(
+                options.TrajectoryFingerprint,
+                expectedTrajectoryFingerprint,
+                StringComparison.Ordinal))
+        {
+            mismatches.Add(
+                "Benchmark trajectory fingerprint is absent or does not match " +
+                $"'{SampleBenchmarkTrajectory.GetName(options.Trajectory)}'.");
+        }
+        if (movingTrajectory && _samples.Count != trajectoryFrameCount)
+        {
+            mismatches.Add(
+                $"Moving trajectory '{SampleBenchmarkTrajectory.GetName(options.Trajectory)}' " +
+                $"requires exactly {trajectoryFrameCount} measured frames; captured {_samples.Count}.");
+        }
         if (_samples.Count < 120)
             mismatches.Add($"Production timing requires at least 120 frames; captured {_samples.Count}.");
         if (first.GiMeasurement.Mode != GiMeasurementMode.Production)
@@ -1277,8 +1323,31 @@ public sealed class SampleBenchmarkAnalyzer
             CompareInvariant(mismatches, index, "height", first.CaptureRenderHeight, sample.CaptureRenderHeight);
             CompareInvariant(mismatches, index, "quality", first.ActiveQualityPreset, sample.ActiveQualityPreset);
             CompareInvariant(mismatches, index, "scene revision", first.CaptureSceneContentRevision, sample.CaptureSceneContentRevision);
-            CompareInvariant(mismatches, index, "scene hash", first.CaptureSceneStateHash, sample.CaptureSceneStateHash);
-            CompareInvariant(mismatches, index, "camera", first.CaptureCamera, sample.CaptureCamera);
+            if (movingTrajectory)
+            {
+                IReadOnlyList<string> cameraMismatches =
+                    SampleBenchmarkTrajectory.ValidateCamera(
+                        options.Trajectory,
+                        index,
+                        options.TrajectoryBistroVariant,
+                        sample.CaptureCamera);
+                foreach (string mismatch in cameraMismatches)
+                {
+                    mismatches.Add(
+                        $"Frame {index} trajectory camera {mismatch}.");
+                }
+                CompareInvariant(
+                    mismatches,
+                    index,
+                    "camera cut serial",
+                    first.CaptureCamera.CameraCutSerial,
+                    sample.CaptureCamera.CameraCutSerial);
+            }
+            else
+            {
+                CompareInvariant(mismatches, index, "scene hash", first.CaptureSceneStateHash, sample.CaptureSceneStateHash);
+                CompareInvariant(mismatches, index, "camera", first.CaptureCamera, sample.CaptureCamera);
+            }
             CompareInvariant(mismatches, index, "executable", first.CaptureRun.ExecutableHash, sample.CaptureRun.ExecutableHash);
             CompareInvariant(mismatches, index, "commit", first.CaptureRun.Commit, sample.CaptureRun.Commit);
             CompareInvariant(mismatches, index, "dirty state", first.CaptureRun.DirtyWorktreeState, sample.CaptureRun.DirtyWorktreeState);
@@ -1319,10 +1388,12 @@ public sealed class SampleBenchmarkAnalyzer
             bool acceptedTailCertificate =
                 SampleBenchmarkRunner.HasAcceptedCurrentSimpleDdgiTailCertificate(
                     sample);
-            if (sample.CaptureFrame.TransportConvergencePending &&
+            if (!movingTrajectory &&
+                sample.CaptureFrame.TransportConvergencePending &&
                 !acceptedTailCertificate)
                 mismatches.Add($"Frame {index} still has pending transport convergence.");
-            if (sample.SimpleDdgiActive != 0 &&
+            if (!movingTrajectory &&
+                sample.SimpleDdgiActive != 0 &&
                 sample.SimpleDdgiTransportV2Active != 0 &&
                 !(sample.SimpleDdgiTransportTailCertificationEnabled
                     ? acceptedTailCertificate
@@ -1392,6 +1463,9 @@ public sealed class SampleBenchmarkAnalyzer
 
         string identityHash = CreateCaptureIdentityHash(first, includeTargetState: false);
         string fullIdentityHash = CreateCaptureIdentityHash(first, includeTargetState: true);
+        string trajectorySequenceHash = CreateTrajectorySequenceHash(
+            _samples,
+            options);
         bool production = first.GiMeasurement.Mode == GiMeasurementMode.Production &&
             first.ValidationMode == RendererValidationMode.Off &&
             first.DdgiDetailedCountersCompiled == 0 &&
@@ -1410,6 +1484,10 @@ public sealed class SampleBenchmarkAnalyzer
             Array.AsReadOnly(mismatches.Distinct(StringComparer.Ordinal).ToArray()))
         {
             FullIdentityHash = fullIdentityHash,
+            Trajectory = SampleBenchmarkTrajectory.GetName(options.Trajectory),
+            TrajectoryFingerprint = expectedTrajectoryFingerprint,
+            TrajectoryFrameCount = trajectoryFrameCount,
+            TrajectorySequenceHash = trajectorySequenceHash,
             PassTimestampReconciliationToleranceMicroseconds =
                 passTimestampToleranceMicroseconds
         };
@@ -1557,6 +1635,44 @@ public sealed class SampleBenchmarkAnalyzer
         string canonical = string.Join("|", parts);
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
         return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static string CreateTrajectorySequenceHash(
+        IReadOnlyList<RendererDiagnostics> samples,
+        SampleBenchmarkOptions options)
+    {
+        var canonical = new StringBuilder();
+        canonical.Append("njulf-benchmark-trajectory-sequence/v1|")
+            .Append(SampleBenchmarkTrajectory.GetName(options.Trajectory))
+            .Append('|')
+            .Append(options.TrajectoryFingerprint)
+            .Append('\n');
+        for (int index = 0; index < samples.Count; index++)
+        {
+            RendererDiagnostics sample = samples[index];
+            PerformanceCaptureCameraMetadata camera = sample.CaptureCamera;
+            canonical.Append(index.ToString(CultureInfo.InvariantCulture)).Append('|')
+                .Append(camera.PositionX.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(camera.PositionY.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(camera.PositionZ.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(camera.YawRadians.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(camera.PitchRadians.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(camera.FieldOfViewRadians.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(camera.NearPlane.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(camera.FarPlane.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+                .Append(camera.ViewHash).Append('|')
+                .Append(camera.ProjectionHash).Append('|')
+                .Append(camera.CameraCutSerial.ToString(CultureInfo.InvariantCulture)).Append('|')
+                .Append(sample.CaptureSceneStateHash).Append('|')
+                .Append(sample.ResolvedGiSettings.StableHash).Append('|')
+                .Append(sample.ActiveFeatureIsolation).Append('|')
+                .Append(sample.GlobalIlluminationDebugView)
+                .Append('\n');
+        }
+
+        return "sha256:" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())))
+            .ToLowerInvariant();
     }
 
     private static double MicrosecondsToMilliseconds(long microseconds)

@@ -63,10 +63,13 @@ public static class SampleSmokeOptionsParser
         "--benchmark-budget-profile",
         "--benchmark-pair-id",
         "--benchmark-variant",
+        "--benchmark-trajectory",
         "--benchmark-require-production",
         "--benchmark-hdr-reference",
         "--benchmark-hdr-candidate",
         "--benchmark-hdr-max-relative-rmse",
+        "--benchmark-hdr-max-flip-p95",
+        "--benchmark-hdr-quality-contract",
         "--benchmark-shader-profile",
         "--benchmark-require-shader-profile",
         "--startup-log",
@@ -340,6 +343,10 @@ public static class SampleSmokeOptionsParser
         string benchmarkVariant =
             Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_VARIANT")?.Trim() ??
             "baseline";
+        SampleBenchmarkTrajectoryKind benchmarkTrajectory =
+            SampleBenchmarkTrajectory.Parse(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_BENCHMARK_TRAJECTORY"));
         bool benchmarkRequireProduction = ParseBool(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_REQUIRE_PRODUCTION"),
             "NJULF_RENDERER_BENCHMARK_REQUIRE_PRODUCTION");
@@ -358,6 +365,18 @@ public static class SampleSmokeOptionsParser
             benchmarkHdrMaximumRelativeRmseEnvironment,
             SampleBenchmarkHdrDifference.DefaultMaximumRelativeRmse,
             "NJULF_RENDERER_BENCHMARK_HDR_MAX_RELATIVE_RMSE");
+        string? benchmarkHdrMaximumFlipP95Environment =
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_BENCHMARK_HDR_MAX_FLIP_P95");
+        double benchmarkHdrMaximumFlipP95 = ParseNonNegativeDouble(
+            benchmarkHdrMaximumFlipP95Environment,
+            0.02,
+            "NJULF_RENDERER_BENCHMARK_HDR_MAX_FLIP_P95");
+        string benchmarkHdrQualityContractPath =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_RENDERER_BENCHMARK_HDR_QUALITY_CONTRACT")) ??
+            string.Empty;
         string benchmarkShaderProfilePath =
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
@@ -376,11 +395,17 @@ public static class SampleSmokeOptionsParser
             benchmarkVariant,
             SampleBenchmarkCaptureVariant.Baseline,
             StringComparison.OrdinalIgnoreCase);
+        enableBenchmark |= benchmarkTrajectory !=
+            SampleBenchmarkTrajectoryKind.Stationary;
         enableBenchmark |= benchmarkRequireProduction;
         enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkHdrReferencePath);
         enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkHdrCandidatePath);
         enableBenchmark |= !string.IsNullOrWhiteSpace(
             benchmarkHdrMaximumRelativeRmseEnvironment);
+        enableBenchmark |= !string.IsNullOrWhiteSpace(
+            benchmarkHdrMaximumFlipP95Environment);
+        enableBenchmark |= !string.IsNullOrWhiteSpace(
+            benchmarkHdrQualityContractPath);
         enableBenchmark |= !string.IsNullOrWhiteSpace(benchmarkShaderProfilePath);
         enableBenchmark |= benchmarkRequireShaderProfile;
 
@@ -612,6 +637,10 @@ public static class SampleSmokeOptionsParser
                     benchmarkVariant = RequireNonEmptyValue(value, "--benchmark-variant");
                     enableBenchmark = true;
                     break;
+                case "--benchmark-trajectory":
+                    benchmarkTrajectory = SampleBenchmarkTrajectory.Parse(value);
+                    enableBenchmark = true;
+                    break;
                 case "--benchmark-require-production":
                     benchmarkRequireProduction = ParseBool(value, optionName);
                     enableBenchmark = true;
@@ -629,6 +658,17 @@ public static class SampleSmokeOptionsParser
                         value,
                         SampleBenchmarkHdrDifference.DefaultMaximumRelativeRmse,
                         optionName);
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-hdr-max-flip-p95":
+                    benchmarkHdrMaximumFlipP95 = ParseNonNegativeDouble(
+                        value,
+                        0.02,
+                        optionName);
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-hdr-quality-contract":
+                    benchmarkHdrQualityContractPath = RequirePath(value, optionName);
                     enableBenchmark = true;
                     break;
                 case "--benchmark-shader-profile":
@@ -992,10 +1032,12 @@ public static class SampleSmokeOptionsParser
         if (bistroQualityVariantSpecified &&
             string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory) &&
             performanceScenario !=
-                SamplePerformanceScenario.BistroQualityMotionRelight)
+                SamplePerformanceScenario.BistroQualityMotionRelight &&
+            !SampleBenchmarkTrajectory.RequiresBistro(benchmarkTrajectory))
         {
             throw new ArgumentException(
-                "--bistro-quality-variant requires --bistro-quality-capture-dir or the BistroQualityMotionRelight performance scenario.");
+                "--bistro-quality-variant requires --bistro-quality-capture-dir, " +
+                "the BistroQualityMotionRelight performance scenario, or a Bistro benchmark trajectory.");
         }
 
         if (khronosRenderedGate is not null)
@@ -1200,6 +1242,40 @@ public static class SampleSmokeOptionsParser
                 sceneKind = SampleSceneKind.Bistro;
             }
 
+            if (SampleBenchmarkTrajectory.RequiresBistro(benchmarkTrajectory))
+            {
+                if (sceneSpecified && sceneKind != SampleSceneKind.Bistro)
+                {
+                    throw new ArgumentException(
+                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' " +
+                        "requires the Bistro scene.");
+                }
+                sceneKind = SampleSceneKind.Bistro;
+                if (benchmarkTrajectory ==
+                    SampleBenchmarkTrajectoryKind.BistroPresentation)
+                {
+                    bistroQualityCaptureVariant =
+                        SampleBistroQualityCaptureVariant.Presentation;
+                }
+                else if (bistroQualityCaptureVariant ==
+                    SampleBistroQualityCaptureVariant.Presentation)
+                {
+                    throw new ArgumentException(
+                        "The bistro-loop benchmark trajectory requires a moving " +
+                        "Bistro quality variant.");
+                }
+            }
+            if (SampleBenchmarkTrajectory.RequiresSponza(benchmarkTrajectory))
+            {
+                if (sceneSpecified && sceneKind != SampleSceneKind.SponzaPlaza)
+                {
+                    throw new ArgumentException(
+                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' " +
+                        "requires the Sponza plaza scene.");
+                }
+                sceneKind = SampleSceneKind.SponzaPlaza;
+            }
+
             if (enableBenchmark)
             {
                 if (mode != SampleSmokeMode.None || frameCount > 0 || longRunOptionsSpecified)
@@ -1268,6 +1344,16 @@ public static class SampleSmokeOptionsParser
                 {
                     throw new ArgumentException(
                         "--benchmark-require-production requires at least 120 measurement frames.");
+                }
+                if (benchmarkRequireProduction &&
+                    SampleBenchmarkTrajectory.IsMoving(benchmarkTrajectory) &&
+                    benchmarkMeasureFrames !=
+                        SampleBenchmarkTrajectory.GetFrameCount(benchmarkTrajectory))
+                {
+                    throw new ArgumentException(
+                        "A production moving benchmark must measure exactly one complete " +
+                        $"'{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' cycle " +
+                        $"({SampleBenchmarkTrajectory.GetFrameCount(benchmarkTrajectory)} frames).");
                 }
                 if (benchmarkRequireShaderProfile &&
                     string.IsNullOrWhiteSpace(benchmarkShaderProfilePath))
@@ -1389,10 +1475,17 @@ public static class SampleSmokeOptionsParser
             CaptureVariant = string.IsNullOrWhiteSpace(benchmarkVariant)
                 ? "baseline"
                 : benchmarkVariant,
+            Trajectory = benchmarkTrajectory,
+            TrajectoryFingerprint = SampleBenchmarkTrajectory.CreateFingerprint(
+                benchmarkTrajectory,
+                bistroQualityCaptureVariant),
+            TrajectoryBistroVariant = bistroQualityCaptureVariant,
             RequireProductionTiming = benchmarkRequireProduction,
             HdrReferencePath = benchmarkHdrReferencePath,
             HdrCandidatePath = benchmarkHdrCandidatePath,
             HdrMaximumRelativeRmse = benchmarkHdrMaximumRelativeRmse,
+            HdrMaximumFlipP95 = benchmarkHdrMaximumFlipP95,
+            HdrQualityContractPath = benchmarkHdrQualityContractPath,
             ShaderProfileArtifactPath = benchmarkShaderProfilePath,
             RequireShaderProfileEvidence = benchmarkRequireShaderProfile,
             MaximumAdditionalSettlingFrameCount = benchmarkMaximumSettlingFrames

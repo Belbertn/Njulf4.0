@@ -407,6 +407,8 @@ internal sealed class HelloGame : Game
         if (_sceneKind == SampleSceneKind.Bistro &&
             (startupScenario ==
                  SamplePerformanceScenario.BistroQualityMotionRelight ||
+             SampleBenchmarkTrajectory.RequiresBistro(
+                 _smokeOptions.Benchmark.Trajectory) ||
              !string.IsNullOrWhiteSpace(
                  _smokeOptions.BistroQualityCaptureDirectory)))
         {
@@ -937,9 +939,10 @@ internal sealed class HelloGame : Game
         ApplySponzaScenarioFrameControls();
         ApplyBenchmarkDynamicScenarioFrameControls();
         ApplyBenchmarkCameraScenarioFrameControls();
+        ApplyBenchmarkSponzaTrajectoryFrameControls();
         if (_bistroQualityCaptureRunner != null)
             _bistroQualityCaptureRunner.PrepareFrame(_drawnFrames);
-        else
+        else if (_benchmarkRunner?.HoldTrajectoryForPostMeasurementEvidence != true)
             _bistroQualityRuntimeController?.PrepareFrame(_drawnFrames);
 
         base.Update(simulationDeltaTime);
@@ -1025,6 +1028,37 @@ internal sealed class HelloGame : Game
                 $"Benchmark camera disturbance: scenario={scenario}, " +
                 $"frame={_drawnFrames}, position={position}, yaw={yaw:F3}.");
         }
+    }
+
+    private void ApplyBenchmarkSponzaTrajectoryFrameControls()
+    {
+        SampleBenchmarkOptions benchmark = _smokeOptions.Benchmark;
+        if (!benchmark.Enabled ||
+            !SampleBenchmarkTrajectory.RequiresSponza(benchmark.Trajectory) ||
+            _benchmarkRunner?.HoldTrajectoryForPostMeasurementEvidence == true ||
+            Camera is not FirstPersonCamera camera)
+        {
+            return;
+        }
+
+        int trajectoryFrame =
+            SampleBenchmarkTrajectory.GetTrajectoryFrameIndex(
+                benchmark.Trajectory,
+                _drawnFrames);
+        SampleBenchmarkCameraPose pose =
+            SampleBenchmarkTrajectory.ResolveCamera(
+                benchmark.Trajectory,
+                trajectoryFrame,
+                benchmark.TrajectoryBistroVariant) ??
+            throw new InvalidOperationException(
+                "A named Sponza benchmark trajectory did not resolve a camera pose.");
+        camera.Position = pose.Position;
+        camera.Yaw = pose.Yaw;
+        camera.Pitch = pose.Pitch;
+        camera.FieldOfView = pose.FieldOfView;
+        camera.NearPlane = pose.NearPlane;
+        camera.FarPlane = pose.FarPlane;
+        camera.Update();
     }
 
     internal static (CoreVector3 Position, float Yaw, float Pitch)

@@ -111,6 +111,19 @@ public sealed record SampleBenchmarkCaptureContract(
 {
     /// <summary>Exact rendered-state identity for this individual run.</summary>
     public string FullIdentityHash { get; init; } = "unavailable";
+    /// <summary>Named stationary or deterministic moving camera program.</summary>
+    public string Trajectory { get; init; } =
+        SampleBenchmarkTrajectory.StationaryName;
+    /// <summary>Hash of the authored trajectory contract and lighting script.</summary>
+    public string TrajectoryFingerprint { get; init; } = "unavailable";
+    /// <summary>Number of camera states in one complete trajectory cycle.</summary>
+    public int TrajectoryFrameCount { get; init; } = 1;
+    /// <summary>
+    /// Hash of every measured camera and scene-state identity in order. This
+    /// lets paired captures compare moving workloads without pretending that
+    /// every frame has the same camera or dynamic scene state.
+    /// </summary>
+    public string TrajectorySequenceHash { get; init; } = "unavailable";
     /// <summary>
     /// Quantization allowance used to reconcile independently rounded pass
     /// durations with the rounded frame duration.

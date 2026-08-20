@@ -55,6 +55,74 @@ public sealed class SampleBenchmarkEvidenceTests
     }
 
     [Test]
+    public void HdrComparer_AppliesFlipAndNamedLinearRoiGates()
+    {
+        string directory = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "benchmark-hdr-quality-contract",
+            Guid.NewGuid().ToString("N"));
+        string referencePath = Path.Combine(directory, "reference.pfm");
+        string matchingPath = Path.Combine(directory, "matching.pfm");
+        string shiftedPath = Path.Combine(directory, "shifted.pfm");
+        string contractPath = Path.Combine(directory, "quality.json");
+        float[] reference =
+        [
+            1.0f, 1.0f, 1.0f,
+            1.0f, 1.0f, 1.0f,
+            1.0f, 1.0f, 1.0f,
+            1.0f, 1.0f, 1.0f
+        ];
+        float[] shifted = (float[])reference.Clone();
+        shifted[0] = 0.5f;
+        shifted[1] = 0.5f;
+        shifted[2] = 0.5f;
+        PfmLinearImageCodec.WriteAtomic(referencePath, reference, 2, 2);
+        PfmLinearImageCodec.WriteAtomic(matchingPath, reference, 2, 2);
+        PfmLinearImageCodec.WriteAtomic(shiftedPath, shifted, 2, 2);
+        Directory.CreateDirectory(directory);
+        var contract = new SampleBenchmarkHdrQualityContract(
+            SampleBenchmarkHdrQualityContract.CurrentSchema,
+            2,
+            2,
+            [new SampleBenchmarkHdrRoiContract("whole-frame", 0, 0, 2, 2, 0.01, 0.01)]);
+        File.WriteAllText(
+            contractPath,
+            JsonSerializer.Serialize(
+                contract,
+                new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                }));
+
+        SampleBenchmarkHdrDifference matching =
+            SampleBenchmarkHdrComparer.Compare(
+                referencePath,
+                matchingPath,
+                maximumRelativeRmse: 1.0,
+                maximumFlipP95: 1.0,
+                qualityContractPath: contractPath);
+        SampleBenchmarkHdrDifference shiftedResult =
+            SampleBenchmarkHdrComparer.Compare(
+                referencePath,
+                shiftedPath,
+                maximumRelativeRmse: 1.0,
+                maximumFlipP95: 1.0,
+                qualityContractPath: contractPath);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matching.Passed, Is.True);
+            Assert.That(matching.FlipP95, Is.Zero);
+            Assert.That(matching.RoiResults, Has.Count.EqualTo(1));
+            Assert.That(matching.RoiResults[0].Passed, Is.True);
+            Assert.That(matching.QualityContractSha256, Has.Length.EqualTo(64));
+            Assert.That(shiftedResult.Passed, Is.False);
+            Assert.That(shiftedResult.RoiResults[0].Passed, Is.False);
+            Assert.That(shiftedResult.FailureReason, Does.Contain("whole-frame"));
+        });
+    }
+
+    [Test]
     public void ShaderProfileLoader_RejectsMismatchedCaptureIdentity()
     {
         string directory = Path.Combine(

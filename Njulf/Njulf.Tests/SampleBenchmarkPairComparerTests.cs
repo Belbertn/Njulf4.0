@@ -106,6 +106,111 @@ public sealed class SampleBenchmarkPairComparerTests
     }
 
     [Test]
+    public void Compare_RejectsEveryMovingTrajectoryIdentityMismatch()
+    {
+        SampleBenchmarkReport baseline = WithMovingTrajectory(CreateReport(
+            "locked-pair",
+            "sha256:state-a",
+            "baseline",
+            10.0,
+            4.0));
+        SampleBenchmarkCaptureContract contract = baseline.CaptureContract;
+        SampleBenchmarkReport[] mismatches =
+        [
+            baseline with
+            {
+                CaptureContract = contract with
+                {
+                    Trajectory = SampleBenchmarkTrajectory.SponzaVerticalName,
+                    TrajectoryFrameCount =
+                        SampleBenchmarkTrajectory.GetFrameCount(
+                            SampleBenchmarkTrajectoryKind.SponzaVertical)
+                }
+            },
+            baseline with
+            {
+                CaptureContract = contract with
+                {
+                    TrajectoryFingerprint = Sha256('b')
+                }
+            },
+            baseline with
+            {
+                CaptureContract = contract with
+                {
+                    TrajectoryFrameCount = contract.TrajectoryFrameCount - 1
+                }
+            },
+            baseline with
+            {
+                CaptureContract = contract with
+                {
+                    TrajectorySequenceHash = Sha256('c')
+                }
+            }
+        ];
+        string[] expectedFailures =
+        [
+            "Capture trajectories differ.",
+            "Capture trajectory fingerprints differ.",
+            "Capture trajectory frame counts do not match their authored contracts.",
+            "Capture trajectory sequences differ."
+        ];
+
+        Assert.Multiple(() =>
+        {
+            for (int index = 0; index < mismatches.Length; index++)
+            {
+                SampleBenchmarkPairComparison comparison =
+                    SampleBenchmarkPairComparer.Compare(
+                        baseline,
+                        mismatches[index],
+                        requireRepeatability: false);
+                Assert.That(comparison.Comparable, Is.False, expectedFailures[index]);
+                Assert.That(
+                    comparison.Failures,
+                    Does.Contain(expectedFailures[index]));
+            }
+        });
+    }
+
+    [Test]
+    public void Compare_RejectsUnavailableTrajectoryEvidence()
+    {
+        SampleBenchmarkReport baseline = CreateReport(
+            "locked-pair",
+            "sha256:state-a",
+            "baseline",
+            10.0,
+            4.0);
+        SampleBenchmarkReport missing = baseline with
+        {
+            CaptureContract = baseline.CaptureContract with
+            {
+                TrajectoryFingerprint = "unavailable",
+                TrajectorySequenceHash = "unavailable"
+            }
+        };
+
+        SampleBenchmarkPairComparison comparison =
+            SampleBenchmarkPairComparer.Compare(
+                baseline,
+                missing,
+                requireRepeatability: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(comparison.Comparable, Is.False);
+            Assert.That(
+                comparison.Failures,
+                Does.Contain("Capture trajectory fingerprints are missing or invalid."));
+            Assert.That(
+                comparison.Failures,
+                Does.Contain("Capture trajectory sequence hashes are missing or invalid."));
+        });
+    }
+
+    [Test]
     public void Compare_ModelsDisabledPassAsZeroForAbButRejectsItForRepeat()
     {
         SampleBenchmarkReport baseline = CreateReport(
@@ -437,10 +542,30 @@ public sealed class SampleBenchmarkPairComparerTests
                 IdentityHash: identityHash,
                 Mismatches: [])
             {
-                FullIdentityHash = identityHash + ":" + variant
+                FullIdentityHash = identityHash + ":" + variant,
+                Trajectory = SampleBenchmarkTrajectory.StationaryName,
+                TrajectoryFingerprint = Sha256('1'),
+                TrajectoryFrameCount = 1,
+                TrajectorySequenceHash = Sha256('2')
             }
         };
     }
+
+    private static SampleBenchmarkReport WithMovingTrajectory(
+        SampleBenchmarkReport report) => report with
+        {
+            CaptureContract = report.CaptureContract with
+            {
+                Trajectory = SampleBenchmarkTrajectory.SponzaHorizontalName,
+                TrajectoryFingerprint = Sha256('a'),
+                TrajectoryFrameCount = SampleBenchmarkTrajectory.GetFrameCount(
+                    SampleBenchmarkTrajectoryKind.SponzaHorizontal),
+                TrajectorySequenceHash = Sha256('d')
+            }
+        };
+
+    private static string Sha256(char digit) =>
+        "sha256:" + new string(digit, 64);
 
     private static SampleBenchmarkTimingStats Stats(string name, double p95) =>
         new(name, 120, p95, p95, p95, p95)

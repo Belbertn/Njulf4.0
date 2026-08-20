@@ -77,6 +77,7 @@ public static class SampleBenchmarkPairComparer
         }
         if (!string.Equals(left.IdentityHash, right.IdentityHash, StringComparison.Ordinal))
             failures.Add("Locked capture identities differ.");
+        ValidateTrajectoryIdentity(left, right, failures);
         if (requireRepeatability)
         {
             if (!string.Equals(left.Variant, right.Variant, StringComparison.Ordinal))
@@ -173,6 +174,108 @@ public static class SampleBenchmarkPairComparer
         {
             ForwardGiGatherEstimate = forwardGiEstimate
         };
+    }
+
+    private static void ValidateTrajectoryIdentity(
+        SampleBenchmarkCaptureContract left,
+        SampleBenchmarkCaptureContract right,
+        ICollection<string> failures)
+    {
+        bool leftTrajectoryValid = TryResolveTrajectoryFrameCount(
+            left.Trajectory,
+            out int leftExpectedFrameCount);
+        bool rightTrajectoryValid = TryResolveTrajectoryFrameCount(
+            right.Trajectory,
+            out int rightExpectedFrameCount);
+        if (!leftTrajectoryValid || !rightTrajectoryValid)
+        {
+            failures.Add("Capture trajectories are missing or invalid.");
+        }
+        else
+        {
+            if (!string.Equals(
+                    left.Trajectory,
+                    right.Trajectory,
+                    StringComparison.Ordinal))
+            {
+                failures.Add("Capture trajectories differ.");
+            }
+            if (left.TrajectoryFrameCount != leftExpectedFrameCount ||
+                right.TrajectoryFrameCount != rightExpectedFrameCount)
+            {
+                failures.Add(
+                    "Capture trajectory frame counts do not match their authored contracts.");
+            }
+            else if (left.TrajectoryFrameCount != right.TrajectoryFrameCount)
+            {
+                failures.Add("Capture trajectory frame counts differ.");
+            }
+        }
+
+        if (!IsSha256Identity(left.TrajectoryFingerprint) ||
+            !IsSha256Identity(right.TrajectoryFingerprint))
+        {
+            failures.Add("Capture trajectory fingerprints are missing or invalid.");
+        }
+        else if (!string.Equals(
+                     left.TrajectoryFingerprint,
+                     right.TrajectoryFingerprint,
+                     StringComparison.Ordinal))
+        {
+            failures.Add("Capture trajectory fingerprints differ.");
+        }
+
+        if (!IsSha256Identity(left.TrajectorySequenceHash) ||
+            !IsSha256Identity(right.TrajectorySequenceHash))
+        {
+            failures.Add("Capture trajectory sequence hashes are missing or invalid.");
+        }
+        else if (!string.Equals(
+                     left.TrajectorySequenceHash,
+                     right.TrajectorySequenceHash,
+                     StringComparison.Ordinal))
+        {
+            failures.Add("Capture trajectory sequences differ.");
+        }
+    }
+
+    private static bool TryResolveTrajectoryFrameCount(
+        string? value,
+        out int expectedFrameCount)
+    {
+        expectedFrameCount = 0;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        try
+        {
+            SampleBenchmarkTrajectoryKind trajectory =
+                SampleBenchmarkTrajectory.Parse(value);
+            if (!string.Equals(
+                    value,
+                    SampleBenchmarkTrajectory.GetName(trajectory),
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+            expectedFrameCount = SampleBenchmarkTrajectory.GetFrameCount(trajectory);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsSha256Identity(string? value)
+    {
+        const string prefix = "sha256:";
+        if (value == null || value.Length != prefix.Length + 64 ||
+            !value.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        return value.AsSpan(prefix.Length).IndexOfAnyExcept(
+            "0123456789abcdef".AsSpan()) < 0;
     }
 
     private static SampleBenchmarkPairMetric CompareMetric(

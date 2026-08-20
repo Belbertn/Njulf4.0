@@ -100,6 +100,9 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_PAIR_ID", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_VARIANT", null);
         Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_TRAJECTORY",
+            null);
+        Environment.SetEnvironmentVariable(
             "NJULF_RENDERER_BENCHMARK_REQUIRE_PRODUCTION",
             null);
         Environment.SetEnvironmentVariable(
@@ -110,6 +113,12 @@ public sealed class SampleSmokeOptionsParserTests
             null);
         Environment.SetEnvironmentVariable(
             "NJULF_RENDERER_BENCHMARK_HDR_MAX_RELATIVE_RMSE",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_HDR_MAX_FLIP_P95",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_HDR_QUALITY_CONTRACT",
             null);
         Environment.SetEnvironmentVariable(
             "NJULF_RENDERER_BENCHMARK_SHADER_PROFILE",

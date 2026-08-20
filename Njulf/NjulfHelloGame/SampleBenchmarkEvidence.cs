@@ -27,6 +27,13 @@ public sealed record SampleBenchmarkHdrDifference(
 {
     public const double DefaultMaximumRelativeRmse = 0.12;
 
+    public double FlipP95 { get; init; }
+    public double MaximumFlipP95 { get; init; } = 0.02;
+    public string QualityContractPath { get; init; } = string.Empty;
+    public string QualityContractSha256 { get; init; } = string.Empty;
+    public IReadOnlyList<SampleBenchmarkHdrRoiResult> RoiResults { get; init; } =
+        Array.Empty<SampleBenchmarkHdrRoiResult>();
+
     public static SampleBenchmarkHdrDifference Unavailable(string reason) => new(
         false,
         false,
@@ -51,10 +58,14 @@ public static class SampleBenchmarkHdrComparer
     public static SampleBenchmarkHdrDifference Compare(
         string referencePath,
         string candidatePath,
-        double maximumRelativeRmse = SampleBenchmarkHdrDifference.DefaultMaximumRelativeRmse)
+        double maximumRelativeRmse = SampleBenchmarkHdrDifference.DefaultMaximumRelativeRmse,
+        double maximumFlipP95 = 0.02,
+        string? qualityContractPath = null)
     {
         if (!double.IsFinite(maximumRelativeRmse) || maximumRelativeRmse < 0.0)
             throw new ArgumentOutOfRangeException(nameof(maximumRelativeRmse));
+        if (!double.IsFinite(maximumFlipP95) || maximumFlipP95 < 0.0)
+            throw new ArgumentOutOfRangeException(nameof(maximumFlipP95));
 
         SampleEvidenceFileContent referenceEvidence = SampleEvidenceFileIo.Read(
             NormalizePfmPath(referencePath, nameof(referencePath)),
@@ -104,7 +115,40 @@ public static class SampleBenchmarkHdrComparer
         double rmse = Math.Sqrt(squaredError / sampleCount);
         double relativeRmse = Math.Sqrt(
             squaredError / Math.Max(squaredReference, MinimumReferenceEnergy));
-        bool passed = relativeRmse <= maximumRelativeRmse;
+        double flipP95 =
+            SampleMaterialGiHdrFlipMetric.ComputeP95(reference, candidate);
+        SampleBenchmarkHdrRoiEvaluation roiEvaluation =
+            SampleBenchmarkHdrQualityContractEvaluator.Evaluate(
+                qualityContractPath,
+                reference,
+                candidate);
+        SampleBenchmarkHdrRoiResult[] failedRois =
+            roiEvaluation.Results.Where(static result => !result.Passed).ToArray();
+        bool passed = relativeRmse <= maximumRelativeRmse &&
+            flipP95 <= maximumFlipP95 &&
+            failedRois.Length == 0;
+        var failureReasons = new List<string>();
+        if (relativeRmse > maximumRelativeRmse)
+        {
+            failureReasons.Add(
+                $"HDR relative RMSE {relativeRmse:R} exceeds {maximumRelativeRmse:R}.");
+        }
+        if (flipP95 > maximumFlipP95)
+        {
+            failureReasons.Add(
+                $"HDR-FLIP P95 {flipP95:R} exceeds {maximumFlipP95:R}.");
+        }
+        if (failedRois.Length > 0)
+        {
+            failureReasons.Add(
+                "HDR ROI gates failed: " + string.Join(
+                    ", ",
+                    failedRois.Select(static roi =>
+                        $"{roi.Name}(mean={roi.MeanLuminanceShift:R}/" +
+                        $"{roi.MaximumMeanLuminanceShift:R}, p95=" +
+                        $"{roi.P95LuminanceShift:R}/" +
+                        $"{roi.MaximumP95LuminanceShift:R})")) + ".");
+        }
         return new SampleBenchmarkHdrDifference(
             true,
             passed,
@@ -119,9 +163,14 @@ public static class SampleBenchmarkHdrComparer
             absoluteError / sampleCount,
             maximumAbsoluteError,
             maximumRelativeRmse,
-            passed
-                ? string.Empty
-                : $"HDR relative RMSE {relativeRmse:R} exceeds {maximumRelativeRmse:R}.");
+            string.Join(" ", failureReasons))
+        {
+            FlipP95 = flipP95,
+            MaximumFlipP95 = maximumFlipP95,
+            QualityContractPath = roiEvaluation.ContractPath,
+            QualityContractSha256 = roiEvaluation.ContractSha256,
+            RoiResults = roiEvaluation.Results
+        };
     }
 
     private static string NormalizePfmPath(string path, string parameterName)

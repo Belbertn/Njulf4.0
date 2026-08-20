@@ -26,6 +26,18 @@ public sealed record SampleBenchmarkOptions(
     public string CapturePairId { get; init; } = string.Empty;
     /// <summary>Variant label such as baseline, no-decals, or forced-old-far-field.</summary>
     public string CaptureVariant { get; init; } = "baseline";
+    /// <summary>Named deterministic camera program used by this capture.</summary>
+    public SampleBenchmarkTrajectoryKind Trajectory { get; init; } =
+        SampleBenchmarkTrajectoryKind.Stationary;
+    /// <summary>Stable contract fingerprint for the selected camera/state program.</summary>
+    public string TrajectoryFingerprint { get; init; } = string.Empty;
+    /// <summary>
+    /// Bistro lighting script paired with Bistro presentation/loop trajectories.
+    /// It is retained in benchmark options so every measured pose can be
+    /// validated without depending on mutable host state.
+    /// </summary>
+    public SampleBistroQualityCaptureVariant TrajectoryBistroVariant { get; init; } =
+        SampleBistroQualityCaptureVariant.SunScaleStep;
     /// <summary>Reject captures that are not compiled/validated as ProductionTiming.</summary>
     public bool RequireProductionTiming { get; init; }
     /// <summary>Linear-RGB PFM reference used by the post-measurement image gate.</summary>
@@ -35,6 +47,10 @@ public sealed record SampleBenchmarkOptions(
     /// <summary>Maximum relative RMSE accepted by the linear-HDR comparison gate.</summary>
     public double HdrMaximumRelativeRmse { get; init; } =
         SampleBenchmarkHdrDifference.DefaultMaximumRelativeRmse;
+    /// <summary>Maximum NVIDIA HDR-FLIP P95 accepted by the image gate.</summary>
+    public double HdrMaximumFlipP95 { get; init; } = 0.02;
+    /// <summary>Optional strict named-ROI quality contract.</summary>
+    public string HdrQualityContractPath { get; init; } = string.Empty;
     /// <summary>Validated njulf-nsight-shader-profile-v1 JSON artifact.</summary>
     public string ShaderProfileArtifactPath { get; init; } = string.Empty;
     public bool RequireShaderProfileEvidence { get; init; }

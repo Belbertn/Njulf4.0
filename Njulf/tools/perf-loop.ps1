@@ -756,6 +756,26 @@ function Get-WorkloadIdentity {
     $diagnostics = $Report.LastDiagnostics
     $camera = $diagnostics.CaptureCamera
     $producer = $Report.ProducerIdentity
+    $capture = $Report.CaptureContract
+    $trajectory = [string]$capture.Trajectory
+    $trajectoryFingerprint = [string]$capture.TrajectoryFingerprint
+    $trajectoryFrameCount = [int]$capture.TrajectoryFrameCount
+    $trajectorySequenceHash = [string]$capture.TrajectorySequenceHash
+    if ([string]::IsNullOrWhiteSpace($trajectory) -or
+        [string]::Equals($trajectory, "unavailable", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Benchmark report has no trajectory identity."
+    }
+    if ([string]::IsNullOrWhiteSpace($trajectoryFingerprint) -or
+        [string]::Equals($trajectoryFingerprint, "unavailable", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Benchmark report has no trajectory fingerprint."
+    }
+    if ($trajectoryFrameCount -le 0) {
+        throw "Benchmark report has invalid trajectory frame count '$trajectoryFrameCount'."
+    }
+    if ([string]::IsNullOrWhiteSpace($trajectorySequenceHash) -or
+        [string]::Equals($trajectorySequenceHash, "unavailable", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Benchmark report has no trajectory sequence hash."
+    }
     $parts = @(
         [string]$Report.Scenario,
         [string]$diagnostics.CaptureRenderWidth,
@@ -768,7 +788,11 @@ function Get-WorkloadIdentity {
         [string]$diagnostics.ResolvedGiSettings.StableHash,
         [string]$diagnostics.ActiveFeatureIsolation,
         [string]$diagnostics.GlobalIlluminationDebugView,
-        [string]$producer.SettingsFingerprint
+        [string]$producer.SettingsFingerprint,
+        $trajectory,
+        $trajectoryFingerprint,
+        [string]$trajectoryFrameCount,
+        $trajectorySequenceHash
     )
     return $parts -join "|"
 }
