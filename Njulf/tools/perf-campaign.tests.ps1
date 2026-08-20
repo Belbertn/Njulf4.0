@@ -1651,6 +1651,135 @@ function Invoke-QualityVerifierSmokeCase {
     Write-Host "PASS quality-verifier-spatial-temporal-pipe"
 }
 
+function Invoke-SyntheticCookedAssetStagingCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for the cooked asset staging test."
+    }
+    $requiredFunctions = @(
+        "Get-Sha256", "Get-Sha256Bytes", "Get-Sha256Text",
+        "Get-RuntimeExecutableBundleHash",
+        "Read-BoundedFileBytes", "Assert-JsonObject", "Assert-Text",
+        "Assert-ExactPropertyNames", "Assert-NoLinkedPathComponents",
+        "Test-PathContainedBy", "Assert-NoDuplicateJsonProperties",
+        "Read-StrictJsonFile", "Write-JsonArtifact",
+        "Get-CookedAssetInventoryValue", "Resolve-CookedAssetBundle",
+        "Initialize-CampaignHardLinkInterop", "Install-CookedAssetBundle",
+        "Assert-CookedAssetStaging", "Get-BuildBundleFingerprint",
+        "Assert-BuildIdentity")
+    foreach ($functionName in $requiredFunctions) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    $sourceRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
+        "njulf-cooked-staging-test-" + [Guid]::NewGuid().ToString("N"))
+    $buildRoot = Join-Path $testRoot "cooked-staging-build"
+    try {
+        $platformRoot = Join-Path $sourceRoot "win-x64"
+        New-Item -ItemType Directory -Path (Join-Path $platformRoot "models") `
+            -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $platformRoot "textures") `
+            -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $platformRoot "reports") `
+            -Force | Out-Null
+        $sharedTexture = Join-Path $platformRoot "textures/shared.ktx2"
+        Set-Content -LiteralPath $sharedTexture -Value "shared" -NoNewline
+        $manifest = Get-Content -LiteralPath $sourceManifest -Raw |
+            ConvertFrom-Json -DateKind String
+        $hashIndex = 10
+        foreach ($model in @($manifest.cookedAssets.requiredModels)) {
+            $modelName = [string]$model
+            $modelPath = Join-Path $platformRoot "models/$modelName.njmodel"
+            Set-Content -LiteralPath $modelPath -Value "model-$modelName" -NoNewline
+            $outputs = [ordered]@{}
+            $outputs["models/$modelName.njmodel"] = $hashIndex
+            $outputs["textures/shared.ktx2"] = 1
+            $hashIndex++
+            $report = [ordered]@{
+                sourcePath = "synthetic/$modelName"
+                assetId = [Guid]::NewGuid()
+                status = "Succeeded"
+                outputs = $outputs
+            }
+            Write-JsonArtifact `
+                (Join-Path $platformRoot "reports/$modelName.cook-report.json") `
+                $report
+        }
+        $script:SolutionRoot = $solutionRoot
+        $script:RepoRoot = $solutionRoot
+        $script:RunRoot = $testRoot
+        $bundle = Resolve-CookedAssetBundle `
+            $manifest $sourceRoot "Synthetic"
+        if ([int]$bundle.Identity.fileCount -ne 9 -or
+            [string]$bundle.Identity.identityHash -cnotmatch
+                '^sha256:[0-9a-f]{64}$') {
+            throw "Synthetic cooked asset identity is not canonical."
+        }
+        New-Item -ItemType Directory -Path $buildRoot | Out-Null
+        Set-Content -LiteralPath (Join-Path $buildRoot "NjulfHelloGame.exe") `
+            -Value "synthetic executable" -NoNewline
+        $staging = Install-CookedAssetBundle $bundle $buildRoot "Synthetic"
+        $script:CookedAssetBundle = $bundle
+        Assert-CookedAssetStaging $staging $buildRoot "Synthetic"
+        $fingerprintBefore = Get-BuildBundleFingerprint $buildRoot
+        $syntheticExecutable = Join-Path $buildRoot "NjulfHelloGame.exe"
+        $buildIdentity = [pscustomobject][ordered]@{
+            RootPath = $buildRoot
+            ExecutablePath = $syntheticExecutable
+            ExecutableFileSha256 = Get-Sha256 $syntheticExecutable
+            RuntimeExecutableBundleHash =
+                Get-RuntimeExecutableBundleHash $syntheticExecutable
+            BundleFingerprint = $fingerprintBefore
+            CookedAssetBundle = $staging
+            BuildCommit = "a" * 40
+            ProjectPath = "NjulfHelloGame/NjulfHelloGame.csproj"
+            SourceProvenance = "git-worktree-exact-commit"
+            IntermediateIsolation = "dotnet-artifacts-path"
+        }
+        Assert-BuildIdentity $buildIdentity "Synthetic"
+        $extraCooked = Join-Path $buildRoot "Cooked/win-x64/textures/extra.ktx2"
+        Set-Content -LiteralPath $extraCooked -Value "extra" -NoNewline
+        $failedClosed = $false
+        try {
+            Assert-CookedAssetStaging $staging $buildRoot "Synthetic tamper"
+        } catch {
+            $failedClosed = $true
+        }
+        if (-not $failedClosed) {
+            throw "Cooked staging accepted an unexpected output."
+        }
+        Remove-Item -LiteralPath $extraCooked -Force
+        Set-Content -LiteralPath (Join-Path $buildRoot "runtime.dll") `
+            -Value "runtime" -NoNewline
+        if ((Get-BuildBundleFingerprint $buildRoot) -ceq $fingerprintBefore) {
+            throw "Build fingerprint ignored a non-cooked runtime mutation."
+        }
+        Write-Host "PASS cooked-asset-staging"
+    } finally {
+        if (Test-Path -LiteralPath $sourceRoot) {
+            $fullSource = [System.IO.Path]::GetFullPath($sourceRoot)
+            $tempRoot = [System.IO.Path]::GetFullPath(
+                [System.IO.Path]::GetTempPath())
+            if (-not $fullSource.StartsWith(
+                    $tempRoot,
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Synthetic cooked source escaped the temporary root."
+            }
+            Remove-Item -LiteralPath $fullSource -Recurse -Force
+        }
+    }
+}
+
 try {
     Invoke-SyntheticManifestSnapshotCase
     Invoke-SyntheticHealthReportCase
@@ -1661,6 +1790,7 @@ try {
     Invoke-SyntheticQualitySequencePolicyCase
     Invoke-SyntheticHotspotDiscoveryCase
     Invoke-SyntheticCandidateEnvelopeCase
+    Invoke-SyntheticCookedAssetStagingCase
     Invoke-ProcessTimeoutContainmentCase
     Invoke-QualityVerifierSmokeCase
     Invoke-ManifestCase "valid" {} $true
@@ -1697,6 +1827,25 @@ try {
     Invoke-ManifestCase "activation-topology-change" {
         param($manifest)
         $manifest.workloads[8].activation = "none"
+    } $false
+    Invoke-ManifestCase "wrong-cooked-platform" {
+        param($manifest)
+        $manifest.cookedAssets.platform = "linux-x64"
+    } $false
+    Invoke-ManifestCase "missing-cooked-model" {
+        param($manifest)
+        $manifest.cookedAssets.requiredModels = @(
+            $manifest.cookedAssets.requiredModels | Select-Object -First 3)
+    } $false
+    Invoke-ManifestCase "wrong-cooked-file-bound" {
+        param($manifest)
+        $manifest.cookedAssets.maximumFiles = 2048
+    } $false
+    Invoke-ManifestCase "cooked-assets-unknown-property" {
+        param($manifest)
+        $manifest.cookedAssets | Add-Member `
+            -NotePropertyName allowSourceFallback `
+            -NotePropertyValue $true
     } $false
     Invoke-ManifestCase "quality-trajectory-topology-change" {
         param($manifest)
@@ -1826,6 +1975,10 @@ try {
             "NjulfHelloGame/SampleBudgetMetricCoverage.cs",
             "NjulfHelloGame/SampleDdgiProductionGate.cs",
             "NjulfHelloGame/SampleDdgiBenchmarkSuite.cs",
+            "NjulfHelloGame/SampleAssetManifest.cs",
+            "NjulfHelloGame/SampleAssetValidationGate.cs",
+            "Njulf.Assets/ContentManager.cs",
+            "Njulf.Assets/Cooked",
             "Njulf.Rendering/Diagnostics/RenderBudgetEvaluator.cs",
             "tools/perf-campaign.tests.ps1")) {
         $caseName = "missing-trust-" +
@@ -1879,6 +2032,7 @@ try {
     $wrapperOutput = & pwsh -NoProfile -NonInteractive -File $wrapper `
         -CampaignManifestPath $sourceManifest `
         -CampaignRunDirectory $wrapperRunPath `
+        -CampaignCookedAssetRoot (Join-Path $testRoot "unused-cooked") `
         -ValidateCampaign 2>&1
     if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $wrapperRunPath)) {
         throw "perf-loop campaign dispatch failed or mutated ValidateOnly state.`n$($wrapperOutput -join "`n")"

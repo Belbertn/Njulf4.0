@@ -4,6 +4,7 @@ param(
 
     [string]$CampaignManifestPath = "",
     [string]$CampaignRunDirectory = ".perf-loop-runs/campaign",
+    [string]$CampaignCookedAssetRoot = "",
     [string]$CampaignCandidateId = "",
     [string]$CampaignCandidateEnvelopePath = "",
     [switch]$PrepareCampaignCandidateEnvelope,
@@ -62,6 +63,7 @@ $ErrorActionPreference = "Stop"
 if (-not [string]::IsNullOrWhiteSpace($CampaignManifestPath)) {
     $campaignParametersAllowed = @(
         "CampaignManifestPath", "CampaignRunDirectory",
+        "CampaignCookedAssetRoot",
         "CampaignCandidateId", "CampaignCandidateEnvelopePath",
         "PrepareCampaignCandidateEnvelope",
         "CampaignDiscoveryArtifactPath", "CampaignAutomaticCandidateId",
@@ -86,6 +88,7 @@ if (-not [string]::IsNullOrWhiteSpace($CampaignManifestPath)) {
     $campaignParameters = @{
         ManifestPath = $CampaignManifestPath
         RunDirectory = $CampaignRunDirectory
+        CookedAssetRoot = $CampaignCookedAssetRoot
         CandidateId = $CampaignCandidateId
         CandidateEnvelopePath = $CampaignCandidateEnvelopePath
         PrepareCandidateEnvelope = $PrepareCampaignCandidateEnvelope

@@ -11,6 +11,7 @@ param(
     [string]$AutomaticCandidateFocusedTestFilter = "",
     [string]$CandidateEnvelopeOutputPath = "",
     [string]$RunDirectory = ".perf-loop-runs/campaign",
+    [string]$CookedAssetRoot = "",
     [string]$TargetHypothesisId = "",
     [switch]$InitializeReferences,
     [switch]$InitializeReferencesOnly,
@@ -51,6 +52,7 @@ $script:ProtectedFingerprints = [ordered]@{}
 $script:CampaignLockPath = ""
 $script:CampaignLockSha256 = ""
 $script:CampaignManifestSha256 = ""
+$script:CookedAssetBundle = $null
 
 function Get-PropertyValue {
     param($Object, [string]$Name, $Default = $null)
@@ -386,6 +388,363 @@ function Get-AdmittedCampaignManifestSha256 {
     return $script:CampaignManifestSha256
 }
 
+function Get-BuildBundleFingerprint {
+    param([string]$Path)
+    $fullPath = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath($Path)) "Build bundle '$Path'"
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Container)) {
+        throw "Build bundle is missing: $fullPath"
+    }
+    $builder = [System.Text.StringBuilder]::new()
+    foreach ($item in @(Get-ChildItem -LiteralPath $fullPath -Recurse -Force |
+            Sort-Object FullName)) {
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Build bundle contains reparse/link entry '$($item.FullName)'."
+        }
+        $relative = $item.FullName.Substring(
+            $fullPath.Length + 1).Replace("\", "/")
+        if ($relative -ceq "Cooked" -or
+            $relative.StartsWith("Cooked/", [StringComparison]::Ordinal)) {
+            continue
+        }
+        if ($item.PSIsContainer) {
+            [void]$builder.Append("directory  ").Append(
+                $relative).Append("`n")
+        } else {
+            [void]$builder.Append("file:sha256:").Append(
+                (Get-Sha256 $item.FullName)).Append(
+                "  ").Append($relative).Append("`n")
+        }
+    }
+    return "directory:sha256:" + (Get-Sha256Text $builder.ToString())
+}
+
+function Get-CookedAssetInventoryValue {
+    param($Bundle)
+    return [ordered]@{
+        schema = "njulf-perf-cooked-asset-inventory/v1"
+        identityHash = [string]$Bundle.Identity.identityHash
+        platform = [string]$Bundle.Identity.platform
+        fileCount = [int]$Bundle.Identity.fileCount
+        totalBytes = [long]$Bundle.Identity.totalBytes
+        reports = @($Bundle.Identity.reports)
+        files = @($Bundle.Files | ForEach-Object {
+            [ordered]@{
+                relativePath = [string]$_.relativePath
+                length = [long]$_.length
+                cookHash = [string]$_.cookHash
+                sha256 = [string]$_.sha256
+            }
+        })
+    }
+}
+
+function Resolve-CookedAssetBundle {
+    param($Manifest, [string]$SourceRoot, [string]$Label)
+    Assert-Text $SourceRoot "$Label cooked asset root"
+    $fullSourceRoot = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath($SourceRoot)) `
+        "$Label cooked asset root"
+    if (-not (Test-Path -LiteralPath $fullSourceRoot -PathType Container)) {
+        throw "$Label cooked asset root is missing: $fullSourceRoot"
+    }
+    if ((Test-PathContainedBy $fullSourceRoot $script:RepoRoot) -or
+        (Test-PathContainedBy $fullSourceRoot $script:RunRoot)) {
+        throw "$Label cooked asset root must be an external immutable input, not campaign source or output."
+    }
+    $platform = [string]$Manifest.cookedAssets.platform
+    $platformRoot = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath((Join-Path $fullSourceRoot $platform))) `
+        "$Label cooked asset platform root"
+    if (-not (Test-PathContainedBy $platformRoot $fullSourceRoot) -or
+        -not (Test-Path -LiteralPath $platformRoot -PathType Container)) {
+        throw "$Label cooked asset platform root is missing or escaped: $platformRoot"
+    }
+    $fileMap = [System.Collections.Generic.Dictionary[string,object]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    $reportIdentities = [System.Collections.Generic.List[object]]::new()
+    foreach ($model in @($Manifest.cookedAssets.requiredModels)) {
+        $modelName = [string]$model
+        $reportRelative = "reports/$modelName.cook-report.json"
+        $reportPath = Assert-NoLinkedPathComponents `
+            ([System.IO.Path]::GetFullPath((Join-Path $platformRoot (
+                $reportRelative.Replace("/", "\"))))) `
+            "$Label cook report '$modelName'"
+        if (-not (Test-PathContainedBy $reportPath $platformRoot) -or
+            -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            throw "$Label cook report is missing: $reportPath"
+        }
+        $reportRead = Read-StrictJsonFile `
+            $reportPath 16777216 "$Label cook report '$modelName'"
+        $report = $reportRead.Value
+        $null = Assert-JsonObject $report "$Label cook report '$modelName'"
+        if ([string]$report.status -cne "Succeeded") {
+            throw "$Label cook report '$modelName' is not successful."
+        }
+        $assetId = [Guid]::Empty
+        if (-not [Guid]::TryParse([string]$report.assetId, [ref]$assetId) -or
+            $assetId -eq [Guid]::Empty) {
+            throw "$Label cook report '$modelName' has no canonical asset identity."
+        }
+        $null = Assert-JsonObject `
+            $report.outputs "$Label cook report '$modelName' outputs"
+        $outputProperties = @($report.outputs.PSObject.Properties |
+            Sort-Object Name)
+        if ($outputProperties.Count -eq 0) {
+            throw "$Label cook report '$modelName' has no outputs."
+        }
+        $packageRelative = "models/$modelName.njmodel"
+        if ($null -eq $report.outputs.PSObject.Properties[$packageRelative]) {
+            throw "$Label cook report '$modelName' omits '$packageRelative'."
+        }
+        foreach ($property in $outputProperties) {
+            $relative = [string]$property.Name
+            $segments = @($relative -split '/')
+            if ([string]::IsNullOrWhiteSpace($relative) -or
+                [System.IO.Path]::IsPathRooted($relative) -or
+                $relative.Contains("\", [StringComparison]::Ordinal) -or
+                $segments.Count -lt 2 -or
+                @($segments | Where-Object {
+                    [string]::IsNullOrWhiteSpace($_) -or $_ -in @(".", "..")
+                }).Count -ne 0) {
+                throw "$Label cook output path is not canonical: '$relative'."
+            }
+            [UInt64]$cookHash = 0
+            if (-not [UInt64]::TryParse(
+                    [string]$property.Value,
+                    [Globalization.NumberStyles]::Integer,
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [ref]$cookHash) -or $cookHash -eq 0) {
+                throw "$Label cook output '$relative' has no canonical content hash."
+            }
+            $sourcePath = Assert-NoLinkedPathComponents `
+                ([System.IO.Path]::GetFullPath((Join-Path $platformRoot (
+                    $relative.Replace("/", "\"))))) `
+                "$Label cook output '$relative'"
+            if (-not (Test-PathContainedBy $sourcePath $platformRoot) -or
+                -not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                throw "$Label cook output is missing or escaped: $sourcePath"
+            }
+            $length = [long](Get-Item -LiteralPath $sourcePath).Length
+            if ($length -le 0) {
+                throw "$Label cook output '$relative' is empty."
+            }
+            $entry = [pscustomobject]@{
+                relativePath = $relative
+                sourcePath = $sourcePath
+                length = $length
+                cookHash = $cookHash.ToString(
+                    [Globalization.CultureInfo]::InvariantCulture)
+                sha256 = ""
+            }
+            if ($fileMap.ContainsKey($relative)) {
+                $existing = $fileMap[$relative]
+                if ([string]$existing.cookHash -cne [string]$entry.cookHash -or
+                    [long]$existing.length -ne $length -or
+                    -not [string]::Equals(
+                        [string]$existing.sourcePath,
+                        $sourcePath,
+                        [StringComparison]::OrdinalIgnoreCase)) {
+                    throw "$Label cook reports disagree on '$relative'."
+                }
+            } else {
+                $fileMap.Add($relative, $entry)
+            }
+        }
+        $reportLength = [long](Get-Item -LiteralPath $reportPath).Length
+        $reportEntry = [pscustomobject]@{
+            relativePath = $reportRelative
+            sourcePath = $reportPath
+            length = $reportLength
+            cookHash = "unavailable"
+            sha256 = [string]$reportRead.Sha256
+        }
+        if ($fileMap.ContainsKey($reportRelative)) {
+            throw "$Label report path collides with a cooked output: '$reportRelative'."
+        }
+        $fileMap.Add($reportRelative, $reportEntry)
+        $reportIdentities.Add([pscustomobject]@{
+            model = $modelName
+            relativePath = $reportRelative
+            sha256 = [string]$reportRead.Sha256
+        })
+    }
+    $files = @($fileMap.Values | Sort-Object relativePath)
+    [long]$totalBytes = 0
+    foreach ($file in $files) {
+        $totalBytes += [long]$file.length
+    }
+    if ($files.Count -gt [int]$Manifest.cookedAssets.maximumFiles -or
+        $totalBytes -gt [long]$Manifest.cookedAssets.maximumBytes) {
+        throw "$Label cooked asset bundle exceeds its admitted file or byte bound."
+    }
+    $canonical = [System.Text.StringBuilder]::new()
+    [void]$canonical.Append("njulf-perf-cooked-assets/v1`n").Append(
+        $platform).Append("`n")
+    foreach ($file in $files) {
+        [void]$canonical.Append([string]$file.relativePath).Append("`0").Append(
+            [long]$file.length).Append("`0").Append(
+            [string]$file.cookHash).Append("`0").Append(
+            [string]$file.sha256).Append("`n")
+    }
+    $identity = [pscustomobject][ordered]@{
+        schema = "njulf-perf-cooked-assets/v1"
+        platform = $platform
+        sourceRoot = $fullSourceRoot
+        identityHash = "sha256:" + (Get-Sha256Text $canonical.ToString())
+        fileCount = $files.Count
+        totalBytes = $totalBytes
+        reports = @($reportIdentities)
+    }
+    return [pscustomobject]@{
+        Identity = $identity
+        Files = $files
+    }
+}
+
+function Initialize-CampaignHardLinkInterop {
+    if ($null -ne ("NjulfPerfCampaignNativeMethods" -as [type])) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class NjulfPerfCampaignNativeMethods
+{
+    [DllImport("Kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CreateHardLink(
+        string newFileName,
+        string existingFileName,
+        IntPtr securityAttributes);
+}
+'@
+}
+
+function Install-CookedAssetBundle {
+    param($Bundle, [string]$BuildRoot, [string]$Label)
+    if ($null -eq $Bundle) { throw "$Label has no admitted cooked asset bundle." }
+    $fullBuildRoot = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath($BuildRoot)) "$Label build root"
+    $targetBase = [System.IO.Path]::GetFullPath(
+        (Join-Path $fullBuildRoot "Cooked"))
+    if (-not (Test-PathContainedBy $targetBase $fullBuildRoot) -or
+        (Test-Path -LiteralPath $targetBase)) {
+        throw "$Label cooked target must be a fresh path: $targetBase"
+    }
+    $targetRoot = Join-Path $targetBase ([string]$Bundle.Identity.platform)
+    New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null
+    Initialize-CampaignHardLinkInterop
+    foreach ($file in @($Bundle.Files)) {
+        $target = [System.IO.Path]::GetFullPath((Join-Path $targetRoot (
+            ([string]$file.relativePath).Replace("/", "\"))))
+        if (-not (Test-PathContainedBy $target $targetRoot) -or
+            (Test-Path -LiteralPath $target)) {
+            throw "$Label cooked target is duplicated or escaped: $target"
+        }
+        New-Item -ItemType Directory -Path (Split-Path -Parent $target) `
+            -Force | Out-Null
+        $linked = [NjulfPerfCampaignNativeMethods]::CreateHardLink(
+            $target,
+            [string]$file.sourcePath,
+            [IntPtr]::Zero)
+        if (-not $linked) {
+            [System.IO.File]::Copy([string]$file.sourcePath, $target, $false)
+            if ((Get-Sha256 ([string]$file.sourcePath)) -cne
+                (Get-Sha256 $target)) {
+                throw "$Label copied cooked output differs from its source: $target"
+            }
+        }
+        if ([long](Get-Item -LiteralPath $target).Length -ne [long]$file.length) {
+            throw "$Label staged cooked output has the wrong length: $target"
+        }
+        if (-not [string]::IsNullOrEmpty([string]$file.sha256) -and
+            (Get-Sha256 $target) -cne [string]$file.sha256) {
+            throw "$Label staged cook report differs from its admitted bytes: $target"
+        }
+    }
+    $inventoryPath = Join-Path $fullBuildRoot "campaign-cooked-assets.json"
+    Write-JsonArtifact $inventoryPath (Get-CookedAssetInventoryValue $Bundle)
+    return [pscustomobject][ordered]@{
+        Schema = "njulf-perf-cooked-asset-staging/v1"
+        Platform = [string]$Bundle.Identity.platform
+        IdentityHash = [string]$Bundle.Identity.identityHash
+        FileCount = [int]$Bundle.Identity.fileCount
+        TotalBytes = [long]$Bundle.Identity.totalBytes
+        InventoryPath = [System.IO.Path]::GetFullPath($inventoryPath)
+        InventorySha256 = Get-Sha256 $inventoryPath
+    }
+}
+
+function Assert-CookedAssetStaging {
+    param($Staging, [string]$BuildRoot, [string]$Label)
+    if ($null -eq $script:CookedAssetBundle) {
+        throw "$Label has no active cooked asset source admission."
+    }
+    Assert-ExactPropertyNames $Staging @(
+        "Schema", "Platform", "IdentityHash", "FileCount", "TotalBytes",
+        "InventoryPath", "InventorySha256") "$Label cooked staging"
+    $bundle = $script:CookedAssetBundle
+    $expectedInventory = Get-CookedAssetInventoryValue $bundle
+    $fullBuildRoot = [System.IO.Path]::GetFullPath($BuildRoot)
+    $inventoryPath = [System.IO.Path]::GetFullPath(
+        (Join-Path $fullBuildRoot "campaign-cooked-assets.json"))
+    if ([string]$Staging.Schema -cne "njulf-perf-cooked-asset-staging/v1" -or
+        [string]$Staging.Platform -cne [string]$bundle.Identity.platform -or
+        [string]$Staging.IdentityHash -cne [string]$bundle.Identity.identityHash -or
+        [int]$Staging.FileCount -ne [int]$bundle.Identity.fileCount -or
+        [long]$Staging.TotalBytes -ne [long]$bundle.Identity.totalBytes -or
+        -not [string]::Equals(
+            [System.IO.Path]::GetFullPath([string]$Staging.InventoryPath),
+            $inventoryPath,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        [string]$Staging.InventorySha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        -not (Test-Path -LiteralPath $inventoryPath -PathType Leaf) -or
+        (Get-Sha256 $inventoryPath) -cne [string]$Staging.InventorySha256) {
+        throw "$Label cooked staging identity changed."
+    }
+    $inventory = (Read-StrictJsonFile `
+        $inventoryPath 1048576 "$Label cooked inventory").Value
+    if (($inventory | ConvertTo-Json -Depth 12 -Compress) -cne
+        ($expectedInventory | ConvertTo-Json -Depth 12 -Compress)) {
+        throw "$Label cooked inventory differs from the admitted source reports."
+    }
+    $targetRoot = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath((Join-Path $fullBuildRoot (
+            "Cooked/" + [string]$bundle.Identity.platform)))) `
+        "$Label cooked target"
+    if (-not (Test-Path -LiteralPath $targetRoot -PathType Container)) {
+        throw "$Label cooked target is missing: $targetRoot"
+    }
+    $expectedPaths = [System.Collections.Generic.Dictionary[string,object]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($file in @($bundle.Files)) {
+        $expectedPaths.Add([string]$file.relativePath, $file)
+    }
+    $actualItems = @(Get-ChildItem -LiteralPath $targetRoot -Recurse -Force)
+    foreach ($item in $actualItems) {
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Label cooked target contains a link/reparse entry: $($item.FullName)"
+        }
+    }
+    $actualFiles = @($actualItems | Where-Object { -not $_.PSIsContainer })
+    if ($actualFiles.Count -ne $expectedPaths.Count) {
+        throw "$Label cooked target file count changed."
+    }
+    foreach ($item in $actualFiles) {
+        $relative = [System.IO.Path]::GetRelativePath(
+            $targetRoot, $item.FullName).Replace("\", "/")
+        if (-not $expectedPaths.ContainsKey($relative) -or
+            [long]$item.Length -ne [long]$expectedPaths[$relative].length) {
+            throw "$Label cooked target contains an unexpected or changed file: $relative"
+        }
+        $entry = $expectedPaths[$relative]
+        if (-not [string]::IsNullOrEmpty([string]$entry.sha256) -and
+            (Get-Sha256 $item.FullName) -cne [string]$entry.sha256) {
+            throw "$Label cooked report bytes changed: $relative"
+        }
+    }
+}
+
 function Initialize-CampaignManifestSnapshot {
     Assert-CampaignManifestIntegrity
     if ($null -eq $script:CampaignManifestBytes -or
@@ -490,11 +849,11 @@ function Assert-CampaignManifest {
     Assert-ExactPropertyNames $Manifest @(
         "schema", "campaignId", "projectPath",
         "iterationConfiguration", "finalConfigurations",
-        "advisoryBeautyTargetManifest", "protectedPaths", "capture",
+        "advisoryBeautyTargetManifest", "cookedAssets", "protectedPaths", "capture",
         "quality", "qualitySequence", "acceptance", "discoveryPolicy",
         "candidates", "targetHypotheses", "workloads") `
         "Campaign manifest"
-    if ([string]$Manifest.schema -ne "njulf-perf-campaign/v1") {
+    if ([string]$Manifest.schema -ne "njulf-perf-campaign/v2") {
         throw "Unsupported campaign schema '$($Manifest.schema)'."
     }
     Assert-Text ([string]$Manifest.campaignId) "campaignId"
@@ -508,6 +867,34 @@ function Assert-CampaignManifest {
     }
     if ([string]$Manifest.iterationConfiguration -ne "Release") {
         throw "The per-hypothesis campaign configuration must be Release."
+    }
+    $null = Assert-JsonObject $Manifest.cookedAssets "cookedAssets"
+    Assert-ExactPropertyNames $Manifest.cookedAssets @(
+        "platform", "requiredModels", "maximumFiles", "maximumBytes") `
+        "cookedAssets"
+    if ((Assert-JsonString $Manifest.cookedAssets.platform `
+            "cookedAssets.platform") -cne "win-x64") {
+        throw "The campaign requires the win-x64 cooked asset package."
+    }
+    $null = Assert-JsonArray `
+        $Manifest.cookedAssets.requiredModels "cookedAssets.requiredModels"
+    $requiredCookedModels = @(
+        $Manifest.cookedAssets.requiredModels | ForEach-Object {
+            Assert-JsonString $_ "cookedAssets.requiredModels entry"
+        })
+    if (($requiredCookedModels -join "`n") -cne
+        (@(
+            "BistroExterior",
+            "NewSponza_Main_glTF_003",
+            "NewSponza_Curtains_glTF",
+            "Strut") -join "`n")) {
+        throw "The cooked asset model set differs from the exact Bistro/Sponza contract."
+    }
+    if ((Assert-JsonInteger $Manifest.cookedAssets.maximumFiles `
+            "cookedAssets.maximumFiles" 1) -ne 1024 -or
+        (Assert-JsonInteger $Manifest.cookedAssets.maximumBytes `
+            "cookedAssets.maximumBytes" 1) -ne 3221225472) {
+        throw "The cooked asset package bounds differ from the approved contract."
     }
     $finalConfigurations = @($Manifest.finalConfigurations)
     if ($finalConfigurations.Count -ne 2 -or
@@ -593,6 +980,8 @@ function Assert-CampaignManifest {
         "NjulfHelloGame/SampleSmokeOptions.cs",
         "NjulfHelloGame/SampleSmokeOptionsParser.cs",
         "NjulfHelloGame/SampleInputController.cs",
+        "NjulfHelloGame/SampleAssetManifest.cs",
+        "NjulfHelloGame/SampleAssetValidationGate.cs",
         "NjulfHelloGame/SampleBenchmarkGateEvaluation.cs",
         "NjulfHelloGame/SampleBudgetMetricCoverage.cs",
         "NjulfHelloGame/SampleDdgiProductionGate.cs",
@@ -621,6 +1010,8 @@ function Assert-CampaignManifest {
         "NjulfHelloGame/SampleTailDdgiQualification.cs",
         "NjulfHelloGame/Strut.glb",
         "Njulf.Assets/Scenes/SceneDocumentLoader.cs",
+        "Njulf.Assets/ContentManager.cs",
+        "Njulf.Assets/Cooked",
         "Njulf.Core/Animation/Animator.cs",
         "Njulf.Core/Scene/Model.cs",
         "Njulf.Rendering/Data/RenderSettings.cs",
@@ -2615,6 +3006,10 @@ function Invoke-BuildOutput {
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
         throw "$Label did not produce $executable."
     }
+    $cookedAssetStaging = Install-CookedAssetBundle `
+        $script:CookedAssetBundle $fullOutputPath $Label
+    Assert-CookedAssetStaging `
+        $cookedAssetStaging $fullOutputPath $Label
     Assert-ProtectedFingerprints $script:ProtectedFingerprints
     if (-not [string]::IsNullOrWhiteSpace($ExpectedCommit)) {
         Assert-ExactCampaignHead $ExpectedCommit "$Label post-build"
@@ -2625,7 +3020,8 @@ function Invoke-BuildOutput {
         ExecutablePath = [System.IO.Path]::GetFullPath($executable)
         ExecutableFileSha256 = Get-Sha256 $executable
         RuntimeExecutableBundleHash = Get-RuntimeExecutableBundleHash $executable
-        BundleFingerprint = Get-CanonicalPathFingerprint $fullOutputPath
+        BundleFingerprint = Get-BuildBundleFingerprint $fullOutputPath
+        CookedAssetBundle = $cookedAssetStaging
         BuildCommit = $ExpectedCommit
         ProjectPath = [string]$Manifest.projectPath
         SourceProvenance = "git-worktree-exact-commit"
@@ -2635,6 +3031,15 @@ function Invoke-BuildOutput {
 
 function Assert-BuildIdentity {
     param($BuildIdentity, [string]$Label)
+    $cookedAssetsValid = $true
+    try {
+        Assert-CookedAssetStaging `
+            $BuildIdentity.CookedAssetBundle `
+            ([string]$BuildIdentity.RootPath) `
+            $Label
+    } catch {
+        $cookedAssetsValid = $false
+    }
     if ($null -eq $BuildIdentity -or
         -not (Test-Path -LiteralPath ([string]$BuildIdentity.RootPath) -PathType Container) -or
         -not (Test-Path -LiteralPath ([string]$BuildIdentity.ExecutablePath) -PathType Leaf) -or
@@ -2643,7 +3048,7 @@ function Assert-BuildIdentity {
             [string]$BuildIdentity.ExecutableFileSha256,
             [StringComparison]::OrdinalIgnoreCase) -or
         -not [string]::Equals(
-            (Get-CanonicalPathFingerprint ([string]$BuildIdentity.RootPath)),
+            (Get-BuildBundleFingerprint ([string]$BuildIdentity.RootPath)),
             [string]$BuildIdentity.BundleFingerprint,
             [StringComparison]::Ordinal) -or
         -not [string]::Equals(
@@ -2657,7 +3062,8 @@ function Assert-BuildIdentity {
         [string]$BuildIdentity.SourceProvenance -cne
             "git-worktree-exact-commit" -or
         [string]$BuildIdentity.IntermediateIsolation -cne
-            "dotnet-artifacts-path") {
+            "dotnet-artifacts-path" -or
+        -not $cookedAssetsValid) {
         throw "$Label build bundle changed after its fresh build lock."
     }
 }
@@ -9090,7 +9496,7 @@ function Initialize-CampaignReferences {
         $Manifest $baselineCommit $referenceBuilds $references `
         $referenceControlledIsolations
     $lock = [ordered]@{
-        schema = "njulf-perf-campaign-lock/v8"
+        schema = "njulf-perf-campaign-lock/v9"
         campaignId = [string]$Manifest.campaignId
         createdAtUtc = [DateTimeOffset]::UtcNow
         manifestPath = $script:ManifestFile
@@ -9104,6 +9510,7 @@ function Initialize-CampaignReferences {
         baselineStatus = "clean"
         configurations = @(Get-CampaignConfigurations $Manifest)
         advisoryBeautyTarget = $BeautyTarget
+        cookedAssets = $script:CookedAssetBundle.Identity
         protectedFingerprints = $ProtectedFingerprints
         referenceBuilds = $referenceBuilds
         references = $references
@@ -9134,7 +9541,7 @@ function Read-CampaignLock {
         ConvertFrom-Json -DateKind String
     $script:CampaignLockPath = $path
     $script:CampaignLockSha256 = Get-Sha256 $path
-    if ([string]$lock.schema -ne "njulf-perf-campaign-lock/v8" -or
+    if ([string]$lock.schema -ne "njulf-perf-campaign-lock/v9" -or
         [string]$lock.campaignId -ne [string]$Manifest.campaignId -or
         [string]$lock.manifestSha256 -ne
             (Get-AdmittedCampaignManifestSha256)) {
@@ -9149,7 +9556,8 @@ function Read-CampaignLock {
         "manifestSha256", "manifestSnapshotPath",
         "manifestSnapshotSha256", "gitInfoExcludePath",
         "gitInfoExcludeFingerprint", "baselineCommit", "baselineStatus",
-        "configurations", "advisoryBeautyTarget", "protectedFingerprints",
+        "configurations", "advisoryBeautyTarget", "cookedAssets",
+        "protectedFingerprints",
         "referenceBuilds", "references", "controlledIsolations",
         "discoveryPolicy", "reviewedCandidates", "targetHypotheses") `
         "Campaign lock"
@@ -9214,6 +9622,26 @@ function Read-CampaignLock {
         @($lock.controlledIsolations.PSObject.Properties).Count -ne 0) {
         throw "Lean campaign lock must not contain directional controlled-isolation artifacts."
     }
+    Assert-ExactPropertyNames $lock.cookedAssets @(
+        "schema", "platform", "sourceRoot", "identityHash", "fileCount",
+        "totalBytes", "reports") "Campaign lock cooked assets"
+    foreach ($reportIdentity in @($lock.cookedAssets.reports)) {
+        Assert-ExactPropertyNames $reportIdentity @(
+            "model", "relativePath", "sha256") `
+            "Campaign lock cooked asset report"
+    }
+    $cookedSourceRoot = if (-not [string]::IsNullOrWhiteSpace($CookedAssetRoot)) {
+        $CookedAssetRoot
+    } else {
+        [string]$lock.cookedAssets.sourceRoot
+    }
+    $resolvedCookedAssets = Resolve-CookedAssetBundle `
+        $Manifest $cookedSourceRoot "Campaign lock"
+    if (($resolvedCookedAssets.Identity | ConvertTo-Json -Depth 12 -Compress) -cne
+        ($lock.cookedAssets | ConvertTo-Json -Depth 12 -Compress)) {
+        throw "Campaign lock cooked asset source or report inventory changed."
+    }
+    $script:CookedAssetBundle = $resolvedCookedAssets
     if (($lock.discoveryPolicy | ConvertTo-Json -Depth 12 -Compress) -cne
             ($Manifest.discoveryPolicy | ConvertTo-Json -Depth 12 -Compress) -or
         ($lock.reviewedCandidates | ConvertTo-Json -Depth 12 -Compress) -cne
@@ -9248,7 +9676,9 @@ function Read-CampaignLock {
         $referenceBuild = Get-ReferenceBuildIdentity $lock $configuration
         Assert-ExactPropertyNames $referenceBuild @(
             "RootPath", "ExecutablePath", "ExecutableFileSha256",
-            "RuntimeExecutableBundleHash", "BundleFingerprint") `
+            "RuntimeExecutableBundleHash", "BundleFingerprint",
+            "CookedAssetBundle", "BuildCommit", "ProjectPath",
+            "SourceProvenance", "IntermediateIsolation") `
             "Locked $configuration reference build"
         $expectedBuildRoot = Join-Path $script:RunRoot (
             "reference-build/{0}" -f $configuration)
@@ -9685,6 +10115,10 @@ if ($ValidateOnly) {
     Write-Host "Workloads: $(@($manifest.workloads).Count); qualification: $(@($manifest.workloads | Where-Object { [bool]$_.qualification }).Count)"
     Write-Host "Beauty target: advisory $($beautyTarget.Width)x$($beautyTarget.Height) $($beautyTarget.MediaType) sha256=$($beautyTarget.ImageSha256)"
     exit 0
+}
+if ($InitializeReferences) {
+    $script:CookedAssetBundle = Resolve-CookedAssetBundle `
+        $manifest $CookedAssetRoot "Reference initialization"
 }
 New-Item -ItemType Directory -Force -Path $script:RunRoot | Out-Null
 if ($InitializeReferences) {

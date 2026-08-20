@@ -1,5 +1,5 @@
 {
-  "schema": "njulf-perf-campaign/v1",
+  "schema": "njulf-perf-campaign/v2",
   "campaignId": "bistro-sponza-quality-first",
   "projectPath": "NjulfHelloGame/NjulfHelloGame.csproj",
   "iterationConfiguration": "Release",
@@ -8,6 +8,17 @@
     "ShippingPerformance"
   ],
   "advisoryBeautyTargetManifest": ".perf-loop-runs/campaign/beauty-target/manifest.json",
+  "cookedAssets": {
+    "platform": "win-x64",
+    "requiredModels": [
+      "BistroExterior",
+      "NewSponza_Main_glTF_003",
+      "NewSponza_Curtains_glTF",
+      "Strut"
+    ],
+    "maximumFiles": 1024,
+    "maximumBytes": 3221225472
+  },
   "protectedPaths": [
     "tools/perf-campaign.ps1",
     "tools/perf-campaign.bistro-sponza.json",
@@ -34,6 +45,8 @@
     "NjulfHelloGame/SampleSmokeOptions.cs",
     "NjulfHelloGame/SampleSmokeOptionsParser.cs",
     "NjulfHelloGame/SampleInputController.cs",
+    "NjulfHelloGame/SampleAssetManifest.cs",
+    "NjulfHelloGame/SampleAssetValidationGate.cs",
     "NjulfHelloGame/SampleBenchmarkGateEvaluation.cs",
     "NjulfHelloGame/SampleBudgetMetricCoverage.cs",
     "NjulfHelloGame/SampleDdgiProductionGate.cs",
@@ -62,6 +75,8 @@
     "NjulfHelloGame/SampleTailDdgiQualification.cs",
     "NjulfHelloGame/Strut.glb",
     "Njulf.Assets/Scenes/SceneDocumentLoader.cs",
+    "Njulf.Assets/ContentManager.cs",
+    "Njulf.Assets/Cooked",
     "Njulf.Core/Animation/Animator.cs",
     "Njulf.Core/Scene/Model.cs",
     "Njulf.Rendering/Data/RenderSettings.cs",
