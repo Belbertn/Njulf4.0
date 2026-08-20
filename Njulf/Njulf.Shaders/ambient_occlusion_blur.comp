@@ -8,6 +8,16 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(binding = 0) uniform sampler2D SourceTextures[2];
 layout(r8, binding = 1) uniform writeonly image2D AoOutput;
 
+const int AO_BLUR_GROUP_SIZE = 8;
+const int AO_BLUR_MAX_RADIUS = 4;
+const int AO_BLUR_SHARED_STRIDE =
+    AO_BLUR_GROUP_SIZE + AO_BLUR_MAX_RADIUS * 2;
+const int AO_BLUR_SHARED_SAMPLE_COUNT =
+    AO_BLUR_GROUP_SIZE * AO_BLUR_SHARED_STRIDE;
+
+shared float SharedAo[AO_BLUR_SHARED_SAMPLE_COUNT];
+shared float SharedViewDepth[AO_BLUR_SHARED_SAMPLE_COUNT];
+
 layout(push_constant) uniform AmbientOcclusionBlurPushBlock
 {
     mat4 InverseProjectionMatrix;
@@ -46,23 +56,105 @@ float ReconstructViewDepth(vec2 uv, float depth)
     return abs(view.z / max(abs(view.w), 0.00001));
 }
 
+void PreloadAoAndViewDepth(
+    int sharedIndex,
+    ivec2 samplePixel,
+    vec2 invAoSize)
+{
+    SharedAo[sharedIndex] = FetchSourceAo(samplePixel);
+    vec2 sampleUv = (vec2(samplePixel) + vec2(0.5)) * invAoSize;
+    float depth = FetchDepth(sampleUv);
+    SharedViewDepth[sharedIndex] = depth <= 0.000001
+        ? -1.0 : ReconstructViewDepth(sampleUv, depth);
+}
+
+int SharedTileIndex(ivec2 localPixel, int offset, bool horizontal)
+{
+    return horizontal
+        ? localPixel.y * AO_BLUR_SHARED_STRIDE +
+            localPixel.x + AO_BLUR_MAX_RADIUS + offset
+        : (localPixel.y + AO_BLUR_MAX_RADIUS + offset) *
+            AO_BLUR_GROUP_SIZE + localPixel.x;
+}
+
+void PreloadAoTile(
+    ivec2 pixel,
+    ivec2 localPixel,
+    ivec2 groupBase,
+    ivec2 extent,
+    bool horizontal,
+    vec2 invAoSize)
+{
+    ivec2 maximumPixel = extent - ivec2(1);
+    PreloadAoAndViewDepth(
+        SharedTileIndex(localPixel, 0, horizontal),
+        clamp(pixel, ivec2(0), maximumPixel),
+        invAoSize);
+
+    if (horizontal && localPixel.x < AO_BLUR_MAX_RADIUS)
+    {
+        ivec2 leftPixel = groupBase +
+            ivec2(localPixel.x - AO_BLUR_MAX_RADIUS, localPixel.y);
+        ivec2 rightPixel = groupBase +
+            ivec2(AO_BLUR_GROUP_SIZE + localPixel.x, localPixel.y);
+        PreloadAoAndViewDepth(
+            localPixel.y * AO_BLUR_SHARED_STRIDE + localPixel.x,
+            clamp(leftPixel, ivec2(0), maximumPixel),
+            invAoSize);
+        PreloadAoAndViewDepth(
+            localPixel.y * AO_BLUR_SHARED_STRIDE +
+                AO_BLUR_MAX_RADIUS + AO_BLUR_GROUP_SIZE + localPixel.x,
+            clamp(rightPixel, ivec2(0), maximumPixel),
+            invAoSize);
+    }
+    else if (!horizontal && localPixel.y < AO_BLUR_MAX_RADIUS)
+    {
+        ivec2 topPixel = groupBase +
+            ivec2(localPixel.x, localPixel.y - AO_BLUR_MAX_RADIUS);
+        ivec2 bottomPixel = groupBase +
+            ivec2(localPixel.x, AO_BLUR_GROUP_SIZE + localPixel.y);
+        PreloadAoAndViewDepth(
+            localPixel.y * AO_BLUR_GROUP_SIZE + localPixel.x,
+            clamp(topPixel, ivec2(0), maximumPixel),
+            invAoSize);
+        PreloadAoAndViewDepth(
+            (AO_BLUR_MAX_RADIUS + AO_BLUR_GROUP_SIZE + localPixel.y) *
+                AO_BLUR_GROUP_SIZE + localPixel.x,
+            clamp(bottomPixel, ivec2(0), maximumPixel),
+            invAoSize);
+    }
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 localPixel = ivec2(gl_LocalInvocationID.xy);
+    ivec2 groupBase = pixel - localPixel;
     ivec2 extent = imageSize(AoOutput);
+    bool horizontal = pc.Direction.x == 1.0;
+    vec2 invAoSize = 1.0 / max(pc.Dimensions, vec2(1.0));
+
+    PreloadAoTile(
+        pixel,
+        localPixel,
+        groupBase,
+        extent,
+        horizontal,
+        invAoSize);
+    barrier();
+
     if (pixel.x >= extent.x || pixel.y >= extent.y)
         return;
 
-    vec2 invAoSize = 1.0 / max(pc.Dimensions, vec2(1.0));
-    vec2 uv = (vec2(pixel) + vec2(0.5)) * invAoSize;
-    float centerDepth = FetchDepth(uv);
-    if (centerDepth <= 0.000001)
+    int centerSharedIndex = SharedTileIndex(localPixel, 0, horizontal);
+    float centerViewDepth = SharedViewDepth[centerSharedIndex];
+    if (centerViewDepth < 0.0)
     {
-        imageStore(AoOutput, pixel, vec4(FetchSourceAo(pixel), 0.0, 0.0, 1.0));
+        float centerAo = SharedAo[centerSharedIndex];
+        imageStore(AoOutput, pixel, vec4(centerAo, 0.0, 0.0, 1.0));
         return;
     }
 
-    float centerViewDepth = ReconstructViewDepth(uv, centerDepth);
     float depthSigma = min(max(pc.DepthSigma, 0.05), max(0.08, centerViewDepth * 0.03));
 
     float total = 0.0;
@@ -70,14 +162,12 @@ void main()
     int radius = int(clamp(pc.Radius, 0u, 4u));
     for (int i = -radius; i <= radius; i++)
     {
-        ivec2 samplePixel = clamp(pixel + ivec2(pc.Direction * float(i)), ivec2(0), extent - ivec2(1));
-        vec2 sampleUv = (vec2(samplePixel) + vec2(0.5)) * invAoSize;
-        float ao = FetchSourceAo(samplePixel);
-        float depth = FetchDepth(sampleUv);
-        if (depth <= 0.000001)
+        int sharedIndex = SharedTileIndex(localPixel, i, horizontal);
+        float ao = SharedAo[sharedIndex];
+        float viewDepth = SharedViewDepth[sharedIndex];
+        if (viewDepth < 0.0)
             continue;
 
-        float viewDepth = ReconstructViewDepth(sampleUv, depth);
         float depthDifference = abs(centerViewDepth - viewDepth);
         if (depthDifference > depthSigma * 4.0)
             continue;
@@ -89,6 +179,8 @@ void main()
         weightSum += weight;
     }
 
-    float result = weightSum > 0.0 ? total / weightSum : FetchSourceAo(pixel);
+    float result = weightSum > 0.0
+        ? total / weightSum
+        : SharedAo[centerSharedIndex];
     imageStore(AoOutput, pixel, vec4(result, 0.0, 0.0, 1.0));
 }
