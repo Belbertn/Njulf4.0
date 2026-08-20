@@ -2131,8 +2131,8 @@ function Assert-TimingActivationVerifierResult {
             [int]$Result.reflectionProbeCaptureResultRowCount -ne 8) {
             throw "$Label reflection C3 evidence is incomplete."
         }
-    } elseif ([string]$Result.reflectionProbeCaptureEvidenceDigest -cne
-            "unavailable" -or
+    } elseif (-not (Test-Sha256Identity `
+            ([string]$Result.reflectionProbeCaptureEvidenceDigest)) -or
         [int]$Result.reflectionProbeCaptureRawRowCount -ne 0 -or
         [int]$Result.reflectionProbeCaptureResultRowCount -ne 0) {
         throw "$Label non-reflection C3 evidence is not canonical unavailable."

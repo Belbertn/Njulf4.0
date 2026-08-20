@@ -1841,12 +1841,99 @@ function Invoke-SyntheticFrozenVerifierReturnShapeCase {
     Write-Host "PASS frozen-verifier-return-shape"
 }
 
+function Invoke-SyntheticNonReflectionC3VerifierCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver,
+        [ref]$tokens,
+        [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for the non-reflection C3 test."
+    }
+    foreach ($functionName in @(
+            "Test-Sha256Identity",
+            "Assert-PathIdentity",
+            "Assert-ResultReportIdentity",
+            "Assert-SponzaAnimationVerifierIdentity",
+            "Assert-TimingActivationVerifierResult")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+
+    $reportPath = Join-Path $testRoot "non-reflection-c3-report.json"
+    $reportSha256 = -join ("b" * 64)
+    $fingerprint = "sha256:" + (-join ("c" * 64))
+    $workload = [pscustomobject]@{
+        scene = "Bistro"
+        activation = "none"
+        measureFrames = 240
+    }
+    $report = [pscustomobject]@{
+        ActivationEvidence = [pscustomobject]@{
+            Fingerprint = $fingerprint
+            ActivationStructuralSequenceHash = "unavailable"
+            ActivationExecutionSequenceHash = "unavailable"
+        }
+        SponzaSceneAnimationEvidence = [pscustomobject]@{
+            Fingerprint = $fingerprint
+            Mode = 0
+        }
+    }
+    $result = [pscustomobject]@{
+        reportPath = $reportPath
+        reportSha256 = $reportSha256
+        activation = "none"
+        activationFingerprint = $fingerprint
+        activationStructuralSequenceHash = "unavailable"
+        activationExecutionSequenceHash = "unavailable"
+        reflectionProbeCaptureEvidenceDigest = "sha256:" + (-join ("d" * 64))
+        reflectionProbeCaptureRawRowCount = 0
+        reflectionProbeCaptureResultRowCount = 0
+        sponzaSceneAnimationFingerprint = $fingerprint
+        sponzaSceneAnimationMode = 0
+        sponzaSceneAnimationConfigurationFingerprint = "unavailable"
+        sponzaSceneAnimationSequenceHash = "unavailable"
+        sponzaSceneAnimationSidecarPath = ""
+        sponzaSceneAnimationSidecarSha256 = ""
+    }
+    $sidecar = Assert-TimingActivationVerifierResult `
+        $workload $report $result $reportPath $reportSha256 `
+        "Synthetic non-reflection C3"
+    if ([string]$sidecar.path -cne "" -or [string]$sidecar.sha256 -cne "") {
+        throw "Non-reflection C3 admission returned a noncanonical sidecar."
+    }
+
+    $result.reflectionProbeCaptureEvidenceDigest = "unavailable"
+    $failedClosed = $false
+    try {
+        $null = Assert-TimingActivationVerifierResult `
+            $workload $report $result $reportPath $reportSha256 `
+            "Synthetic non-reflection C3 invalid digest"
+    } catch {
+        $failedClosed = $_.Exception.Message -like
+            "*non-reflection C3 evidence is not canonical unavailable*"
+    }
+    if (-not $failedClosed) {
+        throw "Non-reflection C3 admission accepted an unavailable digest."
+    }
+    Write-Host "PASS non-reflection-c3-verifier-contract"
+}
+
 try {
     Invoke-SyntheticManifestSnapshotCase
     Invoke-SyntheticHealthReportCase
     Invoke-SyntheticAcceptanceRefCase
     Invoke-SyntheticVerifierByteContractCase
     Invoke-SyntheticFrozenVerifierReturnShapeCase
+    Invoke-SyntheticNonReflectionC3VerifierCase
     Invoke-SyntheticQualityAnimationContractCase
     Invoke-SyntheticComparisonContractCase
     Invoke-SyntheticQualitySequencePolicyCase
