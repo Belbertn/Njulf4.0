@@ -62,6 +62,8 @@ public sealed record SampleBenchmarkReport(
             "Tail-certified DDGI was not observed in this capture.");
     public SampleBenchmarkMaterialTimingEvidence MaterialTimingEvidence { get; init; } =
         SampleBenchmarkMaterialTimingEvidence.Unavailable;
+    public SampleBenchmarkCpuSpikeEvidence CpuSpikeEvidence { get; init; } =
+        SampleBenchmarkCpuSpikeEvidence.Empty;
 }
 
 public sealed record SampleBenchmarkTimingStats(
@@ -163,6 +165,161 @@ public sealed record SampleBenchmarkIntegerStats(
 {
     public static SampleBenchmarkIntegerStats Empty(string name) =>
         new(name, 0, 0, 0, 0, 0, 0);
+}
+
+/// <summary>
+/// CPU timing distributions split by whether the renderer rebuilt its scene
+/// payload. Camera-driven draw-list rebuilds are a subset of rebuilt frames
+/// and are counted separately so moving captures remain attributable.
+/// </summary>
+public sealed record SampleBenchmarkCpuCohortEvidence(
+    string Name,
+    int FrameCount,
+    int ScenePayloadRebuiltFrameCount,
+    int CameraDrivenCpuDrawListRebuiltFrameCount,
+    SampleBenchmarkTimingStats TotalDrawSceneMilliseconds,
+    SampleBenchmarkTimingStats SceneBuildMilliseconds,
+    SampleBenchmarkTimingStats PayloadSignatureMilliseconds,
+    SampleBenchmarkTimingStats ObjectCullMilliseconds,
+    SampleBenchmarkTimingStats MeshletCullMilliseconds,
+    SampleBenchmarkTimingStats StaticBatchBuildMilliseconds,
+    SampleBenchmarkTimingStats UploadMilliseconds,
+    SampleBenchmarkTimingStats MaterialUploadMilliseconds,
+    SampleBenchmarkTimingStats AccelerationStructureBuildMilliseconds,
+    SampleBenchmarkTimingStats PrimaryCommandRecordMilliseconds,
+    SampleBenchmarkTimingStats SecondaryCommandRecordMilliseconds,
+    SampleBenchmarkTimingStats FrameFenceWaitMilliseconds)
+{
+    public static SampleBenchmarkCpuCohortEvidence Empty(string name) => new(
+        name,
+        0,
+        0,
+        0,
+        SampleBenchmarkTimingStats.Empty($"{name} total draw scene"),
+        SampleBenchmarkTimingStats.Empty($"{name} scene build"),
+        SampleBenchmarkTimingStats.Empty($"{name} payload signature"),
+        SampleBenchmarkTimingStats.Empty($"{name} object cull"),
+        SampleBenchmarkTimingStats.Empty($"{name} meshlet cull"),
+        SampleBenchmarkTimingStats.Empty($"{name} static batch build"),
+        SampleBenchmarkTimingStats.Empty($"{name} upload"),
+        SampleBenchmarkTimingStats.Empty($"{name} material upload"),
+        SampleBenchmarkTimingStats.Empty($"{name} acceleration structure build"),
+        SampleBenchmarkTimingStats.Empty($"{name} primary command record"),
+        SampleBenchmarkTimingStats.Empty($"{name} secondary command record"),
+        SampleBenchmarkTimingStats.Empty($"{name} frame-fence wait"));
+}
+
+/// <summary>
+/// Correlated diagnostics for one of the slowest CPU renderer frames. Queue
+/// submit and present timings are deliberately omitted because those values
+/// describe phase-lagged work and must not be reported as causes of this
+/// measurement sample's scene-build spike. RuntimeWorstStallReason is also
+/// omitted because it describes the session maximum rather than this frame.
+/// </summary>
+public sealed record SampleBenchmarkCpuSlowFrame
+{
+    public int MeasurementSampleIndex { get; init; }
+
+    public long CpuTotalDrawSceneMicroseconds { get; init; }
+    public long CpuSceneBuildMicroseconds { get; init; }
+    public long CpuPayloadSignatureMicroseconds { get; init; }
+    public long CpuObjectCullMicroseconds { get; init; }
+    public long CpuMeshletCullMicroseconds { get; init; }
+    public long CpuStaticBatchBuildMicroseconds { get; init; }
+    public long CpuUploadMicroseconds { get; init; }
+    public long CpuMaterialUploadMicroseconds { get; init; }
+    public long CpuAccelerationStructureBuildMicroseconds { get; init; }
+    public long CpuAccelerationStructureBlasBuildMicroseconds { get; init; }
+    public long CpuAccelerationStructureBlasCompactionMicroseconds { get; init; }
+    public long CpuAccelerationStructureTlasBuildMicroseconds { get; init; }
+    public long CpuAccelerationStructureInstanceUploadMicroseconds { get; init; }
+    public long CpuPrimaryCommandRecordMicroseconds { get; init; }
+    public long CpuSecondaryCommandRecordMicroseconds { get; init; }
+    public long CpuWaitForFrameFenceMicroseconds { get; init; }
+    public long RuntimeStallMicrosecondsThisFrame { get; init; }
+    public long CpuReflectionProbeCaptureRecordMicroseconds { get; init; }
+    public long CpuReflectionProbePrefilterRecordMicroseconds { get; init; }
+
+    public int ScenePayloadRebuilt { get; init; }
+    public int CameraDrivenCpuDrawListRebuilt { get; init; }
+    public int HiZPolicyCameraCut { get; init; }
+    public int SceneUploadCount { get; init; }
+    public int SceneUploadSkipped { get; init; }
+    public int VisibleObjectCount { get; init; }
+    public int VisibleMeshletCount { get; init; }
+    public int StaticInstanceBatchCount { get; init; }
+    public int StaticInstanceCount { get; init; }
+    public int VisibleStaticInstanceCount { get; init; }
+    public int CulledStaticInstanceCount { get; init; }
+    public int StaticBatchMeshletDrawCommandCount { get; init; }
+    public int MaterialCount { get; init; }
+    public uint MaterialRevision { get; init; }
+    public int TransparentSortCandidateCount { get; init; }
+    public long TransparentSortMicroseconds { get; init; }
+    public int ReflectionProbeCapturesQueued { get; init; }
+    public int ReflectionProbeCapturesCompleted { get; init; }
+    public ulong ReflectionProbeCapturesCompletedTotal { get; init; }
+    public int ObjectCandidatesCpu { get; init; }
+    public int ObjectFrustumCulledCpu { get; init; }
+    public int MeshletCandidatesCpu { get; init; }
+    public int MeshletFrustumCulledCpu { get; init; }
+    public int MeshletLodSkippedCpu { get; init; }
+    public int MeshletLod0SubmittedCpu { get; init; }
+    public int MeshletLod1SubmittedCpu { get; init; }
+    public int MeshletLod2SubmittedCpu { get; init; }
+    public int MeshletCountSubmittedCpu { get; init; }
+    public SceneSubmissionMode SceneSubmissionActiveMode { get; init; }
+    public int SceneSubmissionCpuCandidateCount { get; init; }
+    public int SceneSubmissionGpuOpaqueCandidateCount { get; init; }
+    public int SceneSubmissionGpuOpaqueFrustumRejectedCount { get; init; }
+    public int SceneSubmissionGpuLod0EmittedCount { get; init; }
+    public int SceneSubmissionGpuLod1EmittedCount { get; init; }
+    public int SceneSubmissionGpuLod2EmittedCount { get; init; }
+    public int SceneSubmissionGpuMissingLodFallbackCount { get; init; }
+    public int SceneSubmissionGpuOpaqueLodDecimatedCount { get; init; }
+    public int AccelerationStructureBlasBuildCount { get; init; }
+    public int AccelerationStructureBlasCompactionQueryCount { get; init; }
+    public int AccelerationStructureBlasCompactionCount { get; init; }
+    public int AccelerationStructureBlasCompactionPendingCount { get; init; }
+    public int AccelerationStructureBlasCompactionQueryOverflowCount { get; init; }
+    public int AccelerationStructureBlasCompactionQueryReadbackFailureCount { get; init; }
+    public int AccelerationStructureTlasBuildCount { get; init; }
+    public int AccelerationStructureTlasUpdateCount { get; init; }
+    public int AccelerationStructureTlasSkipCount { get; init; }
+
+    public ulong UploadedBytes { get; init; }
+    public ulong StableSceneInputUploadBytes { get; init; }
+    public ulong CpuCandidateListUploadBytes { get; init; }
+    public ulong ObjectUploadBytes { get; init; }
+    public ulong InstanceUploadBytes { get; init; }
+    public ulong MeshletDrawUploadBytes { get; init; }
+    public ulong TransparentMeshletDrawUploadBytes { get; init; }
+    public ulong SolidDepthMeshletDrawUploadBytes { get; init; }
+    public ulong MaskedDepthMeshletDrawUploadBytes { get; init; }
+    public ulong MaterialUploadBytes { get; init; }
+    public ulong MaterialExtensionUploadBytes { get; init; }
+    public ulong LightUploadBytes { get; init; }
+    public ulong AccelerationStructureInstanceUploadBytes { get; init; }
+    public ulong AccelerationStructureRayQueryMetadataUploadBytes { get; init; }
+
+    public ulong CaptureSceneContentRevision { get; init; }
+    public ulong CaptureFrameSerial { get; init; }
+    public ulong CaptureFramesSinceSceneLoad { get; init; }
+    public string CaptureSceneAssetHash { get; init; } = string.Empty;
+    public string CaptureSceneStateHash { get; init; } = string.Empty;
+}
+
+public sealed record SampleBenchmarkCpuSpikeEvidence(
+    SampleBenchmarkCpuCohortEvidence Rebuilt,
+    SampleBenchmarkCpuCohortEvidence Stable,
+    IReadOnlyList<SampleBenchmarkCpuSlowFrame> SlowestFrames)
+{
+    public const int SlowFrameLimit = 8;
+
+    public static SampleBenchmarkCpuSpikeEvidence Empty { get; } = new(
+        SampleBenchmarkCpuCohortEvidence.Empty("Rebuilt"),
+        SampleBenchmarkCpuCohortEvidence.Empty("Stable"),
+        Array.Empty<SampleBenchmarkCpuSlowFrame>());
 }
 
 public sealed record SampleDdgiSchedulerSlowFrame(

@@ -858,4 +858,245 @@ public sealed class SampleBenchmarkAnalyzerTests
             candidate => candidate.Name == "GI GPU");
         Assert.That(metric.Status, Is.EqualTo(incompleteStatus));
     }
+
+    [Test]
+    public void CreateReport_ExportsDeterministicTopEightCorrelatedCpuSpikeFrames()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        long[] totals = [1_000, 9_000, 7_000, 8_000, 9_000, 6_000, 5_000, 4_000, 3_000, 2_000];
+        for (int index = 0; index < totals.Length; index++)
+        {
+            analyzer.AddSample(RendererDiagnostics.Empty with
+            {
+                CpuTotalDrawSceneMicroseconds = totals[index],
+                CpuSceneBuildMicroseconds = 100 + index,
+                CpuPayloadSignatureMicroseconds = 200 + index,
+                CpuObjectCullMicroseconds = 300 + index,
+                CpuMeshletCullMicroseconds = 400 + index,
+                CpuStaticBatchBuildMicroseconds = 500 + index,
+                CpuUploadMicroseconds = 600 + index,
+                CpuMaterialUploadMicroseconds = 700 + index,
+                CpuAccelerationStructureBuildMicroseconds = 800 + index,
+                CpuAccelerationStructureBlasBuildMicroseconds = 810 + index,
+                CpuAccelerationStructureBlasCompactionMicroseconds = 820 + index,
+                CpuAccelerationStructureTlasBuildMicroseconds = 830 + index,
+                CpuAccelerationStructureInstanceUploadMicroseconds = 840 + index,
+                CpuPrimaryCommandRecordMicroseconds = 900 + index,
+                CpuSecondaryCommandRecordMicroseconds = 1_000 + index,
+                CpuWaitForFrameFenceMicroseconds = 1_100 + index,
+                RuntimeStallMicrosecondsThisFrame = 1_150 + index,
+                CpuReflectionProbeCaptureRecordMicroseconds = 1_160 + index,
+                CpuReflectionProbePrefilterRecordMicroseconds = 1_170 + index,
+                CpuQueueSubmitMicroseconds = 90_000 + index,
+                CpuPresentMicroseconds = 91_000 + index,
+                ScenePayloadRebuilt = index % 2 == 0 ? 1 : 0,
+                CameraDrivenCpuDrawListRebuilt = index == 4 ? 1 : 0,
+                HiZPolicyCameraCut = index == 4 ? 1 : 0,
+                SceneUploadCount = 1_200 + index,
+                SceneUploadSkipped = 1_300 + index,
+                VisibleObjectCount = 1_400 + index,
+                VisibleMeshletCount = 1_500 + index,
+                StaticInstanceBatchCount = 1_600 + index,
+                StaticInstanceCount = 1_700 + index,
+                VisibleStaticInstanceCount = 1_800 + index,
+                CulledStaticInstanceCount = 1_900 + index,
+                StaticBatchMeshletDrawCommandCount = 2_000 + index,
+                MaterialCount = 2_100 + index,
+                MaterialRevision = (uint)(2_200 + index),
+                TransparentSortCandidateCount = 2_210 + index,
+                TransparentSortMicroseconds = 2_220 + index,
+                ReflectionProbeCapturesQueued = 2_230 + index,
+                ReflectionProbeCapturesCompleted = 2_240 + index,
+                ReflectionProbeCapturesCompletedTotal = (ulong)(2_250 + index),
+                ObjectCandidatesCpu = 2_300 + index,
+                ObjectFrustumCulledCpu = 2_400 + index,
+                MeshletCandidatesCpu = 2_500 + index,
+                MeshletFrustumCulledCpu = 2_600 + index,
+                MeshletLodSkippedCpu = 2_700 + index,
+                MeshletLod0SubmittedCpu = 2_800 + index,
+                MeshletLod1SubmittedCpu = 2_900 + index,
+                MeshletLod2SubmittedCpu = 3_000 + index,
+                MeshletCountSubmittedCpu = 3_100 + index,
+                SceneSubmissionActiveMode = SceneSubmissionMode.GpuCompactedIndirect,
+                SceneSubmissionCpuCandidateCount = 3_200 + index,
+                SceneSubmissionGpuOpaqueCandidateCount = 3_300 + index,
+                SceneSubmissionGpuOpaqueFrustumRejectedCount = 3_400 + index,
+                SceneSubmissionGpuLod0EmittedCount = 3_500 + index,
+                SceneSubmissionGpuLod1EmittedCount = 3_600 + index,
+                SceneSubmissionGpuLod2EmittedCount = 3_700 + index,
+                SceneSubmissionGpuMissingLodFallbackCount = 3_800 + index,
+                SceneSubmissionGpuOpaqueLodDecimatedCount = 3_900 + index,
+                AccelerationStructureBlasBuildCount = 4_000 + index,
+                AccelerationStructureBlasCompactionQueryCount = 4_010 + index,
+                AccelerationStructureBlasCompactionCount = 4_020 + index,
+                AccelerationStructureBlasCompactionPendingCount = 4_030 + index,
+                AccelerationStructureBlasCompactionQueryOverflowCount = 4_040 + index,
+                AccelerationStructureBlasCompactionQueryReadbackFailureCount = 4_050 + index,
+                AccelerationStructureTlasBuildCount = 4_100 + index,
+                AccelerationStructureTlasUpdateCount = 4_200 + index,
+                AccelerationStructureTlasSkipCount = 4_300 + index,
+                UploadedBytes = (ulong)(5_000 + index),
+                StableSceneInputUploadBytes = (ulong)(5_100 + index),
+                CpuCandidateListUploadBytes = (ulong)(5_200 + index),
+                ObjectUploadBytes = (ulong)(5_300 + index),
+                InstanceUploadBytes = (ulong)(5_400 + index),
+                MeshletDrawUploadBytes = (ulong)(5_500 + index),
+                TransparentMeshletDrawUploadBytes = (ulong)(5_600 + index),
+                SolidDepthMeshletDrawUploadBytes = (ulong)(5_700 + index),
+                MaskedDepthMeshletDrawUploadBytes = (ulong)(5_800 + index),
+                MaterialUploadBytes = (ulong)(5_900 + index),
+                MaterialExtensionUploadBytes = (ulong)(6_000 + index),
+                LightUploadBytes = (ulong)(6_100 + index),
+                AccelerationStructureInstanceUploadBytes = (ulong)(6_200 + index),
+                AccelerationStructureRayQueryMetadataUploadBytes = (ulong)(6_300 + index),
+                CaptureSceneContentRevision = (ulong)(6_400 + index),
+                CaptureFrame = PerformanceCaptureFrameMetadata.Unknown with
+                {
+                    FrameSerial = (ulong)(6_500 + index),
+                    FramesSinceSceneLoad = (ulong)(6_600 + index)
+                },
+                CaptureSceneAssetHash = $"asset-{index}",
+                CaptureSceneStateHash = $"state-{index}"
+            }, RenderBudgetSnapshot.Empty);
+        }
+
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            new SampleBenchmarkOptions(true, 0, totals.Length, null),
+            SamplePerformanceScenario.Normal,
+            warmupFrameCount: 0,
+            measurementFrameCount: totals.Length,
+            firstMeasurementFrameIndex: 0,
+            lastMeasurementFrameIndex: totals.Length - 1);
+
+        IReadOnlyList<SampleBenchmarkCpuSlowFrame> slowest =
+            report.CpuSpikeEvidence.SlowestFrames;
+        SampleBenchmarkCpuSlowFrame correlated = slowest[1];
+        string[] exportedPropertyNames = typeof(SampleBenchmarkCpuSlowFrame)
+            .GetProperties()
+            .Select(static property => property.Name)
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(slowest, Has.Count.EqualTo(8));
+            Assert.That(
+                slowest.Select(static frame => frame.MeasurementSampleIndex),
+                Is.EqualTo(new[] { 1, 4, 3, 2, 5, 6, 7, 8 }));
+            Assert.That(correlated.CpuPayloadSignatureMicroseconds, Is.EqualTo(204));
+            Assert.That(correlated.CpuMeshletCullMicroseconds, Is.EqualTo(404));
+            Assert.That(correlated.CpuStaticBatchBuildMicroseconds, Is.EqualTo(504));
+            Assert.That(correlated.CpuAccelerationStructureTlasBuildMicroseconds, Is.EqualTo(834));
+            Assert.That(correlated.CpuSecondaryCommandRecordMicroseconds, Is.EqualTo(1_004));
+            Assert.That(correlated.CpuWaitForFrameFenceMicroseconds, Is.EqualTo(1_104));
+            Assert.That(correlated.RuntimeStallMicrosecondsThisFrame, Is.EqualTo(1_154));
+            Assert.That(correlated.CpuReflectionProbeCaptureRecordMicroseconds, Is.EqualTo(1_164));
+            Assert.That(correlated.CpuReflectionProbePrefilterRecordMicroseconds, Is.EqualTo(1_174));
+            Assert.That(correlated.CameraDrivenCpuDrawListRebuilt, Is.EqualTo(1));
+            Assert.That(correlated.HiZPolicyCameraCut, Is.EqualTo(1));
+            Assert.That(correlated.TransparentSortCandidateCount, Is.EqualTo(2_214));
+            Assert.That(correlated.ReflectionProbeCapturesQueued, Is.EqualTo(2_234));
+            Assert.That(correlated.ReflectionProbeCapturesCompleted, Is.EqualTo(2_244));
+            Assert.That(correlated.MeshletCandidatesCpu, Is.EqualTo(2_504));
+            Assert.That(correlated.SceneSubmissionGpuLod2EmittedCount, Is.EqualTo(3_704));
+            Assert.That(correlated.MaterialUploadBytes, Is.EqualTo(5_904));
+            Assert.That(correlated.AccelerationStructureInstanceUploadBytes, Is.EqualTo(6_204));
+            Assert.That(correlated.AccelerationStructureBlasCompactionQueryCount, Is.EqualTo(4_014));
+            Assert.That(correlated.AccelerationStructureBlasCompactionCount, Is.EqualTo(4_024));
+            Assert.That(correlated.CaptureFrameSerial, Is.EqualTo(6_504));
+            Assert.That(correlated.CaptureFramesSinceSceneLoad, Is.EqualTo(6_604));
+            Assert.That(correlated.CaptureSceneStateHash, Is.EqualTo("state-4"));
+            Assert.That(exportedPropertyNames,
+                Does.Not.Contain(nameof(RendererDiagnostics.CpuQueueSubmitMicroseconds)));
+            Assert.That(exportedPropertyNames,
+                Does.Not.Contain(nameof(RendererDiagnostics.CpuPresentMicroseconds)));
+            Assert.That(exportedPropertyNames,
+                Does.Not.Contain(nameof(RendererDiagnostics.RuntimeWorstStallReason)));
+        });
+    }
+
+    [Test]
+    public void CreateReport_EmitsEmptyCpuCohortsAndNoSlowFramesWithoutSamples()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            new SampleBenchmarkOptions(true, 0, 0, null),
+            SamplePerformanceScenario.Normal,
+            warmupFrameCount: 0,
+            measurementFrameCount: 0,
+            firstMeasurementFrameIndex: -1,
+            lastMeasurementFrameIndex: -1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.CpuSpikeEvidence.Rebuilt.FrameCount, Is.Zero);
+            Assert.That(report.CpuSpikeEvidence.Rebuilt.TotalDrawSceneMilliseconds.Count, Is.Zero);
+            Assert.That(report.CpuSpikeEvidence.Stable.FrameCount, Is.Zero);
+            Assert.That(report.CpuSpikeEvidence.Stable.TotalDrawSceneMilliseconds.Count, Is.Zero);
+            Assert.That(report.CpuSpikeEvidence.SlowestFrames, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void CreateReport_SplitsRebuiltAndStableCpuCohorts()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        analyzer.AddSample(RendererDiagnostics.Empty with
+        {
+            ScenePayloadRebuilt = 1,
+            CameraDrivenCpuDrawListRebuilt = 1,
+            CpuTotalDrawSceneMicroseconds = 10_000,
+            CpuSceneBuildMicroseconds = 4_000,
+            CpuMeshletCullMicroseconds = 2_000
+        }, RenderBudgetSnapshot.Empty);
+        analyzer.AddSample(RendererDiagnostics.Empty with
+        {
+            ScenePayloadRebuilt = 0,
+            CpuTotalDrawSceneMicroseconds = 1_000,
+            CpuSceneBuildMicroseconds = 400,
+            CpuMeshletCullMicroseconds = 200
+        }, RenderBudgetSnapshot.Empty);
+        analyzer.AddSample(RendererDiagnostics.Empty with
+        {
+            ScenePayloadRebuilt = 1,
+            CpuTotalDrawSceneMicroseconds = 30_000,
+            CpuSceneBuildMicroseconds = 12_000,
+            CpuMeshletCullMicroseconds = 6_000
+        }, RenderBudgetSnapshot.Empty);
+        analyzer.AddSample(RendererDiagnostics.Empty with
+        {
+            ScenePayloadRebuilt = 0,
+            CpuTotalDrawSceneMicroseconds = 3_000,
+            CpuSceneBuildMicroseconds = 1_200,
+            CpuMeshletCullMicroseconds = 600
+        }, RenderBudgetSnapshot.Empty);
+
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            new SampleBenchmarkOptions(true, 0, 4, null),
+            SamplePerformanceScenario.Normal,
+            warmupFrameCount: 0,
+            measurementFrameCount: 4,
+            firstMeasurementFrameIndex: 0,
+            lastMeasurementFrameIndex: 3);
+
+        SampleBenchmarkCpuCohortEvidence rebuilt = report.CpuSpikeEvidence.Rebuilt;
+        SampleBenchmarkCpuCohortEvidence stable = report.CpuSpikeEvidence.Stable;
+        Assert.Multiple(() =>
+        {
+            Assert.That(rebuilt.FrameCount, Is.EqualTo(2));
+            Assert.That(rebuilt.ScenePayloadRebuiltFrameCount, Is.EqualTo(2));
+            Assert.That(rebuilt.CameraDrivenCpuDrawListRebuiltFrameCount, Is.EqualTo(1));
+            Assert.That(rebuilt.TotalDrawSceneMilliseconds.AverageMilliseconds, Is.EqualTo(20));
+            Assert.That(rebuilt.TotalDrawSceneMilliseconds.P95Milliseconds, Is.EqualTo(30));
+            Assert.That(rebuilt.SceneBuildMilliseconds.AverageMilliseconds, Is.EqualTo(8));
+            Assert.That(rebuilt.MeshletCullMilliseconds.P95Milliseconds, Is.EqualTo(6));
+            Assert.That(stable.FrameCount, Is.EqualTo(2));
+            Assert.That(stable.ScenePayloadRebuiltFrameCount, Is.Zero);
+            Assert.That(stable.CameraDrivenCpuDrawListRebuiltFrameCount, Is.Zero);
+            Assert.That(stable.TotalDrawSceneMilliseconds.AverageMilliseconds, Is.EqualTo(2));
+            Assert.That(stable.TotalDrawSceneMilliseconds.P95Milliseconds, Is.EqualTo(3));
+            Assert.That(stable.SceneBuildMilliseconds.AverageMilliseconds, Is.EqualTo(0.8));
+            Assert.That(stable.MeshletCullMilliseconds.P95Milliseconds, Is.EqualTo(0.6));
+        });
+    }
 }

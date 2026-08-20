@@ -829,6 +829,7 @@ public sealed class SampleBenchmarkAnalyzer
             GpuUnexplainedMilliseconds = gpuUnexplained,
             SimpleDdgiTransportBlendMilliseconds = simpleDdgiTransportBlend,
             SimpleDdgiSchedulerRefresh = schedulerRefreshEvidence,
+            CpuSpikeEvidence = BuildCpuSpikeEvidence(),
             TailDdgiEvidence = SampleTailDdgiRuntimeEvidenceBuilder.Create(
                 _samples,
                 tailObservation ?? SampleTailDdgiRunObservation.Empty,
@@ -1264,6 +1265,208 @@ public sealed class SampleBenchmarkAnalyzer
                 sample.SimpleDdgiUploadTiming.SchedulerFullRebuildCount != 0),
             slowest);
     }
+
+    private SampleBenchmarkCpuSpikeEvidence BuildCpuSpikeEvidence()
+    {
+        RendererDiagnostics[] rebuilt = _samples
+            .Where(static sample => sample.ScenePayloadRebuilt != 0)
+            .ToArray();
+        RendererDiagnostics[] stable = _samples
+            .Where(static sample => sample.ScenePayloadRebuilt == 0)
+            .ToArray();
+        SampleBenchmarkCpuSlowFrame[] slowest = _samples
+            .Select(static (sample, index) => CreateCpuSlowFrame(index, sample))
+            .OrderByDescending(static frame => frame.CpuTotalDrawSceneMicroseconds)
+            .ThenBy(static frame => frame.MeasurementSampleIndex)
+            .Take(SampleBenchmarkCpuSpikeEvidence.SlowFrameLimit)
+            .ToArray();
+
+        return new SampleBenchmarkCpuSpikeEvidence(
+            BuildCpuCohort("Rebuilt", rebuilt),
+            BuildCpuCohort("Stable", stable),
+            slowest);
+    }
+
+    private static SampleBenchmarkCpuCohortEvidence BuildCpuCohort(
+        string name,
+        IReadOnlyList<RendererDiagnostics> samples)
+    {
+        string prefix = $"{name} CPU";
+        return new SampleBenchmarkCpuCohortEvidence(
+            name,
+            samples.Count,
+            samples.Count(static sample => sample.ScenePayloadRebuilt != 0),
+            samples.Count(static sample =>
+                sample.CameraDrivenCpuDrawListRebuilt != 0),
+            BuildStats(
+                $"{prefix} total draw scene",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuTotalDrawSceneMicroseconds))),
+            BuildStats(
+                $"{prefix} scene build",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuSceneBuildMicroseconds))),
+            BuildStats(
+                $"{prefix} payload signature",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuPayloadSignatureMicroseconds))),
+            BuildStats(
+                $"{prefix} object cull",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuObjectCullMicroseconds))),
+            BuildStats(
+                $"{prefix} meshlet cull",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuMeshletCullMicroseconds))),
+            BuildStats(
+                $"{prefix} static batch build",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuStaticBatchBuildMicroseconds))),
+            BuildStats(
+                $"{prefix} upload",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuUploadMicroseconds))),
+            BuildStats(
+                $"{prefix} material upload",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuMaterialUploadMicroseconds))),
+            BuildStats(
+                $"{prefix} acceleration structure build",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuAccelerationStructureBuildMicroseconds))),
+            BuildStats(
+                $"{prefix} primary command record",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuPrimaryCommandRecordMicroseconds))),
+            BuildStats(
+                $"{prefix} secondary command record",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuSecondaryCommandRecordMicroseconds))),
+            BuildStats(
+                $"{prefix} frame-fence wait",
+                samples.Select(static sample => MicrosecondsToMilliseconds(
+                    sample.CpuWaitForFrameFenceMicroseconds))));
+    }
+
+    private static SampleBenchmarkCpuSlowFrame CreateCpuSlowFrame(
+        int measurementSampleIndex,
+        RendererDiagnostics sample) => new()
+    {
+        MeasurementSampleIndex = measurementSampleIndex,
+        CpuTotalDrawSceneMicroseconds = sample.CpuTotalDrawSceneMicroseconds,
+        CpuSceneBuildMicroseconds = sample.CpuSceneBuildMicroseconds,
+        CpuPayloadSignatureMicroseconds = sample.CpuPayloadSignatureMicroseconds,
+        CpuObjectCullMicroseconds = sample.CpuObjectCullMicroseconds,
+        CpuMeshletCullMicroseconds = sample.CpuMeshletCullMicroseconds,
+        CpuStaticBatchBuildMicroseconds = sample.CpuStaticBatchBuildMicroseconds,
+        CpuUploadMicroseconds = sample.CpuUploadMicroseconds,
+        CpuMaterialUploadMicroseconds = sample.CpuMaterialUploadMicroseconds,
+        CpuAccelerationStructureBuildMicroseconds =
+            sample.CpuAccelerationStructureBuildMicroseconds,
+        CpuAccelerationStructureBlasBuildMicroseconds =
+            sample.CpuAccelerationStructureBlasBuildMicroseconds,
+        CpuAccelerationStructureBlasCompactionMicroseconds =
+            sample.CpuAccelerationStructureBlasCompactionMicroseconds,
+        CpuAccelerationStructureTlasBuildMicroseconds =
+            sample.CpuAccelerationStructureTlasBuildMicroseconds,
+        CpuAccelerationStructureInstanceUploadMicroseconds =
+            sample.CpuAccelerationStructureInstanceUploadMicroseconds,
+        CpuPrimaryCommandRecordMicroseconds =
+            sample.CpuPrimaryCommandRecordMicroseconds,
+        CpuSecondaryCommandRecordMicroseconds =
+            sample.CpuSecondaryCommandRecordMicroseconds,
+        CpuWaitForFrameFenceMicroseconds = sample.CpuWaitForFrameFenceMicroseconds,
+        RuntimeStallMicrosecondsThisFrame = sample.RuntimeStallMicrosecondsThisFrame,
+        CpuReflectionProbeCaptureRecordMicroseconds =
+            sample.CpuReflectionProbeCaptureRecordMicroseconds,
+        CpuReflectionProbePrefilterRecordMicroseconds =
+            sample.CpuReflectionProbePrefilterRecordMicroseconds,
+        ScenePayloadRebuilt = sample.ScenePayloadRebuilt,
+        CameraDrivenCpuDrawListRebuilt = sample.CameraDrivenCpuDrawListRebuilt,
+        HiZPolicyCameraCut = sample.HiZPolicyCameraCut,
+        SceneUploadCount = sample.SceneUploadCount,
+        SceneUploadSkipped = sample.SceneUploadSkipped,
+        VisibleObjectCount = sample.VisibleObjectCount,
+        VisibleMeshletCount = sample.VisibleMeshletCount,
+        StaticInstanceBatchCount = sample.StaticInstanceBatchCount,
+        StaticInstanceCount = sample.StaticInstanceCount,
+        VisibleStaticInstanceCount = sample.VisibleStaticInstanceCount,
+        CulledStaticInstanceCount = sample.CulledStaticInstanceCount,
+        StaticBatchMeshletDrawCommandCount =
+            sample.StaticBatchMeshletDrawCommandCount,
+        MaterialCount = sample.MaterialCount,
+        MaterialRevision = sample.MaterialRevision,
+        TransparentSortCandidateCount = sample.TransparentSortCandidateCount,
+        TransparentSortMicroseconds = sample.TransparentSortMicroseconds,
+        ReflectionProbeCapturesQueued = sample.ReflectionProbeCapturesQueued,
+        ReflectionProbeCapturesCompleted = sample.ReflectionProbeCapturesCompleted,
+        ReflectionProbeCapturesCompletedTotal =
+            sample.ReflectionProbeCapturesCompletedTotal,
+        ObjectCandidatesCpu = sample.ObjectCandidatesCpu,
+        ObjectFrustumCulledCpu = sample.ObjectFrustumCulledCpu,
+        MeshletCandidatesCpu = sample.MeshletCandidatesCpu,
+        MeshletFrustumCulledCpu = sample.MeshletFrustumCulledCpu,
+        MeshletLodSkippedCpu = sample.MeshletLodSkippedCpu,
+        MeshletLod0SubmittedCpu = sample.MeshletLod0SubmittedCpu,
+        MeshletLod1SubmittedCpu = sample.MeshletLod1SubmittedCpu,
+        MeshletLod2SubmittedCpu = sample.MeshletLod2SubmittedCpu,
+        MeshletCountSubmittedCpu = sample.MeshletCountSubmittedCpu,
+        SceneSubmissionActiveMode = sample.SceneSubmissionActiveMode,
+        SceneSubmissionCpuCandidateCount = sample.SceneSubmissionCpuCandidateCount,
+        SceneSubmissionGpuOpaqueCandidateCount =
+            sample.SceneSubmissionGpuOpaqueCandidateCount,
+        SceneSubmissionGpuOpaqueFrustumRejectedCount =
+            sample.SceneSubmissionGpuOpaqueFrustumRejectedCount,
+        SceneSubmissionGpuLod0EmittedCount =
+            sample.SceneSubmissionGpuLod0EmittedCount,
+        SceneSubmissionGpuLod1EmittedCount =
+            sample.SceneSubmissionGpuLod1EmittedCount,
+        SceneSubmissionGpuLod2EmittedCount =
+            sample.SceneSubmissionGpuLod2EmittedCount,
+        SceneSubmissionGpuMissingLodFallbackCount =
+            sample.SceneSubmissionGpuMissingLodFallbackCount,
+        SceneSubmissionGpuOpaqueLodDecimatedCount =
+            sample.SceneSubmissionGpuOpaqueLodDecimatedCount,
+        AccelerationStructureBlasBuildCount =
+            sample.AccelerationStructureBlasBuildCount,
+        AccelerationStructureBlasCompactionQueryCount =
+            sample.AccelerationStructureBlasCompactionQueryCount,
+        AccelerationStructureBlasCompactionCount =
+            sample.AccelerationStructureBlasCompactionCount,
+        AccelerationStructureBlasCompactionPendingCount =
+            sample.AccelerationStructureBlasCompactionPendingCount,
+        AccelerationStructureBlasCompactionQueryOverflowCount =
+            sample.AccelerationStructureBlasCompactionQueryOverflowCount,
+        AccelerationStructureBlasCompactionQueryReadbackFailureCount =
+            sample.AccelerationStructureBlasCompactionQueryReadbackFailureCount,
+        AccelerationStructureTlasBuildCount =
+            sample.AccelerationStructureTlasBuildCount,
+        AccelerationStructureTlasUpdateCount =
+            sample.AccelerationStructureTlasUpdateCount,
+        AccelerationStructureTlasSkipCount =
+            sample.AccelerationStructureTlasSkipCount,
+        UploadedBytes = sample.UploadedBytes,
+        StableSceneInputUploadBytes = sample.StableSceneInputUploadBytes,
+        CpuCandidateListUploadBytes = sample.CpuCandidateListUploadBytes,
+        ObjectUploadBytes = sample.ObjectUploadBytes,
+        InstanceUploadBytes = sample.InstanceUploadBytes,
+        MeshletDrawUploadBytes = sample.MeshletDrawUploadBytes,
+        TransparentMeshletDrawUploadBytes = sample.TransparentMeshletDrawUploadBytes,
+        SolidDepthMeshletDrawUploadBytes = sample.SolidDepthMeshletDrawUploadBytes,
+        MaskedDepthMeshletDrawUploadBytes = sample.MaskedDepthMeshletDrawUploadBytes,
+        MaterialUploadBytes = sample.MaterialUploadBytes,
+        MaterialExtensionUploadBytes = sample.MaterialExtensionUploadBytes,
+        LightUploadBytes = sample.LightUploadBytes,
+        AccelerationStructureInstanceUploadBytes =
+            sample.AccelerationStructureInstanceUploadBytes,
+        AccelerationStructureRayQueryMetadataUploadBytes =
+            sample.AccelerationStructureRayQueryMetadataUploadBytes,
+        CaptureSceneContentRevision = sample.CaptureSceneContentRevision,
+        CaptureFrameSerial = sample.CaptureFrame.FrameSerial,
+        CaptureFramesSinceSceneLoad = sample.CaptureFrame.FramesSinceSceneLoad,
+        CaptureSceneAssetHash = sample.CaptureSceneAssetHash,
+        CaptureSceneStateHash = sample.CaptureSceneStateHash
+    };
 
     private static SampleBenchmarkIntegerStats BuildIntegerStats(
         string name,
