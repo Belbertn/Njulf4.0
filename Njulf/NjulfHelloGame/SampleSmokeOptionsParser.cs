@@ -331,7 +331,15 @@ public static class SampleSmokeOptionsParser
                 "NJULF_RENDERER_BENCHMARK") ||
             !string.IsNullOrWhiteSpace(benchmarkReportPath);
         int benchmarkWarmupFrames = ParseNonNegativeInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES"), 30, "NJULF_RENDERER_BENCHMARK_WARMUP_FRAMES");
-        int benchmarkMeasureFrames = ParsePositiveInt(Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES"), 120, "NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES");
+        string? benchmarkMeasureFramesEnvironment =
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES");
+        bool benchmarkMeasureFramesSpecified =
+            !string.IsNullOrWhiteSpace(benchmarkMeasureFramesEnvironment);
+        int benchmarkMeasureFrames = ParsePositiveInt(
+            benchmarkMeasureFramesEnvironment,
+            120,
+            "NJULF_RENDERER_BENCHMARK_MEASURE_FRAMES");
         int benchmarkMaximumSettlingFrames = ParsePositiveInt(
             Environment.GetEnvironmentVariable(
                 "NJULF_RENDERER_BENCHMARK_MAX_SETTLE_FRAMES"),
@@ -365,6 +373,9 @@ public static class SampleSmokeOptionsParser
             benchmarkHdrMaximumRelativeRmseEnvironment,
             SampleBenchmarkHdrDifference.DefaultMaximumRelativeRmse,
             "NJULF_RENDERER_BENCHMARK_HDR_MAX_RELATIVE_RMSE");
+        bool benchmarkHdrMaximumRelativeRmseSpecified =
+            !string.IsNullOrWhiteSpace(
+                benchmarkHdrMaximumRelativeRmseEnvironment);
         string? benchmarkHdrMaximumFlipP95Environment =
             Environment.GetEnvironmentVariable(
                 "NJULF_RENDERER_BENCHMARK_HDR_MAX_FLIP_P95");
@@ -372,6 +383,9 @@ public static class SampleSmokeOptionsParser
             benchmarkHdrMaximumFlipP95Environment,
             0.02,
             "NJULF_RENDERER_BENCHMARK_HDR_MAX_FLIP_P95");
+        bool benchmarkHdrMaximumFlipP95Specified =
+            !string.IsNullOrWhiteSpace(
+                benchmarkHdrMaximumFlipP95Environment);
         string benchmarkHdrQualityContractPath =
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
@@ -615,6 +629,7 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--benchmark-measure-frames":
                     benchmarkMeasureFrames = ParsePositiveInt(value, 120, "--benchmark-measure-frames");
+                    benchmarkMeasureFramesSpecified = true;
                     break;
                 case "--benchmark-max-settle-frames":
                     benchmarkMaximumSettlingFrames = ParsePositiveInt(
@@ -658,6 +673,7 @@ public static class SampleSmokeOptionsParser
                         value,
                         SampleBenchmarkHdrDifference.DefaultMaximumRelativeRmse,
                         optionName);
+                    benchmarkHdrMaximumRelativeRmseSpecified = true;
                     enableBenchmark = true;
                     break;
                 case "--benchmark-hdr-max-flip-p95":
@@ -665,6 +681,7 @@ public static class SampleSmokeOptionsParser
                         value,
                         0.02,
                         optionName);
+                    benchmarkHdrMaximumFlipP95Specified = true;
                     enableBenchmark = true;
                     break;
                 case "--benchmark-hdr-quality-contract":
@@ -1244,6 +1261,15 @@ public static class SampleSmokeOptionsParser
 
             if (SampleBenchmarkTrajectory.RequiresBistro(benchmarkTrajectory))
             {
+                if (performanceScenario ==
+                        SamplePerformanceScenario.GiSponzaRightWallStationary ||
+                    SampleSponzaAtmosphereScenario.IsScenario(
+                        performanceScenario))
+                {
+                    throw new ArgumentException(
+                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' " +
+                        $"cannot be combined with Sponza-only scenario '{performanceScenario}'.");
+                }
                 if (sceneSpecified && sceneKind != SampleSceneKind.Bistro)
                 {
                     throw new ArgumentException(
@@ -1267,6 +1293,13 @@ public static class SampleSmokeOptionsParser
             }
             if (SampleBenchmarkTrajectory.RequiresSponza(benchmarkTrajectory))
             {
+                if (performanceScenario ==
+                    SamplePerformanceScenario.BistroQualityMotionRelight)
+                {
+                    throw new ArgumentException(
+                        $"Benchmark trajectory '{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' " +
+                        "cannot be combined with BistroQualityMotionRelight.");
+                }
                 if (sceneSpecified && sceneKind != SampleSceneKind.SponzaPlaza)
                 {
                     throw new ArgumentException(
@@ -1274,6 +1307,16 @@ public static class SampleSmokeOptionsParser
                         "requires the Sponza plaza scene.");
                 }
                 sceneKind = SampleSceneKind.SponzaPlaza;
+            }
+
+            if (benchmarkTrajectory !=
+                    SampleBenchmarkTrajectoryKind.Stationary &&
+                performanceScenario ==
+                    SamplePerformanceScenario.GiFastTraversalTeleport)
+            {
+                throw new ArgumentException(
+                    "GiFastTraversalTeleport owns its camera program and cannot " +
+                    "be combined with a named benchmark trajectory.");
             }
 
             if (enableBenchmark)
@@ -1345,15 +1388,32 @@ public static class SampleSmokeOptionsParser
                     throw new ArgumentException(
                         "--benchmark-require-production requires at least 120 measurement frames.");
                 }
-                if (benchmarkRequireProduction &&
-                    SampleBenchmarkTrajectory.IsMoving(benchmarkTrajectory) &&
-                    benchmarkMeasureFrames !=
-                        SampleBenchmarkTrajectory.GetFrameCount(benchmarkTrajectory))
+                if (SampleBenchmarkTrajectory.IsMoving(benchmarkTrajectory))
+                {
+                    int requiredFrameCount =
+                        SampleBenchmarkTrajectory.GetFrameCount(
+                            benchmarkTrajectory);
+                    if (!benchmarkMeasureFramesSpecified)
+                    {
+                        benchmarkMeasureFrames = requiredFrameCount;
+                    }
+                    else if (benchmarkMeasureFrames != requiredFrameCount)
+                    {
+                        throw new ArgumentException(
+                            "A moving benchmark must measure exactly one complete " +
+                            $"'{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' cycle " +
+                            $"({requiredFrameCount} frames).");
+                    }
+                }
+                if (string.IsNullOrWhiteSpace(benchmarkHdrReferencePath) &&
+                    (benchmarkHdrMaximumRelativeRmseSpecified ||
+                     benchmarkHdrMaximumFlipP95Specified ||
+                     !string.IsNullOrWhiteSpace(
+                         benchmarkHdrQualityContractPath)))
                 {
                     throw new ArgumentException(
-                        "A production moving benchmark must measure exactly one complete " +
-                        $"'{SampleBenchmarkTrajectory.GetName(benchmarkTrajectory)}' cycle " +
-                        $"({SampleBenchmarkTrajectory.GetFrameCount(benchmarkTrajectory)} frames).");
+                        "Benchmark HDR RMSE, FLIP, and ROI quality gates require " +
+                        "--benchmark-hdr-reference.");
                 }
                 if (benchmarkRequireShaderProfile &&
                     string.IsNullOrWhiteSpace(benchmarkShaderProfilePath))

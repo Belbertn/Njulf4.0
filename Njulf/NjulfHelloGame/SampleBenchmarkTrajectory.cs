@@ -129,6 +129,33 @@ public static class SampleBenchmarkTrajectory
         return remainder < 0 ? remainder + frameCount : remainder;
     }
 
+    /// <summary>
+    /// Resolves the untimed camera program. Closed routes circulate through
+    /// their authored warmup; the one-way vertical route remains at Low so it
+    /// cannot introduce an untimed High-to-timed-Low cut.
+    /// </summary>
+    public static int GetWarmupFrameIndex(
+        SampleBenchmarkTrajectoryKind kind,
+        int absoluteFrameIndex)
+    {
+        if (kind == SampleBenchmarkTrajectoryKind.SponzaVertical)
+            return 0;
+        return GetTrajectoryFrameIndex(kind, absoluteFrameIndex);
+    }
+
+    public static bool CanStartMeasurementAfterFrame(
+        SampleBenchmarkTrajectoryKind kind,
+        int absoluteFrameIndex)
+    {
+        if (!IsMoving(kind) ||
+            kind == SampleBenchmarkTrajectoryKind.SponzaVertical)
+        {
+            return true;
+        }
+        return GetWarmupFrameIndex(kind, absoluteFrameIndex) ==
+            GetFrameCount(kind) - 1;
+    }
+
     public static string CreateFingerprint(
         SampleBenchmarkTrajectoryKind kind,
         SampleBistroQualityCaptureVariant bistroVariant)
@@ -153,6 +180,54 @@ public static class SampleBenchmarkTrajectory
             contractFingerprint);
         return "sha256:" + Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Camera-only identity for one authored route cycle. It intentionally
+    /// excludes scene state, renderer settings, and camera-cut serials so it
+    /// remains comparable across isolated A/B variants. Generic stationary
+    /// captures bind their runtime-frozen camera through <paramref
+    /// name="stationaryCamera"/>.
+    /// </summary>
+    public static string CreateRouteHash(
+        SampleBenchmarkTrajectoryKind kind,
+        SampleBistroQualityCaptureVariant bistroVariant,
+        PerformanceCaptureCameraMetadata? stationaryCamera = null)
+    {
+        var canonical = new StringBuilder();
+        canonical.Append("njulf-benchmark-camera-route/v1|")
+            .Append(GetName(kind))
+            .Append('|')
+            .Append(GetFrameCount(kind).ToString(CultureInfo.InvariantCulture))
+            .Append('\n');
+        if (kind == SampleBenchmarkTrajectoryKind.Stationary)
+        {
+            if (stationaryCamera == null)
+            {
+                throw new ArgumentNullException(
+                    nameof(stationaryCamera),
+                    "The generic stationary route requires its frozen runtime camera.");
+            }
+            AppendCamera(canonical, 0, stationaryCamera);
+        }
+        else
+        {
+            int frameCount = GetFrameCount(kind);
+            for (int index = 0; index < frameCount; index++)
+            {
+                SampleBenchmarkCameraPose pose = ResolveCamera(
+                    kind,
+                    index,
+                    bistroVariant) ??
+                    throw new InvalidOperationException(
+                        $"Trajectory '{GetName(kind)}' did not resolve frame {index}.");
+                AppendCamera(canonical, index, pose);
+            }
+        }
+
+        return "sha256:" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())))
+            .ToLowerInvariant();
     }
 
     public static SampleBenchmarkCameraPose? ResolveCamera(
@@ -252,6 +327,40 @@ public static class SampleBenchmarkTrajectory
             mismatches.Add(
                 $"{field} expected {expected:R}, captured {actual:R}");
         }
+    }
+
+    private static void AppendCamera(
+        StringBuilder canonical,
+        int index,
+        SampleBenchmarkCameraPose pose)
+    {
+        canonical.Append(index.ToString(CultureInfo.InvariantCulture)).Append('|')
+            .Append(pose.Position.X.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(pose.Position.Y.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(pose.Position.Z.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(pose.Yaw.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(pose.Pitch.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(pose.FieldOfView.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(pose.NearPlane.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(pose.FarPlane.ToString("R", CultureInfo.InvariantCulture))
+            .Append('\n');
+    }
+
+    private static void AppendCamera(
+        StringBuilder canonical,
+        int index,
+        PerformanceCaptureCameraMetadata camera)
+    {
+        canonical.Append(index.ToString(CultureInfo.InvariantCulture)).Append('|')
+            .Append(camera.PositionX.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(camera.PositionY.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(camera.PositionZ.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(camera.YawRadians.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(camera.PitchRadians.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(camera.FieldOfViewRadians.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(camera.NearPlane.ToString("R", CultureInfo.InvariantCulture)).Append('|')
+            .Append(camera.FarPlane.ToString("R", CultureInfo.InvariantCulture))
+            .Append('\n');
     }
 
     private static SampleBenchmarkCameraPose FromBistro(

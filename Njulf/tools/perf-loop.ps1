@@ -760,6 +760,7 @@ function Get-WorkloadIdentity {
     $trajectory = [string]$capture.Trajectory
     $trajectoryFingerprint = [string]$capture.TrajectoryFingerprint
     $trajectoryFrameCount = [int]$capture.TrajectoryFrameCount
+    $trajectoryRouteHash = [string]$capture.TrajectoryRouteHash
     $trajectorySequenceHash = [string]$capture.TrajectorySequenceHash
     if ([string]::IsNullOrWhiteSpace($trajectory) -or
         [string]::Equals($trajectory, "unavailable", [StringComparison]::OrdinalIgnoreCase)) {
@@ -771,6 +772,10 @@ function Get-WorkloadIdentity {
     }
     if ($trajectoryFrameCount -le 0) {
         throw "Benchmark report has invalid trajectory frame count '$trajectoryFrameCount'."
+    }
+    if ([string]::IsNullOrWhiteSpace($trajectoryRouteHash) -or
+        [string]::Equals($trajectoryRouteHash, "unavailable", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Benchmark report has no trajectory route hash."
     }
     if ([string]::IsNullOrWhiteSpace($trajectorySequenceHash) -or
         [string]::Equals($trajectorySequenceHash, "unavailable", [StringComparison]::OrdinalIgnoreCase)) {
@@ -792,7 +797,7 @@ function Get-WorkloadIdentity {
         $trajectory,
         $trajectoryFingerprint,
         [string]$trajectoryFrameCount,
-        $trajectorySequenceHash
+        $trajectoryRouteHash
     )
     return $parts -join "|"
 }
@@ -855,13 +860,16 @@ function Assert-BenchmarkSet {
 
     $identity = $null
     $fullIdentity = $null
+    $trajectorySequence = $null
     foreach ($report in $Reports) {
         Assert-BenchmarkReport $report $Label
         $currentIdentity = Get-WorkloadIdentity $report
         $currentFullIdentity = [string]$report.CaptureContract.FullIdentityHash
+        $currentTrajectorySequence = [string]$report.CaptureContract.TrajectorySequenceHash
         if ($null -eq $identity) {
             $identity = $currentIdentity
             $fullIdentity = $currentFullIdentity
+            $trajectorySequence = $currentTrajectorySequence
             continue
         }
         if (-not [string]::Equals($identity, $currentIdentity, [StringComparison]::Ordinal)) {
@@ -869,6 +877,12 @@ function Assert-BenchmarkSet {
         }
         if (-not [string]::Equals($fullIdentity, $currentFullIdentity, [StringComparison]::Ordinal)) {
             throw "$Label repeats used different exact rendered states."
+        }
+        if (-not [string]::Equals(
+                $trajectorySequence,
+                $currentTrajectorySequence,
+                [StringComparison]::Ordinal)) {
+            throw "$Label repeats used different observed trajectory sequences."
         }
     }
 }

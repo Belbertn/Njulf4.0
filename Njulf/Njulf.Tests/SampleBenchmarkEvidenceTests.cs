@@ -123,6 +123,76 @@ public sealed class SampleBenchmarkEvidenceTests
     }
 
     [Test]
+    public void BenchmarkRunner_FailClosesMalformedTypedHdrContract()
+    {
+        string directory = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "benchmark-hdr-malformed-contract",
+            Guid.NewGuid().ToString("N"));
+        string referencePath = Path.Combine(directory, "reference.pfm");
+        string candidatePath = Path.Combine(directory, "candidate.pfm");
+        string contractPath = Path.Combine(directory, "quality.json");
+        PfmLinearImageCodec.WriteAtomic(
+            referencePath,
+            [1.0f, 1.0f, 1.0f],
+            1,
+            1);
+        PfmLinearImageCodec.WriteAtomic(
+            candidatePath,
+            [1.0f, 1.0f, 1.0f],
+            1,
+            1);
+        File.WriteAllText(contractPath, "{\"schema\":1}");
+        bool exited = false;
+        var options = new SampleBenchmarkOptions(true, 0, 1, null)
+        {
+            HdrReferencePath = referencePath,
+            HdrCandidatePath = candidatePath,
+            HdrQualityContractPath = contractPath,
+            MaximumAdditionalSettlingFrameCount = 0
+        };
+        var runner = new SampleBenchmarkRunner(
+            options,
+            SamplePerformanceScenario.Normal,
+            () => exited = true,
+            () => "sha256:" + new string('a', 64),
+            _ => true,
+            _ => new LinearHdrCaptureResult(
+                candidatePath,
+                LinearHdrCaptureState.Completed,
+                string.Empty));
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            CaptureRun = PerformanceCaptureRunMetadata.Unknown with
+            {
+                Commit = "0123456789abcdef0123456789abcdef01234567",
+                ShaderBundleHash = "sha256:" + new string('b', 64)
+            },
+            CaptureGpuDeviceName = "Synthetic benchmark GPU",
+            CaptureGpuDriverVersion = "1.0-test"
+        };
+
+        runner.OnFrameRendered(
+            0,
+            diagnostics,
+            RenderBudgetSnapshot.Empty);
+        runner.OnFrameRendered(
+            1,
+            diagnostics,
+            RenderBudgetSnapshot.Empty);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exited, Is.True);
+            Assert.That(runner.Report, Is.Not.Null);
+            Assert.That(runner.Report!.HdrDifference.Available, Is.False);
+            Assert.That(
+                runner.Report.HdrDifference.FailureReason,
+                Does.Contain("JsonException"));
+        });
+    }
+
+    [Test]
     public void ShaderProfileLoader_RejectsMismatchedCaptureIdentity()
     {
         string directory = Path.Combine(

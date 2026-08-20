@@ -77,7 +77,11 @@ public static class SampleBenchmarkPairComparer
         }
         if (!string.Equals(left.IdentityHash, right.IdentityHash, StringComparison.Ordinal))
             failures.Add("Locked capture identities differ.");
-        ValidateTrajectoryIdentity(left, right, failures);
+        ValidateTrajectoryIdentity(
+            left,
+            right,
+            requireRepeatability,
+            failures);
         if (requireRepeatability)
         {
             if (!string.Equals(left.Variant, right.Variant, StringComparison.Ordinal))
@@ -179,6 +183,7 @@ public static class SampleBenchmarkPairComparer
     private static void ValidateTrajectoryIdentity(
         SampleBenchmarkCaptureContract left,
         SampleBenchmarkCaptureContract right,
+        bool requireRepeatability,
         ICollection<string> failures)
     {
         bool leftTrajectoryValid = TryResolveTrajectoryFrameCount(
@@ -225,12 +230,25 @@ public static class SampleBenchmarkPairComparer
             failures.Add("Capture trajectory fingerprints differ.");
         }
 
+        if (!IsSha256Identity(left.TrajectoryRouteHash) ||
+            !IsSha256Identity(right.TrajectoryRouteHash))
+        {
+            failures.Add("Capture trajectory route hashes are missing or invalid.");
+        }
+        else if (!string.Equals(
+                     left.TrajectoryRouteHash,
+                     right.TrajectoryRouteHash,
+                     StringComparison.Ordinal))
+        {
+            failures.Add("Capture trajectory routes differ.");
+        }
+
         if (!IsSha256Identity(left.TrajectorySequenceHash) ||
             !IsSha256Identity(right.TrajectorySequenceHash))
         {
             failures.Add("Capture trajectory sequence hashes are missing or invalid.");
         }
-        else if (!string.Equals(
+        else if (requireRepeatability && !string.Equals(
                      left.TrajectorySequenceHash,
                      right.TrajectorySequenceHash,
                      StringComparison.Ordinal))

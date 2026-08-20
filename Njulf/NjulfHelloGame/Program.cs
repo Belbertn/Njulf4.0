@@ -919,7 +919,8 @@ internal sealed class HelloGame : Game
 #endif
         if (_materialGiCaptureRunner == null &&
             _khronosMaterialGiRenderedGateRunner == null &&
-            _bistroQualityCaptureRunner == null)
+            _bistroQualityCaptureRunner == null &&
+            !_smokeOptions.Benchmark.Enabled)
             _inputController?.Update(
                 simulationDeltaTime,
                 WindowWidth,
@@ -939,9 +940,18 @@ internal sealed class HelloGame : Game
         ApplySponzaScenarioFrameControls();
         ApplyBenchmarkDynamicScenarioFrameControls();
         ApplyBenchmarkCameraScenarioFrameControls();
-        ApplyBenchmarkSponzaTrajectoryFrameControls();
+        ApplyBenchmarkNamedTrajectoryFrameControls();
         if (_bistroQualityCaptureRunner != null)
             _bistroQualityCaptureRunner.PrepareFrame(_drawnFrames);
+        else if (_benchmarkRunner != null &&
+                 SampleBenchmarkTrajectory.RequiresBistro(
+                     _smokeOptions.Benchmark.Trajectory) &&
+                 !_benchmarkRunner.HoldTrajectoryForPostMeasurementEvidence)
+        {
+            _bistroQualityRuntimeController?.PrepareFrame(
+                _benchmarkRunner.ResolveBistroControllerFrameIndexForNextRender(
+                    _drawnFrames));
+        }
         else if (_benchmarkRunner?.HoldTrajectoryForPostMeasurementEvidence != true)
             _bistroQualityRuntimeController?.PrepareFrame(_drawnFrames);
 
@@ -1030,7 +1040,7 @@ internal sealed class HelloGame : Game
         }
     }
 
-    private void ApplyBenchmarkSponzaTrajectoryFrameControls()
+    private void ApplyBenchmarkNamedTrajectoryFrameControls()
     {
         SampleBenchmarkOptions benchmark = _smokeOptions.Benchmark;
         if (!benchmark.Enabled ||
@@ -1042,7 +1052,9 @@ internal sealed class HelloGame : Game
         }
 
         int trajectoryFrame =
-            SampleBenchmarkTrajectory.GetTrajectoryFrameIndex(
+            _benchmarkRunner?.ResolveTrajectoryFrameIndexForNextRender(
+                _drawnFrames) ??
+            SampleBenchmarkTrajectory.GetWarmupFrameIndex(
                 benchmark.Trajectory,
                 _drawnFrames);
         SampleBenchmarkCameraPose pose =

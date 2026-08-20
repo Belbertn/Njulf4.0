@@ -145,7 +145,7 @@ public sealed class SampleBenchmarkPairComparerTests
             {
                 CaptureContract = contract with
                 {
-                    TrajectorySequenceHash = Sha256('c')
+                    TrajectoryRouteHash = Sha256('c')
                 }
             }
         ];
@@ -154,7 +154,7 @@ public sealed class SampleBenchmarkPairComparerTests
             "Capture trajectories differ.",
             "Capture trajectory fingerprints differ.",
             "Capture trajectory frame counts do not match their authored contracts.",
-            "Capture trajectory sequences differ."
+            "Capture trajectory routes differ."
         ];
 
         Assert.Multiple(() =>
@@ -188,6 +188,7 @@ public sealed class SampleBenchmarkPairComparerTests
             CaptureContract = baseline.CaptureContract with
             {
                 TrajectoryFingerprint = "unavailable",
+                TrajectoryRouteHash = "unavailable",
                 TrajectorySequenceHash = "unavailable"
             }
         };
@@ -206,7 +207,51 @@ public sealed class SampleBenchmarkPairComparerTests
                 Does.Contain("Capture trajectory fingerprints are missing or invalid."));
             Assert.That(
                 comparison.Failures,
+                Does.Contain("Capture trajectory route hashes are missing or invalid."));
+            Assert.That(
+                comparison.Failures,
                 Does.Contain("Capture trajectory sequence hashes are missing or invalid."));
+        });
+    }
+
+    [Test]
+    public void Compare_ObservedSequenceIsExactForRepeatsButNotIsolatedAb()
+    {
+        SampleBenchmarkReport baseline = WithMovingTrajectory(CreateReport(
+            "locked-pair",
+            "sha256:state-a",
+            "baseline",
+            10.0,
+            4.0));
+        SampleBenchmarkReport changedSequence = baseline with
+        {
+            CaptureContract = baseline.CaptureContract with
+            {
+                TrajectorySequenceHash = Sha256('e')
+            }
+        };
+
+        SampleBenchmarkPairComparison repeat =
+            SampleBenchmarkPairComparer.Compare(baseline, changedSequence);
+        SampleBenchmarkPairComparison ab =
+            SampleBenchmarkPairComparer.Compare(
+                baseline,
+                changedSequence with
+                {
+                    CaptureContract = changedSequence.CaptureContract with
+                    {
+                        Variant = "candidate"
+                    }
+                },
+                requireRepeatability: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(repeat.Comparable, Is.False);
+            Assert.That(
+                repeat.Failures,
+                Does.Contain("Capture trajectory sequences differ."));
+            Assert.That(ab.Comparable, Is.True);
         });
     }
 
@@ -546,6 +591,7 @@ public sealed class SampleBenchmarkPairComparerTests
                 Trajectory = SampleBenchmarkTrajectory.StationaryName,
                 TrajectoryFingerprint = Sha256('1'),
                 TrajectoryFrameCount = 1,
+                TrajectoryRouteHash = Sha256('3'),
                 TrajectorySequenceHash = Sha256('2')
             }
         };
@@ -560,6 +606,7 @@ public sealed class SampleBenchmarkPairComparerTests
                 TrajectoryFingerprint = Sha256('a'),
                 TrajectoryFrameCount = SampleBenchmarkTrajectory.GetFrameCount(
                     SampleBenchmarkTrajectoryKind.SponzaHorizontal),
+                TrajectoryRouteHash = Sha256('f'),
                 TrajectorySequenceHash = Sha256('d')
             }
         };

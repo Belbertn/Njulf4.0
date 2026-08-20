@@ -119,6 +119,11 @@ public sealed record SampleBenchmarkCaptureContract(
     /// <summary>Number of camera states in one complete trajectory cycle.</summary>
     public int TrajectoryFrameCount { get; init; } = 1;
     /// <summary>
+    /// Camera-only identity for the authored route, excluding renderer state
+    /// and absolute camera-cut serials so controlled A/B variants can pair.
+    /// </summary>
+    public string TrajectoryRouteHash { get; init; } = "unavailable";
+    /// <summary>
     /// Hash of every measured camera and scene-state identity in order. This
     /// lets paired captures compare moving workloads without pretending that
     /// every frame has the same camera or dynamic scene state.

@@ -44,6 +44,7 @@ public sealed class SampleBenchmarkRunner
     private RendererDiagnostics? _lastPreMeasurementDiagnostics;
     private int _consecutiveReadyFrameCount;
     private string? _measurementSettingsFingerprint;
+    private bool _movingTrajectoryMeasurementStarted;
 
     public SampleBenchmarkRunner(
         SampleBenchmarkOptions options,
@@ -74,6 +75,36 @@ public sealed class SampleBenchmarkRunner
     public bool HoldTrajectoryForPostMeasurementEvidence =>
         _waitingForHdrCapture;
 
+    public bool MovingTrajectoryMeasurementStarted =>
+        _movingTrajectoryMeasurementStarted;
+
+    public int ResolveTrajectoryFrameIndexForNextRender(int absoluteFrameIndex)
+    {
+        if (!SampleBenchmarkTrajectory.IsMoving(_options.Trajectory))
+            return 0;
+        if (!_movingTrajectoryMeasurementStarted)
+        {
+            return SampleBenchmarkTrajectory.GetWarmupFrameIndex(
+                _options.Trajectory,
+                absoluteFrameIndex);
+        }
+        return Math.Min(
+            _samplesCaptured,
+            SampleBenchmarkTrajectory.GetFrameCount(_options.Trajectory) - 1);
+    }
+
+    public int ResolveBistroControllerFrameIndexForNextRender(
+        int absoluteFrameIndex)
+    {
+        int routeFrame = ResolveTrajectoryFrameIndexForNextRender(
+            absoluteFrameIndex);
+        return _movingTrajectoryMeasurementStarted
+            ? checked(
+                SampleBistroQualityCaptureContract.FirstMeasuredFrame +
+                routeFrame)
+            : routeFrame;
+    }
+
     public void OnFrameRendered(int frameIndex, RendererDiagnostics diagnostics, RenderBudgetSnapshot budget)
     {
         if (!_options.Enabled || _completed)
@@ -101,6 +132,16 @@ public sealed class SampleBenchmarkRunner
 
             if (frameIndex < _options.WarmupFrameCount)
             {
+                if (SampleBenchmarkTrajectory.IsMoving(_options.Trajectory) &&
+                    frameIndex == _options.WarmupFrameCount - 1 &&
+                    _consecutiveReadyFrameCount >=
+                        RequiredConsecutiveReadyFrameCount &&
+                    SampleBenchmarkTrajectory.CanStartMeasurementAfterFrame(
+                        _options.Trajectory,
+                        frameIndex))
+                {
+                    _movingTrajectoryMeasurementStarted = true;
+                }
                 _lastPreMeasurementDiagnostics = diagnostics;
                 return;
             }
@@ -117,19 +158,30 @@ public sealed class SampleBenchmarkRunner
 
                 _settlingWaitTimedOut = true;
             }
-            else if (!SampleBenchmarkTrajectory.IsMeasurementStartFrame(
-                         _options.Trajectory,
-                         frameIndex))
+
+            if (SampleBenchmarkTrajectory.IsMoving(_options.Trajectory) &&
+                !_movingTrajectoryMeasurementStarted)
             {
-                if (_additionalSettlingFrameCount <
-                    _options.MaximumAdditionalSettlingFrameCount)
+                if (!SampleBenchmarkTrajectory.CanStartMeasurementAfterFrame(
+                        _options.Trajectory,
+                        frameIndex))
                 {
-                    _additionalSettlingFrameCount++;
+                    if (_additionalSettlingFrameCount <
+                        _options.MaximumAdditionalSettlingFrameCount)
+                    {
+                        _additionalSettlingFrameCount++;
+                    }
+                    else
+                    {
+                        _settlingWaitTimedOut = true;
+                    }
                     _lastPreMeasurementDiagnostics = diagnostics;
                     return;
                 }
 
-                _settlingWaitTimedOut = true;
+                _movingTrajectoryMeasurementStarted = true;
+                _lastPreMeasurementDiagnostics = diagnostics;
+                return;
             }
         }
 
@@ -232,6 +284,9 @@ public sealed class SampleBenchmarkRunner
                 exception is ArgumentException or
                     IOException or
                     InvalidDataException or
+                    InvalidOperationException or
+                    JsonException or
+                    NotSupportedException or
                     UnauthorizedAccessException)
             {
                 Complete(SampleBenchmarkHdrDifference.Unavailable(
@@ -1249,6 +1304,8 @@ public sealed class SampleBenchmarkAnalyzer
         var mismatches = new List<string>();
         bool movingTrajectory =
             SampleBenchmarkTrajectory.IsMoving(options.Trajectory);
+        bool namedTrajectory = options.Trajectory !=
+            SampleBenchmarkTrajectoryKind.Stationary;
         int trajectoryFrameCount =
             SampleBenchmarkTrajectory.GetFrameCount(options.Trajectory);
         string expectedTrajectoryFingerprint =
@@ -1323,12 +1380,12 @@ public sealed class SampleBenchmarkAnalyzer
             CompareInvariant(mismatches, index, "height", first.CaptureRenderHeight, sample.CaptureRenderHeight);
             CompareInvariant(mismatches, index, "quality", first.ActiveQualityPreset, sample.ActiveQualityPreset);
             CompareInvariant(mismatches, index, "scene revision", first.CaptureSceneContentRevision, sample.CaptureSceneContentRevision);
-            if (movingTrajectory)
+            if (namedTrajectory)
             {
                 IReadOnlyList<string> cameraMismatches =
                     SampleBenchmarkTrajectory.ValidateCamera(
                         options.Trajectory,
-                        index,
+                        movingTrajectory ? index : 0,
                         options.TrajectoryBistroVariant,
                         sample.CaptureCamera);
                 foreach (string mismatch in cameraMismatches)
@@ -1336,6 +1393,9 @@ public sealed class SampleBenchmarkAnalyzer
                     mismatches.Add(
                         $"Frame {index} trajectory camera {mismatch}.");
                 }
+            }
+            if (movingTrajectory)
+            {
                 CompareInvariant(
                     mismatches,
                     index,
@@ -1463,6 +1523,10 @@ public sealed class SampleBenchmarkAnalyzer
 
         string identityHash = CreateCaptureIdentityHash(first, includeTargetState: false);
         string fullIdentityHash = CreateCaptureIdentityHash(first, includeTargetState: true);
+        string trajectoryRouteHash = SampleBenchmarkTrajectory.CreateRouteHash(
+            options.Trajectory,
+            options.TrajectoryBistroVariant,
+            first.CaptureCamera);
         string trajectorySequenceHash = CreateTrajectorySequenceHash(
             _samples,
             options);
@@ -1487,6 +1551,7 @@ public sealed class SampleBenchmarkAnalyzer
             Trajectory = SampleBenchmarkTrajectory.GetName(options.Trajectory),
             TrajectoryFingerprint = expectedTrajectoryFingerprint,
             TrajectoryFrameCount = trajectoryFrameCount,
+            TrajectoryRouteHash = trajectoryRouteHash,
             TrajectorySequenceHash = trajectorySequenceHash,
             PassTimestampReconciliationToleranceMicroseconds =
                 passTimestampToleranceMicroseconds
