@@ -30,6 +30,8 @@ public sealed class SampleBenchmarkRunner
     private readonly SamplePerformanceScenario _scenario;
     private readonly Action _exit;
     private readonly Func<string> _getSettingsFingerprint;
+    private readonly Func<string>?
+        _getControlledIsolationSettingsFingerprint;
     private readonly Func<string, bool>? _requestLinearHdrCapture;
     private readonly Func<string, LinearHdrCaptureResult>? _getLinearHdrCaptureResult;
     private readonly SampleBenchmarkAnalyzer _analyzer;
@@ -49,6 +51,8 @@ public sealed class SampleBenchmarkRunner
     private RendererDiagnostics? _lastPreMeasurementDiagnostics;
     private int _consecutiveReadyFrameCount;
     private string? _measurementSettingsFingerprint;
+    private string _measurementControlledIsolationSettingsFingerprint =
+        "unavailable";
     private bool _movingTrajectoryMeasurementStarted;
     private bool _measurementActivationArmed;
 
@@ -58,7 +62,8 @@ public sealed class SampleBenchmarkRunner
         Action exit,
         Func<string> getSettingsFingerprint,
         Func<string, bool>? requestLinearHdrCapture = null,
-        Func<string, LinearHdrCaptureResult>? getLinearHdrCaptureResult = null)
+        Func<string, LinearHdrCaptureResult>? getLinearHdrCaptureResult = null,
+        Func<string>? getControlledIsolationSettingsFingerprint = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _analyzer = new SampleBenchmarkAnalyzer(
@@ -83,6 +88,8 @@ public sealed class SampleBenchmarkRunner
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _getSettingsFingerprint = getSettingsFingerprint ??
             throw new ArgumentNullException(nameof(getSettingsFingerprint));
+        _getControlledIsolationSettingsFingerprint =
+            getControlledIsolationSettingsFingerprint;
         _requestLinearHdrCapture = requestLinearHdrCapture;
         _getLinearHdrCaptureResult = getLinearHdrCaptureResult;
     }
@@ -343,6 +350,13 @@ public sealed class SampleBenchmarkRunner
         // permissions and must not make an otherwise identical timing run look
         // like it used different render settings.
         _measurementSettingsFingerprint = _getSettingsFingerprint();
+        if (SampleBenchmarkActivation.RequiresDeterministicAnimation(
+                _options.Activation))
+        {
+            _measurementControlledIsolationSettingsFingerprint =
+                _getControlledIsolationSettingsFingerprint?.Invoke() ??
+                    "unavailable";
+        }
         BeginPostMeasurementEvidence();
     }
 
@@ -496,7 +510,8 @@ public sealed class SampleBenchmarkRunner
             _samplesCaptured,
             _firstMeasurementFrame,
             _lastMeasurementFrame,
-            _tailDdgiObserver.Snapshot());
+            _tailDdgiObserver.Snapshot(),
+            _measurementControlledIsolationSettingsFingerprint);
         Report = Report with
         {
             HdrDifference = hdrDifference,
@@ -1033,7 +1048,8 @@ public sealed class SampleBenchmarkAnalyzer
         int measurementFrameCount,
         int firstMeasurementFrameIndex,
         int lastMeasurementFrameIndex,
-        SampleTailDdgiRunObservation? tailObservation = null)
+        SampleTailDdgiRunObservation? tailObservation = null,
+        string controlledIsolationSettingsFingerprint = "unavailable")
     {
         if (options == null)
             throw new ArgumentNullException(nameof(options));
@@ -1100,7 +1116,10 @@ public sealed class SampleBenchmarkAnalyzer
             LastDiagnostics: last)
         {
             AccuracyOracleResults = SampleGiAccuracyOracleEvaluator.Evaluate(scenario, _samples),
-            CaptureContract = BuildCaptureContract(options, scenario),
+            CaptureContract = BuildCaptureContract(
+                options,
+                scenario,
+                controlledIsolationSettingsFingerprint),
             GpuIndependentPassSumMilliseconds = gpuPassSum,
             GpuUnexplainedMilliseconds = gpuUnexplained,
             SimpleDdgiTransportBlendMilliseconds = simpleDdgiTransportBlend,
@@ -1775,7 +1794,8 @@ public sealed class SampleBenchmarkAnalyzer
 
     private SampleBenchmarkCaptureContract BuildCaptureContract(
         SampleBenchmarkOptions options,
-        SamplePerformanceScenario scenario)
+        SamplePerformanceScenario scenario,
+        string controlledIsolationSettingsFingerprint)
     {
         if (_samples.Count == 0)
             return SampleBenchmarkCaptureContract.Unavailable;
@@ -2041,6 +2061,13 @@ public sealed class SampleBenchmarkAnalyzer
             first,
             expectedActivationFingerprint,
             includeTargetState: true);
+        string controlledIsolationIdentityHash =
+            SampleBenchmarkActivation.RequiresDeterministicAnimation(
+                expectedActivation)
+                ? CreateControlledIsolationIdentityHash(
+                    first,
+                    expectedActivation)
+                : "unavailable";
         string trajectoryRouteHash = SampleBenchmarkTrajectory.CreateRouteHash(
             options.Trajectory,
             options.TrajectoryBistroVariant,
@@ -2048,6 +2075,40 @@ public sealed class SampleBenchmarkAnalyzer
         string trajectorySequenceHash = CreateTrajectorySequenceHash(
             _samples,
             options);
+        IReadOnlyList<SampleBenchmarkControlledIsolationFrameEvidence>
+            controlledIsolationFrames =
+                Array.Empty<SampleBenchmarkControlledIsolationFrameEvidence>();
+        string controlledIsolationSequenceHash = "unavailable";
+        if (SampleBenchmarkActivation.RequiresDeterministicAnimation(
+                expectedActivation))
+        {
+            try
+            {
+                controlledIsolationFrames =
+                    SampleBenchmarkControlledIsolationSequence.CreateFrames(
+                        _samples,
+                        controlledIsolationSettingsFingerprint);
+                controlledIsolationSequenceHash =
+                    SampleBenchmarkControlledIsolationSequence
+                        .ValidateAndCreateHash(
+                            controlledIsolationFrames,
+                            options.MeasureFrameCount,
+                            SampleBenchmarkTrajectory.GetName(
+                                options.Trajectory),
+                            expectedTrajectoryFingerprint,
+                            trajectoryRouteHash,
+                            expectedActivation,
+                            controlledIsolationSettingsFingerprint);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException or InvalidDataException or
+                    OverflowException)
+            {
+                mismatches.Add(
+                    "Directional controlled-isolation sequence evidence is " +
+                    $"invalid: {exception.Message}");
+            }
+        }
         bool production = first.GiMeasurement.Mode == GiMeasurementMode.Production &&
             first.ValidationMode == RendererValidationMode.Off &&
             first.DdgiDetailedCountersCompiled == 0 &&
@@ -2073,6 +2134,16 @@ public sealed class SampleBenchmarkAnalyzer
             TrajectorySequenceHash = trajectorySequenceHash,
             Activation = expectedActivation,
             ActivationFingerprint = expectedActivationFingerprint,
+            ControlledIsolationIdentityHash =
+                controlledIsolationIdentityHash,
+            ControlledIsolationSettingsFingerprint =
+                SampleBenchmarkActivation.RequiresDeterministicAnimation(
+                    expectedActivation)
+                    ? controlledIsolationSettingsFingerprint
+                    : "unavailable",
+            ControlledIsolationSequenceHash =
+                controlledIsolationSequenceHash,
+            ControlledIsolationFrames = controlledIsolationFrames,
             PassTimestampReconciliationToleranceMicroseconds =
                 passTimestampToleranceMicroseconds
         };
@@ -2223,6 +2294,15 @@ public sealed class SampleBenchmarkAnalyzer
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
         return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    internal static string CreateControlledIsolationIdentityHash(
+        RendererDiagnostics diagnostics,
+        string activation) =>
+        CreateCaptureIdentityHash(
+            diagnostics,
+            SampleBenchmarkActivation.CreateControlledIsolationFingerprint(
+                activation),
+            includeTargetState: true);
 
     private static string CreateTrajectorySequenceHash(
         IReadOnlyList<RendererDiagnostics> samples,

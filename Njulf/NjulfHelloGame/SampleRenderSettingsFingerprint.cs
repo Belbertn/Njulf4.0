@@ -21,6 +21,30 @@ internal static class SampleRenderSettingsFingerprint
         return $"sha256:{Convert.ToHexString(SHA256.HashData(serialized)).ToLowerInvariant()}";
     }
 
+    /// <summary>
+    /// Captures the complete render-settings identity shared by the authored
+    /// directional-shadow controlled isolation. The two roles intentionally
+    /// differ only in the capture-only forced static-cascade refresh switch,
+    /// so normalize exactly that switch and no other setting. This is called
+    /// after the timing window, never while a Draw is in progress.
+    /// </summary>
+    public static string CaptureDirectionalIsolationFamily(
+        RenderSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        bool forceRefresh =
+            settings.Shadows.ForceStaticCascadeCacheRefresh;
+        try
+        {
+            settings.Shadows.ForceStaticCascadeCacheRefresh = false;
+            return Capture(settings);
+        }
+        finally
+        {
+            settings.Shadows.ForceStaticCascadeCacheRefresh = forceRefresh;
+        }
+    }
+
     private static JsonSerializerOptions CreateOptions()
     {
         var options = new JsonSerializerOptions

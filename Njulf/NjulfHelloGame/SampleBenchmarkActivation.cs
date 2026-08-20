@@ -70,6 +70,30 @@ public static class SampleBenchmarkActivation
         Normalize(activation) is DirectionalShadowMovingCaster or
             DirectionalShadowForcedRefresh;
 
+    public static string CreateControlledIsolationFingerprint(
+        string? activation)
+    {
+        string normalized = Normalize(activation);
+        if (normalized is not (DirectionalShadowMovingCaster or
+            DirectionalShadowForcedRefresh))
+        {
+            throw new ArgumentException(
+                "Only the authored directional-shadow roles have a " +
+                "controlled-isolation family fingerprint.",
+                nameof(activation));
+        }
+        string canonical =
+            "njulf-benchmark-controlled-isolation/v2|" +
+            "family=directional-shadow|" +
+            "route-sequence=all-240-camera+scene+gi+feature+" +
+            "common-animation+cache-signature+dynamic-foliage-population|" +
+            "settings=full-render-settings-with-only-" +
+            "Shadows.ForceStaticCascadeCacheRefresh-normalized-false|";
+        return "sha256:" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
+    }
+
     public static bool ShouldRequestReflectionRecapture(
         string? activation,
         int routeFrameIndex) =>
@@ -2212,7 +2236,8 @@ internal static class SampleBenchmarkActivationEvidenceEvaluator
             bool refreshed =
                 (runtime.StaticCacheRefreshMask & bit) != 0;
             bool reused = (runtime.StaticCacheReuseMask & bit) != 0;
-            if (layer.FinalWorkingLayerValid == 0 ||
+            if (layer.CacheSignature == 0 ||
+                layer.FinalWorkingLayerValid == 0 ||
                 layer.DynamicWorkAppended == 0 ||
                 layer.CopiedFromCache == 0 ||
                 (refreshed

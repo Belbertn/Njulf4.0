@@ -156,6 +156,28 @@ public sealed record SampleBenchmarkCaptureContract(
         "unavailable";
     public string SponzaSceneAnimationSidecarSha256 { get; init; } =
         "unavailable";
+    /// <summary>
+    /// Shared build/scene/camera identity for explicitly authored controlled
+    /// isolations. It replaces the role-specific activation fingerprint with
+    /// the isolation-family fingerprint while retaining exact target state.
+    /// </summary>
+    public string ControlledIsolationIdentityHash { get; init; } =
+        "unavailable";
+    /// <summary>
+    /// Full render-settings identity shared by the directional isolation after
+    /// normalizing only the authored forced static-cascade refresh switch.
+    /// </summary>
+    public string ControlledIsolationSettingsFingerprint { get; init; } =
+        "unavailable";
+    /// <summary>
+    /// Recomputable role-neutral identity over every measured directional
+    /// route/state/cache-provenance row.
+    /// </summary>
+    public string ControlledIsolationSequenceHash { get; init; } =
+        "unavailable";
+    public IReadOnlyList<SampleBenchmarkControlledIsolationFrameEvidence>
+        ControlledIsolationFrames { get; init; } =
+            Array.Empty<SampleBenchmarkControlledIsolationFrameEvidence>();
 
     public static SampleBenchmarkCaptureContract Unavailable { get; } = new(
         false,
@@ -168,6 +190,31 @@ public sealed record SampleBenchmarkCaptureContract(
         FullIdentityHash = "unavailable"
     };
 }
+
+public sealed record SampleBenchmarkControlledIsolationCascadeEvidence(
+    int CascadeIndex,
+    ulong CacheSignature,
+    int DynamicWorkAppended,
+    int FoliageWorkAppended);
+
+public sealed record SampleBenchmarkControlledIsolationFrameEvidence(
+    int MeasurementFrameIndex,
+    PerformanceCaptureCameraMetadata Camera,
+    string SceneAssetHash,
+    string SceneStateHash,
+    ulong SceneContentRevision,
+    string ResolvedGiSettingsHash,
+    RenderFeatureIsolationMode FeatureIsolation,
+    GlobalIlluminationDebugView DebugView,
+    string ControlledSettingsFingerprint,
+    int DirectionalStaticCacheActiveMask,
+    int PlayingAnimatorCount,
+    int SkinningDispatchCount,
+    int SkinnedObjectCount,
+    int DirectionalDynamicShadowMeshletCount,
+    int DirectionalShadowSkinnedObjectCount,
+    IReadOnlyList<SampleBenchmarkControlledIsolationCascadeEvidence>
+        Cascades);
 
 public sealed record SampleBenchmarkFinding(
     string Category,

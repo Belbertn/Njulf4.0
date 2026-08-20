@@ -40,6 +40,22 @@ internal static class Program
         {
             return activationVerificationExitCode;
         }
+        if (SampleBenchmarkQualityActivationVerificationCli.TryRun(
+                args,
+                Console.Out,
+                Console.Error,
+                out int qualityActivationVerificationExitCode))
+        {
+            return qualityActivationVerificationExitCode;
+        }
+        if (SampleBenchmarkControlledIsolationVerificationCli.TryRun(
+                args,
+                Console.Out,
+                Console.Error,
+                out int controlledIsolationVerificationExitCode))
+        {
+            return controlledIsolationVerificationExitCode;
+        }
         if (SampleBenchmarkPairComparisonCli.TryRun(
                 args,
                 Console.Out,
@@ -656,7 +672,11 @@ internal sealed class HelloGame : Game
                     renderer.Settings.Debug.AllowScreenshots = true;
                     return renderer.RequestLinearHdrCapture(outputPath);
                 },
-                renderer.GetLinearHdrCaptureResult);
+                renderer.GetLinearHdrCaptureResult,
+                getControlledIsolationSettingsFingerprint: () =>
+                    SampleRenderSettingsFingerprint
+                        .CaptureDirectionalIsolationFamily(
+                            renderer.Settings));
             Console.WriteLine(
                 $"Benchmark armed: warmup={_smokeOptions.Benchmark.WarmupFrameCount}, " +
                 $"measure={_smokeOptions.Benchmark.MeasureFrameCount}, vsync={(VSync ? "on" : "off")}");
