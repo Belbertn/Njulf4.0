@@ -1460,6 +1460,7 @@ public sealed class SampleBenchmarkAnalyzer
             ValidateDdgiTransientAuditLifecycle(
                 failures,
                 windowIndex,
+                sourceGeneration,
                 frames);
 
             windows.Add(new SampleBenchmarkDdgiTransientWindow(
@@ -1538,16 +1539,6 @@ public sealed class SampleBenchmarkAnalyzer
                 $"{prefix} retained a queue epoch that is not the resident " +
                 "scheduler-resource generation.");
         }
-        if (completed.Submitted.AdmittedSourceCohortGeneration !=
-                sourceGeneration ||
-            completed.Submitted.LivePropagationSourceGeneration !=
-                sourceGeneration)
-        {
-            failures.Add(
-                $"{prefix} retained a source cohort that is not current for " +
-                "the submitted source-lighting generation.");
-        }
-
         SimpleDdgiTailCertificateFrameEvidence tail =
             completed.Submitted.TailCertificate;
         SimpleDdgiGpuPassMask intended =
@@ -1671,6 +1662,16 @@ public sealed class SampleBenchmarkAnalyzer
         bool auditDispatch =
             (completed.Submitted.IntendedGpuPasses &
              SimpleDdgiGpuPassMask.TransportAudit) != 0;
+        SimpleDdgiGpuPassMask expectedPasses = auditDispatch
+            ? SimpleDdgiGpuPassMask.TransportAudit
+            : SimpleDdgiGpuPassMask.None;
+        if (completed.Submitted.IntendedGpuPasses != expectedPasses)
+        {
+            failures.Add(
+                $"{prefix} does not match the phase-specific Bistro DDGI " +
+                $"pass mask for AuditFrozen " +
+                $"{(auditDispatch ? "dispatch" : "await")}.");
+        }
         if (auditDispatch)
         {
             if (!completed.GpuTimingAvailable ||
@@ -1765,6 +1766,44 @@ public sealed class SampleBenchmarkAnalyzer
                 $"{prefix} does not identify exactly one complete accelerated " +
                 "or legacy transport/blend path.");
         }
+        SimpleDdgiTransportPhase phase =
+            completed.Submitted.TailCertificate.Phase;
+        bool expectedAccelerated =
+            phase == SimpleDdgiTransportPhase.AcceleratedSolve;
+        bool expectedLegacy = phase is
+            SimpleDdgiTransportPhase.SourceRepair or
+            SimpleDdgiTransportPhase.Certified;
+        if ((!expectedAccelerated && !expectedLegacy) ||
+            accelerated != expectedAccelerated ||
+            completeLegacy != expectedLegacy)
+        {
+            failures.Add(
+                $"{prefix} transport pass mask does not match tail phase " +
+                $"{phase}.");
+        }
+        SimpleDdgiGpuPassMask expectedPhasePasses = required |
+            (expectedAccelerated
+                ? SimpleDdgiGpuPassMask.AcceleratedSolve
+                : expectedLegacy
+                    ? legacyMask
+                    : SimpleDdgiGpuPassMask.None);
+        SimpleDdgiGpuPassMask optionalPhasePasses =
+            SimpleDdgiGpuPassMask.UrgentRelight;
+        if ((intended & expectedPhasePasses) != expectedPhasePasses ||
+            (intended & ~(expectedPhasePasses | optionalPhasePasses)) != 0)
+        {
+            failures.Add(
+                $"{prefix} does not match the phase-specific Bistro DDGI " +
+                $"pass mask for {phase}.");
+        }
+        if ((expectedAccelerated &&
+             completed.Submitted.CachedSweepCount <= 0) ||
+            (expectedLegacy && completed.Submitted.CachedSweepCount != 0))
+        {
+            failures.Add(
+                $"{prefix} cached-sweep count does not match tail phase " +
+                $"{phase}.");
+        }
         if (!completed.GpuScheduleTimingAvailable ||
             !completed.GpuSchedulerCommitTimingAvailable ||
             !completed.GpuSchedulerTailAdmitTimingAvailable ||
@@ -1853,6 +1892,7 @@ public sealed class SampleBenchmarkAnalyzer
     private static void ValidateDdgiTransientAuditLifecycle(
         ICollection<string> failures,
         int windowIndex,
+        uint sourceGeneration,
         IReadOnlyList<SampleBenchmarkDdgiTransientFrame> frames)
     {
         uint submittedChunkCount = 0u;
@@ -1867,6 +1907,8 @@ public sealed class SampleBenchmarkAnalyzer
         uint frozenExpectedParticipantCount = 0u;
         uint frozenExpectedTexelCount = 0u;
         int frozenPhysicalProbeCount = 0;
+        uint frozenVolumeResourceGeneration = 0u;
+        uint frozenPublishedPropagationGeneration = 0u;
         bool sawDispatch = false;
         bool sawAwait = false;
         SimpleDdgiTailCertificateFrameEvidence certificateTail = default;
@@ -1884,17 +1926,31 @@ public sealed class SampleBenchmarkAnalyzer
                  SimpleDdgiGpuPassMask.TransportAudit) != 0;
             if (auditDispatch)
             {
+                if (sawAwait)
+                {
+                    failures.Add(
+                        $"DDGI transient window {windowIndex} route frame " +
+                        $"{frame.RouteFrameIndex} resumed audit dispatch after " +
+                        "entering readback await.");
+                }
                 uint delta = tail.AuditSubmittedChunkCount >= submittedChunkCount
                     ? tail.AuditSubmittedChunkCount - submittedChunkCount
                     : uint.MaxValue;
-                if (delta == 0u ||
-                    delta > SimpleDdgiAuditCardinalityContract
-                        .MaximumChunksPerSubmittedFrame)
+                uint remaining = tail.AuditPlannedChunkCount >=
+                    submittedChunkCount
+                        ? tail.AuditPlannedChunkCount - submittedChunkCount
+                        : 0u;
+                uint expectedDelta = Math.Min(
+                    SimpleDdgiAuditCardinalityContract
+                        .MaximumChunksPerSubmittedFrame,
+                    remaining);
+                if (expectedDelta == 0u || delta != expectedDelta)
                 {
                     failures.Add(
                         $"DDGI transient window {windowIndex} route frame " +
                         $"{frame.RouteFrameIndex} advanced the frozen audit by " +
-                        $"{delta} chunks; expected one or two.");
+                        $"{delta} chunks; greedy dispatch required " +
+                        $"{expectedDelta} of {remaining} remaining chunks.");
                 }
 
                 if (!sawDispatch)
@@ -1913,6 +1969,10 @@ public sealed class SampleBenchmarkAnalyzer
                     frozenExpectedTexelCount = tail.ExpectedTexelCount;
                     frozenPhysicalProbeCount =
                         completed.Submitted.AuditPhysicalProbeCount;
+                    frozenVolumeResourceGeneration =
+                        completed.Submitted.VolumeResourceGeneration;
+                    frozenPublishedPropagationGeneration = completed.Submitted
+                        .PublishedPropagationGeneration;
                     plannedChunkCount = tail.AuditPlannedChunkCount;
                     if (tail.AuditFirstSubmissionFrameSerial !=
                         firstSchedulerSerial)
@@ -1920,6 +1980,23 @@ public sealed class SampleBenchmarkAnalyzer
                         failures.Add(
                             $"DDGI transient window {windowIndex} first audit " +
                             "dispatch does not own the first scheduler-frame serial.");
+                    }
+                    if (!HasSameFrozenDdgiAuditIdentity(
+                            completed,
+                            frozenGenerations,
+                            frozenSolveEpoch,
+                            frozenAuditEpoch,
+                            frozenExpectedParticipantCount,
+                            frozenExpectedTexelCount,
+                            frozenPhysicalProbeCount,
+                            frozenVolumeResourceGeneration,
+                            frozenPublishedPropagationGeneration,
+                            certificate: false))
+                    {
+                        failures.Add(
+                            $"DDGI transient window {windowIndex} first audit " +
+                            "dispatch does not bind its submitted tuple to " +
+                            "the frozen tail identity.");
                     }
                 }
                 else if (tail.AuditPlannedChunkCount != plannedChunkCount ||
@@ -1936,7 +2013,10 @@ public sealed class SampleBenchmarkAnalyzer
                              frozenAuditEpoch,
                              frozenExpectedParticipantCount,
                              frozenExpectedTexelCount,
-                             frozenPhysicalProbeCount))
+                             frozenPhysicalProbeCount,
+                             frozenVolumeResourceGeneration,
+                             frozenPublishedPropagationGeneration,
+                             certificate: false))
                 {
                     failures.Add(
                         $"DDGI transient window {windowIndex} changed its " +
@@ -1980,7 +2060,10 @@ public sealed class SampleBenchmarkAnalyzer
                         frozenAuditEpoch,
                         frozenExpectedParticipantCount,
                         frozenExpectedTexelCount,
-                        frozenPhysicalProbeCount))
+                        frozenPhysicalProbeCount,
+                        frozenVolumeResourceGeneration,
+                        frozenPublishedPropagationGeneration,
+                        certificate: false))
                 {
                     failures.Add(
                         $"DDGI transient window {windowIndex} route frame " +
@@ -2017,7 +2100,10 @@ public sealed class SampleBenchmarkAnalyzer
                     frozenAuditEpoch,
                     frozenExpectedParticipantCount,
                     frozenExpectedTexelCount,
-                    frozenPhysicalProbeCount))
+                    frozenPhysicalProbeCount,
+                    frozenVolumeResourceGeneration,
+                    frozenPublishedPropagationGeneration,
+                    certificate: true))
             {
                 failures.Add(
                     $"DDGI transient window {windowIndex} certificate does not " +
@@ -2032,6 +2118,7 @@ public sealed class SampleBenchmarkAnalyzer
             ValidateDdgiTransientAuditFeedbackProvenance(
                 failures,
                 windowIndex,
+                sourceGeneration,
                 frames,
                 certificateTail);
         }
@@ -2044,21 +2131,193 @@ public sealed class SampleBenchmarkAnalyzer
         uint auditEpoch,
         uint expectedParticipantCount,
         uint expectedTexelCount,
-        int physicalProbeCount)
+        int physicalProbeCount,
+        uint volumeResourceGeneration,
+        uint publishedPropagationGeneration,
+        bool certificate)
     {
         SimpleDdgiTailCertificateFrameEvidence tail =
             completed.Submitted.TailCertificate;
+        bool logicalVolumeMatches = certificate
+            ? completed.Submitted.VolumeResourceGeneration != 0u &&
+              (completed.Submitted.VolumeResourceGeneration ==
+                   volumeResourceGeneration ||
+               completed.Submitted.VolumeResourceGeneration ==
+                   AdvanceNonZeroGeneration(volumeResourceGeneration))
+            : volumeResourceGeneration != 0u &&
+              completed.Submitted.VolumeResourceGeneration ==
+                  volumeResourceGeneration;
+        bool publicationMatches = certificate
+            ? completed.Submitted.PublishedPropagationGeneration ==
+                tail.Generations.CanonicalField
+            : publishedPropagationGeneration != 0u &&
+              completed.Submitted.PublishedPropagationGeneration ==
+                publishedPropagationGeneration;
         return tail.Generations == generations &&
             tail.SolveEpoch == solveEpoch &&
             tail.AuditEpoch == auditEpoch &&
             tail.ExpectedParticipantCount == expectedParticipantCount &&
             tail.ExpectedTexelCount == expectedTexelCount &&
-            completed.Submitted.AuditPhysicalProbeCount == physicalProbeCount;
+            completed.Submitted.AuditPhysicalProbeCount == physicalProbeCount &&
+            logicalVolumeMatches &&
+            completed.Submitted.TransportTopologyGeneration ==
+                tail.Generations.VolumeTable &&
+            completed.Submitted.TransportTopologyGeneration ==
+                tail.Generations.PhysicalOwnership &&
+            completed.Submitted.SourceLightingGeneration ==
+                tail.Generations.SourceLighting &&
+            completed.Submitted.TransportGeneration ==
+                tail.Generations.CanonicalField &&
+            publicationMatches &&
+            completed.Submitted.QueueTransactionGeneration ==
+                tail.Generations.Queue &&
+            completed.Submitted.SchedulerResourceGeneration ==
+                tail.Generations.SchedulerResources &&
+            completed.Submitted.AdmittedSourceCohortGeneration ==
+                tail.Generations.SourceLighting &&
+            completed.Submitted.LivePropagationSourceGeneration ==
+                tail.Generations.SourceLighting;
+    }
+
+    private static void ValidateDdgiTransientSourceOwnershipTransition(
+        ICollection<string> failures,
+        int windowIndex,
+        uint sourceGeneration,
+        uint expectedParticipantCount,
+        int solveIndex,
+        int triggerIndex,
+        IReadOnlyList<SampleBenchmarkDdgiTransientFrame> frames)
+    {
+        string prefix = $"DDGI transient window {windowIndex}";
+        bool sawSourceRepair = false;
+        bool sawAcceleratedSolve = false;
+        bool admittedCurrent = false;
+        bool liveCurrent = false;
+        int firstAcceleratedSolveIndex = -1;
+
+        for (int index = 0; index <= triggerIndex; index++)
+        {
+            SimpleDdgiSubmittedFrameEvidence submitted =
+                frames[index].Completed.Submitted;
+            SimpleDdgiTransportPhase phase =
+                submitted.TailCertificate.Phase;
+            uint admitted = submitted.AdmittedSourceCohortGeneration;
+            uint live = submitted.LivePropagationSourceGeneration;
+
+            if (index == 0 &&
+                (phase != SimpleDdgiTransportPhase.SourceRepair ||
+                 admitted != 0u ||
+                 live != 0u))
+            {
+                failures.Add(
+                    $"{prefix} generation edge did not begin in SourceRepair " +
+                    "with no admitted cohort or live propagation.");
+            }
+
+            if (phase == SimpleDdgiTransportPhase.SourceRepair)
+            {
+                SimpleDdgiCompletedFrameEvidence completed =
+                    frames[index].Completed;
+                if (sawAcceleratedSolve ||
+                    admitted != 0u ||
+                    live != 0u ||
+                    completed.SchedulerSolveEpoch != 0u ||
+                    completed.SchedulerSolveVisitedCount != 0u)
+                {
+                    failures.Add(
+                        $"{prefix} route frame {frames[index].RouteFrameIndex} " +
+                        "has an invalid delayed SourceRepair ownership/" +
+                        "epoch state.");
+                }
+                sawSourceRepair = true;
+                continue;
+            }
+
+            if (phase != SimpleDdgiTransportPhase.AcceleratedSolve)
+            {
+                failures.Add(
+                    $"{prefix} route frame {frames[index].RouteFrameIndex} " +
+                    $"has unexpected pre-audit phase {phase}.");
+                continue;
+            }
+
+            if (!sawAcceleratedSolve && live != 0u)
+            {
+                failures.Add(
+                    $"{prefix} first AcceleratedSolve submission claimed " +
+                    "live propagation before delayed solve feedback.");
+            }
+            if (!sawAcceleratedSolve)
+                firstAcceleratedSolveIndex = index;
+            sawAcceleratedSolve = true;
+
+            bool liveRequired = index >= solveIndex +
+                RenderingConstants.FramesInFlight;
+            if (admitted != sourceGeneration ||
+                (liveRequired
+                    ? live != sourceGeneration
+                    : live != 0u && live != sourceGeneration))
+            {
+                failures.Add(
+                    $"{prefix} route frame {frames[index].RouteFrameIndex} " +
+                    "has an invalid admitted/live source generation during " +
+                    "AcceleratedSolve.");
+            }
+
+            if (admittedCurrent && admitted != sourceGeneration)
+            {
+                failures.Add(
+                    $"{prefix} admitted source cohort regressed after becoming current.");
+            }
+            admittedCurrent |= admitted == sourceGeneration;
+            if (liveCurrent && live != sourceGeneration)
+            {
+                failures.Add(
+                    $"{prefix} live propagation source regressed after becoming current.");
+            }
+            liveCurrent |= live == sourceGeneration;
+        }
+
+        if (!sawSourceRepair || !sawAcceleratedSolve ||
+            frames[solveIndex].Completed.Submitted.TailCertificate.Phase !=
+                SimpleDdgiTransportPhase.AcceleratedSolve)
+        {
+            failures.Add(
+                $"{prefix} did not observe SourceRepair followed by an exact " +
+                "AcceleratedSolve witness.");
+        }
+
+        int admissionFeedbackIndex = firstAcceleratedSolveIndex -
+            RenderingConstants.FramesInFlight;
+        if (admissionFeedbackIndex < 0 ||
+            frames[admissionFeedbackIndex].Completed.Submitted.TailCertificate
+                .Phase != SimpleDdgiTransportPhase.SourceRepair ||
+            frames[admissionFeedbackIndex].Completed
+                .SchedulerSolveParticipantCount != expectedParticipantCount ||
+            frames[admissionFeedbackIndex].Completed
+                .SchedulerBlockingTailSourceWorkCount != 0u)
+        {
+            failures.Add(
+                $"{prefix} did not carry the exact delayed source-admission " +
+                "feedback packet one FramesInFlight interval before " +
+                "AcceleratedSolve.");
+        }
+
+        SimpleDdgiSubmittedFrameEvidence trigger =
+            frames[triggerIndex].Completed.Submitted;
+        if (trigger.AdmittedSourceCohortGeneration != sourceGeneration ||
+            trigger.LivePropagationSourceGeneration != sourceGeneration)
+        {
+            failures.Add(
+                $"{prefix} audit trigger did not retain the current admitted " +
+                "cohort and live propagation generation.");
+        }
     }
 
     private static void ValidateDdgiTransientAuditFeedbackProvenance(
         ICollection<string> failures,
         int windowIndex,
+        uint sourceGeneration,
         IReadOnlyList<SampleBenchmarkDdgiTransientFrame> frames,
         in SimpleDdgiTailCertificateFrameEvidence tail)
     {
@@ -2097,6 +2356,15 @@ public sealed class SampleBenchmarkAnalyzer
         }
         if (solveIndex < 0 || triggerIndex < 0 || firstAuditIndex < 0)
             return;
+
+        ValidateDdgiTransientSourceOwnershipTransition(
+            failures,
+            windowIndex,
+            sourceGeneration,
+            tail.ExpectedParticipantCount,
+            solveIndex,
+            triggerIndex,
+            frames);
 
         if (solveIndex >= triggerIndex || triggerIndex >= firstAuditIndex)
         {
@@ -2195,6 +2463,8 @@ public sealed class SampleBenchmarkAnalyzer
             SimpleDdgiCompletedFrameEvidence postTrigger =
                 frames[index].Completed;
             if (!IsExactOrdinaryFeedbackIdentity(postTrigger, tail) ||
+                postTrigger.Submitted.TailCertificate.Phase !=
+                    SimpleDdgiTransportPhase.AcceleratedSolve ||
                 postTrigger.SchedulerFeedbackTransportGeneration !=
                     tail.Generations.CanonicalField ||
                 postTrigger.SchedulerSolveEpoch != 0u ||
@@ -2214,6 +2484,8 @@ public sealed class SampleBenchmarkAnalyzer
         }
 
         if (!IsExactOrdinaryFeedbackIdentity(solve, tail) ||
+            solve.Submitted.TailCertificate.Phase !=
+                SimpleDdgiTransportPhase.AcceleratedSolve ||
             solve.SchedulerSolveEpoch != tail.SolveEpoch ||
             solve.SchedulerSolveParticipantCount !=
                 tail.ExpectedParticipantCount ||
@@ -2221,6 +2493,7 @@ public sealed class SampleBenchmarkAnalyzer
                 tail.ExpectedParticipantCount ||
             solve.SchedulerPublishedWorkCount == 0u ||
             solve.SchedulerActiveCanonicalMutationCount == 0u ||
+            solve.SchedulerActiveSourceMutationCount != 0u ||
             solve.SchedulerBlockingTailSourceWorkCount != 0u ||
             solve.SchedulerFeedbackTransportGeneration ==
                 tail.Generations.CanonicalField)
@@ -2231,6 +2504,8 @@ public sealed class SampleBenchmarkAnalyzer
         }
 
         if (!IsExactOrdinaryFeedbackIdentity(trigger, tail) ||
+            trigger.Submitted.TailCertificate.Phase !=
+                SimpleDdgiTransportPhase.AcceleratedSolve ||
             trigger.SchedulerSolveEpoch != 0u ||
             trigger.SchedulerSolveParticipantCount !=
                 tail.ExpectedParticipantCount ||
@@ -2271,8 +2546,9 @@ public sealed class SampleBenchmarkAnalyzer
     private static bool IsExactOrdinaryFeedbackIdentity(
         in SimpleDdgiCompletedFrameEvidence completed,
         in SimpleDdgiTailCertificateFrameEvidence tail) =>
-        completed.Submitted.TailCertificate.Phase ==
-            SimpleDdgiTransportPhase.AcceleratedSolve &&
+        (completed.Submitted.TailCertificate.Phase is
+            SimpleDdgiTransportPhase.SourceRepair or
+            SimpleDdgiTransportPhase.AcceleratedSolve) &&
         completed.SchedulerFeedbackAvailable &&
         completed.SchedulerFeedbackFrameAligned &&
         completed.SchedulerFeedbackGenerationAligned &&
