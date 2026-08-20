@@ -1,0 +1,298 @@
+{
+  "schema": "njulf-perf-campaign/v1",
+  "campaignId": "bistro-sponza-quality-first",
+  "projectPath": "NjulfHelloGame/NjulfHelloGame.csproj",
+  "iterationConfiguration": "Release",
+  "finalConfigurations": [
+    "Release",
+    "ShippingPerformance"
+  ],
+  "advisoryBeautyTargetManifest": ".perf-loop-runs/campaign/beauty-target/manifest.json",
+  "protectedPaths": [
+    "tools/perf-campaign.ps1",
+    "tools/perf-campaign.bistro-sponza.json",
+    "tools/perf-loop.ps1",
+    "NjulfHelloGame/Program.cs",
+    "NjulfHelloGame/SampleBenchmarkRunner.cs",
+    "NjulfHelloGame/SampleBenchmarkReport.cs",
+    "NjulfHelloGame/SampleBenchmarkEvidence.cs",
+    "NjulfHelloGame/SampleBenchmarkHdrQualityContract.cs",
+    "NjulfHelloGame/SampleBenchmarkOptions.cs",
+    "NjulfHelloGame/SampleBenchmarkPairComparer.cs",
+    "NjulfHelloGame/SampleBenchmarkTrajectory.cs",
+    "NjulfHelloGame/SampleHealthReportWriter.cs",
+    "NjulfHelloGame/SampleHealthReportEvaluation.cs",
+    "NjulfHelloGame/SampleMaterialGiProducerIdentityFactory.cs",
+    "NjulfHelloGame/SampleMaterialGiApprovedHdrRegression.cs",
+    "NjulfHelloGame/SampleRenderSettingsFingerprint.cs",
+    "NjulfHelloGame/SampleSmokeOptions.cs",
+    "NjulfHelloGame/SampleSmokeOptionsParser.cs",
+    "NjulfHelloGame/SampleInputController.cs",
+    "Njulf.Rendering/Data/MaterialGiRolloutPolicy.cs",
+    "Njulf.Rendering/Diagnostics/RendererHealthReportWriter.cs",
+    "Njulf.Rendering/Debugging/LinearHdrReadback.cs",
+    ".perf-loop-runs/campaign/beauty-target/manifest.json",
+    ".perf-loop-runs/campaign/beauty-target/bistro-beauty-target.jpg",
+    "NjulfHelloGame/Assets/Bistro_v5_2",
+    "NjulfHelloGame/NewSponza_Main_glTF_003.gltf",
+    "NjulfHelloGame/NewSponza_Main_glTF_003.bin",
+    "NjulfHelloGame/NewSponza_Curtains_glTF.gltf",
+    "NjulfHelloGame/NewSponza_Curtains_glTF.bin",
+    "NjulfHelloGame/textures",
+    "NjulfHelloGame/Cooked",
+    "NjulfHelloGame/Scenes"
+  ],
+  "capture": {
+    "abbaCycles": 3,
+    "maximumSettlingFrames": 4096,
+    "benchmarkTimeoutSeconds": 900,
+    "trialTimeoutSeconds": 1800,
+    "budgetProfile": "stress"
+  },
+  "quality": {
+    "maximumRelativeRmse": 0.005,
+    "maximumFlipP95": 0.02,
+    "maximumRoiMeanLuminanceShift": 0.02,
+    "maximumRoiP95LuminanceShift": 0.03
+  },
+  "acceptance": {
+    "minimumFrameImprovementPercent": 1.0,
+    "minimumFrameImprovementMilliseconds": 0.10,
+    "minimumPassImprovementPercent": 5.0,
+    "minimumPassImprovementMilliseconds": 0.05,
+    "maximumRegressionPercent": 1.0,
+    "bootstrapSamples": 10000,
+    "bootstrapConfidence": 0.95
+  },
+  "workloads": [
+    {
+      "id": "bistro-stationary",
+      "scene": "Bistro",
+      "scenario": "Normal",
+      "trajectory": "bistro-presentation",
+      "bistroQualityVariant": "presentation",
+      "captureVariant": "baseline",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": true,
+      "qualityRois": [
+        { "name": "bistro-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "bistro-motion",
+      "scene": "Bistro",
+      "scenario": "BistroQualityMotionRelight",
+      "trajectory": "bistro-loop",
+      "bistroQualityVariant": "steady-motion",
+      "captureVariant": "baseline",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": true,
+      "qualityRois": [
+        { "name": "bistro-moving-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "bistro-motion-relight",
+      "scene": "Bistro",
+      "scenario": "BistroQualityMotionRelight",
+      "trajectory": "bistro-loop",
+      "bistroQualityVariant": "sun-scale-step",
+      "captureVariant": "baseline",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": true,
+      "qualityRois": [
+        { "name": "bistro-relight-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "sponza-low-stationary",
+      "scene": "Sponza",
+      "scenario": "GiSponzaRightWallStationary",
+      "trajectory": "sponza-low",
+      "captureVariant": "baseline",
+      "warmupFrames": 2048,
+      "measureFrames": 240,
+      "qualification": true,
+      "qualityRois": [
+        { "name": "sponza-low-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "sponza-high-stationary",
+      "scene": "Sponza",
+      "scenario": "GiSponzaRightWallStationary",
+      "trajectory": "sponza-high",
+      "captureVariant": "baseline",
+      "warmupFrames": 2688,
+      "measureFrames": 240,
+      "qualification": true,
+      "qualityRois": [
+        { "name": "sponza-high-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "sponza-horizontal-motion",
+      "scene": "Sponza",
+      "scenario": "GiSponzaRightWallStationary",
+      "trajectory": "sponza-horizontal",
+      "captureVariant": "baseline",
+      "warmupFrames": 2688,
+      "measureFrames": 300,
+      "qualification": true,
+      "qualityRois": [
+        { "name": "sponza-horizontal-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "sponza-vertical-motion",
+      "scene": "Sponza",
+      "scenario": "GiSponzaRightWallStationary",
+      "trajectory": "sponza-vertical",
+      "captureVariant": "baseline",
+      "warmupFrames": 2688,
+      "measureFrames": 960,
+      "qualification": true,
+      "qualityRois": [
+        { "name": "sponza-vertical-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "bistro-forward-gi-enabled",
+      "scene": "Bistro",
+      "scenario": "Normal",
+      "trajectory": "bistro-presentation",
+      "bistroQualityVariant": "presentation",
+      "captureVariant": "forward-gi-enabled",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": false,
+      "targetPass": "ForwardPlusPass",
+      "isolationGroup": "bistro-forward-gi",
+      "isolationRole": "enabled",
+      "qualityRois": [
+        { "name": "bistro-forward-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "bistro-forward-gi-disabled",
+      "scene": "Bistro",
+      "scenario": "Normal",
+      "trajectory": "bistro-presentation",
+      "bistroQualityVariant": "presentation",
+      "captureVariant": "forward-gi-disabled",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": false,
+      "targetPass": "ForwardPlusPass",
+      "isolationGroup": "bistro-forward-gi",
+      "isolationRole": "disabled",
+      "qualityRois": [
+        { "name": "bistro-forward-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "bistro-forward-gi-exact",
+      "scene": "Bistro",
+      "scenario": "Normal",
+      "trajectory": "bistro-presentation",
+      "bistroQualityVariant": "presentation",
+      "captureVariant": "forward-gi-exact",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": false,
+      "targetPass": "ForwardPlusPass",
+      "isolationGroup": "bistro-forward-gi",
+      "isolationRole": "exact",
+      "qualityRois": [
+        { "name": "bistro-forward-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "bistro-ddgi-tail-jacobi",
+      "scene": "Bistro",
+      "scenario": "BistroQualityMotionRelight",
+      "trajectory": "bistro-loop",
+      "bistroQualityVariant": "sun-scale-step",
+      "captureVariant": "tail-jacobi",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": false,
+      "targetPass": "SimpleDdgiAcceleratedSolvePass",
+      "isolationGroup": "bistro-ddgi-tail",
+      "isolationRole": "jacobi",
+      "qualityRois": [
+        { "name": "bistro-tail-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "bistro-ddgi-tail-accelerated",
+      "scene": "Bistro",
+      "scenario": "BistroQualityMotionRelight",
+      "trajectory": "bistro-loop",
+      "bistroQualityVariant": "sun-scale-step",
+      "captureVariant": "tail-accelerated",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": false,
+      "targetPass": "SimpleDdgiAcceleratedSolvePass",
+      "isolationGroup": "bistro-ddgi-tail",
+      "isolationRole": "accelerated",
+      "qualityRois": [
+        { "name": "bistro-tail-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "bistro-transparent-stress",
+      "scene": "Bistro",
+      "scenario": "ManyTransparentObjects",
+      "trajectory": "stationary",
+      "captureVariant": "baseline",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": false,
+      "targetPass": "TransparentPasses",
+      "qualityRois": [
+        { "name": "bistro-transparent-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "sponza-reflection-lifecycle",
+      "scene": "Sponza",
+      "scenario": "GiSponzaReflectionProbeLifecycle",
+      "trajectory": "sponza-low",
+      "captureVariant": "baseline",
+      "warmupFrames": 2688,
+      "measureFrames": 240,
+      "qualification": false,
+      "targetPass": "ReflectionProbeCapture",
+      "qualityRois": [
+        { "name": "sponza-reflection-full-frame", "x": 0, "y": 0, "width": 1920, "height": 1080 }
+      ]
+    },
+    {
+      "id": "bistro-large-meshlet-count",
+      "scene": "Bistro",
+      "scenario": "LargeMeshletCount",
+      "trajectory": "stationary",
+      "captureVariant": "baseline",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": false,
+      "targetPass": "DrawScene"
+    },
+    {
+      "id": "bistro-moving-rigid-object",
+      "scene": "Bistro",
+      "scenario": "GiMovingRigidObject",
+      "trajectory": "stationary",
+      "captureVariant": "baseline",
+      "warmupFrames": 480,
+      "measureFrames": 240,
+      "qualification": false,
+      "targetPass": "MotionVectorPass"
+    }
+  ]
+}

@@ -2,6 +2,16 @@
 param(
     [string]$TrialCommand = "",
 
+    [string]$CampaignManifestPath = "",
+    [string]$CampaignRunDirectory = ".perf-loop-runs/campaign",
+    [string]$CampaignTargetWorkloadId = "",
+    [string[]]$CampaignFinalTargetWorkloadIds = @(),
+    [switch]$InitializeCampaignReferences,
+    [switch]$InitializeCampaignReferencesOnly,
+    [switch]$ValidateCampaign,
+    [switch]$FinalizeRetainedStack,
+    [bool]$CampaignKeepRejectedCommits = $true,
+
     [int]$Iterations = 1,
     [int]$RepeatCount = 3,
     [string]$RunDirectory = ".perf-loop-runs",
@@ -41,6 +51,37 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+
+if (-not [string]::IsNullOrWhiteSpace($CampaignManifestPath)) {
+    $campaignDriver = Join-Path $PSScriptRoot "perf-campaign.ps1"
+    if (-not (Test-Path -LiteralPath $campaignDriver -PathType Leaf)) {
+        throw "Campaign driver is missing: $campaignDriver"
+    }
+    $campaignParameters = @{
+        ManifestPath = $CampaignManifestPath
+        RunDirectory = $CampaignRunDirectory
+        TrialCommand = $TrialCommand
+        Iterations = $Iterations
+        TargetWorkloadId = $CampaignTargetWorkloadId
+        FinalTargetWorkloadIds = $CampaignFinalTargetWorkloadIds
+        RollbackRejected = $RollbackRejected
+        KeepRejectedCommits = $CampaignKeepRejectedCommits
+    }
+    if ($InitializeCampaignReferences) {
+        $campaignParameters.InitializeReferences = $true
+    }
+    if ($InitializeCampaignReferencesOnly) {
+        $campaignParameters.InitializeReferences = $true
+        $campaignParameters.InitializeReferencesOnly = $true
+    }
+    if ($BaselineOnly) { $campaignParameters.BaselineOnly = $true }
+    if ($ValidateCampaign) { $campaignParameters.ValidateOnly = $true }
+    if ($FinalizeRetainedStack) {
+        $campaignParameters.FinalizeRetainedStack = $true
+    }
+    & $campaignDriver @campaignParameters
+    exit $LASTEXITCODE
+}
 
 if ($Iterations -lt 1) {
     throw "Iterations must be at least 1."
