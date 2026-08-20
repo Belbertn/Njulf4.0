@@ -38,6 +38,10 @@ const uint SIMPLE_DDGI_RECEIVER_CACHE_REFLECTION_ENABLED_FLAG = 1u << 0u;
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+shared SimpleDdgiParams ReceiverSharedParams;
+shared GPUEnvironmentData ReceiverSharedEnvironment;
+shared GPUReflectionProbeHeader ReceiverSharedReflectionHeader;
+
 layout(push_constant) uniform SimpleDdgiReceiverCachePushBlock
 {
     mat4 InverseViewProjectionMatrix;
@@ -417,6 +421,16 @@ uint EncodeReceiverCacheMetadata(
 
 void main()
 {
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        ReceiverSharedParams = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+        ReceiverSharedEnvironment = ReadEnvironmentData();
+        ReceiverSharedReflectionHeader = ReadReflectionProbeHeader();
+    }
+    // Every invocation must reach the barrier, including lanes outside a
+    // partial edge group. Bounds checks therefore remain below this point.
+    barrier();
+
     uvec2 cacheCoord = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(cacheCoord, uvec2(pc.CacheWidth, pc.CacheHeight))))
         return;
@@ -448,7 +462,7 @@ void main()
         receiverPixel,
         worldPosition,
         viewDirection);
-    SimpleDdgiParams params = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
+    SimpleDdgiParams params = ReceiverSharedParams;
     SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(
         params,
         worldPosition,
@@ -467,8 +481,8 @@ void main()
         SimpleDdgiIndirectSpecularVisibility(gather, params);
     float environmentFallbackWeight =
         (1.0 - ownership) * params.environmentFallbackIntensity;
-    GPUEnvironmentData environment = ReadEnvironmentData();
-    GPUReflectionProbeHeader reflectionHeader = ReadReflectionProbeHeader();
+    GPUEnvironmentData environment = ReceiverSharedEnvironment;
+    GPUReflectionProbeHeader reflectionHeader = ReceiverSharedReflectionHeader;
     bool indirectReflectionsActive =
         environment.Enabled != 0u &&
         environment.SpecularIntensity > 0.0 &&

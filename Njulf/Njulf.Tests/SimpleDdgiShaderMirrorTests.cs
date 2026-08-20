@@ -751,6 +751,17 @@ namespace Njulf.Tests
             string shaderProject = ReadRepoText(
                 "Njulf.Shaders",
                 "Njulf.Shaders.csproj");
+            int sharedInitialization = cache.IndexOf(
+                "ReceiverSharedParams = ReadSimpleDdgiParams(pc.ParamsBufferIndex);",
+                StringComparison.Ordinal);
+            int sharedBarrier = cache.IndexOf(
+                "barrier();",
+                Math.Max(sharedInitialization, 0),
+                StringComparison.Ordinal);
+            int receiverBoundsCheck = cache.IndexOf(
+                "uvec2 cacheCoord = gl_GlobalInvocationID.xy;",
+                Math.Max(sharedBarrier, 0),
+                StringComparison.Ordinal);
 
             Assert.Multiple(() =>
             {
@@ -772,6 +783,39 @@ namespace Njulf.Tests
                     "evaluateFarFieldFallback || indirectReflectionsActive"));
                 Assert.That(cache, Does.Contain(
                     "environment.SpecularIntensity > 0.0"));
+                Assert.That(cache, Does.Contain(
+                    "shared SimpleDdgiParams ReceiverSharedParams;"));
+                Assert.That(cache, Does.Contain(
+                    "shared GPUEnvironmentData ReceiverSharedEnvironment;"));
+                Assert.That(cache, Does.Contain(
+                    "shared GPUReflectionProbeHeader ReceiverSharedReflectionHeader;"));
+                Assert.That(cache, Does.Contain(
+                    "if (gl_LocalInvocationIndex == 0u)"));
+                Assert.That(
+                    cache.Split(
+                        "ReadSimpleDdgiParams(",
+                        StringSplitOptions.None).Length - 1,
+                    Is.EqualTo(1));
+                Assert.That(
+                    cache.Split(
+                        "ReadEnvironmentData(",
+                        StringSplitOptions.None).Length - 1,
+                    Is.EqualTo(1));
+                Assert.That(
+                    cache.Split(
+                        "ReadReflectionProbeHeader(",
+                        StringSplitOptions.None).Length - 1,
+                    Is.EqualTo(1));
+                Assert.That(sharedInitialization, Is.GreaterThanOrEqualTo(0));
+                Assert.That(sharedBarrier, Is.GreaterThan(sharedInitialization));
+                Assert.That(receiverBoundsCheck, Is.GreaterThan(sharedBarrier),
+                    "Partial edge workgroups must reach the shared-memory barrier before returning.");
+                Assert.That(cache, Does.Contain(
+                    "SimpleDdgiParams params = ReceiverSharedParams;"));
+                Assert.That(cache, Does.Contain(
+                    "GPUEnvironmentData environment = ReceiverSharedEnvironment;"));
+                Assert.That(cache, Does.Contain(
+                    "GPUReflectionProbeHeader reflectionHeader = ReceiverSharedReflectionHeader;"));
                 Assert.That(cache, Does.Contain(
                     "indirectSpecularVisibility = min("));
                 Assert.That(cacheSampling, Does.Contain(

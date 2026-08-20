@@ -21,6 +21,8 @@ public sealed class ShaderBuildTests
         "ddgi_simple_publish.comp",
         "ddgi_simple_publish_sampled.comp",
         "ddgi_simple_relocate_classify.comp",
+        "ddgi_simple_receiver_cache.comp",
+        "ddgi_simple_receiver_cache_b1.comp",
         "ddgi_simple_schedule_admit_tail.comp",
         "ddgi_simple_schedule_materialize.comp",
         "farfield_voxelize.comp",
@@ -53,6 +55,40 @@ public sealed class ShaderBuildTests
             Assert.That(stream!.Length, Is.GreaterThanOrEqualTo(4), $"Shader resource '{resourceName}' is empty.");
             Assert.That(stream.Read(magicBytes), Is.EqualTo(4), $"Could not read SPIR-V magic from '{resourceName}'.");
             Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(magicBytes), Is.EqualTo(0x07230203));
+        }
+    }
+
+    [Test]
+    public void ReceiverCacheVariantsEmbedWorkgroupStorageAndControlBarrier()
+    {
+        string[] receiverCacheVariants =
+        [
+            "ddgi_simple_receiver_cache.comp",
+            "ddgi_simple_receiver_cache_b1.comp"
+        ];
+
+        foreach (string shaderName in receiverCacheVariants)
+        {
+            string resourceName = $"Njulf.Shaders.{shaderName}";
+            using Stream stream = typeof(ShaderLibrary).Assembly
+                .GetManifestResourceStream(resourceName)
+                ?? throw new AssertionException(
+                    $"Missing shader resource '{resourceName}'.");
+            using var memory = new MemoryStream();
+            stream.CopyTo(memory);
+            byte[] spirv = memory.ToArray();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    ContainsSpirvOpcode(spirv, 224),
+                    Is.True,
+                    $"'{resourceName}' does not contain OpControlBarrier.");
+                Assert.That(
+                    ContainsSpirvWorkgroupVariable(spirv),
+                    Is.True,
+                    $"'{resourceName}' does not contain a Workgroup OpVariable.");
+            });
         }
     }
 
@@ -151,4 +187,64 @@ public sealed class ShaderBuildTests
 
         throw new AssertionException($"Could not find repo directory '{name}'.");
     }
+
+    private static bool ContainsSpirvOpcode(byte[] spirv, ushort expectedOpcode)
+    {
+        foreach ((ushort Opcode, int WordOffset, int WordCount) instruction in
+                 EnumerateSpirvInstructions(spirv))
+        {
+            if (instruction.Opcode == expectedOpcode)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsSpirvWorkgroupVariable(byte[] spirv)
+    {
+        const ushort opVariable = 59;
+        const uint storageClassWorkgroup = 4;
+        foreach ((ushort opcode, int wordOffset, int wordCount) in
+                 EnumerateSpirvInstructions(spirv))
+        {
+            if (opcode == opVariable &&
+                wordCount >= 4 &&
+                ReadSpirvWord(spirv, wordOffset + 3) == storageClassWorkgroup)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<(ushort Opcode, int WordOffset, int WordCount)>
+        EnumerateSpirvInstructions(byte[] spirv)
+    {
+        if (spirv.Length < 20 || spirv.Length % sizeof(uint) != 0 ||
+            ReadSpirvWord(spirv, 0) != 0x07230203u)
+        {
+            throw new AssertionException("The embedded resource is not valid SPIR-V word data.");
+        }
+
+        int totalWords = spirv.Length / sizeof(uint);
+        for (int wordOffset = 5; wordOffset < totalWords;)
+        {
+            uint instruction = ReadSpirvWord(spirv, wordOffset);
+            int wordCount = checked((int)(instruction >> 16));
+            ushort opcode = checked((ushort)(instruction & 0xffffu));
+            if (wordCount <= 0 || wordOffset + wordCount > totalWords)
+            {
+                throw new AssertionException(
+                    $"Invalid SPIR-V instruction at word {wordOffset}.");
+            }
+
+            yield return (opcode, wordOffset, wordCount);
+            wordOffset += wordCount;
+        }
+    }
+
+    private static uint ReadSpirvWord(byte[] spirv, int wordOffset) =>
+        BinaryPrimitives.ReadUInt32LittleEndian(
+            spirv.AsSpan(checked(wordOffset * sizeof(uint)), sizeof(uint)));
 }
