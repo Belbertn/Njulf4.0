@@ -32,6 +32,14 @@ internal static class Program
         {
             return tailDdgiQualificationExitCode;
         }
+        if (SampleBenchmarkActivationVerificationCli.TryRun(
+                args,
+                Console.Out,
+                Console.Error,
+                out int activationVerificationExitCode))
+        {
+            return activationVerificationExitCode;
+        }
         if (SampleBenchmarkPairComparisonCli.TryRun(
                 args,
                 Console.Out,
@@ -238,6 +246,7 @@ internal sealed class HelloGame : Game
     private (int Width, int Height)? _pendingSmokeResize;
     private PendingSmokeWindowMutation? _observingSmokeWindowMutation;
     private long _framebufferResizeRevision;
+    private int _benchmarkActivationPreparedDrawFrame = -1;
     // Explicit initialization keeps non-editor builds warning-clean; the
     // editor-only restart callback is the sole writer when that feature is
     // compiled in.
@@ -1005,6 +1014,7 @@ internal sealed class HelloGame : Game
             _bistroQualityRuntimeController?.PrepareFrame(_drawnFrames);
 
         base.Update(simulationDeltaTime);
+        ApplyBenchmarkActivationPreDrawControls();
         if (_benchmarkQualitySequenceRunner != null)
         {
             var camera = Camera as FirstPersonCamera ??
@@ -1101,6 +1111,148 @@ internal sealed class HelloGame : Game
             Console.WriteLine(
                 $"Benchmark camera disturbance: scenario={scenario}, " +
                 $"frame={_drawnFrames}, position={position}, yaw={yaw:F3}.");
+        }
+    }
+
+    private void ApplyBenchmarkActivationPreDrawControls()
+    {
+        if (_benchmarkActivationPreparedDrawFrame == _drawnFrames ||
+            Renderer is not VulkanRenderer renderer)
+        {
+            return;
+        }
+
+        bool timing = _benchmarkRunner != null;
+        bool quality = !timing && _benchmarkQualitySequenceRunner != null;
+        string activation = timing
+            ? _smokeOptions.Benchmark.Activation
+            : _smokeOptions.BenchmarkQualitySequence.Activation;
+        SampleBenchmarkTrajectoryKind trajectory = timing
+            ? _smokeOptions.Benchmark.Trajectory
+            : _smokeOptions.BenchmarkQualitySequence.Trajectory;
+        bool sponza = SampleBenchmarkTrajectory.RequiresSponza(trajectory);
+        bool active = SampleBenchmarkActivation.Normalize(activation) !=
+            SampleBenchmarkActivation.None;
+        if (!(timing || quality) || (!sponza && !active))
+        {
+            return;
+        }
+
+        bool evidenceFrame;
+        bool holdFrame = false;
+        int routeFrameIndex;
+        if (timing)
+        {
+            evidenceFrame = _benchmarkRunner!
+                .TryGetMeasurementFrameIndexForNextRender(
+                    out routeFrameIndex);
+            if (!evidenceFrame)
+            {
+                holdFrame = _benchmarkRunner
+                    .HoldTrajectoryForPostMeasurementEvidence;
+                routeFrameIndex = holdFrame
+                    ? _smokeOptions.Benchmark.MeasureFrameCount - 1
+                    : _benchmarkRunner
+                        .ResolveTrajectoryFrameIndexForNextRender(_drawnFrames);
+            }
+        }
+        else
+        {
+            evidenceFrame = _benchmarkQualitySequenceRunner!
+                .TryGetActivationFrameIndexForNextRender(
+                    out routeFrameIndex);
+            if (!evidenceFrame)
+            {
+                routeFrameIndex = _benchmarkQualitySequenceRunner
+                    .ResolveTrajectoryFrameIndexForNextRender(_drawnFrames);
+                holdFrame = _benchmarkQualitySequenceRunner
+                    .HoldTrajectoryForReadbackDrain;
+            }
+        }
+
+        try
+        {
+            ApplyBenchmarkActivationPreDrawControlsCore(
+                renderer,
+                timing,
+                evidenceFrame,
+                holdFrame,
+                routeFrameIndex,
+                activation);
+        }
+        catch (Exception exception)
+        {
+            if (quality)
+            {
+                _benchmarkQualitySequenceRunner!
+                    .RecordPreDrawActivationFailure(exception);
+            }
+            else
+            {
+                _benchmarkRunner!.RecordPreDrawActivationFailure(exception);
+            }
+        }
+        _benchmarkActivationPreparedDrawFrame = _drawnFrames;
+    }
+
+    private void ApplyBenchmarkActivationPreDrawControlsCore(
+        VulkanRenderer renderer,
+        bool timing,
+        bool evidenceFrame,
+        bool holdFrame,
+        int routeFrameIndex,
+        string activation)
+    {
+        SampleBenchmarkTrajectoryKind trajectory = timing
+            ? _smokeOptions.Benchmark.Trajectory
+            : _smokeOptions.BenchmarkQualitySequence.Trajectory;
+        if (SampleBenchmarkTrajectory.RequiresSponza(trajectory))
+        {
+            if (timing)
+            {
+                _benchmarkRunner!.PrepareSponzaSceneAnimationFrame(
+                    Scene,
+                    routeFrameIndex,
+                    evidenceFrame,
+                    holdFrame);
+            }
+            else
+            {
+                bool routeEvidence =
+                    _benchmarkQualitySequenceRunner!.RouteStarted &&
+                    !holdFrame;
+                _benchmarkQualitySequenceRunner
+                    .PrepareSponzaSceneAnimationFrame(
+                        Scene,
+                        routeFrameIndex,
+                        routeEvidence ? routeFrameIndex : null,
+                        holdFrame);
+            }
+        }
+
+        bool activationRequestAllowed = timing ||
+            _benchmarkQualitySequenceRunner?.CanIssueActivationRequest == true;
+        if (evidenceFrame && activationRequestAllowed &&
+            SampleBenchmarkActivation.ShouldRequestReflectionRecapture(
+                activation,
+                routeFrameIndex))
+        {
+            ReflectionProbeRecaptureRequestSummary admission =
+                renderer.RequestReflectionProbeRecapture(
+                    "benchmark-authored-manual-recapture");
+            if (timing)
+            {
+                _benchmarkRunner!.RecordReflectionActivationRequest(
+                    routeFrameIndex,
+                    admission);
+            }
+            else
+            {
+                _benchmarkQualitySequenceRunner!
+                    .RecordReflectionActivationRequest(
+                        routeFrameIndex,
+                        admission);
+            }
         }
     }
 

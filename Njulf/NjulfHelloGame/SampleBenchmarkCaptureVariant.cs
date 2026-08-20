@@ -22,6 +22,8 @@ public static class SampleBenchmarkCaptureVariant
     public const string ForwardGiEnabled = "forward-gi-enabled";
     public const string ForwardGiDisabled = "forward-gi-disabled";
     public const string ForwardGiExact = "forward-gi-exact";
+    public const string DirectionalShadowForcedRefresh =
+        "directional-shadow-forced-refresh";
     public const string DecalMaterialPrefix = "decal-material:";
 
     public static bool IsTailVariant(string? variant)
@@ -43,6 +45,7 @@ public static class SampleBenchmarkCaptureVariant
         settings.GlobalIllumination.SimpleDdgiForceLegacyFarFieldFallbackEvaluation = false;
         settings.Diagnostics.SuppressForwardGiGatherForBenchmark = false;
         settings.Diagnostics.ForceExactForwardGiGatherForBenchmark = false;
+        settings.Shadows.ForceStaticCascadeCacheRefresh = false;
 
         switch (normalized)
         {
@@ -79,6 +82,9 @@ public static class SampleBenchmarkCaptureVariant
             case ForwardGiDisabled:
                 settings.Diagnostics.SuppressForwardGiGatherForBenchmark = true;
                 return normalized;
+            case DirectionalShadowForcedRefresh:
+                settings.Shadows.ForceStaticCascadeCacheRefresh = true;
+                return normalized;
         }
 
         if (normalized.StartsWith(DecalMaterialPrefix, StringComparison.Ordinal))
@@ -101,7 +107,8 @@ public static class SampleBenchmarkCaptureVariant
         if (normalized is Baseline or DecalsDisabled or DecalDdgiDisabled or
             DecalShadowsDisabled or FarFieldGated or FarFieldForcedOld or
             TailJacobi or TailAccelerated or ForwardGiEnabled or
-            ForwardGiDisabled or ForwardGiExact)
+            ForwardGiDisabled or ForwardGiExact or
+            DirectionalShadowForcedRefresh)
         {
             return normalized;
         }
@@ -128,6 +135,7 @@ public static class SampleBenchmarkCaptureVariant
             $"{DecalShadowsDisabled}, {FarFieldGated}, {FarFieldForcedOld}, " +
             $"{TailJacobi}, {TailAccelerated}, " +
             $"{ForwardGiEnabled}, {ForwardGiDisabled}, {ForwardGiExact}, " +
+            $"{DirectionalShadowForcedRefresh}, " +
             $"or {DecalMaterialPrefix}<index>.",
             nameof(variant));
     }

@@ -26,6 +26,11 @@ public sealed record SampleBenchmarkOptions(
     public string CapturePairId { get; init; } = string.Empty;
     /// <summary>Variant label such as baseline, no-decals, or forced-old-far-field.</summary>
     public string CaptureVariant { get; init; } = "baseline";
+    /// <summary>Exact workload activation whose measured evidence is required.</summary>
+    public string Activation { get; init; } = SampleBenchmarkActivation.None;
+    public string ActivationFingerprint { get; init; } =
+        SampleBenchmarkActivation.CreateFingerprint(
+            SampleBenchmarkActivation.None);
     /// <summary>Named deterministic camera program used by this capture.</summary>
     public SampleBenchmarkTrajectoryKind Trajectory { get; init; } =
         SampleBenchmarkTrajectoryKind.Stationary;

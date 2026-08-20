@@ -64,6 +64,11 @@ public sealed record SampleBenchmarkReport(
         SampleBenchmarkMaterialTimingEvidence.Unavailable;
     public SampleBenchmarkCpuSpikeEvidence CpuSpikeEvidence { get; init; } =
         SampleBenchmarkCpuSpikeEvidence.Empty;
+    public SampleBenchmarkActivationEvidence ActivationEvidence { get; init; } =
+        SampleBenchmarkActivationEvidence.Unavailable;
+    public SampleBenchmarkSponzaSceneAnimationEvidence
+        SponzaSceneAnimationEvidence { get; init; } =
+            SampleBenchmarkSponzaSceneAnimationEvidence.Unavailable;
 }
 
 public sealed record SampleBenchmarkTimingStats(
@@ -136,6 +141,21 @@ public sealed record SampleBenchmarkCaptureContract(
     /// durations with the rounded frame duration.
     /// </summary>
     public long PassTimestampReconciliationToleranceMicroseconds { get; init; }
+    public string Activation { get; init; } = SampleBenchmarkActivation.None;
+    public string ActivationFingerprint { get; init; } =
+        SampleBenchmarkActivation.CreateFingerprint(
+            SampleBenchmarkActivation.None);
+    public string SponzaSceneAnimationFingerprint { get; init; } =
+        "unavailable";
+    public SampleBenchmarkSponzaSceneAnimationMode
+        SponzaSceneAnimationMode { get; init; } =
+            SampleBenchmarkSponzaSceneAnimationMode.Unavailable;
+    public string SponzaSceneAnimationConfigurationFingerprint { get; init; } =
+        "unavailable";
+    public string SponzaSceneAnimationSequenceHash { get; init; } =
+        "unavailable";
+    public string SponzaSceneAnimationSidecarSha256 { get; init; } =
+        "unavailable";
 
     public static SampleBenchmarkCaptureContract Unavailable { get; } = new(
         false,

@@ -3,6 +3,23 @@ using System;
 namespace Njulf.Rendering.Resources;
 
 /// <summary>
+/// Immediate admission result for one explicit all-probe recapture request.
+/// This describes CPU scheduler admission only; submitted GPU work and
+/// completion remain owned by <see cref="ReflectionProbeLifecycleSnapshot"/>.
+/// </summary>
+public readonly record struct ReflectionProbeRecaptureRequestSummary(
+    int RequestedProbeCount,
+    int AdmittedProbeCount,
+    int DeferredProbeCount,
+    int CoalescedProbeCount,
+    int RejectedProbeCount,
+    ReflectionProbeLifecycleSnapshot BeforeLifecycle,
+    ReflectionProbeLifecycleSnapshot AfterLifecycle)
+{
+    public static ReflectionProbeRecaptureRequestSummary Empty => default;
+}
+
+/// <summary>
 /// Exclusive current lifecycle counts plus same-frame work pulses. This is a
 /// compact value snapshot: reading it is O(1) and allocation-free.
 /// </summary>

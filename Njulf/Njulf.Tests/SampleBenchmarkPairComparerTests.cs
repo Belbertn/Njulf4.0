@@ -215,6 +215,124 @@ public sealed class SampleBenchmarkPairComparerTests
     }
 
     [Test]
+    public void Compare_RejectsIdenticallyForgedNonSponzaAnimationEvidence()
+    {
+        SampleBenchmarkReport report = CreateReport(
+            "forged-unavailable-animation",
+            "sha256:locked-state",
+            "baseline",
+            10.0,
+            4.0);
+        string sidecarPath = Path.GetFullPath("forged-sponza-animation.bin");
+        SampleBenchmarkSponzaSceneAnimationEvidence forgedEvidence =
+            SampleBenchmarkSponzaSceneAnimationEvidence.Unavailable with
+            {
+                ConfigurationFingerprint = Sha256('a'),
+                SequenceHash = Sha256('b'),
+                SidecarPath = sidecarPath,
+                SidecarSha256 = new string('c', 64)
+            };
+        SampleBenchmarkCaptureContract forgedContract =
+            report.CaptureContract with
+            {
+                SponzaSceneAnimationConfigurationFingerprint = Sha256('a'),
+                SponzaSceneAnimationSequenceHash = Sha256('b'),
+                SponzaSceneAnimationSidecarSha256 = new string('c', 64)
+            };
+        SampleBenchmarkReport left = report with
+        {
+            SponzaSceneAnimationEvidence = forgedEvidence,
+            CaptureContract = forgedContract
+        };
+        SampleBenchmarkReport right = left with
+        {
+            CapturedAtUtc = left.CapturedAtUtc.AddSeconds(1)
+        };
+
+        SampleBenchmarkPairComparison comparison =
+            SampleBenchmarkPairComparer.Compare(left, right);
+        SampleBenchmarkReport nullCollection = report with
+        {
+            SponzaSceneAnimationEvidence =
+                SampleBenchmarkSponzaSceneAnimationEvidence.Unavailable with
+                {
+                    Failures = null!
+                }
+        };
+        SampleBenchmarkPairComparison nullComparison =
+            SampleBenchmarkPairComparer.Compare(
+                nullCollection,
+                nullCollection);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(comparison.Comparable, Is.False);
+            Assert.That(
+                comparison.Failures,
+                Has.Some.Contains("canonical unavailable Sponza animation"));
+            Assert.That(nullComparison.Comparable, Is.False);
+            Assert.That(
+                nullComparison.Failures,
+                Has.Some.Contains("canonical unavailable Sponza animation"));
+        });
+    }
+
+    [Test]
+    public void Compare_RejectsIgnoredNoActivationAggregatesAndNullLists()
+    {
+        SampleBenchmarkReport report = CreateReport(
+            "forged-no-activation",
+            "sha256:locked-state",
+            "baseline",
+            10.0,
+            4.0);
+        SampleBenchmarkActivationEvidence canonical =
+            report.ActivationEvidence;
+        SampleBenchmarkActivationEvidence[] forged =
+        [
+            canonical with
+            {
+                ReflectionSubmittedWorkFrameCount = 1,
+                ReflectionCompletedDelta = 1
+            },
+            canonical with
+            {
+                DirectionalStaticReuseFrameCount = 1,
+                DirectionalTruthfulCacheFrameCount = 1
+            },
+            canonical with
+            {
+                ForwardSuppressedFrameCount = 1,
+                ForwardDisabledPipelineFrameCount = 1
+            },
+            canonical with
+            {
+                ReflectionRequests = null!
+            }
+        ];
+
+        Assert.Multiple(() =>
+        {
+            foreach (SampleBenchmarkActivationEvidence evidence in forged)
+            {
+                SampleBenchmarkReport forgedReport = report with
+                {
+                    ActivationEvidence = evidence
+                };
+                SampleBenchmarkPairComparison comparison =
+                    SampleBenchmarkPairComparer.Compare(
+                        forgedReport,
+                        forgedReport);
+                Assert.That(comparison.Comparable, Is.False);
+                Assert.That(
+                    comparison.Failures,
+                    Has.Some.Contains(
+                        "no-activation report contains activation work evidence"));
+            }
+        });
+    }
+
+    [Test]
     public void Compare_ObservedSequenceIsExactForRepeatsButNotIsolatedAb()
     {
         SampleBenchmarkReport baseline = WithMovingTrajectory(CreateReport(
@@ -240,7 +358,8 @@ public sealed class SampleBenchmarkPairComparerTests
                 {
                     CaptureContract = changedSequence.CaptureContract with
                     {
-                        Variant = "candidate"
+                        Variant =
+                            SampleBenchmarkCaptureVariant.FarFieldForcedOld
                     }
                 },
                 requireRepeatability: false);
@@ -579,6 +698,7 @@ public sealed class SampleBenchmarkPairComparerTests
             BudgetMetrics: [],
             LastDiagnostics: RendererDiagnostics.Empty)
         {
+            ActivationEvidence = CanonicalNoActivationEvidence(120),
             CaptureContract = new SampleBenchmarkCaptureContract(
                 Comparable: true,
                 ProductionTiming: true,
@@ -597,15 +717,25 @@ public sealed class SampleBenchmarkPairComparerTests
         };
     }
 
+    private static SampleBenchmarkActivationEvidence
+        CanonicalNoActivationEvidence(int sampleCount) => new(
+            SampleBenchmarkActivationEvidence.CurrentSchema,
+            SampleBenchmarkActivation.None,
+            SampleBenchmarkActivation.CreateFingerprint(
+                SampleBenchmarkActivation.None),
+            Passed: true,
+            MeasuredSampleCount: sampleCount,
+            Failures: Array.Empty<string>());
+
     private static SampleBenchmarkReport WithMovingTrajectory(
         SampleBenchmarkReport report) => report with
         {
             CaptureContract = report.CaptureContract with
             {
-                Trajectory = SampleBenchmarkTrajectory.SponzaHorizontalName,
+                Trajectory = SampleBenchmarkTrajectory.BistroLoopName,
                 TrajectoryFingerprint = Sha256('a'),
                 TrajectoryFrameCount = SampleBenchmarkTrajectory.GetFrameCount(
-                    SampleBenchmarkTrajectoryKind.SponzaHorizontal),
+                    SampleBenchmarkTrajectoryKind.BistroLoop),
                 TrajectoryRouteHash = Sha256('f'),
                 TrajectorySequenceHash = Sha256('d')
             }

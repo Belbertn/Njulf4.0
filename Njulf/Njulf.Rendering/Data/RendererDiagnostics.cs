@@ -978,6 +978,8 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuDirectionalShadowLodFallbackCount { get; init; }
         public string SceneSubmissionGpuDirectionalShadowCascadeSummary { get; init; } = string.Empty;
         public DirectionalShadowRuntimeDiagnostics DirectionalShadowRuntime { get; init; } = DirectionalShadowRuntimeDiagnostics.Empty;
+        public int DirectionalDynamicShadowMeshletCount { get; init; }
+        public int DirectionalShadowSkinnedObjectCount { get; init; }
         public int SceneSubmissionLocalShadowGpuCompactionJustified { get; init; }
         public int SceneSubmissionSpotShadowGpuCompactionJustified { get; init; }
         public int SceneSubmissionPointShadowGpuCompactionJustified { get; init; }
@@ -1993,6 +1995,13 @@ namespace Njulf.Rendering.Data
         public int ReflectionProbeCaptureBudgetUsed { get; init; }
         /// <summary>One when the current-frame planner reservation exhausted its budget.</summary>
         public int ReflectionProbeCaptureBudgetExceeded { get; init; }
+        /// <summary>Capture-only control was active for this forward draw.</summary>
+        public int ForwardGiBenchmarkSuppressed { get; init; }
+        public int ForwardGiBenchmarkForcedExact { get; init; }
+        /// <summary>The opaque draw consumed the resolved half-resolution receiver cache.</summary>
+        public int ForwardGiReceiverCacheConsumed { get; init; }
+        public int ForwardGiDisabledPipelineUsed { get; init; }
+        public int ForwardGiExactGatherUsed { get; init; }
         public ulong StagingBufferAllocatedBytes { get; init; }
         public ulong StagingBytesUsedThisFrame { get; init; }
         public ulong StagingBytesPeakThisSession { get; init; }

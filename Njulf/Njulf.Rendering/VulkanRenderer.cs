@@ -1164,6 +1164,24 @@ namespace Njulf.Rendering
             return _linearHdrCaptureService.GetResult(outputPath);
         }
 
+        /// <summary>
+        /// Explicitly requests a local-probe recapture. The result is the
+        /// immediate CPU scheduler admission; normal frame telemetry owns all
+        /// later GPU-work and completion evidence.
+        /// </summary>
+        public ReflectionProbeRecaptureRequestSummary
+            RequestReflectionProbeRecapture(string reason)
+        {
+            ThrowIfDisposalStarted();
+            if (string.IsNullOrWhiteSpace(reason))
+                throw new ArgumentException(
+                    "A reflection recapture reason is required.",
+                    nameof(reason));
+            return _reflectionProbeManager?.RequestRecaptureAllWithSummary(
+                       reason.Trim()) ??
+                   ReflectionProbeRecaptureRequestSummary.Empty;
+        }
+
         public void RequestRenderDocCapture()
         {
             ThrowIfDisposalStarted();
@@ -8449,6 +8467,10 @@ namespace Njulf.Rendering
                 SceneSubmissionGpuDirectionalShadowLodFallbackCount = sceneData.SceneSubmissionGpuDirectionalShadowLodFallbackCount,
                 SceneSubmissionGpuDirectionalShadowCascadeSummary = BuildDirectionalShadowCompactionSummary(sceneData),
                 DirectionalShadowRuntime = CreateDirectionalShadowRuntimeDiagnostics(sceneData),
+                DirectionalDynamicShadowMeshletCount =
+                    sceneData.DirectionalDynamicShadowMeshletCount,
+                DirectionalShadowSkinnedObjectCount =
+                    sceneData.DirectionalShadowSkinnedObjectCount,
                 SceneSubmissionLocalShadowGpuCompactionJustified =
                     spotShadowGpuCompactionJustified || pointShadowGpuCompactionJustified ? 1 : 0,
                 SceneSubmissionSpotShadowGpuCompactionJustified = spotShadowGpuCompactionJustified ? 1 : 0,
@@ -8884,6 +8906,22 @@ namespace Njulf.Rendering
                  ReflectionProbeCaptureBudgetExceeded =
                      ReflectionProbeTelemetryValueMapper.CaptureBudgetExceeded(
                          sceneData.ReflectionProbeCaptureBudget),
+                 ForwardGiBenchmarkSuppressed =
+                     Settings.Diagnostics.SuppressForwardGiGatherForBenchmark ? 1 : 0,
+                 ForwardGiBenchmarkForcedExact =
+                     Settings.Diagnostics.ForceExactForwardGiGatherForBenchmark ? 1 : 0,
+                 ForwardGiReceiverCacheConsumed =
+                     _forwardPlusPass?.ConsumedSimpleDdgiReceiverCacheForCurrentView == true
+                         ? 1
+                         : 0,
+                 ForwardGiDisabledPipelineUsed =
+                     _forwardPlusPass?.UsedForwardGiDisabledBenchmarkPipelineForCurrentView == true
+                         ? 1
+                         : 0,
+                 ForwardGiExactGatherUsed =
+                     _forwardPlusPass?.UsedForwardGiExactGatherForCurrentView == true
+                         ? 1
+                         : 0,
                 StagingBufferAllocatedBytes = _stagingRing.TotalAllocatedBytes,
                 StagingBytesUsedThisFrame = _stagingRing.CurrentFrameBytesUsed,
                 StagingBytesPeakThisSession = _stagingRing.PeakBytesThisSession,

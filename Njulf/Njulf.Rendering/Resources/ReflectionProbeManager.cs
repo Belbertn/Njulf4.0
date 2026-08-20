@@ -778,17 +778,62 @@ namespace Njulf.Rendering.Resources
         public void RequestRecaptureAll(string reason)
         {
             _ = reason ?? throw new ArgumentNullException(nameof(reason));
-            RequestRecaptureAll(ResolveCaptureReason(reason), bypassInterval: true);
+            _ = RequestRecaptureAll(
+                ResolveCaptureReason(reason),
+                bypassInterval: true);
         }
 
-        private void RequestRecaptureAll(ReflectionCaptureReason reason, bool bypassInterval = false)
+        /// <summary>
+        /// Requests a manual recapture and returns exact scheduler admission
+        /// evidence without waiting for GPU submission or completion.
+        /// </summary>
+        public ReflectionProbeRecaptureRequestSummary
+            RequestRecaptureAllWithSummary(string reason)
+        {
+            _ = reason ?? throw new ArgumentNullException(nameof(reason));
+            return RequestRecaptureAll(
+                ResolveCaptureReason(reason),
+                bypassInterval: true);
+        }
+
+        private ReflectionProbeRecaptureRequestSummary RequestRecaptureAll(
+            ReflectionCaptureReason reason,
+            bool bypassInterval = false)
         {
             if (reason == ReflectionCaptureReason.None)
-                return;
+                return ReflectionProbeRecaptureRequestSummary.Empty;
+
+            ReflectionProbeLifecycleSnapshot before = CaptureLifecycle;
+            int requested = 0;
+            int admitted = 0;
+            int deferred = 0;
+            int coalesced = 0;
+            int rejected = 0;
             foreach (Guid probeId in _layersByProbeId.Keys)
             {
-                QueueCapture(probeId, reason, bypassInterval);
+                requested++;
+                ReflectionProbeRecaptureDecision decision = QueueCapture(
+                    probeId,
+                    reason,
+                    bypassInterval);
+                if (decision.RequestCapture)
+                    admitted++;
+                else if (decision.Deferred)
+                    deferred++;
+                else if (decision.Coalesced)
+                    coalesced++;
+                else
+                    rejected++;
             }
+
+            return new ReflectionProbeRecaptureRequestSummary(
+                requested,
+                admitted,
+                deferred,
+                coalesced,
+                rejected,
+                before,
+                CaptureLifecycle);
         }
 
         /// <summary>
@@ -1197,17 +1242,17 @@ namespace Njulf.Rendering.Resources
             return capacity;
         }
 
-        private void QueueCapture(
+        private ReflectionProbeRecaptureDecision QueueCapture(
             Guid probeId,
             ReflectionCaptureReason reason,
             bool bypassInterval = false)
         {
             if (reason == ReflectionCaptureReason.None ||
                 !_layersByProbeId.TryGetValue(probeId, out int layer))
-                return;
+                return default;
             ReflectionProbe? probe = _probesByLayer[layer] ?? FindProbe(probeId);
             if (probe == null)
-                return;
+                return default;
             ReflectionCaptureVersion version = _captureVersion;
             if (version == default)
             {
@@ -1234,9 +1279,10 @@ namespace Njulf.Rendering.Resources
             if (decision.Deferred)
                 EnqueueDeferredRecapture(layer, probeId);
             if (!decision.RequestCapture)
-                return;
+                return decision;
 
             SubmitCaptureRequest(layer, probeId, probe, decision);
+            return decision;
         }
 
         private void SubmitCaptureRequest(

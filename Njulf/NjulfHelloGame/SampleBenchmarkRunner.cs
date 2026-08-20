@@ -9,6 +9,8 @@ using System.Text.Json;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
+using Njulf.Core.Scene;
 
 namespace NjulfHelloGame;
 
@@ -31,6 +33,9 @@ public sealed class SampleBenchmarkRunner
     private readonly Func<string, bool>? _requestLinearHdrCapture;
     private readonly Func<string, LinearHdrCaptureResult>? _getLinearHdrCaptureResult;
     private readonly SampleBenchmarkAnalyzer _analyzer;
+    private readonly SampleBenchmarkActivationObserver _activationObserver;
+    private readonly SampleBenchmarkSponzaSceneAnimationObserver?
+        _sponzaSceneAnimationObserver;
     private readonly SampleTailDdgiRunObserver _tailDdgiObserver = new();
     private int _samplesCaptured;
     private int _firstMeasurementFrame = -1;
@@ -45,6 +50,7 @@ public sealed class SampleBenchmarkRunner
     private int _consecutiveReadyFrameCount;
     private string? _measurementSettingsFingerprint;
     private bool _movingTrajectoryMeasurementStarted;
+    private bool _measurementActivationArmed;
 
     public SampleBenchmarkRunner(
         SampleBenchmarkOptions options,
@@ -56,8 +62,23 @@ public sealed class SampleBenchmarkRunner
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _analyzer = new SampleBenchmarkAnalyzer(
+            _options.MeasureFrameCount,
             SampleBenchmarkCaptureVariant.IsTailVariant(
                 _options.CaptureVariant));
+        _activationObserver = new SampleBenchmarkActivationObserver(
+            _options.Activation,
+            scenario,
+            _options.Trajectory,
+            _options.CaptureVariant,
+            _options.MeasureFrameCount);
+        if (SampleBenchmarkTrajectory.RequiresSponza(_options.Trajectory))
+        {
+            _sponzaSceneAnimationObserver =
+                new SampleBenchmarkSponzaSceneAnimationObserver(
+                    _options.MeasureFrameCount,
+                    _options.Activation,
+                    _options.Trajectory);
+        }
         _scenario = scenario;
         _exit = exit ?? throw new ArgumentNullException(nameof(exit));
         _getSettingsFingerprint = getSettingsFingerprint ??
@@ -77,6 +98,88 @@ public sealed class SampleBenchmarkRunner
 
     public bool MovingTrajectoryMeasurementStarted =>
         _movingTrajectoryMeasurementStarted;
+
+    public bool TryGetActivationFrameIndexForNextRender(
+        out int measurementFrameIndex)
+    {
+        if (!SampleBenchmarkActivation.RequiresPreDrawMeasurementArm(
+                _options.Activation))
+        {
+            measurementFrameIndex = -1;
+            return false;
+        }
+        return TryGetMeasurementFrameIndexForNextRender(
+            out measurementFrameIndex);
+    }
+
+    public bool TryGetMeasurementFrameIndexForNextRender(
+        out int measurementFrameIndex)
+    {
+        measurementFrameIndex = -1;
+        if (!_measurementActivationArmed || _completed ||
+            _waitingForHdrCapture ||
+            _samplesCaptured >= _options.MeasureFrameCount)
+        {
+            return false;
+        }
+        measurementFrameIndex = _samplesCaptured;
+        return true;
+    }
+
+    public void RecordReflectionActivationRequest(
+        int measurementFrameIndex,
+        in ReflectionProbeRecaptureRequestSummary admission) =>
+        _activationObserver.RecordReflectionRequest(
+            measurementFrameIndex,
+            admission);
+
+    public void RecordPreDrawActivationFrame(
+        int measurementFrameIndex,
+        SampleBenchmarkActivationFrameState state) =>
+        _activationObserver.RecordPreDrawFrame(
+            measurementFrameIndex,
+            state);
+
+    public void RecordPreDrawActivationFailure(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        _activationObserver.RecordFailure(
+            "Benchmark activation pre-Draw control failed: " +
+            $"{exception.GetType().Name}: {exception.Message}");
+    }
+
+    public void PrepareActivationAnimationFrame(
+        Scene scene,
+        int routeFrameIndex,
+        int? measurementFrameIndex) =>
+        _activationObserver.PrepareTimingAnimationFrame(
+            scene,
+            routeFrameIndex,
+            measurementFrameIndex);
+
+    public void PrepareSponzaSceneAnimationFrame(
+        Scene scene,
+        int authoredRouteFrameIndex,
+        bool measurementFrame,
+        bool hold)
+    {
+        if (_sponzaSceneAnimationObserver == null)
+            return;
+        try
+        {
+            _sponzaSceneAnimationObserver.PrepareTimingFrame(
+                scene,
+                authoredRouteFrameIndex,
+                measurementFrame,
+                hold);
+        }
+        catch (Exception exception)
+        {
+            _sponzaSceneAnimationObserver.RecordFailure(
+                "Sponza animation pre-Draw attestation failed: " +
+                $"{exception.GetType().Name}: {exception.Message}");
+        }
+    }
 
     public int ResolveTrajectoryFrameIndexForNextRender(int absoluteFrameIndex)
     {
@@ -141,6 +244,16 @@ public sealed class SampleBenchmarkRunner
                         frameIndex))
                 {
                     _movingTrajectoryMeasurementStarted = true;
+                    _measurementActivationArmed = true;
+                }
+                else if (!SampleBenchmarkTrajectory.IsMoving(
+                             _options.Trajectory) &&
+                         frameIndex == _options.WarmupFrameCount - 1 &&
+                         _consecutiveReadyFrameCount >=
+                             RequiredConsecutiveReadyFrameCount &&
+                         RequiresPreDrawMeasurementBoundary())
+                {
+                    _measurementActivationArmed = true;
                 }
                 _lastPreMeasurementDiagnostics = diagnostics;
                 return;
@@ -180,6 +293,15 @@ public sealed class SampleBenchmarkRunner
                 }
 
                 _movingTrajectoryMeasurementStarted = true;
+                _measurementActivationArmed = true;
+                _lastPreMeasurementDiagnostics = diagnostics;
+                return;
+            }
+
+            if (RequiresPreDrawMeasurementBoundary() &&
+                !_measurementActivationArmed)
+            {
+                _measurementActivationArmed = true;
                 _lastPreMeasurementDiagnostics = diagnostics;
                 return;
             }
@@ -188,10 +310,28 @@ public sealed class SampleBenchmarkRunner
         if (_samplesCaptured == 0)
         {
             _firstMeasurementFrame = frameIndex;
-            _analyzer.SetMeasurementBaseline(
-                _lastPreMeasurementDiagnostics ?? diagnostics);
+            RendererDiagnostics baseline =
+                _lastPreMeasurementDiagnostics ?? diagnostics;
+            _analyzer.SetMeasurementBaseline(baseline);
+            _activationObserver.BeginMeasurement(baseline);
         }
         _lastMeasurementFrame = frameIndex;
+        if (_sponzaSceneAnimationObserver != null)
+        {
+            try
+            {
+                _sponzaSceneAnimationObserver.RecordTimingFrame(
+                    _samplesCaptured,
+                    _samplesCaptured);
+            }
+            catch (Exception exception)
+            {
+                _sponzaSceneAnimationObserver.RecordFailure(
+                    "Sponza animation measured-frame attestation failed: " +
+                    $"{exception.GetType().Name}: {exception.Message}");
+            }
+        }
+        _activationObserver.Observe(_samplesCaptured, diagnostics);
         _analyzer.AddSample(diagnostics, budget);
         _samplesCaptured++;
 
@@ -205,6 +345,11 @@ public sealed class SampleBenchmarkRunner
         _measurementSettingsFingerprint = _getSettingsFingerprint();
         BeginPostMeasurementEvidence();
     }
+
+    private bool RequiresPreDrawMeasurementBoundary() =>
+        SampleBenchmarkActivation.RequiresPreDrawMeasurementArm(
+            _options.Activation) ||
+        SampleBenchmarkTrajectory.RequiresSponza(_options.Trajectory);
 
     private void BeginPostMeasurementEvidence()
     {
@@ -316,6 +461,34 @@ public sealed class SampleBenchmarkRunner
     private void Complete(SampleBenchmarkHdrDifference hdrDifference)
     {
         _completed = true;
+        string reportTargetPath = ResolveReportPath(_options.ReportPath);
+        SampleBenchmarkSponzaSceneAnimationBuild? sceneAnimationBuild = null;
+        SampleBenchmarkSponzaSceneAnimationEvidence sceneAnimationEvidence;
+        try
+        {
+            sceneAnimationBuild = _sponzaSceneAnimationObserver?.BuildTiming(
+                reportTargetPath + ".sponza-animation.bin");
+            sceneAnimationEvidence = sceneAnimationBuild?.Evidence ??
+                SampleBenchmarkSponzaSceneAnimationEvidence.Unavailable;
+        }
+        catch (Exception exception)
+        {
+            sceneAnimationEvidence =
+                SampleBenchmarkSponzaSceneAnimationEvidence.Failed(
+                    SampleBenchmarkSponzaSceneAnimationContract.ResolveMode(
+                        _options.Activation),
+                    _samplesCaptured,
+                    "Sponza animation evidence assembly failed: " +
+                    $"{exception.GetType().Name}: {exception.Message}");
+        }
+        IReadOnlyList<SampleBenchmarkActivationFrameState>?
+            activationAnimationFrames =
+                SampleBenchmarkActivation.RequiresDeterministicAnimation(
+                    _options.Activation)
+                    ? sceneAnimationBuild?.Frames
+                    : null;
+        SampleBenchmarkActivationEvidence activationEvidence =
+            _activationObserver.Build(activationAnimationFrames);
         Report = _analyzer.CreateReport(
             _options,
             _scenario,
@@ -327,6 +500,8 @@ public sealed class SampleBenchmarkRunner
         Report = Report with
         {
             HdrDifference = hdrDifference,
+            ActivationEvidence = activationEvidence,
+            SponzaSceneAnimationEvidence = sceneAnimationEvidence,
             AdditionalSettlingFrameCount = _additionalSettlingFrameCount,
             SettlingWaitTimedOut = _settlingWaitTimedOut,
             ShaderProfile = SampleShaderProfileEvidenceLoader.Load(
@@ -350,14 +525,17 @@ public sealed class SampleBenchmarkRunner
                     _options.MaximumAdditionalSettlingFrameCount),
                 _options,
                 Report.HdrDifference,
-                Report.ShaderProfile)
+                Report.ShaderProfile,
+                Report.ActivationEvidence,
+                Report.SponzaSceneAnimationEvidence,
+                activationAnimationFrames)
         };
         if (SampleDdgiBenchmarkSuite.RequiredProductionGateScenes.Any(scene => scene.Scenario == _scenario))
         {
             SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(Report);
             Report = Report with { DdgiProductionGate = gate };
         }
-        ReportPath = WriteReport(Report, _options.ReportPath);
+        ReportPath = WriteReport(Report, reportTargetPath);
         Console.WriteLine(
             $"Benchmark report exported: {ReportPath} " +
             $"cpuP95={Report.CpuFrameMilliseconds.P95Milliseconds:F3}ms " +
@@ -483,7 +661,11 @@ public sealed class SampleBenchmarkRunner
         SampleBenchmarkCaptureContract contract,
         SampleBenchmarkOptions options,
         SampleBenchmarkHdrDifference hdrDifference,
-        SampleShaderProfileEvidence shaderProfile)
+        SampleShaderProfileEvidence shaderProfile,
+        SampleBenchmarkActivationEvidence activationEvidence,
+        SampleBenchmarkSponzaSceneAnimationEvidence sceneAnimationEvidence,
+        IReadOnlyList<SampleBenchmarkActivationFrameState>?
+            activationAnimationFrames)
     {
         var mismatches = new List<string>(contract.Mismatches);
         bool hdrRequested = !string.IsNullOrWhiteSpace(options.HdrReferencePath);
@@ -506,11 +688,93 @@ public sealed class SampleBenchmarkRunner
                 shaderProfile.UnavailableReason);
         }
 
+        string activation = SampleBenchmarkActivation.Normalize(
+            options.Activation);
+        string activationFingerprint =
+            SampleBenchmarkActivation.CreateFingerprint(activation);
+        if (!string.Equals(
+                activationEvidence.Schema,
+                SampleBenchmarkActivationEvidence.CurrentSchema,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                activationEvidence.Activation,
+                activation,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                activationEvidence.Fingerprint,
+                activationFingerprint,
+                StringComparison.Ordinal) ||
+            activationEvidence.MeasuredSampleCount !=
+                options.MeasureFrameCount ||
+            !activationEvidence.Passed ||
+            activationEvidence.Failures.Count != 0)
+        {
+            mismatches.Add(
+                "Authored benchmark activation evidence is missing, failed, " +
+                "or does not match the capture contract.");
+        }
+        foreach (string failure in
+                 SampleBenchmarkActivationEvidenceValidator.Validate(
+                     activationEvidence,
+                     activation,
+                     options.CaptureVariant,
+                     options.MeasureFrameCount,
+                     qualitySequence: false,
+                     trajectory: options.Trajectory,
+                     authoredAnimationFrames: activationAnimationFrames))
+        {
+            mismatches.Add("Activation evidence: " + failure);
+        }
+        bool sponza = SampleBenchmarkTrajectory.RequiresSponza(
+            options.Trajectory);
+        if (sponza)
+        {
+            SampleBenchmarkSponzaSceneAnimationMode expectedMode =
+                SampleBenchmarkSponzaSceneAnimationContract.ResolveMode(
+                    options.Activation);
+            if (sceneAnimationEvidence.Schema !=
+                    SampleBenchmarkSponzaSceneAnimationEvidence.CurrentSchema ||
+                sceneAnimationEvidence.Fingerprint !=
+                    SampleBenchmarkSponzaSceneAnimationContract.Fingerprint ||
+                sceneAnimationEvidence.Mode != expectedMode ||
+                !sceneAnimationEvidence.Passed ||
+                sceneAnimationEvidence.SampleCount !=
+                    options.MeasureFrameCount ||
+                sceneAnimationEvidence.Failures.Count != 0)
+            {
+                mismatches.Add(
+                    "Sponza scene-animation evidence is missing, failed, or " +
+                    "does not match the authored phase contract.");
+            }
+        }
+        else if (!SampleBenchmarkSponzaSceneAnimationEvidence
+                     .IsCanonicalUnavailable(sceneAnimationEvidence))
+        {
+            mismatches.Add(
+                "A non-Sponza workload does not contain the exact canonical " +
+                "unavailable Sponza scene-animation evidence shape.");
+        }
+
         string[] distinct = mismatches.Distinct(StringComparer.Ordinal).ToArray();
         return contract with
         {
             Comparable = contract.Comparable && distinct.Length == 0,
-            Mismatches = Array.AsReadOnly(distinct)
+            Mismatches = Array.AsReadOnly(distinct),
+            SponzaSceneAnimationFingerprint = sponza
+                ? sceneAnimationEvidence.Fingerprint
+                : "unavailable",
+            SponzaSceneAnimationMode = sponza
+                ? sceneAnimationEvidence.Mode
+                : SampleBenchmarkSponzaSceneAnimationMode.Unavailable,
+            SponzaSceneAnimationConfigurationFingerprint = sponza
+                ? sceneAnimationEvidence.ConfigurationFingerprint
+                : "unavailable",
+            SponzaSceneAnimationSequenceHash = sponza
+                ? sceneAnimationEvidence.SequenceHash
+                : "unavailable",
+            SponzaSceneAnimationSidecarSha256 = sponza
+                ? sceneAnimationEvidence.SidecarSha256
+                : "unavailable"
         };
     }
 
@@ -545,9 +809,7 @@ public sealed class SampleBenchmarkRunner
 
     internal static string WriteReport(SampleBenchmarkReport report, string? path)
     {
-        string targetPath = string.IsNullOrWhiteSpace(path)
-            ? Path.Combine(AppContext.BaseDirectory, "BenchmarkReports", $"benchmark-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.json")
-            : Path.GetFullPath(path);
+        string targetPath = ResolveReportPath(path);
         byte[] payload =
             JsonSerializer.SerializeToUtf8Bytes(report, SerializerOptions);
         return SampleEvidenceFileIo.WriteAtomic(
@@ -556,6 +818,14 @@ public sealed class SampleBenchmarkRunner
             SampleEvidenceFileIo.MaximumJsonBytes,
             "Benchmark report").Path;
     }
+
+    private static string ResolveReportPath(string? path) =>
+        string.IsNullOrWhiteSpace(path)
+            ? Path.Combine(
+                AppContext.BaseDirectory,
+                "BenchmarkReports",
+                $"benchmark-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.json")
+            : Path.GetFullPath(path);
 }
 
 public sealed class SampleBenchmarkAnalyzer
@@ -711,13 +981,18 @@ public sealed class SampleBenchmarkAnalyzer
         new("RuntimeStall", d => d.RuntimeStallMicrosecondsThisFrame)
     ];
 
-    private readonly List<RendererDiagnostics> _samples = new();
+    private readonly List<RendererDiagnostics> _samples;
     private readonly Dictionary<string, BudgetMetric> _worstBudgetMetrics =
         new(StringComparer.Ordinal);
     private RendererDiagnostics? _measurementBaseline;
 
-    public SampleBenchmarkAnalyzer(bool tailDdgiTimingProjection = false)
+    public SampleBenchmarkAnalyzer(
+        int expectedSampleCount = 0,
+        bool tailDdgiTimingProjection = false)
     {
+        if (expectedSampleCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedSampleCount));
+        _samples = new List<RendererDiagnostics>(expectedSampleCount);
         _tailDdgiTimingProjection = tailDdgiTimingProjection;
     }
 
@@ -825,7 +1100,7 @@ public sealed class SampleBenchmarkAnalyzer
             LastDiagnostics: last)
         {
             AccuracyOracleResults = SampleGiAccuracyOracleEvaluator.Evaluate(scenario, _samples),
-            CaptureContract = BuildCaptureContract(options),
+            CaptureContract = BuildCaptureContract(options, scenario),
             GpuIndependentPassSumMilliseconds = gpuPassSum,
             GpuUnexplainedMilliseconds = gpuUnexplained,
             SimpleDdgiTransportBlendMilliseconds = simpleDdgiTransportBlend,
@@ -1499,7 +1774,8 @@ public sealed class SampleBenchmarkAnalyzer
     }
 
     private SampleBenchmarkCaptureContract BuildCaptureContract(
-        SampleBenchmarkOptions options)
+        SampleBenchmarkOptions options,
+        SamplePerformanceScenario scenario)
     {
         if (_samples.Count == 0)
             return SampleBenchmarkCaptureContract.Unavailable;
@@ -1525,6 +1801,38 @@ public sealed class SampleBenchmarkAnalyzer
             mismatches.Add(
                 "Benchmark trajectory fingerprint is absent or does not match " +
                 $"'{SampleBenchmarkTrajectory.GetName(options.Trajectory)}'.");
+        }
+        string expectedActivation =
+            SampleBenchmarkActivation.Normalize(options.Activation);
+        string expectedActivationFingerprint =
+            SampleBenchmarkActivation.CreateFingerprint(expectedActivation);
+        if (!string.Equals(
+                options.Activation,
+                expectedActivation,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                options.ActivationFingerprint,
+                expectedActivationFingerprint,
+                StringComparison.Ordinal))
+        {
+            mismatches.Add(
+                "Benchmark activation identity is absent, noncanonical, or " +
+                "does not match its authored fingerprint.");
+        }
+        try
+        {
+            SampleBenchmarkActivation.Validate(
+                expectedActivation,
+                scenario,
+                options.Trajectory,
+                options.CaptureVariant,
+                options.MeasureFrameCount);
+        }
+        catch (ArgumentException exception)
+        {
+            mismatches.Add(
+                "Benchmark activation contract is invalid: " +
+                exception.Message);
         }
         if (movingTrajectory && _samples.Count != trajectoryFrameCount)
         {
@@ -1725,8 +2033,14 @@ public sealed class SampleBenchmarkAnalyzer
                 $"of {_samples.Count} measured frames; at most eight field differences are shown.");
         }
 
-        string identityHash = CreateCaptureIdentityHash(first, includeTargetState: false);
-        string fullIdentityHash = CreateCaptureIdentityHash(first, includeTargetState: true);
+        string identityHash = CreateCaptureIdentityHash(
+            first,
+            expectedActivationFingerprint,
+            includeTargetState: false);
+        string fullIdentityHash = CreateCaptureIdentityHash(
+            first,
+            expectedActivationFingerprint,
+            includeTargetState: true);
         string trajectoryRouteHash = SampleBenchmarkTrajectory.CreateRouteHash(
             options.Trajectory,
             options.TrajectoryBistroVariant,
@@ -1757,6 +2071,8 @@ public sealed class SampleBenchmarkAnalyzer
             TrajectoryFrameCount = trajectoryFrameCount,
             TrajectoryRouteHash = trajectoryRouteHash,
             TrajectorySequenceHash = trajectorySequenceHash,
+            Activation = expectedActivation,
+            ActivationFingerprint = expectedActivationFingerprint,
             PassTimestampReconciliationToleranceMicroseconds =
                 passTimestampToleranceMicroseconds
         };
@@ -1871,6 +2187,7 @@ public sealed class SampleBenchmarkAnalyzer
 
     private static string CreateCaptureIdentityHash(
         RendererDiagnostics diagnostics,
+        string activationFingerprint,
         bool includeTargetState)
     {
         var parts = new List<string>
@@ -1895,7 +2212,8 @@ public sealed class SampleBenchmarkAnalyzer
             diagnostics.ActiveFeatureIsolation.ToString(),
             diagnostics.GlobalIlluminationDebugView.ToString(),
             diagnostics.CaptureFrame.DdgiCacheGeneration.ToString(
-                CultureInfo.InvariantCulture)
+                CultureInfo.InvariantCulture),
+            activationFingerprint
         };
         if (includeTargetState)
         {
@@ -1915,6 +2233,8 @@ public sealed class SampleBenchmarkAnalyzer
             .Append(SampleBenchmarkTrajectory.GetName(options.Trajectory))
             .Append('|')
             .Append(options.TrajectoryFingerprint)
+            .Append('|')
+            .Append(options.ActivationFingerprint)
             .Append('\n');
         for (int index = 0; index < samples.Count; index++)
         {

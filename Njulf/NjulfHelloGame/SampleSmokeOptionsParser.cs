@@ -63,6 +63,7 @@ public static class SampleSmokeOptionsParser
         "--benchmark-budget-profile",
         "--benchmark-pair-id",
         "--benchmark-variant",
+        "--benchmark-activation",
         "--benchmark-trajectory",
         "--benchmark-require-production",
         "--benchmark-hdr-reference",
@@ -82,6 +83,7 @@ public static class SampleSmokeOptionsParser
         "--benchmark-quality-sequence-max-drain-frames",
         "--benchmark-quality-sequence-budget-profile",
         "--benchmark-quality-sequence-variant",
+        "--benchmark-quality-sequence-activation",
         "--benchmark-quality-sequence-trajectory",
         "--benchmark-quality-sequence-reference-contract",
         "--benchmark-quality-sequence-hdr-quality-contract",
@@ -366,6 +368,9 @@ public static class SampleSmokeOptionsParser
         string benchmarkVariant =
             Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_VARIANT")?.Trim() ??
             "baseline";
+        string benchmarkActivation = SampleBenchmarkActivation.Normalize(
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_BENCHMARK_ACTIVATION"));
         SampleBenchmarkTrajectoryKind benchmarkTrajectory =
             SampleBenchmarkTrajectory.Parse(
                 Environment.GetEnvironmentVariable(
@@ -424,6 +429,7 @@ public static class SampleSmokeOptionsParser
             benchmarkVariant,
             SampleBenchmarkCaptureVariant.Baseline,
             StringComparison.OrdinalIgnoreCase);
+        enableBenchmark |= benchmarkActivation != SampleBenchmarkActivation.None;
         enableBenchmark |= benchmarkTrajectory !=
             SampleBenchmarkTrajectoryKind.Stationary;
         enableBenchmark |= benchmarkRequireProduction;
@@ -453,6 +459,8 @@ public static class SampleSmokeOptionsParser
         RenderBudgetProfileKind? benchmarkQualitySequenceBudgetProfile = null;
         string benchmarkQualitySequenceVariant =
             SampleBenchmarkCaptureVariant.Baseline;
+        string benchmarkQualitySequenceActivation =
+            SampleBenchmarkActivation.None;
         bool benchmarkQualitySequenceTrajectorySpecified = false;
         SampleBenchmarkTrajectoryKind benchmarkQualitySequenceTrajectory =
             SampleBenchmarkTrajectoryKind.Stationary;
@@ -696,6 +704,11 @@ public static class SampleSmokeOptionsParser
                     benchmarkVariant = RequireNonEmptyValue(value, "--benchmark-variant");
                     enableBenchmark = true;
                     break;
+                case "--benchmark-activation":
+                    benchmarkActivation = SampleBenchmarkActivation.Normalize(
+                        RequireNonEmptyValue(value, optionName));
+                    enableBenchmark = true;
+                    break;
                 case "--benchmark-trajectory":
                     benchmarkTrajectory = SampleBenchmarkTrajectory.Parse(value);
                     enableBenchmark = true;
@@ -793,6 +806,12 @@ public static class SampleSmokeOptionsParser
                 case "--benchmark-quality-sequence-variant":
                     benchmarkQualitySequenceVariant =
                         RequireNonEmptyValue(value, optionName);
+                    enableBenchmarkQualitySequence = true;
+                    break;
+                case "--benchmark-quality-sequence-activation":
+                    benchmarkQualitySequenceActivation =
+                        SampleBenchmarkActivation.Normalize(
+                            RequireNonEmptyValue(value, optionName));
                     enableBenchmarkQualitySequence = true;
                     break;
                 case "--benchmark-quality-sequence-trajectory":
@@ -1231,6 +1250,17 @@ public static class SampleSmokeOptionsParser
                     "ReflectionSourceAb Bistro variant because it intentionally " +
                     "changes the render-settings identity inside the route.");
             }
+            benchmarkQualitySequenceVariant =
+                SampleBenchmarkCaptureVariant.Normalize(
+                    benchmarkQualitySequenceVariant);
+            SampleBenchmarkActivation.Validate(
+                benchmarkQualitySequenceActivation,
+                performanceScenario,
+                benchmarkQualitySequenceTrajectory,
+                benchmarkQualitySequenceVariant,
+                SampleBenchmarkTrajectory.GetFrameCount(
+                    benchmarkQualitySequenceTrajectory),
+                qualitySequence: true);
         }
 
         int standaloneCaptureModeCount =
@@ -1630,6 +1660,14 @@ public static class SampleSmokeOptionsParser
                             $"({requiredFrameCount} frames).");
                     }
                 }
+                benchmarkVariant =
+                    SampleBenchmarkCaptureVariant.Normalize(benchmarkVariant);
+                SampleBenchmarkActivation.Validate(
+                    benchmarkActivation,
+                    performanceScenario,
+                    benchmarkTrajectory,
+                    benchmarkVariant,
+                    benchmarkMeasureFrames);
                 if (string.IsNullOrWhiteSpace(benchmarkHdrReferencePath) &&
                     (benchmarkHdrMaximumRelativeRmseSpecified ||
                      benchmarkHdrMaximumFlipP95Specified ||
@@ -1759,7 +1797,12 @@ public static class SampleSmokeOptionsParser
             CapturePairId = benchmarkPairId,
             CaptureVariant = string.IsNullOrWhiteSpace(benchmarkVariant)
                 ? "baseline"
-                : benchmarkVariant,
+                : SampleBenchmarkCaptureVariant.Normalize(benchmarkVariant),
+            Activation = SampleBenchmarkActivation.Normalize(
+                benchmarkActivation),
+            ActivationFingerprint =
+                SampleBenchmarkActivation.CreateFingerprint(
+                    benchmarkActivation),
             Trajectory = benchmarkTrajectory,
             TrajectoryFingerprint = SampleBenchmarkTrajectory.CreateFingerprint(
                 benchmarkTrajectory,
@@ -1792,6 +1835,11 @@ public static class SampleSmokeOptionsParser
                     benchmarkQualitySequenceBudgetProfile,
                 CaptureVariant = SampleBenchmarkCaptureVariant.Normalize(
                     benchmarkQualitySequenceVariant),
+                Activation = SampleBenchmarkActivation.Normalize(
+                    benchmarkQualitySequenceActivation),
+                ActivationFingerprint =
+                    SampleBenchmarkActivation.CreateFingerprint(
+                        benchmarkQualitySequenceActivation),
                 SceneKind = sceneKind,
                 Scenario = performanceScenario,
                 Trajectory = benchmarkQualitySequenceTrajectory,

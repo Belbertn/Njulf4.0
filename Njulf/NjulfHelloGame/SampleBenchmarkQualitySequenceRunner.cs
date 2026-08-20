@@ -3,6 +3,7 @@ using System.Text.Json;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
 
@@ -31,6 +32,10 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         public RendererDiagnostics? Diagnostics { get; set; }
         public string SettingsFingerprint { get; set; } = string.Empty;
         public MaterialGiProducerIdentity? ProducerIdentity { get; set; }
+        public SampleBenchmarkActivationFrameState? ActivationFrameState {
+            get;
+            set;
+        }
         public bool Completed { get; set; }
         public bool Terminal { get; set; }
         public SampleEvidenceFileContent? CapturedPfmEvidence { get; set; }
@@ -46,12 +51,16 @@ public sealed class SampleBenchmarkQualitySequenceRunner
     private readonly PendingCheckpoint[] _checkpoints;
     private readonly Dictionary<int, PendingCheckpoint> _checkpointsByFrame;
     private readonly SampleBenchmarkQualitySequenceLoadedReference? _reference;
+    private readonly SampleBenchmarkActivationObserver _activationObserver;
+    private readonly SampleBenchmarkSponzaSceneAnimationObserver?
+        _sponzaSceneAnimationObserver;
     private readonly List<SampleBenchmarkQualityRouteObservation> _routeObservations = new();
     private int _routeFramesRendered;
     private int _firstRouteAbsoluteFrameIndex = -1;
     private int _preparedRouteFrameIndex = -1;
     private SampleBenchmarkCameraPose? _preparedCamera;
     private SampleBistroQualityFrameState? _preparedBistroState;
+    private SampleBenchmarkActivationFrameState? _preparedActivationState;
     private string? _preparedSettingsFingerprint;
     private PerformanceCaptureCameraMetadata? _frozenStationaryCamera;
     private int _additionalSettlingFrameCount;
@@ -81,6 +90,22 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         _getLinearHdrCaptureResult = getLinearHdrCaptureResult ??
             throw new ArgumentNullException(nameof(getLinearHdrCaptureResult));
         ValidateOptions(options);
+        _activationObserver = new SampleBenchmarkActivationObserver(
+            options.Activation,
+            scenario,
+            options.Trajectory,
+            options.CaptureVariant,
+            SampleBenchmarkTrajectory.GetFrameCount(options.Trajectory),
+            qualitySequence: true);
+        if (SampleBenchmarkTrajectory.RequiresSponza(options.Trajectory))
+        {
+            _sponzaSceneAnimationObserver =
+                new SampleBenchmarkSponzaSceneAnimationObserver(
+                    SampleBenchmarkTrajectory.GetFrameCount(
+                        options.Trajectory),
+                    options.Activation,
+                    options.Trajectory);
+        }
         if (scenario != options.Scenario)
         {
             throw new ArgumentException(
@@ -141,6 +166,106 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         _routeStarted &&
         _routeFramesRendered >=
             SampleBenchmarkTrajectory.GetFrameCount(_options.Trajectory);
+    public bool CanIssueActivationRequest =>
+        !_completed && !_failureDrainActive && _routeStarted &&
+        _routeFramesRendered <
+            SampleBenchmarkTrajectory.GetFrameCount(_options.Trajectory);
+
+    public bool TryGetActivationFrameIndexForNextRender(
+        out int routeFrameIndex)
+    {
+        routeFrameIndex = -1;
+        if (_completed || !_routeStarted ||
+            SampleBenchmarkActivation.Normalize(_options.Activation) ==
+                SampleBenchmarkActivation.None ||
+            _routeFramesRendered >=
+                SampleBenchmarkTrajectory.GetFrameCount(_options.Trajectory))
+        {
+            return false;
+        }
+        routeFrameIndex = _routeFramesRendered;
+        return true;
+    }
+
+    public void RecordPreDrawActivationFrame(
+        int routeFrameIndex,
+        SampleBenchmarkActivationFrameState state)
+    {
+        if (_preparedActivationState != null)
+        {
+            throw new InvalidOperationException(
+                "Quality activation frame was prepared more than once before Draw.");
+        }
+        _activationObserver.RecordPreDrawFrame(routeFrameIndex, state);
+        _preparedActivationState = state;
+    }
+
+    public void RecordPreDrawActivationHoldFrame(
+        SampleBenchmarkActivationFrameState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        int heldRouteFrame =
+            SampleBenchmarkTrajectory.GetFrameCount(_options.Trajectory) - 1;
+        if (!HoldTrajectoryForReadbackDrain ||
+            state.RouteFrameIndex != heldRouteFrame)
+        {
+            throw new InvalidOperationException(
+                "Quality activation hold evidence does not name the final " +
+                "authored route frame.");
+        }
+        if (_preparedActivationState != null)
+        {
+            throw new InvalidOperationException(
+                "Quality activation hold frame was prepared more than once before Draw.");
+        }
+        _preparedActivationState = state;
+    }
+
+    public void RecordReflectionActivationRequest(
+        int routeFrameIndex,
+        in ReflectionProbeRecaptureRequestSummary admission) =>
+        _activationObserver.RecordReflectionRequest(
+            routeFrameIndex,
+            admission);
+
+    public void RecordPreDrawActivationFailure(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        RecordFailure(
+            "Quality activation pre-Draw control failed: " +
+            $"{exception.GetType().Name}: {exception.Message}");
+    }
+
+    public void PrepareSponzaSceneAnimationFrame(
+        Njulf.Core.Scene.Scene scene,
+        int authoredRouteFrameIndex,
+        int? evidenceFrameIndex,
+        bool hold)
+    {
+        if (_sponzaSceneAnimationObserver == null)
+            return;
+        SampleBenchmarkActivationFrameState state =
+            _sponzaSceneAnimationObserver.PrepareQualityFrame(
+                scene,
+                authoredRouteFrameIndex,
+                evidenceFrameIndex,
+                hold);
+        if (!SampleBenchmarkActivation.RequiresDeterministicAnimation(
+                _options.Activation))
+        {
+            return;
+        }
+        if (evidenceFrameIndex.HasValue)
+        {
+            RecordPreDrawActivationFrame(
+                evidenceFrameIndex.Value,
+                state);
+        }
+        else if (hold)
+        {
+            RecordPreDrawActivationHoldFrame(state);
+        }
+    }
 
     public int ResolveTrajectoryFrameIndexForNextRender(int absoluteFrameIndex)
     {
@@ -192,6 +317,7 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                 routeFrame,
                 preDrawCamera,
                 bistroFrameState);
+            ValidatePreDrawActivationFrame(routeFrame);
             string settingsFingerprint = _getSettingsFingerprint();
             SampleBenchmarkQualitySequenceReferenceLoader.RequireSha256Identity(
                 settingsFingerprint,
@@ -301,6 +427,8 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                 {
                     owningCheckpoint.SettingsFingerprint = settingsFingerprint;
                     owningCheckpoint.ProducerIdentity = producer;
+                    owningCheckpoint.ActivationFrameState =
+                        _preparedActivationState;
                 }
                 string postDrawSettingsFingerprint = _getSettingsFingerprint();
                 RequireExact(
@@ -314,9 +442,11 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                     _preparedBistroState,
                     diagnostics,
                     settingsFingerprint,
-                    producer);
+                    producer,
+                    _preparedActivationState);
                 ValidateRouteObservation(observation);
                 _routeObservations.Add(observation);
+                _activationObserver.Observe(expectedRouteFrame, diagnostics);
             }
             catch (Exception exception)
             {
@@ -335,6 +465,7 @@ public sealed class SampleBenchmarkQualitySequenceRunner
             _preparedRouteFrameIndex = -1;
             _preparedCamera = null;
             _preparedBistroState = null;
+            _preparedActivationState = null;
             _preparedSettingsFingerprint = null;
         }
         else
@@ -440,6 +571,7 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                 "frozen stationary camera");
             _frozenStationaryCamera = diagnostics.CaptureCamera;
         }
+        _activationObserver.BeginMeasurement(diagnostics);
         _routeStarted = true;
     }
 
@@ -483,6 +615,30 @@ public sealed class SampleBenchmarkQualitySequenceRunner
             throw new InvalidDataException(
                 "A non-Bistro quality route supplied Bistro script state.");
         }
+    }
+
+    private void ValidatePreDrawActivationFrame(int routeFrame)
+    {
+        string activation =
+            SampleBenchmarkActivation.Normalize(_options.Activation);
+        if (!SampleBenchmarkActivation.RequiresDeterministicAnimation(
+                activation))
+        {
+            if (_preparedActivationState != null)
+            {
+                throw new InvalidDataException(
+                    "Quality route supplied animator state without a " +
+                    "directional moving-caster activation.");
+            }
+            return;
+        }
+        SampleBenchmarkActivationFrameState state =
+            _preparedActivationState ??
+            throw new InvalidDataException(
+                "Active quality route lacks pre-Draw animator state.");
+        SampleBenchmarkActivationFrameState.ValidateCanonical(
+            state,
+            routeFrame);
     }
 
     private void ValidateRenderedRouteFrame(
@@ -534,7 +690,28 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                 heldRouteFrame,
                 _preparedCamera,
                 _preparedBistroState);
+            ValidatePreDrawActivationFrame(heldRouteFrame);
             ValidateRenderedRouteFrame(heldRouteFrame, diagnostics);
+            SampleBenchmarkActivationFrameState? authoredActivation =
+                _routeObservations[^1].ActivationFrameState;
+            if (authoredActivation != null)
+            {
+                SampleBenchmarkActivationFrameState heldActivation =
+                    _preparedActivationState ?? throw new InvalidDataException(
+                        "Readback drain has no held activation state.");
+                RequireExact(
+                    heldActivation.ConfigurationFingerprint,
+                    authoredActivation.ConfigurationFingerprint,
+                    "readback-drain activation configuration");
+                RequireExact(
+                    heldActivation.FrameHash,
+                    authoredActivation.FrameHash,
+                    "readback-drain activation frame");
+                // The common Sponza observer already deep-compares every
+                // animator scalar and raw matrix bit before Draw. Do not use
+                // record equality here: each capture owns a fresh read-only
+                // matrix wrapper even when its exact contents are unchanged.
+            }
             string preparedSettingsFingerprint =
                 _preparedSettingsFingerprint ?? throw new InvalidDataException(
                     "Readback drain has no pre-Draw settings fingerprint.");
@@ -548,6 +725,14 @@ public sealed class SampleBenchmarkQualitySequenceRunner
             RecordFailure(
                 $"Quality readback hold frame {heldRouteFrame} attestation failed: " +
                 $"{exception.GetType().Name}: {exception.Message}");
+        }
+        finally
+        {
+            _preparedRouteFrameIndex = -1;
+            _preparedCamera = null;
+            _preparedBistroState = null;
+            _preparedActivationState = null;
+            _preparedSettingsFingerprint = null;
         }
     }
 
@@ -926,6 +1111,137 @@ public sealed class SampleBenchmarkQualitySequenceRunner
             previousCheckpointSerial = evidence[index].DdgiFrameSerial;
         }
 
+        SampleBenchmarkSponzaSceneAnimationBuild? sceneAnimationBuild = null;
+        SampleBenchmarkSponzaSceneAnimationEvidence sceneAnimationEvidence;
+        try
+        {
+            sceneAnimationBuild = _sponzaSceneAnimationObserver?.BuildQuality(
+                Path.GetFullPath(_options.ReportPath) +
+                ".sponza-animation.bin");
+            sceneAnimationEvidence = sceneAnimationBuild?.Evidence ??
+                SampleBenchmarkSponzaSceneAnimationEvidence.Unavailable;
+        }
+        catch (Exception exception)
+        {
+            sceneAnimationEvidence =
+                SampleBenchmarkSponzaSceneAnimationEvidence.Failed(
+                    SampleBenchmarkSponzaSceneAnimationContract.ResolveMode(
+                        _options.Activation),
+                    _routeFramesRendered,
+                    "Sponza animation evidence assembly failed: " +
+                    $"{exception.GetType().Name}: {exception.Message}");
+            _failures.Add(sceneAnimationEvidence.Failures[0]);
+        }
+        try
+        {
+            if (_sponzaSceneAnimationObserver != null)
+            {
+                if (!sceneAnimationEvidence.Passed ||
+                    sceneAnimationEvidence.Failures.Count != 0)
+                {
+                    foreach (string failure in sceneAnimationEvidence.Failures)
+                        _failures.Add("Sponza scene animation: " + failure);
+                }
+                if (_reference != null)
+                {
+                    SampleBenchmarkQualitySequenceReferenceContract contract =
+                        _reference.Contract;
+                    RequireExact(
+                        sceneAnimationEvidence.Fingerprint,
+                        contract.SponzaSceneAnimationFingerprint,
+                        "reference Sponza scene-animation fingerprint");
+                    if (sceneAnimationEvidence.Mode !=
+                        contract.SponzaSceneAnimationMode)
+                    {
+                        throw new InvalidDataException(
+                            "Reference Sponza scene-animation mode changed.");
+                    }
+                    RequireExact(
+                        sceneAnimationEvidence.ConfigurationFingerprint,
+                        contract.SponzaSceneAnimationConfigurationFingerprint,
+                        "reference Sponza scene-animation configuration");
+                    RequireExact(
+                        sceneAnimationEvidence.SequenceHash,
+                        contract.SponzaSceneAnimationSequenceHash,
+                        "reference Sponza scene-animation sequence");
+                    RequireExact(
+                        sceneAnimationEvidence.SidecarSha256,
+                        contract.SponzaSceneAnimationSidecarSha256,
+                        "reference Sponza scene-animation sidecar hash");
+                }
+            }
+            else if (!SampleBenchmarkSponzaSceneAnimationEvidence
+                         .IsCanonicalUnavailable(sceneAnimationEvidence))
+            {
+                throw new InvalidDataException(
+                    "A non-Sponza quality sequence did not emit the exact " +
+                    "canonical unavailable Sponza animation evidence shape.");
+            }
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidDataException or
+                OverflowException)
+        {
+            _failures.Add(
+                "Quality Sponza scene-animation validation failed: " +
+                $"{exception.GetType().Name}: {exception.Message}");
+        }
+        SampleBenchmarkActivationEvidence activationEvidence =
+            SampleBenchmarkActivationEvidence.Unavailable;
+        try
+        {
+            activationEvidence = _activationObserver.Build(
+                SampleBenchmarkActivation.RequiresDeterministicAnimation(
+                    _options.Activation)
+                    ? sceneAnimationBuild?.Frames
+                    : null);
+            foreach (string failure in
+                     SampleBenchmarkActivationEvidenceValidator.Validate(
+                         activationEvidence,
+                         _options.Activation,
+                         _options.CaptureVariant,
+                         SampleBenchmarkTrajectory.GetFrameCount(
+                             _options.Trajectory),
+                         qualitySequence: true,
+                         trajectory: _options.Trajectory,
+                         authoredAnimationFrames:
+                             SampleBenchmarkActivation
+                                 .RequiresDeterministicAnimation(
+                                     _options.Activation)
+                                 ? sceneAnimationBuild?.Frames
+                                 : null))
+            {
+                _failures.Add(failure);
+            }
+            if (_reference != null)
+            {
+                SampleBenchmarkQualitySequenceReferenceContract contract =
+                    _reference.Contract;
+                RequireExact(
+                    activationEvidence.AnimationConfigurationFingerprint,
+                    contract.ActivationAnimationConfigurationFingerprint,
+                    "reference activation animation configuration");
+                RequireExact(
+                    activationEvidence.AnimationSequenceHash,
+                    contract.ActivationAnimationSequenceHash,
+                    "reference activation animation sequence");
+                RequireExact(
+                    activationEvidence.ActivationStructuralSequenceHash,
+                    contract.ActivationStructuralSequenceHash,
+                    "reference activation structural sequence");
+                RequireExact(
+                    activationEvidence.ActivationExecutionSequenceHash,
+                    contract.ActivationExecutionSequenceHash,
+                    "reference activation execution sequence");
+            }
+        }
+        catch (Exception exception)
+        {
+            _failures.Add(
+                "Quality activation evidence failed: " +
+                $"{exception.GetType().Name}: {exception.Message}");
+        }
+
         string[] failures = _failures
             .Distinct(StringComparer.Ordinal)
             .ToArray();
@@ -967,7 +1283,14 @@ public sealed class SampleBenchmarkQualitySequenceRunner
             BuildConfiguration = _routeObservations.FirstOrDefault()
                 ?.Diagnostics.CaptureRun.BuildConfiguration ?? string.Empty,
             CaptureRun = _routeObservations.FirstOrDefault()?.Diagnostics.CaptureRun,
-            ProducerIdentity = _routeObservations.FirstOrDefault()?.ProducerIdentity
+            ProducerIdentity = _routeObservations.FirstOrDefault()?.ProducerIdentity,
+            Activation = SampleBenchmarkActivation.Normalize(
+                _options.Activation),
+            ActivationFingerprint =
+                SampleBenchmarkActivation.CreateFingerprint(
+                    _options.Activation),
+            ActivationEvidence = activationEvidence,
+            SponzaSceneAnimationEvidence = sceneAnimationEvidence
         };
         try
         {
@@ -1055,7 +1378,10 @@ public sealed class SampleBenchmarkQualitySequenceRunner
             checkpoint.SettingsFingerprint,
             diagnostics.CaptureRun,
             checkpoint.ProducerIdentity!,
-            difference);
+            difference)
+        {
+            ActivationFrameState = checkpoint.ActivationFrameState
+        };
     }
 
     private void AssertAdmittedEvidenceUnchanged()
@@ -1099,6 +1425,18 @@ public sealed class SampleBenchmarkQualitySequenceRunner
             qualityContract.Sha256,
             _reference.QualityContractEvidence.Sha256,
             "quality contract hash");
+        if (_reference.SponzaSceneAnimationSidecar != null)
+        {
+            SampleBenchmarkSponzaSceneAnimationSidecarContent admitted =
+                _reference.SponzaSceneAnimationSidecar;
+            _ = SampleBenchmarkSponzaSceneAnimationSidecar.Read(
+                admitted.Path,
+                admitted.Sha256,
+                admitted.Mode,
+                admitted.Frames.Count,
+                admitted.ConfigurationFingerprint,
+                admitted.SequenceHash);
+        }
     }
 
     private void ValidateCheckpointIdentity(
@@ -1183,6 +1521,66 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                 producer,
                 expected.ProducerIdentity,
                 "baseline repeat producer");
+        }
+        if (expected.ActivationFrameState == null)
+        {
+            if (actual.ActivationFrameState != null)
+            {
+                throw new InvalidDataException(
+                    "Inactive checkpoint unexpectedly contains activation state.");
+            }
+        }
+        else if (actual.ActivationFrameState == null)
+        {
+            throw new InvalidDataException(
+                "Checkpoint activation frame state differs from reference.");
+        }
+        else
+        {
+            RequireActivationFrameEqual(
+                actual.ActivationFrameState,
+                expected.ActivationFrameState,
+                "checkpoint activation frame state");
+        }
+    }
+
+    private static void RequireActivationFrameEqual(
+        SampleBenchmarkActivationFrameState actual,
+        SampleBenchmarkActivationFrameState expected,
+        string role)
+    {
+        if (!string.Equals(actual.Schema, expected.Schema, StringComparison.Ordinal) ||
+            actual.RouteFrameIndex != expected.RouteFrameIndex ||
+            !string.Equals(
+                actual.ConfigurationFingerprint,
+                expected.ConfigurationFingerprint,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                actual.FrameHash,
+                expected.FrameHash,
+                StringComparison.Ordinal) ||
+            actual.Animators.Count != expected.Animators.Count)
+        {
+            throw new InvalidDataException($"{role} differs from reference.");
+        }
+        for (int index = 0; index < actual.Animators.Count; index++)
+        {
+            SampleBenchmarkActivationAnimatorState left = actual.Animators[index];
+            SampleBenchmarkActivationAnimatorState right = expected.Animators[index];
+            if (!string.Equals(left.Identity, right.Identity, StringComparison.Ordinal) ||
+                !string.Equals(left.ClipName, right.ClipName, StringComparison.Ordinal) ||
+                BitConverter.SingleToInt32Bits(left.ClipDurationSeconds) !=
+                    BitConverter.SingleToInt32Bits(right.ClipDurationSeconds) ||
+                BitConverter.SingleToInt32Bits(left.TimeSeconds) !=
+                    BitConverter.SingleToInt32Bits(right.TimeSeconds) ||
+                left.JointCount != right.JointCount ||
+                left.SkinCount != right.SkinCount ||
+                !string.Equals(left.PoseHash, right.PoseHash, StringComparison.Ordinal) ||
+                !left.GlobalMatrixComponentBits.SequenceEqual(
+                    right.GlobalMatrixComponentBits))
+            {
+                throw new InvalidDataException($"{role} differs from reference.");
+            }
         }
     }
 

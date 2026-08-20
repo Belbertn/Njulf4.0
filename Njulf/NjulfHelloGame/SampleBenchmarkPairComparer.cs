@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 
 namespace NjulfHelloGame;
@@ -77,6 +78,82 @@ public static class SampleBenchmarkPairComparer
         }
         if (!string.Equals(left.IdentityHash, right.IdentityHash, StringComparison.Ordinal))
             failures.Add("Locked capture identities differ.");
+        if (!IsSha256Identity(left.ActivationFingerprint) ||
+            !IsSha256Identity(right.ActivationFingerprint) ||
+            !string.Equals(
+                left.ActivationFingerprint,
+                right.ActivationFingerprint,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                left.Activation,
+                right.Activation,
+                StringComparison.Ordinal))
+        {
+            failures.Add("Capture activation identities differ or are invalid.");
+        }
+        foreach (string failure in ValidateAuthenticatedEvidence(baseline))
+            failures.Add("Baseline " + failure);
+        foreach (string failure in ValidateAuthenticatedEvidence(variant))
+            failures.Add("Variant " + failure);
+        SampleBenchmarkSponzaSceneAnimationEvidence? baselineAnimation =
+            baseline.SponzaSceneAnimationEvidence;
+        SampleBenchmarkSponzaSceneAnimationEvidence? variantAnimation =
+            variant.SponzaSceneAnimationEvidence;
+        if (baselineAnimation == null || variantAnimation == null ||
+            !string.Equals(
+                baselineAnimation.Fingerprint,
+                variantAnimation.Fingerprint,
+                StringComparison.Ordinal) ||
+            baselineAnimation.Mode != variantAnimation.Mode ||
+            !string.Equals(
+                baselineAnimation.ConfigurationFingerprint,
+                variantAnimation.ConfigurationFingerprint,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                baselineAnimation.SequenceHash,
+                variantAnimation.SequenceHash,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                baselineAnimation.SidecarSha256,
+                variantAnimation.SidecarSha256,
+                StringComparison.Ordinal))
+        {
+            failures.Add(
+                "Capture common Sponza animation topology, phase, pose, or " +
+                "sidecar identity differs.");
+        }
+        if (!string.Equals(
+                baseline.ActivationEvidence.AnimationConfigurationFingerprint,
+                variant.ActivationEvidence.AnimationConfigurationFingerprint,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                baseline.ActivationEvidence.AnimationSequenceHash,
+                variant.ActivationEvidence.AnimationSequenceHash,
+                StringComparison.Ordinal))
+        {
+            failures.Add(
+                "Capture activation animation configuration or sequence differs.");
+        }
+        if (!string.Equals(
+                baseline.ActivationEvidence.ActivationStructuralSequenceHash,
+                variant.ActivationEvidence.ActivationStructuralSequenceHash,
+                StringComparison.Ordinal))
+        {
+            failures.Add("Capture activation structural sequence differs.");
+        }
+        bool sameVariant = string.Equals(
+            left.Variant,
+            right.Variant,
+            StringComparison.Ordinal);
+        if ((sameVariant || requireRepeatability) &&
+            !string.Equals(
+                baseline.ActivationEvidence.ActivationExecutionSequenceHash,
+                variant.ActivationEvidence.ActivationExecutionSequenceHash,
+                StringComparison.Ordinal))
+        {
+            failures.Add(
+                "Same-role capture activation execution sequence differs.");
+        }
         ValidateTrajectoryIdentity(
             left,
             right,
@@ -178,6 +255,201 @@ public static class SampleBenchmarkPairComparer
         {
             ForwardGiGatherEstimate = forwardGiEstimate
         };
+    }
+
+    internal static IReadOnlyList<string> ValidateAuthenticatedEvidence(
+        SampleBenchmarkReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        var failures = new List<string>();
+        if (!string.Equals(
+                report.Kind,
+                "njulf-renderer-benchmark",
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                report.Schema,
+                MaterialGiReleaseEvidenceContract.BenchmarkProducerSchema,
+                StringComparison.Ordinal))
+        {
+            failures.Add("benchmark report kind or schema is invalid.");
+        }
+        IReadOnlyList<SampleBenchmarkActivationFrameState> animationFrames =
+            ValidateSponzaSceneAnimationEvidence(report, failures);
+        ValidateActivationEvidence(report, animationFrames, failures);
+        return Array.AsReadOnly(
+            failures.Distinct(StringComparer.Ordinal).ToArray());
+    }
+
+    private static void ValidateActivationEvidence(
+        SampleBenchmarkReport report,
+        IReadOnlyList<SampleBenchmarkActivationFrameState>
+            authoredAnimationFrames,
+        ICollection<string> failures)
+    {
+        SampleBenchmarkActivationEvidence? evidence =
+            report.ActivationEvidence;
+        if (evidence == null)
+        {
+            failures.Add("Activation evidence is null.");
+            return;
+        }
+        string normalizedActivation = SampleBenchmarkActivation.Normalize(
+            report.CaptureContract.Activation);
+        if (!string.Equals(
+                report.CaptureContract.Activation,
+                normalizedActivation,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                report.CaptureContract.ActivationFingerprint,
+                SampleBenchmarkActivation.CreateFingerprint(
+                    normalizedActivation),
+                StringComparison.Ordinal))
+        {
+            failures.Add(
+                "Capture-contract activation identity is noncanonical.");
+        }
+        IReadOnlyList<string> activationFailures =
+            SampleBenchmarkActivationEvidenceValidator.Validate(
+                evidence,
+                report.CaptureContract.Activation,
+                report.CaptureContract.Variant,
+                report.MeasurementFrameCount,
+                qualitySequence: false,
+                trajectory: SampleBenchmarkTrajectory.Parse(
+                    report.CaptureContract.Trajectory),
+                authoredAnimationFrames:
+                    SampleBenchmarkActivation.RequiresDeterministicAnimation(
+                        report.CaptureContract.Activation)
+                        ? authoredAnimationFrames
+                        : Array.Empty<SampleBenchmarkActivationFrameState>());
+        foreach (string failure in activationFailures)
+            failures.Add("Activation evidence: " + failure);
+        if (!string.Equals(
+                evidence.Fingerprint,
+                report.CaptureContract.ActivationFingerprint,
+                StringComparison.Ordinal))
+        {
+            failures.Add(
+                "Activation evidence fingerprint does not match the capture contract.");
+        }
+    }
+
+    private static IReadOnlyList<SampleBenchmarkActivationFrameState>
+        ValidateSponzaSceneAnimationEvidence(
+            SampleBenchmarkReport report,
+            ICollection<string> failures)
+    {
+        SampleBenchmarkSponzaSceneAnimationEvidence? evidence =
+            report.SponzaSceneAnimationEvidence;
+        SampleBenchmarkTrajectoryKind trajectory;
+        try
+        {
+            trajectory = SampleBenchmarkTrajectory.Parse(
+                report.CaptureContract.Trajectory);
+        }
+        catch (ArgumentException exception)
+        {
+            failures.Add(
+                "Sponza scene-animation trajectory is invalid: " +
+                exception.Message);
+            return Array.Empty<SampleBenchmarkActivationFrameState>();
+        }
+        if (!SampleBenchmarkTrajectory.RequiresSponza(trajectory))
+        {
+            if (!SampleBenchmarkSponzaSceneAnimationEvidence
+                    .IsCanonicalUnavailable(evidence) ||
+                !string.Equals(
+                    report.CaptureContract.SponzaSceneAnimationFingerprint,
+                    "unavailable",
+                    StringComparison.Ordinal) ||
+                report.CaptureContract.SponzaSceneAnimationMode !=
+                    SampleBenchmarkSponzaSceneAnimationMode.Unavailable ||
+                !string.Equals(
+                    report.CaptureContract
+                        .SponzaSceneAnimationConfigurationFingerprint,
+                    "unavailable",
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    report.CaptureContract.SponzaSceneAnimationSequenceHash,
+                    "unavailable",
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    report.CaptureContract.SponzaSceneAnimationSidecarSha256,
+                    "unavailable",
+                    StringComparison.Ordinal))
+            {
+                failures.Add(
+                    "A non-Sponza capture does not contain the exact " +
+                    "canonical unavailable Sponza animation evidence and " +
+                    "capture-contract shape.");
+            }
+            return Array.Empty<SampleBenchmarkActivationFrameState>();
+        }
+
+        if (evidence == null)
+        {
+            failures.Add("A Sponza capture lacks scene-animation evidence.");
+            return Array.Empty<SampleBenchmarkActivationFrameState>();
+        }
+
+        SampleBenchmarkSponzaSceneAnimationMode expectedMode =
+            SampleBenchmarkSponzaSceneAnimationContract.ResolveMode(
+                report.CaptureContract.Activation);
+        if (evidence.Schema !=
+                SampleBenchmarkSponzaSceneAnimationEvidence.CurrentSchema ||
+            evidence.Fingerprint !=
+                SampleBenchmarkSponzaSceneAnimationContract.Fingerprint ||
+            evidence.Mode != expectedMode || !evidence.Passed ||
+            evidence.SampleCount != report.MeasurementFrameCount ||
+            evidence.Failures.Count != 0 ||
+            !IsSha256Identity(evidence.ConfigurationFingerprint) ||
+            !IsSha256Identity(evidence.SequenceHash) ||
+            !IsSha256(evidence.SidecarSha256) ||
+            report.CaptureContract.SponzaSceneAnimationFingerprint !=
+                evidence.Fingerprint ||
+            report.CaptureContract.SponzaSceneAnimationMode != evidence.Mode ||
+            report.CaptureContract
+                .SponzaSceneAnimationConfigurationFingerprint !=
+                evidence.ConfigurationFingerprint ||
+            report.CaptureContract.SponzaSceneAnimationSequenceHash !=
+                evidence.SequenceHash ||
+            report.CaptureContract.SponzaSceneAnimationSidecarSha256 !=
+                evidence.SidecarSha256)
+        {
+            failures.Add(
+                "Sponza scene-animation report/contract evidence is invalid " +
+                "or internally inconsistent.");
+            return Array.Empty<SampleBenchmarkActivationFrameState>();
+        }
+        try
+        {
+            string canonicalPath = Path.GetFullPath(evidence.SidecarPath);
+            if (!string.Equals(
+                    canonicalPath,
+                    evidence.SidecarPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    "Sponza animation sidecar path is not canonical.");
+            }
+            return SampleBenchmarkSponzaSceneAnimationSidecar.Read(
+                canonicalPath,
+                evidence.SidecarSha256,
+                expectedMode,
+                report.MeasurementFrameCount,
+                evidence.ConfigurationFingerprint,
+                evidence.SequenceHash).Frames;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or IOException or
+                InvalidDataException or UnauthorizedAccessException or
+                OverflowException)
+        {
+            failures.Add(
+                "Sponza animation sidecar admission failed: " +
+                $"{exception.GetType().Name}: {exception.Message}");
+            return Array.Empty<SampleBenchmarkActivationFrameState>();
+        }
     }
 
     private static void ValidateTrajectoryIdentity(
@@ -295,6 +567,10 @@ public static class SampleBenchmarkPairComparer
         return value.AsSpan(prefix.Length).IndexOfAnyExcept(
             "0123456789abcdef".AsSpan()) < 0;
     }
+
+    private static bool IsSha256(string? value) =>
+        value is { Length: 64 } && value.AsSpan().IndexOfAnyExcept(
+            "0123456789abcdef".AsSpan()) < 0;
 
     private static SampleBenchmarkPairMetric CompareMetric(
         string name,

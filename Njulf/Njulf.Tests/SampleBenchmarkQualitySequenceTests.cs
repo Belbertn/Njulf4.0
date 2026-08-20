@@ -861,7 +861,8 @@ public sealed class SampleBenchmarkQualitySequenceTests
                 SampleMaterialGiProducerIdentityFactory.Create(
                     diagnostics,
                     HashA,
-                    "StressUnlimited")));
+                    "StressUnlimited"),
+                ActivationFrameState: null));
         }
         return Array.AsReadOnly(observations.ToArray());
     }

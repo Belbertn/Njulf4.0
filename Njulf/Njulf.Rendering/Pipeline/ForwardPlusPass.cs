@@ -80,6 +80,9 @@ namespace Njulf.Rendering.Pipeline
         private uint _simpleDdgiReceiverGatherHeight;
         private ulong _simpleDdgiReceiverGatherBufferBytes;
         private bool _simpleDdgiReceiverCacheAvailableForCurrentView;
+        private bool _simpleDdgiReceiverCacheConsumedForCurrentView;
+        private bool _forwardGiDisabledBenchmarkPipelineUsedForCurrentView;
+        private bool _forwardGiExactGatherUsedForCurrentView;
         private bool _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView;
         private bool _simpleDdgiFoliageFeedbackRequiredForCurrentView;
         private bool _simpleDdgiReflectionFeedbackRequiredForCurrentView;
@@ -685,6 +688,9 @@ namespace Njulf.Rendering.Pipeline
             try
             {
             _simpleDdgiReceiverCacheAvailableForCurrentView = false;
+            _simpleDdgiReceiverCacheConsumedForCurrentView = false;
+            _forwardGiDisabledBenchmarkPipelineUsedForCurrentView = false;
+            _forwardGiExactGatherUsedForCurrentView = false;
             _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView = false;
             _simpleDdgiFoliageFeedbackRequiredForCurrentView = false;
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
@@ -1277,6 +1283,8 @@ namespace Njulf.Rendering.Pipeline
                 !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                 !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                 ShouldUseSimpleDdgiReceiverCacheForDraw();
+            bool disabledBenchmarkPipeline =
+                ShouldUseForwardGiDisabledBenchmarkPipeline();
             if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
             {
                 if (!_meshPipeline.TryResolveCombinedAdvancedGiPipeline(
@@ -1319,10 +1327,18 @@ namespace Njulf.Rendering.Pipeline
                 pipeline = _meshPipeline.ResolveOpaqueSpecializedPipeline(
                     pipeline,
                     receiverCacheEnabled,
-                    ShouldUseForwardGiDisabledBenchmarkPipeline(),
+                    disabledBenchmarkPipeline,
                     _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView ||
                     _simpleDdgiReflectionFeedbackRequiredForCurrentView);
             }
+            _simpleDdgiReceiverCacheConsumedForCurrentView |=
+                receiverCacheEnabled && !disabledBenchmarkPipeline;
+            _forwardGiDisabledBenchmarkPipelineUsedForCurrentView |=
+                disabledBenchmarkPipeline;
+            _forwardGiExactGatherUsedForCurrentView |=
+                _settings.Diagnostics.ForceExactForwardGiGatherForBenchmark &&
+                !disabledBenchmarkPipeline &&
+                !receiverCacheEnabled;
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
 
             var pushConstants = new Data.GPUForwardPushConstants
@@ -1524,6 +1540,8 @@ namespace Njulf.Rendering.Pipeline
                 !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                 !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                 ShouldUseSimpleDdgiReceiverCacheForDraw();
+            bool disabledBenchmarkPipeline =
+                ShouldUseForwardGiDisabledBenchmarkPipeline();
             if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
             {
                 if (!_meshPipeline.TryResolveCombinedAdvancedGiPipeline(
@@ -1566,10 +1584,18 @@ namespace Njulf.Rendering.Pipeline
                 pipeline = _meshPipeline.ResolveOpaqueSpecializedPipeline(
                     pipeline,
                     receiverCacheEnabled,
-                    ShouldUseForwardGiDisabledBenchmarkPipeline(),
+                    disabledBenchmarkPipeline,
                     _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView ||
                     _simpleDdgiReflectionFeedbackRequiredForCurrentView);
             }
+            _simpleDdgiReceiverCacheConsumedForCurrentView |=
+                receiverCacheEnabled && !disabledBenchmarkPipeline;
+            _forwardGiDisabledBenchmarkPipelineUsedForCurrentView |=
+                disabledBenchmarkPipeline;
+            _forwardGiExactGatherUsedForCurrentView |=
+                _settings.Diagnostics.ForceExactForwardGiGatherForBenchmark &&
+                !disabledBenchmarkPipeline &&
+                !receiverCacheEnabled;
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
 
             var pushConstants = new Data.GPUForwardPushConstants
@@ -2031,6 +2057,15 @@ namespace Njulf.Rendering.Pipeline
 
         internal bool CanConsumeSimpleDdgiReceiverCacheForCurrentView =>
             ShouldUseSimpleDdgiReceiverCacheForDraw();
+
+        internal bool ConsumedSimpleDdgiReceiverCacheForCurrentView =>
+            _simpleDdgiReceiverCacheConsumedForCurrentView;
+
+        internal bool UsedForwardGiDisabledBenchmarkPipelineForCurrentView =>
+            _forwardGiDisabledBenchmarkPipelineUsedForCurrentView;
+
+        internal bool UsedForwardGiExactGatherForCurrentView =>
+            _forwardGiExactGatherUsedForCurrentView;
 
         internal void BindSimpleDdgiReceiverCacheBuffer(
             CommandBuffer cmd,
