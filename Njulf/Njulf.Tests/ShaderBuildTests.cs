@@ -10,6 +10,7 @@ public sealed class ShaderBuildTests
 {
     private static readonly string[] RequiredShaders =
     [
+        "ambient_occlusion.comp",
         "forward.frag",
         "ddgi_simple_trace.comp",
         "ddgi_simple_transport.comp",
