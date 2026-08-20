@@ -191,6 +191,8 @@ public sealed class SampleSmokeOptionsParserTests
     [TestCase("material-showcase", SampleSceneKind.MaterialShowcase)]
     [TestCase("global-illumination-test", SampleSceneKind.GlobalIlluminationTest)]
     [TestCase("bistro", SampleSceneKind.Bistro)]
+    [TestCase("sponza", SampleSceneKind.SponzaPlaza)]
+    [TestCase("sponza-plaza", SampleSceneKind.SponzaPlaza)]
     [TestCase("foliage-showcase", SampleSceneKind.FoliageShowcase)]
     [TestCase("vfx-showcase", SampleSceneKind.VfxShowcase)]
     public void ParsesSceneAndDefaultsToStartupSmoke(string value, SampleSceneKind expected)
@@ -207,6 +209,18 @@ public sealed class SampleSmokeOptionsParserTests
             Assert.That(options.FrameCount, Is.EqualTo(3));
             Assert.That(options.Enabled, Is.True);
         });
+    }
+
+    [TestCase(SampleSceneKind.Bistro, "Bistro")]
+    [TestCase(SampleSceneKind.SponzaPlaza, "Sponza")]
+    [TestCase(SampleSceneKind.GlobalIlluminationTest, "GlobalIlluminationTest")]
+    public void PerformanceCaptureSceneKind_UsesCanonicalCampaignIdentity(
+        SampleSceneKind sceneKind,
+        string expected)
+    {
+        Assert.That(
+            HelloGame.GetPerformanceCaptureSceneKind(sceneKind),
+            Is.EqualTo(expected));
     }
 
     [Test]

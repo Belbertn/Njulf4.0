@@ -383,6 +383,7 @@ internal sealed class HelloGame : Game
         LightManager lightManager = services.GetRequiredService<LightManager>();
         VulkanRenderer renderer = Renderer as VulkanRenderer
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
+        renderer.CaptureSceneKind = GetPerformanceCaptureSceneKind(_sceneKind);
         if (ShouldAutoEnableGpuTiming())
             renderer.Settings.Debug.AllowGpuTiming = true;
         ConfigureSceneRenderSettings(renderer);
@@ -2106,6 +2107,7 @@ internal sealed class HelloGame : Game
         FirstPersonCamera camera)
     {
         _sceneKind = sceneKind;
+        renderer.CaptureSceneKind = GetPerformanceCaptureSceneKind(_sceneKind);
 
         Model model = LoadSampleScene(meshManager, materialManager, lightManager);
         _performanceScenarioRunner = CreatePerformanceScenarioRunner(meshManager, materialManager, lightManager);
@@ -2295,6 +2297,11 @@ internal sealed class HelloGame : Game
             _ => "Sponza Plaza"
         };
     }
+
+    internal static string GetPerformanceCaptureSceneKind(
+        SampleSceneKind sceneKind) => sceneKind == SampleSceneKind.SponzaPlaza
+            ? "Sponza"
+            : sceneKind.ToString();
 
     private static SampleAssetManifest? GetModelSceneManifest(SampleSceneKind sceneKind) =>
         sceneKind switch

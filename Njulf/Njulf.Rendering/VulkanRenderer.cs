@@ -1103,6 +1103,11 @@ namespace Njulf.Rendering
                 SimpleDdgiNearFieldResidualProfile.QuarterResolutionPerformance;
         }
         /// <summary>
+        /// Optional application-supplied scene-kind identifier included in performance
+        /// captures. When it is absent, the renderer falls back to the scene object's name.
+        /// </summary>
+        public string CaptureSceneKind { get; set; } = string.Empty;
+        /// <summary>
         /// Optional application-supplied active scenario identifier included in performance
         /// captures. Set this before drawing the scenario; when it is not supplied, captures
         /// deliberately report that the scenario is unavailable instead of inferring one from
@@ -8662,7 +8667,9 @@ namespace Njulf.Rendering
                 CaptureSceneAssetHash = ComputePerformanceCaptureSceneAssetHash(sceneData),
                 CaptureSceneStateHash = ComputePerformanceCaptureSceneStateHash(sceneData),
                 CaptureRun = new PerformanceCaptureRunMetadata(
-                    ResolveCaptureSceneKind(sceneData.CaptureSceneName),
+                    ResolveCaptureSceneKind(
+                        CaptureSceneKind,
+                        sceneData.CaptureSceneName),
                     ResolveCaptureScenario(sceneData.CaptureScenario),
                     CreatePerformanceCaptureBuildConfiguration(_context.ValidationSettings.Mode.ToString()),
                     ResolvePerformanceCaptureApplicationVersion(),
@@ -9556,9 +9563,16 @@ namespace Njulf.Rendering
                 "unavailable:active-scenario-not-supplied-by-renderer-client");
         }
 
-        private static string ResolveCaptureSceneKind(string? sceneName)
+        internal static string ResolveCaptureSceneKind(
+            string? sceneKind,
+            string? sceneName)
         {
-            return NormalizeCaptureMetadataValue(sceneName, "unavailable:scene-name-not-reported");
+            string? supplied = string.IsNullOrWhiteSpace(sceneKind)
+                ? sceneName
+                : sceneKind;
+            return NormalizeCaptureMetadataValue(
+                supplied,
+                "unavailable:scene-kind-not-reported");
         }
 
         private static string ResolveCaptureShaderBundleHash(string? shaderBundleHash)

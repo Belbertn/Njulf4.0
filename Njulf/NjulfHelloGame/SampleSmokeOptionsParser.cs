@@ -2251,6 +2251,8 @@ public static class SampleSmokeOptionsParser
             return SampleSceneKind.GlobalIlluminationTest;
 
         string normalized = value.Trim().Replace("-", string.Empty).Replace("_", string.Empty);
+        if (normalized.Equals("sponza", StringComparison.OrdinalIgnoreCase))
+            return SampleSceneKind.SponzaPlaza;
         foreach (SampleSceneKind sceneKind in Enum.GetValues<SampleSceneKind>())
         {
             string sceneName = sceneKind.ToString().Replace("-", string.Empty).Replace("_", string.Empty);
