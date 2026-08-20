@@ -1439,8 +1439,7 @@ public sealed class SampleBenchmarkAnalyzer
                     joined.CompletionIndex,
                     completed));
 
-                if (completed.Submitted.TailCertificate.IsAcceptedFor(
-                        completed.Submitted))
+                if (HasExactCertifiedDdgiTransientClosure(completed))
                 {
                     certificateIndex = originIndex;
                     break;
@@ -1819,13 +1818,36 @@ public sealed class SampleBenchmarkAnalyzer
         SimpleDdgiTailCertificateFrameEvidence tail =
             completed.Submitted.TailCertificate;
         if (tail.Phase == SimpleDdgiTransportPhase.Certified &&
-            (completed.SchedulerSolveEpoch != 0u ||
-             completed.SchedulerSolveVisitedCount != 0u))
+            !HasExactCertifiedDdgiTransientClosure(completed))
         {
             failures.Add(
-                $"{prefix} Certified scheduler feedback did not retain the " +
-                "production epoch-zero/no-visited solve markers.");
+                $"{prefix} Certified closure is not an exact quiescent, " +
+                "generation-current participant witness; post-audit work " +
+                "requires a fresh lifecycle.");
         }
+    }
+
+    private static bool HasExactCertifiedDdgiTransientClosure(
+        in SimpleDdgiCompletedFrameEvidence completed)
+    {
+        SimpleDdgiTailCertificateFrameEvidence tail =
+            completed.Submitted.TailCertificate;
+        return tail.IsAcceptedFor(completed.Submitted) &&
+            completed.SchedulerFeedbackAvailable &&
+            completed.SchedulerFeedbackFrameAligned &&
+            completed.SchedulerFeedbackGenerationAligned &&
+            completed.SchedulerFeedbackStatusFlags == 0u &&
+            completed.SchedulerFeedbackTransportGeneration ==
+                completed.Submitted.TransportGeneration &&
+            completed.SchedulerFeedbackTransportGeneration ==
+                tail.Generations.CanonicalField &&
+            completed.SchedulerSolveEpoch == 0u &&
+            completed.SchedulerSolveParticipantCount ==
+                tail.ExpectedParticipantCount &&
+            completed.SchedulerSolveVisitedCount == 0u &&
+            completed.SchedulerActiveCanonicalMutationCount == 0u &&
+            completed.SchedulerActiveSourceMutationCount == 0u &&
+            completed.SchedulerBlockingTailSourceWorkCount == 0u;
     }
 
     private static void ValidateDdgiTransientAuditLifecycle(
@@ -1839,6 +1861,12 @@ public sealed class SampleBenchmarkAnalyzer
         ulong finalSchedulerSerial = 0UL;
         ulong solveFeedbackSerial = 0UL;
         ulong triggerFeedbackSerial = 0UL;
+        SimpleDdgiTransportGenerations frozenGenerations = default;
+        uint frozenSolveEpoch = 0u;
+        uint frozenAuditEpoch = 0u;
+        uint frozenExpectedParticipantCount = 0u;
+        uint frozenExpectedTexelCount = 0u;
+        int frozenPhysicalProbeCount = 0;
         bool sawDispatch = false;
         bool sawAwait = false;
         SimpleDdgiTailCertificateFrameEvidence certificateTail = default;
@@ -1877,6 +1905,14 @@ public sealed class SampleBenchmarkAnalyzer
                         tail.AuditSolveFeedbackFrameSerial;
                     triggerFeedbackSerial =
                         tail.AuditTriggerFeedbackFrameSerial;
+                    frozenGenerations = tail.Generations;
+                    frozenSolveEpoch = tail.SolveEpoch;
+                    frozenAuditEpoch = tail.AuditEpoch;
+                    frozenExpectedParticipantCount =
+                        tail.ExpectedParticipantCount;
+                    frozenExpectedTexelCount = tail.ExpectedTexelCount;
+                    frozenPhysicalProbeCount =
+                        completed.Submitted.AuditPhysicalProbeCount;
                     plannedChunkCount = tail.AuditPlannedChunkCount;
                     if (tail.AuditFirstSubmissionFrameSerial !=
                         firstSchedulerSerial)
@@ -1892,7 +1928,15 @@ public sealed class SampleBenchmarkAnalyzer
                          tail.AuditSolveFeedbackFrameSerial !=
                             solveFeedbackSerial ||
                          tail.AuditTriggerFeedbackFrameSerial !=
-                            triggerFeedbackSerial)
+                            triggerFeedbackSerial ||
+                         !HasSameFrozenDdgiAuditIdentity(
+                             completed,
+                             frozenGenerations,
+                             frozenSolveEpoch,
+                             frozenAuditEpoch,
+                             frozenExpectedParticipantCount,
+                             frozenExpectedTexelCount,
+                             frozenPhysicalProbeCount))
                 {
                     failures.Add(
                         $"DDGI transient window {windowIndex} changed its " +
@@ -1928,7 +1972,15 @@ public sealed class SampleBenchmarkAnalyzer
                     tail.AuditSolveFeedbackFrameSerial !=
                         solveFeedbackSerial ||
                     tail.AuditTriggerFeedbackFrameSerial !=
-                        triggerFeedbackSerial)
+                        triggerFeedbackSerial ||
+                    !HasSameFrozenDdgiAuditIdentity(
+                        completed,
+                        frozenGenerations,
+                        frozenSolveEpoch,
+                        frozenAuditEpoch,
+                        frozenExpectedParticipantCount,
+                        frozenExpectedTexelCount,
+                        frozenPhysicalProbeCount))
                 {
                     failures.Add(
                         $"DDGI transient window {windowIndex} route frame " +
@@ -1939,7 +1991,16 @@ public sealed class SampleBenchmarkAnalyzer
             }
 
             if (tail.Phase != SimpleDdgiTransportPhase.Certified)
+            {
+                if (sawDispatch)
+                {
+                    failures.Add(
+                        $"DDGI transient window {windowIndex} route frame " +
+                        $"{frame.RouteFrameIndex} resumed ordinary work after " +
+                        "the frozen audit began; a fresh lifecycle is required.");
+                }
                 continue;
+            }
 
             if (!sawDispatch || !sawAwait ||
                 submittedChunkCount != plannedChunkCount ||
@@ -1948,7 +2009,15 @@ public sealed class SampleBenchmarkAnalyzer
                 tail.AuditFirstSubmissionFrameSerial != firstSchedulerSerial ||
                 tail.AuditFinalSubmissionFrameSerial != finalSchedulerSerial ||
                 tail.AuditSolveFeedbackFrameSerial != solveFeedbackSerial ||
-                tail.AuditTriggerFeedbackFrameSerial != triggerFeedbackSerial)
+                tail.AuditTriggerFeedbackFrameSerial != triggerFeedbackSerial ||
+                !HasSameFrozenDdgiAuditIdentity(
+                    completed,
+                    frozenGenerations,
+                    frozenSolveEpoch,
+                    frozenAuditEpoch,
+                    frozenExpectedParticipantCount,
+                    frozenExpectedTexelCount,
+                    frozenPhysicalProbeCount))
             {
                 failures.Add(
                     $"DDGI transient window {windowIndex} certificate does not " +
@@ -1966,6 +2035,25 @@ public sealed class SampleBenchmarkAnalyzer
                 frames,
                 certificateTail);
         }
+    }
+
+    private static bool HasSameFrozenDdgiAuditIdentity(
+        in SimpleDdgiCompletedFrameEvidence completed,
+        in SimpleDdgiTransportGenerations generations,
+        uint solveEpoch,
+        uint auditEpoch,
+        uint expectedParticipantCount,
+        uint expectedTexelCount,
+        int physicalProbeCount)
+    {
+        SimpleDdgiTailCertificateFrameEvidence tail =
+            completed.Submitted.TailCertificate;
+        return tail.Generations == generations &&
+            tail.SolveEpoch == solveEpoch &&
+            tail.AuditEpoch == auditEpoch &&
+            tail.ExpectedParticipantCount == expectedParticipantCount &&
+            tail.ExpectedTexelCount == expectedTexelCount &&
+            completed.Submitted.AuditPhysicalProbeCount == physicalProbeCount;
     }
 
     private static void ValidateDdgiTransientAuditFeedbackProvenance(
@@ -2017,30 +2105,142 @@ public sealed class SampleBenchmarkAnalyzer
                 "epoch-zero trigger, then first audit submission.");
         }
 
+        ulong solveSerial =
+            frames[solveIndex].Completed.Submitted.SchedulerFrameSerial;
+        ulong triggerSerial =
+            frames[triggerIndex].Completed.Submitted.SchedulerFrameSerial;
+        ulong firstAuditSerial =
+            frames[firstAuditIndex].Completed.Submitted.SchedulerFrameSerial;
+        ulong completionDelay = (ulong)RenderingConstants.FramesInFlight;
+        if (triggerIndex - solveIndex < RenderingConstants.FramesInFlight ||
+            solveSerial > ulong.MaxValue - completionDelay ||
+            triggerSerial < solveSerial + completionDelay)
+        {
+            failures.Add(
+                $"{prefix} audit trigger does not postdate solve feedback by " +
+                "the required FramesInFlight completion delay.");
+        }
+        if (firstAuditIndex - triggerIndex !=
+                RenderingConstants.FramesInFlight ||
+            triggerSerial > ulong.MaxValue - completionDelay ||
+            firstAuditSerial != triggerSerial + completionDelay)
+        {
+            failures.Add(
+                $"{prefix} first audit submission is not exactly one " +
+                "FramesInFlight delay after its trigger feedback packet.");
+        }
+
         SimpleDdgiCompletedFrameEvidence solve = frames[solveIndex].Completed;
         SimpleDdgiCompletedFrameEvidence trigger =
             frames[triggerIndex].Completed;
-        if (!IsExactOrdinaryFeedbackWitness(solve, tail) ||
+        // Replay the manager's delayed-feedback admission rule. A packet can
+        // name the current generation or its one-step predecessor; only work
+        // published by the current generation advances the host generation.
+        uint replayedTransportGeneration =
+            frames[0].Completed.Submitted.TransportGeneration;
+        if (replayedTransportGeneration == 0u)
+        {
+            failures.Add(
+                $"{prefix} generation replay has an invalid zero origin.");
+        }
+        for (int index = 0; index <= triggerIndex; index++)
+        {
+            SimpleDdgiCompletedFrameEvidence replay = frames[index].Completed;
+            if (!IsExactOrdinaryFeedbackIdentity(replay, tail))
+            {
+                failures.Add(
+                    $"{prefix} route frame {frames[index].RouteFrameIndex} " +
+                    "is not an exact ordinary feedback identity for replay.");
+                continue;
+            }
+
+            uint feedbackGeneration =
+                replay.SchedulerFeedbackTransportGeneration;
+            if (feedbackGeneration == 0u || replayedTransportGeneration == 0u)
+            {
+                failures.Add(
+                    $"{prefix} route frame {frames[index].RouteFrameIndex} " +
+                    "retained a zero transport generation during replay.");
+                continue;
+            }
+
+            bool currentGeneration =
+                feedbackGeneration == replayedTransportGeneration;
+            bool immediatePredecessor = AdvanceNonZeroGeneration(
+                feedbackGeneration) == replayedTransportGeneration;
+            if (!currentGeneration && !immediatePredecessor)
+            {
+                failures.Add(
+                    $"{prefix} route frame {frames[index].RouteFrameIndex} " +
+                    $"feedback generation {feedbackGeneration} is neither " +
+                    $"current {replayedTransportGeneration} nor its exact " +
+                    "wrap-safe predecessor.");
+                continue;
+            }
+
+            if (currentGeneration &&
+                replay.SchedulerPublishedWorkCount != 0u &&
+                replay.SchedulerActiveCanonicalMutationCount != 0u)
+            {
+                replayedTransportGeneration = AdvanceNonZeroGeneration(
+                    replayedTransportGeneration);
+            }
+        }
+
+        // The packet after the trigger can already be in flight when BeginFrame
+        // freezes the audit. Any work in that packet invalidates the frozen
+        // pre-work certificate, even though its own completion is observed later.
+        for (int index = triggerIndex + 1; index < firstAuditIndex; index++)
+        {
+            SimpleDdgiCompletedFrameEvidence postTrigger =
+                frames[index].Completed;
+            if (!IsExactOrdinaryFeedbackIdentity(postTrigger, tail) ||
+                postTrigger.SchedulerFeedbackTransportGeneration !=
+                    tail.Generations.CanonicalField ||
+                postTrigger.SchedulerSolveEpoch != 0u ||
+                postTrigger.SchedulerSolveParticipantCount !=
+                    tail.ExpectedParticipantCount ||
+                postTrigger.SchedulerSolveVisitedCount != 0u ||
+                postTrigger.SchedulerActiveCanonicalMutationCount != 0u ||
+                postTrigger.SchedulerActiveSourceMutationCount != 0u ||
+                postTrigger.SchedulerBlockingTailSourceWorkCount != 0u)
+            {
+                failures.Add(
+                    $"{prefix} route frame {frames[index].RouteFrameIndex} " +
+                    "post-trigger in-flight feedback was not quiescent at " +
+                    "the frozen canonical generation; a fresh audit " +
+                    "lifecycle is required.");
+            }
+        }
+
+        if (!IsExactOrdinaryFeedbackIdentity(solve, tail) ||
             solve.SchedulerSolveEpoch != tail.SolveEpoch ||
             solve.SchedulerSolveParticipantCount !=
                 tail.ExpectedParticipantCount ||
             solve.SchedulerSolveVisitedCount !=
                 tail.ExpectedParticipantCount ||
-            solve.SchedulerBlockingTailSourceWorkCount != 0u)
+            solve.SchedulerPublishedWorkCount == 0u ||
+            solve.SchedulerActiveCanonicalMutationCount == 0u ||
+            solve.SchedulerBlockingTailSourceWorkCount != 0u ||
+            solve.SchedulerFeedbackTransportGeneration ==
+                tail.Generations.CanonicalField)
         {
             failures.Add(
                 $"{prefix} solve-feedback packet is not the exact complete " +
                 "solve epoch/population that armed the drain.");
         }
 
-        if (!IsExactOrdinaryFeedbackWitness(trigger, tail) ||
+        if (!IsExactOrdinaryFeedbackIdentity(trigger, tail) ||
             trigger.SchedulerSolveEpoch != 0u ||
             trigger.SchedulerSolveParticipantCount !=
                 tail.ExpectedParticipantCount ||
             trigger.SchedulerSolveVisitedCount != 0u ||
             trigger.SchedulerActiveCanonicalMutationCount != 0u ||
             trigger.SchedulerActiveSourceMutationCount != 0u ||
-            trigger.SchedulerBlockingTailSourceWorkCount != 0u)
+            trigger.SchedulerBlockingTailSourceWorkCount != 0u ||
+            trigger.SchedulerFeedbackTransportGeneration !=
+                replayedTransportGeneration ||
+            replayedTransportGeneration != tail.Generations.CanonicalField)
         {
             failures.Add(
                 $"{prefix} audit-trigger feedback packet is not the exact " +
@@ -2068,7 +2268,7 @@ public sealed class SampleBenchmarkAnalyzer
         return result;
     }
 
-    private static bool IsExactOrdinaryFeedbackWitness(
+    private static bool IsExactOrdinaryFeedbackIdentity(
         in SimpleDdgiCompletedFrameEvidence completed,
         in SimpleDdgiTailCertificateFrameEvidence tail) =>
         completed.Submitted.TailCertificate.Phase ==
@@ -2097,8 +2297,6 @@ public sealed class SampleBenchmarkAnalyzer
             tail.Generations.PhysicalOwnership &&
         completed.SchedulerFeedbackSourceLightingGeneration ==
             tail.Generations.SourceLighting &&
-        completed.SchedulerFeedbackTransportGeneration ==
-            tail.Generations.CanonicalField &&
         completed.SchedulerFeedbackQueueTransactionGeneration ==
             tail.Generations.Queue &&
         completed.SchedulerFeedbackSchedulerResourceGeneration ==
