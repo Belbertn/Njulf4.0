@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Globalization;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Njulf.Rendering.Core;
@@ -36,10 +37,22 @@ public sealed record LinearHdrCaptureResult(
     LinearHdrCaptureState State,
     string Error)
 {
+    /// <summary>
+    /// Caller-authored identity carried unchanged from request through terminal
+    /// publication. Empty retains compatibility with ordinary one-shot captures.
+    /// </summary>
+    public string CaptureToken { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Exact renderer DDGI frame serial whose SceneColor image was copied.
+    /// It is assigned when the request is dequeued into a frame slot.
+    /// </summary>
+    public ulong FrameSerial { get; init; }
+
     public bool IsTerminal => State is LinearHdrCaptureState.Completed or LinearHdrCaptureState.Failed;
 }
 
-internal sealed record LinearHdrCaptureRequest(string OutputPath);
+internal sealed record LinearHdrCaptureRequest(string OutputPath, string CaptureToken);
 
 /// <summary>
 /// Thread-safe request/status registry used by the public renderer API and the
@@ -61,9 +74,10 @@ internal sealed class LinearHdrCaptureService
         }
     }
 
-    public void Request(string outputPath)
+    public void Request(string outputPath, string captureToken = "")
     {
         string fullPath = NormalizeOutputPath(outputPath);
+        string normalizedToken = NormalizeCaptureToken(captureToken);
         lock (_gate)
         {
             if (_results.TryGetValue(fullPath, out LinearHdrCaptureResult? existing) &&
@@ -73,11 +87,14 @@ internal sealed class LinearHdrCaptureService
                     $"Linear HDR capture '{fullPath}' is already queued or submitted.");
             }
 
-            _requests.Enqueue(new LinearHdrCaptureRequest(fullPath));
+            _requests.Enqueue(new LinearHdrCaptureRequest(fullPath, normalizedToken));
             _results[fullPath] = new LinearHdrCaptureResult(
                 fullPath,
                 LinearHdrCaptureState.Queued,
-                string.Empty);
+                string.Empty)
+            {
+                CaptureToken = normalizedToken
+            };
         }
     }
 
@@ -98,7 +115,7 @@ internal sealed class LinearHdrCaptureService
         {
             if (_requests.Count == 0)
             {
-                request = new LinearHdrCaptureRequest(string.Empty);
+                request = new LinearHdrCaptureRequest(string.Empty, string.Empty);
                 return false;
             }
 
@@ -107,9 +124,13 @@ internal sealed class LinearHdrCaptureService
         }
     }
 
-    public void MarkSubmitted(string outputPath)
+    public void MarkSubmitted(string outputPath, ulong frameSerial)
     {
-        Update(outputPath, LinearHdrCaptureState.Submitted, string.Empty);
+        Update(
+            outputPath,
+            LinearHdrCaptureState.Submitted,
+            string.Empty,
+            frameSerial);
     }
 
     public void MarkCompleted(string outputPath)
@@ -137,16 +158,30 @@ internal sealed class LinearHdrCaptureService
                 _results[request.OutputPath] = new LinearHdrCaptureResult(
                     request.OutputPath,
                     LinearHdrCaptureState.Failed,
-                    error);
+                    error)
+                {
+                    CaptureToken = request.CaptureToken
+                };
             }
         }
     }
 
-    private void Update(string outputPath, LinearHdrCaptureState state, string error)
+    private void Update(
+        string outputPath,
+        LinearHdrCaptureState state,
+        string error,
+        ulong? frameSerial = null)
     {
         string fullPath = NormalizeOutputPath(outputPath);
         lock (_gate)
-            _results[fullPath] = new LinearHdrCaptureResult(fullPath, state, error);
+        {
+            _results.TryGetValue(fullPath, out LinearHdrCaptureResult? existing);
+            _results[fullPath] = new LinearHdrCaptureResult(fullPath, state, error)
+            {
+                CaptureToken = existing?.CaptureToken ?? string.Empty,
+                FrameSerial = frameSerial ?? existing?.FrameSerial ?? 0UL
+            };
+        }
     }
 
     private static string NormalizeOutputPath(string outputPath)
@@ -163,6 +198,24 @@ internal sealed class LinearHdrCaptureService
         }
 
         return fullPath;
+    }
+
+    private static string NormalizeCaptureToken(string? captureToken)
+    {
+        string normalized = captureToken?.Trim() ?? string.Empty;
+        if (normalized.Length > 256)
+        {
+            throw new ArgumentException(
+                "A linear HDR capture token cannot exceed 256 characters.",
+                nameof(captureToken));
+        }
+        if (normalized.Any(static character => char.IsControl(character)))
+        {
+            throw new ArgumentException(
+                "A linear HDR capture token cannot contain control characters.",
+                nameof(captureToken));
+        }
+        return normalized;
     }
 }
 
@@ -687,6 +740,7 @@ internal sealed unsafe class LinearHdrReadbackManager : IDisposable
         public required int Width { get; init; }
         public required int Height { get; init; }
         public required ulong ByteCount { get; init; }
+        public required ulong FrameSerial { get; init; }
         public bool Submitted { get; set; }
     }
 
@@ -707,6 +761,7 @@ internal sealed unsafe class LinearHdrReadbackManager : IDisposable
 
     public bool TryPrepareCapture(
         int frameIndex,
+        ulong frameSerial,
         RenderTarget source,
         out LinearHdrReadbackCapturePlan plan)
     {
@@ -750,7 +805,8 @@ internal sealed unsafe class LinearHdrReadbackManager : IDisposable
                 Buffer = buffer,
                 Width = width,
                 Height = height,
-                ByteCount = byteCount
+                ByteCount = byteCount,
+                FrameSerial = frameSerial
             };
             plan = new LinearHdrReadbackCapturePlan(frameIndex, buffer, width, height, byteCount);
             return true;
@@ -827,7 +883,9 @@ internal sealed unsafe class LinearHdrReadbackManager : IDisposable
             return;
 
         pending.Submitted = true;
-        _captureService.MarkSubmitted(pending.Request.OutputPath);
+        _captureService.MarkSubmitted(
+            pending.Request.OutputPath,
+            pending.FrameSerial);
     }
 
     public void CompleteFrameAfterFence(int frameIndex)

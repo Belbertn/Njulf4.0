@@ -1139,11 +1139,22 @@ namespace Njulf.Rendering
         /// </summary>
         public bool RequestLinearHdrCapture(string outputPath)
         {
+            return RequestLinearHdrCapture(outputPath, string.Empty);
+        }
+
+        /// <summary>
+        /// Queues a lossless SceneColor capture carrying a caller-authored
+        /// attestation token through the exact submitted DDGI frame serial.
+        /// </summary>
+        public bool RequestLinearHdrCapture(
+            string outputPath,
+            string captureToken)
+        {
             ThrowIfDisposalStarted();
             if (!Settings.Debug.Enabled || !Settings.Debug.AllowScreenshots)
                 return false;
 
-            _linearHdrCaptureService.Request(outputPath);
+            _linearHdrCaptureService.Request(outputPath, captureToken);
             return true;
         }
 
@@ -10020,6 +10031,7 @@ namespace Njulf.Rendering
             RenderTarget sceneColor = _renderTargets.SceneColor;
             if (!_linearHdrReadbackManager.TryPrepareCapture(
                     _currentFrame,
+                    _ddgiFrameSerial,
                     sceneColor,
                     out LinearHdrReadbackCapturePlan plan))
             {

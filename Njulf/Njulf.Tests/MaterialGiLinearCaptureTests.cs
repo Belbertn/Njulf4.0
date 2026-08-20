@@ -175,6 +175,39 @@ public sealed class MaterialGiLinearCaptureTests
     }
 
     [Test]
+    public void LinearCaptureService_PreservesTokenAndExactSubmittedFrameSerial()
+    {
+        var service = new LinearHdrCaptureService();
+        string path = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "attested-linear-capture.pfm");
+        const string token = "quality-sequence:route-0059";
+
+        service.Request(path, token);
+        Assert.That(service.TryDequeue(out LinearHdrCaptureRequest request), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(request.OutputPath, Is.EqualTo(Path.GetFullPath(path)));
+            Assert.That(request.CaptureToken, Is.EqualTo(token));
+        });
+
+        service.MarkSubmitted(path, 42UL);
+        LinearHdrCaptureResult submitted = service.GetResult(path);
+        service.MarkCompleted(path);
+        LinearHdrCaptureResult completed = service.GetResult(path);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(submitted.State, Is.EqualTo(LinearHdrCaptureState.Submitted));
+            Assert.That(submitted.CaptureToken, Is.EqualTo(token));
+            Assert.That(submitted.FrameSerial, Is.EqualTo(42UL));
+            Assert.That(completed.State, Is.EqualTo(LinearHdrCaptureState.Completed));
+            Assert.That(completed.CaptureToken, Is.EqualTo(token));
+            Assert.That(completed.FrameSerial, Is.EqualTo(42UL));
+        });
+    }
+
+    [Test]
     public void CaptureSequence_WarmsExactly360FramesThenPublishesAllSignalsInOrder()
     {
         var sequence = new SampleMaterialGiCaptureSequence();
