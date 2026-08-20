@@ -13,6 +13,9 @@ public sealed record SampleBenchmarkActivationVerificationResult(
     string ActivationFingerprint,
     string ActivationStructuralSequenceHash,
     string ActivationExecutionSequenceHash,
+    string ReflectionProbeCaptureEvidenceDigest,
+    int ReflectionProbeCaptureRawRowCount,
+    int ReflectionProbeCaptureResultRowCount,
     string SponzaSceneAnimationFingerprint,
     SampleBenchmarkSponzaSceneAnimationMode SponzaSceneAnimationMode,
     string SponzaSceneAnimationConfigurationFingerprint,
@@ -24,7 +27,7 @@ public sealed record SampleBenchmarkActivationVerificationResult(
     public const string CurrentKind =
         "njulf-benchmark-activation-verification";
     public const string CurrentSchema =
-        "njulf-benchmark-activation-verification/v1";
+        "njulf-benchmark-activation-verification/v2";
 }
 
 /// <summary>
@@ -114,6 +117,9 @@ public static class SampleBenchmarkActivationVerificationCli
 
             SampleBenchmarkActivationEvidence activation =
                 finalParsed.ActivationEvidence;
+            SampleBenchmarkReflectionProbeVerification reflection =
+                SampleBenchmarkReflectionProbeCaptureEvaluator.Verify(
+                    finalParsed);
             SampleBenchmarkSponzaSceneAnimationEvidence animation =
                 finalParsed.SponzaSceneAnimationEvidence;
             string[] distinct = failures
@@ -129,6 +135,9 @@ public static class SampleBenchmarkActivationVerificationCli
                 activation.Fingerprint,
                 activation.ActivationStructuralSequenceHash,
                 activation.ActivationExecutionSequenceHash,
+                reflection.Digest,
+                reflection.RawRowCount,
+                reflection.RecomputedEvidence.SlowestFrames.Count,
                 animation.Fingerprint,
                 animation.Mode,
                 animation.ConfigurationFingerprint,

@@ -1094,6 +1094,15 @@ public sealed class SampleBenchmarkAnalyzer
                 budgetMetrics,
                 cpuFrame,
                 gpuFrame);
+        SampleBenchmarkReflectionProbeRawEvidence reflectionRawEvidence =
+            SampleBenchmarkReflectionProbeCaptureEvaluator.CaptureRaw(
+                _samples,
+                options,
+                scenario,
+                measurementFrameCount);
+        SampleReflectionProbeCaptureEvidence reflectionCaptureEvidence =
+            SampleBenchmarkReflectionProbeCaptureEvaluator.Recompute(
+                reflectionRawEvidence);
 
         return new SampleBenchmarkReport(
             Kind: "njulf-renderer-benchmark",
@@ -1125,7 +1134,8 @@ public sealed class SampleBenchmarkAnalyzer
             SimpleDdgiTransportBlendMilliseconds = simpleDdgiTransportBlend,
             SimpleDdgiSchedulerRefresh = schedulerRefreshEvidence,
             CpuSpikeEvidence = BuildCpuSpikeEvidence(),
-            ReflectionProbeCaptureEvidence = BuildReflectionProbeCaptureEvidence(),
+            ReflectionProbeCaptureRawEvidence = reflectionRawEvidence,
+            ReflectionProbeCaptureEvidence = reflectionCaptureEvidence,
             TailDdgiEvidence = SampleTailDdgiRuntimeEvidenceBuilder.Create(
                 _samples,
                 tailObservation ?? SampleTailDdgiRunObservation.Empty,
@@ -1581,87 +1591,6 @@ public sealed class SampleBenchmarkAnalyzer
             BuildCpuCohort("Rebuilt", rebuilt),
             BuildCpuCohort("Stable", stable),
             slowest);
-    }
-
-    private SampleReflectionProbeCaptureEvidence BuildReflectionProbeCaptureEvidence()
-    {
-        SampleReflectionProbeSlowFrame[] slowest = _samples
-            .Select((sample, index) => CreateReflectionProbeSlowFrame(index, sample))
-            .Where(static frame => frame is not null)
-            .Select(static frame => frame!)
-            .OrderByDescending(static frame => frame.CompletedGpuMicroseconds)
-            .ThenBy(static frame => frame.MeasurementSampleIndex)
-            .Take(SampleReflectionProbeCaptureEvidence.SlowFrameLimit)
-            .ToArray();
-
-        return new SampleReflectionProbeCaptureEvidence(slowest);
-    }
-
-    private SampleReflectionProbeSlowFrame? CreateReflectionProbeSlowFrame(
-        int measurementSampleIndex,
-        RendererDiagnostics sample)
-    {
-        ReflectionProbeLifecycleFrameSnapshot completed =
-            sample.ReflectionProbeCompletedLifecycle;
-        ReflectionProbeLifecycleSnapshot lifecycle = completed.Lifecycle;
-        bool hasSubmittedWork =
-            lifecycle.CaptureFaceUnitsThisFrame > 0 ||
-            lifecycle.PrefilterMipUnitsThisFrame > 0 ||
-            lifecycle.PublishCopyUnitsThisFrame > 0;
-        if (sample.GpuTimingValid == 0 ||
-            !completed.Valid ||
-            !completed.GpuTimingRecorded ||
-            !hasSubmittedWork)
-        {
-            return null;
-        }
-
-        long capture = Math.Max(0L, sample.GpuReflectionProbeCaptureMicroseconds);
-        long prefilter = Math.Max(0L, sample.GpuReflectionProbePrefilterMicroseconds);
-        long publish = Math.Max(0L, sample.GpuReflectionProbePublishMicroseconds);
-        SubmittedReflectionProbeBudget submittedBudget =
-            FindSubmittedReflectionProbeBudget(
-                measurementSampleIndex,
-                completed);
-        return new SampleReflectionProbeSlowFrame(
-            measurementSampleIndex,
-            capture + prefilter + publish,
-            capture,
-            prefilter,
-            publish,
-            completed,
-            submittedBudget.Available,
-            submittedBudget.MeasurementSampleIndex,
-            submittedBudget.FrameSlot,
-            submittedBudget.FrameSerial,
-            submittedBudget.Budget);
-    }
-
-    private SubmittedReflectionProbeBudget FindSubmittedReflectionProbeBudget(
-        int completedMeasurementSampleIndex,
-        in ReflectionProbeLifecycleFrameSnapshot completed)
-    {
-        for (int index = completedMeasurementSampleIndex - 1; index >= 0; index--)
-        {
-            RendererDiagnostics candidate = _samples[index];
-            ReflectionProbeLifecycleFrameSnapshot current =
-                candidate.ReflectionProbeCurrentLifecycle;
-            if (!current.Valid ||
-                current.FrameSerial != completed.FrameSerial ||
-                current.FrameSlot != completed.FrameSlot)
-            {
-                continue;
-            }
-
-            return new SubmittedReflectionProbeBudget(
-                Available: true,
-                MeasurementSampleIndex: index,
-                FrameSlot: current.FrameSlot,
-                FrameSerial: current.FrameSerial,
-                Budget: candidate.ReflectionProbeCurrentCaptureBudget);
-        }
-
-        return SubmittedReflectionProbeBudget.Unavailable;
     }
 
     private static SampleBenchmarkCpuCohortEvidence BuildCpuCohort(
@@ -2433,14 +2362,4 @@ public sealed class SampleBenchmarkAnalyzer
 
     private sealed record TimingSelector(string Name, Func<RendererDiagnostics, long> GetMicroseconds);
 
-    private readonly record struct SubmittedReflectionProbeBudget(
-        bool Available,
-        int MeasurementSampleIndex,
-        int FrameSlot,
-        ulong FrameSerial,
-        ReflectionProbeGpuBudgetSnapshot Budget)
-    {
-        public static SubmittedReflectionProbeBudget Unavailable { get; } =
-            new(false, -1, -1, 0UL, default);
-    }
 }

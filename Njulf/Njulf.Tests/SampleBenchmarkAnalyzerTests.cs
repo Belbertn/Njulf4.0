@@ -1064,10 +1064,12 @@ public sealed class SampleBenchmarkAnalyzerTests
         var analyzer = new SampleBenchmarkAnalyzer();
         long[] totals =
             [1_000, 9_000, 7_000, 8_000, 9_000, 6_000, 5_000, 4_000, 3_000, 2_000];
+        const ulong firstFrameSerial = 10_000UL;
         for (int workloadIndex = 0; workloadIndex < totals.Length; workloadIndex++)
         {
-            int frameSlot = workloadIndex % RenderingConstants.FramesInFlight;
-            ulong frameSerial = (ulong)(10_000 + workloadIndex);
+            int originIndex = workloadIndex * 2;
+            int frameSlot = originIndex % RenderingConstants.FramesInFlight;
+            ulong frameSerial = firstFrameSerial + (ulong)originIndex;
             ReflectionProbeLifecycleFrameSnapshot submitted =
                 CreateReflectionLifecycleFrame(
                     frameSlot,
@@ -1089,25 +1091,48 @@ public sealed class SampleBenchmarkAnalyzerTests
             // submitted budget is explicitly unavailable.
             analyzer.AddSample(RendererDiagnostics.Empty with
             {
-                ReflectionProbeCurrentLifecycle = workloadIndex == 4
-                    ? default
-                    : submitted,
+                CaptureFrame = new PerformanceCaptureFrameMetadata(
+                    frameSerial,
+                    (ulong)originIndex,
+                    DdgiRuntimeWarmupState.SteadyState,
+                    0,
+                    0),
+                GpuTimingSupported = 1,
+                GpuTimingValid = 1,
+                ReflectionProbeCurrentLifecycle = submitted,
                 ReflectionProbeCurrentCaptureBudget = budget
             }, RenderBudgetSnapshot.Empty);
+            int completionIndex = originIndex + 1;
+            ulong completionFrameSerial = firstFrameSerial +
+                (ulong)completionIndex;
+            ReflectionProbeLifecycleFrameSnapshot completed =
+                workloadIndex == 4
+                    ? submitted with
+                    {
+                        FrameSlot = 0,
+                        FrameSerial = firstFrameSerial - 1UL
+                    }
+                    : submitted;
             analyzer.AddSample(RendererDiagnostics.Empty with
             {
+                CaptureFrame = new PerformanceCaptureFrameMetadata(
+                    completionFrameSerial,
+                    (ulong)completionIndex,
+                    DdgiRuntimeWarmupState.SteadyState,
+                    0,
+                    0),
                 GpuTimingSupported = 1,
                 GpuTimingValid = 1,
                 GpuReflectionProbeCaptureMicroseconds = totals[workloadIndex] - 50,
                 GpuReflectionProbePrefilterMicroseconds = 30,
                 GpuReflectionProbePublishMicroseconds = 20,
                 GpuFrameMicroseconds = totals[workloadIndex],
-                ReflectionProbeCompletedLifecycle = submitted,
+                ReflectionProbeCompletedLifecycle = completed,
                 ReflectionProbeCurrentLifecycle =
                     CreateReflectionLifecycleFrame(
-                        frameSlot,
-                        frameSerial + 1_000UL,
-                        captureFaceUnits: 1,
+                        completionIndex % RenderingConstants.FramesInFlight,
+                        completionFrameSerial,
+                        captureFaceUnits: 0,
                         prefilterMipUnits: 0,
                         publishCopyUnits: 0),
                 ReflectionProbeCurrentCaptureBudget = budget with
@@ -1116,14 +1141,58 @@ public sealed class SampleBenchmarkAnalyzerTests
                 }
             }, RenderBudgetSnapshot.Empty);
         }
+        for (int index = totals.Length * 2;
+             index < SampleBenchmarkActivation.SponzaActivationFrameCount;
+             index++)
+        {
+            ulong frameSerial = firstFrameSerial + (ulong)index;
+            analyzer.AddSample(RendererDiagnostics.Empty with
+            {
+                CaptureFrame = new PerformanceCaptureFrameMetadata(
+                    frameSerial,
+                    (ulong)index,
+                    DdgiRuntimeWarmupState.SteadyState,
+                    0,
+                    0),
+                GpuTimingSupported = 1,
+                GpuTimingValid = 1,
+                ReflectionProbeCurrentLifecycle =
+                    CreateReflectionLifecycleFrame(
+                        index % RenderingConstants.FramesInFlight,
+                        frameSerial,
+                        captureFaceUnits: 0,
+                        prefilterMipUnits: 0,
+                        publishCopyUnits: 0),
+                ReflectionProbeCurrentCaptureBudget = default
+            }, RenderBudgetSnapshot.Empty);
+        }
+
+        SampleBenchmarkOptions options = new(
+            Enabled: true,
+            WarmupFrameCount: 0,
+            MeasureFrameCount:
+                SampleBenchmarkActivation.SponzaActivationFrameCount,
+            ReportPath: null)
+        {
+            CaptureVariant = SampleBenchmarkCaptureVariant.Baseline,
+            Activation = SampleBenchmarkActivation.ReflectionRecapture,
+            ActivationFingerprint = SampleBenchmarkActivation.CreateFingerprint(
+                SampleBenchmarkActivation.ReflectionRecapture),
+            Trajectory = SampleBenchmarkTrajectoryKind.SponzaHorizontal,
+            TrajectoryFingerprint = SampleBenchmarkTrajectory.CreateFingerprint(
+                SampleBenchmarkTrajectoryKind.SponzaHorizontal,
+                SampleBistroQualityCaptureVariant.SunScaleStep)
+        };
 
         SampleBenchmarkReport report = analyzer.CreateReport(
-            new SampleBenchmarkOptions(true, 0, totals.Length * 2, null),
+            options,
             SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle,
             warmupFrameCount: 0,
-            measurementFrameCount: totals.Length * 2,
+            measurementFrameCount:
+                SampleBenchmarkActivation.SponzaActivationFrameCount,
             firstMeasurementFrameIndex: 0,
-            lastMeasurementFrameIndex: totals.Length * 2 - 1);
+            lastMeasurementFrameIndex:
+                SampleBenchmarkActivation.SponzaActivationFrameCount - 1);
 
         IReadOnlyList<SampleReflectionProbeSlowFrame> slowest =
             report.ReflectionProbeCaptureEvidence.SlowestFrames;
@@ -1132,6 +1201,11 @@ public sealed class SampleBenchmarkAnalyzerTests
         Assert.Multiple(() =>
         {
             Assert.That(slowest, Has.Count.EqualTo(8));
+            Assert.That(report.ReflectionProbeCaptureRawEvidence.Frames,
+                Has.Count.EqualTo(
+                    SampleBenchmarkActivation.SponzaActivationFrameCount));
+            Assert.That(report.ReflectionProbeCaptureEvidence.Applicable,
+                Is.True);
             Assert.That(
                 slowest.Select(static frame => frame.MeasurementSampleIndex),
                 Is.EqualTo(new[] { 3, 9, 7, 5, 11, 13, 15, 17 }));
@@ -1139,8 +1213,8 @@ public sealed class SampleBenchmarkAnalyzerTests
             Assert.That(aligned.GpuCaptureMicroseconds, Is.EqualTo(8_950));
             Assert.That(aligned.GpuPrefilterMicroseconds, Is.EqualTo(30));
             Assert.That(aligned.GpuPublishMicroseconds, Is.EqualTo(20));
-            Assert.That(aligned.CompletedLifecycle.FrameSerial, Is.EqualTo(10_001UL));
-            Assert.That(aligned.CompletedLifecycle.FrameSlot, Is.EqualTo(1));
+            Assert.That(aligned.CompletedLifecycle.FrameSerial, Is.EqualTo(10_002UL));
+            Assert.That(aligned.CompletedLifecycle.FrameSlot, Is.EqualTo(0));
             Assert.That(
                 aligned.CompletedLifecycle.Lifecycle.CaptureFaceUnitsThisFrame,
                 Is.EqualTo(2));
@@ -1152,8 +1226,8 @@ public sealed class SampleBenchmarkAnalyzerTests
                 Is.EqualTo(22));
             Assert.That(aligned.SubmittedBudgetAvailable, Is.True);
             Assert.That(aligned.SubmittedBudgetMeasurementSampleIndex, Is.EqualTo(2));
-            Assert.That(aligned.SubmittedBudgetFrameSerial, Is.EqualTo(10_001UL));
-            Assert.That(aligned.SubmittedBudgetFrameSlot, Is.EqualTo(1));
+            Assert.That(aligned.SubmittedBudgetFrameSerial, Is.EqualTo(10_002UL));
+            Assert.That(aligned.SubmittedBudgetFrameSlot, Is.EqualTo(0));
             Assert.That(aligned.SubmittedBudget.ReservedMicroseconds,
                 Is.EqualTo(201),
                 "the completed timing sample's newer 901us budget must not be attached");
@@ -1177,7 +1251,7 @@ public sealed class SampleBenchmarkAnalyzerTests
                 Assert.That(
                     jsonFrame.GetProperty("CompletedLifecycle")
                         .GetProperty("FrameSerial").GetUInt64(),
-                    Is.EqualTo(10_001UL));
+                    Is.EqualTo(10_002UL));
                 Assert.That(
                     jsonFrame.GetProperty("CompletedLifecycle")
                         .GetProperty("Lifecycle")
@@ -1188,7 +1262,7 @@ public sealed class SampleBenchmarkAnalyzerTests
                     Is.True);
                 Assert.That(
                     jsonFrame.GetProperty("SubmittedBudgetFrameSerial").GetUInt64(),
-                    Is.EqualTo(10_001UL));
+                    Is.EqualTo(10_002UL));
                 Assert.That(
                     jsonFrame.GetProperty("SubmittedBudget")
                         .GetProperty("ReservedMicroseconds").GetInt32(),

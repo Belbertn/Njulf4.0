@@ -276,6 +276,10 @@ public static class SampleBenchmarkPairComparer
         IReadOnlyList<SampleBenchmarkActivationFrameState> animationFrames =
             ValidateSponzaSceneAnimationEvidence(report, failures);
         ValidateActivationEvidence(report, animationFrames, failures);
+        SampleBenchmarkReflectionProbeVerification reflectionVerification =
+            SampleBenchmarkReflectionProbeCaptureEvaluator.Verify(report);
+        foreach (string failure in reflectionVerification.Failures)
+            failures.Add("Reflection capture evidence: " + failure);
         return Array.AsReadOnly(
             failures.Distinct(StringComparer.Ordinal).ToArray());
     }

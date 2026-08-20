@@ -70,8 +70,13 @@ public sealed record SampleBenchmarkReport(
     public SampleBenchmarkSponzaSceneAnimationEvidence
         SponzaSceneAnimationEvidence { get; init; } =
             SampleBenchmarkSponzaSceneAnimationEvidence.Unavailable;
+    [JsonRequired]
+    public SampleBenchmarkReflectionProbeRawEvidence
+        ReflectionProbeCaptureRawEvidence { get; init; } =
+            SampleBenchmarkReflectionProbeRawEvidence.NotApplicable;
+    [JsonRequired]
     public SampleReflectionProbeCaptureEvidence ReflectionProbeCaptureEvidence { get; init; } =
-        SampleReflectionProbeCaptureEvidence.Empty;
+        SampleReflectionProbeCaptureEvidence.NotApplicable;
 }
 
 public sealed record SampleBenchmarkTimingStats(
@@ -399,25 +404,45 @@ public sealed record SampleBenchmarkCpuSpikeEvidence(
 /// only by joining that identity to an earlier measured current frame.
 /// </summary>
 public sealed record SampleReflectionProbeSlowFrame(
-    int MeasurementSampleIndex,
-    long CompletedGpuMicroseconds,
-    long GpuCaptureMicroseconds,
-    long GpuPrefilterMicroseconds,
-    long GpuPublishMicroseconds,
-    ReflectionProbeLifecycleFrameSnapshot CompletedLifecycle,
-    bool SubmittedBudgetAvailable,
-    int SubmittedBudgetMeasurementSampleIndex,
-    int SubmittedBudgetFrameSlot,
-    ulong SubmittedBudgetFrameSerial,
-    ReflectionProbeGpuBudgetSnapshot SubmittedBudget);
+    [property: JsonRequired] int MeasurementSampleIndex,
+    [property: JsonRequired] long CompletedGpuMicroseconds,
+    [property: JsonRequired] long GpuCaptureMicroseconds,
+    [property: JsonRequired] long GpuPrefilterMicroseconds,
+    [property: JsonRequired] long GpuPublishMicroseconds,
+    [property: JsonRequired]
+        ReflectionProbeLifecycleFrameSnapshot CompletedLifecycle,
+    [property: JsonRequired] bool SubmittedBudgetAvailable,
+    [property: JsonRequired] int SubmittedBudgetMeasurementSampleIndex,
+    [property: JsonRequired] int SubmittedBudgetFrameSlot,
+    [property: JsonRequired] ulong SubmittedBudgetFrameSerial,
+    [property: JsonRequired]
+        ReflectionProbeGpuBudgetSnapshot SubmittedBudget);
 
 public sealed record SampleReflectionProbeCaptureEvidence(
-    IReadOnlyList<SampleReflectionProbeSlowFrame> SlowestFrames)
+    [property: JsonRequired]
+        IReadOnlyList<SampleReflectionProbeSlowFrame> SlowestFrames)
 {
     public const int SlowFrameLimit = 8;
+    public const string CurrentSchema =
+        "njulf-benchmark-reflection-probe-capture-evidence/v1";
+
+    [JsonRequired]
+    public string Schema { get; init; } = CurrentSchema;
+    [JsonRequired]
+    public bool Applicable { get; init; }
+
+    public static SampleReflectionProbeCaptureEvidence NotApplicable { get; } =
+        new(Array.Empty<SampleReflectionProbeSlowFrame>());
 
     public static SampleReflectionProbeCaptureEvidence Empty { get; } =
-        new(Array.Empty<SampleReflectionProbeSlowFrame>());
+        NotApplicable;
+
+    public static bool IsCanonicalNotApplicable(
+        SampleReflectionProbeCaptureEvidence? evidence) =>
+        evidence != null &&
+        string.Equals(evidence.Schema, CurrentSchema, StringComparison.Ordinal) &&
+        !evidence.Applicable &&
+        evidence.SlowestFrames is { Count: 0 };
 }
 
 public sealed record SampleDdgiSchedulerSlowFrame(
