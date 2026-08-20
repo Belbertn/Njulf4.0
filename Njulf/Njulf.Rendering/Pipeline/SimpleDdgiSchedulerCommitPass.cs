@@ -22,8 +22,12 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
     [
         "ddgi_simple_schedule_commit_local.comp.spv",
         "ddgi_simple_schedule_commit_propagation.comp.spv",
+        "ddgi_simple_schedule_feedback_partial.comp.spv",
         "ddgi_simple_schedule_feedback.comp.spv"
     ];
+
+    internal const uint FeedbackProbesPerPartialGroup = 64u * 64u;
+    internal const uint MaximumFeedbackPartialGroupCount = 8u;
 
     private readonly RenderSettings _settings;
     private readonly SimpleDdgiVolumeManager _volumeManager;
@@ -87,7 +91,8 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
             _volumeManager.GpuSchedulerFrameExecutionAvailable &&
             _volumeManager.ProbeCount > 0 &&
             _volumeManager.GpuScheduler.IsReady &&
-            _pipelines[2].Handle != 0;
+            _pipelines[2].Handle != 0 &&
+            _pipelines[3].Handle != 0;
     }
 
     public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -110,19 +115,33 @@ public sealed unsafe class SimpleDdgiSchedulerCommitPass : RenderPassBase
                 scheduler.GetIndirectCommandOffset(SimpleDdgiSchedulerDispatchSlot.CommitPropagation));
         }
 
-        pushConstants.Stage = 2u;
+        uint partialGroupCount = CalculateFeedbackPartialGroupCount(
+            _volumeManager.ProbeCount);
+        pushConstants.Stage = partialGroupCount;
         _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[2]);
         BindBindlessStorageAndTextures(cmd, _pipelineLayout, PipelineBindPoint.Compute);
         PushConstants(cmd, pushConstants);
-        // Feedback always consists of one bounded reduction workgroup.  It has
-        // no data-dependent extent, so using an arena-written indirect command
-        // provides no scheduling benefit and unnecessarily couples the final
-        // frame fence to an indirect-buffer read after all scheduler writes.
-        // Keep the genuinely variable commit stages indirect, but make this
-        // fixed dispatch explicit and robust across drivers.
+        _context.Api.CmdDispatch(cmd, partialGroupCount, 1, 1);
+        InsertStorageBarrier(cmd);
+
+        _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipelines[3]);
+        PushConstants(cmd, pushConstants);
         _context.Api.CmdDispatch(cmd, 1, 1, 1);
         InsertStorageBarrier(cmd);
         _ = scheduler.RecordFeedbackReadback(cmd, frameIndex, _volumeManager.FrameSerial);
+    }
+
+    internal static uint CalculateFeedbackPartialGroupCount(int probeCount)
+    {
+        uint activeProbeCount = checked((uint)Math.Min(
+            Math.Max(0, probeCount),
+            32768));
+        return Math.Min(
+            MaximumFeedbackPartialGroupCount,
+            Math.Max(
+                1u,
+                (activeProbeCount + FeedbackProbesPerPartialGroup - 1u) /
+                    FeedbackProbesPerPartialGroup));
     }
 
     /// <summary>

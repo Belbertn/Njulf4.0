@@ -40,6 +40,7 @@ $schedulerModuleNames = @(
     'ddgi_simple_schedule_compact.comp.spv',
     'ddgi_simple_schedule_emit.comp.spv',
     'ddgi_simple_schedule_feedback.comp.spv',
+    'ddgi_simple_schedule_feedback_partial.comp.spv',
     'ddgi_simple_schedule_lane_base.comp.spv',
     'ddgi_simple_schedule_materialize.comp.spv',
     'ddgi_simple_schedule_prefix.comp.spv',

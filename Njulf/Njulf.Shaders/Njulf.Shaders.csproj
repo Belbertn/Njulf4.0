@@ -352,6 +352,10 @@
         <Source>ddgi_simple_schedule_admit.comp</Source>
         <Role>1</Role>
       </SimpleDdgiAdmissionShaderVariant>
+      <SimpleDdgiFeedbackShaderVariant Include="ddgi_simple_schedule_feedback_partial.comp">
+        <Source>ddgi_simple_schedule_feedback.comp</Source>
+        <Defines>-DSIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION=1</Defines>
+      </SimpleDdgiFeedbackShaderVariant>
       <GpuDiagnosticTaskShader Include="depth.task;forward.task;forward_compacted.task" />
       <GpuDiagnosticMeshShader Include="foliage_grass.mesh;foliage_mesh.mesh" />
       <!-- Compile the exact production compaction source with bounded caster
@@ -640,6 +644,10 @@
         <NjulfShaderArtifact Include="@(SimpleDdgiAdmissionShaderVariant)">
           <Source>$(MSBuildProjectDirectory)\%(SimpleDdgiAdmissionShaderVariant.Source)</Source>
           <Defines>-DSIMPLE_DDGI_SCHEDULER_ADMISSION_ROLE=%(SimpleDdgiAdmissionShaderVariant.Role)</Defines>
+        </NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="@(SimpleDdgiFeedbackShaderVariant)">
+          <Source>$(MSBuildProjectDirectory)\%(SimpleDdgiFeedbackShaderVariant.Source)</Source>
+          <Defines>%(SimpleDdgiFeedbackShaderVariant.Defines)</Defines>
         </NjulfShaderArtifact>
         <NjulfShaderArtifact Include="@(GpuDiagnosticTaskShader -&gt; '%(Filename)_diagnostics%(Extension)')">
           <Source>%(GpuDiagnosticTaskShader.FullPath)</Source>

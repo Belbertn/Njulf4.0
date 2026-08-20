@@ -4,6 +4,10 @@
 
 #include "ddgi_simple_schedule_shared.glsl"
 
+#ifndef SIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION
+#define SIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION 0
+#endif
+
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 // Keep the feedback participant definition identical to the transport audit.
@@ -13,10 +17,9 @@ const uint SIMPLE_DDGI_CLASSIFICATION_INACTIVE = 1u;
 
 #include "ddgi_simple_transport_participant.glsl"
 
-// The fixed feedback dispatch is one 64-lane workgroup. Accumulate one local
-// subtotal per lane and merge only those subtotals in shared memory; this
-// keeps the exact full-field reduction while avoiding a serial scan of every
-// resident probe on lane zero.
+// The partial variant distributes the active field across a bounded set of
+// 64-lane workgroups. Each emits one compact subtotal; the final single-group
+// variant combines those records and publishes the unchanged feedback ABI.
 const uint SIMPLE_DDGI_FEEDBACK_PENDING_FRESH = 0u;
 const uint SIMPLE_DDGI_FEEDBACK_PENDING_EXPOSED = 1u;
 const uint SIMPLE_DDGI_FEEDBACK_PENDING_RELOCATION = 2u;
@@ -83,6 +86,7 @@ void main()
     uint receiverFallbackProbeCount = 0u;
     uint receiverConsumerMask = 0u;
     uint activeProbeCount = min(SchedulerActiveProbeCount(), 32768u);
+#if SIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION
     uint receiverOffsetWordsPlusOne = ReadStorageWordUniform(
         pc.ParamsBufferIndex,
         SIMPLE_DDGI_SCHEDULER_RECEIVER_OFFSET_PARAM_WORD);
@@ -91,9 +95,12 @@ void main()
         : receiverOffsetWordsPlusOne - 1u +
             ((SchedulerFrameIndex() - 1u) & 1u) * activeProbeCount *
                 SIMPLE_DDGI_SCHEDULER_RECEIVER_WORDS_PER_PROBE;
-    for (uint probeIndex = localIndex;
+    uint globalInvocationIndex = gl_GlobalInvocationID.x;
+    uint globalInvocationCount =
+        gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    for (uint probeIndex = globalInvocationIndex;
          probeIndex < activeProbeCount;
-         probeIndex += gl_WorkGroupSize.x)
+         probeIndex += globalInvocationCount)
     {
         // Classification has consumed frame N-1. Clear that bank before it is
         // reused by receivers at N+1. This runs for every virtual probe,
@@ -296,6 +303,84 @@ void main()
         if (solverReady && !hasFresh && !hasExposed && !hasRelocation)
             converged++;
     }
+#else
+    // Stage two reads the compact per-workgroup records produced by the
+    // partial variant. pc.Stage carries their fixed dispatch count; the
+    // scheduler stage enum never reaches shader control flow.
+    uint partialGroupCount = clamp(pc.Stage, 1u, 8u);
+    for (uint groupIndex = localIndex;
+         groupIndex < partialGroupCount;
+         groupIndex += gl_WorkGroupSize.x)
+    {
+        uint partialBase = pc.FeedbackOffsetWords +
+            groupIndex * SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS;
+        pendingFresh += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_PENDING_FRESH);
+        pendingExposed += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_PENDING_EXPOSED);
+        pendingRelocation += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_PENDING_RELOCATION);
+        pendingSource += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_PENDING_SOURCE);
+        pendingSourceInvalidFlag += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_SOURCE_INVALID);
+        pendingSourcePrivateRepair += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_SOURCE_REPAIR);
+        pendingSourceCardinality += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_SOURCE_CARDINALITY);
+        pendingSourceGeneration += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_SOURCE_GENERATION);
+        pendingSolver += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_PENDING_SOLVER);
+        converged += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_CONVERGED);
+        maximumFreshAge = max(
+            maximumFreshAge,
+            SchedulerArenaRead(
+                partialBase + SIMPLE_DDGI_FEEDBACK_MAX_FRESH_AGE));
+        maximumExposedAge = max(
+            maximumExposedAge,
+            SchedulerArenaRead(
+                partialBase + SIMPLE_DDGI_FEEDBACK_MAX_EXPOSED_AGE));
+        maximumRelocationAge = max(
+            maximumRelocationAge,
+            SchedulerArenaRead(
+                partialBase + SIMPLE_DDGI_FEEDBACK_MAX_RELOCATION_AGE));
+        maximumUnpublishedAge = max(
+            maximumUnpublishedAge,
+            SchedulerArenaRead(
+                partialBase + SIMPLE_DDGI_FEEDBACK_MAX_UNPUBLISHED_AGE));
+        maximumVisibleUnsupportedAge = max(
+            maximumVisibleUnsupportedAge,
+            SchedulerArenaRead(
+                partialBase +
+                    SIMPLE_DDGI_FEEDBACK_MAX_VISIBLE_UNSUPPORTED_AGE));
+        visibleParticipants += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_VISIBLE_PARTICIPANTS);
+        visibleSourceReady += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_VISIBLE_SOURCE_READY);
+        visiblePublished += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_VISIBLE_PUBLISHED);
+        participatingCount += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_PARTICIPANTS);
+        solveEpochVisitedCount += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_SOLVE_VISITED);
+        activeSourceMutationCount += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_ACTIVE_SOURCE_MUTATION);
+        activeCanonicalMutationCount += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_ACTIVE_CANONICAL_MUTATION);
+        receiverContributingProbeCount += SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_RECEIVER_PROBES);
+        receiverCoverageBucketCount += SchedulerArenaRead(
+            partialBase +
+                SIMPLE_DDGI_FEEDBACK_RECEIVER_COVERAGE_BUCKETS);
+        receiverFallbackProbeCount += SchedulerArenaRead(
+            partialBase +
+                SIMPLE_DDGI_FEEDBACK_RECEIVER_FALLBACK_PROBES);
+        receiverConsumerMask |= SchedulerArenaRead(
+            partialBase + SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK);
+    }
+#endif
 
     atomicAdd(feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_FRESH], pendingFresh);
     atomicAdd(feedbackReduction[SIMPLE_DDGI_FEEDBACK_PENDING_EXPOSED], pendingExposed);
@@ -344,6 +429,23 @@ void main()
         feedbackReduction[SIMPLE_DDGI_FEEDBACK_RECEIVER_CONSUMER_MASK],
         receiverConsumerMask);
     barrier();
+
+#if SIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION
+    if (localIndex == 0u)
+    {
+        uint partialBase = pc.FeedbackOffsetWords +
+            gl_WorkGroupID.x * SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS;
+        for (uint word = 0u;
+             word < SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS;
+             word++)
+        {
+            SchedulerArenaWrite(
+                partialBase + word,
+                feedbackReduction[word]);
+        }
+    }
+    return;
+#endif
 
     if (localIndex != 0u)
         return;
@@ -557,6 +659,28 @@ void main()
                 SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane));
         }
     }
+#if SIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION == 0
+    else
+    {
+        // Partial records reuse the beginning of the 4 KiB feedback region.
+        // Groups three through eight overlap only the lane-cursor prefix.
+        // Ordinary frames rewrite all cursors above; certified-quiesced frames
+        // must restore that exact overwritten prefix before host readback.
+        uint partialWordCount =
+            partialGroupCount * SIMPLE_DDGI_FEEDBACK_REDUCTION_WORDS;
+        uint overwrittenCursorCount = partialWordCount > 64u
+            ? min(
+                partialWordCount - 64u,
+                SIMPLE_DDGI_SCHEDULER_MAX_LANES)
+            : 0u;
+        for (uint lane = 0u; lane < overwrittenCursorCount; lane++)
+        {
+            SchedulerArenaWrite(
+                base + 64u + lane,
+                SchedulerArenaRead(pc.LaneCursorsOffsetWords + lane));
+        }
+    }
+#endif
     for (uint category = 0u;
          category < SIMPLE_DDGI_SCHEDULER_COMMIT_FAILURE_CATEGORY_COUNT;
          category++)

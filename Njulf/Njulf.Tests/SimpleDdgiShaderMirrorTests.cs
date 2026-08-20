@@ -2476,8 +2476,14 @@ namespace Njulf.Tests
                 Assert.That(participant, Does.Contain(
                     "cacheProbeBaseWordPlusOne != 0u"));
                 Assert.That(feedback, Does.Contain("shared uint feedbackReduction"));
-                Assert.That(feedback, Does.Contain("probeIndex = localIndex"));
-                Assert.That(feedback, Does.Contain("probeIndex += gl_WorkGroupSize.x"));
+                Assert.That(feedback, Does.Contain(
+                    "probeIndex = globalInvocationIndex"));
+                Assert.That(feedback, Does.Contain(
+                    "probeIndex += globalInvocationCount"));
+                Assert.That(feedback, Does.Contain(
+                    "SIMPLE_DDGI_FEEDBACK_PARTIAL_REDUCTION"));
+                Assert.That(feedback, Does.Contain(
+                    "uint partialGroupCount = clamp(pc.Stage, 1u, 8u)"));
                 Assert.That(feedback, Does.Contain("atomicAdd(feedbackReduction"));
                 Assert.That(feedback, Does.Not.Contain(
                     "if (gl_GlobalInvocationID.x != 0u)"));

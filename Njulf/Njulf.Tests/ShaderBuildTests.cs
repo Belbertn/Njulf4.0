@@ -24,6 +24,7 @@ public sealed class ShaderBuildTests
         "ddgi_simple_receiver_cache.comp",
         "ddgi_simple_receiver_cache_b1.comp",
         "ddgi_simple_schedule_admit_tail.comp",
+        "ddgi_simple_schedule_feedback_partial.comp",
         "ddgi_simple_schedule_materialize.comp",
         "farfield_voxelize.comp",
         "farfield_jumpflood.comp"
@@ -44,7 +45,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(254));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(255));
 
         foreach (string shaderName in RequiredShaders)
         {
