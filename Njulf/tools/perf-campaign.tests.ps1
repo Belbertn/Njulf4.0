@@ -1158,6 +1158,82 @@ function Invoke-SyntheticQualitySequencePolicyCase {
     Write-Host "PASS synthetic-quality-sequence-policy"
 }
 
+function Invoke-SyntheticManifestSnapshotCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for manifest snapshot test."
+    }
+    foreach ($functionName in @(
+            "Get-Sha256", "Get-Sha256Bytes", "Assert-NoLinkedPathComponents",
+            "Test-PathContainedBy", "Write-AtomicByteArtifact",
+            "Assert-CampaignManifestIntegrity",
+            "Initialize-CampaignManifestSnapshot")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    $variableNames = @(
+        "ManifestFile", "RunRoot", "CampaignManifestBytes",
+        "CampaignManifestSha256", "CampaignManifestSnapshotPath")
+    $absent = [object]::new()
+    $savedVariables = [ordered]@{}
+    foreach ($variableName in $variableNames) {
+        $variable = Get-Variable -Scope Script -Name $variableName `
+            -ErrorAction SilentlyContinue
+        $savedVariables[$variableName] = if ($null -eq $variable) {
+            $absent
+        } else { $variable.Value }
+    }
+    try {
+        $caseRoot = Join-Path $testRoot "manifest-snapshot"
+        New-Item -ItemType Directory -Path $caseRoot | Out-Null
+        $manifestPath = Join-Path $caseRoot "manifest.json"
+        $manifestBytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+            '{"schema":"synthetic"}')
+        [System.IO.File]::WriteAllBytes($manifestPath, $manifestBytes)
+        $script:ManifestFile = $manifestPath
+        $script:RunRoot = $caseRoot
+        $script:CampaignManifestBytes = $manifestBytes
+        $script:CampaignManifestSha256 = Get-Sha256Bytes $manifestBytes
+        Initialize-CampaignManifestSnapshot
+        $snapshotPath = Join-Path $caseRoot "campaign.manifest.snapshot.json"
+        if ([string]$script:CampaignManifestSnapshotPath -cne
+                [System.IO.Path]::GetFullPath($snapshotPath) -or
+            -not (Test-Path -LiteralPath $snapshotPath -PathType Leaf) -or
+            (Get-Sha256 $snapshotPath) -cne $script:CampaignManifestSha256) {
+            throw "Campaign manifest snapshot was not published byte-exactly."
+        }
+        $overwriteFailed = $false
+        try { Initialize-CampaignManifestSnapshot } catch {
+            $overwriteFailed = $_.Exception.Message -match "already exists"
+        }
+        if (-not $overwriteFailed) {
+            throw "Campaign manifest snapshot allowed an overwrite."
+        }
+        Write-Host "PASS synthetic-manifest-snapshot"
+    } finally {
+        foreach ($variableName in $variableNames) {
+            if ([object]::ReferenceEquals(
+                    $savedVariables[$variableName], $absent)) {
+                Remove-Variable -Scope Script -Name $variableName `
+                    -ErrorAction SilentlyContinue
+            } else {
+                Set-Variable -Scope Script -Name $variableName `
+                    -Value $savedVariables[$variableName]
+            }
+        }
+    }
+}
+
 function Invoke-SyntheticHotspotDiscoveryCase {
     $tokens = $null
     $parseErrors = $null
@@ -1576,6 +1652,7 @@ function Invoke-QualityVerifierSmokeCase {
 }
 
 try {
+    Invoke-SyntheticManifestSnapshotCase
     Invoke-SyntheticHealthReportCase
     Invoke-SyntheticAcceptanceRefCase
     Invoke-SyntheticVerifierByteContractCase

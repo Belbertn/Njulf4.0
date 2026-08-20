@@ -386,6 +386,28 @@ function Get-AdmittedCampaignManifestSha256 {
     return $script:CampaignManifestSha256
 }
 
+function Initialize-CampaignManifestSnapshot {
+    Assert-CampaignManifestIntegrity
+    if ($null -eq $script:CampaignManifestBytes -or
+        $script:CampaignManifestBytes.Length -eq 0) {
+        throw "Campaign manifest bytes were not admitted before snapshot initialization."
+    }
+    $snapshotPath = Assert-NoLinkedPathComponents `
+        ([System.IO.Path]::GetFullPath(
+            (Join-Path $script:RunRoot "campaign.manifest.snapshot.json"))) `
+        "Campaign manifest snapshot"
+    if (-not (Test-PathContainedBy $snapshotPath $script:RunRoot)) {
+        throw "Campaign manifest snapshot must remain inside the admitted run root."
+    }
+    Write-AtomicByteArtifact `
+        $snapshotPath ([byte[]]$script:CampaignManifestBytes) `
+        "Campaign manifest snapshot"
+    if ((Get-Sha256 $snapshotPath) -cne $script:CampaignManifestSha256) {
+        throw "Campaign manifest snapshot differs from the admitted manifest bytes."
+    }
+    $script:CampaignManifestSnapshotPath = $snapshotPath
+}
+
 function Assert-ProtectedFingerprints {
     param($Expected)
     Assert-CampaignManifestIntegrity
