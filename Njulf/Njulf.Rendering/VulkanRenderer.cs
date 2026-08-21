@@ -9086,7 +9086,7 @@ namespace Njulf.Rendering
         internal static float ExtractPerformanceCapturePitchRadians(Vector3 forward) =>
             -MathF.Asin(Math.Clamp(forward.Y, -1.0f, 1.0f));
 
-        private static string ComputePerformanceCaptureMatrixHash(Matrix4x4 matrix)
+        internal static string ComputePerformanceCaptureMatrixHash(Matrix4x4 matrix)
         {
             string canonical = string.Join("|", new[]
             {
@@ -9096,7 +9096,7 @@ namespace Njulf.Rendering
                 matrix.M41.ToString("R", CultureInfo.InvariantCulture), matrix.M42.ToString("R", CultureInfo.InvariantCulture), matrix.M43.ToString("R", CultureInfo.InvariantCulture), matrix.M44.ToString("R", CultureInfo.InvariantCulture)
             });
             byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
-            return Convert.ToHexString(hash).ToLowerInvariant();
+            return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
         }
 
         internal static string ComputePerformanceCaptureSceneStateHash(

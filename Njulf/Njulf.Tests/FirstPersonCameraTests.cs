@@ -45,6 +45,21 @@ namespace Njulf.Tests
             Assert.That(captured, Is.EqualTo(pitch).Within(1.0e-6f));
         }
 
+        [Test]
+        public void PerformanceCaptureMatrixHash_IsCanonicalSha256Identity()
+        {
+            string first = VulkanRenderer.ComputePerformanceCaptureMatrixHash(Matrix4x4.Identity);
+            string second = VulkanRenderer.ComputePerformanceCaptureMatrixHash(Matrix4x4.Identity);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(first, Does.StartWith("sha256:"));
+                Assert.That(first, Has.Length.EqualTo(71));
+                Assert.That(first[7..], Does.Match("^[0-9a-f]{64}$"));
+                Assert.That(second, Is.EqualTo(first));
+            });
+        }
+
         private static Vector3 TransformPoint(Vector3 point, Matrix4x4 matrix) =>
             point * matrix;
 
