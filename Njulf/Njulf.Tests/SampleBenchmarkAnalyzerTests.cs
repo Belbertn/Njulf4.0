@@ -863,6 +863,59 @@ public sealed class SampleBenchmarkAnalyzerTests
     }
 
     [Test]
+    public void CreateReport_IdleDdgiFrameDoesNotPoisonMeasuredUpdateBudget()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        RenderBudgetProfile profile = RenderBudgetProfile.Development;
+        RendererDiagnostics idle = RendererDiagnostics.Empty with
+        {
+            GpuTimingSupported = 1,
+            GpuTimingValid = 1,
+            GpuFrameMicroseconds = 1_000,
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationDdgiActive = 1,
+            SimpleDdgiActive = 1,
+            DdgiActiveProbeCount = 100,
+            DdgiProbeUpdateRequestBudget = 64,
+            DdgiProbesUpdated = 0
+        };
+        RendererDiagnostics active = idle with { DdgiProbesUpdated = 1 };
+        var evaluator = new RenderBudgetEvaluator();
+        var upload = new UploadBudgetSnapshot(
+            0, profile.UploadBudgetBytesPerFrame, 0, 0, [],
+            RenderBudgetStatus.WithinBudget);
+        var stalls = new RuntimeStallSnapshot(
+            0, 0, RuntimeStallReason.Unknown, 0, []);
+
+        analyzer.AddSample(idle, evaluator.Evaluate(
+            profile, idle, MemoryBudgetSnapshot.Empty, upload, stalls));
+        analyzer.AddSample(active, evaluator.Evaluate(
+            profile, active, MemoryBudgetSnapshot.Empty, upload, stalls));
+
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            new SampleBenchmarkOptions(true, 0, 2, null),
+            SamplePerformanceScenario.Normal,
+            warmupFrameCount: 0,
+            measurementFrameCount: 2,
+            firstMeasurementFrameIndex: 0,
+            lastMeasurementFrameIndex: 1);
+        BudgetMetric requestBudget = report.BudgetMetrics.Single(candidate =>
+            candidate.Name == "DDGI update request budget");
+        BudgetMetric updatedProbes = report.BudgetMetrics.Single(candidate =>
+            candidate.Name == "DDGI probes updated");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(requestBudget.Status,
+                Is.EqualTo(RenderBudgetStatus.WithinBudget));
+            Assert.That(requestBudget.Value, Is.EqualTo(1));
+            Assert.That(updatedProbes.Status,
+                Is.EqualTo(RenderBudgetStatus.WithinBudget));
+            Assert.That(updatedProbes.Value, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void CreateReport_ExportsDeterministicTopEightCorrelatedCpuSpikeFrames()
     {
         var analyzer = new SampleBenchmarkAnalyzer();

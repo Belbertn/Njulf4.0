@@ -101,4 +101,44 @@ public sealed class RenderBudgetEvaluatorTests
 
         Assert.That(metric.Value, Is.EqualTo(1_550.0));
     }
+
+    [Test]
+    public void Evaluation_TreatsIdleDdgiUpdateCountersAsMeasuredZeroWork()
+    {
+        RenderBudgetProfile profile = RenderBudgetProfile.Development;
+        RendererDiagnostics diagnostics = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationEnabled = 1,
+            GlobalIlluminationDdgiActive = 1,
+            SimpleDdgiActive = 1,
+            DdgiActiveProbeCount = 100,
+            DdgiProbeUpdateRequestBudget = 64,
+            DdgiProbesUpdated = 0
+        };
+
+        RenderBudgetSnapshot snapshot = new RenderBudgetEvaluator().Evaluate(
+            profile,
+            diagnostics,
+            MemoryBudgetSnapshot.Empty,
+            new UploadBudgetSnapshot(0, profile.UploadBudgetBytesPerFrame, 0, 0,
+                [], RenderBudgetStatus.WithinBudget),
+            new RuntimeStallSnapshot(0, 0, RuntimeStallReason.Unknown, 0, []));
+
+        BudgetMetric requestBudget = snapshot.Metrics.Single(entry =>
+            entry.Name == "DDGI update request budget");
+        BudgetMetric updatedProbes = snapshot.Metrics.Single(entry =>
+            entry.Name == "DDGI probes updated");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(requestBudget.Value, Is.Zero);
+            Assert.That(requestBudget.FailureThreshold, Is.EqualTo(64));
+            Assert.That(requestBudget.Status,
+                Is.EqualTo(RenderBudgetStatus.WithinBudget));
+            Assert.That(updatedProbes.Value, Is.Zero);
+            Assert.That(updatedProbes.FailureThreshold, Is.EqualTo(99));
+            Assert.That(updatedProbes.Status,
+                Is.EqualTo(RenderBudgetStatus.WithinBudget));
+        });
+    }
 }
