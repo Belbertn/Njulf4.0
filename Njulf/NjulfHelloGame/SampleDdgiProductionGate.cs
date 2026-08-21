@@ -58,6 +58,10 @@ public static class SampleDdgiProductionGate
         SampleBenchmarkTimingStats? simpleDdgiRelocateClassifyPass = FindGpuPass(report, "SimpleDdgiRelocateClassifyPass");
         SampleBenchmarkTimingStats? simpleDdgiPublishPass = FindGpuPass(report, "SimpleDdgiPublishPass");
         bool simpleDdgiActive = diagnostics.SimpleDdgiActive != 0;
+        bool movingTrajectory =
+            SampleBenchmarkTrajectory.IsMoving(report.Options.Trajectory);
+        bool authenticatedMovingTrajectory =
+            IsAuthenticatedMovingTrajectory(report);
         var criteria = new List<SampleDdgiProductionGateCriterion>
         {
             Criterion(
@@ -169,12 +173,18 @@ public static class SampleDdgiProductionGate
                 $"scenario={report.Scenario}, leakAttenuation={diagnostics.DdgiAverageLeakAttenuationEstimate:F3}, finalLum={diagnostics.DdgiForwardEstimateFinalDiffuseLuminance:F3}, rawDiffuseLum={diagnostics.DdgiForwardEstimateRawDiffuseLuminance:F3}"),
             Criterion(
                 "phase10-cache-warmup-steady",
-                IsPhase10CacheWarmupSteady(diagnostics),
-                $"cacheGeneration={diagnostics.DdgiCacheGeneration}, warmup={diagnostics.DdgiWarmupState}, cacheWarmup={diagnostics.DdgiCacheWarmupState}"),
+                IsPhase10CacheWarmupReady(
+                    diagnostics,
+                    movingTrajectory,
+                    authenticatedMovingTrajectory),
+                $"trajectory={report.Options.Trajectory}, authenticatedMoving={authenticatedMovingTrajectory}, cacheGeneration={diagnostics.DdgiCacheGeneration}, warmup={diagnostics.DdgiWarmupState}, cacheWarmup={diagnostics.DdgiCacheWarmupState}, stableKey={diagnostics.SimpleDdgiUploadTiming.CapacityDetails.StableKeyHit}, transitions={diagnostics.SimpleDdgiUploadTiming.CapacityDetails.TransitionCount}"),
             Criterion(
                 "phase10-warmup-progress-valid",
-                IsPhase10WarmupProgressValid(diagnostics),
-                $"warmup={diagnostics.DdgiWarmupState}, visible/local/cascade0={diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}"),
+                IsPhase10WarmupProgressValid(
+                    diagnostics,
+                    movingTrajectory,
+                    authenticatedMovingTrajectory),
+                $"trajectory={report.Options.Trajectory}, authenticatedMoving={authenticatedMovingTrajectory}, warmup={diagnostics.DdgiWarmupState}, visible/local/cascade0={diagnostics.DdgiWarmedVisibleProbeFraction:F3}/{diagnostics.DdgiWarmedLocalProbeFraction:F3}/{diagnostics.DdgiWarmedCascade0ProbeFraction:F3}"),
             Criterion(
                 "simple-ddgi-probe-lifecycle-bounded",
                 IsSimpleDdgiProbeLifecycleBounded(diagnostics),
@@ -221,7 +231,11 @@ public static class SampleDdgiProductionGate
                 $"active={diagnostics.SimpleDdgiActive}, stableKey={diagnostics.SimpleDdgiUploadTiming.CapacityDetails.StableKeyHit}, p95={FindCpuStage(report, "SimpleDdgiUpload.Capacity")?.P95Milliseconds:F3}ms, budget={SimpleDdgiCapacityP95BudgetMilliseconds:F3}ms"),
             Criterion(
                 "simple-ddgi-transport-settled",
-                IsSimpleDdgiTransportSettled(diagnostics),
+                IsSimpleDdgiTransportQualified(
+                    diagnostics,
+                    movingTrajectory,
+                    authenticatedMovingTrajectory),
+                $"trajectory={report.Options.Trajectory}, authenticatedMoving={authenticatedMovingTrajectory}, " +
                 CreateSimpleDdgiTransportSettlementDetail(diagnostics)),
             Criterion(
                 "phase8-emergency-degrade-preserves-near-field",
@@ -424,25 +438,70 @@ public static class SampleDdgiProductionGate
             diagnostics.DdgiForwardEstimateFinalDiffuseLuminance < MinimumPhase9HealthyFinalDiffuseLuminance;
     }
 
-    private static bool IsPhase10CacheWarmupSteady(RendererDiagnostics diagnostics)
+    internal static bool IsPhase10CacheWarmupReady(
+        RendererDiagnostics diagnostics,
+        bool movingTrajectory,
+        bool authenticatedMovingTrajectory)
     {
         if (diagnostics.GlobalIlluminationDdgiActive == 0)
             return true;
+
+        if (movingTrajectory)
+        {
+            return authenticatedMovingTrajectory &&
+                diagnostics.DdgiCacheGeneration > 0 &&
+                IsDynamicWarmupState(diagnostics.DdgiWarmupState) &&
+                IsDynamicWarmupState(diagnostics.DdgiCacheWarmupState) &&
+                diagnostics.SimpleDdgiUploadTiming.CapacityDetails.StableKeyHit &&
+                diagnostics.SimpleDdgiUploadTiming.CapacityDetails.TransitionCount == 0;
+        }
 
         return diagnostics.DdgiCacheGeneration > 0 &&
             diagnostics.DdgiWarmupState == DdgiRuntimeWarmupState.SteadyState &&
             diagnostics.DdgiCacheWarmupState == DdgiRuntimeWarmupState.SteadyState;
     }
 
-    private static bool IsPhase10WarmupProgressValid(RendererDiagnostics diagnostics)
+    internal static bool IsPhase10WarmupProgressValid(
+        RendererDiagnostics diagnostics,
+        bool movingTrajectory,
+        bool authenticatedMovingTrajectory)
     {
         if (diagnostics.GlobalIlluminationDdgiActive == 0)
             return true;
 
-        return diagnostics.DdgiWarmupState == DdgiRuntimeWarmupState.SteadyState &&
+        bool validState = movingTrajectory
+            ? authenticatedMovingTrajectory &&
+                IsDynamicWarmupState(diagnostics.DdgiWarmupState)
+            : diagnostics.DdgiWarmupState == DdgiRuntimeWarmupState.SteadyState;
+        return validState &&
             diagnostics.DdgiWarmedVisibleProbeFraction >= WarmupCompletionTarget &&
             diagnostics.DdgiWarmedLocalProbeFraction >= WarmupCompletionTarget &&
             diagnostics.DdgiWarmedCascade0ProbeFraction >= WarmupCompletionTarget;
+    }
+
+    private static bool IsDynamicWarmupState(DdgiRuntimeWarmupState state) =>
+        state is DdgiRuntimeWarmupState.LocalVolumeWarmup or
+            DdgiRuntimeWarmupState.NearCascadeWarmup or
+            DdgiRuntimeWarmupState.SteadyState;
+
+    internal static bool IsAuthenticatedMovingTrajectory(
+        SampleBenchmarkReport report)
+    {
+        SampleBenchmarkTrajectoryKind trajectory = report.Options.Trajectory;
+        SampleBenchmarkCaptureContract capture = report.CaptureContract;
+        return SampleBenchmarkTrajectory.IsMoving(trajectory) &&
+            capture.Comparable &&
+            capture.ProductionTiming &&
+            capture.Mismatches.Count == 0 &&
+            capture.TrajectoryFrameCount == report.MeasurementFrameCount &&
+            string.Equals(
+                capture.Trajectory,
+                SampleBenchmarkTrajectory.GetName(trajectory),
+                StringComparison.Ordinal) &&
+            string.Equals(
+                capture.TrajectoryFingerprint,
+                report.Options.TrajectoryFingerprint,
+                StringComparison.Ordinal);
     }
 
     private static bool IsSimpleDdgiProbeLifecycleBounded(RendererDiagnostics diagnostics)
@@ -509,12 +568,26 @@ public static class SampleDdgiProductionGate
             stage.P95Milliseconds <= budgetMilliseconds;
     }
 
-    private static bool IsSimpleDdgiTransportSettled(RendererDiagnostics diagnostics)
+    internal static bool IsSimpleDdgiTransportQualified(
+        RendererDiagnostics diagnostics,
+        bool movingTrajectory,
+        bool authenticatedMovingTrajectory)
     {
         if (diagnostics.SimpleDdgiActive == 0 ||
             diagnostics.SimpleDdgiTransportV2Active == 0)
         {
             return true;
+        }
+
+        if (movingTrajectory)
+        {
+            SimpleDdgiCapacityTiming capacity =
+                diagnostics.SimpleDdgiUploadTiming.CapacityDetails;
+            return authenticatedMovingTrajectory &&
+                diagnostics.GpuTimingValid != 0 &&
+                capacity.StableKeyHit &&
+                capacity.TransitionCount == 0 &&
+                IsSimpleDdgiProbeLifecycleBounded(diagnostics);
         }
 
         SimpleDdgiTransportConvergenceTelemetry convergence =

@@ -313,6 +313,55 @@ public sealed class SampleBenchmarkGateEvaluationTests
     }
 
     [Test]
+    public void DdgiGate_AuthenticatesTheExactCompleteMovingRoute()
+    {
+        SampleBenchmarkReport report = CreateReport(metrics: []);
+        string trajectoryFingerprint = SampleBenchmarkTrajectory.CreateFingerprint(
+            SampleBenchmarkTrajectoryKind.SponzaHorizontal,
+            SampleBistroQualityCaptureVariant.SunScaleStep);
+        report = report with
+        {
+            Options = report.Options with
+            {
+                MeasureFrameCount = 300,
+                Trajectory = SampleBenchmarkTrajectoryKind.SponzaHorizontal,
+                TrajectoryFingerprint = trajectoryFingerprint
+            },
+            MeasurementFrameCount = 300,
+            CaptureContract = SampleBenchmarkCaptureContract.Unavailable with
+            {
+                Comparable = true,
+                ProductionTiming = true,
+                Mismatches = Array.Empty<string>(),
+                Trajectory = SampleBenchmarkTrajectory.SponzaHorizontalName,
+                TrajectoryFingerprint = trajectoryFingerprint,
+                TrajectoryFrameCount = 300
+            }
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleDdgiProductionGate.IsAuthenticatedMovingTrajectory(report),
+                Is.True);
+            Assert.That(
+                SampleDdgiProductionGate.IsAuthenticatedMovingTrajectory(
+                    report with
+                    {
+                        CaptureContract = report.CaptureContract with
+                        {
+                            TrajectoryFingerprint = "sha256:forged"
+                        }
+                    }),
+                Is.False);
+            Assert.That(
+                SampleDdgiProductionGate.IsAuthenticatedMovingTrajectory(
+                    report with { MeasurementFrameCount = 299 }),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void Evaluate_AcceptsExactNonShippingQualificationCandidateTuple()
     {
         SampleBenchmarkReport report =

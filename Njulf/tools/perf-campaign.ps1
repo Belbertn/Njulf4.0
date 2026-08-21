@@ -1039,6 +1039,7 @@ function Assert-CampaignManifest {
         "Njulf.Tests/SampleBenchmarkPairComparerTests.cs",
         "Njulf.Tests/SampleBenchmarkEvidenceTests.cs",
         "Njulf.Tests/SampleBenchmarkGateEvaluationTests.cs",
+        "Njulf.Tests/GlobalIlluminationDefaultsTests.cs",
         "Njulf.Tests/SampleBenchmarkTrajectoryTests.cs",
         "Njulf.Tests/SampleEvidenceFileIoTests.cs",
         "Njulf.Tests/SampleBenchmarkAnalyzerTests.cs",

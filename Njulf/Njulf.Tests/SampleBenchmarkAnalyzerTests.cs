@@ -409,6 +409,123 @@ public sealed class SampleBenchmarkAnalyzerTests
     }
 
     [Test]
+    public void ProductionGate_MovingRouteRequiresAuthenticatedDynamicReadinessNotStationaryTail()
+    {
+        RendererDiagnostics moving = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationDdgiActive = 1,
+            GpuTimingValid = 1,
+            DdgiCacheGeneration = 1,
+            DdgiWarmupState = DdgiRuntimeWarmupState.LocalVolumeWarmup,
+            DdgiCacheWarmupState = DdgiRuntimeWarmupState.LocalVolumeWarmup,
+            DdgiWarmedVisibleProbeFraction = 1.0f,
+            DdgiWarmedLocalProbeFraction = 1.0f,
+            DdgiWarmedCascade0ProbeFraction = 1.0f,
+            SimpleDdgiActive = 1,
+            SimpleDdgiTransportV2Active = 1,
+            SimpleDdgiTransportTailCertificationEnabled = true,
+            SimpleDdgiTransportGlobalConvergencePending = 1,
+            SimpleDdgiUploadTiming = new SimpleDdgiUploadTiming
+            {
+                CapacityDetails = new SimpleDdgiCapacityTiming
+                {
+                    StableKeyHit = true,
+                    TransitionCount = 0
+                }
+            },
+            SimpleDdgiTransportConvergence =
+                SimpleDdgiTransportConvergenceTelemetry.Empty
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleDdgiProductionGate.IsPhase10CacheWarmupReady(
+                    moving,
+                    movingTrajectory: true,
+                    authenticatedMovingTrajectory: true),
+                Is.True);
+            Assert.That(
+                SampleDdgiProductionGate.IsPhase10WarmupProgressValid(
+                    moving,
+                    movingTrajectory: true,
+                    authenticatedMovingTrajectory: true),
+                Is.True);
+            Assert.That(
+                SampleDdgiProductionGate.IsSimpleDdgiTransportQualified(
+                    moving,
+                    movingTrajectory: true,
+                    authenticatedMovingTrajectory: true),
+                Is.True);
+            Assert.That(
+                SampleDdgiProductionGate.IsSimpleDdgiTransportQualified(
+                    moving,
+                    movingTrajectory: false,
+                    authenticatedMovingTrajectory: false),
+                Is.False,
+                "Stationary qualification still requires a current tail certificate.");
+        });
+    }
+
+    [Test]
+    public void ProductionGate_MovingRouteFailsClosedWithoutAuthenticationOrStableCapacity()
+    {
+        RendererDiagnostics moving = RendererDiagnostics.Empty with
+        {
+            GlobalIlluminationDdgiActive = 1,
+            GpuTimingValid = 1,
+            DdgiCacheGeneration = 1,
+            DdgiWarmupState = DdgiRuntimeWarmupState.LocalVolumeWarmup,
+            DdgiCacheWarmupState = DdgiRuntimeWarmupState.LocalVolumeWarmup,
+            DdgiWarmedVisibleProbeFraction = 1.0f,
+            DdgiWarmedLocalProbeFraction = 1.0f,
+            DdgiWarmedCascade0ProbeFraction = 1.0f,
+            SimpleDdgiActive = 1,
+            SimpleDdgiTransportV2Active = 1,
+            SimpleDdgiUploadTiming = new SimpleDdgiUploadTiming
+            {
+                CapacityDetails = new SimpleDdgiCapacityTiming
+                {
+                    StableKeyHit = true,
+                    TransitionCount = 0
+                }
+            }
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleDdgiProductionGate.IsPhase10CacheWarmupReady(
+                    moving,
+                    movingTrajectory: true,
+                    authenticatedMovingTrajectory: false),
+                Is.False);
+            Assert.That(
+                SampleDdgiProductionGate.IsPhase10WarmupProgressValid(
+                    moving,
+                    movingTrajectory: true,
+                    authenticatedMovingTrajectory: false),
+                Is.False);
+            Assert.That(
+                SampleDdgiProductionGate.IsSimpleDdgiTransportQualified(
+                    moving with
+                    {
+                        SimpleDdgiUploadTiming = moving.SimpleDdgiUploadTiming with
+                        {
+                            CapacityDetails =
+                                moving.SimpleDdgiUploadTiming.CapacityDetails with
+                                {
+                                    TransitionCount = 1
+                                }
+                        }
+                    },
+                    movingTrajectory: true,
+                    authenticatedMovingTrajectory: true),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void CreateReport_MovingRouteAuthenticatesDynamicDdgiStateInsteadOfDemandingStationaryState()
     {
         var analyzer = new SampleBenchmarkAnalyzer();

@@ -2053,9 +2053,10 @@ namespace Njulf.Rendering.Data
         public const int MaxSimpleDdgiRaysPerProbe = 256;
         public const int MaxSimpleDdgiVolumeCount = 16;
         public const int MaxSimpleDdgiTotalProbeCount = 32_768;
-        // Alias indices occupy 16 bits in the shader ABI. 8K covers the measured
-        // production scenes while keeping the persistent table to roughly 512 KiB.
-        public const int MaxDdgiEmissiveTriangleBudget = 8_192;
+        // Alias indices occupy 16 bits in the shader ABI. Sponza contains 10,306
+        // eligible emissive triangles, so 16K is the smallest power-of-two tier
+        // that preserves every production source without approaching the ABI limit.
+        public const int MaxDdgiEmissiveTriangleBudget = 16_384;
         public const int MaxFarFieldClipmapResolution = 256;
         public const int MaxSimpleDdgiLocalLightSamplesPerHit = 64;
         public const int MaxSimpleDdgiExactLocalLightThreshold = 1_024;

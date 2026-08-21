@@ -10,6 +10,26 @@ namespace Njulf.Tests;
 public sealed class GlobalIlluminationDefaultsTests
 {
     [Test]
+    public void DdgiHigh_EmissiveBudgetCoversAuthenticatedSponzaPopulation()
+    {
+        const int authenticatedSponzaEmissiveTriangleCount = 10_306;
+        var settings = new RenderSettings();
+
+        settings.ApplyQualityPreset(RenderQualityPreset.DdgiHigh);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                GlobalIlluminationSettings.MaxDdgiEmissiveTriangleBudget,
+                Is.EqualTo(16_384));
+            Assert.That(
+                settings.GlobalIllumination.DdgiEmissiveTriangleBudget,
+                Is.GreaterThanOrEqualTo(
+                    authenticatedSponzaEmissiveTriangleCount));
+        });
+    }
+
+    [Test]
     public void SimpleDdgiHeaderBitPacking_PreservesFullFrameAndFlagWords()
     {
         const uint frameIndex = 0xf1234567u;
