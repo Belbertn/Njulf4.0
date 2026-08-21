@@ -22,7 +22,7 @@ public sealed record SampleBenchmarkDdgiTransientVerificationResult(
     public const string CurrentKind =
         "njulf-benchmark-ddgi-transient-verification";
     public const string CurrentSchema =
-        "njulf-benchmark-ddgi-transient-verification/v1";
+        "njulf-benchmark-ddgi-transient-verification/v2";
 }
 
 /// <summary>

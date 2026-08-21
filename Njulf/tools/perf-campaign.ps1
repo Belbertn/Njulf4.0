@@ -2222,7 +2222,7 @@ function New-TimingFrozenVerifierEvidence {
         @("--verify-benchmark-ddgi-transient-report", $reportPath) `
         @($reportPath) @($reportSha256) $ddgiArtifactPath `
         "njulf-benchmark-ddgi-transient-verification" `
-        "njulf-benchmark-ddgi-transient-verification/v1" `
+        "njulf-benchmark-ddgi-transient-verification/v2" `
         (Get-DdgiTransientVerifierResultProperties) "$Label DDGI transient" 120
     Assert-DdgiTransientVerifierResult `
         $Workload $Report $ddgi.result $reportPath $reportSha256 `
@@ -2279,7 +2279,7 @@ function Assert-TimingFrozenVerifierEvidence {
         @("--verify-benchmark-ddgi-transient-report", $reportPath) `
         @($reportPath) @($reportSha256) $ddgiArtifactPath `
         "njulf-benchmark-ddgi-transient-verification" `
-        "njulf-benchmark-ddgi-transient-verification/v1" `
+        "njulf-benchmark-ddgi-transient-verification/v2" `
         (Get-DdgiTransientVerifierResultProperties) "$Label DDGI transient" 120
     Assert-DdgiTransientVerifierResult `
         $Workload $Report $ddgiResult $reportPath $reportSha256 `

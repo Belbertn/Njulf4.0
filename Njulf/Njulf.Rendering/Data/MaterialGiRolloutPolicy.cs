@@ -110,7 +110,7 @@ public static class MaterialGiReleaseEvidenceContract
     public const string BenchmarkDdgiTransientRawEvidenceSchema =
         "njulf-benchmark-ddgi-transient-raw-evidence/v1";
     public const string BenchmarkDdgiTransientEvidenceSchema =
-        "njulf-benchmark-ddgi-transient-evidence/v1";
+        "njulf-benchmark-ddgi-transient-evidence/v2";
     public const string LongRunProducerKind =
         "material-gi-long-run-stability";
     public const string LongRunProducerSchema =

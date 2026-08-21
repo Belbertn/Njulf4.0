@@ -1277,7 +1277,13 @@ internal static class SampleBenchmarkActivationEvidenceEvaluator
         ulong faceDelta = 0;
         ulong mipDelta = 0;
         ulong copyDelta = 0;
-        if (samples.Count > 0)
+        // These counters describe the authored reflection-recapture workload,
+        // not incidental renderer lifecycle activity. Bistro relight runs can
+        // legitimately recapture probes after an environment change while the
+        // activation is "none"; admitting those background deltas here would
+        // make the canonical no-activation shape impossible.
+        if (activation == SampleBenchmarkActivation.ReflectionRecapture &&
+            samples.Count > 0)
         {
             ReflectionProbeLifecycleSnapshot first =
                 baseline.ReflectionProbeCurrentLifecycle.Lifecycle;

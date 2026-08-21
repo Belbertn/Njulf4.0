@@ -102,7 +102,9 @@ public sealed record SampleBenchmarkDdgiTransientFrame(
 
 /// <summary>
 /// Deterministic relight interval from an observed source-generation edge
-/// through the first accepted complete certificate for that generation.
+/// through an authenticated response closure. A stationary interval may close
+/// with a complete tail certificate; a continuously moving route closes when
+/// the new source generation first becomes live in published propagation.
 /// </summary>
 public sealed record SampleBenchmarkDdgiTransientWindow(
     [property: JsonRequired] int WindowIndex,
@@ -111,13 +113,24 @@ public sealed record SampleBenchmarkDdgiTransientWindow(
     [property: JsonRequired] int GenerationResponseLatencyFrames,
     [property: JsonRequired] uint PreviousSourceLightingGeneration,
     [property: JsonRequired] uint SourceLightingGeneration,
-    [property: JsonRequired] int AcceptedCertificateRouteFrameIndex,
-    [property: JsonRequired] int CertificateLatencyFrames,
+    [property: JsonRequired] string ClosureKind,
+    [property: JsonRequired] int ResponseClosureRouteFrameIndex,
+    [property: JsonRequired] int ResponseLatencyFrames,
     [property: JsonRequired] ulong FirstSubmittedFrameSerial,
     [property: JsonRequired] ulong LastSubmittedFrameSerial,
     [property: JsonRequired] ulong FirstSubmittedSchedulerFrameSerial,
     [property: JsonRequired] ulong LastSubmittedSchedulerFrameSerial,
     [property: JsonRequired] IReadOnlyList<SampleBenchmarkDdgiTransientFrame> Frames);
+
+public static class SampleBenchmarkDdgiTransientClosureKind
+{
+    public const string CertifiedTail = "certified-tail";
+    public const string DynamicLivePropagation = "dynamic-live-propagation";
+
+    public static bool IsCanonical(string? value) =>
+        string.Equals(value, CertifiedTail, StringComparison.Ordinal) ||
+        string.Equals(value, DynamicLivePropagation, StringComparison.Ordinal);
+}
 
 public sealed record SampleBenchmarkDdgiTransientEvidence(
     [property: JsonRequired] bool Applicable,

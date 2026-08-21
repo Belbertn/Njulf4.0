@@ -732,7 +732,7 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
     }
 
     [Test]
-    public void CompletionRejectsLogicalPhysicalTopologyOrQueueEpochMismatches()
+    public void CompletionAlignsImmutableIdentityWhileTransportMayAdvance()
     {
         SimpleDdgiSubmittedFrameEvidence submitted = CreateSubmitted(
             frameSlot: 0,
@@ -779,6 +779,15 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
                 schedulerFeedbackAvailable: true,
                 wrongQueue,
                 submitted.TransportTopologyGeneration);
+        GPUSimpleDdgiSchedulerFeedback advancedTransport = feedback;
+        advancedTransport.TransportGeneration++;
+        SimpleDdgiCompletedFrameEvidence sameSlotAdvancedTransport =
+            SimpleDdgiFrameEvidenceFactory.Complete(
+                submitted,
+                timings,
+                schedulerFeedbackAvailable: true,
+                advancedTransport,
+                submitted.TransportTopologyGeneration);
 
         Assert.Multiple(() =>
         {
@@ -789,6 +798,11 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
                 Is.False);
             Assert.That(wrongQueueEpoch.SchedulerFeedbackGenerationAligned,
                 Is.False);
+            Assert.That(sameSlotAdvancedTransport
+                .SchedulerFeedbackGenerationAligned, Is.True);
+            Assert.That(sameSlotAdvancedTransport
+                .SchedulerFeedbackTransportGeneration,
+                Is.EqualTo(submitted.TransportGeneration + 1u));
         });
     }
 

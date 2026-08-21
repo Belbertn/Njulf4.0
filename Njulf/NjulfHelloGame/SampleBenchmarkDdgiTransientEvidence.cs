@@ -61,7 +61,7 @@ public sealed record SampleBenchmarkDdgiTransientVerification(
 public static class SampleBenchmarkDdgiTransientEvidenceEvaluator
 {
     public const string SemanticDigestSchema =
-        "njulf-benchmark-ddgi-transient-semantic-digest/v1";
+        "njulf-benchmark-ddgi-transient-semantic-digest/v2";
 
     private static readonly JsonSerializerOptions CanonicalJsonOptions = new()
     {
@@ -687,9 +687,7 @@ public static class SampleBenchmarkDdgiTransientEvidenceEvaluator
             completed.SchedulerFeedbackQueueTransactionGeneration ==
                 submitted.QueueTransactionGeneration &&
             completed.SchedulerFeedbackSourceLightingGeneration ==
-                submitted.SourceLightingGeneration &&
-            completed.SchedulerFeedbackTransportGeneration ==
-                submitted.TransportGeneration;
+                submitted.SourceLightingGeneration;
         if (completed.SchedulerFeedbackFrameAligned != expectedFrameAligned ||
             completed.SchedulerFeedbackGenerationAligned !=
                 expectedGenerationAligned)
@@ -823,7 +821,51 @@ public static class SampleBenchmarkDdgiTransientEvidenceEvaluator
                     !string.IsNullOrWhiteSpace(failure)) &&
                 evidence.Windows.Count == 0;
         }
-        return evidence.Failures.Count == 0 && evidence.Windows.Count == 2;
+        if (evidence.Failures.Count != 0 || evidence.Windows.Count != 2)
+            return false;
+
+        for (int windowIndex = 0; windowIndex < evidence.Windows.Count;
+             windowIndex++)
+        {
+            SampleBenchmarkDdgiTransientWindow window =
+                evidence.Windows[windowIndex];
+            if (window is null ||
+                window.WindowIndex != windowIndex ||
+                !SampleBenchmarkDdgiTransientClosureKind.IsCanonical(
+                    window.ClosureKind) ||
+                window.Frames is null ||
+                window.ObservedGenerationEdgeRouteFrameIndex <
+                    window.AuthoredEventRouteFrameIndex ||
+                window.ResponseClosureRouteFrameIndex <
+                    window.ObservedGenerationEdgeRouteFrameIndex)
+            {
+                return false;
+            }
+
+            long responseLatency =
+                (long)window.ResponseClosureRouteFrameIndex -
+                window.ObservedGenerationEdgeRouteFrameIndex;
+            if (responseLatency != window.ResponseLatencyFrames ||
+                responseLatency + 1L != window.Frames.Count ||
+                window.Frames.Count == 0 ||
+                window.Frames[0].RouteFrameIndex !=
+                    window.ObservedGenerationEdgeRouteFrameIndex ||
+                window.Frames[^1].RouteFrameIndex !=
+                    window.ResponseClosureRouteFrameIndex ||
+                window.FirstSubmittedFrameSerial !=
+                    window.Frames[0].Completed.Submitted.FrameSerial ||
+                window.LastSubmittedFrameSerial !=
+                    window.Frames[^1].Completed.Submitted.FrameSerial ||
+                window.FirstSubmittedSchedulerFrameSerial !=
+                    window.Frames[0].Completed.Submitted.SchedulerFrameSerial ||
+                window.LastSubmittedSchedulerFrameSerial !=
+                    window.Frames[^1].Completed.Submitted.SchedulerFrameSerial)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool StructuralEquals<T>(T left, T right)

@@ -569,6 +569,51 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
     }
 
     [Test]
+    public void NoActivationIgnoresBackgroundReflectionLifecycleDeltas()
+    {
+        RendererDiagnostics baselineDiagnostics =
+            CreateBackgroundReflectionDiagnostics(frameSerial: 10UL);
+        RendererDiagnostics measuredDiagnostics =
+            CreateBackgroundReflectionDiagnostics(frameSerial: 20UL);
+        SampleBenchmarkActivationEvidence evidence =
+            SampleBenchmarkActivationEvidenceEvaluator.Evaluate(
+                SampleBenchmarkActivation.None,
+                SampleBenchmarkCaptureVariant.Baseline,
+                expectedSampleCount: 1,
+                SampleBenchmarkActivationExecutionFrameEvidence.Create(
+                    -1,
+                    baselineDiagnostics),
+                [SampleBenchmarkActivationExecutionFrameEvidence.Create(
+                    0,
+                    measuredDiagnostics)],
+                new Dictionary<int, ReflectionProbeRecaptureRequestSummary>(),
+                Array.Empty<SampleBenchmarkActivationFrameState>(),
+                SampleBenchmarkTrajectoryKind.BistroLoop,
+                qualitySequence: false);
+
+        IReadOnlyList<string> failures =
+            SampleBenchmarkActivationEvidenceValidator.Validate(
+                evidence,
+                SampleBenchmarkActivation.None,
+                SampleBenchmarkCaptureVariant.Baseline,
+                expectedSampleCount: 1,
+                qualitySequence: false,
+                trajectory: SampleBenchmarkTrajectoryKind.BistroLoop);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(evidence.Passed, Is.True);
+            Assert.That(failures, Is.Empty);
+            Assert.That(evidence.ReflectionStartedDelta, Is.Zero);
+            Assert.That(evidence.ReflectionCompletedDelta, Is.Zero);
+            Assert.That(evidence.ReflectionPublishedDelta, Is.Zero);
+            Assert.That(evidence.ReflectionCaptureFaceUnitDelta, Is.Zero);
+            Assert.That(evidence.ReflectionPrefilterMipUnitDelta, Is.Zero);
+            Assert.That(evidence.ReflectionPublishCopyUnitDelta, Is.Zero);
+        });
+    }
+
+    [Test]
     public void DirectionalProvenance_RejectsDuplicateAndMissingCascadeLayers()
     {
         DirectionalShadowCacheLayerProvenance[] exact = Enumerable.Range(0, 4)
@@ -947,6 +992,33 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
         },
         SkinIndex = 0,
         Animator = animator
+    };
+
+    private static RendererDiagnostics CreateBackgroundReflectionDiagnostics(
+        ulong frameSerial) => RendererDiagnostics.Empty with
+    {
+        ReflectionProbeCurrentLifecycle = new ReflectionProbeLifecycleFrameSnapshot(
+            Valid: true,
+            FrameSlot: 0,
+            FrameSerial: frameSerial,
+            GpuTimingRecorded: true,
+            Lifecycle: new ReflectionProbeLifecycleSnapshot(
+                QueuedCount: 0,
+                ActiveCount: 0,
+                State: ReflectionProbeCaptureState.Published,
+                AwaitingGpuCompletionCount: 0,
+                PublishedCount: 0,
+                CapturesStartedThisFrame: 0,
+                CapturesCompletedThisFrame: 0,
+                CaptureFaceUnitsThisFrame: 0,
+                PrefilterMipUnitsThisFrame: 0,
+                PublishCopyUnitsThisFrame: 0,
+                CapturesStartedTotal: frameSerial,
+                CapturesCompletedTotal: frameSerial,
+                CapturesPublishedTotal: frameSerial,
+                CaptureFaceUnitsTotal: frameSerial * 6UL,
+                PrefilterMipUnitsTotal: frameSerial * 7UL,
+                PublishCopyUnitsTotal: frameSerial))
     };
 
     private static Animator CreateAnimator()

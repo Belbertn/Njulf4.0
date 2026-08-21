@@ -1324,7 +1324,9 @@ public sealed class SampleBenchmarkAnalyzer
                     routeFrameIndex: completionIndex,
                     completed.Submitted.SourceLightingGeneration,
                     submittedSerial,
-                    observedGenerationEdge: false,
+                    feedbackSupersededBySourceChange:
+                        samples[completionIndex].SourceLightingGeneration !=
+                        completed.Submitted.SourceLightingGeneration,
                     completed);
                 continue;
             }
@@ -1408,7 +1410,9 @@ public sealed class SampleBenchmarkAnalyzer
                 originIndex,
                 samples[originIndex].SourceLightingGeneration,
                 routeSerial,
-                generationEdges.Contains(originIndex),
+                feedbackSupersededBySourceChange:
+                    samples[joined.CompletionIndex].SourceLightingGeneration !=
+                    submitted.SourceLightingGeneration,
                 joined.Evidence);
             ulong schedulerSerial = submitted.SchedulerFrameSerial;
             if (!submitted.FrameSerialsValid)
@@ -1461,11 +1465,12 @@ public sealed class SampleBenchmarkAnalyzer
                 samples[edgeIndex].SourceLightingGeneration;
             uint priorSourceGeneration =
                 samples[edgeIndex - 1].SourceLightingGeneration;
-            var frames = new List<SampleBenchmarkDdgiTransientFrame>();
+            var candidateFrames = new List<SampleBenchmarkDdgiTransientFrame>();
             int certificateIndex = -1;
+            int firstLivePropagationIndex = -1;
 
             for (int originIndex = edgeIndex;
-                 originIndex < endExclusive;
+                 originIndex < Math.Min(endExclusive, completableOriginCount);
                  originIndex++)
             {
                 SampleBenchmarkDdgiTransientRawFrame origin = samples[originIndex];
@@ -1481,12 +1486,20 @@ public sealed class SampleBenchmarkAnalyzer
                 }
 
                 SimpleDdgiCompletedFrameEvidence completed = joined.Evidence;
-                frames.Add(new SampleBenchmarkDdgiTransientFrame(
+                candidateFrames.Add(new SampleBenchmarkDdgiTransientFrame(
                     originIndex,
                     originIndex,
                     joined.CompletionIndex,
                     joined.CompletionIndex,
                     completed));
+
+                if (firstLivePropagationIndex < 0 &&
+                    HasExactDynamicDdgiTransientClosure(
+                        completed,
+                        sourceGeneration))
+                {
+                    firstLivePropagationIndex = originIndex;
+                }
 
                 if (HasExactCertifiedDdgiTransientClosure(completed))
                 {
@@ -1495,22 +1508,51 @@ public sealed class SampleBenchmarkAnalyzer
                 }
             }
 
-            if (certificateIndex < 0)
+            int closureIndex = certificateIndex >= 0
+                ? certificateIndex
+                : firstLivePropagationIndex;
+            string closureKind = certificateIndex >= 0
+                ? SampleBenchmarkDdgiTransientClosureKind.CertifiedTail
+                : SampleBenchmarkDdgiTransientClosureKind.DynamicLivePropagation;
+            if (closureIndex < 0)
             {
                 failures.Add(
                     windowIndex + 1 < authoredEvents.Length
                         ? $"DDGI transient window {windowIndex} overlapped the next " +
-                          $"source-lighting edge without an accepted current tail certificate."
+                          $"source-lighting edge before the new generation became live."
                         : $"DDGI transient window {windowIndex} did not complete with " +
-                          $"an accepted current tail certificate inside the route.");
+                          $"an authenticated live-propagation response inside the route.");
                 continue;
             }
 
-            ValidateDdgiTransientAuditLifecycle(
-                failures,
-                windowIndex,
-                sourceGeneration,
-                frames);
+            int retainedFrameCount = closureIndex - edgeIndex + 1;
+            SampleBenchmarkDdgiTransientFrame[] retainedFrames = candidateFrames
+                .Take(retainedFrameCount)
+                .ToArray();
+            if (certificateIndex >= 0)
+            {
+                ValidateDdgiTransientAuditLifecycle(
+                    failures,
+                    windowIndex,
+                    sourceGeneration,
+                    retainedFrames);
+            }
+            else
+            {
+                for (int index = 0; index < retainedFrames.Length - 1; index++)
+                {
+                    if (retainedFrames[index].Completed.Submitted
+                            .LivePropagationSourceGeneration == sourceGeneration)
+                    {
+                        failures.Add(
+                            $"DDGI transient window {windowIndex} selected route " +
+                            $"frame {closureIndex} after the new source generation " +
+                            $"was already live at route frame " +
+                            $"{retainedFrames[index].RouteFrameIndex}.");
+                        break;
+                    }
+                }
+            }
 
             windows.Add(new SampleBenchmarkDdgiTransientWindow(
                 windowIndex,
@@ -1519,13 +1561,14 @@ public sealed class SampleBenchmarkAnalyzer
                 edgeIndex - authoredEvents[windowIndex],
                 priorSourceGeneration,
                 sourceGeneration,
-                certificateIndex,
-                certificateIndex - edgeIndex,
-                frames[0].Completed.Submitted.FrameSerial,
-                frames[^1].Completed.Submitted.FrameSerial,
-                frames[0].Completed.Submitted.SchedulerFrameSerial,
-                frames[^1].Completed.Submitted.SchedulerFrameSerial,
-                Array.AsReadOnly(frames.ToArray())));
+                closureKind,
+                closureIndex,
+                closureIndex - edgeIndex,
+                retainedFrames[0].Completed.Submitted.FrameSerial,
+                retainedFrames[^1].Completed.Submitted.FrameSerial,
+                retainedFrames[0].Completed.Submitted.SchedulerFrameSerial,
+                retainedFrames[^1].Completed.Submitted.SchedulerFrameSerial,
+                Array.AsReadOnly(retainedFrames)));
         }
 
         failures.AddRange(allRowCompletionFailures);
@@ -1545,7 +1588,7 @@ public sealed class SampleBenchmarkAnalyzer
         int routeFrameIndex,
         uint sourceGeneration,
         ulong submittedSerial,
-        bool observedGenerationEdge,
+        bool feedbackSupersededBySourceChange,
         in SimpleDdgiCompletedFrameEvidence completed)
     {
         string prefix = windowIndex >= 0
@@ -1592,16 +1635,17 @@ public sealed class SampleBenchmarkAnalyzer
         }
         SimpleDdgiTailCertificateFrameEvidence tail =
             completed.Submitted.TailCertificate;
-        if (!tail.HasCompleteIdentity ||
+        if (!tail.Generations.IsInitialized ||
+            tail.SolveEpoch != tail.Generations.Solve ||
+            tail.AuditEpoch != tail.Generations.Audit ||
             !tail.HasDurableSummary ||
+            tail.Summary.Generations != tail.Generations ||
             tail.Generations.VolumeTable !=
                 completed.Submitted.TransportTopologyGeneration ||
             tail.Generations.PhysicalOwnership !=
                 completed.Submitted.TransportTopologyGeneration ||
             tail.Generations.SourceLighting !=
                 completed.Submitted.SourceLightingGeneration ||
-            tail.Generations.CanonicalField !=
-                completed.Submitted.TransportGeneration ||
             tail.Generations.Queue !=
                 completed.Submitted.QueueTransactionGeneration ||
             tail.Generations.SchedulerResources !=
@@ -1609,8 +1653,8 @@ public sealed class SampleBenchmarkAnalyzer
         {
             failures.Add(
                 $"{prefix} retained tail generations/digest that do not " +
-                "exactly bind the submitted topology, source, field, queue, " +
-                "and scheduler identity.");
+                "exactly bind the submitted topology, source, queue, and " +
+                "scheduler identity.");
         }
         SimpleDdgiGpuPassMask intended =
             completed.Submitted.IntendedGpuPasses;
@@ -1619,15 +1663,6 @@ public sealed class SampleBenchmarkAnalyzer
             (intended & SimpleDdgiGpuPassMask.TransportAudit) != 0;
         bool urgentRelightIntended =
             (intended & SimpleDdgiGpuPassMask.UrgentRelight) != 0;
-        if (observedGenerationEdge != urgentRelightIntended)
-        {
-            failures.Add(
-                observedGenerationEdge
-                    ? $"{prefix} is the Bistro radiometric generation edge " +
-                      "but has no urgent-relight parent timing scope."
-                    : $"{prefix} retained an urgent-relight parent timing " +
-                      "scope outside an authored generation edge.");
-        }
         if (urgentRelightIntended !=
             completed.GpuUrgentRelightTimingAvailable)
         {
@@ -1652,6 +1687,7 @@ public sealed class SampleBenchmarkAnalyzer
             ValidateSchedulerDdgiTransientFrame(
                 failures,
                 prefix,
+                feedbackSupersededBySourceChange,
                 completed);
             if (auditIntended)
                 failures.Add($"{prefix} mixed scheduler work with a frozen audit.");
@@ -1801,6 +1837,7 @@ public sealed class SampleBenchmarkAnalyzer
     private static void ValidateSchedulerDdgiTransientFrame(
         ICollection<string> failures,
         string prefix,
+        bool feedbackSupersededBySourceChange,
         in SimpleDdgiCompletedFrameEvidence completed)
     {
         SimpleDdgiGpuPassMask intended =
@@ -1899,7 +1936,17 @@ public sealed class SampleBenchmarkAnalyzer
                 "accelerated transport phase.");
         }
         if (!completed.SchedulerFeedbackAvailable)
-            failures.Add($"{prefix} has no same-slot scheduler feedback.");
+        {
+            if (!feedbackSupersededBySourceChange)
+                failures.Add($"{prefix} has no same-slot scheduler feedback.");
+            if (HasAnySchedulerFeedbackPayload(completed))
+            {
+                failures.Add(
+                    $"{prefix} retained a partial scheduler-feedback payload " +
+                    "after a source-generation change invalidated it.");
+            }
+            return;
+        }
         if (!completed.SchedulerFeedbackFrameAligned)
             failures.Add($"{prefix} scheduler feedback frame serial is not aligned.");
         if (completed.SchedulerFeedbackFrameSerial !=
@@ -1916,11 +1963,19 @@ public sealed class SampleBenchmarkAnalyzer
             completed.SchedulerFeedbackQueueTransactionGeneration !=
                 completed.Submitted.QueueTransactionGeneration ||
             completed.SchedulerFeedbackSourceLightingGeneration !=
-                completed.Submitted.SourceLightingGeneration ||
-            completed.SchedulerFeedbackTransportGeneration !=
-                completed.Submitted.TransportGeneration)
+                completed.Submitted.SourceLightingGeneration)
         {
             failures.Add($"{prefix} scheduler feedback retained mismatched generation values.");
+        }
+        if (!IsSameOrNextNonZeroGeneration(
+                completed.Submitted.TransportGeneration,
+                completed.SchedulerFeedbackTransportGeneration))
+        {
+            failures.Add(
+                $"{prefix} scheduler feedback transport generation " +
+                $"{completed.SchedulerFeedbackTransportGeneration} is neither " +
+                $"submitted current {completed.Submitted.TransportGeneration} " +
+                "nor its exact wrap-safe successor.");
         }
         if (completed.SchedulerFeedbackStatusFlags != 0u)
         {
@@ -1961,6 +2016,24 @@ public sealed class SampleBenchmarkAnalyzer
             completed.SchedulerActiveCanonicalMutationCount == 0u &&
             completed.SchedulerActiveSourceMutationCount == 0u &&
             completed.SchedulerBlockingTailSourceWorkCount == 0u;
+    }
+
+    internal static bool HasExactDynamicDdgiTransientClosure(
+        in SimpleDdgiCompletedFrameEvidence completed,
+        uint sourceGeneration)
+    {
+        SimpleDdgiSubmittedFrameEvidence submitted = completed.Submitted;
+        SimpleDdgiTailCertificateFrameEvidence tail = submitted.TailCertificate;
+        return sourceGeneration != 0u &&
+            submitted.SourceLightingGeneration == sourceGeneration &&
+            submitted.LivePropagationSourceGeneration == sourceGeneration &&
+            IsExactOrdinaryFeedbackIdentity(completed, tail) &&
+            IsSameOrNextNonZeroGeneration(
+                submitted.TransportGeneration,
+                completed.SchedulerFeedbackTransportGeneration) &&
+            completed.SchedulerFeedbackStatusFlags == 0u &&
+            completed.SchedulerSolveParticipantCount > 0u &&
+            completed.SchedulerPublishedWorkCount > 0u;
     }
 
     private static void ValidateDdgiTransientAuditLifecycle(
@@ -2635,8 +2708,6 @@ public sealed class SampleBenchmarkAnalyzer
             completed.Submitted.TransportTopologyGeneration &&
         completed.SchedulerFeedbackSourceLightingGeneration ==
             completed.Submitted.SourceLightingGeneration &&
-        completed.SchedulerFeedbackTransportGeneration ==
-            completed.Submitted.TransportGeneration &&
         completed.SchedulerFeedbackQueueTransactionGeneration ==
             completed.Submitted.QueueTransactionGeneration &&
         completed.SchedulerFeedbackSchedulerResourceGeneration ==
@@ -2651,6 +2722,14 @@ public sealed class SampleBenchmarkAnalyzer
             tail.Generations.Queue &&
         completed.SchedulerFeedbackSchedulerResourceGeneration ==
             tail.Generations.SchedulerResources;
+
+    private static bool IsSameOrNextNonZeroGeneration(
+        uint current,
+        uint candidate) =>
+        current != 0u &&
+        candidate != 0u &&
+        (candidate == current ||
+         candidate == AdvanceNonZeroGeneration(current));
 
     private static bool HasAnySchedulerFeedbackPayload(
         in SimpleDdgiCompletedFrameEvidence completed) =>

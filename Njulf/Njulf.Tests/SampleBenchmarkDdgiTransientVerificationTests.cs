@@ -248,8 +248,8 @@ public sealed partial class SampleBenchmarkDdgiTransientEvidenceTests
             report.DdgiTransientEvidence.Windows.ToArray();
         windows[0] = windows[0] with
         {
-            AcceptedCertificateRouteFrameIndex =
-                windows[0].AcceptedCertificateRouteFrameIndex + 1
+            ResponseClosureRouteFrameIndex =
+                windows[0].ResponseClosureRouteFrameIndex + 1
         };
         report = report with
         {

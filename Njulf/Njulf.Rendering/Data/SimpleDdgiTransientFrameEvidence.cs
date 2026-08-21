@@ -780,8 +780,7 @@ internal static class SimpleDdgiFrameEvidenceFactory
             feedback.SchedulerResourceGeneration == submitted.SchedulerResourceGeneration &&
             feedback.QueueTransactionGeneration ==
                 submitted.QueueTransactionGeneration &&
-            feedback.SourceLightingGeneration == submitted.SourceLightingGeneration &&
-            feedback.TransportGeneration == submitted.TransportGeneration;
+            feedback.SourceLightingGeneration == submitted.SourceLightingGeneration;
         SimpleDdgiGpuPassMask completedGpuTimingPasses =
             SimpleDdgiGpuPassContract.CaptureAvailable(timings);
         bool timingPassSetAligned = submitted.GpuTimingRecorded &&
