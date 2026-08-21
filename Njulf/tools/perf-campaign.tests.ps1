@@ -234,6 +234,148 @@ function Invoke-SyntheticHealthReportCase {
     Write-Host "PASS synthetic-runtime-bundle-hash"
 }
 
+function Invoke-SyntheticQualityHealthBudgetCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver,
+        [ref]$tokens,
+        [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for the quality health test."
+    }
+    foreach ($functionName in @(
+            "Get-PropertyValue",
+            "Get-ExpectedQualityTier",
+            "Test-Sha256Identity",
+            "Test-CanonicalIdentityText",
+            "Get-QualitySequenceRoleName",
+            "Get-QualitySequenceRoleValue",
+            "Assert-QualitySequenceCaptureRun",
+            "Assert-QualitySequenceHealthReport")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+
+    $manifest = Get-Content -LiteralPath $sourceManifest -Raw |
+        ConvertFrom-Json -DateKind String
+    $workload = @($manifest.workloads)[0]
+    $commit = "a" * 40
+    $executableHash = "sha256:" + ("b" * 64)
+    $shaderHash = "sha256:" + ("c" * 64)
+    $settingsHash = "d" * 64
+    $activationFingerprint = "sha256:" + ("e" * 64)
+    $reportPath = [System.IO.Path]::GetFullPath(
+        (Join-Path $testRoot "quality-health-report.json"))
+    $outputDirectory = [System.IO.Path]::GetFullPath(
+        (Join-Path $testRoot "quality-health-checkpoints"))
+    $sequenceId = "synthetic-quality-health"
+    $captureRun = [pscustomobject]@{
+        SceneKind = "Bistro"
+        Scenario = "Normal"
+        BuildConfiguration = "Release; validation=Off"
+        ApplicationVersion = "1.0.0+synthetic"
+        Commit = $commit
+        ShaderBundleHash = $shaderHash
+        SettingsSchemaVersion = 1
+        ExecutableHash = $executableHash
+        DirtyWorktreeState = "clean"
+    }
+    $reportProducer = [pscustomobject]@{
+        Schema = "material-gi-producer-identity/v1"
+        BuildCommit = $commit
+        ShaderFingerprint = "c" * 64
+        SettingsFingerprint = $settingsHash
+        SourceSettingsFingerprints = @($settingsHash)
+        GpuName = "Synthetic GPU"
+        DriverVersion = "1.2.3"
+        QualityTier = "StressUnlimited"
+    }
+    $report = [pscustomobject]@{
+        ActivationFingerprint = $activationFingerprint
+        CaptureRun = $captureRun
+        ProducerIdentity = $reportProducer
+    }
+    $qualityOptions = [pscustomobject]@{
+        Enabled = $true
+        Role = "Canonical"
+        SequenceId = $sequenceId
+        WarmupFrameCount = [int]$workload.warmupFrames
+        MaximumAdditionalSettlingFrameCount =
+            [int]$manifest.capture.maximumSettlingFrames
+        MaximumReadbackDrainFrameCount =
+            [int]$manifest.qualitySequence.maximumReadbackDrainFrames
+        ReportPath = $reportPath
+        OutputDirectory = $outputDirectory
+        ReferenceContractPath = ""
+        HdrQualityContractPath = ""
+        BudgetProfileOverride = "StressUnlimited"
+        CaptureVariant = [string]$workload.captureVariant
+        Activation = [string]$workload.activation
+        ActivationFingerprint = $activationFingerprint
+        SceneKind = "Bistro"
+        Scenario = "Normal"
+        Trajectory = "BistroPresentation"
+        TrajectoryBistroVariant = "Presentation"
+        HdrMaximumRelativeRmse = [double]$manifest.quality.maximumRelativeRmse
+        HdrMaximumFlipP95 = [double]$manifest.quality.maximumFlipP95
+    }
+    $health = [pscustomobject]@{
+        kind = "renderer-health"
+        schema = "renderer-health/v3"
+        status = "passed"
+        options = [pscustomobject]@{
+            BenchmarkQualitySequence = $qualityOptions
+        }
+        diagnostics = [pscustomobject]@{
+            CaptureRun = $captureRun
+            CaptureRenderWidth = 1920
+            CaptureRenderHeight = 1080
+        }
+        producerIdentity = [pscustomobject]@{
+            schema = "material-gi-producer-identity/v1"
+            buildCommit = $commit
+            shaderFingerprint = "c" * 64
+            settingsFingerprint = $settingsHash
+            sourceSettingsFingerprints = @($settingsHash)
+            gpuName = "Synthetic GPU"
+            driverVersion = "1.2.3"
+            qualityTier = ""
+        }
+    }
+    $build = [pscustomobject]@{
+        RuntimeExecutableBundleHash = $executableHash
+    }
+
+    Assert-QualitySequenceHealthReport `
+        $manifest $workload $health $report $build "Release" "canonical" `
+        $sequenceId $commit $reportPath $outputDirectory "" "" `
+        "Synthetic quality health"
+
+    $qualityOptions.BudgetProfileOverride = "Stress"
+    $wrongBudgetFailedClosed = $false
+    try {
+        Assert-QualitySequenceHealthReport `
+            $manifest $workload $health $report $build "Release" "canonical" `
+            $sequenceId $commit $reportPath $outputDirectory "" "" `
+            "Synthetic quality health"
+    } catch {
+        $wrongBudgetFailedClosed = $_.Exception.Message -match
+            "health options differ"
+    }
+    if (-not $wrongBudgetFailedClosed) {
+        throw "Quality health accepted a noncanonical stress budget enum."
+    }
+    Write-Host "PASS synthetic-quality-health-budget-contract"
+}
+
 function Invoke-SyntheticAcceptanceRefCase {
     $tokens = $null
     $parseErrors = $null
@@ -2046,6 +2188,7 @@ function Invoke-SyntheticSceneProfileArgumentCase {
 try {
     Invoke-SyntheticManifestSnapshotCase
     Invoke-SyntheticHealthReportCase
+    Invoke-SyntheticQualityHealthBudgetCase
     Invoke-SyntheticAcceptanceRefCase
     Invoke-SyntheticVerifierByteContractCase
     Invoke-SyntheticFrozenVerifierReturnShapeCase

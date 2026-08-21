@@ -3955,6 +3955,8 @@ function Assert-QualitySequenceHealthReport {
     } else {
         [string]$Workload.scene
     }
+    $expectedBudgetProfile = Get-ExpectedQualityTier (
+        [string]$Manifest.capture.budgetProfile)
     $expectedReferencePath = if ($Role -eq "canonical") {
         ""
     } else {
@@ -3979,7 +3981,7 @@ function Assert-QualitySequenceHealthReport {
             [System.IO.Path]::GetFullPath($OutputDirectory) -or
         [string]$options.ReferenceContractPath -cne $expectedReferencePath -or
         [string]$options.HdrQualityContractPath -cne $expectedRoiPath -or
-        [string]$options.BudgetProfileOverride -cne "Stress" -or
+        [string]$options.BudgetProfileOverride -cne $expectedBudgetProfile -or
         [string]$options.CaptureVariant -cne [string]$Workload.captureVariant -or
         [string]$options.Activation -cne [string]$Workload.activation -or
         [string]$options.ActivationFingerprint -cne
