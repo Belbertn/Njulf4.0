@@ -3146,6 +3146,7 @@ public sealed class SampleBenchmarkAnalyzer
 
         Array.Sort(samples);
         double sum = samples.Sum();
+        double average = Math.Clamp(sum / samples.Length, samples[0], samples[^1]);
         int p95Index = PercentileIndex(samples.Length, 0.95);
         int p99Index = PercentileIndex(samples.Length, 0.99);
         double median = samples.Length % 2 == 0
@@ -3154,7 +3155,7 @@ public sealed class SampleBenchmarkAnalyzer
         return new SampleBenchmarkTimingStats(
             name,
             samples.Length,
-            sum / samples.Length,
+            average,
             samples[0],
             samples[^1],
             samples[p95Index])

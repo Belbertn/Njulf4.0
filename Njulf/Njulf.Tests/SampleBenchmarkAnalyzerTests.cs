@@ -14,6 +14,27 @@ namespace Njulf.Tests;
 public sealed class SampleBenchmarkAnalyzerTests
 {
     [Test]
+    public void BuildStats_ClampsFloatingPointMeanToObservedRange()
+    {
+        double[] samples = Enumerable.Repeat(0.001, 240).ToArray();
+
+        SampleBenchmarkTimingStats stats = SampleBenchmarkAnalyzer.BuildStats(
+            "constant timer",
+            samples);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stats.Count, Is.EqualTo(samples.Length));
+            Assert.That(stats.MinMilliseconds, Is.EqualTo(0.001));
+            Assert.That(stats.AverageMilliseconds, Is.EqualTo(0.001));
+            Assert.That(stats.MaxMilliseconds, Is.EqualTo(0.001));
+            Assert.That(stats.P50Milliseconds, Is.EqualTo(0.001));
+            Assert.That(stats.P95Milliseconds, Is.EqualTo(0.001));
+            Assert.That(stats.P99Milliseconds, Is.EqualTo(0.001));
+        });
+    }
+
+    [Test]
     public void ProducerIdentity_FreezesSettingsBeforePostMeasurementHdrMutation()
     {
         string reportPath = Path.Combine(
