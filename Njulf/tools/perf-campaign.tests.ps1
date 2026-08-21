@@ -1568,6 +1568,44 @@ function Invoke-SyntheticCandidateEnvelopeCase {
     Write-Host "PASS synthetic-candidate-envelope"
 }
 
+function Invoke-SyntheticBuildPathBudgetCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for build path budget test."
+    }
+    foreach ($functionName in @(
+            "Assert-Text",
+            "New-CampaignBuildIsolationLayout")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+
+    $layout = New-CampaignBuildIsolationLayout "ShippingPerformance"
+    $expectedParent = [System.IO.Path]::GetFullPath(
+        (Join-Path ([System.IO.Path]::GetTempPath()) "njb"))
+    if (-not ([string]$layout.SourceRoot).StartsWith(
+            $expectedParent + [System.IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        [System.IO.Path]::GetFileName([string]$layout.ArtifactRoot) -cne ".a" -or
+        ([string]$layout.PathBudgetProbe).Length -gt 240 -or
+        ([string]$layout.PathBudgetProbe) -cnotmatch
+            '[\\/]shippingperformance[\\/]Shaders[\\/]' -or
+        (Test-Path -LiteralPath ([string]$layout.SourceRoot))) {
+        throw "Hermetic ShippingPerformance build paths exceed the admitted short-path contract."
+    }
+    Write-Host "PASS synthetic-build-path-budget"
+}
+
 function Invoke-QualityVerifierSmokeCase {
     $buildRoot = Join-Path $solutionRoot "NjulfHelloGame/bin/Release/net10.0"
     if (-not (Test-Path -LiteralPath (Join-Path $buildRoot "NjulfHelloGame.dll") -PathType Leaf)) {
@@ -2011,6 +2049,7 @@ try {
     Invoke-SyntheticCandidateEnvelopeCase
     Invoke-SyntheticCookedAssetStagingCase
     Invoke-ProcessTimeoutContainmentCase
+    Invoke-SyntheticBuildPathBudgetCase
     Invoke-QualityVerifierSmokeCase
     Invoke-ManifestCase "valid" {} $true
     Invoke-ManifestCase "abba-too-small" {

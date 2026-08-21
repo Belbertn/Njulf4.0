@@ -2902,6 +2902,34 @@ function Assert-ExactCampaignHead {
     }
 }
 
+function New-CampaignBuildIsolationLayout {
+    param([string]$Configuration)
+    Assert-Text $Configuration "Build configuration"
+    # glslangValidator still opens output files through a MAX_PATH-sensitive
+    # path on Windows. Keep both the source worktree and artifacts directory
+    # short while retaining a unique, fresh, exact-commit checkout.
+    $isolatedParent = Join-Path `
+        ([System.IO.Path]::GetTempPath()) "njb"
+    $isolatedRoot = Join-Path `
+        $isolatedParent ([Guid]::NewGuid().ToString("N"))
+    $artifactRoot = Join-Path $isolatedRoot ".a"
+    $knownLongestShaderRelativePath = (
+        "obj/Njulf.Shaders/{0}/Shaders/" +
+        "forward_opaque_simple_full_input_ddgi_near_field_direct_" +
+        "source_cache_required.frag.spv") -f
+            $Configuration.ToLowerInvariant()
+    $knownLongestShaderOutput = Join-Path `
+        $artifactRoot $knownLongestShaderRelativePath
+    if ($knownLongestShaderOutput.Length -gt 240) {
+        throw "Hermetic $Configuration shader output path exceeds the admitted 240-character Windows budget: $knownLongestShaderOutput"
+    }
+    return [pscustomobject][ordered]@{
+        SourceRoot = $isolatedRoot
+        ArtifactRoot = $artifactRoot
+        PathBudgetProbe = $knownLongestShaderOutput
+    }
+}
+
 function Invoke-BuildOutput {
     param(
         $Manifest,
@@ -2926,11 +2954,8 @@ function Invoke-BuildOutput {
         throw "$Label output already exists; choose a fresh campaign run directory: $fullOutputPath"
     }
     New-Item -ItemType Directory -Path $fullOutputPath | Out-Null
-    $isolatedParent = Join-Path `
-        ([System.IO.Path]::GetTempPath()) `
-        "njulf-perf-campaign-build-worktrees"
-    $isolatedRoot = Join-Path `
-        $isolatedParent ([Guid]::NewGuid().ToString("N"))
+    $isolation = New-CampaignBuildIsolationLayout $Configuration
+    $isolatedRoot = [string]$isolation.SourceRoot
     $null = Assert-NoLinkedPathComponents $isolatedRoot "$Label isolated source"
     if (Test-Path -LiteralPath $isolatedRoot) {
         throw "$Label isolated source unexpectedly exists: $isolatedRoot"
@@ -2950,7 +2975,7 @@ function Invoke-BuildOutput {
         $isolatedProject = Join-Path `
             $isolatedSolution ([string]$Manifest.projectPath)
         $isolatedProps = Join-Path $isolatedSolution "Directory.Build.props"
-        $artifactRoot = Join-Path $isolatedRoot ".campaign-build-artifacts"
+        $artifactRoot = [string]$isolation.ArtifactRoot
         if (-not (Test-Path -LiteralPath $isolatedProject -PathType Leaf) -or
             -not (Test-Path -LiteralPath $isolatedProps -PathType Leaf) -or
             (Test-Path -LiteralPath $artifactRoot)) {
