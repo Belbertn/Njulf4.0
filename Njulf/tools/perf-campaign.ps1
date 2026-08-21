@@ -1364,8 +1364,8 @@ function Assert-CampaignManifest {
                 "Njulf.Shaders/ambient_occlusion_blur.comp",
                 "Njulf.Tests/AmbientOcclusionBlurSharedTileTests.cs"))
         "ddgi-feedback-partial-reduction" = @(
-            "60d6c5f5f96a288a5f71ff856060dc394f78985e",
-            "eec1d6c3201b645585dcb3f292177d5c023f1d0a",
+            "4687cf2cada15ef84c42a7bb9d48415e4a051cb9",
+            "2bbf20a5f3ef8957695bee0272313444c048c616",
             "ddgi-scheduler-commit",
             "FullyQualifiedName~SimpleDdgiFeedbackPartialReductionTests|FullyQualifiedName~SimpleDdgiShaderMirrorTests|FullyQualifiedName~ShaderBuildTests",
             @(
@@ -1373,6 +1373,7 @@ function Assert-CampaignManifest {
                 "Njulf.Shaders/Njulf.Shaders.csproj",
                 "Njulf.Shaders/VerifyProductionDiagnosticAtomics.ps1",
                 "Njulf.Shaders/ddgi_simple_schedule_feedback.comp",
+                "Njulf.Tests/ShaderBuildTests.cs",
                 "Njulf.Tests/SimpleDdgiFeedbackPartialReductionTests.cs",
                 "Njulf.Tests/SimpleDdgiShaderMirrorTests.cs"))
     }

@@ -211,14 +211,15 @@
     },
     {
       "id": "ddgi-feedback-partial-reduction",
-      "sourceCommit": "60d6c5f5f96a288a5f71ff856060dc394f78985e",
-      "patchId": "eec1d6c3201b645585dcb3f292177d5c023f1d0a",
+      "sourceCommit": "4687cf2cada15ef84c42a7bb9d48415e4a051cb9",
+      "patchId": "2bbf20a5f3ef8957695bee0272313444c048c616",
       "hypothesisId": "ddgi-scheduler-commit",
       "allowedPaths": [
         "Njulf.Rendering/Pipeline/SimpleDdgiSchedulerCommitPass.cs",
         "Njulf.Shaders/Njulf.Shaders.csproj",
         "Njulf.Shaders/VerifyProductionDiagnosticAtomics.ps1",
         "Njulf.Shaders/ddgi_simple_schedule_feedback.comp",
+        "Njulf.Tests/ShaderBuildTests.cs",
         "Njulf.Tests/SimpleDdgiFeedbackPartialReductionTests.cs",
         "Njulf.Tests/SimpleDdgiShaderMirrorTests.cs"
       ],
