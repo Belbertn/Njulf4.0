@@ -616,6 +616,34 @@ function Invoke-SyntheticVerifierByteContractCase {
             $script:ProtectedFingerprints = $savedProtectedFingerprints.Value
         }
     }
+    $metricVerifierDefinition = @($driverAst.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq "Invoke-QualityMetricVerifier"
+    }, $true))[0]
+    if ($null -eq $metricVerifierDefinition) {
+        throw "Campaign driver lacks Invoke-QualityMetricVerifier."
+    }
+    $helperHashAssignments = @($metricVerifierDefinition.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            $node.Left.Extent.Text -ceq '$expectedHelperHash' -and
+            $node.Right.Extent.Text -match 'HashData' -and
+            $node.Right.Extent.Text -match '\$helperBytes'
+    }, $true))
+    $helperHashReferences = @($metricVerifierDefinition.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.VariableExpressionAst] -and
+            $node.VariablePath.UserPath -ceq 'expectedHelperHash'
+    }, $true))
+    if ($helperHashAssignments.Count -ne 1 -or
+        $helperHashReferences.Count -lt 2 -or
+        $helperHashAssignments[0].Extent.StartOffset -ge
+            $helperHashReferences[-1].Extent.StartOffset -or
+        $metricVerifierDefinition.Extent.Text -notmatch
+            '\(Get-Sha256 \$helperPath\) -cne \$expectedHelperHash') {
+        throw "Quality verifier helper hash is not captured before its TOCTOU recheck."
+    }
     $expectedHeader = @("kind", "schema", "passed", "failures")
     $frozenJson =
         '{"kind":"synthetic-verifier","schema":"synthetic-verifier/v1","passed":true,"failures":[]}'

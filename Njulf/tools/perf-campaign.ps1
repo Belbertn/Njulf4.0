@@ -4680,6 +4680,9 @@ function Invoke-QualityMetricVerifier {
     [byte[]]$helperBytes = [System.IO.File]::ReadAllBytes($helperPath)
     Assert-ProtectedFileByteIdentity `
         $helperRelativePath $helperBytes "$Label verifier helper"
+    $expectedHelperHash = [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData(
+            $helperBytes)).ToLowerInvariant()
     $helperText = [System.Text.UTF8Encoding]::new(
         $false,
         $true).GetString($helperBytes)
