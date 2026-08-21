@@ -787,7 +787,8 @@ function Invoke-SyntheticQualityAnimationContractCase {
             "ConvertTo-QualityCaptureRunContract",
             "ConvertTo-QualityProducerContract",
             "ConvertTo-QualityCameraContract",
-            "New-QualitySequenceReferenceContract")) {
+            "New-QualitySequenceReferenceContract",
+            "Write-QualitySequenceReferenceContract")) {
         $definition = @($driverAst.FindAll({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -869,6 +870,19 @@ function Invoke-SyntheticQualityAnimationContractCase {
         -not [string]::IsNullOrEmpty(
             [string]$contract.sponzaSceneAnimationSidecarSha256)) {
         throw "Non-Sponza quality contract does not use canonical sentinels."
+    }
+
+    $singleFov = [single]0.98174775
+    $wireContractPath = Join-Path $testRoot "synthetic-quality-wire-contract.json"
+    $wireContract = Write-QualitySequenceReferenceContract `
+        $wireContractPath ([ordered]@{
+            camera = [ordered]@{ fieldOfViewRadians = $singleFov }
+        })
+    $wireFov = $wireContract.contract.camera.fieldOfViewRadians
+    if ($wireFov.GetType() -ne [double] -or
+        [string]$wireFov -cne "0.98174775" -or
+        [string]$wireFov -ceq [string]$singleFov) {
+        throw "Quality contract did not return its exact serialized camera value."
     }
 
     $reportPath = [System.IO.Path]::GetFullPath(

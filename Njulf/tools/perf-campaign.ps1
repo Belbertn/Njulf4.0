@@ -4488,10 +4488,11 @@ function Write-QualitySequenceReferenceContract {
         ".{0}.{1}.tmp" -f
             [System.IO.Path]::GetFileName($Path),
             [Guid]::NewGuid().ToString("N"))
+    $serializedContract = $null
     try {
         $Contract | ConvertTo-Json -Depth 24 |
             Set-Content -LiteralPath $temporaryPath -Encoding utf8
-        $null = Get-Content -LiteralPath $temporaryPath -Raw |
+        $serializedContract = Get-Content -LiteralPath $temporaryPath -Raw |
             ConvertFrom-Json -DateKind String
         [System.IO.File]::Move($temporaryPath, $Path, $false)
     } finally {
@@ -4502,7 +4503,7 @@ function Write-QualitySequenceReferenceContract {
     return [pscustomobject]@{
         path = [System.IO.Path]::GetFullPath($Path)
         sha256 = Get-Sha256 $Path
-        contract = $Contract
+        contract = $serializedContract
     }
 }
 
@@ -8781,7 +8782,7 @@ function Initialize-QualitySequenceReference {
             -ExpectedReferenceContractSha256 ([string]$repeatContract.sha256) `
             -QualityContractPath $QualityContractPath `
             -ExpectedQualityContractSha256 $QualityContractSha256 `
-            -ReferenceContract $repeatContractValue `
+            -ReferenceContract $repeatContract.contract `
             -VerifierBuildIdentity $ReferenceBuild `
             -SpatialEnvelope $null `
             -ExpectedCommit $BaselineCommit `
