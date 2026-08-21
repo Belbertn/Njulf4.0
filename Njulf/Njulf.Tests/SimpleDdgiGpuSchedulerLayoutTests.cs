@@ -183,7 +183,9 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
                 "SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_COMMAND_WORDS"));
             Assert.That(reset, Does.Contain(
                 "command * SIMPLE_DDGI_SCHEDULER_RAY_BUCKET_COMMAND_WORDS"));
-            Assert.That(reset, Does.Not.Contain(
+            Assert.That(reset, Does.Contain(
+                "bool resetLaneCursors = SchedulerResetLaneCursors();"));
+            Assert.That(reset, Does.Contain(
                 "SchedulerArenaWrite(pc.LaneCursorsOffsetWords + i, 0u);"));
             Assert.That(emit, Does.Contain(
                 "SchedulerArenaWrite(commandBase + 1u, 1u);"));
@@ -219,7 +221,7 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             "bool layoutOwnershipChanged = invalidate &&",
             StringComparison.Ordinal);
         int inactiveReset = classify.IndexOf(
-            "if (layoutOwnershipChanged)\n        inactive = false;",
+            "if (layoutOwnershipChanged)",
             StringComparison.Ordinal);
         int pendingTailSource = classify.IndexOf(
             "bool pendingTailSource =",
@@ -233,6 +235,7 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(layoutOwnershipReset, Is.GreaterThanOrEqualTo(0));
             Assert.That(classify, Does.Contain(
                 "(topologyInvalid || exposed || atlasFresh)"));
+            Assert.That(classify, Does.Contain("inactive = false;"));
             Assert.That(inactiveReset, Is.GreaterThan(layoutOwnershipReset));
             Assert.That(pendingTailSource, Is.GreaterThan(inactiveReset),
                 "A remapped slot must enter the frozen-tail pending cohort instead of retaining its old inactive identity.");
@@ -344,8 +347,9 @@ public sealed class SimpleDdgiGpuSchedulerLayoutTests
             Assert.That(commit, Does.Contain("TryPackSimpleDdgiReceiverProbe("));
             Assert.That(commit, Does.Contain("PublishPackedSimpleDdgiReceiverProbe("));
 
-            Assert.That(reset, Does.Not.Contain("pc.LaneCursorsOffsetWords"));
-            Assert.That(reset, Does.Contain("if (!certifiedQuiesced)"));
+            Assert.That(reset, Does.Contain("if (resetLaneCursors)"));
+            Assert.That(reset, Does.Contain(
+                "if (!certifiedQuiesced || resetLaneCursors)"));
             Assert.That(reset, Does.Contain("? 64u"));
             Assert.That(laneBase, Does.Contain("pc.LanePrefixesOffsetWords"));
             Assert.That(laneBase, Does.Not.Contain("pc.LaneCursorsOffsetWords"));

@@ -880,6 +880,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private int _completedSourceRefreshProbeCount;
         private int _currentCompletedSourceRefreshProbeCount;
         private uint _sourceLightingGeneration = 1u;
+        private bool _gpuSchedulerLaneCursorResetPending;
         // Exact scene revision sampled when the current CPU queue was built.
         // C3 folds it with source generation/epoch into the 32-bit training
         // record revision; zero remains reserved for an invalid workload.
@@ -3893,8 +3894,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     // generation once; resident classification then repairs
                     // every current participant while receivers continue to
                     // sample the last coherent canonical field.
-                    _sourceLightingGeneration = AdvanceSourceLightingGeneration(
-                        _sourceLightingGeneration);
+                    AdvanceSourceLightingGenerationForNewCohort();
                     _sourceRefreshMode =
                         SimpleDdgiSourceRefreshMode.FullTrace;
                     _transportGeneration = AdvanceSourceLightingGeneration(
@@ -7915,7 +7915,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 bool previousGenerationComplete =
                     IsCurrentSourceGenerationComplete();
                 _lastLightingSignature = lightingSignature;
-                _sourceLightingGeneration = AdvanceSourceLightingGeneration(_sourceLightingGeneration);
+                AdvanceSourceLightingGenerationForNewCohort();
                 _livePropagationSourceGeneration = 0u;
                 SimpleDdgiSourceRefreshMode sanitizedMode =
                     SanitizeSourceRefreshMode(requestedRefreshMode);
@@ -8135,7 +8135,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 // ray/material/light-selection contract. Advance the source
                 // generation as well as clearing CPU cache metadata so no
                 // solver-only update can read the prior estimator.
-                _sourceLightingGeneration = AdvanceSourceLightingGeneration(_sourceLightingGeneration);
+                AdvanceSourceLightingGenerationForNewCohort();
                 _sourceRefreshMode =
                     SimpleDdgiSourceRefreshMode.FullTrace;
                 InvalidateTransportSourceCacheMetadata(
@@ -14156,6 +14156,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 featureFlags |=
                     SimpleDdgiSchedulerAbi.SchedulerFeatureAdaptiveRayCardinality;
             }
+            if (_gpuSchedulerLaneCursorResetPending)
+            {
+                featureFlags |=
+                    SimpleDdgiSchedulerAbi.SchedulerFeatureResetLaneCursors;
+            }
 
             Span<uint> rayBuckets = stackalloc uint[SimpleDdgiSchedulerAbi.MaxRayBucketCount];
             int rayBucketCount = 0;
@@ -14391,6 +14396,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _gpuPreviousVolumePolicyScratch, 0, GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount),
                 new ReadOnlySpan<GPUSimpleDdgiSchedulerDirtyRegion>(
                     _gpuDirtyRegionScratch, 0, dirtyCount));
+            _gpuSchedulerLaneCursorResetPending = false;
         }
 
         internal static bool ShouldQuiesceCertifiedResidentMaintenance(
@@ -18642,6 +18648,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         {
             uint next = generation + 1u;
             return next == 0u ? 1u : next;
+        }
+
+        private void AdvanceSourceLightingGenerationForNewCohort()
+        {
+            _sourceLightingGeneration = AdvanceSourceLightingGeneration(
+                _sourceLightingGeneration);
+            _gpuSchedulerLaneCursorResetPending = true;
         }
 
         private static uint AdvanceSourceEpoch(uint epoch)

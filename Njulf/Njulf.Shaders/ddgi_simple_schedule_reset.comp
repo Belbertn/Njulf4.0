@@ -10,13 +10,14 @@ void main()
 {
     uint localIndex = gl_LocalInvocationID.x;
     bool certifiedQuiesced = SchedulerCertifiedQuiesced();
+    bool resetLaneCursors = SchedulerResetLaneCursors();
     // Classification deterministically overwrites every active candidate
     // record, including the invalid sentinel on every rejection path. Compact
     // likewise overwrites exactly the [0, eligibleCount) output interval that
     // admission is allowed to read. Clearing either full-capacity pool here
     // only duplicates those writes and makes a sparse one-probe frame pay for
     // the complete 15k-probe arena.
-    if (!certifiedQuiesced)
+    if (!certifiedQuiesced || resetLaneCursors)
     {
         for (uint i = localIndex;
              i < SchedulerCandidateGroupLaneWordCount();
@@ -39,9 +40,12 @@ void main()
             SchedulerArenaWrite(pc.LaneCandidateCountsOffsetWords + i, 0u);
             SchedulerArenaWrite(pc.LanePrefixesOffsetWords + i, 0u);
             SchedulerArenaWrite(pc.LaneTotalsOffsetWords + i, 0u);
-            // LaneCursors is persistent rotating state. It is initialized by
-            // the bootstrap upload and advanced only by successful admission;
-            // a frame reset must never turn it back into a compacted lane base.
+            // LaneCursors is persistent rotating state on ordinary frames.
+            // A new field-wide source generation deliberately restarts it so
+            // the first relight cohort cannot depend on unrelated warmup or
+            // maintenance work from the prior lighting state.
+            if (resetLaneCursors)
+                SchedulerArenaWrite(pc.LaneCursorsOffsetWords + i, 0u);
             SchedulerArenaWrite(pc.LaneAdmissionOffsetWords + i, 0u);
         }
     }

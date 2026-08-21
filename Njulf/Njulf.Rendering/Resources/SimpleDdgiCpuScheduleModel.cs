@@ -136,6 +136,12 @@ public static class SimpleDdgiSchedulerAbi
     /// source count remains immutable through every solve/audit epoch.
     /// </summary>
     public const uint SchedulerFeatureAdaptiveRayCardinality = 1u << 15;
+    /// <summary>
+    /// Resets persistent admission cursors at a field-wide source-generation
+    /// boundary. This makes the first relight cohort independent of unrelated
+    /// maintenance work completed before the lighting edit.
+    /// </summary>
+    public const uint SchedulerFeatureResetLaneCursors = 1u << 16;
     public const uint ExactReceiverFeedbackBindingValid = 1u << 0;
     public const uint ReasonFresh = (uint)SimpleDdgiSchedulerCandidateReason.Fresh;
     public const uint ReasonScrollExposed = (uint)SimpleDdgiSchedulerCandidateReason.ScrollExposed;
