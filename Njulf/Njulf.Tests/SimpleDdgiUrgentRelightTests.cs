@@ -126,6 +126,8 @@ public sealed class SimpleDdgiUrgentRelightTests
             "Njulf.Shaders", "ddgi_simple_schedule_feedback.comp");
         string sampled = ReadRepoText(
             "Njulf.Shaders", "ddgi_simple_publish_sampled.comp");
+        string relocate = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_relocate_classify.comp");
         string pass = ReadRepoText(
             "Njulf.Rendering", "Pipeline", "SimpleDdgiUrgentRelightPass.cs");
         string scheduler = ReadRepoText(
@@ -140,6 +142,12 @@ public sealed class SimpleDdgiUrgentRelightTests
             Assert.That(commit, Does.Contain("SIMPLE_DDGI_SCHEDULER_COMPLETE_URGENT_COMMIT"));
             Assert.That(feedback, Does.Contain("Consume the mailbox after copying it"));
             Assert.That(sampled, Does.Contain("COMPLETE_URGENT_COMMIT"));
+            Assert.That(relocate, Does.Contain(
+                "SimpleDdgiUpdateRelightsEnvironmentMisses(update) ||"));
+            Assert.That(relocate, Does.Contain(
+                "SimpleDdgiUpdateRelightsCachedHits(update)"));
+            Assert.That(relocate, Does.Contain(
+                "previous.classification"));
             Assert.That(pass, Does.Contain("ExecuteCacheReuseOnly"));
             Assert.That(pass, Does.Contain("ExecuteCanonicalOnly"));
             Assert.That(pass, Does.Contain("ExecuteResidentLocalOnly"));

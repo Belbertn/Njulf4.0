@@ -132,6 +132,42 @@ void main()
         return;
     }
 
+    bool radiometricRelight =
+        SimpleDdgiUpdateRelightsEnvironmentMisses(update) ||
+        SimpleDdgiUpdateRelightsCachedHits(update);
+    if (gpuScheduler && radiometricRelight)
+    {
+        // A radiometric-only edit reuses the exact committed hit sequence and
+        // cannot provide new geometry evidence. Re-running relocation and
+        // classification here lets harmless cache-history differences move a
+        // probe across the inactive threshold when only light intensity
+        // changed, exposing a whole support region as relight flicker. Preserve
+        // the committed geometry state; topology, segment-selective, fresh,
+        // and full-trace transactions still execute the classifier below.
+        uint proposalBase = pc.SchedulerUpdateRecordsOffsetWords +
+            update.outcomeIndex * SIMPLE_DDGI_SCHEDULER_UPDATE_RECORD_WORDS;
+        WriteStorageFloatUniform(pc.SchedulerArenaBufferIndex, proposalBase + 0u,
+            previous.relocation.x);
+        WriteStorageFloatUniform(pc.SchedulerArenaBufferIndex, proposalBase + 1u,
+            previous.relocation.y);
+        WriteStorageFloatUniform(pc.SchedulerArenaBufferIndex, proposalBase + 2u,
+            previous.relocation.z);
+        WriteStorageFloatUniform(pc.SchedulerArenaBufferIndex, proposalBase + 3u,
+            previous.activeWeight);
+        WriteStorageWordUniform(pc.SchedulerArenaBufferIndex, proposalBase + 4u,
+            previous.flags);
+        WriteStorageWordUniform(pc.SchedulerArenaBufferIndex, proposalBase + 5u,
+            previous.classification);
+        WriteStorageWordUniform(pc.SchedulerArenaBufferIndex, proposalBase + 6u,
+            floatBitsToUint(max(previous.luminanceChangeEma, 0.0)));
+        SimpleDdgiSchedulerCompleteSingle(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerOutcomesOffsetWords,
+            update.outcomeIndex,
+            1u << 1u);
+        return;
+    }
+
     uint missCount = 0u;
     uint hitCount = 0u;
     uint backfaceCount = 0u;
