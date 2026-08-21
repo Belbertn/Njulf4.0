@@ -73,6 +73,66 @@ public sealed class DependencyReproducibilityTests
     }
 
     [Test]
+    public void HelloGame_ReleaseAndShippingPerformanceUseOnlyCookedAssets()
+    {
+        string root = FindRepositoryRoot();
+        XDocument project = XDocument.Load(
+            Path.Combine(root, "NjulfHelloGame", "NjulfHelloGame.csproj"));
+        const string cookedConfigurationCondition =
+            "'$(Configuration)' == 'Release' Or '$(Configuration)' == 'ShippingPerformance'";
+        const string sourceAssetsCondition = "'$(CookedAssetsOnly)' != 'true'";
+
+        XElement cookedAssetsOnly = project.Descendants()
+            .Single(element => element.Name.LocalName == "CookedAssetsOnly");
+        XElement editorDefine = project.Descendants()
+            .Single(element =>
+                element.Name.LocalName == "DefineConstants" &&
+                element.Value.Contains("NJULF_EDITOR", StringComparison.Ordinal));
+        XElement editorReference = project.Descendants()
+            .Single(element =>
+                element.Name.LocalName == "ProjectReference" &&
+                string.Equals(
+                    element.Attribute("Include")?.Value,
+                    "..\\Njulf.Editor\\Njulf.Editor.csproj",
+                    StringComparison.Ordinal));
+        string[] rawSourceItems =
+        [
+            "NewSponza_Main_glTF_003.gltf",
+            "NewSponza_Main_glTF_003.bin",
+            "NewSponza_Curtains_glTF.gltf",
+            "NewSponza_Curtains_glTF.bin",
+            "Strut.glb",
+            "Assets\\**\\*.*",
+            "textures\\**\\*.*"
+        ];
+        XElement[] rawSources = project.Descendants()
+            .Where(element =>
+                element.Name.LocalName == "None" &&
+                rawSourceItems.Contains(
+                    element.Attribute("Update")?.Value,
+                    StringComparer.Ordinal))
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cookedAssetsOnly.Value.Trim(), Is.EqualTo("true"));
+            Assert.That(
+                cookedAssetsOnly.Attribute("Condition")?.Value,
+                Is.EqualTo(cookedConfigurationCondition));
+            Assert.That(
+                editorDefine.Attribute("Condition")?.Value,
+                Is.EqualTo(sourceAssetsCondition));
+            Assert.That(
+                editorReference.Attribute("Condition")?.Value,
+                Is.EqualTo(sourceAssetsCondition));
+            Assert.That(rawSources, Has.Length.EqualTo(rawSourceItems.Length));
+            Assert.That(
+                rawSources.Select(element => element.Attribute("Condition")?.Value),
+                Is.All.EqualTo(sourceAssetsCondition));
+        });
+    }
+
+    [Test]
     public void AssetToolKtxRedistribution_MatchesRestoredPackageNoticeAndBuildContract()
     {
         string root = FindRepositoryRoot();

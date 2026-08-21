@@ -5,8 +5,8 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <CookedAssetsOnly Condition="'$(Configuration)' == 'Release'">true</CookedAssetsOnly>
-        <DefineConstants Condition="'$(Configuration)' != 'Release'">$(DefineConstants);NJULF_EDITOR</DefineConstants>
+        <CookedAssetsOnly Condition="'$(Configuration)' == 'Release' Or '$(Configuration)' == 'ShippingPerformance'">true</CookedAssetsOnly>
+        <DefineConstants Condition="'$(CookedAssetsOnly)' != 'true'">$(DefineConstants);NJULF_EDITOR</DefineConstants>
     </PropertyGroup>
 
     <ItemGroup>
@@ -15,15 +15,15 @@
       <ProjectReference Include="..\Njulf.Rendering\Njulf.Rendering.csproj" />
       <ProjectReference Include="..\Njulf.Assets\Njulf.Assets.csproj" />
       <ProjectReference Include="..\Njulf.Input\Njulf.Input.csproj" />
-      <ProjectReference Include="..\Njulf.Editor\Njulf.Editor.csproj" Condition="'$(Configuration)' != 'Release'" />
+      <ProjectReference Include="..\Njulf.Editor\Njulf.Editor.csproj" Condition="'$(CookedAssetsOnly)' != 'true'" />
     </ItemGroup>
 
     <ItemGroup>
-      <None Update="NewSponza_Main_glTF_003.gltf" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
-      <None Update="NewSponza_Main_glTF_003.bin" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
-      <None Update="NewSponza_Curtains_glTF.gltf" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
-      <None Update="NewSponza_Curtains_glTF.bin" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
-      <None Update="Strut.glb" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="NewSponza_Main_glTF_003.gltf" CopyToOutputDirectory="IfDifferent" Condition="'$(CookedAssetsOnly)' != 'true'" />
+      <None Update="NewSponza_Main_glTF_003.bin" CopyToOutputDirectory="IfDifferent" Condition="'$(CookedAssetsOnly)' != 'true'" />
+      <None Update="NewSponza_Curtains_glTF.gltf" CopyToOutputDirectory="IfDifferent" Condition="'$(CookedAssetsOnly)' != 'true'" />
+      <None Update="NewSponza_Curtains_glTF.bin" CopyToOutputDirectory="IfDifferent" Condition="'$(CookedAssetsOnly)' != 'true'" />
+      <None Update="Strut.glb" CopyToOutputDirectory="IfDifferent" Condition="'$(CookedAssetsOnly)' != 'true'" />
       <None Update="sample-asset-validation-report.json" CopyToOutputDirectory="IfDifferent" />
       <None Update="THIRD-PARTY-NOTICES.txt"
             CopyToOutputDirectory="PreserveNewest"
@@ -32,10 +32,10 @@
             Link="Imazen.WebP.provenance.json"
             CopyToOutputDirectory="PreserveNewest"
             CopyToPublishDirectory="PreserveNewest" />
-      <None Update="Assets\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="Assets\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(CookedAssetsOnly)' != 'true'" />
       <None Update="Assets\Bistro_v5_2\san_giuseppe_bridge_4k.hdr"
             CopyToOutputDirectory="PreserveNewest" />
-      <None Update="textures\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(Configuration)' != 'Release'" />
+      <None Update="textures\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(CookedAssetsOnly)' != 'true'" />
       <None Update="textures\IvyLeaf_*.png" CopyToOutputDirectory="Never" />
       <None Update="Cooked\**\*.*" CopyToOutputDirectory="IfDifferent" />
       <None Update="Scenes\**\*.njscene.json" CopyToOutputDirectory="IfDifferent" />
