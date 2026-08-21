@@ -7943,6 +7943,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             {
                 bool previousGenerationComplete =
                     IsCurrentSourceGenerationComplete();
+                bool previousRadiometricGenerationPublished =
+                    _publishedRadiometricGeneration != 0u &&
+                    _publishedRadiometricGeneration ==
+                        _sourceLightingGeneration;
                 _lastLightingSignature = lightingSignature;
                 AdvanceSourceLightingGenerationForNewCohort();
                 _livePropagationSourceGeneration = 0u;
@@ -7956,11 +7960,15 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 // generation is only partially re-lit, probes no longer share
                 // one baseline. Repair with a complete trace instead of
                 // applying the newest ratio twice to the completed subset.
-                bool overlappingCachedHitRelight = !previousGenerationComplete &&
-                    (_sourceRefreshMode ==
-                        SimpleDdgiSourceRefreshMode.CachedHitRelight ||
-                     sanitizedMode ==
-                        SimpleDdgiSourceRefreshMode.CachedHitRelight);
+                // Once that generation crossed the coherent field fence, later
+                // toroidal fresh-slot repair may keep the broad completion test
+                // false but cannot make the published baseline heterogeneous.
+                bool overlappingCachedHitRelight =
+                    ShouldEscalateOverlappingCachedHitRelight(
+                        previousGenerationComplete,
+                        previousRadiometricGenerationPublished,
+                        _sourceRefreshMode,
+                        sanitizedMode);
                 _sourceRefreshMode = overlappingCachedHitRelight
                     ? SimpleDdgiSourceRefreshMode.FullTrace
                     : previousGenerationComplete ||
@@ -8107,6 +8115,16 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 SimpleDdgiSourceRefreshMode.SegmentSelective
                 ? mode
                 : SimpleDdgiSourceRefreshMode.FullTrace;
+
+        internal static bool ShouldEscalateOverlappingCachedHitRelight(
+            bool previousGenerationComplete,
+            bool previousRadiometricGenerationPublished,
+            SimpleDdgiSourceRefreshMode currentMode,
+            SimpleDdgiSourceRefreshMode requestedMode) =>
+            !previousGenerationComplete &&
+            !previousRadiometricGenerationPublished &&
+            (currentMode == SimpleDdgiSourceRefreshMode.CachedHitRelight ||
+             requestedMode == SimpleDdgiSourceRefreshMode.CachedHitRelight);
 
         internal static SimpleDdgiSourceRefreshMode CombineSourceRefreshModes(
             SimpleDdgiSourceRefreshMode pending,

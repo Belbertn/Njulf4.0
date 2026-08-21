@@ -90,6 +90,50 @@ public sealed class SimpleDdgiUrgentRelightTests
         });
     }
 
+    [Test]
+    public void OverlappingCachedRelight_EscalatesOnlyBeforeCoherentPublication()
+    {
+        static bool Escalate(
+            bool complete,
+            bool coherentlyPublished,
+            SimpleDdgiSourceRefreshMode current,
+            SimpleDdgiSourceRefreshMode requested) =>
+            SimpleDdgiVolumeManager.ShouldEscalateOverlappingCachedHitRelight(
+                complete,
+                coherentlyPublished,
+                current,
+                requested);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Escalate(
+                complete: false,
+                coherentlyPublished: false,
+                SimpleDdgiSourceRefreshMode.None,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.True);
+            Assert.That(Escalate(
+                complete: false,
+                coherentlyPublished: true,
+                SimpleDdgiSourceRefreshMode.None,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.False);
+            Assert.That(Escalate(
+                complete: true,
+                coherentlyPublished: false,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.False);
+            Assert.That(Escalate(
+                complete: false,
+                coherentlyPublished: false,
+                SimpleDdgiSourceRefreshMode.EnvironmentMissRelight,
+                SimpleDdgiSourceRefreshMode.FullTrace), Is.False);
+            Assert.That(Escalate(
+                complete: false,
+                coherentlyPublished: false,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight,
+                SimpleDdgiSourceRefreshMode.EnvironmentMissRelight), Is.True);
+        });
+    }
+
     [TestCase(-1, 0u)]
     [TestCase(0, 0u)]
     [TestCase(1, 1u)]
