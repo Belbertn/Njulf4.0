@@ -887,6 +887,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         // generation whose irradiance remains staged in the transport atlas.
         private uint _deferredRadiometricPublicationGeneration;
         private bool _deferredRadiometricPublicationReady;
+        // A deferred generation must read one immutable receiver-visible
+        // lattice. Keep physical ring/refinement ownership fixed until the
+        // whole-field publication fence; smooth ring influence still follows
+        // the camera so receiver coverage does not visibly stick in place.
+        private bool _freezeVolumeTopologyForRadiometricPublicationThisFrame;
         private uint _publishedRadiometricGeneration;
         private ulong _coherentRadiometricPublicationCount;
         // Exact scene revision sampled when the current CPU queue was built.
@@ -5323,6 +5328,16 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 int previousProbeCount = _probeCount;
                 int previousVolumeCount = _volumeCount;
                 CapturePreviousVolumes();
+                _freezeVolumeTopologyForRadiometricPublicationThisFrame =
+                    ShouldFreezeVolumeTopologyForRadiometricPublication(
+                        RadiometricRelightPublicationPending,
+                        _hasLightingSignature,
+                        lightingSignature != _lastLightingSignature,
+                        _schedulerMode,
+                        TransportV2Active,
+                        sourceRefreshMode,
+                        DirectionalRadianceMode,
+                        HasDeferredRadiometricDirectionalStorage());
                 BuildVolumeTable(
                     gi,
                     sceneBounds,
@@ -6494,6 +6509,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _currentProbeInvalidationMarkerSerial = ++_nextProbeInvalidationMarkerSerial;
             }
             _recenteredThisFrame = false;
+            _freezeVolumeTopologyForRadiometricPublicationThisFrame = false;
             _atlasPreservedOnRecenterThisFrame = false;
             _atlasClearedThisFrame = false;
             _receiverProbeInvalidationBytesThisFrame = 0;
@@ -8066,18 +8082,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
         private void ConfigureDeferredRadiometricPublicationForCurrentGeneration()
         {
-            bool directionalStorageAvailable =
-                DirectionalRadianceMode == SimpleDdgiDirectionalRadianceMode.Off ||
-                (_directionalRadianceBuffer.IsValid &&
-                 _directionalRadianceParityBuffer.IsValid &&
-                 _directionalRadianceBytes > 0UL &&
-                 _directionalRadianceParityBytes >= _directionalRadianceBytes);
             if (!ShouldDeferRadiometricPublication(
                     _schedulerMode,
                     TransportV2Active,
                     _sourceRefreshMode,
                     DirectionalRadianceMode,
-                    directionalStorageAvailable))
+                    HasDeferredRadiometricDirectionalStorage()))
             {
                 CancelDeferredRadiometricPublication();
                 return;
@@ -8101,6 +8111,32 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 SimpleDdgiSourceRefreshMode.CachedHitRelight) &&
             (directionalMode == SimpleDdgiDirectionalRadianceMode.Off ||
              directionalStorageAvailable);
+
+        internal static bool ShouldFreezeVolumeTopologyForRadiometricPublication(
+            bool publicationPending,
+            bool lightingSignatureInitialized,
+            bool lightingSignatureChanged,
+            SimpleDdgiSchedulerMode schedulerMode,
+            bool transportV2Active,
+            SimpleDdgiSourceRefreshMode requestedRefreshMode,
+            SimpleDdgiDirectionalRadianceMode directionalMode,
+            bool directionalStorageAvailable) =>
+            publicationPending ||
+            (lightingSignatureInitialized &&
+             lightingSignatureChanged &&
+             ShouldDeferRadiometricPublication(
+                 schedulerMode,
+                 transportV2Active,
+                 requestedRefreshMode,
+                 directionalMode,
+                 directionalStorageAvailable));
+
+        private bool HasDeferredRadiometricDirectionalStorage() =>
+            DirectionalRadianceMode == SimpleDdgiDirectionalRadianceMode.Off ||
+            (_directionalRadianceBuffer.IsValid &&
+             _directionalRadianceParityBuffer.IsValid &&
+             _directionalRadianceBytes > 0UL &&
+             _directionalRadianceParityBytes >= _directionalRadianceBytes);
 
         private void CancelDeferredRadiometricPublication()
         {
@@ -13443,16 +13479,24 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 }
             }
 
-            IReadOnlyList<SimpleDdgiRefinementBrick> bricks =
-                _refinementBrickPool.Update(
+            IReadOnlyList<SimpleDdgiRefinementBrick> bricks;
+            if (_freezeVolumeTopologyForRadiometricPublicationThisFrame)
+            {
+                bricks = _refinementBrickPool.ActiveBricks;
+                _refinementTopologyChangedThisFrame = false;
+            }
+            else
+            {
+                bricks = _refinementBrickPool.Update(
                     _frameIndex,
                     configuration,
                     _refinementDemandScratch);
-            SimpleDdgiRefinementBrickPoolDiagnostics diagnostics =
-                _refinementBrickPool.Diagnostics;
-            _refinementTopologyChangedThisFrame = diagnostics.TopologyChanged;
-            _refinementEvictionCount = checked(
-                _refinementEvictionCount + (ulong)diagnostics.EvictedBrickCount);
+                SimpleDdgiRefinementBrickPoolDiagnostics diagnostics =
+                    _refinementBrickPool.Diagnostics;
+                _refinementTopologyChangedThisFrame = diagnostics.TopologyChanged;
+                _refinementEvictionCount = checked(
+                    _refinementEvictionCount + (ulong)diagnostics.EvictedBrickCount);
+            }
 
             foreach (SimpleDdgiRefinementBrick brick in bricks)
                 _volumeCandidates.Add(CreateRefinementVolume(brick));
@@ -13557,17 +13601,28 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             };
             if (receiverAnchored)
                 placementCamera.Y = gi.SimpleDdgiReceiverVerticalAnchor;
-            Vector3 origin = ResolveCameraRelativeRingOrigin(
-                sceneBounds.Min,
-                sceneBounds.Max,
-                latticeSize,
-                spacing,
-                placementCamera,
-                _ringOrigins[ringIndex],
-                ref _ringHasOrigins[ringIndex],
-                out bool recentered,
-                verticalHysteresisFraction,
-                canonicalizeVerticalPhase: true);
+            Vector3 origin;
+            bool recentered;
+            if (_freezeVolumeTopologyForRadiometricPublicationThisFrame &&
+                hadRingOrigin)
+            {
+                origin = _ringOrigins[ringIndex];
+                recentered = false;
+            }
+            else
+            {
+                origin = ResolveCameraRelativeRingOrigin(
+                    sceneBounds.Min,
+                    sceneBounds.Max,
+                    latticeSize,
+                    spacing,
+                    placementCamera,
+                    _ringOrigins[ringIndex],
+                    ref _ringHasOrigins[ringIndex],
+                    out recentered,
+                    verticalHysteresisFraction,
+                    canonicalizeVerticalPhase: true);
+            }
             if (recentered && _ringRecenterCountThisFrame >= 2 && hadRingOrigin)
             {
                 origin = _ringOrigins[ringIndex];

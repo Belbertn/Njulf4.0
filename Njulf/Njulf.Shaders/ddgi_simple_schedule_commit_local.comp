@@ -423,9 +423,7 @@ void main()
         (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u;
     bool deferredRadiometricPublication = !urgentRelight &&
         SchedulerGpuResident() &&
-        SchedulerDefersRadiometricPublication() &&
-        (SchedulerUpdateUsesRadiometricRelight(updateFlags) ||
-         (!sourceRefresh && SchedulerSolveEpoch() != 0u));
+        SchedulerDefersRadiometricPublication();
     uint sourceRayCount = sourceRefresh
         ? (SchedulerArenaRead(outcomeBase + 11u) & 0xffffu)
         : 0u;

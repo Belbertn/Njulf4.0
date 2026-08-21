@@ -91,6 +91,79 @@ public sealed class SimpleDdgiUrgentRelightTests
     }
 
     [Test]
+    public void CoherentPublication_FreezesTopologyBeforeTheIncomingGenerationStarts()
+    {
+        static bool Freeze(
+            bool pending,
+            bool initialized,
+            bool changed,
+            SimpleDdgiSourceRefreshMode mode,
+            SimpleDdgiSchedulerMode schedulerMode =
+                SimpleDdgiSchedulerMode.GpuResident,
+            bool transportV2 = true,
+            SimpleDdgiDirectionalRadianceMode directionalMode =
+                SimpleDdgiDirectionalRadianceMode.Off,
+            bool directionalStorageAvailable = true) =>
+            SimpleDdgiVolumeManager
+                .ShouldFreezeVolumeTopologyForRadiometricPublication(
+                    pending,
+                    initialized,
+                    changed,
+                    schedulerMode,
+                    transportV2,
+                    mode,
+                    directionalMode,
+                    directionalStorageAvailable);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Freeze(
+                pending: true,
+                initialized: false,
+                changed: false,
+                SimpleDdgiSourceRefreshMode.FullTrace), Is.True);
+            Assert.That(Freeze(
+                pending: false,
+                initialized: true,
+                changed: true,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.True);
+            Assert.That(Freeze(
+                pending: false,
+                initialized: true,
+                changed: true,
+                SimpleDdgiSourceRefreshMode.EnvironmentMissRelight), Is.True);
+            Assert.That(Freeze(
+                pending: false,
+                initialized: true,
+                changed: true,
+                SimpleDdgiSourceRefreshMode.FullTrace), Is.False);
+            Assert.That(Freeze(
+                pending: false,
+                initialized: true,
+                changed: false,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.False);
+            Assert.That(Freeze(
+                pending: false,
+                initialized: false,
+                changed: true,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.False);
+            Assert.That(Freeze(
+                pending: false,
+                initialized: true,
+                changed: true,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight,
+                schedulerMode: SimpleDdgiSchedulerMode.GpuMirror), Is.False);
+            Assert.That(Freeze(
+                pending: false,
+                initialized: true,
+                changed: true,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight,
+                directionalMode: SimpleDdgiDirectionalRadianceMode.L2,
+                directionalStorageAvailable: false), Is.False);
+        });
+    }
+
+    [Test]
     public void OverlappingCachedRelight_EscalatesOnlyBeforeCoherentPublication()
     {
         static bool Escalate(
@@ -289,7 +362,7 @@ public sealed class SimpleDdgiUrgentRelightTests
                 "SIMPLE_DDGI_SOLVE_SINGLE_SWEEP"));
             Assert.That(commit, Does.Contain(
                 "bool deferredRadiometricPublication = !urgentRelight"));
-            Assert.That(commit, Does.Contain(
+            Assert.That(commit, Does.Not.Contain(
                 "SchedulerUpdateUsesRadiometricRelight(updateFlags)"));
             Assert.That(commit, Does.Contain(
                 "if (SchedulerGpuResident() && !deferredRadiometricPublication)"));
@@ -301,6 +374,10 @@ public sealed class SimpleDdgiUrgentRelightTests
                 "bool DeferSimpleDdgiDirectionalPublication("));
             Assert.That(manager, Does.Contain(
                 "PublishDeferredRadiometricGenerationIfReady(commandBuffer);"));
+            Assert.That(manager, Does.Contain(
+                "ShouldFreezeVolumeTopologyForRadiometricPublication("));
+            Assert.That(manager, Does.Contain(
+                "_freezeVolumeTopologyForRadiometricPublicationThisFrame &&"));
             Assert.That(manager, Does.Contain(
                 "_bufferManager.GetBuffer(_transportIrradianceAtlasBuffer)"));
             Assert.That(manager, Does.Contain(

@@ -65,7 +65,6 @@ layout(push_constant) uniform SimpleDdgiPushBlock
 
 bool DeferSimpleDdgiDirectionalPublication(
     SimpleDdgiParams params,
-    SimpleDdgiProbeUpdate update,
     bool gpuScheduler)
 {
     return gpuScheduler &&
@@ -74,9 +73,7 @@ bool DeferSimpleDdgiDirectionalPublication(
         SimpleDdgiDirectionalParityRequired(params) &&
         !SimpleDdgiSchedulerUrgentRelight(
             pc.SchedulerArenaBufferIndex,
-            pc.SchedulerCountersOffsetWords) &&
-        (SimpleDdgiUpdateRelightsEnvironmentMisses(update) ||
-         SimpleDdgiUpdateRelightsCachedHits(update));
+            pc.SchedulerCountersOffsetWords);
 }
 
 void InvalidateSimpleDdgiDirectionalProjection(
@@ -113,7 +110,6 @@ void FailSimpleDdgiDirectionalProjection(
     // result of this transaction.
     bool deferredPublication = DeferSimpleDdgiDirectionalPublication(
         params,
-        update,
         gpuScheduler);
     InvalidateSimpleDdgiDirectionalProjection(
         params,
@@ -292,7 +288,6 @@ bool BlendAndWriteSimpleDdgiDirectionalCoefficients(
     uint qualityLevel = min((validCount + 15u) / 16u, 15u);
     bool deferredPublication = DeferSimpleDdgiDirectionalPublication(
         params,
-        update,
         SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex));
     bool wroteCanonical = deferredPublication ||
         WriteSimpleDdgiRadianceShRecord(
@@ -394,7 +389,6 @@ void main()
     {
         bool deferredPublication = DeferSimpleDdgiDirectionalPublication(
             params,
-            update,
             gpuScheduler);
         InvalidateSimpleDdgiDirectionalProjection(
             params,

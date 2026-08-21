@@ -132,13 +132,7 @@ void main()
     bool deferredRadiometricPublication = !urgentRelight &&
         residentTransaction &&
         (schedulerFeatureFlags &
-            SIMPLE_DDGI_PUBLISH_DEFER_RADIOMETRIC_FEATURE) != 0u &&
-        (SimpleDdgiUpdateRelightsEnvironmentMisses(update) ||
-         SimpleDdgiUpdateRelightsCachedHits(update) ||
-         (!SimpleDdgiUpdateRequiresSourceRefresh(update) &&
-          ReadStorageWordUniform(
-              pc.SchedulerArenaBufferIndex,
-              pc.SchedulerFrameOffsetWords + 19u) != 0u));
+            SIMPLE_DDGI_PUBLISH_DEFER_RADIOMETRIC_FEATURE) != 0u;
     if (deferredRadiometricPublication)
     {
         // The canonical SSBO and this optional image mirror must cross the
