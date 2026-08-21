@@ -1651,7 +1651,7 @@ public sealed class SimpleDdgiVolumeManagerTests
                     participantCount: 14_779u,
                     visitedParticipantCount: 6_656u,
                     publishedCount: 512u,
-                    blockingSourceWork: false),
+                    blockingSourceCohortWork: false),
                 Is.True,
                 "a source-clean current-epoch publication is usable while the exact audit count catches up");
             Assert.That(
@@ -1662,7 +1662,7 @@ public sealed class SimpleDdgiVolumeManagerTests
                     participantCount: 14_779u,
                     visitedParticipantCount: 14_779u,
                     publishedCount: 0u,
-                    blockingSourceWork: false),
+                    blockingSourceCohortWork: false),
                 Is.True,
                 "an already-published complete participant sweep remains a live witness");
             Assert.That(
@@ -1673,7 +1673,7 @@ public sealed class SimpleDdgiVolumeManagerTests
                     participantCount: 14_779u,
                     visitedParticipantCount: 6_656u,
                     publishedCount: 512u,
-                    blockingSourceWork: true),
+                    blockingSourceCohortWork: true),
                 Is.False,
                 "unrepaired source probes must keep a new lighting generation behind the boundary");
             Assert.That(
@@ -1684,7 +1684,7 @@ public sealed class SimpleDdgiVolumeManagerTests
                     participantCount: 14_779u,
                     visitedParticipantCount: 14_779u,
                     publishedCount: 512u,
-                    blockingSourceWork: false),
+                    blockingSourceCohortWork: false),
                 Is.False,
                 "a delayed solve epoch cannot authorize the current field");
         });

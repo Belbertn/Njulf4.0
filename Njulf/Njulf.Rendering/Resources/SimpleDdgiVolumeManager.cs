@@ -2477,7 +2477,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         feedback.SolveEpochParticipantCount,
                         feedback.SolveEpochVisitedCount,
                         feedback.PublishedCount,
-                        HasBlockingTailSourceWork(feedback));
+                        HasBlockingLivePropagationSourceCohortWork(feedback));
                 if (livePropagationBoundaryReady)
                 {
                     // A moving toroidal field can change its exact active
@@ -2547,6 +2547,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             GPUSimpleDdgiSchedulerFeedback feedback) =>
             ResolveBlockingTailSourceWorkCount(feedback) != 0u;
 
+        internal static bool HasBlockingLivePropagationSourceCohortWork(
+            GPUSimpleDdgiSchedulerFeedback feedback) =>
+            ResolveBlockingLivePropagationSourceCohortWorkCount(feedback) != 0u;
+
         internal static bool CanEstablishLivePropagationBoundary(
             SimpleDdgiTransportPhase phase,
             uint currentSolveEpoch,
@@ -2554,12 +2558,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             uint participantCount,
             uint visitedParticipantCount,
             uint publishedCount,
-            bool blockingSourceWork) =>
+            bool blockingSourceCohortWork) =>
             phase == SimpleDdgiTransportPhase.AcceleratedSolve &&
             currentSolveEpoch != 0u &&
             feedbackSolveEpoch == currentSolveEpoch &&
             participantCount != 0u &&
-            !blockingSourceWork &&
+            !blockingSourceCohortWork &&
             (visitedParticipantCount == participantCount ||
              publishedCount != 0u);
 
@@ -2667,6 +2671,22 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 Math.Max(pendingCardinality, pendingGeneration));
         }
 
+        internal static uint ResolveBlockingLivePropagationSourceCohortWorkCount(
+            GPUSimpleDdgiSchedulerFeedback feedback)
+        {
+            uint pendingInvalid =
+                feedback.PackedPendingSourceInvalidAndCardinalityCounts & 0xffffu;
+            uint pendingCardinality =
+                feedback.PackedPendingSourceInvalidAndCardinalityCounts >> 16;
+            uint pendingPrivateRepair =
+                feedback.PackedPendingSourceRepairAndGenerationCounts & 0xffffu;
+            uint pendingGeneration =
+                feedback.PackedPendingSourceRepairAndGenerationCounts >> 16;
+            return Math.Max(
+                Math.Max(pendingInvalid, pendingCardinality),
+                Math.Max(pendingPrivateRepair, pendingGeneration));
+        }
+
         private void SynchronizeGpuResidentPeriodicSourceRefreshWave(
             GPUSimpleDdgiSchedulerFeedback feedback)
         {
@@ -2702,6 +2722,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             GPUSimpleDdgiSchedulerFeedback feedback)
         {
             uint blocking = ResolveBlockingTailSourceWorkCount(feedback);
+            uint cohortBlocking =
+                ResolveBlockingLivePropagationSourceCohortWorkCount(feedback);
             _sourceStepStaleProbeCount = checked((int)Math.Min(
                 int.MaxValue,
                 blocking));
@@ -2711,7 +2733,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     Math.Max(feedback.MaximumFreshAge, feedback.MaximumExposedAge),
                     feedback.MaximumRelocationAge)));
             _sourceStepAgeP95Frames = 0;
-            if (blocking != 0u ||
+            if (cohortBlocking != 0u ||
                 feedback.SourceLightingGeneration != _sourceLightingGeneration)
             {
                 _sourceCohortQuietFrames = 0;
@@ -7996,7 +8018,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident)
             {
                 return _gpuSchedulerFeedbackValid &&
-                    _transportResidentSourceRepairProbeCount == 0 &&
+                    _admittedSourceCohortGeneration == _sourceLightingGeneration &&
                     !_sourceCohortTransitionActive;
             }
 

@@ -74,6 +74,53 @@ public sealed class SimpleDdgiTransportTailTests
     }
 
     [Test]
+    public void LivePropagationSourceCohort_ExcludesMotionOnlyTransientWork()
+    {
+        GPUSimpleDdgiSchedulerFeedback motionOnly = new()
+        {
+            PendingSourceCount = 7u,
+            PendingFreshCount = 5u,
+            PendingExposedCount = 3u,
+            PendingRelocationCount = 2u
+        };
+        GPUSimpleDdgiSchedulerFeedback sourceCohort = motionOnly with
+        {
+            PackedPendingSourceInvalidAndCardinalityCounts = 4u | (6u << 16),
+            PackedPendingSourceRepairAndGenerationCounts = 8u | (9u << 16)
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ResolveBlockingLivePropagationSourceCohortWorkCount(default),
+                Is.Zero);
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ResolveBlockingLivePropagationSourceCohortWorkCount(motionOnly),
+                Is.Zero,
+                "newly exposed local work must still block tail audit without " +
+                "holding an already-complete radiometric cohort behind the camera");
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .HasBlockingLivePropagationSourceCohortWork(motionOnly),
+                Is.False);
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .ResolveBlockingLivePropagationSourceCohortWorkCount(sourceCohort),
+                Is.EqualTo(9u));
+            Assert.That(
+                SimpleDdgiVolumeManager
+                    .HasBlockingLivePropagationSourceCohortWork(sourceCohort),
+                Is.True);
+            Assert.That(
+                SimpleDdgiVolumeManager.HasBlockingTailSourceWork(motionOnly),
+                Is.True,
+                "motion-only source work remains an exact tail-certification blocker");
+        });
+    }
+
+    [Test]
     public void LocalSourceRepair_ReopensTheSameSolveEpoch()
     {
         var controller = new SimpleDdgiTransportSolveController(2);
