@@ -60,7 +60,7 @@ public sealed class DependencyReproducibilityTests
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(static path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        Assert.That(projectPaths, Has.Length.EqualTo(9));
+        Assert.That(projectPaths, Has.Length.EqualTo(11));
 
         var failures = new List<string>();
         foreach (string projectPath in projectPaths)

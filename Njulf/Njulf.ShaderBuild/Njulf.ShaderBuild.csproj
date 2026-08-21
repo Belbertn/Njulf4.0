@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- This library is loaded by the active dotnet MSBuild host. Keeping the
+         references private=false avoids carrying a second MSBuild copy. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.Build.Framework" HintPath="$(MSBuildBinPath)\Microsoft.Build.Framework.dll" Private="false" />
+    <Reference Include="Microsoft.Build.Utilities.Core" HintPath="$(MSBuildBinPath)\Microsoft.Build.Utilities.Core.dll" Private="false" />
+  </ItemGroup>
+
+</Project>

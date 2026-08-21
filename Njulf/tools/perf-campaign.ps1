@@ -46,6 +46,8 @@ $script:RunRoot = if ([System.IO.Path]::IsPathRooted($RunDirectory)) {
 } else {
     [System.IO.Path]::GetFullPath((Join-Path $script:SolutionRoot $RunDirectory))
 }
+$script:ShaderCacheRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $script:SolutionRoot "artifacts/shader-cache/v1"))
 $script:RepoRoot = ""
 $script:CampaignBranch = ""
 $script:ProtectedFingerprints = [ordered]@{}
@@ -2828,6 +2830,18 @@ function Assert-CampaignPathTopology {
         $script:ManifestFile "Active campaign manifest"
     $null = Assert-NoLinkedPathComponents `
         $script:RunRoot "Campaign run root"
+    $null = Assert-NoLinkedPathComponents `
+        $script:ShaderCacheRoot "Shader cache root"
+    $artifactRoot = [System.IO.Path]::GetFullPath(
+        (Join-Path $script:SolutionRoot "artifacts"))
+    if (-not (Test-PathContainedBy $script:ShaderCacheRoot $artifactRoot)) {
+        throw "Shader cache root must remain inside the campaign worktree's artifacts directory."
+    }
+    $cacheProbe = Join-Path $script:ShaderCacheRoot ".njulf-cache-probe"
+    $null = & git -C $script:SolutionRoot check-ignore --quiet --no-index $cacheProbe
+    if ($LASTEXITCODE -ne 0) {
+        throw "Shader cache root is not ignored by git: $script:ShaderCacheRoot"
+    }
     if (Test-Path -LiteralPath $script:RunRoot -PathType Leaf) {
         throw "Campaign run root is a file: $script:RunRoot"
     }
@@ -2994,6 +3008,7 @@ function Invoke-BuildOutput {
                 "-p:UseSharedCompilation=false",
                 "-p:ImportDirectoryBuildTargets=false",
                 "-p:DirectoryBuildPropsPath=$isolatedProps",
+                "-p:NjulfShaderCacheDirectory=$script:ShaderCacheRoot",
                 "-nodeReuse:false") `
             $Label `
             1800 `
@@ -3014,6 +3029,7 @@ function Invoke-BuildOutput {
                     "-p:UseSharedCompilation=false",
                     "-p:ImportDirectoryBuildTargets=false",
                     "-p:DirectoryBuildPropsPath=$isolatedProps",
+                    "-p:NjulfShaderCacheDirectory=$script:ShaderCacheRoot",
                     "-nodeReuse:false") `
                 "$Label focused candidate tests" `
                 3600 `

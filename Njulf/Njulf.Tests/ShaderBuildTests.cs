@@ -30,7 +30,18 @@ public sealed class ShaderBuildTests
     public void SimpleDdgiShadersAreEmbeddedAsSpirv()
     {
         var assembly = typeof(ShaderLibrary).Assembly;
+        string[] shaderResourceNames = assembly.GetManifestResourceNames()
+            .Where(name =>
+                name.StartsWith("Njulf.Shaders.", StringComparison.Ordinal) &&
+                (name.EndsWith(".comp", StringComparison.Ordinal) ||
+                 name.EndsWith(".frag", StringComparison.Ordinal) ||
+                 name.EndsWith(".vert", StringComparison.Ordinal) ||
+                 name.EndsWith(".mesh", StringComparison.Ordinal) ||
+                 name.EndsWith(".task", StringComparison.Ordinal)))
+            .ToArray();
         byte[] magicBytes = new byte[4];
+
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(254));
 
         foreach (string shaderName in RequiredShaders)
         {

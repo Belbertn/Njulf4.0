@@ -18,6 +18,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Njulf.AssetTool", "Njulf.As
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Njulf.Editor", "Njulf.Editor\Njulf.Editor.csproj", "{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Njulf.ShaderBuild", "Njulf.ShaderBuild\Njulf.ShaderBuild.csproj", "{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Njulf.ShaderBuild.Tests", "Njulf.ShaderBuild.Tests\Njulf.ShaderBuild.Tests.csproj", "{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -117,5 +121,25 @@ Global
 		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.Release|Any CPU.Build.0 = Release|Any CPU
 		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.ShippingPerformance|Any CPU.ActiveCfg = ShippingPerformance|Any CPU
 		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.ProfileSymbols|Any CPU.Build.0 = ProfileSymbols|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.ShippingPerformance|Any CPU.ActiveCfg = ShippingPerformance|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.ProfileSymbols|Any CPU.Build.0 = ProfileSymbols|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.ShippingPerformance|Any CPU.ActiveCfg = ShippingPerformance|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 	EndGlobalSection
 EndGlobal

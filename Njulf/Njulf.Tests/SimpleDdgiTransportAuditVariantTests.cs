@@ -98,15 +98,16 @@ public sealed class SimpleDdgiTransportAuditVariantTests
                 ((string?)element.Attribute("Condition"))?.Contains(
                     "Debug",
                     StringComparison.Ordinal) == true);
-        XElement auditCompile = project
-            .Descendants("Exec")
+        XElement auditArtifact = project
+            .Descendants("NjulfShaderArtifact")
             .Single(element =>
-                ((string?)element.Attribute("Command"))?.Contains(
-                    "%(SimpleDdgiAuditShaderVariant.Identity)",
-                    StringComparison.Ordinal) == true);
-        XElement[] otherCompiles = project
-            .Descendants("Exec")
-            .Where(element => element != auditCompile)
+                string.Equals(
+                    (string?)element.Attribute("Include"),
+                    "@(SimpleDdgiAuditShaderVariant)",
+                    StringComparison.Ordinal));
+        XElement[] otherArtifacts = project
+            .Descendants("NjulfShaderArtifact")
+            .Where(element => element != auditArtifact)
             .ToArray();
 
         Assert.Multiple(() =>
@@ -119,11 +120,12 @@ public sealed class SimpleDdgiTransportAuditVariantTests
                 debugDiagnostics.Value.Trim(),
                 Is.EqualTo("-DNJULF_DDGI_DETAILED_COUNTERS=1"));
             Assert.That(
-                (string?)auditCompile.Attribute("Command"),
-                Does.Contain("$(NjulfSimpleDdgiAuditOptimizationOptions)"));
+                auditArtifact.Element("AdditionalCompileOptions")?.Value,
+                Is.EqualTo("$(NjulfSimpleDdgiAuditOptimizationOptions)"));
             Assert.That(
-                otherCompiles.Select(element =>
-                    (string?)element.Attribute("Command") ?? string.Empty),
+                otherArtifacts.SelectMany(element =>
+                    element.Elements("AdditionalCompileOptions"))
+                    .Select(element => element.Value),
                 Has.None.Contains("$(NjulfSimpleDdgiAuditOptimizationOptions)"));
         });
     }

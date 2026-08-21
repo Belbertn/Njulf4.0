@@ -905,7 +905,7 @@ namespace Njulf.Tests
                 Assert.That(shaderProject, Does.Contain(
                     "-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_DDGI_RECEIVER_CACHE=1"));
                 Assert.That(shaderProject, Does.Contain(
-                    "forward_opaque_simple_full_input_ddgi_cache_required.frag.spv"));
+                    "forward_opaque_simple_full_input_ddgi_cache_required.frag"));
             });
         }
 

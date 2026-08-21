@@ -1841,6 +1841,25 @@ function Invoke-SyntheticBuildPathBudgetCase {
     Write-Host "PASS synthetic-build-path-budget"
 }
 
+function Invoke-SyntheticShaderCacheWiringCase {
+    $source = Get-Content -LiteralPath $driver -Raw
+    $cacheArgument = '"-p:NjulfShaderCacheDirectory=$script:ShaderCacheRoot"'
+    $cacheArgumentCount = [regex]::Matches(
+        $source,
+        [regex]::Escape($cacheArgument)).Count
+    if ($cacheArgumentCount -ne 2) {
+        throw "Hermetic build and focused-test invocations must both use the persistent shader cache."
+    }
+    if ($source -notmatch
+            '(?s)Join-Path\s+\$script:SolutionRoot\s+"artifacts/shader-cache/v1"' -or
+        $source -notmatch
+            'Test-PathContainedBy\s+\$script:ShaderCacheRoot\s+\$artifactRoot' -or
+        $source -notmatch 'check-ignore --quiet --no-index') {
+        throw "Persistent shader cache path safety is not fail-closed."
+    }
+    Write-Host "PASS synthetic-shader-cache-wiring"
+}
+
 function Invoke-QualityVerifierSmokeCase {
     $buildRoot = Join-Path $solutionRoot "NjulfHelloGame/bin/Release/net10.0"
     if (-not (Test-Path -LiteralPath (Join-Path $buildRoot "NjulfHelloGame.dll") -PathType Leaf)) {
@@ -2295,6 +2314,7 @@ try {
     Invoke-SyntheticCookedAssetStagingCase
     Invoke-ProcessTimeoutContainmentCase
     Invoke-SyntheticBuildPathBudgetCase
+    Invoke-SyntheticShaderCacheWiringCase
     Invoke-QualityVerifierSmokeCase
     Invoke-ManifestCase "valid" {} $true
     Invoke-ManifestCase "abba-too-small" {
