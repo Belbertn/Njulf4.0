@@ -3247,9 +3247,9 @@ function Get-QualitySequenceCheckpointFingerprint {
     [void]$builder.Append(($indices -join ',')).Append('|')
     foreach ($pair in @(Get-QualitySequenceTemporalPairs $Trajectory)) {
         [void]$builder.Append([int]$pair.fromRouteFrameIndex)
-            .Append("->")
-            .Append([int]$pair.toRouteFrameIndex)
-            .Append(',')
+        [void]$builder.Append("->")
+        [void]$builder.Append([int]$pair.toRouteFrameIndex)
+        [void]$builder.Append(',')
     }
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($builder.ToString())
     return "sha256:" + [Convert]::ToHexString(

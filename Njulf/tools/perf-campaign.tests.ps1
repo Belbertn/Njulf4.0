@@ -1264,6 +1264,7 @@ function Invoke-SyntheticQualitySequencePolicyCase {
             "Get-QualitySequenceTrajectoryFrameCount",
             "Get-QualitySequenceCheckpointIndices",
             "Get-QualitySequenceTemporalPairs",
+            "Get-QualitySequenceCheckpointFingerprint",
             "New-QualitySequenceTemporalGates",
             "New-QualitySequenceSpatialEnvelope",
             "Assert-QualitySequenceSpatialEnvelope")) {
@@ -1307,6 +1308,16 @@ function Invoke-SyntheticQualitySequencePolicyCase {
         if (($actual -join ",") -cne (@($entry.Value) -join ",")) {
             throw "Quality temporal-pair topology differs for '$($entry.Key)'."
         }
+    }
+    $checkpointFingerprints = @($expectedCheckpoints.Keys | ForEach-Object {
+        Get-QualitySequenceCheckpointFingerprint ([string]$_)
+    })
+    if (@($checkpointFingerprints | Where-Object {
+                [string]$_ -notmatch '^sha256:[0-9a-f]{64}$'
+            }).Count -ne 0 -or
+        @($checkpointFingerprints | Sort-Object -Unique).Count -ne
+            $expectedCheckpoints.Count) {
+        throw "Quality checkpoint fingerprints are invalid or collide."
     }
 
     $manifest = Get-Content -LiteralPath $sourceManifest -Raw |
