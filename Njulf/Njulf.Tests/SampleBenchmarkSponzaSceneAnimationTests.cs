@@ -4,6 +4,7 @@ using Njulf.Core.Animation;
 using Njulf.Core.Math;
 using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 using NjulfHelloGame;
 using NUnit.Framework;
 
@@ -102,6 +103,50 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
                 authoredRouteFrameIndex: 2,
                 measurementFrame: false,
                 hold: true));
+    }
+
+    [Test]
+    public void StableSkinningOutputState_DoesNotRepublishSceneContent()
+    {
+        var scene = new Scene();
+        var skinned = new SkinnedRenderObject("mesh", "material");
+        scene.Add(skinned);
+
+        SkinningManager.ApplySkinningOutputState(
+            skinned,
+            enabled: true,
+            skinnedVertexOffset: 42u);
+        ulong enabledRevision = scene.RenderPayloadRevision;
+
+        SkinningManager.ApplySkinningOutputState(
+            skinned,
+            enabled: true,
+            skinnedVertexOffset: 42u);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scene.RenderPayloadRevision, Is.EqualTo(enabledRevision));
+            Assert.That(skinned.SkinningEnabled, Is.True);
+            Assert.That(skinned.SkinnedVertexOffset, Is.EqualTo(42u));
+        });
+
+        SkinningManager.ApplySkinningOutputState(
+            skinned,
+            enabled: false,
+            skinnedVertexOffset: 99u);
+        ulong disabledRevision = scene.RenderPayloadRevision;
+        SkinningManager.ApplySkinningOutputState(
+            skinned,
+            enabled: false,
+            skinnedVertexOffset: 99u);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(disabledRevision, Is.GreaterThan(enabledRevision));
+            Assert.That(scene.RenderPayloadRevision, Is.EqualTo(disabledRevision));
+            Assert.That(skinned.SkinningEnabled, Is.False);
+            Assert.That(skinned.SkinnedVertexOffset, Is.Zero);
+        });
     }
 
     [Test]

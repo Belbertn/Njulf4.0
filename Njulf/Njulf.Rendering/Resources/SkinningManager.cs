@@ -95,32 +95,67 @@ namespace Njulf.Rendering.Resources
                     if (renderObject is not SkinnedRenderObject skinned)
                         continue;
 
-                    skinned.SkinningEnabled = false;
-                    skinned.SkinnedVertexOffset = 0;
-
                     if (!enabled || !skinned.Enabled || !skinned.Visible)
+                    {
+                        ApplySkinningOutputState(
+                            skinned,
+                            enabled: false,
+                            skinnedVertexOffset: 0u);
                         continue;
+                    }
                     if (maxAnimatedInstances >= 0 && skinnedObjects >= maxAnimatedInstances)
+                    {
+                        ApplySkinningOutputState(
+                            skinned,
+                            enabled: false,
+                            skinnedVertexOffset: 0u);
                         continue;
+                    }
                     if (skinned.Mesh is not MeshHandle meshHandle || !meshHandle.IsValid)
+                    {
+                        ApplySkinningOutputState(
+                            skinned,
+                            enabled: false,
+                            skinnedVertexOffset: 0u);
                         continue;
+                    }
                     if (skinned.Animator == null || skinned.SkinIndex < 0 || skinned.SkinIndex >= skinned.Animator.Skins.Count)
+                    {
+                        ApplySkinningOutputState(
+                            skinned,
+                            enabled: false,
+                            skinnedVertexOffset: 0u);
                         continue;
+                    }
 
                     MeshInfo meshInfo = _meshManager.GetMeshInfo(meshHandle);
                     if (!meshInfo.IsSkinned || meshInfo.SkinningDataCount != meshInfo.VertexCount)
+                    {
+                        ApplySkinningOutputState(
+                            skinned,
+                            enabled: false,
+                            skinnedVertexOffset: 0u);
                         continue;
+                    }
 
                     ReadOnlySpan<Matrix4x4> matrices = skinned.Animator.GetSkinMatrices(skinned.SkinIndex);
                     if (matrices.IsEmpty)
+                    {
+                        ApplySkinningOutputState(
+                            skinned,
+                            enabled: false,
+                            skinnedVertexOffset: 0u);
                         continue;
+                    }
 
                     uint matrixOffset = CheckedCount(_matrixScratch.Count);
                     for (int i = 0; i < matrices.Length; i++)
                         _matrixScratch.Add(ApplySkinningBindTransform(skinned.SkinningBindTransform, matrices[i]));
 
-                    skinned.SkinningEnabled = true;
-                    skinned.SkinnedVertexOffset = skinnedVertexOffset;
+                    ApplySkinningOutputState(
+                        skinned,
+                        enabled: true,
+                        skinnedVertexOffset: skinnedVertexOffset);
                     _dispatchScratch.Add(new GPUSkinningDispatch
                     {
                         SourceVertexOffset = meshInfo.VertexOffset,
@@ -194,6 +229,17 @@ namespace Njulf.Rendering.Resources
         internal static Matrix4x4 ApplySkinningBindTransform(Matrix4x4 bindTransform, Matrix4x4 skinMatrix)
         {
             return skinMatrix * bindTransform;
+        }
+
+        internal static void ApplySkinningOutputState(
+            SkinnedRenderObject skinned,
+            bool enabled,
+            uint skinnedVertexOffset)
+        {
+            ArgumentNullException.ThrowIfNull(skinned);
+            uint effectiveOffset = enabled ? skinnedVertexOffset : 0u;
+            skinned.SkinnedVertexOffset = effectiveOffset;
+            skinned.SkinningEnabled = enabled;
         }
 
         private SkinningBuffer CreateBuffer(

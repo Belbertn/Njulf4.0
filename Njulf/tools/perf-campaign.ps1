@@ -1028,6 +1028,7 @@ function Assert-CampaignManifest {
         "Njulf.Rendering/Resources/ReflectionProbeFrameTelemetry.cs",
         "Njulf.Rendering/Resources/ReflectionProbeGpuBudgetPlanner.cs",
         "Njulf.Rendering/Resources/ReflectionProbeManager.cs",
+        "Njulf.Rendering/Resources/SkinningManager.cs",
         "Njulf.Rendering/Resources/SimpleDdgiGpuScheduler.cs",
         "Njulf.Rendering/Resources/SimpleDdgiVolumeManager.cs",
         "Njulf.Rendering/Debugging/GpuTimestampRecorder.cs",
