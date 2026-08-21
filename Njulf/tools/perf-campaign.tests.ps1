@@ -568,7 +568,8 @@ function Invoke-SyntheticVerifierByteContractCase {
             "Assert-NoDuplicateJsonProperties",
             "ConvertFrom-FrozenVerifierBytes",
             "ConvertFrom-QualityMetricVerifierBytes",
-            "Assert-FrozenVerifierResultHeader")) {
+            "Assert-FrozenVerifierResultHeader",
+            "Assert-ProtectedFileByteIdentity")) {
         $definition = @($driverAst.FindAll({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -581,6 +582,40 @@ function Invoke-SyntheticVerifierByteContractCase {
     }
 
     $utf8 = [System.Text.UTF8Encoding]::new($false, $true)
+    $savedProtectedFingerprints = Get-Variable `
+        -Scope Script -Name ProtectedFingerprints -ErrorAction SilentlyContinue
+    try {
+        $protectedBytes = $utf8.GetBytes("synthetic protected helper")
+        $protectedHash = [Convert]::ToHexString(
+            [System.Security.Cryptography.SHA256]::HashData(
+                $protectedBytes)).ToLowerInvariant()
+        $script:ProtectedFingerprints = [ordered]@{
+            "tools/perf-quality-verify.ps1" = "file:sha256:$protectedHash"
+        }
+        Assert-ProtectedFileByteIdentity `
+            "tools/perf-quality-verify.ps1" $protectedBytes `
+            "Synthetic protected helper"
+        $tamperedProtectedBytes = $utf8.GetBytes("tampered protected helper")
+        $protectedTamperFailedClosed = $false
+        try {
+            Assert-ProtectedFileByteIdentity `
+                "tools/perf-quality-verify.ps1" $tamperedProtectedBytes `
+                "Synthetic protected helper"
+        } catch {
+            $protectedTamperFailedClosed = $_.Exception.Message -match
+                "differs from its admitted bytes"
+        }
+        if (-not $protectedTamperFailedClosed) {
+            throw "Protected helper byte tampering did not fail closed."
+        }
+    } finally {
+        if ($null -eq $savedProtectedFingerprints) {
+            Remove-Variable -Scope Script -Name ProtectedFingerprints `
+                -ErrorAction SilentlyContinue
+        } else {
+            $script:ProtectedFingerprints = $savedProtectedFingerprints.Value
+        }
+    }
     $expectedHeader = @("kind", "schema", "passed", "failures")
     $frozenJson =
         '{"kind":"synthetic-verifier","schema":"synthetic-verifier/v1","passed":true,"failures":[]}'

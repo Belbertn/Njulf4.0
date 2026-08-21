@@ -4641,6 +4641,22 @@ function Assert-QualityMetricVerifierInputs {
     }
 }
 
+function Assert-ProtectedFileByteIdentity {
+    param(
+        [string]$RelativePath,
+        [byte[]]$Bytes,
+        [string]$Label)
+    $expectedFingerprint =
+        [string]$script:ProtectedFingerprints[$RelativePath]
+    $actualHash = [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
+    $actualFingerprint = "file:sha256:$actualHash"
+    if ($expectedFingerprint -cnotmatch '^file:sha256:[0-9a-f]{64}$' -or
+        $actualFingerprint -cne $expectedFingerprint) {
+        throw "$Label differs from its admitted bytes."
+    }
+}
+
 function Invoke-QualityMetricVerifier {
     param(
         $Manifest,
@@ -4661,14 +4677,9 @@ function Invoke-QualityMetricVerifier {
     $hostExecutable = Join-Path $PSHOME "pwsh.exe"
     $helperPath = Join-Path $script:SolutionRoot "tools/perf-quality-verify.ps1"
     $helperRelativePath = "tools/perf-quality-verify.ps1"
-    $expectedHelperHash = [string]$script:ProtectedFingerprints[$helperRelativePath]
     [byte[]]$helperBytes = [System.IO.File]::ReadAllBytes($helperPath)
-    $actualHelperHash = [Convert]::ToHexString(
-        [System.Security.Cryptography.SHA256]::HashData($helperBytes)).ToLowerInvariant()
-    if ($expectedHelperHash -cnotmatch '^[0-9a-f]{64}$' -or
-        $actualHelperHash -cne $expectedHelperHash) {
-        throw "$Label verifier helper differs from its admitted bytes."
-    }
+    Assert-ProtectedFileByteIdentity `
+        $helperRelativePath $helperBytes "$Label verifier helper"
     $helperText = [System.Text.UTF8Encoding]::new(
         $false,
         $true).GetString($helperBytes)
