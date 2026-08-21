@@ -2030,6 +2030,15 @@ function Invoke-SyntheticSceneProfileArgumentCase {
             $quality -contains "--quality-preset") {
             throw "$scene benchmark arguments overwrite its authored scene profile."
         }
+        if ($timing -notcontains "--benchmark-activation" -or
+            $timing -contains "--benchmark-quality-sequence-activation") {
+            throw "$scene timing arguments do not own the timing activation namespace."
+        }
+        if ($quality -notcontains "--benchmark-quality-sequence-activation" -or
+            $quality -contains "--benchmark-activation" -or
+            $quality -contains "--benchmark") {
+            throw "$scene quality arguments mix timing and quality-sequence modes."
+        }
     }
     Write-Host "PASS synthetic-scene-profile-arguments"
 }

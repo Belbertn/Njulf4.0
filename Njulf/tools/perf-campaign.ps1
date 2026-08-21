@@ -3300,7 +3300,7 @@ function Get-QualitySequenceArguments {
         "--benchmark-quality-sequence-budget-profile", ([string]$Manifest.capture.budgetProfile),
         "--benchmark-quality-sequence-variant", ([string]$Workload.captureVariant),
         "--benchmark-quality-sequence-trajectory", ([string]$Workload.qualityTrajectory),
-        "--benchmark-activation", ([string]$Workload.activation),
+        "--benchmark-quality-sequence-activation", ([string]$Workload.activation),
         "--health-report", $HealthPath,
         "--scene", ([string]$Workload.scene),
         "--performance-scenario", ([string]$Workload.scenario),
