@@ -4038,8 +4038,6 @@ function Assert-QualitySequenceHealthReport {
             [string]$Report.ProducerIdentity.GpuName -or
         [string]$producer.driverVersion -cne
             [string]$Report.ProducerIdentity.DriverVersion -or
-        [string]$producer.settingsFingerprint -cne
-            [string]$Report.ProducerIdentity.SettingsFingerprint -or
         -not [string]::IsNullOrEmpty([string]$producer.qualityTier) -or
         [string]$producer.settingsFingerprint -cnotmatch '^[0-9a-f]{64}$' -or
         @($producer.sourceSettingsFingerprints).Count -ne 1 -or

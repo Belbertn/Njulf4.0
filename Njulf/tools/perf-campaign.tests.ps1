@@ -270,7 +270,8 @@ function Invoke-SyntheticQualityHealthBudgetCase {
     $commit = "a" * 40
     $executableHash = "sha256:" + ("b" * 64)
     $shaderHash = "sha256:" + ("c" * 64)
-    $settingsHash = "d" * 64
+    $reportSettingsHash = "d" * 64
+    $healthSettingsHash = "f" * 64
     $activationFingerprint = "sha256:" + ("e" * 64)
     $reportPath = [System.IO.Path]::GetFullPath(
         (Join-Path $testRoot "quality-health-report.json"))
@@ -292,8 +293,8 @@ function Invoke-SyntheticQualityHealthBudgetCase {
         Schema = "material-gi-producer-identity/v1"
         BuildCommit = $commit
         ShaderFingerprint = "c" * 64
-        SettingsFingerprint = $settingsHash
-        SourceSettingsFingerprints = @($settingsHash)
+        SettingsFingerprint = $reportSettingsHash
+        SourceSettingsFingerprints = @($reportSettingsHash)
         GpuName = "Synthetic GPU"
         DriverVersion = "1.2.3"
         QualityTier = "StressUnlimited"
@@ -343,8 +344,8 @@ function Invoke-SyntheticQualityHealthBudgetCase {
             schema = "material-gi-producer-identity/v1"
             buildCommit = $commit
             shaderFingerprint = "c" * 64
-            settingsFingerprint = $settingsHash
-            sourceSettingsFingerprints = @($settingsHash)
+            settingsFingerprint = $healthSettingsHash
+            sourceSettingsFingerprints = @($healthSettingsHash)
             gpuName = "Synthetic GPU"
             driverVersion = "1.2.3"
             qualityTier = ""
@@ -372,6 +373,21 @@ function Invoke-SyntheticQualityHealthBudgetCase {
     }
     if (-not $wrongBudgetFailedClosed) {
         throw "Quality health accepted a noncanonical stress budget enum."
+    }
+    $qualityOptions.BudgetProfileOverride = "StressUnlimited"
+    $health.producerIdentity.sourceSettingsFingerprints = @($reportSettingsHash)
+    $wrongHealthSourceFailedClosed = $false
+    try {
+        Assert-QualitySequenceHealthReport `
+            $manifest $workload $health $report $build "Release" "canonical" `
+            $sequenceId $commit $reportPath $outputDirectory "" "" `
+            "Synthetic quality health"
+    } catch {
+        $wrongHealthSourceFailedClosed = $_.Exception.Message -match
+            "health producer/render identity is invalid"
+    }
+    if (-not $wrongHealthSourceFailedClosed) {
+        throw "Quality health accepted a mismatched settings source identity."
     }
     Write-Host "PASS synthetic-quality-health-budget-contract"
 }
