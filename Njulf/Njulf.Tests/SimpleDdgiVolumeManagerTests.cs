@@ -550,8 +550,8 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
-    [TestCase(4_096, 128, true, true, 512)]
-    [TestCase(4_096, 64, true, true, 1_024)]
+    [TestCase(4_096, 128, true, true, 640)]
+    [TestCase(4_096, 64, true, true, 1_280)]
     [TestCase(256, 128, true, true, 256)]
     [TestCase(4_096, 128, true, false, 128)]
     [TestCase(4_096, 128, false, true, 4_096)]
@@ -621,13 +621,13 @@ public sealed class SimpleDdgiVolumeManagerTests
             Is.EqualTo(expected));
     }
 
-    [TestCase(4_096, 128, 512, true, false, false, true, 512)]
-    [TestCase(4_096, 64, 1_024, true, false, false, true, 256)]
+    [TestCase(4_096, 128, 640, true, false, false, true, 640)]
+    [TestCase(4_096, 64, 1_280, true, false, false, true, 320)]
     [TestCase(4_096, 128, 384, true, false, true, true, 384)]
     [TestCase(256, 128, 512, true, false, false, true, 256)]
     [TestCase(4_096, 128, 512, true, true, false, true, 512)]
     [TestCase(4_096, 128, 512, false, false, false, true, 512)]
-    public void TransportV2RadiometricRecoveryFrameBudget_UsesBoundedFourfoldSourceEnvelope(
+    public void TransportV2RadiometricRecoveryFrameBudget_UsesBoundedFivefoldSourceEnvelope(
         int requestedBudget,
         int sourceBudget,
         int requestCapacity,

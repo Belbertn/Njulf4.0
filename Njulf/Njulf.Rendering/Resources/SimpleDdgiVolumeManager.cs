@@ -9035,7 +9035,12 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (!acceleratedTailSolveEnabled)
                 return sourceCapacity;
 
-            const int maximumCachedRayEvaluationsPerFrame = 65_536;
+            // Keep one source-envelope of margin beyond the four ordinary
+            // recovery waves. A moving clipmap can expose a handful of new
+            // probes while a radiometric cohort is draining; without this
+            // margin the last source probe can miss the only zero-blocker
+            // frame and starve live propagation for the rest of the route.
+            const int maximumCachedRayEvaluationsPerFrame = 81_920;
             int raysPerProbe = Math.Max(1, maximumFullRaysPerProbe);
             int cachedSolveCapacity = Math.Max(
                 1,
@@ -9066,12 +9071,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // second source envelope. A global radiometric transition is more
             // latency-sensitive: like Flax's fast-rising active-probe attention,
             // it must promptly revisit the camera-visible field instead of waiting
-            // for an ordinary maintenance sweep. Spend at most four source
+            // for an ordinary maintenance sweep. Spend at most five source
             // envelopes while the explicit lighting-dirty window is active.
-            // The accelerated-solve arena is already provisioned for at least
-            // four source envelopes, so neither path reallocates resources or
-            // changes the steady-state request/ray envelope.
-            int recoveryMultiplier = radiometricRecoveryActive ? 4 : 2;
+            // The fifth envelope is bounded moving-field liveness margin: it
+            // drains probes exposed while the original radiometric cohort is
+            // in flight. The accelerated-solve arena is provisioned for this
+            // exact bound, so steady-state request/ray work is unchanged.
+            int recoveryMultiplier = radiometricRecoveryActive ? 5 : 2;
             int recoverySourceBudget = (int)Math.Min(
                 int.MaxValue,
                 (long)sourceBudget * recoveryMultiplier);
