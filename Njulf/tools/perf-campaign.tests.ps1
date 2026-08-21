@@ -932,6 +932,7 @@ function Invoke-SyntheticComparisonContractCase {
                 TrajectoryFingerprint = "same"
                 TrajectoryFrameCount = 1
                 TrajectoryRouteHash = "same"
+                TrajectorySequenceHash = "same"
             }
             LastDiagnostics = [pscustomobject]@{
                 CaptureSceneAssetHash = "same"
@@ -1927,6 +1928,74 @@ function Invoke-SyntheticNonReflectionC3VerifierCase {
     Write-Host "PASS non-reflection-c3-verifier-contract"
 }
 
+function Invoke-SyntheticSceneProfileArgumentCase {
+    $tokens = $null
+    $parseErrors = $null
+    $driverAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $driver, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) {
+        throw "Campaign driver did not parse for the scene-profile argument test."
+    }
+    foreach ($functionName in @(
+            "Get-PropertyValue",
+            "Get-BenchmarkArguments",
+            "Get-QualitySequenceArguments")) {
+        $definition = @($driverAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $functionName
+        }, $true))[0]
+        if ($null -eq $definition) {
+            throw "Campaign driver lacks '$functionName'."
+        }
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+
+    $manifest = [pscustomobject]@{
+        capture = [pscustomobject]@{
+            maximumSettlingFrames = 4096
+            budgetProfile = "stress"
+        }
+        qualitySequence = [pscustomobject]@{
+            maximumReadbackDrainFrames = 120
+        }
+    }
+    foreach ($scene in @("Bistro", "Sponza")) {
+        $workload = [pscustomobject]@{
+            scene = $scene
+            scenario = "Synthetic"
+            warmupFrames = 480
+            measureFrames = 240
+            captureVariant = "baseline"
+            trajectory = if ($scene -eq "Bistro") {
+                "bistro-loop"
+            } else {
+                "sponza-horizontal"
+            }
+            qualityTrajectory = if ($scene -eq "Bistro") {
+                "bistro-loop"
+            } else {
+                "sponza-horizontal"
+            }
+            activation = "none"
+            bistroQualityVariant = ""
+            arguments = @()
+        }
+        $timing = @(Get-BenchmarkArguments `
+            $manifest $workload "report.json" "health.json" "pair" `
+            "quality.json" "reference.pfm" $true)
+        $quality = @(Get-QualitySequenceArguments `
+            $manifest $workload "canonical" "sequence" "quality-report.json" `
+            "quality-health.json" "quality-output" "reference.json" `
+            "quality.json")
+        if ($timing -contains "--quality-preset" -or
+            $quality -contains "--quality-preset") {
+            throw "$scene benchmark arguments overwrite its authored scene profile."
+        }
+    }
+    Write-Host "PASS synthetic-scene-profile-arguments"
+}
+
 try {
     Invoke-SyntheticManifestSnapshotCase
     Invoke-SyntheticHealthReportCase
@@ -1934,6 +2003,7 @@ try {
     Invoke-SyntheticVerifierByteContractCase
     Invoke-SyntheticFrozenVerifierReturnShapeCase
     Invoke-SyntheticNonReflectionC3VerifierCase
+    Invoke-SyntheticSceneProfileArgumentCase
     Invoke-SyntheticQualityAnimationContractCase
     Invoke-SyntheticComparisonContractCase
     Invoke-SyntheticQualitySequencePolicyCase

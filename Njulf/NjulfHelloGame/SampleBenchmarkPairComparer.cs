@@ -157,7 +157,7 @@ public static class SampleBenchmarkPairComparer
         ValidateTrajectoryIdentity(
             left,
             right,
-            requireRepeatability,
+            requireRepeatability || sameVariant,
             failures);
         if (requireRepeatability)
         {

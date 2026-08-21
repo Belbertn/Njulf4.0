@@ -505,7 +505,9 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         RendererDiagnostics diagnostics)
     {
         _consecutiveReadyFrameCount =
-            SampleBenchmarkRunner.IsReadyForMeasurement(diagnostics)
+            SampleBenchmarkRunner.IsReadyForMeasurement(
+                    diagnostics,
+                    _options.Trajectory)
                 ? Math.Min(
                     RequiredConsecutiveReadyFrameCount,
                     _consecutiveReadyFrameCount + 1)

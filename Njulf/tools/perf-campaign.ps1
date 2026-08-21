@@ -3277,7 +3277,6 @@ function Get-QualitySequenceArguments {
         "--health-report", $HealthPath,
         "--scene", ([string]$Workload.scene),
         "--performance-scenario", ([string]$Workload.scenario),
-        "--quality-preset", "ddgi-high",
         "--validation", "off",
         "--gpu-timing")
     $bistroVariant = [string](Get-PropertyValue $Workload "bistroQualityVariant" "")
@@ -5156,7 +5155,6 @@ function Get-BenchmarkArguments {
         "--benchmark-budget-profile", ([string]$Manifest.capture.budgetProfile),
         "--scene", ([string]$Workload.scene),
         "--performance-scenario", ([string]$Workload.scenario),
-        "--quality-preset", "ddgi-high",
         "--validation", "off",
         "--gpu-timing")
     $bistroVariant = [string](Get-PropertyValue $Workload "bistroQualityVariant" "")
@@ -6639,6 +6637,7 @@ function Assert-CrossBuildIdentity {
         @("trajectory fingerprint", [string]$baseline.CaptureContract.TrajectoryFingerprint, [string]$candidate.CaptureContract.TrajectoryFingerprint),
         @("trajectory frame count", [string]$baseline.CaptureContract.TrajectoryFrameCount, [string]$candidate.CaptureContract.TrajectoryFrameCount),
         @("trajectory route", [string]$baseline.CaptureContract.TrajectoryRouteHash, [string]$candidate.CaptureContract.TrajectoryRouteHash),
+        @("trajectory sequence", [string]$baseline.CaptureContract.TrajectorySequenceHash, [string]$candidate.CaptureContract.TrajectorySequenceHash),
         @("scene asset", [string]$baseline.LastDiagnostics.CaptureSceneAssetHash, [string]$candidate.LastDiagnostics.CaptureSceneAssetHash),
         @("settings schema", [string]$baseline.LastDiagnostics.CaptureRun.SettingsSchemaVersion, [string]$candidate.LastDiagnostics.CaptureRun.SettingsSchemaVersion),
         @("quality", [string]$baseline.LastDiagnostics.ActiveQualityPreset, [string]$candidate.LastDiagnostics.ActiveQualityPreset),

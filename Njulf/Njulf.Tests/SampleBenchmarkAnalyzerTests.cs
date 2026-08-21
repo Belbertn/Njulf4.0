@@ -346,6 +346,127 @@ public sealed class SampleBenchmarkAnalyzerTests
         });
     }
 
+    [Test]
+    public void MeasurementReadiness_MovingRouteRequiresTimingAndStableCapacityNotAStationaryCertificate()
+    {
+        RendererDiagnostics moving = RendererDiagnostics.Empty with
+        {
+            GpuTimingValid = 1,
+            SimpleDdgiActive = 1,
+            SimpleDdgiTransportV2Active = 1,
+            SimpleDdgiTransportTailCertificationEnabled = true,
+            CaptureFrame = new PerformanceCaptureFrameMetadata(
+                800,
+                800,
+                DdgiRuntimeWarmupState.NearCascadeWarmup,
+                800,
+                800)
+            {
+                TransportConvergencePending = true
+            },
+            SimpleDdgiUploadTiming = new SimpleDdgiUploadTiming
+            {
+                CapacityDetails = new SimpleDdgiCapacityTiming
+                {
+                    StableKeyHit = true
+                }
+            }
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleBenchmarkRunner.IsReadyForMeasurement(
+                    moving,
+                    SampleBenchmarkTrajectoryKind.BistroLoop),
+                Is.True);
+            Assert.That(
+                SampleBenchmarkRunner.IsReadyForMeasurement(moving),
+                Is.False,
+                "Stationary captures still require a current certificate.");
+            Assert.That(
+                SampleBenchmarkRunner.IsReadyForMeasurement(
+                    moving with { GpuTimingValid = 0 },
+                    SampleBenchmarkTrajectoryKind.BistroLoop),
+                Is.False);
+            Assert.That(
+                SampleBenchmarkRunner.IsReadyForMeasurement(
+                    moving with
+                    {
+                        SimpleDdgiUploadTiming =
+                            moving.SimpleDdgiUploadTiming with
+                            {
+                                CapacityDetails =
+                                    moving.SimpleDdgiUploadTiming.CapacityDetails with
+                                    {
+                                        StableKeyHit = false
+                                    }
+                            }
+                    },
+                    SampleBenchmarkTrajectoryKind.BistroLoop),
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void CreateReport_MovingRouteAuthenticatesDynamicDdgiStateInsteadOfDemandingStationaryState()
+    {
+        var analyzer = new SampleBenchmarkAnalyzer();
+        for (int index = 0; index < 2; index++)
+        {
+            analyzer.AddSample(RendererDiagnostics.Empty with
+            {
+                GpuTimingSupported = 1,
+                GpuTimingValid = 1,
+                CaptureFrame = new PerformanceCaptureFrameMetadata(
+                    (ulong)index,
+                    (ulong)index,
+                    index == 0
+                        ? DdgiRuntimeWarmupState.NearCascadeWarmup
+                        : DdgiRuntimeWarmupState.Recovery,
+                    1,
+                    1)
+                {
+                    TransportConvergencePending = true
+                },
+                ResolvedGiSettings = new ResolvedGiSettingsMetadata(
+                    $"dynamic-{index}",
+                    string.Empty,
+                    [$"route-frame={index}"])
+            }, RenderBudgetSnapshot.Empty);
+        }
+
+        SampleBenchmarkOptions options = new(true, 0, 2, null)
+        {
+            Trajectory = SampleBenchmarkTrajectoryKind.BistroLoop,
+            TrajectoryBistroVariant =
+                SampleBistroQualityCaptureVariant.SteadyMotion,
+            TrajectoryFingerprint = SampleBenchmarkTrajectory.CreateFingerprint(
+                SampleBenchmarkTrajectoryKind.BistroLoop,
+                SampleBistroQualityCaptureVariant.SteadyMotion)
+        };
+        SampleBenchmarkReport report = analyzer.CreateReport(
+            options,
+            SamplePerformanceScenario.BistroQualityMotionRelight,
+            warmupFrameCount: 0,
+            measurementFrameCount: 2,
+            firstMeasurementFrameIndex: 0,
+            lastMeasurementFrameIndex: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                report.CaptureContract.Mismatches,
+                Has.None.Contains("warmup state is"));
+            Assert.That(
+                report.CaptureContract.Mismatches,
+                Has.None.Contains("Resolved GI settings changed"));
+            Assert.That(
+                report.CaptureContract.TrajectorySequenceHash,
+                Does.Match("^sha256:[0-9a-f]{64}$"));
+        });
+    }
+
     [TestCase(1, 1_000, 50, 0, 950, 0, true)]
     [TestCase(1, 1_000, 51, 0, 949, 0, false)]
     [TestCase(1, 1_000, 200, 200, 800, 0, true)]

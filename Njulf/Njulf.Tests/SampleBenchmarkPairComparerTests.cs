@@ -333,7 +333,7 @@ public sealed class SampleBenchmarkPairComparerTests
     }
 
     [Test]
-    public void Compare_ObservedSequenceIsExactForRepeatsButNotIsolatedAb()
+    public void Compare_ObservedSequenceIsExactForSameRoleAndMayDifferForIntentionalVariantAb()
     {
         SampleBenchmarkReport baseline = WithMovingTrajectory(CreateReport(
             "locked-pair",
@@ -351,6 +351,11 @@ public sealed class SampleBenchmarkPairComparerTests
 
         SampleBenchmarkPairComparison repeat =
             SampleBenchmarkPairComparer.Compare(baseline, changedSequence);
+        SampleBenchmarkPairComparison sameRoleCrossBuild =
+            SampleBenchmarkPairComparer.Compare(
+                baseline,
+                changedSequence,
+                requireRepeatability: false);
         SampleBenchmarkPairComparison ab =
             SampleBenchmarkPairComparer.Compare(
                 baseline,
@@ -369,6 +374,10 @@ public sealed class SampleBenchmarkPairComparerTests
             Assert.That(repeat.Comparable, Is.False);
             Assert.That(
                 repeat.Failures,
+                Does.Contain("Capture trajectory sequences differ."));
+            Assert.That(sameRoleCrossBuild.Comparable, Is.False);
+            Assert.That(
+                sameRoleCrossBuild.Failures,
                 Does.Contain("Capture trajectory sequences differ."));
             Assert.That(ab.Comparable, Is.True);
         });

@@ -235,7 +235,9 @@ public sealed class SampleBenchmarkRunner
 
         if (_samplesCaptured == 0)
         {
-            _consecutiveReadyFrameCount = IsReadyForMeasurement(diagnostics)
+            _consecutiveReadyFrameCount = IsReadyForMeasurement(
+                    diagnostics,
+                    _options.Trajectory)
                 ? Math.Min(
                     RequiredConsecutiveReadyFrameCount,
                     _consecutiveReadyFrameCount + 1)
@@ -566,13 +568,24 @@ public sealed class SampleBenchmarkRunner
         _exit();
     }
 
-    internal static bool IsReadyForMeasurement(RendererDiagnostics diagnostics)
+    internal static bool IsReadyForMeasurement(RendererDiagnostics diagnostics) =>
+        IsReadyForMeasurement(
+            diagnostics,
+            SampleBenchmarkTrajectoryKind.Stationary);
+
+    internal static bool IsReadyForMeasurement(
+        RendererDiagnostics diagnostics,
+        SampleBenchmarkTrajectoryKind trajectory)
     {
+        bool movingTrajectory = SampleBenchmarkTrajectory.IsMoving(trajectory);
         bool acceptedTailCertificate =
             HasAcceptedCurrentSimpleDdgiTailCertificate(diagnostics);
         if (diagnostics.GpuTimingValid == 0 ||
-            diagnostics.CaptureFrame.WarmupState != DdgiRuntimeWarmupState.SteadyState ||
-            (diagnostics.CaptureFrame.TransportConvergencePending &&
+            (!movingTrajectory &&
+             diagnostics.CaptureFrame.WarmupState !=
+                 DdgiRuntimeWarmupState.SteadyState) ||
+            (!movingTrajectory &&
+             diagnostics.CaptureFrame.TransportConvergencePending &&
                 !acceptedTailCertificate))
         {
             return false;
@@ -582,6 +595,14 @@ public sealed class SampleBenchmarkRunner
             return true;
         if (!diagnostics.SimpleDdgiUploadTiming.CapacityDetails.StableKeyHit)
             return false;
+
+        // A closed moving route deliberately advances camera-relative DDGI
+        // ownership. Its transport certificate cannot remain current for
+        // thirty consecutive frames, but the allocation key must already be
+        // stable. The complete route-state sequence is authenticated in the
+        // capture contract and compared exactly for same-role runs.
+        if (movingTrajectory)
+            return true;
 
         if (diagnostics.SimpleDdgiTransportV2Active == 0)
             return true;
@@ -3510,7 +3531,7 @@ public sealed class SampleBenchmarkAnalyzer
             CompareInvariant(mismatches, index, "dirty state", first.CaptureRun.DirtyWorktreeState, sample.CaptureRun.DirtyWorktreeState);
             CompareInvariant(mismatches, index, "shader bundle", first.CaptureRun.ShaderBundleHash, sample.CaptureRun.ShaderBundleHash);
             CompareInvariant(mismatches, index, "timestamp period", first.GpuTimestampPeriodNanoseconds, sample.GpuTimestampPeriodNanoseconds);
-            if (!string.Equals(
+            if (!movingTrajectory && !string.Equals(
                     first.ResolvedGiSettings.StableHash,
                     sample.ResolvedGiSettings.StableHash,
                     StringComparison.Ordinal))
@@ -3540,7 +3561,15 @@ public sealed class SampleBenchmarkAnalyzer
             CompareInvariant(mismatches, index, "feature isolation", first.ActiveFeatureIsolation, sample.ActiveFeatureIsolation);
             CompareInvariant(mismatches, index, "debug view", first.GlobalIlluminationDebugView, sample.GlobalIlluminationDebugView);
             CompareInvariant(mismatches, index, "DDGI cache generation", first.CaptureFrame.DdgiCacheGeneration, sample.CaptureFrame.DdgiCacheGeneration);
-            if (sample.CaptureFrame.WarmupState != DdgiRuntimeWarmupState.SteadyState)
+            if (movingTrajectory)
+            {
+                RequireIdentity(
+                    mismatches,
+                    $"frame {index} resolved GI settings hash",
+                    sample.ResolvedGiSettings.StableHash);
+            }
+            else if (sample.CaptureFrame.WarmupState !=
+                     DdgiRuntimeWarmupState.SteadyState)
                 mismatches.Add($"Frame {index} warmup state is {sample.CaptureFrame.WarmupState}.");
             bool acceptedTailCertificate =
                 SampleBenchmarkRunner.HasAcceptedCurrentSimpleDdgiTailCertificate(
@@ -3899,6 +3928,9 @@ public sealed class SampleBenchmarkAnalyzer
                 .Append(camera.CameraCutSerial.ToString(CultureInfo.InvariantCulture)).Append('|')
                 .Append(sample.CaptureSceneStateHash).Append('|')
                 .Append(sample.ResolvedGiSettings.StableHash).Append('|')
+                .Append(sample.CaptureFrame.WarmupState).Append('|')
+                .Append(sample.CaptureFrame.TransportConvergencePending ? '1' : '0')
+                .Append('|')
                 .Append(sample.ActiveFeatureIsolation).Append('|')
                 .Append(sample.GlobalIlluminationDebugView)
                 .Append('\n');
