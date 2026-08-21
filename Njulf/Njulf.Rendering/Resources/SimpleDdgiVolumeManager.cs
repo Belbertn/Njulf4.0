@@ -17887,6 +17887,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             _coherentRadiometricPublicationCount = SaturatingAdd(
                 _coherentRadiometricPublicationCount,
                 1UL);
+            // The private scheduler advanced its rotating admission cursors
+            // while the public field was frozen. Restart them at the newly
+            // published field boundary so post-publication scroll repair does
+            // not inherit GPU-timing-dependent cohort traversal residue.
+            _gpuSchedulerLaneCursorResetPending = true;
             CancelDeferredRadiometricPublication();
         }
 

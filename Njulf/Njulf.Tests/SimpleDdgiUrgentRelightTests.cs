@@ -382,6 +382,8 @@ public sealed class SimpleDdgiUrgentRelightTests
                 "_bufferManager.GetBuffer(_transportIrradianceAtlasBuffer)"));
             Assert.That(manager, Does.Contain(
                 "_sampledAtlas?.MarkFullSyncRequired();"));
+            Assert.That(manager, Does.Contain(
+                "_gpuSchedulerLaneCursorResetPending = true;"));
             Assert.That(accelerated, Does.Contain(
                 "if (!deferredRadiometricPublication)"));
             Assert.That(accelerated, Does.Contain(
