@@ -196,6 +196,10 @@ const uint SIMPLE_DDGI_SOLVE_VOLUME_FILTER = 1u << 23;
 const uint SIMPLE_DDGI_SOLVE_COLOR_FILTER = 1u << 24;
 const uint SIMPLE_DDGI_SOLVE_FIRST_COLOR = 1u << 25;
 const uint SIMPLE_DDGI_SOLVE_FINAL_COLOR = 1u << 26;
+// Bit 9 is trace-private outside the cached solve pass. Coherent radiometric
+// staging reuses it to collapse the configured accelerated loop to one Jacobi
+// sweep while preserving the final-producer completion contract.
+const uint SIMPLE_DDGI_SOLVE_SINGLE_SWEEP = 1u << 9;
 const uint SIMPLE_DDGI_SOLVE_COLOR_SHIFT = 27u;
 const uint SIMPLE_DDGI_SOLVE_COLOR_MASK = 1u << SIMPLE_DDGI_SOLVE_COLOR_SHIFT;
 const uint SIMPLE_DDGI_SOLVE_SWEEP_INDEX_SHIFT = 28u;
@@ -1996,6 +2000,8 @@ bool SimpleDdgiSolveIsFinalSweep(uint flags, uint acceleratedSweepCount)
     // matching color executes in the configured final sweep; tying completion
     // to the globally final color would permanently exclude the other parity.
     if ((flags & SIMPLE_DDGI_SOLVE_COLOR_FILTER) == 0u)
+        return true;
+    if ((flags & SIMPLE_DDGI_SOLVE_SINGLE_SWEEP) != 0u)
         return true;
     uint sweepIndex = flags >> SIMPLE_DDGI_SOLVE_SWEEP_INDEX_SHIFT;
     return sweepIndex + 1u >= max(acceleratedSweepCount, 1u);

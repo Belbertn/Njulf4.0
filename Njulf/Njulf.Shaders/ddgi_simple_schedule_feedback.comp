@@ -221,7 +221,12 @@ void main()
             lastCommittedSourceRefreshFrame == SchedulerFrameIndex()
                 ? 1u
                 : 0u;
-        activeCanonicalMutationCount += participating &&
+        // A deferred commit mutates the private transport bank and lifecycle
+        // state, but not the receiver-visible canonical field. The manager
+        // advances the canonical generation once when it records the coherent
+        // whole-field copy.
+        activeCanonicalMutationCount += !SchedulerDefersRadiometricPublication() &&
+            participating &&
             lastCommittedUpdateFrame == SchedulerFrameIndex()
                 ? 1u
                 : 0u;

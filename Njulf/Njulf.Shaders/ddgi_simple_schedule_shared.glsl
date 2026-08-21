@@ -90,6 +90,8 @@ const uint SIMPLE_DDGI_SCHEDULER_FEATURE_SPARSE_RESIDUAL_PROPAGATION = 1u << 13u
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_EXACT_RECEIVER_FEEDBACK = 1u << 14u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_ADAPTIVE_RAY_CARDINALITY = 1u << 15u;
 const uint SIMPLE_DDGI_SCHEDULER_FEATURE_RESET_LANE_CURSORS = 1u << 16u;
+const uint SIMPLE_DDGI_SCHEDULER_FEATURE_DEFER_RADIOMETRIC_PUBLICATION =
+    1u << 17u;
 const uint SIMPLE_DDGI_SCHEDULER_EXACT_FEEDBACK_BINDING_VALID = 1u << 0u;
 
 const uint SIMPLE_DDGI_SCHEDULER_FRAME_EXACT_FEEDBACK_BUFFER = 44u;
@@ -578,6 +580,10 @@ bool SchedulerAdaptiveRayCardinality() {
 bool SchedulerResetLaneCursors() {
     return (SchedulerFeatureFlags() &
         SIMPLE_DDGI_SCHEDULER_FEATURE_RESET_LANE_CURSORS) != 0u;
+}
+bool SchedulerDefersRadiometricPublication() {
+    return (SchedulerFeatureFlags() &
+        SIMPLE_DDGI_SCHEDULER_FEATURE_DEFER_RADIOMETRIC_PUBLICATION) != 0u;
 }
 
 shared uint schedulerExactFeedbackHeaderValid;

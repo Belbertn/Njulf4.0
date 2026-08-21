@@ -421,6 +421,11 @@ void main()
     proposedLuminance = max(proposedLuminance, residual);
     bool sourceRefresh =
         (updateFlags & SIMPLE_DDGI_SCHEDULER_UPDATE_SOURCE_REFRESH) != 0u;
+    bool deferredRadiometricPublication = !urgentRelight &&
+        SchedulerGpuResident() &&
+        SchedulerDefersRadiometricPublication() &&
+        (SchedulerUpdateUsesRadiometricRelight(updateFlags) ||
+         (!sourceRefresh && SchedulerSolveEpoch() != 0u));
     uint sourceRayCount = sourceRefresh
         ? (SchedulerArenaRead(outcomeBase + 11u) & 0xffffu)
         : 0u;
@@ -496,8 +501,9 @@ void main()
     if (proposedClassification == 1u)
         receiverFlags |= SIMPLE_DDGI_RECEIVER_FLAG_INACTIVE_CLASSIFICATION;
 
-    uvec4 packedReceiver;
-    if (!TryPackSimpleDdgiReceiverProbe(
+    uvec4 packedReceiver = uvec4(0u);
+    if (!deferredRadiometricPublication &&
+        !TryPackSimpleDdgiReceiverProbe(
             proposedRelocation,
             SchedulerVolumeSpacing(volumeIndex),
             proposedActiveWeight,
@@ -518,7 +524,7 @@ void main()
     // transaction. The publish producer validates generations and marks its
     // completion bit, but leaves both public atlases untouched until this
     // predicate has accepted every producer outcome.
-    if (SchedulerGpuResident())
+    if (SchedulerGpuResident() && !deferredRadiometricPublication)
     {
         uint privateIrradianceBase = physicalProbeIndex *
             SIMPLE_DDGI_SCHEDULER_IRRADIANCE_WORDS_PER_PROBE;
@@ -583,42 +589,52 @@ void main()
         }
     }
 
-    WriteStorageVec4Uniform(
-        pc.ProbeStateBufferIndex,
-        publicStateBase,
-        vec4(
-            proposedRelocation,
-            clamp(proposedActiveWeight, 0.0, 1.0)));
-    WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 4u, proposedFlags);
-    // Commit is the sole public-state owner. Preserve wall-clock retry age for
-    // a relocation transaction before advancing the private last-commit frame;
-    // otherwise every successful retry would restart the 32-frame retirement.
-    WriteStorageWordUniform(
-        pc.ProbeStateBufferIndex,
-        publicStateBase + 5u,
-        proposedAge);
-    WriteStorageWordUniform(pc.ProbeStateBufferIndex, publicStateBase + 6u, proposedClassification);
-    WriteStorageWordUniform(
-        pc.ProbeStateBufferIndex,
-        publicStateBase + 7u,
-        floatBitsToUint(max(proposedLuminance, 0.0)));
+    if (!deferredRadiometricPublication)
+    {
+        WriteStorageVec4Uniform(
+            pc.ProbeStateBufferIndex,
+            publicStateBase,
+            vec4(
+                proposedRelocation,
+                clamp(proposedActiveWeight, 0.0, 1.0)));
+        WriteStorageWordUniform(
+            pc.ProbeStateBufferIndex,
+            publicStateBase + 4u,
+            proposedFlags);
+        // Commit is the sole public-state owner. Preserve wall-clock retry age
+        // for a relocation transaction before advancing the private last-commit
+        // frame; otherwise every successful retry would restart retirement.
+        WriteStorageWordUniform(
+            pc.ProbeStateBufferIndex,
+            publicStateBase + 5u,
+            proposedAge);
+        WriteStorageWordUniform(
+            pc.ProbeStateBufferIndex,
+            publicStateBase + 6u,
+            proposedClassification);
+        WriteStorageWordUniform(
+            pc.ProbeStateBufferIndex,
+            publicStateBase + 7u,
+            floatBitsToUint(max(proposedLuminance, 0.0)));
 
-    // Commit the compact receiver record only after both canonical atlases and
-    // the authoritative compute state have been written. Its coherent bit is
-    // the final store in the receiver-visible transaction.
-    PublishPackedSimpleDdgiReceiverProbe(
-        pc.ReceiverProbeBufferIndex,
-        probeIndex,
-        packedReceiver);
+        // Commit the compact receiver record only after both canonical atlases
+        // and the authoritative compute state have been written. Its coherent
+        // bit is the final store in the receiver-visible transaction.
+        PublishPackedSimpleDdgiReceiverProbe(
+            pc.ReceiverProbeBufferIndex,
+            probeIndex,
+            packedReceiver);
+    }
 
     if (!urgentRelight)
     {
         SchedulerArenaWrite(stateBase + 0u, SchedulerFrameIndex());
         // Persist the exact producer-validated address only after every producer
-        // and receiver-visible publication has succeeded. Lightweight diagnostic
-        // consumers can use this one-based base without compiling the sparse page
-        // resolver into their hot ray kernel; reduction independently revalidates
-        // the current publication and ownership context before certifying it.
+        // has succeeded and receiver publication is either complete or staged
+        // behind the coherent field fence. Lightweight diagnostic consumers can
+        // use this one-based base without compiling the sparse page resolver into
+        // their hot ray kernel; reduction independently revalidates the current
+        // publication and ownership context before certifying it.
         SchedulerArenaWrite(stateBase + 10u, cacheProbeBaseWordPlusOne);
         // For a source refresh the admitted active-ray count is also the source
         // sequence cardinality. It is retained in the expected-ray-count word;
@@ -670,9 +686,9 @@ void main()
             schedulerMetadata &= ~SIMPLE_DDGI_SCHEDULER_PROBE_META_REPAIR;
         SchedulerArenaWrite(stateBase + 5u, schedulerMetadata);
 
-        // Apply the invalidation marker only after the public record and private
-        // atlas publication have passed every generation/completion check. A
-        // failed or partial request therefore remains eligible on the next frame.
+        // Apply the invalidation marker only after the private payload and its
+        // immediate-or-staged publication have passed every generation/completion
+        // check. A failed or partial request remains eligible on the next frame.
         // Cached solver publication is not an invalidation event. Preserve the
         // marker that acknowledged the last topology/source/dirty proposal;
         // replacing it with an unrelated dirty generation can re-arm a still-live
@@ -720,6 +736,8 @@ void main()
         1u);
     if (SchedulerGpuResident())
     {
+        // This counts committed publication payloads. A radiometric cohort may
+        // keep them private until the manager records one coherent field copy.
         SchedulerArenaAtomicAdd(
             pc.CountersOffsetWords + SIMPLE_DDGI_SCHEDULER_COUNTER_PUBLISHED,
             1u);

@@ -12,6 +12,7 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 // The manager declines this optional path when the resolved array-layer count
 // would require more descriptors than this production layout.
 const uint SIMPLE_DDGI_PUBLISH_MAX_IMAGE_GROUPS = 16u;
+const uint SIMPLE_DDGI_PUBLISH_DEFER_RADIOMETRIC_FEATURE = 1u << 17u;
 layout(set = 2, binding = 0, rgba16f) uniform image2DArray IrradianceImages[16];
 layout(set = 2, binding = 1, rg16f) uniform image2DArray VisibilityImages[16];
 
@@ -53,10 +54,12 @@ void main()
     bool urgentRelight = SimpleDdgiSchedulerUrgentRelight(
         pc.SchedulerArenaBufferIndex,
         pc.SchedulerCountersOffsetWords);
-    bool residentTransaction = gpuScheduler &&
-        (ReadStorageWordUniform(
+    uint schedulerFeatureFlags = gpuScheduler
+        ? ReadStorageWordUniform(
             pc.SchedulerArenaBufferIndex,
-            pc.SchedulerFrameOffsetWords + 27u) & 1u) != 0u;
+            pc.SchedulerFrameOffsetWords + 27u)
+        : 0u;
+    bool residentTransaction = (schedulerFeatureFlags & 1u) != 0u;
     uint requestCount = gpuScheduler
         ? SimpleDdgiSchedulerAcceptedCount(
             pc.SchedulerArenaBufferIndex,
@@ -123,6 +126,25 @@ void main()
             pc.SchedulerOutcomesOffsetWords,
             update.outcomeIndex,
             1u << 0u);
+        return;
+    }
+
+    bool deferredRadiometricPublication = !urgentRelight &&
+        residentTransaction &&
+        (schedulerFeatureFlags &
+            SIMPLE_DDGI_PUBLISH_DEFER_RADIOMETRIC_FEATURE) != 0u &&
+        (SimpleDdgiUpdateRelightsEnvironmentMisses(update) ||
+         SimpleDdgiUpdateRelightsCachedHits(update) ||
+         (!SimpleDdgiUpdateRequiresSourceRefresh(update) &&
+          ReadStorageWordUniform(
+              pc.SchedulerArenaBufferIndex,
+              pc.SchedulerFrameOffsetWords + 19u) != 0u));
+    if (deferredRadiometricPublication)
+    {
+        // The canonical SSBO and this optional image mirror must cross the
+        // generation boundary together. The manager performs a full image
+        // synchronization immediately after the whole-field buffer copy.
+        CompleteSampledPublication(update);
         return;
     }
 

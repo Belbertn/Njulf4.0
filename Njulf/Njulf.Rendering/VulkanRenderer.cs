@@ -14143,7 +14143,8 @@ namespace Njulf.Rendering
             sceneData.SimpleDdgiUrgentRelightActive =
                 Settings.GlobalIllumination.SimpleDdgiUrgentRelightEnabled &&
                 _simpleDdgiVolumeManager.SchedulerMode ==
-                    SimpleDdgiSchedulerMode.GpuResident
+                    SimpleDdgiSchedulerMode.GpuResident &&
+                !_simpleDdgiVolumeManager.RadiometricRelightPublicationPending
                     ? 1
                     : 0;
             SimpleDdgiUrgentRelightEvidence urgentEvidence =

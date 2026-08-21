@@ -881,6 +881,14 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
         private int _currentCompletedSourceRefreshProbeCount;
         private uint _sourceLightingGeneration = 1u;
         private bool _gpuSchedulerLaneCursorResetPending;
+        // A radiometric-only source edit builds one complete private field
+        // before receivers are allowed to observe it. Zero means ordinary
+        // per-probe publication; a non-zero value is the exact source
+        // generation whose irradiance remains staged in the transport atlas.
+        private uint _deferredRadiometricPublicationGeneration;
+        private bool _deferredRadiometricPublicationReady;
+        private uint _publishedRadiometricGeneration;
+        private ulong _coherentRadiometricPublicationCount;
         // Exact scene revision sampled when the current CPU queue was built.
         // C3 folds it with source generation/epoch into the 32-bit training
         // record revision; zero remains reserved for an invalid workload.
@@ -2220,6 +2228,17 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     (float)_completedSourceRefreshProbeCount
                 : 0.0f;
         public uint SourceLightingGeneration => _sourceLightingGeneration;
+        /// <summary>
+        /// True while a radiometric-only source generation is being assembled
+        /// in private storage or is waiting for its coherent buffer flip.
+        /// Pre-forward urgent publication must remain disabled at this boundary.
+        /// </summary>
+        public bool RadiometricRelightPublicationPending =>
+            _deferredRadiometricPublicationGeneration != 0u;
+        public uint PublishedRadiometricGeneration =>
+            _publishedRadiometricGeneration;
+        public ulong CoherentRadiometricPublicationCount =>
+            _coherentRadiometricPublicationCount;
         public uint AdmittedSourceCohortGeneration => _admittedSourceCohortGeneration;
         public uint TransportGeneration => _transportGeneration;
         public uint PublishedPropagationGeneration => _publishedPropagationGeneration;
@@ -2395,11 +2414,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _receiverRecordsPublishedCount = checked((int)Math.Min(
                     int.MaxValue,
                     feedback.PublishedCount));
-                // Resident publication is GPU-owned, so MarkPublishExecuted
-                // has no CPU queue count to roll into these metrics. The
-                // fence-complete feedback record is consumed exactly once and
-                // is therefore the authoritative per-frame and cumulative
-                // publication witness for this mode.
+                // Resident commit is GPU-owned, so MarkPublishExecuted has no
+                // CPU queue count to roll into these metrics. During coherent
+                // radiometric staging this counts validated private payloads;
+                // their receiver-visible publication is one later field flip.
                 _currentTransportPublishedProbeCount = checked((int)Math.Min(
                     int.MaxValue,
                     feedback.PublishedCount));
@@ -2742,6 +2760,15 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             }
 
             _admittedSourceCohortGeneration = _sourceLightingGeneration;
+            if (_deferredRadiometricPublicationGeneration ==
+                _sourceLightingGeneration)
+            {
+                // This packet is fence-complete and proves that every member
+                // of the exact source cohort committed into private storage.
+                // The next upload can therefore expose one whole-field copy
+                // instead of a camera-visible sequence of probe patches.
+                _deferredRadiometricPublicationReady = true;
+            }
             if (_sourceCohortTransitionActive)
             {
                 _sourceCohortTransitionActive = false;
@@ -5972,6 +5999,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             // the serialized mode intact; Upload will re-enter it on the first
             // enabled frame after the bounded bootstrap.
             SetGpuSchedulerMode(SimpleDdgiSchedulerMode.CpuReference);
+            CancelDeferredRadiometricPublication();
             _gpuScheduler.CollectRetired(_completedFrameFenceValue);
             _volumeCount = 0;
             _probeCount = 0;
@@ -7904,6 +7932,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 _sourceLightingGeneration = 1u;
                 _sourceRefreshMode = SimpleDdgiSourceRefreshMode.FullTrace;
                 _sourceRelightScale = Vector3.One;
+                CancelDeferredRadiometricPublication();
                 BeginTransportGlobalConvergence(forceFieldEvidenceReset: true);
                 _activeDirtyReasonFlags = 0u;
                 _hasLightingSignature = true;
@@ -7949,6 +7978,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 {
                     _sourceRelightScale = sanitizedRelightScale;
                 }
+                ConfigureDeferredRadiometricPublicationForCurrentGeneration();
                 _sourceCohortQuietFrames = 0;
                 bool useCohortTransition =
                     cohortLightingTransition &&
@@ -8024,6 +8054,50 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
             return !TransportGlobalConvergencePending &&
                 !_sourceCohortTransitionActive;
+        }
+
+        private void ConfigureDeferredRadiometricPublicationForCurrentGeneration()
+        {
+            bool directionalStorageAvailable =
+                DirectionalRadianceMode == SimpleDdgiDirectionalRadianceMode.Off ||
+                (_directionalRadianceBuffer.IsValid &&
+                 _directionalRadianceParityBuffer.IsValid &&
+                 _directionalRadianceBytes > 0UL &&
+                 _directionalRadianceParityBytes >= _directionalRadianceBytes);
+            if (!ShouldDeferRadiometricPublication(
+                    _schedulerMode,
+                    TransportV2Active,
+                    _sourceRefreshMode,
+                    DirectionalRadianceMode,
+                    directionalStorageAvailable))
+            {
+                CancelDeferredRadiometricPublication();
+                return;
+            }
+
+            _deferredRadiometricPublicationGeneration =
+                _sourceLightingGeneration;
+            _deferredRadiometricPublicationReady = false;
+        }
+
+        internal static bool ShouldDeferRadiometricPublication(
+            SimpleDdgiSchedulerMode schedulerMode,
+            bool transportV2Active,
+            SimpleDdgiSourceRefreshMode refreshMode,
+            SimpleDdgiDirectionalRadianceMode directionalMode,
+            bool directionalStorageAvailable) =>
+            schedulerMode == SimpleDdgiSchedulerMode.GpuResident &&
+            transportV2Active &&
+            (refreshMode is
+                SimpleDdgiSourceRefreshMode.EnvironmentMissRelight or
+                SimpleDdgiSourceRefreshMode.CachedHitRelight) &&
+            (directionalMode == SimpleDdgiDirectionalRadianceMode.Off ||
+             directionalStorageAvailable);
+
+        private void CancelDeferredRadiometricPublication()
+        {
+            _deferredRadiometricPublicationGeneration = 0u;
+            _deferredRadiometricPublicationReady = false;
         }
 
         internal static SimpleDdgiSourceRefreshMode SanitizeSourceRefreshMode(
@@ -13772,6 +13846,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             ClearAtlasBuffersIfRequired(commandBuffer);
             UploadReceiverProbeInvalidations(stagingRing, commandBuffer);
             ApplyPersistentWarmStartIfReady(stagingRing, commandBuffer);
+            PublishDeferredRadiometricGenerationIfReady(commandBuffer);
             SynchronizeSampledAtlasIfRequired(commandBuffer);
             RecordPersistentWarmStartReadback(commandBuffer, frameIndex);
 
@@ -14160,6 +14235,11 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             {
                 featureFlags |=
                     SimpleDdgiSchedulerAbi.SchedulerFeatureResetLaneCursors;
+            }
+            if (RadiometricRelightPublicationPending)
+            {
+                featureFlags |= SimpleDdgiSchedulerAbi
+                    .SchedulerFeatureDeferRadiometricPublication;
             }
 
             Span<uint> rayBuckets = stackalloc uint[SimpleDdgiSchedulerAbi.MaxRayBucketCount];
@@ -17674,6 +17754,134 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             }
         }
 
+        private unsafe void PublishDeferredRadiometricGenerationIfReady(
+            CommandBuffer commandBuffer)
+        {
+            uint generation = _deferredRadiometricPublicationGeneration;
+            if (!_deferredRadiometricPublicationReady || generation == 0u)
+                return;
+            if (generation != _sourceLightingGeneration)
+            {
+                CancelDeferredRadiometricPublication();
+                return;
+            }
+
+            bool directionalPublication = DirectionalRadianceMode !=
+                SimpleDdgiDirectionalRadianceMode.Off;
+            bool diffuseStorageValid = commandBuffer.Handle != 0 &&
+                _irradianceAtlasBuffer.IsValid &&
+                _transportIrradianceAtlasBuffer.IsValid &&
+                _irradianceAtlasBytes > 0UL &&
+                _transportIrradianceAtlasBytes >= _irradianceAtlasBytes;
+            bool directionalStorageValid = !directionalPublication ||
+                (_directionalRadianceBuffer.IsValid &&
+                 _directionalRadianceParityBuffer.IsValid &&
+                 _directionalRadianceBytes > 0UL &&
+                 _directionalRadianceParityBytes >= _directionalRadianceBytes);
+            if (!diffuseStorageValid || !directionalStorageValid)
+            {
+                // Capacity/topology invalidation normally cancels this state
+                // before upload. Fail closed if a resource changed between
+                // feedback consumption and command recording.
+                CancelDeferredRadiometricPublication();
+                return;
+            }
+
+            CopyCoherentPublicationBuffer(
+                commandBuffer,
+                _bufferManager.GetBuffer(_transportIrradianceAtlasBuffer),
+                _bufferManager.GetBuffer(_irradianceAtlasBuffer),
+                _irradianceAtlasBytes);
+            if (directionalPublication)
+            {
+                // One-bounce/recursive directional transport already owns a
+                // full parity bank. During the deferred cohort the producer
+                // writes that bank only; promote it with the diffuse field.
+                CopyCoherentPublicationBuffer(
+                    commandBuffer,
+                    _bufferManager.GetBuffer(_directionalRadianceParityBuffer),
+                    _bufferManager.GetBuffer(_directionalRadianceBuffer),
+                    _directionalRadianceBytes);
+            }
+
+            _sampledAtlas?.MarkFullSyncRequired();
+            _publishedRadiometricGeneration = generation;
+            // Deferred feedback deliberately suppresses the ordinary
+            // per-frame canonical mutation witness. Advance exactly once at
+            // the command-recorded whole-field publication boundary instead.
+            _transportGeneration = AdvanceSourceLightingGeneration(
+                _transportGeneration);
+            _coherentRadiometricPublicationCount = SaturatingAdd(
+                _coherentRadiometricPublicationCount,
+                1UL);
+            CancelDeferredRadiometricPublication();
+        }
+
+        private unsafe void CopyCoherentPublicationBuffer(
+            CommandBuffer commandBuffer,
+            Silk.NET.Vulkan.Buffer source,
+            Silk.NET.Vulkan.Buffer destination,
+            ulong bytes)
+        {
+            ExecuteBufferBarrier(
+                commandBuffer,
+                BarrierBuilder.BufferBarrier(
+                    source,
+                    PipelineStageFlags2.AllCommandsBit,
+                    AccessFlags2.MemoryWriteBit,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferReadBit,
+                    0,
+                    bytes));
+            ExecuteBufferBarrier(
+                commandBuffer,
+                BarrierBuilder.BufferBarrier(
+                    destination,
+                    PipelineStageFlags2.AllCommandsBit,
+                    AccessFlags2.MemoryReadBit |
+                        AccessFlags2.MemoryWriteBit,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferWriteBit,
+                    0,
+                    bytes));
+
+            BufferCopy copy = new()
+            {
+                SrcOffset = 0UL,
+                DstOffset = 0UL,
+                Size = bytes
+            };
+            _context.Api.CmdCopyBuffer(
+                commandBuffer,
+                source,
+                destination,
+                1,
+                &copy);
+
+            ExecuteBufferBarrier(
+                commandBuffer,
+                BarrierBuilder.BufferBarrier(
+                    source,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferReadBit,
+                    PipelineStageFlags2.AllCommandsBit,
+                    AccessFlags2.MemoryReadBit |
+                        AccessFlags2.MemoryWriteBit,
+                    0,
+                    bytes));
+            ExecuteBufferBarrier(
+                commandBuffer,
+                BarrierBuilder.BufferBarrier(
+                    destination,
+                    PipelineStageFlags2.TransferBit,
+                    AccessFlags2.TransferWriteBit,
+                    PipelineStageFlags2.AllCommandsBit,
+                    AccessFlags2.MemoryReadBit |
+                        AccessFlags2.MemoryWriteBit,
+                    0,
+                    bytes));
+        }
+
         private void SynchronizeSampledAtlasIfRequired(CommandBuffer commandBuffer)
         {
             if (!SampledAtlasActive || _sampledAtlas?.RequiresFullSync != true)
@@ -17795,6 +18003,10 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             SimpleDdgiSourceCacheInvalidationReason invalidationReason =
                 SimpleDdgiSourceCacheInvalidationReason.Unknown)
         {
+            // Full tracing/recovery can change visibility and ownership, for
+            // which irradiance-only double buffering is insufficient. Return
+            // to the ordinary fail-closed per-probe publication contract.
+            CancelDeferredRadiometricPublication();
             _sourceRefreshMode = SimpleDdgiSourceRefreshMode.FullTrace;
             _sourceEpochGeneration = AdvanceSourceEpoch(
                 _sourceEpochGeneration);
@@ -20348,6 +20560,7 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             if (_schedulerMode == SimpleDdgiSchedulerMode.GpuResident ||
                 nextMode == SimpleDdgiSchedulerMode.GpuResident)
             {
+                CancelDeferredRadiometricPublication();
                 // A resident transition invalidates CPU readback evidence. The
                 // GPU scheduler owns lifecycle state in this mode, and stale
                 // CPU records must not be allowed to overwrite it later.

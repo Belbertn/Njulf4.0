@@ -15,6 +15,10 @@ namespace Njulf.Rendering.Pipeline;
 public sealed unsafe class SimpleDdgiDirectionalRadiancePass :
     SimpleDdgiComputePass
 {
+    // This pass does not use the trace-private bit-9 ABI. Carry the manager's
+    // exact coherent-publication decision to the directional publish shader so
+    // parity-only writes cannot outlive a declined/cancelled staging cohort.
+    private const uint DeferRadiometricPublicationFlag = 1u << 9;
     private const string BaselinePrepareShader =
         "ddgi_simple_directional_prepare.comp.spv";
     private const string BaselineProjectShader =
@@ -112,7 +116,9 @@ public sealed unsafe class SimpleDdgiDirectionalRadiancePass :
             sceneData,
             dispatchIndex: 2,
             bindAccelerationStructure: false,
-            additionalFlags: 0u);
+            additionalFlags: VolumeManager.RadiometricRelightPublicationPending
+                ? DeferRadiometricPublicationFlag
+                : 0u);
     }
 
     protected override SimpleDdgiSchedulerDispatchSlot ResidentDispatchSlot =>

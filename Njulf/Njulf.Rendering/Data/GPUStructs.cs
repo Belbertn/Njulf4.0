@@ -2535,8 +2535,9 @@ namespace Njulf.Rendering.Data
         // sequence. This is distinct from AcceptedCount, which also includes
         // cached solver-only work.
         public uint SourceProbeUsed;
-        // Number of resident transactions that copied the private transport
-        // atlas to the receiver-visible canonical atlas this frame.
+        // Number of resident transactions whose private publication payloads
+        // committed this frame. A coherent radiometric cohort may stage these
+        // payloads until one later whole-field canonical copy.
         public uint PublishedCount;
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -28,6 +29,64 @@ public sealed class SimpleDdgiUrgentRelightTests
             Assert.That(Eligible(SimpleDdgiSourceRefreshMode.CachedHitRelight, sourceInvalid: true), Is.False);
             Assert.That(Eligible(SimpleDdgiSourceRefreshMode.CachedHitRelight, relocationPending: true), Is.False);
             Assert.That(Eligible(SimpleDdgiSourceRefreshMode.CachedHitRelight, inactive: true), Is.False);
+        });
+    }
+
+    [Test]
+    public void CoherentPublicationPolicy_RequiresResidentRadiometricPrivateStorage()
+    {
+        static bool Defer(
+            SimpleDdgiSchedulerMode schedulerMode,
+            bool transportV2,
+            SimpleDdgiSourceRefreshMode refreshMode,
+            SimpleDdgiDirectionalRadianceMode directionalMode =
+                SimpleDdgiDirectionalRadianceMode.Off,
+            bool directionalStorageAvailable = true) =>
+            SimpleDdgiVolumeManager.ShouldDeferRadiometricPublication(
+                schedulerMode,
+                transportV2,
+                refreshMode,
+                directionalMode,
+                directionalStorageAvailable);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SimpleDdgiSchedulerAbi
+                    .SchedulerFeatureDeferRadiometricPublication,
+                Is.EqualTo(1u << 17));
+            Assert.That(Defer(
+                SimpleDdgiSchedulerMode.GpuResident,
+                true,
+                SimpleDdgiSourceRefreshMode.EnvironmentMissRelight), Is.True);
+            Assert.That(Defer(
+                SimpleDdgiSchedulerMode.GpuResident,
+                true,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.True);
+            Assert.That(Defer(
+                SimpleDdgiSchedulerMode.GpuResident,
+                true,
+                SimpleDdgiSourceRefreshMode.FullTrace), Is.False);
+            Assert.That(Defer(
+                SimpleDdgiSchedulerMode.GpuMirror,
+                true,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.False);
+            Assert.That(Defer(
+                SimpleDdgiSchedulerMode.GpuResident,
+                false,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight), Is.False);
+            Assert.That(Defer(
+                SimpleDdgiSchedulerMode.GpuResident,
+                true,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight,
+                SimpleDdgiDirectionalRadianceMode.L2,
+                directionalStorageAvailable: false), Is.False);
+            Assert.That(Defer(
+                SimpleDdgiSchedulerMode.GpuResident,
+                true,
+                SimpleDdgiSourceRefreshMode.CachedHitRelight,
+                SimpleDdgiDirectionalRadianceMode.L2,
+                directionalStorageAvailable: true), Is.True);
         });
     }
 
@@ -149,6 +208,69 @@ public sealed class SimpleDdgiUrgentRelightTests
             Assert.That(scheduler, Does.Contain("_layout.Counters.ByteSize"));
             Assert.That(scheduler, Does.Contain(
                 "allocation residue in word 95 can permanently make every ordinary"));
+        });
+    }
+
+    [Test]
+    public void CoherentRadiometricPublication_UsesOneFenceCompleteFieldFlip()
+    {
+        string schedule = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_schedule_shared.glsl");
+        string shared = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_shared.glsl");
+        string commit = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_schedule_commit_local.comp");
+        string feedback = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_schedule_feedback.comp");
+        string sampled = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_publish_sampled.comp");
+        string directional = ReadRepoText(
+            "Njulf.Shaders", "ddgi_simple_directional_publish.comp");
+        string manager = ReadRepoText(
+            "Njulf.Rendering", "Resources", "SimpleDdgiVolumeManager.cs");
+        string accelerated = ReadRepoText(
+            "Njulf.Rendering", "Pipeline", "SimpleDdgiAcceleratedSolvePass.cs");
+        string directionalPass = ReadRepoText(
+            "Njulf.Rendering", "Pipeline", "SimpleDdgiDirectionalRadiancePass.cs");
+        string urgent = ReadRepoText(
+            "Njulf.Rendering", "Pipeline", "SimpleDdgiUrgentRelightPass.cs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(schedule, Does.Contain(
+                "SIMPLE_DDGI_SCHEDULER_FEATURE_DEFER_RADIOMETRIC_PUBLICATION"));
+            Assert.That(schedule, Does.Contain(
+                "bool SchedulerDefersRadiometricPublication()"));
+            Assert.That(shared, Does.Contain(
+                "SIMPLE_DDGI_SOLVE_SINGLE_SWEEP"));
+            Assert.That(commit, Does.Contain(
+                "bool deferredRadiometricPublication = !urgentRelight"));
+            Assert.That(commit, Does.Contain(
+                "SchedulerUpdateUsesRadiometricRelight(updateFlags)"));
+            Assert.That(commit, Does.Contain(
+                "if (SchedulerGpuResident() && !deferredRadiometricPublication)"));
+            Assert.That(feedback, Does.Contain(
+                "!SchedulerDefersRadiometricPublication()"));
+            Assert.That(sampled, Does.Contain(
+                "The canonical SSBO and this optional image mirror must cross"));
+            Assert.That(directional, Does.Contain(
+                "bool DeferSimpleDdgiDirectionalPublication("));
+            Assert.That(manager, Does.Contain(
+                "PublishDeferredRadiometricGenerationIfReady(commandBuffer);"));
+            Assert.That(manager, Does.Contain(
+                "_bufferManager.GetBuffer(_transportIrradianceAtlasBuffer)"));
+            Assert.That(manager, Does.Contain(
+                "_sampledAtlas?.MarkFullSyncRequired();"));
+            Assert.That(accelerated, Does.Contain(
+                "if (!deferredRadiometricPublication)"));
+            Assert.That(accelerated, Does.Contain(
+                "baseFlags |= SolveSingleSweepFlag"));
+            Assert.That(directional, Does.Contain(
+                "SIMPLE_DDGI_DIRECTIONAL_DEFER_RADIOMETRIC_PUBLICATION"));
+            Assert.That(directionalPass, Does.Contain(
+                "VolumeManager.RadiometricRelightPublicationPending"));
+            Assert.That(urgent, Does.Contain(
+                "!_volumeManager.RadiometricRelightPublicationPending"));
         });
     }
 

@@ -96,6 +96,7 @@ public sealed unsafe class SimpleDdgiUrgentRelightPass : RenderPassBase
             _volumeManager.GpuSchedulerFrameExecutionAvailable &&
             _volumeManager.ProbeCount > 0 &&
             _volumeManager.GpuScheduler.IsReady &&
+            !_volumeManager.RadiometricRelightPublicationPending &&
             _volumeManager.DirtyReasonFlags != 0u &&
             radiometricRelight;
     }

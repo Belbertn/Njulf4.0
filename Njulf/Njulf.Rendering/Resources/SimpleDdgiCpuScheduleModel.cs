@@ -142,6 +142,12 @@ public static class SimpleDdgiSchedulerAbi
     /// maintenance work completed before the lighting edit.
     /// </summary>
     public const uint SchedulerFeatureResetLaneCursors = 1u << 16;
+    /// <summary>
+    /// Keeps radiometric source and active solve results in private storage
+    /// until the CPU observes one fence-complete source cohort and records the
+    /// whole-field publication copy.
+    /// </summary>
+    public const uint SchedulerFeatureDeferRadiometricPublication = 1u << 17;
     public const uint ExactReceiverFeedbackBindingValid = 1u << 0;
     public const uint ReasonFresh = (uint)SimpleDdgiSchedulerCandidateReason.Fresh;
     public const uint ReasonScrollExposed = (uint)SimpleDdgiSchedulerCandidateReason.ScrollExposed;

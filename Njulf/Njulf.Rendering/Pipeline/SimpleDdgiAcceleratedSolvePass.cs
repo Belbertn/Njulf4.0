@@ -29,6 +29,10 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
     private const uint CompleteRaySceneFlag = 1u << 6;
     private const uint AlphaMaskTransportEnabledFlag = 1u << 7;
     private const uint ThinSurfaceTransmissionEnabledFlag = 1u << 8;
+    // Non-trace DDGI passes leave bit 9 free. During coherent radiometric
+    // staging, one Jacobi sweep must still satisfy the normal final-sweep
+    // producer contract even when the configured accelerated count is larger.
+    private const uint SolveSingleSweepFlag = 1u << 9;
     private const uint SolveVolumeFilterFlag = 1u << 23;
     private const uint SolveColorFilterFlag = 1u << 24;
     private const uint SolveFirstColorFlag = 1u << 25;
@@ -222,9 +226,21 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
         }
 
         SimpleDdgiGpuSchedulerLayout? layout = _volumeManager.GpuScheduler.Layout;
-        int sweepCount = Math.Clamp(_volumeManager.TransportAcceleratedSweepCount, 1, 4);
+        bool deferredRadiometricPublication =
+            _volumeManager.RadiometricRelightPublicationPending;
+        // The accelerated red/black loop normally uses the canonical SSBO as
+        // its inner ping-pong bank. While a radiometric generation is staged,
+        // that buffer is the last coherent receiver field and must stay
+        // immutable. One complete two-colour Jacobi sweep writes the private
+        // bank without needing an intermediate public copy; later frames
+        // resume the configured acceleration after the coherent flip.
+        int sweepCount = deferredRadiometricPublication
+            ? 1
+            : Math.Clamp(_volumeManager.TransportAcceleratedSweepCount, 1, 4);
         GPUSimpleDdgiPushConstants pushConstants = CreatePushConstants(sceneData);
         uint baseFlags = pushConstants.Flags & 0x00ffffffu;
+        if (deferredRadiometricPublication)
+            baseFlags |= SolveSingleSweepFlag;
         uint solveEpoch = _volumeManager.TransportTailSolveEpoch;
         int startingColor = solveEpoch != 0u
             ? (int)(solveEpoch & 1u)
@@ -264,8 +280,11 @@ public sealed unsafe class SimpleDdgiAcceleratedSolvePass : RenderPassBase
                     // final publish pass still owns sampled-image publication
                     // and probe lifecycle completion; this copy only feeds the
                     // opposite color and the next cached inner sweep.
-                    DispatchIntermediatePublication(cmd, pushConstants, layout);
-                    InsertStorageBarrier(cmd);
+                    if (!deferredRadiometricPublication)
+                    {
+                        DispatchIntermediatePublication(cmd, pushConstants, layout);
+                        InsertStorageBarrier(cmd);
+                    }
                 }
             }
         }

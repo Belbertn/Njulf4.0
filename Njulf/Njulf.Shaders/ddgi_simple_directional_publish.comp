@@ -23,6 +23,7 @@ const uint SIMPLE_DDGI_DIRECTIONAL_FAILURE_SCRATCH = 1u << 11u;
 const uint SIMPLE_DDGI_DIRECTIONAL_FAILURE_PUBLICATION = 1u << 12u;
 const uint SIMPLE_DDGI_DIRECTIONAL_FAILURE_HEADER = 1u << 13u;
 const uint SIMPLE_DDGI_DIRECTIONAL_FAILURE_SOURCE = 1u << 14u;
+const uint SIMPLE_DDGI_DIRECTIONAL_DEFER_RADIOMETRIC_PUBLICATION = 1u << 9u;
 
 layout(push_constant) uniform SimpleDdgiPushBlock
 {
@@ -62,15 +63,35 @@ layout(push_constant) uniform SimpleDdgiPushBlock
     uint SchedulerUpdateRecordsOffsetWords;
 } pc;
 
+bool DeferSimpleDdgiDirectionalPublication(
+    SimpleDdgiParams params,
+    SimpleDdgiProbeUpdate update,
+    bool gpuScheduler)
+{
+    return gpuScheduler &&
+        (pc.Flags &
+            SIMPLE_DDGI_DIRECTIONAL_DEFER_RADIOMETRIC_PUBLICATION) != 0u &&
+        SimpleDdgiDirectionalParityRequired(params) &&
+        !SimpleDdgiSchedulerUrgentRelight(
+            pc.SchedulerArenaBufferIndex,
+            pc.SchedulerCountersOffsetWords) &&
+        (SimpleDdgiUpdateRelightsEnvironmentMisses(update) ||
+         SimpleDdgiUpdateRelightsCachedHits(update));
+}
+
 void InvalidateSimpleDdgiDirectionalProjection(
     SimpleDdgiParams params,
-    uint physicalProbeIndex)
+    uint physicalProbeIndex,
+    bool invalidateCanonical)
 {
     uint mode = SimpleDdgiDirectionalRadianceMode(params.residencyFlags);
-    InvalidateSimpleDdgiRadianceShRecord(
-        uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_BUFFER_INDEX),
-        physicalProbeIndex,
-        mode);
+    if (invalidateCanonical)
+    {
+        InvalidateSimpleDdgiRadianceShRecord(
+            uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_BUFFER_INDEX),
+            physicalProbeIndex,
+            mode);
+    }
     if (SimpleDdgiDirectionalParityRequired(params))
     {
         InvalidateSimpleDdgiRadianceShRecord(
@@ -90,7 +111,14 @@ void FailSimpleDdgiDirectionalProjection(
 {
     // A failed refresh cannot leave an older generation masquerading as the
     // result of this transaction.
-    InvalidateSimpleDdgiDirectionalProjection(params, physicalProbeIndex);
+    bool deferredPublication = DeferSimpleDdgiDirectionalPublication(
+        params,
+        update,
+        gpuScheduler);
+    InvalidateSimpleDdgiDirectionalProjection(
+        params,
+        physicalProbeIndex,
+        !deferredPublication);
     if (gpuScheduler)
     {
         SimpleDdgiSchedulerFailOutcome(
@@ -262,15 +290,20 @@ bool BlendAndWriteSimpleDdgiDirectionalCoefficients(
     }
 
     uint qualityLevel = min((validCount + 15u) / 16u, 15u);
-    bool wroteCanonical = WriteSimpleDdgiRadianceShRecord(
-        uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_BUFFER_INDEX),
-        physicalProbeIndex,
-        mode,
-        coefficients,
-        slotGeneration,
-        validCount,
-        qualityLevel,
-        blendHistory);
+    bool deferredPublication = DeferSimpleDdgiDirectionalPublication(
+        params,
+        update,
+        SimpleDdgiGpuSchedulerActive(pc.SchedulerArenaBufferIndex));
+    bool wroteCanonical = deferredPublication ||
+        WriteSimpleDdgiRadianceShRecord(
+            uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_BUFFER_INDEX),
+            physicalProbeIndex,
+            mode,
+            coefficients,
+            slotGeneration,
+            validCount,
+            qualityLevel,
+            blendHistory);
     bool wroteParity = !SimpleDdgiDirectionalParityRequired(params) ||
         WriteSimpleDdgiRadianceShRecord(
             uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_PARITY_BUFFER_INDEX),
@@ -359,9 +392,14 @@ void main()
         initialState.activeWeight <= 0.001;
     if (inactiveProbe)
     {
+        bool deferredPublication = DeferSimpleDdgiDirectionalPublication(
+            params,
+            update,
+            gpuScheduler);
         InvalidateSimpleDdgiDirectionalProjection(
             params,
-            physicalProbeIndex);
+            physicalProbeIndex,
+            !deferredPublication);
         return;
     }
 
