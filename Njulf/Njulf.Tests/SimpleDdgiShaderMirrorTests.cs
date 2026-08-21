@@ -2078,7 +2078,7 @@ namespace Njulf.Tests
                 Assert.That(relocate, Does.Contain("state.luminanceChangeEma = previous.luminanceChangeEma;"));
                 Assert.That(relocate, Does.Contain("float softInvalidProbeScore = max("));
                 Assert.That(relocate, Does.Contain("float activeFloor = (volume.kind == SIMPLE_DDGI_VOLUME_KIND_AUTHORED || hardInvalidProbeScore >= 0.95) ? 0.0 : 0.35;"));
-                Assert.That(relocate, Does.Contain(": hardInvalidProbeScore >= 0.75);"));
+                Assert.That(relocate, Does.Contain(": hardInvalidProbeScore >= 0.75));"));
                 Assert.That(relocate, Does.Not.Contain("activeWeight <= 0.05 && hardInvalidProbeScore >= 0.75"));
                 Assert.That(relocate, Does.Contain("state.classification = inactiveProbe ? SIMPLE_DDGI_CLASSIFICATION_INACTIVE : SIMPLE_DDGI_CLASSIFICATION_ACTIVE;"));
                 Assert.That(relocate, Does.Contain("nearestBackfaceDistance + targetSurfaceDistance"));

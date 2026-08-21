@@ -131,6 +131,9 @@ void main()
             1u << 0u);
         return;
     }
+    bool radiometricRelight =
+        SimpleDdgiUpdateRelightsEnvironmentMisses(update) ||
+        SimpleDdgiUpdateRelightsCachedHits(update);
 
     uint missCount = 0u;
     uint hitCount = 0u;
@@ -371,9 +374,18 @@ void main()
     // Classification must be reachable independently of the clipmap support
     // floor above. Otherwise scores in [0.75, 0.95) can never become inactive:
     // their active weight is clamped to at least 0.35 before this test.
-    bool inactiveProbe = relocationTimedOut || (maintenanceUpdate
+    // A cached radiometric edit does not trace new geometry and therefore
+    // cannot author an active/inactive transition. The cached sequence can
+    // legitimately differ in age/cardinality across maintenance histories;
+    // allowing that sequence to cross the hard threshold turns a lighting
+    // edit into a discontinuous support-region change. Continue updating the
+    // soft active weight and relocation estimate, but reserve classification
+    // transitions for full geometry evidence.
+    bool inactiveProbe = relocationTimedOut || (radiometricRelight
         ? previous.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE
-        : hardInvalidProbeScore >= 0.75);
+        : (maintenanceUpdate
+            ? previous.classification == SIMPLE_DDGI_CLASSIFICATION_INACTIVE
+            : hardInvalidProbeScore >= 0.75));
     if (inactiveProbe)
         state.activeWeight = 0.0;
     if (inactiveProbe)
