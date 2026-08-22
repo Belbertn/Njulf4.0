@@ -1,7 +1,7 @@
 #ifndef NJULF_FORWARD_DDGI_RECEIVER_CACHE_GLSL
 #define NJULF_FORWARD_DDGI_RECEIVER_CACHE_GLSL
 
-// Compute prefilters the 8x8 exact-gather lattice to one FP16 value per 2x2
+// Compute prefilters the 12x12 exact-gather lattice to one FP16 value per 2x2
 // screen block. A fragment quad therefore reads one shared texel while the
 // only spatial approximation beyond the accepted bilinear field is bounded to
 // a two-pixel footprint.

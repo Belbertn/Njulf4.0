@@ -2,6 +2,7 @@ using System;
 using Njulf.Core.Math;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
+using Njulf.Rendering.Resources;
 
 namespace NjulfHelloGame;
 
@@ -56,6 +57,7 @@ public static class SampleSponzaGlobalIlluminationProfile
         gi.SimpleDdgiNearRingGridSizeX = 34;
         gi.SimpleDdgiNearRingGridSizeY = 15;
         gi.SimpleDdgiNearRingGridSizeZ = 23;
+        ConfigurePostAdvancedGiRollout(settings);
         // Once the coarse-ring leak is removed, shaded galleries expose the
         // real fine-field transport instead of the previous artificial lift.
         // A small physical receiver multiplier restores readable stone and
@@ -64,6 +66,17 @@ public static class SampleSponzaGlobalIlluminationProfile
         gi.SimpleDdgiAuthoredVolumes.Clear();
 
         ConfigureReferenceOutput(settings);
+    }
+
+    /// <summary>
+    /// Keeps the production Sponza image on the qualified DDGI-only baseline.
+    /// Explicit experiment/CLI overrides are applied after this hook.
+    /// </summary>
+    public static void ConfigurePostAdvancedGiRollout(RenderSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
+            SimpleDdgiNearFieldResidualMode.Off;
     }
 
     /// <summary>
@@ -190,12 +203,13 @@ public static class SampleSponzaGlobalIlluminationProfile
 
         // Meter the upper-middle of the histogram so deep shade remains shade
         // instead of being lifted toward gray. The 12.5% key follows reflected
-        // light-meter calibration, while the daylight clamp preserves a useful
-        // separation between the open courtyard and the covered galleries.
+        // light-meter calibration. The lower bookmark reaches the former 2x
+        // daylight ceiling at only 2.9% average luminance, so admit another
+        // 50% of headroom without allowing the full generic 4x interior lift.
         settings.AutoExposure.Enabled = true;
         settings.AutoExposure.TargetLuminance = 0.125f;
         settings.AutoExposure.MinExposure = 0.25f;
-        settings.AutoExposure.MaxExposure = 2.0f;
+        settings.AutoExposure.MaxExposure = 3.0f;
         settings.AutoExposure.LowPercentile = 70.0f;
         settings.AutoExposure.HighPercentile = 95.0f;
         settings.AutoExposure.DarkToLightAdaptationSpeed = 3.0f;

@@ -550,7 +550,7 @@ namespace Njulf.Rendering.Descriptors
             SimpleDdgiStorageValidationBufferBase + 1;
 
         /// <summary>
-        /// Reduced 8x8 exact-gather lattice used only by the receiver-cache
+        /// Reduced 12x12 exact-gather lattice used only by the receiver-cache
         /// resolve for frame 0.
         /// </summary>
         public const int SimpleDdgiReceiverGatherBufferBase =

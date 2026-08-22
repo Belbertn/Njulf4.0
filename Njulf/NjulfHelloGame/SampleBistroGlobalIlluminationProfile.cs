@@ -36,9 +36,19 @@ internal static class SampleBistroGlobalIlluminationProfile
         // exhibit. Keep the conservative engine default for enclosed scenes,
         // but omit the redundant mask here; this also removes trace work.
         gi.FarFieldSkyVisibilityEnabled = false;
-        // Keep C5's optimized adaptive path enabled for Bistro. The global
-        // rollout is applied after scene setup, so reassert the scene policy
-        // both here and after that rollout.
+        // The low-frequency receiver cache cannot reproduce the high-frequency
+        // visibility changes of Bistro's carved stone at every fragment. Let
+        // material/screen AO own rough-specular contact occlusion in this open
+        // exterior scene while the exact DDGI visibility remains available to
+        // diffuse transport. This removes cache-shaped reflection blotches
+        // without another gather, texture read, or dispatch.
+        gi.SimpleDdgiRoughSpecularMinimumRoughness = 1.0f;
+        gi.SimpleDdgiRoughSpecularFullWeightRoughness = 1.0f;
+        // Establish DDGI as the sole diffuse-indirect owner while its quality
+        // baseline is being qualified. C5 currently changes the Bistro/Sponza
+        // image by less than one display code value while paying for motion
+        // vectors and a full residual pass. Keep the explicit experiment/CLI
+        // override available, but do not spend that cost in production.
         ConfigurePostAdvancedGiRollout(settings);
         // Keep the steady-state tier unchanged. During an actual lighting
         // transition, spend the already-bounded urgent lane on the full set of
@@ -71,7 +81,7 @@ internal static class SampleBistroGlobalIlluminationProfile
     {
         ArgumentNullException.ThrowIfNull(settings);
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            SimpleDdgiNearFieldResidualMode.HiZAdaptive;
+            SimpleDdgiNearFieldResidualMode.Off;
     }
 
     private static void ConfigureEnvironment(EnvironmentSettings environment)

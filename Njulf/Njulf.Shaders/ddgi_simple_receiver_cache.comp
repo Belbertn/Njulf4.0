@@ -34,13 +34,12 @@
 #undef SIMPLE_DDGI_RECEIVER_COVERAGE_HASH
 #undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
 
-const uint SIMPLE_DDGI_RECEIVER_CACHE_REFLECTION_ENABLED_FLAG = 1u << 0u;
-
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+const float RECEIVER_NORMAL_RELATIVE_EPSILON = 0.000001;
 
 shared SimpleDdgiParams ReceiverSharedParams;
 shared GPUEnvironmentData ReceiverSharedEnvironment;
-shared GPUReflectionProbeHeader ReceiverSharedReflectionHeader;
 
 layout(push_constant) uniform SimpleDdgiReceiverCachePushBlock
 {
@@ -235,8 +234,21 @@ vec3 ReconstructReceiverNormal(ivec2 pixel, vec3 worldPosition, vec3 viewDirecti
     {
         vec3 candidate = cross(dx, dy);
         float lengthSquared = dot(candidate, candidate);
-        if (lengthSquared > 0.0000001 && !isnan(lengthSquared) && !isinf(lengthSquared))
+        // Pixel derivatives are expressed in world units, so an absolute
+        // area threshold changes with view distance, FOV, and scene scale. It
+        // rejected valid surfaces at normal pixel footprints and made the
+        // gather fall back to viewDirection. Use the same scale-relative
+        // degeneracy test as the forward/AO depth-normal reconstruction.
+        float derivativeAreaSquared = max(
+            dot(dx, dx) * dot(dy, dy),
+            1.0e-30);
+        if (lengthSquared >
+                derivativeAreaSquared * RECEIVER_NORMAL_RELATIVE_EPSILON &&
+            !isnan(lengthSquared) && !isinf(lengthSquared) &&
+            !isnan(derivativeAreaSquared) && !isinf(derivativeAreaSquared))
+        {
             normal = candidate * inversesqrt(lengthSquared);
+        }
     }
 
     // Opaque forward flips back-facing geometric normals toward the visible
@@ -425,7 +437,6 @@ void main()
     {
         ReceiverSharedParams = ReadSimpleDdgiParams(pc.ParamsBufferIndex);
         ReceiverSharedEnvironment = ReadEnvironmentData();
-        ReceiverSharedReflectionHeader = ReadReflectionProbeHeader();
     }
     // Every invocation must reach the barrier, including lanes outside a
     // partial edge group. Bounds checks therefore remain below this point.
@@ -482,20 +493,13 @@ void main()
     float environmentFallbackWeight =
         (1.0 - ownership) * params.environmentFallbackIntensity;
     GPUEnvironmentData environment = ReceiverSharedEnvironment;
-    GPUReflectionProbeHeader reflectionHeader = ReceiverSharedReflectionHeader;
-    bool indirectReflectionsActive =
-        environment.Enabled != 0u &&
-        environment.SpecularIntensity > 0.0 &&
-        (reflectionHeader.Flags &
-            SIMPLE_DDGI_RECEIVER_CACHE_REFLECTION_ENABLED_FLAG) != 0u &&
-        reflectionHeader.Intensity > 0.0;
     bool evaluateFarFieldFallback =
         environmentFallbackWeight >
             SIMPLE_DDGI_ENVIRONMENT_FALLBACK_MIN_WEIGHT ||
         (params.flags &
             SIMPLE_DDGI_FLAG_FORCE_LEGACY_FAR_FIELD_FALLBACK) != 0u;
     float farFieldSkyVisibility = 1.0;
-    if ((evaluateFarFieldFallback || indirectReflectionsActive) &&
+    if (evaluateFarFieldFallback &&
         (params.flags & SIMPLE_DDGI_FLAG_SKY_VISIBILITY_ENABLED) != 0u)
     {
         farFieldSkyVisibility = EstimateFarFieldSkyVisibility(
@@ -504,18 +508,10 @@ void main()
             params,
             0u);
     }
-    if (indirectReflectionsActive)
-    {
-        // Probe-to-receiver visibility only proves that the diffuse field can
-        // reach this surface. Broad reflection lobes also need a far-field
-        // enclosure test; otherwise an interior wall reflects the outdoor sky
-        // at grazing angles and reads as a uniform metallic sheen. This runs
-        // once per low-resolution cache receiver and leaves sharp lobes open
-        // through the roughness weighting applied by the forward shader.
-        indirectSpecularVisibility = min(
-            indirectSpecularVisibility,
-            farFieldSkyVisibility);
-    }
+    // Keep rough-specular visibility identical to the exact receiver path.
+    // Far-field sky visibility owns only the diffuse environment complement;
+    // applying its coarse voxel result to IBL created a dark 12x12 lattice on
+    // stone and removed reflected fill throughout enclosed scenes.
     // All remaining composition is linear. Fold the global intensity,
     // radiometric ownership, leak attenuation, and far-field visibility here
     // so cache-specific mesh programs can reconstruct the four-corner field

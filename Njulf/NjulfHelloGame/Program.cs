@@ -951,6 +951,14 @@ internal sealed class HelloGame : Game
             SampleBistroGlobalIlluminationProfile
                 .ConfigurePostAdvancedGiRollout(settings);
         }
+        else if (_smokeOptions.SceneKind == SampleSceneKind.SponzaPlaza)
+        {
+            // Sponza uses the same DDGI-only presentation baseline. Apply it
+            // before renderer construction so C5's immutable resources are
+            // not allocated merely to leave its pass disabled at runtime.
+            SampleSponzaGlobalIlluminationProfile
+                .ConfigurePostAdvancedGiRollout(settings);
+        }
         if (_smokeOptions.SimpleDdgiSchedulerModeOverride.HasValue)
         {
             settings.GlobalIllumination.SimpleDdgiSchedulerMode =
@@ -2003,6 +2011,11 @@ internal sealed class HelloGame : Game
             // ApplySmokeRenderSettings runs after this method so an explicit
             // command-line experiment can still opt it back in.
             SampleBistroGlobalIlluminationProfile
+                .ConfigurePostAdvancedGiRollout(settings);
+        }
+        else if (_sceneKind == SampleSceneKind.SponzaPlaza)
+        {
+            SampleSponzaGlobalIlluminationProfile
                 .ConfigurePostAdvancedGiRollout(settings);
         }
     }

@@ -79,7 +79,25 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(nearExtentZ, Is.GreaterThanOrEqualTo(25.0f));
             Assert.That(settings.AutoExposure.Enabled, Is.True);
             Assert.That(settings.Reflections.Enabled, Is.True);
+            Assert.That(
+                gi.SimpleDdgiNearFieldResidualMode,
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
         });
+    }
+
+    [Test]
+    public void SponzaPostRolloutPolicy_KeepsC5Disabled()
+    {
+        var settings = new RenderSettings();
+        settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive;
+
+        SampleSponzaGlobalIlluminationProfile
+            .ConfigurePostAdvancedGiRollout(settings);
+
+        Assert.That(
+            settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
+            Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
     }
 
     [Test]
@@ -190,7 +208,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.AutoExposure.Enabled, Is.True);
             Assert.That(settings.AutoExposure.TargetLuminance, Is.EqualTo(0.125f));
             Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.25f));
-            Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(2.0f));
+            Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(3.0f));
             Assert.That(settings.AutoExposure.LowPercentile, Is.EqualTo(70.0f));
             Assert.That(settings.AutoExposure.HighPercentile, Is.EqualTo(95.0f));
             Assert.That(settings.AutoExposure.DarkToLightAdaptationSpeed, Is.EqualTo(3.0f));

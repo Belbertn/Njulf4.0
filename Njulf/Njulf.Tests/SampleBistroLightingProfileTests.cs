@@ -9,7 +9,7 @@ namespace Njulf.Tests;
 public sealed class SampleBistroLightingProfileTests
 {
     [Test]
-    public void DirectionalKey_PreservesFbxRadianceAndCastsShadows()
+    public void DirectionalKey_UsesReferencePresentationAndCastsShadows()
     {
         Light light = SampleBistroLightingProfile.CreateDirectionalKey();
         Vector3 reconstructedRadiance = light.Color * light.Intensity;
@@ -19,11 +19,19 @@ public sealed class SampleBistroLightingProfileTests
             Assert.That(light.Type, Is.EqualTo(LightType.Directional));
             Assert.That(light.Direction.Length(), Is.EqualTo(1.0f).Within(0.00001f));
             Assert.That(
-                Vector3.Distance(light.Direction, SampleBistroLightingProfile.SourceDirection),
+                Vector3.Distance(
+                    light.Direction,
+                    SampleBistroLightingProfile.DirectionalKeyDirection),
                 Is.LessThan(0.00001f));
             Assert.That(
-                Vector3.Distance(reconstructedRadiance, SampleBistroLightingProfile.SourceRadiance),
+                Vector3.Distance(
+                    reconstructedRadiance,
+                    SampleBistroLightingProfile.DirectionalKeyRadiance),
                 Is.LessThan(0.0001f));
+            Assert.That(
+                reconstructedRadiance.Length() /
+                SampleBistroLightingProfile.SourceRadiance.Length(),
+                Is.EqualTo(1.5f).Within(0.0001f));
             Assert.That(light.CastsShadows, Is.True);
             Assert.That(light.ShadowStrength, Is.EqualTo(1.0f));
             Assert.That(light.ShadowPriority, Is.EqualTo(10));

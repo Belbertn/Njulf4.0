@@ -664,7 +664,7 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void ReflectionProbeMetadataUpload_IsVisibleToOrdinaryAndB1ReceiverCacheCompute()
+        public void ReflectionProbeMetadataUpload_IsComputeVisibleWithoutReceiverCacheDependency()
         {
             string manager = ReadRepoText(
                 "Njulf.Rendering",
@@ -713,8 +713,9 @@ namespace Njulf.Tests
                     "Transfer-written reflection metadata must be visible before compute receivers read it.");
                 Assert.That(metadataUpload, Does.Contain(
                     "AccessFlags2.ShaderStorageReadBit"));
-                Assert.That(cache, Does.Contain(
-                    "ReadReflectionProbeHeader()"));
+                Assert.That(cache, Does.Not.Contain(
+                    "ReadReflectionProbeHeader()"),
+                    "Diffuse DDGI cache production must not depend on reflection metadata.");
                 Assert.That(b1Variant, Does.Contain(
                     "<Source>ddgi_simple_receiver_cache.comp</Source>"));
                 Assert.That(b1Variant, Does.Contain(
@@ -780,15 +781,19 @@ namespace Njulf.Tests
                 Assert.That(cache, Does.Contain(
                     "farFieldSkyVisibility = EstimateFarFieldSkyVisibility("));
                 Assert.That(cache, Does.Contain(
+                    "if (evaluateFarFieldFallback &&"));
+                Assert.That(cache, Does.Not.Contain(
                     "evaluateFarFieldFallback || indirectReflectionsActive"));
-                Assert.That(cache, Does.Contain(
+                Assert.That(cache, Does.Not.Contain(
                     "environment.SpecularIntensity > 0.0"));
                 Assert.That(cache, Does.Contain(
                     "shared SimpleDdgiParams ReceiverSharedParams;"));
                 Assert.That(cache, Does.Contain(
                     "shared GPUEnvironmentData ReceiverSharedEnvironment;"));
-                Assert.That(cache, Does.Contain(
+                Assert.That(cache, Does.Not.Contain(
                     "shared GPUReflectionProbeHeader ReceiverSharedReflectionHeader;"));
+                Assert.That(cache, Does.Contain(
+                    "derivativeAreaSquared * RECEIVER_NORMAL_RELATIVE_EPSILON"));
                 Assert.That(cache, Does.Contain(
                     "if (gl_LocalInvocationIndex == 0u)"));
                 Assert.That(
@@ -805,7 +810,7 @@ namespace Njulf.Tests
                     cache.Split(
                         "ReadReflectionProbeHeader(",
                         StringSplitOptions.None).Length - 1,
-                    Is.EqualTo(1));
+                    Is.Zero);
                 Assert.That(sharedInitialization, Is.GreaterThanOrEqualTo(0));
                 Assert.That(sharedBarrier, Is.GreaterThan(sharedInitialization));
                 Assert.That(receiverBoundsCheck, Is.GreaterThan(sharedBarrier),
@@ -814,9 +819,9 @@ namespace Njulf.Tests
                     "SimpleDdgiParams params = ReceiverSharedParams;"));
                 Assert.That(cache, Does.Contain(
                     "GPUEnvironmentData environment = ReceiverSharedEnvironment;"));
-                Assert.That(cache, Does.Contain(
+                Assert.That(cache, Does.Not.Contain(
                     "GPUReflectionProbeHeader reflectionHeader = ReceiverSharedReflectionHeader;"));
-                Assert.That(cache, Does.Contain(
+                Assert.That(cache, Does.Not.Contain(
                     "indirectSpecularVisibility = min("));
                 Assert.That(cacheSampling, Does.Contain(
                     "layout(std430, set = 2, binding = 0) readonly buffer ForwardDdgiReceiverCacheBlock"));

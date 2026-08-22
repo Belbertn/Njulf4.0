@@ -17,15 +17,29 @@ internal static class SampleBistroLightingProfile
     internal static Vector3 SourceRadiance { get; } =
         new(110.100006f, 87.414825f, 56.481304f);
 
-    internal const float DirectionalKeyIntensity = 110.100006f;
+    // The FBX key points straight along the street and produces a nearly
+    // front-lit courtyard from the locked beauty camera. Rotate it toward the
+    // supplied reference's diagonal street shadow, then increase the direct
+    // key-to-environment ratio by half. Auto exposure compensates the average
+    // level, so this restores highlight/shadow separation without extra work.
+    internal static Vector3 DirectionalKeyDirection { get; } =
+        Vector3.Normalize(new Vector3(
+            0.340573f,
+            -0.87636626f,
+            -0.340573f));
+
+    internal static Vector3 DirectionalKeyRadiance { get; } =
+        SourceRadiance * 1.5f;
+
+    internal const float DirectionalKeyIntensity = 165.150009f;
 
     internal static Vector3 DirectionalKeyColor { get; } =
-        SourceRadiance / DirectionalKeyIntensity;
+        DirectionalKeyRadiance / DirectionalKeyIntensity;
 
     internal static Light CreateDirectionalKey() => new()
     {
         Type = LightType.Directional,
-        Direction = SourceDirection,
+        Direction = DirectionalKeyDirection,
         Color = DirectionalKeyColor,
         Intensity = DirectionalKeyIntensity,
         Range = 100.0f,

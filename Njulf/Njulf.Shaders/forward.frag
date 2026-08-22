@@ -4347,7 +4347,7 @@ void main()
 #if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
     // Pipeline selection is the authoritative handshake: this native program
     // is bound only after the current-depth cache dispatch and its
-    // compute-to-fragment barrier complete. The producer scans a complete 8x8
+    // compute-to-fragment barrier complete. The producer scans a complete 12x12
     // tile when its center is empty, so every opaque fragment has a
     // representative. The cached terms already include DDGI intensity,
     // ownership/leak attenuation, and far-field environment visibility.
