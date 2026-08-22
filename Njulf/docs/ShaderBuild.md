@@ -9,7 +9,7 @@ Production configurations retain their existing compiler options, output names, 
 | Property | Default | Purpose |
 |---|---|---|
 | `NjulfShaderBuildMode` | `Compile` | Builds, reuses, or materializes artifacts. `UseExisting` performs no compiler or cache access and fails if any active output is missing or invalid. |
-| `NjulfShaderMaxParallelism` | `0` | Auto-selects half the logical processors, clamped to 1 through 8. Set `1` for serial equivalence testing. |
+| `NjulfShaderMaxParallelism` | `0` | Auto-selects the logical processor count, clamped to 1 through 8. Set `1` for serial equivalence testing. |
 | `NjulfShaderCacheMode` | `ReadWrite` | Enables the verified persistent cache. Set `Off` to bypass it for equivalence testing. |
 | `NjulfShaderCacheDirectory` | `artifacts/shader-cache/v1` | Cache location, deliberately outside `obj` so `dotnet clean` does not remove it. |
 | `NjulfGlslangValidator` | `glslangValidator` | Compiler executable name or explicit path. |

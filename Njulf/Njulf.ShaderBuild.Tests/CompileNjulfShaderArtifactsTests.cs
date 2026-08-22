@@ -265,6 +265,24 @@ public sealed class CompileNjulfShaderArtifactsTests
     }
 
     [Test]
+    public void AutomaticParallelismUsesAvailableLogicalProcessorsWithinCap()
+    {
+        string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 41);
+        var engine = new RecordingBuildEngine();
+        CompileNjulfShaderArtifacts task = CreateTask(
+            [CreateArtifact("sample.comp", sourcePath)],
+            engine);
+        task.MaxParallelism = 0;
+
+        Assert.That(task.Execute(), Is.True, engine.FormatErrors());
+
+        int expected = Math.Clamp(Environment.ProcessorCount, 1, 8);
+        Assert.That(
+            engine.Messages.Select(message => message.Message),
+            Has.Some.Contains($"with parallelism {expected}"));
+    }
+
+    [Test]
     public void UseExistingNeverResolvesCompilerOrCreatesCache()
     {
         string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 4);

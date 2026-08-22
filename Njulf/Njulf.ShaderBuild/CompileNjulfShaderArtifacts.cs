@@ -655,7 +655,7 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
     }
 
     private static int ResolveParallelism(int requested) =>
-        requested > 0 ? requested : Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
+        requested > 0 ? requested : Math.Clamp(Environment.ProcessorCount, 1, 8);
 
     private static bool IsValidSpirvFile(string path)
     {
