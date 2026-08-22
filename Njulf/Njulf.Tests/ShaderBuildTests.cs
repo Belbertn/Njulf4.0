@@ -79,6 +79,34 @@ public sealed class ShaderBuildTests
     }
 
     [Test]
+    public void ProductionVerificationUsesBoundedNativeScansAndFileBackedDisassembly()
+    {
+        string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
+        string atomicVerification = File.ReadAllText(Path.Combine(
+            shaderDirectory,
+            "VerifyProductionDiagnosticAtomics.ps1"));
+        string receiverVerification = File.ReadAllText(Path.Combine(
+            shaderDirectory,
+            "VerifySimpleDdgiReceiverContract.ps1"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(atomicVerification,
+                Does.Contain("SpirvInstructionInspector]::CountOpcode"));
+            Assert.That(atomicVerification,
+                Does.Not.Contain("for ($byteOffset = 20;"),
+                "Production builds must not interpret every SPIR-V instruction in PowerShell.");
+            Assert.That(receiverVerification,
+                Does.Contain("& $spirvDis --no-color -o $temporaryPath $ModulePath"));
+            Assert.That(receiverVerification,
+                Does.Contain("[IO.File]::ReadAllText($temporaryPath)"));
+            Assert.That(receiverVerification,
+                Does.Not.Contain("(& $spirvDis $modulePath 2>&1) -join"),
+                "Multi-megabyte disassemblies must not be line-materialized through the PowerShell pipeline.");
+        });
+    }
+
+    [Test]
     public void ShaderModuleLoaderUsesTheBuildPinnedResource()
     {
         const string shaderFileName = "ddgi_simple_trace.comp.spv";

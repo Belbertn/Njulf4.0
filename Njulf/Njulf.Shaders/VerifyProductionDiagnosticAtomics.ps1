@@ -234,31 +234,59 @@ if ($missingAlgorithmicModules.Count -ne 0) {
     throw "Expected production Simple-DDGI algorithmic-atomic module(s) missing from '$resolvedDirectory': $($missingAlgorithmicModules -join ', ')."
 }
 
-$spirvMagic = [uint32]0x07230203
 $opAtomicIAdd = 234
+$spirvInspectorTypeName =
+    'Njulf.ShaderBuildValidation.SpirvInstructionInspector'
+if ($null -eq ($spirvInspectorTypeName -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+
+namespace Njulf.ShaderBuildValidation
+{
+    public static class SpirvInstructionInspector
+    {
+        private const uint SpirvMagic = 0x07230203u;
+
+        public static int CountOpcode(string path, int expectedOpcode)
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            if (bytes.Length < 20 || (bytes.Length % sizeof(uint)) != 0)
+                throw new InvalidDataException("'" + path + "' is not a complete SPIR-V word stream.");
+            if (BitConverter.ToUInt32(bytes, 0) != SpirvMagic)
+                throw new InvalidDataException("'" + path + "' does not have the SPIR-V magic word.");
+
+            int opcodeCount = 0;
+            for (int byteOffset = 20; byteOffset < bytes.Length;)
+            {
+                uint instruction = BitConverter.ToUInt32(bytes, byteOffset);
+                int wordCount = (int)(instruction >> 16);
+                int opcode = (int)(instruction & 0xffffu);
+                long nextByteOffset = byteOffset + (long)wordCount * sizeof(uint);
+                if (wordCount <= 0 || nextByteOffset > bytes.Length)
+                {
+                    throw new InvalidDataException(
+                        "'" + path + "' contains a malformed SPIR-V instruction at byte " + byteOffset + ".");
+                }
+
+                if (opcode == expectedOpcode)
+                    opcodeCount++;
+                byteOffset = (int)nextByteOffset;
+            }
+
+            return opcodeCount;
+        }
+    }
+}
+'@ -ErrorAction Stop
+}
+
 $violations = [System.Collections.Generic.List[string]]::new()
 foreach ($shader in $shaderFiles) {
-    [byte[]] $bytes = [System.IO.File]::ReadAllBytes($shader.FullName)
-    if ($bytes.Length -lt 20 -or ($bytes.Length % 4) -ne 0) {
-        throw "'$($shader.FullName)' is not a complete SPIR-V word stream."
-    }
-    if ([BitConverter]::ToUInt32($bytes, 0) -ne $spirvMagic) {
-        throw "'$($shader.FullName)' does not have the SPIR-V magic word."
-    }
-
-    $atomicAdds = 0
-    for ($byteOffset = 20; $byteOffset -lt $bytes.Length;) {
-        [uint32] $instruction = [BitConverter]::ToUInt32($bytes, $byteOffset)
-        $wordCount = $instruction -shr 16
-        $opcode = $instruction -band 0xffff
-        if ($wordCount -le 0 -or $byteOffset + $wordCount * 4 -gt $bytes.Length) {
-            throw "'$($shader.FullName)' contains a malformed SPIR-V instruction at byte $byteOffset."
-        }
-        if ($opcode -eq $opAtomicIAdd) {
-            $atomicAdds++
-        }
-        $byteOffset += $wordCount * 4
-    }
+    $atomicAdds =
+        [Njulf.ShaderBuildValidation.SpirvInstructionInspector]::CountOpcode(
+            $shader.FullName,
+            $opAtomicIAdd)
 
     $expectedAtomicAdds = if ($algorithmicAtomicCounts.ContainsKey($shader.Name)) {
         [int]$algorithmicAtomicCounts[$shader.Name]

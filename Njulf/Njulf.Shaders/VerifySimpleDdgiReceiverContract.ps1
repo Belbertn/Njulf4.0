@@ -8,6 +8,37 @@ $resolvedDirectory = (Resolve-Path -LiteralPath $ShaderDirectory).Path
 $spirvDis = (Get-Command spirv-dis -ErrorAction Stop).Source
 $spirvVal = (Get-Command spirv-val -ErrorAction Stop).Source
 
+function Read-SpirvDisassembly {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $ModulePath
+    )
+
+    # Capturing multi-megabyte disassemblies through the PowerShell pipeline
+    # materializes one managed string per output line. Let spirv-dis stream to
+    # a private file instead, then read it once as a single string for the
+    # contract regexes below.
+    $temporaryPath = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        'njulf-spirv-dis-' + [Guid]::NewGuid().ToString('N') + '.txt')
+    try {
+        $diagnostics =
+            (& $spirvDis --no-color -o $temporaryPath $ModulePath 2>&1) -join
+                [Environment]::NewLine
+        if ($LASTEXITCODE -ne 0) {
+            throw "spirv-dis failed for '$ModulePath': $diagnostics"
+        }
+
+        return [IO.File]::ReadAllText($temporaryPath)
+    }
+    finally {
+        if ([IO.File]::Exists($temporaryPath)) {
+            [IO.File]::Delete($temporaryPath)
+        }
+    }
+}
+
 # These are the production receiver artifacts that execute Simple-DDGI gather
 # code. Fragment-only foliage artifacts consume interpolated ambient and are not
 # receiver modules themselves.
@@ -82,10 +113,7 @@ foreach ($moduleName in $receiverModuleNames) {
         throw "spirv-val failed for '$modulePath': $validation"
     }
 
-    $disassembly = (& $spirvDis $modulePath 2>&1) -join [Environment]::NewLine
-    if ($LASTEXITCODE -ne 0) {
-        throw "spirv-dis failed for '$modulePath': $disassembly"
-    }
+    $disassembly = Read-SpirvDisassembly -ModulePath $modulePath
 
     $accessPatternPrefix = 'Op(?:InBounds)?AccessChain[^\r\n]*%BindlessStorage(?:Vector)?Buffers[^\r\n]*'
     $receiverAccesses = [regex]::Matches(
@@ -157,10 +185,7 @@ foreach ($moduleName in @($receiverCacheFragmentModuleNames + $giDisabledControl
         throw "spirv-val failed for '$modulePath': $validation"
     }
 
-    $disassembly = (& $spirvDis $modulePath 2>&1) -join [Environment]::NewLine
-    if ($LASTEXITCODE -ne 0) {
-        throw "spirv-dis failed for '$modulePath': $disassembly"
-    }
+    $disassembly = Read-SpirvDisassembly -ModulePath $modulePath
 
     $atomicInstructions = [regex]::Matches(
         $disassembly,
@@ -248,10 +273,7 @@ $resolveValidation =
 if ($LASTEXITCODE -ne 0) {
     throw "spirv-val failed for '$resolvePath': $resolveValidation"
 }
-$resolveDisassembly = (& $spirvDis $resolvePath 2>&1) -join [Environment]::NewLine
-if ($LASTEXITCODE -ne 0) {
-    throw "spirv-dis failed for '$resolvePath': $resolveDisassembly"
-}
+$resolveDisassembly = Read-SpirvDisassembly -ModulePath $resolvePath
 $resolveOutputAccesses = [regex]::Matches(
     $resolveDisassembly,
     '(?m)^\s*(?<result>%\w+)\s*=\s*Op(?:InBounds)?AccessChain\s+' +
