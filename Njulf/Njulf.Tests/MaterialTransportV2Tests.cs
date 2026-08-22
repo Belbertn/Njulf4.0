@@ -995,10 +995,40 @@ public sealed class MaterialTransportV2Tests
         {
             Assert.That(compiled.Metadata.IsGeometryDecal, Is.True);
             Assert.That(compiled.Metadata.DecalLayer, Is.EqualTo(4));
-            Assert.That(
-                ((GiMaterialTransportFlags)compiled.GpuMaterial.TransportFlags)
-                .HasFlag(GiMaterialTransportFlags.GeometryDecal),
+            GiMaterialTransportFlags flags =
+                (GiMaterialTransportFlags)compiled.GpuMaterial.TransportFlags;
+            Assert.That(flags.HasFlag(GiMaterialTransportFlags.GeometryDecal),
                 Is.True);
+            Assert.That(flags.HasFlag(GiMaterialTransportFlags.ReceivesIndirectDiffuse),
+                Is.True,
+                "A geometry decal is excluded from transport topology separately; its visible raster lobe must still receive GI.");
+            Assert.That(flags.HasFlag(GiMaterialTransportFlags.ReflectsIndirectDiffuse),
+                Is.True,
+                "A geometry decal needs its diffuse lobe for direct and indirect forward shading.");
+        });
+    }
+
+    [Test]
+    public void Compiler_NonGeometryDecalShadingRemainsOutsideDiffuseTransport()
+    {
+        CompiledMaterialTransport compiled = MaterialTransportCompiler.Compile(
+            new MaterialDefinition
+            {
+                ShadingModel = MaterialShadingModel.Decal,
+                IsGeometryDecal = false
+            });
+
+        GiMaterialTransportFlags flags =
+            (GiMaterialTransportFlags)compiled.GpuMaterial.TransportFlags;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(flags.HasFlag(GiMaterialTransportFlags.GeometryDecal),
+                Is.False);
+            Assert.That(flags.HasFlag(GiMaterialTransportFlags.ReceivesIndirectDiffuse),
+                Is.False);
+            Assert.That(flags.HasFlag(GiMaterialTransportFlags.ReflectsIndirectDiffuse),
+                Is.False);
         });
     }
 

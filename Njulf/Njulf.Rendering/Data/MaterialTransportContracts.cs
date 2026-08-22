@@ -247,12 +247,16 @@ public sealed record MaterialDefinition
 
     public bool ReceivesIndirectDiffuse =>
         DiffuseGiParticipation != GiParticipationOverride.Disabled &&
-        ShadingModel is not MaterialShadingModel.Unlit and not MaterialShadingModel.Decal;
+        ShadingModel != MaterialShadingModel.Unlit &&
+        (ShadingModel != MaterialShadingModel.Decal || IsGeometryDecal);
 
     public bool ReflectsIndirectDiffuse =>
         DiffuseGiParticipation == GiParticipationOverride.Enabled ||
         DiffuseGiParticipation == GiParticipationOverride.Default &&
-        ShadingModel is MaterialShadingModel.Pbr or MaterialShadingModel.Foliage or MaterialShadingModel.SubsurfaceApproximation;
+        (ShadingModel is MaterialShadingModel.Pbr or
+            MaterialShadingModel.Foliage or
+            MaterialShadingModel.SubsurfaceApproximation ||
+         ShadingModel == MaterialShadingModel.Decal && IsGeometryDecal);
 
     public bool EmitsIntoGi =>
         EmissionGiParticipation == GiParticipationOverride.Enabled ||

@@ -31288,7 +31288,9 @@
         ],
         "baseColorTexture": {
           "index": 54
-        }
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 1.0
       },
       "alphaMode": "BLEND",
       "extras": {

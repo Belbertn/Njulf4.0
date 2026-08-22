@@ -257,15 +257,23 @@ namespace Njulf.Tests
             using var importer = new ModelImporter();
 
             ModelMesh model = importer.Import(path);
+            ModelMaterial dirtDecal = model.Materials.Single(m =>
+                string.Equals(
+                    m.Name,
+                    "dirt_decal",
+                    StringComparison.OrdinalIgnoreCase));
 
-            Assert.That(
-                model.Materials,
-                Has.Some.Matches<ModelMaterial>(m =>
-                    string.Equals(m.Name, "dirt_decal", StringComparison.OrdinalIgnoreCase) &&
-                    m.AlphaMode == ModelAlphaMode.Blend &&
-                    m.IsGeometryDecal &&
-                    m.DecalLayer == 0 &&
-                    Math.Abs(m.DecalDepthBias - 0.0005f) < 0.000001f));
+            Assert.Multiple(() =>
+            {
+                Assert.That(dirtDecal.AlphaMode, Is.EqualTo(ModelAlphaMode.Blend));
+                Assert.That(dirtDecal.IsGeometryDecal, Is.True);
+                Assert.That(dirtDecal.DecalLayer, Is.Zero);
+                Assert.That(dirtDecal.DecalDepthBias, Is.EqualTo(0.0005f).Within(0.000001f));
+                Assert.That(dirtDecal.Metallic, Is.Zero,
+                    "The dirt overlay must retain diffuse GI instead of using glTF's fully metallic default.");
+                Assert.That(dirtDecal.Roughness, Is.EqualTo(1f),
+                    "The dirt overlay is an authored matte dielectric.");
+            });
         }
 
         [Test]

@@ -4327,7 +4327,7 @@ void main()
 
     if (reflectionDebugActive)
     {
-        WriteForwardColor(vec4(reflectionDebugColor, 1.0));
+        WriteForwardColor(vec4(reflectionDebugColor, forwardDebugOutputAlpha));
         return;
     }
 
@@ -4665,7 +4665,7 @@ void main()
 #if !FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FINAL_INDIRECT)
     {
-        WriteForwardColor(vec4(finalDiffuseIndirect, 1.0));
+        WriteForwardColor(vec4(finalDiffuseIndirect, forwardDebugOutputAlpha));
         return;
     }
 

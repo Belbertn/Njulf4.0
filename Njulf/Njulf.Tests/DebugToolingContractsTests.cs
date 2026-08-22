@@ -830,6 +830,28 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void ForwardDebugViews_PreserveGeometryDecalCoverage()
+        {
+            string shader = ReadRepoText("Njulf.Shaders", "forward.frag");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    shader,
+                    Does.Contain("WriteForwardColor(vec4(reflectionDebugColor, forwardDebugOutputAlpha));"));
+                Assert.That(
+                    shader,
+                    Does.Contain("WriteForwardColor(vec4(finalDiffuseIndirect, forwardDebugOutputAlpha));"));
+                Assert.That(
+                    shader,
+                    Does.Not.Contain("WriteForwardColor(vec4(reflectionDebugColor, 1.0));"));
+                Assert.That(
+                    shader,
+                    Does.Not.Contain("WriteForwardColor(vec4(finalDiffuseIndirect, 1.0));"));
+            });
+        }
+
+        [Test]
         public void SampleInputController_DebugOverlayShortcutEnablesDebugDrawList()
         {
             string controller = ReadRepoText("NjulfHelloGame", "SampleInputController.cs");
