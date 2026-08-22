@@ -81,23 +81,23 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.Reflections.Enabled, Is.True);
             Assert.That(
                 gi.SimpleDdgiNearFieldResidualMode,
-                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
         });
     }
 
     [Test]
-    public void SponzaPostRolloutPolicy_KeepsC5Disabled()
+    public void SponzaPostRolloutPolicy_KeepsC5Enabled()
     {
         var settings = new RenderSettings();
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            SimpleDdgiNearFieldResidualMode.HiZAdaptive;
+            SimpleDdgiNearFieldResidualMode.Off;
 
         SampleSponzaGlobalIlluminationProfile
             .ConfigurePostAdvancedGiRollout(settings);
 
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
-            Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+            Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
     }
 
     [Test]

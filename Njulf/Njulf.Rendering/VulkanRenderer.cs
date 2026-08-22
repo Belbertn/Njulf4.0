@@ -94,6 +94,7 @@ namespace Njulf.Rendering
         private readonly List<DeferredAsyncSubmission> _deferredAsyncSubmissions = new();
         private readonly AsyncComputeTimingFrame?[] _asyncComputeTimingFrames = new AsyncComputeTimingFrame?[FramesInFlight];
         private readonly bool _ownsDependencies;
+        private readonly RendererStartupLog? _startupLog;
         // Advanced GI may be evaluated only against an explicit frozen
         // prerequisite manifest. It starts empty/fail-closed so a repository
         // build or an extension query can never silently promote research
@@ -1336,7 +1337,8 @@ namespace Njulf.Rendering
             FenceBasedDeleter deleter,
             IModelRenderUploadService modelUploadService,
             bool ownsDependencies,
-            RenderSettings? initialSettings = null)
+            RenderSettings? initialSettings = null,
+            RendererStartupLog? startupLog = null)
         {
             _window = window ?? throw new ArgumentNullException(nameof(window));
             _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -1368,6 +1370,7 @@ namespace Njulf.Rendering
             _gpuParticleRuntimeManager = new GpuParticleRuntimeManager(_context, _bufferManager, _stagingRing);
             _foliageManager = new FoliageManager(_context, _bufferManager, _stagingRing, _meshManager, _materialManager);
             _ownsDependencies = ownsDependencies;
+            _startupLog = startupLog;
         }
 
         private void OnQualityPresetChanging(RenderQualityPreset preset)
@@ -1596,14 +1599,16 @@ namespace Njulf.Rendering
                         SimpleDdgiNearFieldResidualExperimentBudgetBytes);
             }
 
-            // Create pipelines
-            CreatePipelines();
+            RunStartupStep("VulkanRenderer.CreatePipelines", CreatePipelines);
             _captureExecutableHash = ResolvePerformanceCaptureExecutableHash();
             _captureDirtyWorktreeState = ResolvePerformanceCaptureDirtyWorktreeState();
 
-            // Initialize render graph with passes
-            InitializeRenderGraph();
-            _giPipelineCacheService.Persist();
+            RunStartupStep(
+                "VulkanRenderer.InitializeRenderGraph",
+                InitializeRenderGraph);
+            RunStartupStep(
+                "VulkanRenderer.PersistPipelineCache",
+                () => _giPipelineCacheService.Persist());
             _giPipelineCacheService.MarkRenderCriticalFramesStarted();
 
             // Register static buffers in bindless heap
@@ -1619,42 +1624,70 @@ namespace Njulf.Rendering
             System.Diagnostics.Debug.WriteLine("Creating pipelines...");
 
             // Create mesh pipeline for depth prepass and forward pass
-            _meshPipeline = new MeshPipeline(
-                _context,
-                _bindlessHeap,
-                RenderTargetManager.SceneColorFormat,
-                _swapchain.DepthFormat,
-                Settings,
-                _nearFieldDirectSourcePipelineConfiguration,
-                _giCausticReceiverPipelineConfiguration,
-                _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested,
-                _raySceneDescriptorBank);
-            _foliagePipeline = new FoliagePipeline(
-                _context,
-                _bindlessHeap,
-                RenderTargetManager.SceneColorFormat,
-                RenderTargetManager.MotionVectorFormat,
-                _swapchain.DepthFormat,
-                Settings,
-                _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested);
+            RunStartupStep("Pipeline.Create.Mesh", () =>
+            {
+                _meshPipeline = new MeshPipeline(
+                    _context,
+                    _bindlessHeap,
+                    RenderTargetManager.SceneColorFormat,
+                    _swapchain.DepthFormat,
+                    Settings,
+                    _nearFieldDirectSourcePipelineConfiguration,
+                    _giCausticReceiverPipelineConfiguration,
+                    _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested,
+                    _raySceneDescriptorBank,
+                    _giPipelineCacheService,
+                    RunStartupStep);
+            });
+            RunStartupStep("Pipeline.Create.Foliage", () =>
+            {
+                _foliagePipeline = new FoliagePipeline(
+                    _context,
+                    _bindlessHeap,
+                    RenderTargetManager.SceneColorFormat,
+                    RenderTargetManager.MotionVectorFormat,
+                    _swapchain.DepthFormat,
+                    Settings,
+                    _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested);
+            });
 
             // Create compute pipeline for light culling
-            _computePipeline = new ComputePipeline(_context, _bindlessHeap);
+            RunStartupStep(
+                "Pipeline.Create.LightCulling",
+                () => _computePipeline = new ComputePipeline(
+                    _context,
+                    _bindlessHeap));
 
-            _compositePipeline = new CompositePipeline(_context, _bindlessHeap, _swapchain.SurfaceFormat);
-            _ldrCompositePipeline = new CompositePipeline(_context, _bindlessHeap, RenderTargetManager.LdrSceneColorFormat);
-            _weightedOitCompositePipeline = new WeightedOitCompositePipeline(_context, _bindlessHeap, RenderTargetManager.SceneColorFormat);
-            _skyboxPipeline = new SkyboxPipeline(
-                _context,
-                _bindlessHeap,
-                RenderTargetManager.SceneColorFormat,
-                _swapchain.DepthFormat);
-            _particlePipeline = new ParticlePipeline(
-                _context,
-                _bindlessHeap,
-                RenderTargetManager.SceneColorFormat,
-                _swapchain.DepthFormat,
-                _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested);
+            RunStartupStep("Pipeline.Create.Composite", () =>
+            {
+                _compositePipeline = new CompositePipeline(
+                    _context, _bindlessHeap, _swapchain.SurfaceFormat);
+                _ldrCompositePipeline = new CompositePipeline(
+                    _context,
+                    _bindlessHeap,
+                    RenderTargetManager.LdrSceneColorFormat);
+                _weightedOitCompositePipeline = new WeightedOitCompositePipeline(
+                    _context,
+                    _bindlessHeap,
+                    RenderTargetManager.SceneColorFormat);
+            });
+            RunStartupStep("Pipeline.Create.Skybox", () =>
+            {
+                _skyboxPipeline = new SkyboxPipeline(
+                    _context,
+                    _bindlessHeap,
+                    RenderTargetManager.SceneColorFormat,
+                    _swapchain.DepthFormat);
+            });
+            RunStartupStep("Pipeline.Create.Particle", () =>
+            {
+                _particlePipeline = new ParticlePipeline(
+                    _context,
+                    _bindlessHeap,
+                    RenderTargetManager.SceneColorFormat,
+                    _swapchain.DepthFormat,
+                    _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested);
+            });
             _skinningPass = new SkinningPass(_context, _bindlessHeap, _bufferManager, _skinningManager);
             _ddgiFoliageProxyGenerationPass =
                 new DdgiFoliageProxyGenerationPass(
@@ -1973,9 +2006,15 @@ namespace Njulf.Rendering
                 _reflectionProbeManager!,
                 Settings.Reflections,
                 _reflectionProbeCompletionValues);
-            _reflectionProbeCapturePass.Initialize();
-            _reflectionProbePrefilterPass.Initialize();
-            _reflectionProbePublishPass.Initialize();
+            RunStartupStep(
+                "RenderPass.Initialize.ReflectionProbeCapturePass",
+                _reflectionProbeCapturePass.Initialize);
+            RunStartupStep(
+                "RenderPass.Initialize.ReflectionProbePrefilterPass",
+                _reflectionProbePrefilterPass.Initialize);
+            RunStartupStep(
+                "RenderPass.Initialize.ReflectionProbePublishPass",
+                _reflectionProbePublishPass.Initialize);
 
             var farFieldClipmapBakePass = new FarFieldClipmapBakePass(
                 _context,
@@ -2233,8 +2272,30 @@ namespace Njulf.Rendering
                 _renderGraph.PassNames,
                 _advancedGiGraphModes);
 
-            _renderGraph.Initialize();
+            _renderGraph.Initialize(RunStartupStep);
             System.Diagnostics.Debug.WriteLine("Render graph initialized.");
+        }
+
+        private void RunStartupStep(string name, Action action)
+        {
+            ArgumentNullException.ThrowIfNull(action);
+            if (_startupLog?.Path == null)
+            {
+                action();
+                return;
+            }
+
+            _startupLog.StepStarted(name);
+            try
+            {
+                action();
+                _startupLog.StepSucceeded(name);
+            }
+            catch (Exception ex)
+            {
+                _startupLog.StepFailed(name, ex);
+                throw;
+            }
         }
 
         private void RegisterGraphResources()

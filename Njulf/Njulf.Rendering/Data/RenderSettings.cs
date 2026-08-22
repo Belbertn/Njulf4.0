@@ -4689,9 +4689,17 @@ namespace Njulf.Rendering.Data
         public bool SuppressForwardGiGatherForBenchmark { get; set; }
 
         /// <summary>
+        /// Capture-only performance switch that forces the approximate
+        /// screen-space DDGI receiver cache even when the active quality tier
+        /// normally requires the exact per-fragment gather. Normal rendering
+        /// and every quality preset leave this false.
+        /// </summary>
+        public bool ForceForwardGiReceiverCacheForBenchmark { get; set; }
+
+        /// <summary>
         /// Capture-only quality oracle switch. It keeps DDGI enabled but
-        /// bypasses the production screen-space receiver cache so a settled
-        /// frame can be compared against the exact per-fragment gather.
+        /// bypasses the screen-space receiver cache so a settled frame can be
+        /// compared against the exact per-fragment gather.
         /// Normal rendering and every quality preset leave this false.
         /// </summary>
         public bool ForceExactForwardGiGatherForBenchmark { get; set; }

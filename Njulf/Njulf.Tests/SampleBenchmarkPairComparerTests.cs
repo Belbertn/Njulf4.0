@@ -653,6 +653,9 @@ public sealed class SampleBenchmarkPairComparerTests
         Assert.That(
             settings.Diagnostics.SuppressForwardGiGatherForBenchmark,
             Is.False);
+        Assert.That(
+            settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark,
+            Is.True);
 
         SampleBenchmarkCaptureVariant.Apply(
             settings,
@@ -665,6 +668,9 @@ public sealed class SampleBenchmarkPairComparerTests
             Assert.That(
                 settings.Diagnostics.SuppressForwardGiGatherForBenchmark,
                 Is.False);
+            Assert.That(
+                settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark,
+                Is.False);
         });
         SampleBenchmarkCaptureVariant.Apply(
             settings,
@@ -672,6 +678,9 @@ public sealed class SampleBenchmarkPairComparerTests
         Assert.That(
             settings.Diagnostics.ForceExactForwardGiGatherForBenchmark,
             Is.False);
+        Assert.That(
+            settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark,
+            Is.True);
     }
 
     private static SampleBenchmarkReport CreateReport(

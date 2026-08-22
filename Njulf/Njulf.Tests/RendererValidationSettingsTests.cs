@@ -7,6 +7,24 @@ namespace Njulf.Tests;
 public sealed class RendererValidationSettingsTests
 {
     [Test]
+    public void BuildTierDefaultsToExpectedValidationMode()
+    {
+#if DEBUG || NJULF_DEVELOPMENT
+        const RendererValidationMode expectedMode = RendererValidationMode.Standard;
+#else
+        const RendererValidationMode expectedMode = RendererValidationMode.Off;
+#endif
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RendererValidationSettings.Default.Mode, Is.EqualTo(expectedMode));
+            Assert.That(
+                Microsoft.Extensions.DependencyInjection.RenderingOptions.DefaultEnableValidation,
+                Is.EqualTo(expectedMode != RendererValidationMode.Off));
+        });
+    }
+
+    [Test]
     public void DebugUtilsAndLabelsRemainEnabledWhenValidationIsOff()
     {
         RendererValidationSettings settings = RendererValidationSettings.Default with

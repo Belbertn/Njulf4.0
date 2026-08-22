@@ -158,8 +158,10 @@ internal static class GiPipelineCacheFileCodec
 }
 
 /// <summary>
-/// Renderer-owned Vulkan pipeline cache shared by every admitted GI pipeline.
-/// It owns the cache object; passes only borrow <see cref="Cache"/>.
+/// Renderer-owned Vulkan pipeline cache shared by mesh and admitted GI
+/// pipelines. It owns the cache object; pipeline owners only borrow
+/// <see cref="Cache"/>. The historical type name is retained for diagnostics
+/// and capture-schema compatibility.
 /// </summary>
 public sealed unsafe class GiPipelineCacheService : IDisposable
 {
@@ -191,13 +193,18 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _identity = CreateIdentity(context, shaderBundleHash);
-        string root = string.IsNullOrWhiteSpace(cacheDirectory)
+        string? configuredCacheDirectory =
+            string.IsNullOrWhiteSpace(cacheDirectory)
+                ? Environment.GetEnvironmentVariable(
+                    "NJULF_VULKAN_PIPELINE_CACHE_DIRECTORY")
+                : cacheDirectory;
+        string root = string.IsNullOrWhiteSpace(configuredCacheDirectory)
             ? Path.Combine(
                 Environment.GetFolderPath(
                     Environment.SpecialFolder.LocalApplicationData),
                 "Njulf",
                 "PipelineCaches")
-            : Path.GetFullPath(cacheDirectory);
+            : Path.GetFullPath(configuredCacheDirectory);
         _cachePath = Path.Combine(
             root,
             $"gi-{_identity.VendorId:x8}-{_identity.DeviceId:x8}.njvkcache");
@@ -218,7 +225,7 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         _context.SetDebugName(
             _cache.Handle,
             ObjectType.PipelineCache,
-            "Persistent Shared GI Pipeline Cache");
+            "Persistent Shared Renderer Pipeline Cache");
     }
 
     public PipelineCache Cache

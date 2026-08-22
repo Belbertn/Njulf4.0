@@ -25,6 +25,7 @@ EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
+		Development|Any CPU = Development|Any CPU
 		DetailedInvestigation|Any CPU = DetailedInvestigation|Any CPU
 		ProfileSymbols|Any CPU = ProfileSymbols|Any CPU
 		Release|Any CPU = Release|Any CPU
@@ -33,6 +34,8 @@ Global
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{06E3D47A-6425-466E-AD2B-E6768AC13ABB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{06E3D47A-6425-466E-AD2B-E6768AC13ABB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{06E3D47A-6425-466E-AD2B-E6768AC13ABB}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{06E3D47A-6425-466E-AD2B-E6768AC13ABB}.Development|Any CPU.Build.0 = Development|Any CPU
 		{06E3D47A-6425-466E-AD2B-E6768AC13ABB}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{06E3D47A-6425-466E-AD2B-E6768AC13ABB}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{06E3D47A-6425-466E-AD2B-E6768AC13ABB}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
@@ -43,6 +46,8 @@ Global
 		{06E3D47A-6425-466E-AD2B-E6768AC13ABB}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 		{DFBDD398-12F9-4C45-AB1B-E6A8270D63EF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{DFBDD398-12F9-4C45-AB1B-E6A8270D63EF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DFBDD398-12F9-4C45-AB1B-E6A8270D63EF}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{DFBDD398-12F9-4C45-AB1B-E6A8270D63EF}.Development|Any CPU.Build.0 = Development|Any CPU
 		{DFBDD398-12F9-4C45-AB1B-E6A8270D63EF}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{DFBDD398-12F9-4C45-AB1B-E6A8270D63EF}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{DFBDD398-12F9-4C45-AB1B-E6A8270D63EF}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
@@ -53,6 +58,8 @@ Global
 		{DFBDD398-12F9-4C45-AB1B-E6A8270D63EF}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 		{FA1E8125-475A-48EF-AB2C-E0C463C2F141}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{FA1E8125-475A-48EF-AB2C-E0C463C2F141}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FA1E8125-475A-48EF-AB2C-E0C463C2F141}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{FA1E8125-475A-48EF-AB2C-E0C463C2F141}.Development|Any CPU.Build.0 = Development|Any CPU
 		{FA1E8125-475A-48EF-AB2C-E0C463C2F141}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{FA1E8125-475A-48EF-AB2C-E0C463C2F141}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{FA1E8125-475A-48EF-AB2C-E0C463C2F141}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
@@ -63,6 +70,8 @@ Global
 		{FA1E8125-475A-48EF-AB2C-E0C463C2F141}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 		{20CD24D6-6840-46D0-9639-B0EDFD2AA4A6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{20CD24D6-6840-46D0-9639-B0EDFD2AA4A6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{20CD24D6-6840-46D0-9639-B0EDFD2AA4A6}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{20CD24D6-6840-46D0-9639-B0EDFD2AA4A6}.Development|Any CPU.Build.0 = Development|Any CPU
 		{20CD24D6-6840-46D0-9639-B0EDFD2AA4A6}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{20CD24D6-6840-46D0-9639-B0EDFD2AA4A6}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{20CD24D6-6840-46D0-9639-B0EDFD2AA4A6}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
@@ -73,6 +82,8 @@ Global
 		{20CD24D6-6840-46D0-9639-B0EDFD2AA4A6}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 		{5D707867-6DC6-4791-8A71-843A48A175D2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{5D707867-6DC6-4791-8A71-843A48A175D2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5D707867-6DC6-4791-8A71-843A48A175D2}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{5D707867-6DC6-4791-8A71-843A48A175D2}.Development|Any CPU.Build.0 = Development|Any CPU
 		{5D707867-6DC6-4791-8A71-843A48A175D2}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{5D707867-6DC6-4791-8A71-843A48A175D2}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{5D707867-6DC6-4791-8A71-843A48A175D2}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
@@ -83,6 +94,8 @@ Global
 		{5D707867-6DC6-4791-8A71-843A48A175D2}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 		{8E79C541-76B2-4ED4-9401-43D260F2EDB1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{8E79C541-76B2-4ED4-9401-43D260F2EDB1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8E79C541-76B2-4ED4-9401-43D260F2EDB1}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{8E79C541-76B2-4ED4-9401-43D260F2EDB1}.Development|Any CPU.Build.0 = Development|Any CPU
 		{8E79C541-76B2-4ED4-9401-43D260F2EDB1}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{8E79C541-76B2-4ED4-9401-43D260F2EDB1}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{8E79C541-76B2-4ED4-9401-43D260F2EDB1}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
@@ -93,6 +106,8 @@ Global
 		{8E79C541-76B2-4ED4-9401-43D260F2EDB1}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 		{14C23986-6CD5-4FCA-8924-F3906C596D07}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{14C23986-6CD5-4FCA-8924-F3906C596D07}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{14C23986-6CD5-4FCA-8924-F3906C596D07}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{14C23986-6CD5-4FCA-8924-F3906C596D07}.Development|Any CPU.Build.0 = Development|Any CPU
 		{14C23986-6CD5-4FCA-8924-F3906C596D07}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{14C23986-6CD5-4FCA-8924-F3906C596D07}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{14C23986-6CD5-4FCA-8924-F3906C596D07}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
@@ -103,6 +118,8 @@ Global
 		{14C23986-6CD5-4FCA-8924-F3906C596D07}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 		{2BA875E4-2405-47E2-B107-A08C66790DC4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{2BA875E4-2405-47E2-B107-A08C66790DC4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2BA875E4-2405-47E2-B107-A08C66790DC4}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{2BA875E4-2405-47E2-B107-A08C66790DC4}.Development|Any CPU.Build.0 = Development|Any CPU
 		{2BA875E4-2405-47E2-B107-A08C66790DC4}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{2BA875E4-2405-47E2-B107-A08C66790DC4}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{2BA875E4-2405-47E2-B107-A08C66790DC4}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
@@ -113,6 +130,8 @@ Global
 		{2BA875E4-2405-47E2-B107-A08C66790DC4}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.Development|Any CPU.Build.0 = Development|Any CPU
 		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
@@ -123,6 +142,8 @@ Global
 		{C46B67C7-AB75-4A1B-A1D1-51A895D3E6CF}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.Development|Any CPU.Build.0 = Development|Any CPU
 		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU
@@ -133,6 +154,8 @@ Global
 		{0C89C19B-C7A4-4AB0-B652-FA2330B4DA2A}.ShippingPerformance|Any CPU.Build.0 = ShippingPerformance|Any CPU
 		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.Development|Any CPU.ActiveCfg = Development|Any CPU
+		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.Development|Any CPU.Build.0 = Development|Any CPU
 		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.DetailedInvestigation|Any CPU.ActiveCfg = DetailedInvestigation|Any CPU
 		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.DetailedInvestigation|Any CPU.Build.0 = DetailedInvestigation|Any CPU
 		{F5B8F181-4D90-4C0C-B2D4-A0C2B11F8827}.ProfileSymbols|Any CPU.ActiveCfg = ProfileSymbols|Any CPU

@@ -493,11 +493,22 @@ namespace Njulf.Rendering.Pipeline
             System.Diagnostics.Debug.WriteLine($"Render pass added: {pass.Name}");
         }
         
-        public void Initialize()
+        public void Initialize(Action<string, Action>? runStartupStep = null)
         {
             ValidateResourceDeclarations();
             foreach (var pass in _passes)
-                pass.Initialize();
+            {
+                if (runStartupStep == null)
+                {
+                    pass.Initialize();
+                }
+                else
+                {
+                    runStartupStep(
+                        $"RenderPass.Initialize.{pass.Name}",
+                        pass.Initialize);
+                }
+            }
         }
 
         public void ValidateResourceDeclarations()

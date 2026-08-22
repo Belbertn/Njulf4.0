@@ -69,14 +69,14 @@ public static class SampleSponzaGlobalIlluminationProfile
     }
 
     /// <summary>
-    /// Keeps the production Sponza image on the qualified DDGI-only baseline.
+    /// Reasserts the adaptive C5 SSGI residual after global rollout changes.
     /// Explicit experiment/CLI overrides are applied after this hook.
     /// </summary>
     public static void ConfigurePostAdvancedGiRollout(RenderSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            SimpleDdgiNearFieldResidualMode.Off;
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive;
     }
 
     /// <summary>

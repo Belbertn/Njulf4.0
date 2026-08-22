@@ -7,6 +7,40 @@ namespace Njulf.Tests;
 [NonParallelizable]
 public sealed class CookedRuntimePolicyTests
 {
+    [Test]
+    public void SourceFallback_DefaultMatchesBuildTierAndExplicitOverrideWins()
+    {
+        string? previous = Environment.GetEnvironmentVariable(
+            CookedRuntimePolicy.AllowSourceFallbackVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                CookedRuntimePolicy.AllowSourceFallbackVariable,
+                null);
+#if NJULF_DEVELOPMENT
+            Assert.That(CookedRuntimePolicy.AllowSourceFallback, Is.True);
+#else
+            Assert.That(CookedRuntimePolicy.AllowSourceFallback, Is.False);
+#endif
+
+            Environment.SetEnvironmentVariable(
+                CookedRuntimePolicy.AllowSourceFallbackVariable,
+                "false");
+            Assert.That(CookedRuntimePolicy.AllowSourceFallback, Is.False);
+
+            Environment.SetEnvironmentVariable(
+                CookedRuntimePolicy.AllowSourceFallbackVariable,
+                "true");
+            Assert.That(CookedRuntimePolicy.AllowSourceFallback, Is.True);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                CookedRuntimePolicy.AllowSourceFallbackVariable,
+                previous);
+        }
+    }
+
     [TestCase(CookedRuntimePolicy.AllowSourceFallbackVariable)]
     [TestCase(CookedRuntimePolicy.StrictVariable)]
     [TestCase(CookedRuntimePolicy.RequireSignatureVariable)]

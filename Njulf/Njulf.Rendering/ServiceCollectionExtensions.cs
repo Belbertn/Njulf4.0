@@ -241,7 +241,7 @@ namespace Microsoft.Extensions.DependencyInjection
         public Action<VulkanRenderer>? ConfigureAdvancedGiEvidence { get; set; }
 
         public static bool DefaultEnableValidation { get; } =
-#if DEBUG
+#if DEBUG || NJULF_DEVELOPMENT
             true;
 #else
             false;
@@ -404,7 +404,8 @@ namespace Microsoft.Extensions.DependencyInjection
                     provider.GetRequiredService<FenceBasedDeleter>(),
                     provider.GetRequiredService<IModelRenderUploadService>(),
                     ownsDependencies: false,
-                    initialSettings: renderingOptions.InitialSettings);
+                    initialSettings: renderingOptions.InitialSettings,
+                    startupLog: startupLog);
 
                 ConfigureAdvancedGiStartup(
                     renderer,

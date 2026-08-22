@@ -1,6 +1,6 @@
 # Cooked asset pipeline
 
-Njulf resolves versioned, hashed cooked packages before source models. Cooked startup bypasses SharpGLTF/Assimp import, source-image decoding, runtime downscaling, GPU vertex construction, and runtime meshlet generation. Source fallback is disabled by default and is an explicit editor/development opt-in.
+Njulf resolves versioned, hashed cooked packages before source models. Cooked startup bypasses SharpGLTF/Assimp import, source-image decoding, runtime downscaling, GPU vertex construction, and runtime meshlet generation. The `Development` build falls back to source import when a package is missing or stale; other configurations remain cooked-only by default.
 
 ## Cook assets
 
@@ -81,9 +81,9 @@ ordinary mipmaps.
 
 ## Runtime policy
 
-`ContentManager.Load<Model>` probes `Cooked/<current-rid>/models/<source-name>.njmodel`, then the legacy non-RID layout for migration compatibility. Normal runtime policy is cooked-only and strict.
+`ContentManager.Load<Model>` probes `Cooked/<current-rid>/models/<source-name>.njmodel`, then the legacy non-RID layout for migration compatibility. Validation remains strict in every configuration. `Development` permits source fallback by default so the editor remains usable when source assets are newer than their cooked packages; all other configurations default to cooked-only.
 
-- `NJULF_ALLOW_SOURCE_ASSET_RUNTIME_LOAD=true` explicitly enables editor/development source import.
+- `NJULF_ALLOW_SOURCE_ASSET_RUNTIME_LOAD=true|false` explicitly overrides the build default for source import.
 - `NJULF_COOKED_ASSET_STRICT=false` relaxes whole-file/source validation for diagnosis only.
 - `NJULF_COOKED_ASSET_REQUIRE_SIGNATURE=true` enables detached-signature enforcement for shipping deployments.
 - `NJULF_COOKED_ASSET_PUBLIC_KEY=<path-or-PEM>` supplies the trusted ECDSA public key.

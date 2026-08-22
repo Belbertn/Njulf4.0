@@ -44,11 +44,9 @@ internal static class SampleBistroGlobalIlluminationProfile
         // without another gather, texture read, or dispatch.
         gi.SimpleDdgiRoughSpecularMinimumRoughness = 1.0f;
         gi.SimpleDdgiRoughSpecularFullWeightRoughness = 1.0f;
-        // Establish DDGI as the sole diffuse-indirect owner while its quality
-        // baseline is being qualified. C5 currently changes the Bistro/Sponza
-        // image by less than one display code value while paying for motion
-        // vectors and a full residual pass. Keep the explicit experiment/CLI
-        // override available, but do not spend that cost in production.
+        // Keep C5's adaptive screen-space residual enabled. DDGI owns stable
+        // low-frequency and off-screen transport while C5 restores nearby
+        // emissive and direct-lit bounce that a probe lattice cannot retain.
         ConfigurePostAdvancedGiRollout(settings);
         // Keep the steady-state tier unchanged. During an actual lighting
         // transition, spend the already-bounded urgent lane on the full set of
@@ -81,7 +79,7 @@ internal static class SampleBistroGlobalIlluminationProfile
     {
         ArgumentNullException.ThrowIfNull(settings);
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            SimpleDdgiNearFieldResidualMode.Off;
+            SimpleDdgiNearFieldResidualMode.HiZAdaptive;
     }
 
     private static void ConfigureEnvironment(EnvironmentSettings environment)

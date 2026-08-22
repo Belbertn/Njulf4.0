@@ -40,7 +40,7 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
             Assert.That(gi.SimpleDdgiRoughSpecularFullWeightRoughness, Is.EqualTo(1.0f));
             Assert.That(
                 gi.SimpleDdgiNearFieldResidualMode,
-                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
             Assert.That(gi.SimpleDdgiTransportSolverRelaxation, Is.EqualTo(0.90f));
             Assert.That(gi.SimpleDdgiAuthoredVolumes, Is.Empty);
             Assert.That(gi.SimpleDdgiRefinementBricksEnabled, Is.False);
@@ -90,17 +90,17 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
     }
 
     [Test]
-    public void PostRolloutPolicy_KeepsC5Disabled()
+    public void PostRolloutPolicy_KeepsC5Enabled()
     {
         var settings = new RenderSettings();
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            SimpleDdgiNearFieldResidualMode.HiZAdaptive;
+            SimpleDdgiNearFieldResidualMode.Off;
 
         SampleBistroGlobalIlluminationProfile
             .ConfigurePostAdvancedGiRollout(settings);
 
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
-            Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+            Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
     }
 }

@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <Configurations>Debug;Release;ShippingPerformance;ProfileSymbols;DetailedInvestigation</Configurations>
+    <Configurations>Debug;Development;Release;ShippingPerformance;ProfileSymbols;DetailedInvestigation</Configurations>
     <!-- GpuMemoryAllocator.vma ships an unused macos-arm64 asset. Njulf does not target macOS. -->
     <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
 
@@ -14,11 +14,19 @@
       Condition="'$(RestoreLockedMode)' == '' and ('$(Configuration)' == 'Release' or '$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation' or '$(ContinuousIntegrationBuild)' == 'true')">true</RestoreLockedMode>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation'">
+  <!-- Development is the productive editor configuration: optimized managed
+       code and shaders, managed symbols, and lightweight runtime validation.
+       Expensive GPU investigation counters remain exclusive to Debug and
+       DetailedInvestigation. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Development' or '$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation'">
     <Optimize>true</Optimize>
     <DebugType>portable</DebugType>
     <DebugSymbols>true</DebugSymbols>
     <DefineConstants>$(DefineConstants);TRACE;RELEASE</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Development'">
+    <DefineConstants>$(DefineConstants);NJULF_DEVELOPMENT</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'ShippingPerformance'">

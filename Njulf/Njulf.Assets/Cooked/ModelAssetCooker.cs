@@ -949,13 +949,7 @@ public sealed class ModelAssetCooker : IDisposable
             cancellationToken);
         folderProgress.Report(new AssetCookProgressEvent(
             AssetCookProgressEventKind.DiscoveryStarted));
-        string[] sources = Directory.EnumerateFiles(
-                sourceFolder,
-                "*",
-                SearchOption.AllDirectories)
-            .Where(path => SupportedExtensions.Contains(Path.GetExtension(path)))
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        string[] sources = DiscoverFolderSources(sourceFolder);
         folderProgress.Report(new AssetCookProgressEvent(
             AssetCookProgressEventKind.DiscoveryCompleted)
         {
@@ -1001,6 +995,29 @@ public sealed class ModelAssetCooker : IDisposable
         }
 
         return results;
+    }
+
+    internal static string[] DiscoverFolderSources(string sourceFolder)
+    {
+        sourceFolder = Path.GetFullPath(sourceFolder);
+        return Directory.EnumerateFiles(
+                sourceFolder,
+                "*",
+                SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutputPath(sourceFolder, path))
+            .Where(path => SupportedExtensions.Contains(Path.GetExtension(path)))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool IsBuildOutputPath(string sourceFolder, string path)
+    {
+        string relativePath = Path.GetRelativePath(sourceFolder, path);
+        return relativePath
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(part =>
+                string.Equals(part, "bin", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(part, "obj", StringComparison.OrdinalIgnoreCase));
     }
 
     private IReadOnlyList<AssetCookResult> CookFolderParallel(

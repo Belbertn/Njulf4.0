@@ -34,7 +34,7 @@ public sealed record RendererValidationSettings(
         : RendererValidationFeatureSelection.None;
 
     public static RendererValidationSettings Default { get; } = new(
-#if DEBUG
+#if DEBUG || NJULF_DEVELOPMENT
         RendererValidationMode.Standard,
 #else
         RendererValidationMode.Off,

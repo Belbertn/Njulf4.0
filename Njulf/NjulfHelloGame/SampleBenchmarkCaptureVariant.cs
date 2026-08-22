@@ -44,6 +44,7 @@ public static class SampleBenchmarkCaptureVariant
         settings.Decals.IsolatedMaterialIndex = -1;
         settings.GlobalIllumination.SimpleDdgiForceLegacyFarFieldFallbackEvaluation = false;
         settings.Diagnostics.SuppressForwardGiGatherForBenchmark = false;
+        settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark = false;
         settings.Diagnostics.ForceExactForwardGiGatherForBenchmark = false;
         settings.Shadows.ForceStaticCascadeCacheRefresh = false;
 
@@ -75,6 +76,7 @@ public static class SampleBenchmarkCaptureVariant
                     normalized == TailAccelerated;
                 return normalized;
             case ForwardGiEnabled:
+                settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark = true;
                 return normalized;
             case ForwardGiExact:
                 settings.Diagnostics.ForceExactForwardGiGatherForBenchmark = true;

@@ -6,11 +6,19 @@ public static class CookedRuntimePolicy
     public const string StrictVariable = "NJULF_COOKED_ASSET_STRICT";
     public const string RequireSignatureVariable = "NJULF_COOKED_ASSET_REQUIRE_SIGNATURE";
 
-    public static bool AllowSourceFallback => IsEnvironmentEnabled(AllowSourceFallbackVariable, defaultValue: false);
+    public static bool AllowSourceFallback => IsEnvironmentEnabled(
+        AllowSourceFallbackVariable,
+        defaultValue: DefaultAllowSourceFallback);
     public static bool Strict => IsEnvironmentEnabled(StrictVariable, defaultValue: true);
     public static bool RequireSignature => IsEnvironmentEnabled(RequireSignatureVariable, DefaultRequireSignature);
 
     private const bool DefaultRequireSignature = false;
+
+#if NJULF_DEVELOPMENT
+    private const bool DefaultAllowSourceFallback = true;
+#else
+    private const bool DefaultAllowSourceFallback = false;
+#endif
 
     public static CookedAssetReaderFlags ReaderFlags
     {

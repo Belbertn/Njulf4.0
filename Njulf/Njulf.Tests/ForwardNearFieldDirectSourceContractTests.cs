@@ -174,7 +174,7 @@ public sealed class ForwardNearFieldDirectSourceContractTests
             Assert.That(forwardPass,
                 Does.Contain("TryValidateAttachmentBinding"));
             Assert.That(forwardPass,
-                Does.Contain("receiverCacheEligible = !giCausticReceiverEnabled"));
+                Does.Contain("receiverCacheEligible = ShouldConsumeSimpleDdgiReceiverCache("));
             Assert.That(forwardPass,
                 Does.Contain("receiverCacheEnabled,"));
             Assert.That(forwardPass,

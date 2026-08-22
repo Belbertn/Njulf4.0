@@ -944,18 +944,14 @@ internal sealed class HelloGame : Game
         }
         if (_smokeOptions.SceneKind == SampleSceneKind.Bistro)
         {
-            // C5 admission allocates immutable startup resources and cannot be
-            // undone by the ordinary post-device scene profile. Establish the
-            // measured Bistro policy before renderer construction. Explicit
-            // smoke/CLI overrides below retain final authority.
+            // C5 admission allocates immutable startup resources. Establish
+            // the scene's enabled policy before renderer construction;
+            // explicit smoke/CLI overrides below retain final authority.
             SampleBistroGlobalIlluminationProfile
                 .ConfigurePostAdvancedGiRollout(settings);
         }
         else if (_smokeOptions.SceneKind == SampleSceneKind.SponzaPlaza)
         {
-            // Sponza uses the same DDGI-only presentation baseline. Apply it
-            // before renderer construction so C5's immutable resources are
-            // not allocated merely to leave its pass disabled at runtime.
             SampleSponzaGlobalIlluminationProfile
                 .ConfigurePostAdvancedGiRollout(settings);
         }
@@ -2006,10 +2002,9 @@ internal sealed class HelloGame : Game
         _materialGiRolloutBootstrap.Apply(settings, Console.Out);
         if (_sceneKind == SampleSceneKind.Bistro)
         {
-            // The global rollout may admit C5 after the scene profile. Bistro's
-            // measured post-rollout policy removes that visually neutral cost;
-            // ApplySmokeRenderSettings runs after this method so an explicit
-            // command-line experiment can still opt it back in.
+            // Keep the scene aligned with the engine-wide C5-on default after
+            // rollout mutation. ApplySmokeRenderSettings runs after this, so
+            // an explicit command-line Off remains authoritative.
             SampleBistroGlobalIlluminationProfile
                 .ConfigurePostAdvancedGiRollout(settings);
         }

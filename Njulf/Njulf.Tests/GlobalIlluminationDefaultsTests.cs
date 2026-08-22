@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
@@ -9,6 +10,30 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class GlobalIlluminationDefaultsTests
 {
+    [TestCase(RenderQualityPreset.Low, true)]
+    [TestCase(RenderQualityPreset.Medium, true)]
+    [TestCase(RenderQualityPreset.High, false)]
+    [TestCase(RenderQualityPreset.Ultra, false)]
+    [TestCase(RenderQualityPreset.DdgiHigh, false)]
+    public void HighQualityPresets_UseExactPerFragmentDdgiReceivers(
+        RenderQualityPreset preset,
+        bool expectedCacheConsumption)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                ForwardPlusPass.ShouldConsumeSimpleDdgiReceiverCache(
+                    preset,
+                    forceForBenchmark: false),
+                Is.EqualTo(expectedCacheConsumption));
+            Assert.That(
+                ForwardPlusPass.ShouldConsumeSimpleDdgiReceiverCache(
+                    preset,
+                    forceForBenchmark: true),
+                Is.True);
+        });
+    }
+
     [Test]
     public void DdgiHigh_EmissiveBudgetCoversAuthenticatedSponzaPopulation()
     {

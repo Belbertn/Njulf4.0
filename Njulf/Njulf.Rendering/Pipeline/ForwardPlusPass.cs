@@ -25,12 +25,11 @@ namespace Njulf.Rendering.Pipeline
     /// </summary>
     public sealed unsafe class ForwardPlusPass : RenderPassBase
     {
-        // DDGI irradiance is deliberately low frequency. One exact gather per
-        // 12x12 block is published as a compact gather lattice. Compute performs
-        // centered bilinear reconstruction into one FP16 value per 2x2 screen
-        // block so a fragment quad shares one cache address. The gather
-        // producer scans the whole block for covered reverse-Z depth, so this
-        // is not a blind center downsample.
+        // The low-cost receiver accelerator evaluates one exact gather per
+        // 12x12 block, then reconstructs one FP16 value per 2x2 screen block.
+        // That approximation is reserved for lower quality tiers: it cannot
+        // preserve the fragment normal/material signal required by High,
+        // DDGI High, or Ultra. Those tiers use the exact forward gather.
         internal const uint SimpleDdgiReceiverGatherScale =
             SimpleDdgiReceiverFeedbackCaptureSourceAbi.SurfaceTileScale;
         internal const uint SimpleDdgiReceiverCacheScale = 2u;
@@ -730,10 +729,15 @@ namespace Njulf.Rendering.Pipeline
                     renderExtent,
                     materialTransportProvenanceEnabled);
             // C5 adds producer MRTs but does not change SceneColor ownership.
-            // Keep the stable receiver-cache path active for C5-only frames.
-            // C4/combined variants retain their exact fallback until they gain
-            // an independently qualified cache-required shader family.
-            bool receiverCacheEligible = !giCausticReceiverEnabled &&
+            // High-quality tiers deliberately keep exact per-fragment DDGI:
+            // the coarse cache has only depth and cannot retain normal/material
+            // discontinuities. B1 may still request this gather independently
+            // for scheduler feedback without making it a color source.
+            bool receiverCacheEligible = ShouldConsumeSimpleDdgiReceiverCache(
+                    _settings.QualityPreset,
+                    _settings.Diagnostics
+                        .ForceForwardGiReceiverCacheForBenchmark) &&
+                !giCausticReceiverEnabled &&
                 receiverGatherDispatchable;
             // B1 owns an exact opaque receiver producer in this compute
             // gather. C4/C5 attachment output changes how Forward+ consumes
@@ -1336,9 +1340,10 @@ namespace Njulf.Rendering.Pipeline
             _forwardGiDisabledBenchmarkPipelineUsedForCurrentView |=
                 disabledBenchmarkPipeline;
             _forwardGiExactGatherUsedForCurrentView |=
-                _settings.Diagnostics.ForceExactForwardGiGatherForBenchmark &&
                 !disabledBenchmarkPipeline &&
-                !receiverCacheEnabled;
+                !receiverCacheEnabled &&
+                sceneData.SimpleDdgiActive != 0 &&
+                ShouldApplyGlobalIllumination(sceneData);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
 
             var pushConstants = new Data.GPUForwardPushConstants
@@ -1593,9 +1598,10 @@ namespace Njulf.Rendering.Pipeline
             _forwardGiDisabledBenchmarkPipelineUsedForCurrentView |=
                 disabledBenchmarkPipeline;
             _forwardGiExactGatherUsedForCurrentView |=
-                _settings.Diagnostics.ForceExactForwardGiGatherForBenchmark &&
                 !disabledBenchmarkPipeline &&
-                !receiverCacheEnabled;
+                !receiverCacheEnabled &&
+                sceneData.SimpleDdgiActive != 0 &&
+                ShouldApplyGlobalIllumination(sceneData);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
 
             var pushConstants = new Data.GPUForwardPushConstants
@@ -2050,9 +2056,26 @@ namespace Njulf.Rendering.Pipeline
         private bool ShouldUseSimpleDdgiReceiverCacheForDraw()
         {
             return _simpleDdgiReceiverCacheAvailableForCurrentView &&
+                   ShouldConsumeSimpleDdgiReceiverCache(
+                       _settings.QualityPreset,
+                       _settings.Diagnostics
+                           .ForceForwardGiReceiverCacheForBenchmark) &&
                    !_settings.Diagnostics.ForceExactForwardGiGatherForBenchmark &&
                    !_recordingReflectionCapture &&
                    !ShouldWriteMaterialTransportProvenance();
+        }
+
+        internal static bool ShouldConsumeSimpleDdgiReceiverCache(
+            RenderQualityPreset qualityPreset,
+            bool forceForBenchmark)
+        {
+            // The cache samples a depth-derived representative once per 12x12
+            // tile and therefore cannot meet high-tier surface-detail quality.
+            // Keep it available for explicitly lower-cost presets and for the
+            // existing controlled cache-vs-exact benchmark pair.
+            return forceForBenchmark ||
+                   qualityPreset is RenderQualityPreset.Low or
+                       RenderQualityPreset.Medium;
         }
 
         internal bool CanConsumeSimpleDdgiReceiverCacheForCurrentView =>

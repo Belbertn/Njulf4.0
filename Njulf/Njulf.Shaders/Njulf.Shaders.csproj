@@ -545,7 +545,7 @@
     </ItemGroup>
 
     <PropertyGroup>
-      <NjulfShaderOptimizationOptions Condition="'$(Configuration)' == 'Release' or '$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation'">-Os</NjulfShaderOptimizationOptions>
+      <NjulfShaderOptimizationOptions Condition="'$(Configuration)' == 'Development' or '$(Configuration)' == 'Release' or '$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation'">-Os</NjulfShaderOptimizationOptions>
       <NjulfShaderDebugInformation Condition="'$(NJULF_SHADER_PROFILE)' == '1'">true</NjulfShaderDebugInformation>
       <NjulfShaderDebugOptions Condition="'$(NjulfShaderDebugInformation)' == 'true'">-gVS</NjulfShaderDebugOptions>
       <NjulfShaderDetailedDiagnosticsOptions>-DNJULF_DDGI_DETAILED_COUNTERS=0</NjulfShaderDetailedDiagnosticsOptions>
