@@ -8569,6 +8569,7 @@ namespace Njulf.Rendering
                 ScreenshotRequested = _screenshotCaptureService.PendingCount > 0 ? 1 : 0,
                 ScreenshotPendingCount = _screenshotCaptureService.PendingCount,
                 ScreenshotCompletedCount = _screenshotCaptureService.CompletedCount,
+                TemporalSampleIndex = sceneData.TemporalSampleIndex,
                 LastScreenshotPath = _screenshotCaptureService.LastScreenshotPath,
                 LastScreenshotError = _screenshotCaptureService.LastScreenshotError,
                 RenderDocAvailable = _renderDocCaptureService.IsAvailable ? 1 : 0,

@@ -38,6 +38,12 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_SPONZA_GI_CAPTURE_DIR", null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_SPONZA_TEMPORAL_CAPTURE_DIR",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_SPONZA_TEMPORAL_ANALYZE_DIR",
+            null);
         Environment.SetEnvironmentVariable("NJULF_BISTRO_QUALITY_CAPTURE_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_BISTRO_QUALITY_VARIANT", null);
         Environment.SetEnvironmentVariable("NJULF_MATERIAL_GI_CAPTURE_DIR", null);
@@ -1287,6 +1293,80 @@ public sealed class SampleSmokeOptionsParserTests
                 "--smoke-frames", "4"
             }),
             Throws.ArgumentException.With.Message.Contains("owns its deterministic frame sequence"));
+    }
+
+    [Test]
+    public void ParsesSponzaTemporalCaptureAsLockedDeterministicSequence()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "NjulfSponzaTemporalCapture");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--sponza-temporal-capture-dir", directory
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.SponzaTemporalCaptureDirectory,
+                Is.EqualTo(Path.GetFullPath(directory)));
+            Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.SponzaPlaza));
+            Assert.That(
+                options.PerformanceScenario,
+                Is.EqualTo(
+                    SamplePerformanceScenario.GiSponzaRightWallStationary));
+            Assert.That(options.UsesDeterministicSimulationClock, Is.True);
+            Assert.That(options.EnableGpuTiming, Is.True);
+        });
+    }
+
+    [Test]
+    public void ParsesSponzaTemporalAnalysisAsOfflineStandaloneCommand()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "NjulfSponzaTemporalAnalysis");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--analyze-sponza-temporal-capture-dir", directory
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.SponzaTemporalAnalyzeDirectory,
+                Is.EqualTo(Path.GetFullPath(directory)));
+            Assert.That(options.SponzaTemporalCaptureDirectory, Is.Null);
+            Assert.That(options.UsesDeterministicSimulationClock, Is.False);
+            Assert.That(options.EnableGpuTiming, Is.False);
+        });
+    }
+
+    [Test]
+    public void SponzaTemporalModesRejectCompetingRendererOptions()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--sponza-temporal-capture-dir", Path.GetTempPath(),
+                    "--smoke-frames", "4"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "cannot be combined"));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--analyze-sponza-temporal-capture-dir", Path.GetTempPath(),
+                    "--validation", "standard"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "offline standalone"));
+        });
     }
 
     [TestCase("low", RenderQualityPreset.Low)]

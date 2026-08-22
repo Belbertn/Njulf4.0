@@ -1023,6 +1023,12 @@ namespace Njulf.Rendering.Data
         public int ScreenshotRequested { get; init; }
         public int ScreenshotPendingCount { get; init; }
         public int ScreenshotCompletedCount { get; init; }
+        /// <summary>
+        /// Monotonic renderer temporal phase used by jittered and stochastic
+        /// passes. Exposing it makes a captured image's temporal inputs
+        /// unambiguous without exposing mutable scene-frame state.
+        /// </summary>
+        public uint TemporalSampleIndex { get; init; }
         public string LastScreenshotPath { get; init; } = string.Empty;
         public string LastScreenshotError { get; init; } = string.Empty;
         public int RenderDocAvailable { get; init; }

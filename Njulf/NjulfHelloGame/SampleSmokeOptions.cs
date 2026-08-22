@@ -30,6 +30,8 @@ public sealed record SampleSmokeOptions(
     string? SponzaGiCaptureDirectory = null,
     SampleSponzaGiCaptureMode SponzaGiCaptureMode =
         SampleSponzaGiCaptureMode.DetailedDiagnostics,
+    string? SponzaTemporalCaptureDirectory = null,
+    string? SponzaTemporalAnalyzeDirectory = null,
     AsyncComputeMode? AsyncComputeModeOverride = null,
     string? MaterialGiCaptureDirectory = null,
     RenderQualityPreset? QualityPresetOverride = null,
@@ -109,6 +111,8 @@ public sealed record SampleSmokeOptions(
         EnableFarFieldForceAll ||
         !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory) ||
         !string.IsNullOrWhiteSpace(SponzaGiCaptureDirectory) ||
+        !string.IsNullOrWhiteSpace(SponzaTemporalCaptureDirectory) ||
+        !string.IsNullOrWhiteSpace(SponzaTemporalAnalyzeDirectory) ||
         !string.IsNullOrWhiteSpace(BistroQualityCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(MaterialGiCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(AdvancedGiPrerequisiteManifestPath) ||
@@ -131,6 +135,7 @@ public sealed record SampleSmokeOptions(
         Benchmark.Enabled ||
         BenchmarkQualitySequence.Enabled ||
         TailDdgiLongSoak ||
+        !string.IsNullOrWhiteSpace(SponzaTemporalCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(BistroQualityCaptureDirectory) ||
         PerformanceScenario ==
             SamplePerformanceScenario.BistroQualityMotionRelight;

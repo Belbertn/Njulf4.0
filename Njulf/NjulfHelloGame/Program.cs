@@ -90,6 +90,14 @@ internal static class Program
         }
 
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(args);
+        if (!string.IsNullOrWhiteSpace(
+                options.SponzaTemporalAnalyzeDirectory))
+        {
+            return SampleSponzaTemporalCaptureAnalyzer.RunOffline(
+                options.SponzaTemporalAnalyzeDirectory,
+                Console.Out,
+                Console.Error);
+        }
         using var gateFailureGuard =
             options.KhronosMaterialGiRenderedGate is { } gateOptions
                 ? new SampleKhronosMaterialGiRenderedGateHostFailureGuard(gateOptions)
@@ -255,6 +263,8 @@ internal sealed class HelloGame : Game
         _bistroQualityRuntimeController;
     private SampleBistroQualityCaptureRunner? _bistroQualityCaptureRunner;
     private SampleMaterialGiCaptureRunner? _materialGiCaptureRunner;
+    private SampleSponzaTemporalCaptureRunner?
+        _sponzaTemporalCaptureRunner;
     private SampleKhronosMaterialGiRenderedSceneBuild? _khronosMaterialGiRenderedScene;
     private SampleKhronosMaterialGiRenderedGateRunner? _khronosMaterialGiRenderedGateRunner;
     private string? _lastSuccessfulStartupStep;
@@ -299,6 +309,8 @@ internal sealed class HelloGame : Game
 
         Name = "Njulf Hello Game";
         WindowTitle = "Njulf Hello Game - Mesh Shader glTF Sample";
+        bool sponzaTemporalCapture = !string.IsNullOrWhiteSpace(
+            _smokeOptions.SponzaTemporalCaptureDirectory);
         bool controlledProductionRun =
             _smokeOptions.Benchmark.Enabled ||
             _smokeOptions.BenchmarkQualitySequence.Enabled ||
@@ -307,7 +319,7 @@ internal sealed class HelloGame : Game
                 _smokeOptions.BistroQualityCaptureDirectory);
         WindowWidth = controlledProductionRun ? 1920 : 1600;
         WindowHeight = controlledProductionRun ? 1080 : 900;
-        WindowBorderStyle = controlledProductionRun
+        WindowBorderStyle = controlledProductionRun || sponzaTemporalCapture
             ? Silk.NET.Windowing.WindowBorder.Hidden
             : Silk.NET.Windowing.WindowBorder.Resizable;
         VSync = _smokeOptions.KhronosMaterialGiRenderedGate is null &&
@@ -315,6 +327,7 @@ internal sealed class HelloGame : Game
                   (_smokeOptions.Benchmark.Enabled &&
                    _smokeOptions.Benchmark.DisableVSync) ||
                   _smokeOptions.BenchmarkQualitySequence.Enabled ||
+                  sponzaTemporalCapture ||
                   !string.IsNullOrWhiteSpace(
                       _smokeOptions.BistroQualityCaptureDirectory));
     }
@@ -535,6 +548,18 @@ internal sealed class HelloGame : Game
                 () => (WindowWidth, WindowHeight),
                 Exit,
                 _smokeOptions.AsyncComputeModeOverride ?? AsyncComputeMode.Disabled);
+        }
+        else if (!string.IsNullOrWhiteSpace(
+                     _smokeOptions.SponzaTemporalCaptureDirectory))
+        {
+            _sponzaTemporalCaptureRunner =
+                new SampleSponzaTemporalCaptureRunner(
+                    renderer,
+                    camera,
+                    lightManager,
+                    _smokeOptions.SponzaTemporalCaptureDirectory,
+                    () => (WindowWidth, WindowHeight),
+                    Exit);
         }
         else if (!string.IsNullOrWhiteSpace(_smokeOptions.SponzaGiCaptureDirectory))
         {
@@ -997,6 +1022,7 @@ internal sealed class HelloGame : Game
         if (_materialGiCaptureRunner == null &&
             _khronosMaterialGiRenderedGateRunner == null &&
             _bistroQualityCaptureRunner == null &&
+            _sponzaTemporalCaptureRunner == null &&
             !_smokeOptions.Benchmark.Enabled &&
             !_smokeOptions.BenchmarkQualitySequence.Enabled)
             _inputController?.Update(
@@ -1057,6 +1083,9 @@ internal sealed class HelloGame : Game
                     ? _bistroQualityRuntimeController?.LastAppliedState
                     : null);
         }
+        _sponzaTemporalCaptureRunner?.PrepareFrame(
+            WindowWidth,
+            WindowHeight);
     }
 
     private void ApplySponzaScenarioFrameControls()
@@ -1381,6 +1410,11 @@ internal sealed class HelloGame : Game
             _editorHost?.ClearRenderer((VulkanRenderer)Renderer);
 #endif
         Renderer.DrawScene(Scene, Camera);
+        if (Renderer is VulkanRenderer temporalCaptureRenderer)
+        {
+            _sponzaTemporalCaptureRunner?.OnFrameRendered(
+                temporalCaptureRenderer.LastDiagnostics);
+        }
         _materialGiCaptureRunner?.OnFrameRendered();
         _khronosMaterialGiRenderedGateRunner?.OnFrameRendered();
         _diagnosticsReporter?.PrintFirstFrameDiagnostics(Renderer);

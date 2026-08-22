@@ -23,6 +23,8 @@ public static class SampleSmokeOptionsParser
         "--baseline-snapshot-dir",
         "--sponza-gi-capture-dir",
         "--sponza-gi-capture-mode",
+        "--sponza-temporal-capture-dir",
+        "--analyze-sponza-temporal-capture-dir",
         "--bistro-quality-capture-dir",
         "--bistro-quality-variant",
         "--material-gi-capture-dir",
@@ -136,6 +138,14 @@ public static class SampleSmokeOptionsParser
         string? healthReportPath = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_HEALTH_REPORT"));
         string? baselineSnapshotDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR"));
         string? sponzaGiCaptureDirectory = RendererValidationSettings.NormalizeOptionalPath(Environment.GetEnvironmentVariable("NJULF_SPONZA_GI_CAPTURE_DIR"));
+        string? sponzaTemporalCaptureDirectory =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_SPONZA_TEMPORAL_CAPTURE_DIR"));
+        string? sponzaTemporalAnalyzeDirectory =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_SPONZA_TEMPORAL_ANALYZE_DIR"));
         SampleSponzaGiCaptureMode sponzaGiCaptureMode =
             SampleSponzaGiCaptureMode.DetailedDiagnostics;
         bool sponzaGiCaptureModeSpecified = false;
@@ -480,6 +490,7 @@ public static class SampleSmokeOptionsParser
             throw new ArgumentException(validationError);
         }
 
+        var specifiedOptionNames = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 0; i < args.Length; i++)
         {
             string arg = args[i];
@@ -490,6 +501,7 @@ public static class SampleSmokeOptionsParser
                     $"Unknown renderer option '{optionName}'.",
                     nameof(args));
             }
+            specifiedOptionNames.Add(optionName);
 
             string value = ReadValue(args, ref i);
             if (optionName.StartsWith(
@@ -532,6 +544,14 @@ public static class SampleSmokeOptionsParser
                 case "--sponza-gi-capture-mode":
                     sponzaGiCaptureMode = ParseSponzaGiCaptureMode(value);
                     sponzaGiCaptureModeSpecified = true;
+                    break;
+                case "--sponza-temporal-capture-dir":
+                    sponzaTemporalCaptureDirectory =
+                        RequirePath(value, optionName);
+                    break;
+                case "--analyze-sponza-temporal-capture-dir":
+                    sponzaTemporalAnalyzeDirectory =
+                        RequirePath(value, optionName);
                     break;
                 case "--bistro-quality-capture-dir":
                     bistroQualityCaptureDirectory =
@@ -1266,12 +1286,36 @@ public static class SampleSmokeOptionsParser
         int standaloneCaptureModeCount =
             (!string.IsNullOrWhiteSpace(materialGiCaptureDirectory) ? 1 : 0) +
             (!string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory) ? 1 : 0) +
+            (!string.IsNullOrWhiteSpace(sponzaTemporalCaptureDirectory) ? 1 : 0) +
+            (!string.IsNullOrWhiteSpace(sponzaTemporalAnalyzeDirectory) ? 1 : 0) +
             (!string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory) ? 1 : 0) +
             (enableBenchmarkQualitySequence ? 1 : 0);
         if (standaloneCaptureModeCount > 1)
         {
             throw new ArgumentException(
-                "Material, Sponza, Bistro, and benchmark quality-sequence captures are independent standalone modes and cannot be combined.");
+                "Material, Sponza GI, Sponza temporal, Bistro, analysis, and benchmark quality-sequence modes are independent and cannot be combined.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(sponzaTemporalAnalyzeDirectory))
+        {
+            string[] competingOptions = specifiedOptionNames
+                .Where(static option => !string.Equals(
+                    option,
+                    "--analyze-sponza-temporal-capture-dir",
+                    StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (competingOptions.Length != 0 ||
+                mode != SampleSmokeMode.None ||
+                frameCount > 0 ||
+                enableBenchmark ||
+                longRunOptionsSpecified ||
+                !string.IsNullOrWhiteSpace(baselineSnapshotDirectory) ||
+                khronosRenderedGate is not null)
+            {
+                throw new ArgumentException(
+                    "--analyze-sponza-temporal-capture-dir is an offline standalone command and cannot be combined with renderer options.");
+            }
         }
 
         if (sponzaGiCaptureModeSpecified &&
@@ -1295,10 +1339,17 @@ public static class SampleSmokeOptionsParser
                 "the BistroQualityMotionRelight performance scenario, or a Bistro benchmark trajectory.");
         }
 
-        if (khronosRenderedGate is not null)
+        if (!string.IsNullOrWhiteSpace(sponzaTemporalAnalyzeDirectory))
+        {
+            sceneKind = SampleSceneKind.GlobalIlluminationTest;
+            performanceScenario = SamplePerformanceScenario.Normal;
+            enableGpuTiming = false;
+        }
+        else if (khronosRenderedGate is not null)
         {
             if (!string.IsNullOrWhiteSpace(materialGiCaptureDirectory) ||
                 !string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory) ||
+                !string.IsNullOrWhiteSpace(sponzaTemporalCaptureDirectory) ||
                 !string.IsNullOrWhiteSpace(baselineSnapshotDirectory))
             {
                 throw new ArgumentException(
@@ -1397,6 +1448,39 @@ public static class SampleSmokeOptionsParser
 
             sceneKind = SampleSceneKind.MaterialShowcase;
             performanceScenario = SamplePerformanceScenario.Normal;
+            enableGpuTiming = true;
+        }
+        else if (!string.IsNullOrWhiteSpace(sponzaTemporalCaptureDirectory))
+        {
+            if (!string.IsNullOrWhiteSpace(baselineSnapshotDirectory) ||
+                qualityPresetOverride.HasValue ||
+                longRunOptionsSpecified)
+            {
+                throw new ArgumentException(
+                    "--sponza-temporal-capture-dir owns its render settings, evidence, and deterministic frame sequence.");
+            }
+            if (sceneSpecified && sceneKind != SampleSceneKind.SponzaPlaza)
+            {
+                throw new ArgumentException(
+                    "--sponza-temporal-capture-dir requires the Sponza plaza scene.");
+            }
+            if (performanceScenario is not (
+                    SamplePerformanceScenario.Normal or
+                    SamplePerformanceScenario.GiSponzaRightWallStationary))
+            {
+                throw new ArgumentException(
+                    "--sponza-temporal-capture-dir requires the stationary Sponza GI scenario.");
+            }
+            if (mode != SampleSmokeMode.None || frameCount > 0 ||
+                enableBenchmark)
+            {
+                throw new ArgumentException(
+                    "--sponza-temporal-capture-dir cannot be combined with smoke or benchmark mode.");
+            }
+
+            sceneKind = SampleSceneKind.SponzaPlaza;
+            performanceScenario =
+                SamplePerformanceScenario.GiSponzaRightWallStationary;
             enableGpuTiming = true;
         }
         else if (!string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory))
@@ -1882,6 +1966,8 @@ public static class SampleSmokeOptionsParser
             benchmark,
             sponzaGiCaptureDirectory,
             sponzaGiCaptureMode,
+            sponzaTemporalCaptureDirectory,
+            sponzaTemporalAnalyzeDirectory,
             asyncComputeModeOverride,
             materialGiCaptureDirectory,
             qualityPresetOverride,

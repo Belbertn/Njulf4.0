@@ -1,0 +1,2 @@
+Reimplement the 4 things in the history
+Make sure every DDGI and SSGI feature is enabled. Make sure quality is turned up. Then do a performance pass without regressing on quality at all. Use the sceenshot in Downloads as target and use https://github.com/FlaxEngine/FlaxEngine/tree/master/Source as inspiration. Use Sol ULTRA to run the loop.
