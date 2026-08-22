@@ -329,6 +329,35 @@ public sealed class CompileNjulfShaderArtifactsTests
     }
 
     [Test]
+    public void LongHermeticOutputPathUsesBoundedTemporaryNames()
+    {
+        string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 51);
+        const string artifactName =
+            "forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag";
+        string outputDirectory = Path.Combine(_testDirectory, "hermetic-output");
+        while (outputDirectory.Length < 160)
+            outputDirectory = Path.Combine(outputDirectory, "path-segment");
+
+        string finalOutput = Path.Combine(outputDirectory, artifactName + ".spv");
+        string legacyTemporaryOutput = Path.Combine(
+            outputDirectory,
+            "." + artifactName + "." + new string('0', 32) + ".tmp");
+        var engine = new RecordingBuildEngine();
+        CompileNjulfShaderArtifacts task = CreateTask(
+            [CreateArtifact(artifactName, sourcePath)],
+            engine,
+            outputDirectory: outputDirectory);
+
+        Assert.That(finalOutput.Length, Is.LessThan(260));
+        Assert.That(legacyTemporaryOutput.Length, Is.GreaterThanOrEqualTo(260));
+        Assert.That(task.Execute(), Is.True, engine.FormatErrors());
+        AssertValidSpirv(finalOutput);
+        Assert.That(
+            Directory.GetFiles(outputDirectory, ".njulf-*", SearchOption.TopDirectoryOnly),
+            Is.Empty);
+    }
+
+    [Test]
     public void DuplicateOutputsAndSourcesOutsideRootAreRejected()
     {
         string sourcePath = WriteShader(Path.Combine(_shaderRoot, "value.glsl"), 6);
@@ -357,20 +386,25 @@ public sealed class CompileNjulfShaderArtifactsTests
         TaskItem artifact = CreateArtifact("sample.comp", sourcePath);
         string firstOutput = Path.Combine(_testDirectory, "obj-a");
         string secondOutput = Path.Combine(_testDirectory, "obj-b");
+        var firstEngine = new RecordingBuildEngine();
+        var secondEngine = new RecordingBuildEngine();
         CompileNjulfShaderArtifacts first = CreateTask(
             [artifact],
-            new RecordingBuildEngine(),
+            firstEngine,
             outputDirectory: firstOutput);
         CompileNjulfShaderArtifacts second = CreateTask(
             [artifact],
-            new RecordingBuildEngine(),
+            secondEngine,
             outputDirectory: secondOutput);
 
         bool[] results = await Task.WhenAll(
             Task.Run(first.Execute),
             Task.Run(second.Execute));
 
-        Assert.That(results, Is.All.True);
+        Assert.That(
+            results,
+            Is.All.True,
+            firstEngine.FormatErrors() + Environment.NewLine + secondEngine.FormatErrors());
         AssertValidSpirv(Path.Combine(firstOutput, "sample.comp.spv"));
         AssertValidSpirv(Path.Combine(secondOutput, "sample.comp.spv"));
 

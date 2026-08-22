@@ -20,6 +20,7 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
     private const int MaximumShaderModuleBytes = 16 * 1024 * 1024;
     private const int MaximumStateFileBytes = 4 * 1024 * 1024;
     private const int MaximumDependencyCount = 4096;
+    private const int PublicationRetryCount = 8;
     private readonly ConcurrentDictionary<string, Lazy<string>> _inputHashes =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -361,8 +362,14 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
     {
         string outputDirectory = Path.GetDirectoryName(work.Artifact.OutputPath)!;
         string token = Guid.NewGuid().ToString("N");
-        string temporaryOutput = Path.Combine(outputDirectory, "." + work.Artifact.OutputName + "." + token + ".tmp");
-        string temporaryDepfile = Path.Combine(outputDirectory, "." + work.Artifact.OutputName + "." + token + ".d");
+        // Artifact identities can be long specialization names. Repeating one
+        // in a temporary filename can push an otherwise valid hermetic output
+        // directory over native Windows tool path limits. The random token is
+        // sufficient for publication isolation; diagnostics already carry the
+        // owning artifact identity.
+        string temporaryStem = ".njulf-" + token;
+        string temporaryOutput = Path.Combine(outputDirectory, temporaryStem + ".spv.tmp");
+        string temporaryDepfile = Path.Combine(outputDirectory, temporaryStem + ".d.tmp");
         try
         {
             ProcessResult result = RunCompiler(work, temporaryOutput, temporaryDepfile);
@@ -716,7 +723,24 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
     private static void PublishFile(string temporaryPath, string destination)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        File.Move(temporaryPath, destination, overwrite: true);
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(temporaryPath, destination, overwrite: true);
+                return;
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException &&
+                attempt + 1 < PublicationRetryCount)
+            {
+                // Separate MSBuild nodes and worktrees can publish the same
+                // content-addressed object or state entry at the same time.
+                // Windows exposes the atomic replacement as a brief sharing
+                // violation; bounded retries retain last-writer semantics.
+                Thread.Sleep(10 * (attempt + 1));
+            }
+        }
     }
 
     private static void DeleteIfExists(string path)
