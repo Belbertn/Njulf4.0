@@ -1,0 +1,319 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "froxel_common.glsl"
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+vec4 FroxelSampleDirectLightingCache(vec3 froxelCoordinate)
+{
+    ivec3 dimensions = ivec3(FroxelLightingGridSize());
+    vec3 cacheCoordinate = clamp(
+        FroxelLightingCoordinate(froxelCoordinate),
+        vec3(0.0),
+        vec3(dimensions - ivec3(1)));
+    int lowerZ = int(floor(cacheCoordinate.z));
+    int upperZ = min(lowerZ + 1, dimensions.z - 1);
+    vec2 uv = (cacheCoordinate.xy + vec2(0.5)) / vec2(dimensions.xy);
+    return mix(
+        texture(FroxelDirectSampler, vec3(uv, float(lowerZ))),
+        texture(FroxelDirectSampler, vec3(uv, float(upperZ))),
+        fract(cacheCoordinate.z));
+}
+
+vec4 FroxelSampleIndirectLightingCache(vec3 froxelCoordinate)
+{
+    ivec3 dimensions = ivec3(FroxelLightingGridSize());
+    vec3 cacheCoordinate = clamp(
+        FroxelLightingCoordinate(froxelCoordinate),
+        vec3(0.0),
+        vec3(dimensions - ivec3(1)));
+    int lowerZ = int(floor(cacheCoordinate.z));
+    int upperZ = min(lowerZ + 1, dimensions.z - 1);
+    vec2 uv = (cacheCoordinate.xy + vec2(0.5)) / vec2(dimensions.xy);
+    return mix(
+        texture(FroxelIndirectSampler, vec3(uv, float(lowerZ))),
+        texture(FroxelIndirectSampler, vec3(uv, float(upperZ))),
+        fract(cacheCoordinate.z));
+}
+
+void FroxelCurrentScatteringSource(
+    ivec3 coordinate,
+    out vec3 direct,
+    out vec3 indirect,
+    out vec3 incident,
+    out float ddgiSupport)
+{
+    vec3 cacheCoordinate = vec3(coordinate);
+    vec4 directCache = FroxelSampleDirectLightingCache(cacheCoordinate);
+    vec4 indirectCache = FroxelSampleIndirectLightingCache(cacheCoordinate);
+    vec3 sigmaS = imageLoad(FroxelMedium, coordinate).rgb;
+    direct = sigmaS * max(directCache.rgb, vec3(0.0));
+    indirect = sigmaS * max(indirectCache.rgb, vec3(0.0));
+    incident = max(directCache.rgb + indirectCache.rgb, vec3(0.0));
+    ddgiSupport = indirectCache.a;
+}
+
+void FroxelSamplePreviousHistory(
+    vec3 coordinate,
+    out vec4 history,
+    out float confidence)
+{
+    ivec3 dimensions = ivec3(FroxelGridSize());
+    vec3 boundedCoordinate = clamp(
+        coordinate, vec3(0.0), vec3(dimensions - ivec3(1)));
+    int lowerZ = int(floor(boundedCoordinate.z));
+    int upperZ = min(lowerZ + 1, dimensions.z - 1);
+    float zFraction = fract(boundedCoordinate.z);
+    vec2 uv = (boundedCoordinate.xy + vec2(0.5)) /
+        vec2(dimensions.xy);
+    history = mix(
+        texture(FroxelHistorySampler, vec3(uv, float(lowerZ))),
+        texture(FroxelHistorySampler, vec3(uv, float(upperZ))),
+        zFraction);
+    confidence = mix(
+        texture(FroxelHistoryConfidenceSampler,
+            vec3(uv, float(lowerZ))).r,
+        texture(FroxelHistoryConfidenceSampler,
+            vec3(uv, float(upperZ))).r,
+        zFraction);
+}
+
+vec3 FroxelRgbToYCoCg(vec3 rgb)
+{
+    return vec3(
+        dot(rgb, vec3(0.25, 0.5, 0.25)),
+        dot(rgb, vec3(0.5, 0.0, -0.5)),
+        dot(rgb, vec3(-0.25, 0.5, -0.25)));
+}
+
+vec3 FroxelYCoCgToRgb(vec3 value)
+{
+    return vec3(
+        value.x + value.y - value.z,
+        value.x + value.z,
+        value.x - value.y - value.z);
+}
+
+void FroxelCurrentNeighborhood(
+    ivec3 center,
+    vec4 centerMedium,
+    vec3 incident,
+    out vec3 minimumColor,
+    out vec3 maximumColor,
+    out float minimumExtinction,
+    out float maximumExtinction)
+{
+    const ivec3 offsets[2] = ivec3[](
+        ivec3(0, 0, -1), ivec3(0, 0, 1));
+    ivec3 last = ivec3(FroxelGridSize()) - ivec3(1);
+    vec3 centerColor = FroxelRgbToYCoCg(max(
+        centerMedium.rgb * incident,
+        vec3(0.0)));
+    minimumColor = centerColor;
+    maximumColor = centerColor;
+    minimumExtinction = max(centerMedium.a, 0.0);
+    maximumExtinction = minimumExtinction;
+    for (uint index = 0u; index < 2u; index++)
+    {
+        ivec3 sampleCoordinate = clamp(center + offsets[index], ivec3(0), last);
+        vec4 sampleMedium = imageLoad(FroxelMedium, sampleCoordinate);
+        vec3 color = FroxelRgbToYCoCg(max(
+            sampleMedium.rgb * incident,
+            vec3(0.0)));
+        minimumColor = min(minimumColor, color);
+        maximumColor = max(maximumColor, color);
+        minimumExtinction = min(minimumExtinction, max(sampleMedium.a, 0.0));
+        maximumExtinction = max(maximumExtinction, max(sampleMedium.a, 0.0));
+    }
+    vec3 expansion = max((maximumColor - minimumColor) * 0.1,
+        vec3(0.002, 0.001, 0.001));
+    minimumColor -= expansion;
+    maximumColor += expansion;
+    float extinctionExpansion = max(
+        (maximumExtinction - minimumExtinction) * 0.1,
+        0.002);
+    minimumExtinction = max(minimumExtinction - extinctionExpansion, 0.0);
+    maximumExtinction += extinctionExpansion;
+}
+
+void main()
+{
+    uvec3 coordinate = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(coordinate, FroxelGridSize())))
+        return;
+    ivec3 texel = ivec3(coordinate);
+    vec3 direct;
+    vec3 indirect;
+    vec3 incident;
+    float ddgiSupport;
+    FroxelCurrentScatteringSource(
+        texel, direct, indirect, incident, ddgiSupport);
+    vec3 current = direct + indirect;
+    vec4 medium = imageLoad(FroxelMedium, texel);
+    float currentExtinction = max(medium.a, 0.0);
+    vec3 velocity = imageLoad(FroxelMediumAuxiliary, texel).xyz;
+    float deltaTime = clamp(
+        FroxelFrame.PreviousCameraPositionAndDeltaTime.w,
+        0.0,
+        0.25);
+    vec3 worldPosition = FroxelWorldPosition(coordinate);
+    vec3 historyWorldPosition = worldPosition - velocity * deltaTime;
+
+    uint rejectionReason = 0u;
+    bool accepted = (FroxelPush.Flags & FROXEL_FLAG_HISTORY_VALID) != 0u &&
+        (FroxelPush.Flags & FROXEL_FLAG_CAMERA_CUT) == 0u;
+    if (!accepted)
+        rejectionReason = 1u;
+
+    vec4 previousClip = MulRowMajor(
+        vec4(historyWorldPosition, 1.0),
+        FroxelFrame.PreviousViewProjectionMatrix);
+    if (accepted && !(previousClip.w > 1.0e-6))
+    {
+        accepted = false;
+        rejectionReason = 2u;
+    }
+
+    vec3 previousCoordinate = vec3(0.0);
+    if (accepted)
+    {
+        vec2 previousUv = previousClip.xy / previousClip.w * 0.5 + vec2(0.5);
+        float pixelSize = max(FroxelFrame.GridDimensions.w, 1.0);
+        previousCoordinate.xy = previousUv * FroxelFrame.ScreenDimensions.xy /
+            pixelSize + vec2(FroxelFrame.DepthParameters.w) - vec2(0.5);
+        previousCoordinate.z = FroxelContinuousSlice(length(
+            historyWorldPosition -
+                FroxelFrame.PreviousCameraPositionAndDeltaTime.xyz)) - 0.5;
+        accepted = all(greaterThanEqual(previousCoordinate, vec3(-0.5))) &&
+            all(lessThanEqual(previousCoordinate,
+                FroxelFrame.GridDimensions.xyz - vec3(0.5)));
+        if (!accepted)
+            rejectionReason = 2u;
+    }
+
+    vec4 previous = vec4(0.0);
+    float previousConfidence = 0.0;
+    float motionDistance = length(velocity) * deltaTime;
+    float pixelWorldSize = max(
+        FroxelSliceCenter(coordinate.z) *
+            FroxelFrame.GridDimensions.w *
+            FroxelFrame.ScreenDimensions.w,
+        0.02);
+    if (accepted && motionDistance > max(pixelWorldSize * 4.0, 2.0))
+    {
+        accepted = false;
+        rejectionReason = 5u;
+    }
+    if (accepted)
+    {
+        FroxelSamplePreviousHistory(
+            previousCoordinate, previous, previousConfidence);
+        float extinctionDifference = abs(previous.a - currentExtinction);
+        float extinctionThreshold = max(0.035, currentExtinction * 0.18);
+        if (extinctionDifference > extinctionThreshold ||
+            !(previousConfidence > 0.0))
+        {
+            accepted = false;
+            rejectionReason = 3u;
+        }
+        else
+        {
+            float radianceDifference = length(previous.rgb - current);
+            float radianceThreshold = max(0.08, length(current) * 0.55);
+            if (radianceDifference > radianceThreshold)
+            {
+                accepted = false;
+                rejectionReason = 4u;
+            }
+        }
+    }
+
+    vec3 minimumColor;
+    vec3 maximumColor;
+    float minimumExtinction;
+    float maximumExtinction;
+    FroxelCurrentNeighborhood(
+        texel,
+        medium,
+        incident,
+        minimumColor,
+        maximumColor,
+        minimumExtinction,
+        maximumExtinction);
+    vec3 clampedPrevious = FroxelYCoCgToRgb(clamp(
+        FroxelRgbToYCoCg(previous.rgb),
+        minimumColor,
+        maximumColor));
+    float clampedPreviousExtinction = clamp(
+        previous.a,
+        minimumExtinction,
+        maximumExtinction);
+
+    float motionConfidence = exp(-motionDistance /
+        max(pixelWorldSize * 0.75, 0.05));
+    float historyWeight = accepted
+        ? clamp(FroxelFrame.NoiseSelfShadowAndHistory.w, 0.0, 0.95) *
+            clamp(previousConfidence, 0.0, 1.0) * motionConfidence
+        : 0.0;
+    vec3 accumulated = mix(current, clampedPrevious, historyWeight);
+    float accumulatedExtinction = mix(
+        currentExtinction, clampedPreviousExtinction, historyWeight);
+    float confidence = accepted
+        ? min(previousConfidence + 0.125, 1.0)
+        : 0.125;
+
+    if (any(isnan(vec4(accumulated, accumulatedExtinction))) ||
+        any(isinf(vec4(accumulated, accumulatedExtinction))))
+    {
+        atomicAdd(FroxelDiagnostics.NonFiniteCount, 1u);
+        accumulated = vec3(0.0);
+        accumulatedExtinction = 0.0;
+        confidence = 0.125;
+        accepted = false;
+        rejectionReason = 1u;
+    }
+
+    if (FroxelIsDiagnosticSample(coordinate))
+    {
+        float directLuminance = dot(max(direct, vec3(0.0)),
+            vec3(0.2126, 0.7152, 0.0722));
+        float indirectLuminance = dot(max(indirect, vec3(0.0)),
+            vec3(0.2126, 0.7152, 0.0722));
+        if (directLuminance > 1.0e-6)
+            atomicAdd(FroxelDiagnostics.DirectNonZeroCount, 1u);
+        if (indirectLuminance > 1.0e-6)
+            atomicAdd(FroxelDiagnostics.IndirectNonZeroCount, 1u);
+        if (ddgiSupport > 0.0)
+            atomicAdd(FroxelDiagnostics.DdgiSupportedCount, 1u);
+        atomicMax(FroxelDiagnostics.MaximumDirectLuminanceQ,
+            FroxelQuantizeDiagnostic(directLuminance, 256.0));
+        atomicMax(FroxelDiagnostics.MaximumIndirectLuminanceQ,
+            FroxelQuantizeDiagnostic(indirectLuminance, 256.0));
+        atomicAdd(FroxelDiagnostics.DirectLuminanceSumQ,
+            FroxelQuantizeDiagnostic(directLuminance, 256.0));
+        atomicAdd(FroxelDiagnostics.IndirectLuminanceSumQ,
+            FroxelQuantizeDiagnostic(indirectLuminance, 256.0));
+        if (accepted)
+            atomicAdd(FroxelDiagnostics.HistoryAcceptedCount, 1u);
+        else
+        {
+            atomicAdd(FroxelDiagnostics.HistoryRejectedCount, 1u);
+            if (rejectionReason == 1u)
+                atomicAdd(FroxelDiagnostics.HistoryRejectedInvalidCount, 1u);
+            else if (rejectionReason == 2u)
+                atomicAdd(FroxelDiagnostics.HistoryRejectedBoundsCount, 1u);
+            else if (rejectionReason == 3u)
+                atomicAdd(FroxelDiagnostics.HistoryRejectedExtinctionCount, 1u);
+            else if (rejectionReason == 4u)
+                atomicAdd(FroxelDiagnostics.HistoryRejectedRadianceCount, 1u);
+            else if (rejectionReason == 5u)
+                atomicAdd(FroxelDiagnostics.HistoryRejectedVelocityCount, 1u);
+        }
+    }
+    imageStore(FroxelHistoryWrite, texel,
+        vec4(max(accumulated, vec3(0.0)),
+            max(accumulatedExtinction, 0.0)));
+    imageStore(FroxelHistoryConfidenceWrite, texel,
+        vec4(confidence, 0.0, 0.0, 0.0));
+}

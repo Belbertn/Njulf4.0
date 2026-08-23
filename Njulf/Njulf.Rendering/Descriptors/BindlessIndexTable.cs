@@ -868,8 +868,16 @@ namespace Njulf.Rendering.Descriptors
         // ============================================
 
         /// <summary>Number of static (fixed-index) buffers</summary>
-        public const int StaticBufferCount =
+        /// <summary>
+        /// Fog-owned per-physical-probe L2 sidecar containing bounced incident
+        /// radiance only. Direct/emissive/sky source energy is subtracted by
+        /// the froxel publication stage before this slot becomes readable.
+        /// </summary>
+        public const int VolumetricFogBounceRadianceBuffer =
             DirectionalShadowCounterBufferFrame1 + 1;
+
+        public const int StaticBufferCount =
+            VolumetricFogBounceRadianceBuffer + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1107,6 +1115,7 @@ namespace Njulf.Rendering.Descriptors
                     DirectionalShadowDiagnosticBufferFrame1 => nameof(DirectionalShadowDiagnosticBufferFrame1),
                     DirectionalShadowCounterBufferBase => nameof(DirectionalShadowCounterBufferBase),
                     DirectionalShadowCounterBufferFrame1 => nameof(DirectionalShadowCounterBufferFrame1),
+                    VolumetricFogBounceRadianceBuffer => nameof(VolumetricFogBounceRadianceBuffer),
                     _ => "Unknown"
                 };
             }

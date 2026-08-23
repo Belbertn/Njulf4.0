@@ -27,7 +27,19 @@ public sealed class ShaderBuildTests
         "ddgi_simple_schedule_feedback_partial.comp",
         "ddgi_simple_schedule_materialize.comp",
         "farfield_voxelize.comp",
-        "farfield_jumpflood.comp"
+        "farfield_jumpflood.comp",
+        "froxel_noise.comp",
+        "froxel_source_cull.comp",
+        "froxel_medium.comp",
+        "froxel_transmittance.comp",
+        "froxel_ddgi_bounce_l2.comp",
+        "froxel_lighting.comp",
+        "froxel_indirect.comp",
+        "froxel_multiple_scatter.comp",
+        "froxel_temporal.comp",
+        "froxel_integrate.comp",
+        "froxel_resolve.comp",
+        "froxel_composite.comp"
     ];
 
     [Test]
@@ -45,7 +57,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(261));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(273));
 
         foreach (string shaderName in RequiredShaders)
         {
@@ -113,6 +125,26 @@ public sealed class ShaderBuildTests
             Assert.That(File.Exists(Path.Combine(shaderDirectory, "ddgi_schedule_score.comp")), Is.False);
             Assert.That(File.Exists(Path.Combine(shaderDirectory, "ssgi_trace.comp")), Is.False);
             Assert.That(common, Does.Not.Contain("DDGI_GATHER_TILE_BUFFER_INDEX"));
+        });
+    }
+
+    [Test]
+    public void ShaderProject_InvalidatesIdeBuildWhenShaderInputsChange()
+    {
+        string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
+        string project = File.ReadAllText(Path.Combine(
+            shaderDirectory,
+            "Njulf.Shaders.csproj"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(project, Does.Contain("<UpToDateCheckInput Include="));
+            Assert.That(project,
+                Does.Contain("$(MSBuildProjectDirectory)\\*.comp"));
+            Assert.That(project,
+                Does.Contain("$(MSBuildProjectDirectory)\\*.glsl"));
+            Assert.That(project,
+                Does.Contain("$(NjulfShaderBuildTaskSource)"));
         });
     }
 

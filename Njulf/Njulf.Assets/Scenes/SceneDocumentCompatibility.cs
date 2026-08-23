@@ -38,6 +38,7 @@ internal static class SceneDocumentCompatibility
             Lights = source.Lights.ToList(),
             ReflectionProbes = source.ReflectionProbes.ToList(),
             GiProbeVolumes = source.GiProbeVolumes.ToList(),
+            VolumetricDensityVolumes = source.VolumetricDensityVolumes.ToList(),
             InstanceBatches = source.InstanceBatches.ToList(),
             FoliagePrototypes = source.FoliagePrototypes.ToList(),
             FoliagePatches = source.FoliagePatches.ToList(),

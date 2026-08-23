@@ -13,6 +13,7 @@ namespace Njulf.Core.Scene
         private readonly List<IUpdateable> _updateables = new();
         private readonly List<ReflectionProbe> _reflectionProbes = new();
         private readonly List<GlobalIlluminationProbeVolume> _globalIlluminationProbeVolumes = new();
+        private readonly List<VolumetricDensityVolume> _volumetricDensityVolumes = new();
         private readonly List<ParticleEffectInstance> _particleEffects = new();
         private readonly List<StaticInstanceBatch> _staticInstanceBatches = new();
         private readonly List<FoliagePrototype> _foliagePrototypes = new();
@@ -21,6 +22,7 @@ namespace Njulf.Core.Scene
         private readonly ReadOnlyCollection<IUpdateable> _readOnlyUpdateables;
         private readonly ReadOnlyCollection<ReflectionProbe> _readOnlyReflectionProbes;
         private readonly ReadOnlyCollection<GlobalIlluminationProbeVolume> _readOnlyGlobalIlluminationProbeVolumes;
+        private readonly ReadOnlyCollection<VolumetricDensityVolume> _readOnlyVolumetricDensityVolumes;
         private readonly ReadOnlyCollection<ParticleEffectInstance> _readOnlyParticleEffects;
         private readonly ReadOnlyCollection<StaticInstanceBatch> _readOnlyStaticInstanceBatches;
         private readonly ReadOnlyCollection<FoliagePrototype> _readOnlyFoliagePrototypes;
@@ -51,6 +53,7 @@ namespace Njulf.Core.Scene
             _readOnlyUpdateables = _updateables.AsReadOnly();
             _readOnlyReflectionProbes = _reflectionProbes.AsReadOnly();
             _readOnlyGlobalIlluminationProbeVolumes = _globalIlluminationProbeVolumes.AsReadOnly();
+            _readOnlyVolumetricDensityVolumes = _volumetricDensityVolumes.AsReadOnly();
             _readOnlyParticleEffects = _particleEffects.AsReadOnly();
             _readOnlyStaticInstanceBatches = _staticInstanceBatches.AsReadOnly();
             _readOnlyFoliagePrototypes = _foliagePrototypes.AsReadOnly();
@@ -81,6 +84,7 @@ namespace Njulf.Core.Scene
         public IReadOnlyList<ReflectionProbe> ReflectionProbes => _readOnlyReflectionProbes;
         public uint ReflectionProbeRevision => _reflectionProbeRevision;
         public IReadOnlyList<GlobalIlluminationProbeVolume> GlobalIlluminationProbeVolumes => _readOnlyGlobalIlluminationProbeVolumes;
+        public IReadOnlyList<VolumetricDensityVolume> VolumetricDensityVolumes => _readOnlyVolumetricDensityVolumes;
         public IReadOnlyList<ParticleEffectInstance> ParticleEffects => _readOnlyParticleEffects;
         public IReadOnlyList<StaticInstanceBatch> StaticInstanceBatches => _readOnlyStaticInstanceBatches;
         public IReadOnlyList<FoliagePrototype> FoliagePrototypes => _readOnlyFoliagePrototypes;
@@ -128,6 +132,22 @@ namespace Njulf.Core.Scene
 
             EnsureCanAdd(probeVolume);
             _globalIlluminationProbeVolumes.Add(probeVolume);
+        }
+
+        public void Add(VolumetricDensityVolume densityVolume)
+        {
+            if (densityVolume == null)
+                throw new ArgumentNullException(nameof(densityVolume));
+
+            EnsureCanAdd(densityVolume);
+            _volumetricDensityVolumes.Add(densityVolume);
+            densityVolume.Changed += OnVolumetricDensityVolumeChanged;
+            PublishMutation(
+                densityVolume,
+                SceneMutationKind.Added | SceneMutationKind.Volumetrics,
+                null,
+                densityVolume.Bounds,
+                densityVolume.Revision);
         }
 
         public void Add(ParticleEffectInstance particleEffect)
@@ -236,6 +256,21 @@ namespace Njulf.Core.Scene
         {
             EnsureMutable();
             _globalIlluminationProbeVolumes.Remove(probeVolume);
+        }
+
+        public void Remove(VolumetricDensityVolume densityVolume)
+        {
+            EnsureMutable();
+            if (_volumetricDensityVolumes.Remove(densityVolume))
+            {
+                densityVolume.Changed -= OnVolumetricDensityVolumeChanged;
+                PublishMutation(
+                    densityVolume,
+                    SceneMutationKind.Removed | SceneMutationKind.Volumetrics,
+                    densityVolume.Bounds,
+                    null,
+                    densityVolume.Revision);
+            }
         }
 
         public void Remove(ParticleEffectInstance particleEffect)
@@ -354,6 +389,8 @@ namespace Njulf.Core.Scene
                 renderObject.Changed -= OnRenderObjectChanged;
             foreach (ParticleEffectInstance particleEffect in _particleEffects)
                 particleEffect.Changed -= OnParticleEffectChanged;
+            foreach (VolumetricDensityVolume densityVolume in _volumetricDensityVolumes)
+                densityVolume.Changed -= OnVolumetricDensityVolumeChanged;
             foreach (StaticInstanceBatch batch in _staticInstanceBatches)
                 batch.Changed -= OnStaticInstanceBatchChanged;
             foreach (FoliagePatch patch in _foliagePatches)
@@ -370,6 +407,7 @@ namespace Njulf.Core.Scene
             _updateables.Clear();
             _reflectionProbes.Clear();
             _globalIlluminationProbeVolumes.Clear();
+            _volumetricDensityVolumes.Clear();
             _particleEffects.Clear();
             _staticInstanceBatches.Clear();
             _foliagePrototypes.Clear();
@@ -396,6 +434,16 @@ namespace Njulf.Core.Scene
                 null,
                 null,
                 particleEffect.Version);
+
+        private void OnVolumetricDensityVolumeChanged(
+            VolumetricDensityVolume densityVolume,
+            BoundingBox previousBounds) =>
+            PublishMutation(
+                densityVolume,
+                SceneMutationKind.Volumetrics | SceneMutationKind.Content,
+                previousBounds,
+                densityVolume.Bounds,
+                densityVolume.Revision);
 
         private void OnStaticInstanceBatchChanged(StaticInstanceBatch batch) =>
             PublishMutation(
@@ -489,6 +537,7 @@ namespace Njulf.Core.Scene
             return Find(_renderObjects, id)
                 ?? Find(_reflectionProbes, id)
                 ?? Find(_globalIlluminationProbeVolumes, id)
+                ?? Find(_volumetricDensityVolumes, id)
                 ?? Find(_particleEffects, id)
                 ?? Find(_staticInstanceBatches, id)
                 ?? Find(_foliagePrototypes, id)
@@ -619,6 +668,7 @@ namespace Njulf.Core.Scene
         {
             if (_renderObjects.Count == 0 &&
                 _particleEffects.Count == 0 &&
+                _volumetricDensityVolumes.Count == 0 &&
                 _staticInstanceBatches.Count == 0 &&
                 _foliagePrototypes.Count == 0 &&
                 _foliagePatches.Count == 0)

@@ -30,7 +30,13 @@ namespace Njulf.Rendering.Data
         int EmitterId,
         ParticleBillboardMode BillboardMode,
         ParticleMaterialDefinition Material,
-        float SortDistanceSquared);
+        float SortDistanceSquared,
+        bool VolumetricInjectionEnabled,
+        float VolumetricDensity,
+        float VolumetricRadiusScale,
+        Vector3 VolumetricScatteringAlbedo,
+        float VolumetricAnisotropy,
+        int VolumetricPriority);
 
     public readonly record struct ParticleBatch(
         int Start,

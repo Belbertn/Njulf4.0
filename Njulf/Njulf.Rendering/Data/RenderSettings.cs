@@ -762,6 +762,13 @@ namespace Njulf.Rendering.Data
         DistanceAndHeight = 3
     }
 
+    public enum FogTechnique : uint
+    {
+        Auto = 0,
+        Analytic = 1,
+        Froxel = 2
+    }
+
     public enum FogColorMode : uint
     {
         ConstantColor = 0,
@@ -779,7 +786,37 @@ namespace Njulf.Rendering.Data
         Inscattering = 5,
         LinearDepth = 6,
         WorldHeight = 7,
-        FoggedScene = 8
+        FoggedScene = 8,
+        Density = 9,
+        Extinction = 10,
+        DirectRadiance = 11,
+        IndirectRadiance = 12,
+        HistoryConfidence = 13,
+        FinalTransmittance = 14,
+        SelfShadowing = 15
+    }
+
+    internal static class FogDebugViewPolicy
+    {
+        public static bool IsDisplayReferred(FogDebugView debugView)
+        {
+            // FoggedScene remains HDR beauty output and must follow the normal
+            // exposure/tone-map path. All other non-None diagnostics are
+            // normalized by their fog producer for direct display.
+            return debugView is not FogDebugView.None and
+                not FogDebugView.FoggedScene;
+        }
+    }
+
+    /// <summary>
+    /// Selects how a three-dimensional froxel field is reduced for a
+    /// two-dimensional diagnostic view.
+    /// </summary>
+    public enum FogDebugProjection : uint
+    {
+        MaxAlongRay = 0,
+        Surface = 1,
+        Slice = 2
     }
 
     public enum EnvironmentSourceKind : uint
@@ -3898,8 +3935,11 @@ namespace Njulf.Rendering.Data
                     features |= DdgiContentFeature.TransparentGeometry;
                 if (DdgiFoliageGeometryMode != DdgiFoliageGeometryMode.Excluded)
                     features |= DdgiContentFeature.FoliageGeometry;
-                if (SimpleDdgiDirectionalRadianceMode != SimpleDdgiDirectionalRadianceMode.Off &&
-                    SimpleDdgiGlossyTransportMode != SimpleDdgiGlossyTransportMode.Off)
+                // Directional incident radiance is a producer contract.  Fog
+                // consumes it independently from the optional glossy surface
+                // receiver, so do not couple publication to glossy admission.
+                if (SimpleDdgiDirectionalRadianceMode !=
+                    SimpleDdgiDirectionalRadianceMode.Off)
                 {
                     features |= DdgiContentFeature.DirectionalRadiance;
                 }
@@ -4115,12 +4155,11 @@ namespace Njulf.Rendering.Data
             SimpleDdgiMutationJournalEnabled = true;
             SimpleDdgiLocalLightSamplingMode = SimpleDdgiLocalLightSamplingMode.Auto;
             // Per-fragment directional SH evaluation bypasses the production
-            // low-frequency receiver cache. On the High target this made the
-            // opaque gather dominate the complete frame, while C5 already
-            // supplies bounded near-field indirect detail. Keep the exact
-            // directional/glossy receiver as an Ultra feature (and an explicit
-            // editor opt-in); High retains diffuse DDGI through the cache.
-            SimpleDdgiDirectionalRadianceMode = tier == DdgiQualityTier.DdgiUltra
+            // low-frequency receiver cache. High-class volumetric fog now
+            // consumes the same production L2 publication through a clustered
+            // HG phase query; ordinary opaque receivers may still select their
+            // cheaper cache path independently.
+            SimpleDdgiDirectionalRadianceMode = highTier
                 ? SimpleDdgiDirectionalRadianceMode.L2
                 : SimpleDdgiDirectionalRadianceMode.Off;
             SimpleDdgiGlossyTransportMode = tier == DdgiQualityTier.DdgiUltra
@@ -4656,6 +4695,7 @@ namespace Njulf.Rendering.Data
         private float _directionalInscatteringExponent = 8.0f;
 
         public bool Enabled { get; set; } = true;
+        public FogTechnique Technique { get; set; } = FogTechnique.Auto;
         public FogMode Mode { get; set; } = FogMode.DistanceAndHeight;
         public FogColorMode ColorMode { get; set; } = FogColorMode.SkyAndConstantBlend;
         public Vector3 Color { get; set; } = new(0.62f, 0.72f, 0.82f);
@@ -4730,12 +4770,90 @@ namespace Njulf.Rendering.Data
         }
 
         public FogDebugView DebugView { get; set; } = FogDebugView.None;
+        public VolumetricFogSettings Volumetric { get; } = new();
 
         private static float Clamp(float value, float min, float max)
         {
             if (value < min)
                 return min;
             return value > max ? max : value;
+        }
+    }
+
+    public sealed class VolumetricFogSettings
+    {
+        private float _maxDistance = 250f;
+        private float _baseExtinctionPerMeter = 0.015f;
+        private float _heightExtinctionPerMeter = 0.04f;
+        private float _height;
+        private float _heightFalloff = 0.12f;
+        private Vector3 _scatteringAlbedo = new(0.9f, 0.92f, 0.95f);
+        private float _anisotropy = 0.2f;
+        private Vector3 _globalWind;
+        private float _noiseScale = 0.035f;
+        private float _noiseStrength = 0.15f;
+        private float _noiseContrast = 1f;
+        private float _selfShadowDistance = 64f;
+        private float _temporalHistoryWeight = 0.9f;
+        private int _multipleScatteringIterations;
+        private float _multipleScatteringEnergyLimit = 0.5f;
+        private int _debugSlice = -1;
+
+        /// <summary>
+        /// Renderer-owned qualification for the production single-scattering
+        /// path. Scene content cannot promote itself into this state.
+        /// </summary>
+        public bool SingleScatteringQualified { get; internal set; }
+
+        /// <summary>
+        /// Renderer-owned qualification for the bounded multiple-scattering
+        /// extension. It is intentionally independent from single scattering.
+        /// </summary>
+        public bool MultipleScatteringQualified { get; internal set; }
+
+        [Obsolete("Use SingleScatteringQualified. Qualification is renderer-owned.")]
+        public bool ProfileQualified
+        {
+            get => SingleScatteringQualified;
+            internal set => SingleScatteringQualified = value;
+        }
+        public float MaxDistance { get => _maxDistance; set => _maxDistance = Clamp(value, 0.1f, 10000f); }
+        public float BaseExtinctionPerMeter { get => _baseExtinctionPerMeter; set => _baseExtinctionPerMeter = Clamp(value, 0f, 64f); }
+        public float HeightExtinctionPerMeter { get => _heightExtinctionPerMeter; set => _heightExtinctionPerMeter = Clamp(value, 0f, 64f); }
+        public float Height { get => _height; set => _height = FiniteOr(value, 0f); }
+        public float HeightFalloff { get => _heightFalloff; set => _heightFalloff = Clamp(value, 0.001f, 10f); }
+        public Vector3 ScatteringAlbedo { get => _scatteringAlbedo; set => _scatteringAlbedo = Clamp01(value); }
+        public float Anisotropy { get => _anisotropy; set => _anisotropy = Clamp(value, -0.9f, 0.9f); }
+        public Vector3 GlobalWind { get => _globalWind; set => _globalWind = FiniteOrZero(value); }
+        public float NoiseScale { get => _noiseScale; set => _noiseScale = Clamp(value, 0.0001f, 1000f); }
+        public float NoiseStrength { get => _noiseStrength; set => _noiseStrength = Clamp(value, 0f, 1f); }
+        public float NoiseContrast { get => _noiseContrast; set => _noiseContrast = Clamp(value, 0.01f, 8f); }
+        public float SelfShadowDistance { get => _selfShadowDistance; set => _selfShadowDistance = Clamp(value, 1f, 1000f); }
+        public float TemporalHistoryWeight { get => _temporalHistoryWeight; set => _temporalHistoryWeight = Clamp(value, 0f, 0.95f); }
+        public int MultipleScatteringIterations { get => _multipleScatteringIterations; set => _multipleScatteringIterations = Math.Clamp(value, 0, 2); }
+        public float MultipleScatteringEnergyLimit { get => _multipleScatteringEnergyLimit; set => _multipleScatteringEnergyLimit = Clamp(value, 0f, 0.5f); }
+        public int DebugSlice { get => _debugSlice; set => _debugSlice = Math.Clamp(value, -1, 95); }
+        public FogDebugProjection DebugProjection { get; set; } =
+            FogDebugProjection.MaxAlongRay;
+
+        private static Vector3 Clamp01(Vector3 value) => new(
+            Clamp(value.X, 0f, 1f),
+            Clamp(value.Y, 0f, 1f),
+            Clamp(value.Z, 0f, 1f));
+
+        private static Vector3 FiniteOrZero(Vector3 value) => new(
+            FiniteOr(value.X, 0f),
+            FiniteOr(value.Y, 0f),
+            FiniteOr(value.Z, 0f));
+
+        private static float FiniteOr(float value, float fallback) =>
+            float.IsFinite(value) ? value : fallback;
+
+        private static float Clamp(float value, float minimum, float maximum)
+        {
+            if (!float.IsFinite(value))
+                return minimum;
+            return Math.Clamp(value, minimum, maximum);
         }
     }
 
@@ -4887,7 +5005,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 15;
+        public const int SerializationVersion = 16;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -4986,6 +5104,19 @@ namespace Njulf.Rendering.Data
             QualityPresetChanging?.Invoke(preset);
             QualityPreset = preset;
             ShowRawHdrSceneColor = false;
+
+            // Qualification belongs to the renderer profile, never to scene
+            // configuration. High-class profiles ship the qualified
+            // single-scattering path; only Ultra admits the separately bounded
+            // multiple-scattering extension.
+            Fog.Volumetric.SingleScatteringQualified = preset is
+                RenderQualityPreset.High or
+                RenderQualityPreset.DdgiHigh or
+                RenderQualityPreset.Ultra;
+            Fog.Volumetric.MultipleScatteringQualified =
+                preset == RenderQualityPreset.Ultra;
+            Fog.Volumetric.MultipleScatteringIterations =
+                preset == RenderQualityPreset.Ultra ? 2 : 0;
 
             // Quality presets select the bounded C3 production path. Its
             // publication handshake is transactional and preserves the
@@ -5494,6 +5625,7 @@ namespace Njulf.Rendering.Data
             // invalidates every older C5 qualification ID. Version 15 makes
             // explicit adaptive C5 the default and upgrades older
             // AutoQualified requests while preserving explicit opt-outs.
+            // Version 16 persists the froxel volumetric-fog contract.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -5507,6 +5639,7 @@ namespace Njulf.Rendering.Data
             public EnvironmentFile? Environment { get; init; }
             public GlobalIlluminationFile? GlobalIllumination { get; init; }
             public bool FogEnabled { get; init; }
+            public FogFile? Fog { get; init; }
             public bool ReflectionsEnabled { get; init; } = true;
             public ShadowSettingsFile? Shadows { get; init; }
             [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -5539,6 +5672,7 @@ namespace Njulf.Rendering.Data
                     Environment = EnvironmentFile.FromSettings(settings.Environment),
                     GlobalIllumination = GlobalIlluminationFile.FromSettings(settings.GlobalIllumination),
                     FogEnabled = settings.Fog.Enabled,
+                    Fog = FogFile.FromSettings(settings.Fog),
                     ReflectionsEnabled = settings.Reflections.Enabled,
                     Shadows = ShadowSettingsFile.FromSettings(settings.Shadows),
                     ParticlesEnabled = settings.Particles.Enabled,
@@ -5576,7 +5710,10 @@ namespace Njulf.Rendering.Data
                 // observe an unauthenticated feature request during startup.
                 settings.GlobalIllumination.UseLegacyMaterialGiRollout();
                 settings.GlobalIllumination.UseQualifiedContentDependentBaseline();
-                settings.Fog.Enabled = FogEnabled;
+                if (Fog != null)
+                    Fog.ApplyTo(settings.Fog);
+                else
+                    settings.Fog.Enabled = FogEnabled;
                 settings.Reflections.Enabled = ReflectionsEnabled;
                 if (Shadows != null)
                 {
@@ -5620,6 +5757,161 @@ namespace Njulf.Rendering.Data
                 AsyncCompute.ApplyTo(settings.AsyncCompute, missingModeMeansDisabled: !Version.HasValue || Version.Value < 3);
                 settings.Diagnostics.GpuMeshletCountersEnabled = GpuMeshletCountersEnabled;
                 settings.Diagnostics.DdgiForwardEstimateCountersEnabled = DdgiForwardEstimateCountersEnabled;
+            }
+        }
+
+        private sealed record FogFile
+        {
+            public bool Enabled { get; init; }
+            public FogTechnique Technique { get; init; } = FogTechnique.Auto;
+            public FogMode Mode { get; init; } = FogMode.DistanceAndHeight;
+            public FogColorMode ColorMode { get; init; } = FogColorMode.SkyAndConstantBlend;
+            public Vector3File Color { get; init; } = new() { X = 0.62f, Y = 0.72f, Z = 0.82f };
+            public float ColorBlend { get; init; } = 0.5f;
+            public float Density { get; init; } = 0.015f;
+            public float StartDistance { get; init; } = 5f;
+            public float EndDistance { get; init; } = 250f;
+            public float Height { get; init; }
+            public float HeightFalloff { get; init; } = 0.12f;
+            public float HeightDensity { get; init; } = 0.04f;
+            public float MaxOpacity { get; init; } = 0.85f;
+            public bool DirectionalInscatteringEnabled { get; init; } = true;
+            public Vector3File DirectionalInscatteringColor { get; init; } =
+                new() { X = 1f, Y = 0.88f, Z = 0.68f };
+            public Vector3File DirectionalInscatteringDirection { get; init; } =
+                new();
+            public float DirectionalInscatteringIntensity { get; init; } = 0.35f;
+            public float DirectionalInscatteringExponent { get; init; } = 8f;
+            public FogDebugView DebugView { get; init; } = FogDebugView.None;
+            public VolumetricFogFile Volumetric { get; init; } = new();
+
+            public static FogFile FromSettings(FogSettings settings) => new()
+            {
+                Enabled = settings.Enabled,
+                Technique = settings.Technique,
+                Mode = settings.Mode,
+                ColorMode = settings.ColorMode,
+                Color = Vector3File.FromVector3(settings.Color),
+                ColorBlend = settings.ColorBlend,
+                Density = settings.Density,
+                StartDistance = settings.StartDistance,
+                EndDistance = settings.EndDistance,
+                Height = settings.Height,
+                HeightFalloff = settings.HeightFalloff,
+                HeightDensity = settings.HeightDensity,
+                MaxOpacity = settings.MaxOpacity,
+                DirectionalInscatteringEnabled =
+                    settings.DirectionalInscatteringEnabled,
+                DirectionalInscatteringColor = Vector3File.FromVector3(
+                    settings.DirectionalInscatteringColor),
+                DirectionalInscatteringDirection = Vector3File.FromVector3(
+                    settings.DirectionalInscatteringDirection),
+                DirectionalInscatteringIntensity =
+                    settings.DirectionalInscatteringIntensity,
+                DirectionalInscatteringExponent =
+                    settings.DirectionalInscatteringExponent,
+                DebugView = settings.DebugView,
+                Volumetric = VolumetricFogFile.FromSettings(settings.Volumetric)
+            };
+
+            public void ApplyTo(FogSettings settings)
+            {
+                settings.Enabled = Enabled;
+                settings.Technique = Enum.IsDefined(Technique) ? Technique : FogTechnique.Auto;
+                settings.Mode = Enum.IsDefined(Mode) ? Mode : FogMode.DistanceAndHeight;
+                settings.ColorMode = Enum.IsDefined(ColorMode) ? ColorMode : FogColorMode.SkyAndConstantBlend;
+                settings.Color = Color.ToVector3();
+                settings.ColorBlend = ColorBlend;
+                settings.Density = Density;
+                settings.StartDistance = StartDistance;
+                settings.EndDistance = EndDistance;
+                settings.Height = Height;
+                settings.HeightFalloff = HeightFalloff;
+                settings.HeightDensity = HeightDensity;
+                settings.MaxOpacity = MaxOpacity;
+                settings.DirectionalInscatteringEnabled =
+                    DirectionalInscatteringEnabled;
+                settings.DirectionalInscatteringColor =
+                    DirectionalInscatteringColor.ToVector3();
+                settings.DirectionalInscatteringDirection =
+                    DirectionalInscatteringDirection.ToVector3();
+                settings.DirectionalInscatteringIntensity =
+                    DirectionalInscatteringIntensity;
+                settings.DirectionalInscatteringExponent =
+                    DirectionalInscatteringExponent;
+                settings.DebugView = Enum.IsDefined(DebugView)
+                    ? DebugView
+                    : FogDebugView.None;
+                Volumetric.ApplyTo(settings.Volumetric);
+            }
+        }
+
+        private sealed record VolumetricFogFile
+        {
+            // Kept only so version-16 files deserialize without an unknown
+            // member. Qualification is deliberately not restored from disk.
+            public bool? ProfileQualified { get; init; }
+            public float MaxDistance { get; init; } = 250f;
+            public float BaseExtinctionPerMeter { get; init; } = 0.015f;
+            public float HeightExtinctionPerMeter { get; init; } = 0.04f;
+            public float Height { get; init; }
+            public float HeightFalloff { get; init; } = 0.12f;
+            public Vector3File ScatteringAlbedo { get; init; } = new() { X = 0.9f, Y = 0.92f, Z = 0.95f };
+            public float Anisotropy { get; init; } = 0.2f;
+            public Vector3File GlobalWind { get; init; } = new();
+            public float NoiseScale { get; init; } = 0.035f;
+            public float NoiseStrength { get; init; } = 0.15f;
+            public float NoiseContrast { get; init; } = 1f;
+            public float SelfShadowDistance { get; init; } = 64f;
+            public float TemporalHistoryWeight { get; init; } = 0.9f;
+            public int MultipleScatteringIterations { get; init; }
+            public float MultipleScatteringEnergyLimit { get; init; } = 0.5f;
+            public int DebugSlice { get; init; } = -1;
+            public FogDebugProjection DebugProjection { get; init; } =
+                FogDebugProjection.MaxAlongRay;
+
+            public static VolumetricFogFile FromSettings(VolumetricFogSettings settings) => new()
+            {
+                MaxDistance = settings.MaxDistance,
+                BaseExtinctionPerMeter = settings.BaseExtinctionPerMeter,
+                HeightExtinctionPerMeter = settings.HeightExtinctionPerMeter,
+                Height = settings.Height,
+                HeightFalloff = settings.HeightFalloff,
+                ScatteringAlbedo = Vector3File.FromVector3(settings.ScatteringAlbedo),
+                Anisotropy = settings.Anisotropy,
+                GlobalWind = Vector3File.FromVector3(settings.GlobalWind),
+                NoiseScale = settings.NoiseScale,
+                NoiseStrength = settings.NoiseStrength,
+                NoiseContrast = settings.NoiseContrast,
+                SelfShadowDistance = settings.SelfShadowDistance,
+                TemporalHistoryWeight = settings.TemporalHistoryWeight,
+                MultipleScatteringIterations = settings.MultipleScatteringIterations,
+                MultipleScatteringEnergyLimit = settings.MultipleScatteringEnergyLimit,
+                DebugSlice = settings.DebugSlice,
+                DebugProjection = settings.DebugProjection
+            };
+
+            public void ApplyTo(VolumetricFogSettings settings)
+            {
+                settings.MaxDistance = MaxDistance;
+                settings.BaseExtinctionPerMeter = BaseExtinctionPerMeter;
+                settings.HeightExtinctionPerMeter = HeightExtinctionPerMeter;
+                settings.Height = Height;
+                settings.HeightFalloff = HeightFalloff;
+                settings.ScatteringAlbedo = ScatteringAlbedo.ToVector3();
+                settings.Anisotropy = Anisotropy;
+                settings.GlobalWind = GlobalWind.ToVector3();
+                settings.NoiseScale = NoiseScale;
+                settings.NoiseStrength = NoiseStrength;
+                settings.NoiseContrast = NoiseContrast;
+                settings.SelfShadowDistance = SelfShadowDistance;
+                settings.TemporalHistoryWeight = TemporalHistoryWeight;
+                settings.MultipleScatteringIterations = MultipleScatteringIterations;
+                settings.MultipleScatteringEnergyLimit = MultipleScatteringEnergyLimit;
+                settings.DebugSlice = DebugSlice;
+                settings.DebugProjection = Enum.IsDefined(DebugProjection)
+                    ? DebugProjection
+                    : FogDebugProjection.MaxAlongRay;
             }
         }
 

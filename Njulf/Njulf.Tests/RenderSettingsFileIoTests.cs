@@ -83,7 +83,7 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(15));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(16));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));
@@ -224,6 +224,65 @@ public sealed class RenderSettingsFileIoTests
                     Is.EqualTo(DirectionalPcfRadiusMode.Constant));
                 Assert.That(loaded.DirectionalSoftAngularDiameterScale,
                     Is.EqualTo(1f));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void SaveLoad_PreservesFroxelFogContract()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "froxel-fog.json");
+        try
+        {
+            var settings = new RenderSettings();
+            settings.ApplyQualityPreset(RenderQualityPreset.Medium);
+            settings.Fog.Enabled = true;
+            settings.Fog.Technique = FogTechnique.Froxel;
+            settings.Fog.DebugView = FogDebugView.HistoryConfidence;
+            // A scene/settings file must not be able to self-qualify a
+            // production renderer profile.
+            settings.Fog.Volumetric.SingleScatteringQualified = true;
+            settings.Fog.Volumetric.MaxDistance = 480f;
+            settings.Fog.Volumetric.BaseExtinctionPerMeter = 0.027f;
+            settings.Fog.Volumetric.Anisotropy = 0.61f;
+            settings.Fog.Volumetric.GlobalWind = new(1.5f, -0.25f, 3f);
+            settings.Fog.Volumetric.MultipleScatteringIterations = 2;
+            settings.Fog.Volumetric.MultipleScatteringEnergyLimit = 0.35f;
+            settings.Fog.Volumetric.DebugProjection =
+                FogDebugProjection.Slice;
+            settings.Fog.Volumetric.DebugSlice = 17;
+
+            settings.Save(path);
+            RenderSettings loaded = RenderSettings.Load(path);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.Fog.Enabled, Is.True);
+                Assert.That(loaded.Fog.Technique, Is.EqualTo(FogTechnique.Froxel));
+                Assert.That(loaded.Fog.DebugView,
+                    Is.EqualTo(FogDebugView.HistoryConfidence));
+                Assert.That(loaded.Fog.Volumetric.SingleScatteringQualified,
+                    Is.False);
+                Assert.That(loaded.Fog.Volumetric.MultipleScatteringQualified,
+                    Is.False);
+                Assert.That(loaded.Fog.Volumetric.MaxDistance, Is.EqualTo(480f));
+                Assert.That(loaded.Fog.Volumetric.BaseExtinctionPerMeter,
+                    Is.EqualTo(0.027f));
+                Assert.That(loaded.Fog.Volumetric.Anisotropy, Is.EqualTo(0.61f));
+                Assert.That(loaded.Fog.Volumetric.GlobalWind,
+                    Is.EqualTo(new Njulf.Core.Math.Vector3(1.5f, -0.25f, 3f)));
+                Assert.That(loaded.Fog.Volumetric.MultipleScatteringIterations,
+                    Is.EqualTo(2));
+                Assert.That(loaded.Fog.Volumetric.MultipleScatteringEnergyLimit,
+                    Is.EqualTo(0.35f));
+                Assert.That(loaded.Fog.Volumetric.DebugProjection,
+                    Is.EqualTo(FogDebugProjection.Slice));
+                Assert.That(loaded.Fog.Volumetric.DebugSlice, Is.EqualTo(17));
             });
         }
         finally

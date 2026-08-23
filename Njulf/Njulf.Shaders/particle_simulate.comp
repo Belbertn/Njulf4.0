@@ -332,6 +332,10 @@ void EmitRenderInstance(uint frameIndex, uint counterBufferIndex, GPUParticleSta
     particle.BillboardMode = billboardMode;
     particle.DebugId = (state.EmitterIndex & 0xffffu) << 16;
     particle.Padding0 = (min(nextFlipbookFrame, 65535u) << 16u) | min(uint(round(clamp(flipbookBlend, 0.0, 1.0) * 65535.0)), 65535u);
+    particle.VolumetricAlbedoAndExtinction =
+        emitter.VolumetricAlbedoAndExtinction;
+    particle.VolumetricRadiusAnisotropyAndFlags =
+        emitter.VolumetricRadiusAnisotropyAndFlags;
     WriteParticleInstance(frameIndex, renderIndex, particle);
 }
 

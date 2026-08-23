@@ -40,6 +40,8 @@ namespace Njulf.Rendering.Pipeline
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             bool antiAliasingEnabled = _settings.AntiAliasing.EffectiveMode != AntiAliasingMode.None;
+            bool displayReferredFogDebug = FogDebugViewPolicy.IsDisplayReferred(
+                _settings.Fog.DebugView);
             CompositePipeline pipeline = antiAliasingEnabled ? _ldrCompositePipeline : _compositePipeline;
             Extent2D outputExtent = antiAliasingEnabled ? _renderTargets.LdrSceneColor.Extent : _swapchain.Extent;
             int activeSceneColorTextureIndex = sceneData.ActiveSceneColorTextureIndex == BindlessIndex.FoggedSceneColorTexture
@@ -105,8 +107,10 @@ namespace Njulf.Rendering.Pipeline
                 EnvironmentDebugView = (uint)_settings.Environment.DebugView,
                 EnvironmentDebugMipLevel = (uint)_settings.Environment.DebugMipLevel,
                 AmbientOcclusionDebugTextureIndex = (uint)GetAmbientOcclusionDebugTextureIndex(),
-                AutoExposureEnabled = _settings.AutoExposure.Enabled ? 1u : 0u,
-                AutoExposureStateBufferIndex = (uint)(BindlessIndex.AutoExposureStateBufferBase + frameIndex)
+                AutoExposureEnabled = _settings.AutoExposure.Enabled &&
+                    !displayReferredFogDebug ? 1u : 0u,
+                AutoExposureStateBufferIndex = (uint)(BindlessIndex.AutoExposureStateBufferBase + frameIndex),
+                DisplayReferredDebug = displayReferredFogDebug ? 1u : 0u
             };
 
             uint size = (uint)Marshal.SizeOf<GPUCompositePushConstants>();

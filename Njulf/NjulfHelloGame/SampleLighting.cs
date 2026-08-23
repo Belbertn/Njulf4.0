@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
@@ -10,7 +11,8 @@ internal enum SampleLightingMode
     DirectionalKey,
     ThreePointDemo,
     SpotShadowDemo,
-    PointShadowDemo
+    PointShadowDemo,
+    VolumetricShowcase
 }
 
 internal static class SampleLighting
@@ -21,12 +23,16 @@ internal static class SampleLighting
             throw new ArgumentNullException(nameof(settings));
 
         settings.Shadows.DirectionalShadowsEnabled = true;
-        settings.Shadows.SpotShadowsEnabled = mode == SampleLightingMode.SpotShadowDemo;
-        settings.Shadows.PointShadowsEnabled = mode == SampleLightingMode.PointShadowDemo;
-        settings.Shadows.MaxShadowedSpotLights = mode == SampleLightingMode.SpotShadowDemo
+        bool spotShadows = mode is SampleLightingMode.SpotShadowDemo or
+            SampleLightingMode.VolumetricShowcase;
+        bool pointShadows = mode is SampleLightingMode.PointShadowDemo or
+            SampleLightingMode.VolumetricShowcase;
+        settings.Shadows.SpotShadowsEnabled = spotShadows;
+        settings.Shadows.PointShadowsEnabled = pointShadows;
+        settings.Shadows.MaxShadowedSpotLights = spotShadows
             ? Math.Max(settings.Shadows.MaxShadowedSpotLights, 2)
             : 0;
-        settings.Shadows.MaxShadowedPointLights = mode == SampleLightingMode.PointShadowDemo
+        settings.Shadows.MaxShadowedPointLights = pointShadows
             ? Math.Max(settings.Shadows.MaxShadowedPointLights, 1)
             : 0;
     }
@@ -51,6 +57,10 @@ internal static class SampleLighting
                 break;
             case SampleLightingMode.PointShadowDemo:
                 AddPointShadowDemo(lightManager);
+                break;
+            case SampleLightingMode.VolumetricShowcase:
+                foreach (Light light in CreateVolumetricShowcaseLights())
+                    lightManager.AddLight(light);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown sample lighting mode.");
@@ -144,5 +154,49 @@ internal static class SampleLighting
             Range = 6f,
             CastsShadows = false
         });
+    }
+
+    internal static IReadOnlyList<Light> CreateVolumetricShowcaseLights()
+    {
+        return
+        [
+            SampleSponzaLightingProfile.CreateDirectionalKey(),
+            new Light
+            {
+                Type = LightType.Spot,
+                // Place the key behind the pillar and aim it toward the open
+                // camera side. The pillar therefore cuts a readable shadow
+                // through the authored haze volume.
+                Position = new Vector3(-0.75f, 3.85f, -2.45f),
+                Direction = Vector3.Normalize(new Vector3(0.16f, -0.28f, 0.95f)),
+                Color = new Vector3(1.0f, 0.78f, 0.52f),
+                Intensity = 72f,
+                Range = 10f,
+                SpotAngle = MathF.PI / 6f,
+                CastsShadows = true,
+                ShadowStrength = 0.92f,
+                ShadowPriority = 12
+            },
+            new Light
+            {
+                Type = LightType.Point,
+                Position = new Vector3(-2.2f, 1.1f, 0.6f),
+                Color = new Vector3(1.0f, 0.28f, 0.05f),
+                Intensity = 34f,
+                Range = 4.5f,
+                CastsShadows = true,
+                ShadowStrength = 0.85f,
+                ShadowPriority = 10
+            },
+            new Light
+            {
+                Type = LightType.Point,
+                Position = new Vector3(2f, 1.25f, 0.2f),
+                Color = new Vector3(0.18f, 0.65f, 1.0f),
+                Intensity = 24f,
+                Range = 4f,
+                CastsShadows = false
+            }
+        ];
     }
 }

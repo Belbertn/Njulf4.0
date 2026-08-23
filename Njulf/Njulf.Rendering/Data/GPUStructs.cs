@@ -112,6 +112,8 @@ namespace Njulf.Rendering.Data
         public uint BillboardMode;
         public uint DebugId;
         public uint Padding0;
+        public Vector4 VolumetricAlbedoAndExtinction;
+        public Vector4 VolumetricRadiusAnisotropyAndFlags;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -167,6 +169,8 @@ namespace Njulf.Rendering.Data
         public Vector4 EmissiveAngularVelocity;
         public Vector4 RotationParams;
         public Vector4 TimingParams;
+        public Vector4 VolumetricAlbedoAndExtinction;
+        public Vector4 VolumetricRadiusAnisotropyAndFlags;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -2662,7 +2666,7 @@ namespace Njulf.Rendering.Data
         public uint AmbientOcclusionDebugTextureIndex;
         public uint AutoExposureEnabled;
         public uint AutoExposureStateBufferIndex;
-        public uint Padding0;
+        public uint DisplayReferredDebug;
         public uint Padding1;
     }
 
@@ -2719,6 +2723,97 @@ namespace Njulf.Rendering.Data
         public uint DebugView;
         public uint DirectionalInscatteringEnabled;
         public uint CurrentFrameIndex;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVolumetricFogFrameData
+    {
+        public Matrix4x4 ViewProjectionMatrix;
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Matrix4x4 PreviousViewProjectionMatrix;
+        public Vector4 CameraPositionAndTime;
+        public Vector4 PreviousCameraPositionAndDeltaTime;
+        public Vector4 ScreenDimensions;
+        public Vector4 GridDimensions;
+        public Vector4 SourceClusterDimensions;
+        public Vector4 LightingGridDimensions;
+        public Vector4 SourceClusterCellDimensions;
+        public Vector4 LightingCellDimensions;
+        public Vector4 DepthParameters;
+        public Vector4 GlobalExtinction;
+        public Vector4 GlobalScatteringAlbedoAndAnisotropy;
+        public Vector4 WindAndNoiseScale;
+        public Vector4 NoiseSelfShadowAndHistory;
+        public Vector4 TemporalSampleAndReset;
+        public Vector4 CountsAndDebug;
+        public Vector4 MultipleScattering;
+        public Vector4 LightCounts;
+        public Vector4 FogColorAndOpacity;
+        public Vector4 GridProjection;
+        public Vector4 SunDirectionAndFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVolumetricDensityVolume
+    {
+        public Vector4 PositionAndShape;
+        public Vector4 Rotation;
+        public Vector4 BoxExtentsAndRadius;
+        public Vector4 ScatteringAlbedoAndDensity;
+        public Vector4 ExtinctionEdgeAnisotropyPriority;
+        public Vector4 NoiseParameters;
+        public Vector4 FlowVelocityAndSeed;
+        public uint StableIdentityLow;
+        public uint StableIdentityHigh;
+        public uint Enabled;
+        public uint Padding0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVolumetricFogPushConstants
+    {
+        public uint FrameIndex;
+        public uint Stage;
+        public uint HistoryReadBank;
+        public uint HistoryWriteBank;
+        public uint MultipleScatteringIteration;
+        public uint Flags;
+        public uint Padding0;
+        public uint Padding1;
+    }
+
+    /// <summary>
+    /// Fence-complete validation counters written by the froxel compute
+    /// stages. Floating-point values use fixed-point scales shared with the
+    /// froxel shaders.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVolumetricFogDiagnostics
+    {
+        public uint SampleCount;
+        public uint MediumNonEmptyCount;
+        public uint MaximumExtinctionQ;
+        public uint ExtinctionSumQ;
+        public uint DirectNonZeroCount;
+        public uint MaximumDirectLuminanceQ;
+        public uint DirectLuminanceSumQ;
+        public uint IndirectNonZeroCount;
+        public uint MaximumIndirectLuminanceQ;
+        public uint IndirectLuminanceSumQ;
+        public uint DdgiSupportedCount;
+        public uint MaximumOpacityQ;
+        public uint TransmittanceSumQ;
+        public uint HistoryAcceptedCount;
+        public uint HistoryRejectedCount;
+        public uint HistoryRejectedInvalidCount;
+        public uint HistoryRejectedBoundsCount;
+        public uint HistoryRejectedExtinctionCount;
+        public uint HistoryRejectedRadianceCount;
+        public uint HistoryRejectedVelocityCount;
+        public uint NonFiniteCount;
+        public uint AdmittedSourceCount;
+        public uint ClusterOverflowCount;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

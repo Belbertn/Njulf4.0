@@ -2467,8 +2467,11 @@ namespace Njulf.Rendering
                 _context,
                 _swapchain,
                 _bindlessHeap,
+                _bufferManager,
                 _renderTargets!,
                 Settings,
+                _simpleDdgiVolumeManager,
+                _raySceneDescriptorBank!,
                 _simpleDdgiReceiverFeedbackRuntime);
             AddPassInstance(fogPass);
 
@@ -4181,6 +4184,11 @@ namespace Njulf.Rendering
                 captureSceneSubmissionValidationLists: Settings.SceneSubmission.ValidationCompareCpuGpuLists,
                 gpuLod1DistanceRatio: Settings.SceneSubmission.GpuLod1DistanceRatio,
                 gpuLod2DistanceRatio: Settings.SceneSubmission.GpuLod2DistanceRatio);
+            sceneData.VolumetricDensityVolumes = scene.VolumetricDensityVolumes
+                .Where(volume => volume.Enabled)
+                .OrderByDescending(volume => volume.Priority)
+                .ThenBy(volume => volume.Id)
+                .ToArray();
             if (MaterialDebugViewPolicy.IsLinearDirectCapture(Settings.Materials.DebugView))
             {
                 // A direct-light signal has no environment/background term.
@@ -4660,6 +4668,15 @@ namespace Njulf.Rendering
             if (reflectionsAllowed)
                 UpdateReflectionProbeTelemetry(sceneData);
             FinalizeSimpleDdgiReceiverFeedbackCapture();
+
+            // FogPass produces the B5 froxel-consumer evidence. Refresh this
+            // one admission after graph execution so diagnostics describe the
+            // commands that were actually recorded this frame.
+            sceneData.GiRoadmapExperiments = sceneData.GiRoadmapExperiments with
+            {
+                DirectionalFog =
+                    CreateDirectionalFogExperimentAdmission(sceneData)
+            };
 
             // SceneColor still contains the linear, pre-exposure result here.
             // Tone mapping only sampled it; capture before any subsequent
@@ -8642,6 +8659,98 @@ namespace Njulf.Rendering
                 MaterialEstimatedAlphaCandidateRejectCount = _completedMaterialGiCounters.EstimatedAlphaCandidateRejectCount,
                 MaterialNonFiniteValueCount = _completedMaterialGiCounters.NonFiniteMaterialOrRadianceCount,
                 MaterialClampedValueCount = _completedMaterialGiCounters.ClampedMaterialOrRadianceCount,
+                FogRequestedTechnique = sceneData.FogRequestedTechnique,
+                FogEffectiveTechnique = sceneData.FogEffectiveTechnique,
+                VolumetricFogStatus = sceneData.VolumetricFogStatus,
+                VolumetricFogGridWidth = sceneData.VolumetricFogGridWidth,
+                VolumetricFogGridHeight = sceneData.VolumetricFogGridHeight,
+                VolumetricFogGridDepth = sceneData.VolumetricFogGridDepth,
+                VolumetricFogClusterCount = sceneData.VolumetricFogClusterCount,
+                VolumetricFogAllocatedBytes = sceneData.VolumetricFogAllocatedBytes,
+                VolumetricFogLocalVolumeCount = sceneData.VolumetricFogLocalVolumeCount,
+                VolumetricFogParticleSourceCount = sceneData.VolumetricFogParticleSourceCount,
+                VolumetricFogParticleCandidateCount =
+                    sceneData.VolumetricFogParticleCandidateCount,
+                VolumetricFogParticleAdmittedCount =
+                    sceneData.VolumetricFogParticleAdmittedCount,
+                VolumetricFogMultipleScatteringIterations =
+                    sceneData.VolumetricFogMultipleScatteringIterations,
+                VolumetricFogHistoryValid = sceneData.VolumetricFogHistoryValid ? 1 : 0,
+                VolumetricFogHistoryRejected = sceneData.VolumetricFogHistoryRejected ? 1 : 0,
+                VolumetricFogDirectionalL2Active =
+                    sceneData.VolumetricFogDirectionalL2Active ? 1 : 0,
+                VolumetricFogEnergyOwnershipSeparated =
+                    sceneData.VolumetricFogEnergyOwnershipSeparated ? 1 : 0,
+                VolumetricFogOutputReadbackValid =
+                    sceneData.VolumetricFogOutputReadbackValid ? 1 : 0,
+                VolumetricFogOutputProduced =
+                    sceneData.VolumetricFogOutputProduced ? 1 : 0,
+                VolumetricFogDiagnosticSampleCount =
+                    sceneData.VolumetricFogDiagnosticSampleCount,
+                VolumetricFogMediumNonEmptyFroxelCount =
+                    sceneData.VolumetricFogMediumNonEmptyFroxelCount,
+                VolumetricFogDirectNonZeroFroxelCount =
+                    sceneData.VolumetricFogDirectNonZeroFroxelCount,
+                VolumetricFogIndirectNonZeroFroxelCount =
+                    sceneData.VolumetricFogIndirectNonZeroFroxelCount,
+                VolumetricFogDdgiSupportedFroxelCount =
+                    sceneData.VolumetricFogDdgiSupportedFroxelCount,
+                VolumetricFogHistoryAcceptedFroxelCount =
+                    sceneData.VolumetricFogHistoryAcceptedFroxelCount,
+                VolumetricFogHistoryRejectedFroxelCount =
+                    sceneData.VolumetricFogHistoryRejectedFroxelCount,
+                VolumetricFogHistoryRejectedInvalidFroxelCount =
+                    sceneData.VolumetricFogHistoryRejectedInvalidFroxelCount,
+                VolumetricFogHistoryRejectedBoundsFroxelCount =
+                    sceneData.VolumetricFogHistoryRejectedBoundsFroxelCount,
+                VolumetricFogHistoryRejectedExtinctionFroxelCount =
+                    sceneData.VolumetricFogHistoryRejectedExtinctionFroxelCount,
+                VolumetricFogHistoryRejectedRadianceFroxelCount =
+                    sceneData.VolumetricFogHistoryRejectedRadianceFroxelCount,
+                VolumetricFogHistoryRejectedVelocityFroxelCount =
+                    sceneData.VolumetricFogHistoryRejectedVelocityFroxelCount,
+                VolumetricFogClusterOverflowCount =
+                    sceneData.VolumetricFogClusterOverflowCount,
+                VolumetricFogNonFiniteCount =
+                    sceneData.VolumetricFogNonFiniteCount,
+                VolumetricFogMaximumExtinction =
+                    sceneData.VolumetricFogMaximumExtinction,
+                VolumetricFogMeanExtinction =
+                    sceneData.VolumetricFogMeanExtinction,
+                VolumetricFogMaximumDirectLuminance =
+                    sceneData.VolumetricFogMaximumDirectLuminance,
+                VolumetricFogMeanDirectLuminance =
+                    sceneData.VolumetricFogMeanDirectLuminance,
+                VolumetricFogMaximumIndirectLuminance =
+                    sceneData.VolumetricFogMaximumIndirectLuminance,
+                VolumetricFogMeanIndirectLuminance =
+                    sceneData.VolumetricFogMeanIndirectLuminance,
+                VolumetricFogMinimumTransmittance =
+                    sceneData.VolumetricFogMinimumTransmittance,
+                VolumetricFogMeanTransmittance =
+                    sceneData.VolumetricFogMeanTransmittance,
+                GpuVolumetricFogNoiseMicroseconds =
+                    sceneData.GpuVolumetricFogNoiseMicroseconds,
+                GpuVolumetricFogSourceCullMicroseconds =
+                    sceneData.GpuVolumetricFogSourceCullMicroseconds,
+                GpuVolumetricFogMediumMicroseconds =
+                    sceneData.GpuVolumetricFogMediumMicroseconds,
+                GpuVolumetricFogTransmittanceMicroseconds =
+                    sceneData.GpuVolumetricFogTransmittanceMicroseconds,
+                GpuVolumetricFogDdgiBounceMicroseconds =
+                    sceneData.GpuVolumetricFogDdgiBounceMicroseconds,
+                GpuVolumetricFogLightingCacheMicroseconds =
+                    sceneData.GpuVolumetricFogLightingCacheMicroseconds,
+                GpuVolumetricFogMultipleScatteringMicroseconds =
+                    sceneData.GpuVolumetricFogMultipleScatteringMicroseconds,
+                GpuVolumetricFogTemporalMicroseconds =
+                    sceneData.GpuVolumetricFogTemporalMicroseconds,
+                GpuVolumetricFogIntegrateMicroseconds =
+                    sceneData.GpuVolumetricFogIntegrateMicroseconds,
+                GpuVolumetricFogResolveMicroseconds =
+                    sceneData.GpuVolumetricFogResolveMicroseconds,
+                GpuVolumetricFogCompositeMicroseconds =
+                    sceneData.GpuVolumetricFogCompositeMicroseconds,
                 MaterialAlphaCandidateLimitReachedCount = _completedMaterialGiCounters.AlphaCandidateLimitReachedCount,
                 MaterialEstimatedDetailedTransportHitCount =
                     _completedMaterialGiCounters.EstimatedDetailedTransportHitCount,
@@ -12159,7 +12268,9 @@ namespace Njulf.Rendering
                 AsyncComputePath.HiZBuild => sceneData.HiZBuildEnabled,
                 // Fog samples Simple DDGI. Keep it on graphics whenever the
                 // optional image mirror is live for the same ownership reason.
-                AsyncComputePath.Fog => fogWillExecute && sceneData.SimpleDdgiSampledAtlasActive == 0,
+                AsyncComputePath.Fog => fogWillExecute &&
+                    !FroxelFogMayExecute() &&
+                    sceneData.SimpleDdgiSampledAtlasActive == 0,
                 AsyncComputePath.Bloom =>
                     Settings.Bloom.Enabled &&
                     _renderTargets?.BloomMipCount > 0 &&
@@ -12170,6 +12281,18 @@ namespace Njulf.Rendering
                     sceneData.GpuParticleCapacity > 0,
                 _ => false
             };
+
+            bool FroxelFogMayExecute()
+            {
+                FogTechnique technique = Settings.Fog.Technique;
+                if (technique == FogTechnique.Froxel)
+                    return true;
+                if (technique != FogTechnique.Auto ||
+                    !Settings.Fog.Volumetric.SingleScatteringQualified)
+                    return false;
+                return Settings.QualityPreset is RenderQualityPreset.High or
+                    RenderQualityPreset.DdgiHigh or RenderQualityPreset.Ultra;
+            }
         }
 
         private AsyncComputeTimingDecision GetAsyncComputeTimingDecision(
@@ -12966,6 +13089,30 @@ namespace Njulf.Rendering
                 sceneData.GpuDebugDdgiProbeMicroseconds +
                 sceneData.GpuDebugLightTileMicroseconds;
             sceneData.GpuFogMicroseconds = timings.GetGpuMicrosecondsOrZero("FogPass");
+            sceneData.GpuVolumetricFogNoiseMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.FroxelNoise");
+            sceneData.GpuVolumetricFogSourceCullMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.SourceCull");
+            sceneData.GpuVolumetricFogMediumMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.Medium");
+            sceneData.GpuVolumetricFogTransmittanceMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.Transmittance");
+            sceneData.GpuVolumetricFogDdgiBounceMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.DdgiBounce");
+            sceneData.GpuVolumetricFogLightingCacheMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.DirectLightingCache") +
+                timings.GetGpuMicrosecondsOrZero("Fog.IndirectLightingCache");
+            sceneData.GpuVolumetricFogMultipleScatteringMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.MultipleScattering.0") +
+                timings.GetGpuMicrosecondsOrZero("Fog.MultipleScattering.1");
+            sceneData.GpuVolumetricFogTemporalMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.Temporal");
+            sceneData.GpuVolumetricFogIntegrateMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.Integrate");
+            sceneData.GpuVolumetricFogResolveMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.Resolve");
+            sceneData.GpuVolumetricFogCompositeMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("Fog.Composite");
             sceneData.GpuAutoExposureMicroseconds = timings.GetGpuMicrosecondsOrZero("AutoExposurePass");
             sceneData.GpuCompositeMicroseconds = timings.GetGpuMicrosecondsOrZero("ToneMapCompositePass");
             sceneData.GpuAntiAliasingMicroseconds = timings.GetGpuMicrosecondsOrZero("AntiAliasingPass");
@@ -15495,6 +15642,31 @@ namespace Njulf.Rendering
             }.NormalizeForPersistence();
         }
 
+        private GiExperimentAdmission CreateDirectionalFogExperimentAdmission(
+            SceneRenderingData sceneData)
+        {
+            GlobalIlluminationSettings gi = Settings.GlobalIllumination;
+            return SimpleDdgiDirectionalFogExperiment.EvaluateAdmission(
+                gi.SimpleDdgiDirectionalFogEnabled,
+                new SimpleDdgiDirectionalFogCapabilities(
+                    L2IncidentRadianceSidecarAvailable:
+                        _simpleDdgiVolumeManager?.DirectionalRadianceMode ==
+                            SimpleDdgiDirectionalRadianceMode.L2,
+                    FroxelPhaseIntegrationAvailable:
+                        sceneData.FogEffectiveTechnique == FogTechnique.Froxel &&
+                        sceneData.VolumetricFogDirectionalL2Active,
+                    DirectIndirectOwnershipSeparated:
+                        sceneData.VolumetricFogEnergyOwnershipSeparated),
+                productionQualified:
+                    Settings.Fog.Volumetric.SingleScatteringQualified &&
+                    sceneData.FogEffectiveTechnique == FogTechnique.Froxel &&
+                    sceneData.VolumetricFogOutputReadbackValid &&
+                    sceneData.VolumetricFogOutputProduced &&
+                    sceneData.VolumetricFogIndirectNonZeroFroxelCount > 0 &&
+                    sceneData.VolumetricFogDdgiSupportedFroxelCount > 0,
+                allocatedBytes: sceneData.VolumetricFogAllocatedBytes);
+        }
+
         /// <summary>
         /// Builds one fail-closed, generation-aligned Simple-DDGI liveness
         /// sample.  It is intentionally diagnostic-only: no scheduler budget,
@@ -15508,12 +15680,7 @@ namespace Njulf.Rendering
         {
             GlobalIlluminationSettings gi = Settings.GlobalIllumination;
             GiExperimentAdmission directionalFog =
-                SimpleDdgiDirectionalFogExperiment.EvaluateAdmission(
-                    gi.SimpleDdgiDirectionalFogEnabled,
-                    new SimpleDdgiDirectionalFogCapabilities(
-                        L2IncidentRadianceSidecarAvailable: false,
-                        FroxelPhaseIntegrationAvailable: false,
-                        DirectIndirectOwnershipSeparated: true));
+                CreateDirectionalFogExperimentAdmission(sceneData);
 
             Core.GiHardwareResearchCapabilities hardware =
                 _context.GiHardwareResearchCapabilities;

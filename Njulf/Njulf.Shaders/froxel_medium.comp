@@ -1,0 +1,176 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "froxel_common.glsl"
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+void AccumulateMedium(
+    float extinction,
+    vec3 albedo,
+    float anisotropy,
+    vec3 velocity,
+    inout vec3 scattering,
+    inout float totalExtinction,
+    inout float weightedAnisotropy,
+    inout vec3 weightedVelocity)
+{
+    float sigmaT = clamp(extinction, 0.0, 64.0);
+    vec3 sigmaS = sigmaT * clamp(albedo, vec3(0.0), vec3(1.0));
+    scattering += sigmaS;
+    totalExtinction += sigmaT;
+    weightedVelocity += clamp(velocity, vec3(-64.0), vec3(64.0)) * sigmaT;
+    weightedAnisotropy += dot(sigmaS, vec3(0.2126, 0.7152, 0.0722)) *
+        clamp(anisotropy, -0.9, 0.9);
+}
+
+void main()
+{
+    uvec3 coordinate = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(coordinate, FroxelGridSize())))
+        return;
+
+    vec3 worldPosition = FroxelSampleWorldPosition(coordinate);
+    float viewDistance = FroxelSliceCenter(coordinate.z);
+    uint fogMode = uint(max(round(FroxelFrame.SunDirectionAndFlags.w), 0.0));
+    float distanceMask = smoothstep(
+        max(FroxelFrame.GridProjection.z, 0.0),
+        max(FroxelFrame.GridProjection.z, 0.0) +
+            max(FroxelFrame.GridDimensions.w, 1.0),
+        viewDistance);
+    float globalExtinction = 0.0;
+    if (fogMode == 1u || fogMode == 3u)
+        globalExtinction += FroxelFrame.GlobalExtinction.x * distanceMask;
+    if (fogMode == 2u || fogMode == 3u)
+    {
+        float relativeHeight = worldPosition.y - FroxelFrame.GlobalExtinction.z;
+        globalExtinction += FroxelFrame.GlobalExtinction.y *
+            exp(-max(relativeHeight, 0.0) *
+                max(FroxelFrame.GlobalExtinction.w, 0.001));
+    }
+    globalExtinction *= max(FroxelDensityNoise(
+        worldPosition,
+        FroxelFrame.WindAndNoiseScale.xyz,
+        FroxelFrame.WindAndNoiseScale.w,
+        FroxelFrame.NoiseSelfShadowAndHistory.x,
+        FroxelFrame.NoiseSelfShadowAndHistory.y,
+        0.0), 0.0);
+
+    vec3 scattering = vec3(0.0);
+    float totalExtinction = 0.0;
+    float weightedAnisotropy = 0.0;
+    vec3 weightedVelocity = vec3(0.0);
+    AccumulateMedium(
+        globalExtinction,
+        FroxelFrame.GlobalScatteringAlbedoAndAnisotropy.xyz,
+        FroxelFrame.GlobalScatteringAlbedoAndAnisotropy.w,
+        FroxelFrame.WindAndNoiseScale.xyz *
+            clamp(FroxelFrame.NoiseSelfShadowAndHistory.x, 0.0, 1.0),
+        scattering,
+        totalExtinction,
+        weightedAnisotropy,
+        weightedVelocity);
+
+    uint clusterIndex = FroxelFlattenCluster(
+        FroxelClusterForCoordinate(coordinate));
+    uint capacity = FroxelClusterReferenceCapacity();
+    uint sourceCount = min(FroxelClusterCounts[clusterIndex], capacity);
+    for (uint sourceOrdinal = 0u; sourceOrdinal < sourceCount; sourceOrdinal++)
+    {
+        uint encoded = FroxelClusterReferences[
+            clusterIndex * capacity + sourceOrdinal];
+        uint sourceType = encoded >> FROXEL_SOURCE_TYPE_SHIFT;
+        uint sourceIndex = encoded & FROXEL_SOURCE_INDEX_MASK;
+        if (sourceType == FROXEL_SOURCE_LOCAL_VOLUME)
+        {
+            GPUVolumetricDensityVolume volume = FroxelVolumes[sourceIndex];
+            float weight = FroxelVolumeWeight(volume, worldPosition);
+            if (!(weight > 0.0))
+                continue;
+            float noise = FroxelDensityNoise(
+                worldPosition,
+                volume.FlowVelocityAndSeed.xyz +
+                    FroxelFrame.WindAndNoiseScale.xyz,
+                volume.NoiseParameters.x,
+                volume.NoiseParameters.y,
+                volume.NoiseParameters.z,
+                volume.FlowVelocityAndSeed.w);
+            float extinction = volume.ExtinctionEdgeAnisotropyPriority.x *
+                volume.ScatteringAlbedoAndDensity.w * weight * max(noise, 0.0);
+            AccumulateMedium(
+                extinction,
+                volume.ScatteringAlbedoAndDensity.xyz,
+                volume.ExtinctionEdgeAnisotropyPriority.z,
+                volume.FlowVelocityAndSeed.xyz +
+                    FroxelFrame.WindAndNoiseScale.xyz,
+                scattering,
+                totalExtinction,
+                weightedAnisotropy,
+                weightedVelocity);
+        }
+        else if (sourceType == FROXEL_SOURCE_CPU_PARTICLE ||
+                 sourceType == FROXEL_SOURCE_GPU_PARTICLE)
+        {
+            GPUParticleInstance particle = FroxelReadParticle(
+                sourceType, sourceIndex);
+            if (any(isnan(particle.PositionSize)) ||
+                any(isinf(particle.PositionSize)) ||
+                any(isnan(particle.VolumetricAlbedoAndExtinction)) ||
+                any(isinf(particle.VolumetricAlbedoAndExtinction)) ||
+                any(isnan(particle.VolumetricRadiusAnisotropyAndFlags)) ||
+                any(isinf(particle.VolumetricRadiusAnisotropyAndFlags)))
+                continue;
+            float radius = max(particle.PositionSize.w *
+                clamp(particle.VolumetricRadiusAnisotropyAndFlags.x,
+                    0.001, 64.0), 0.001);
+            float normalizedDistance = length(
+                worldPosition - particle.PositionSize.xyz) / radius;
+            float weight = clamp(1.0 - normalizedDistance, 0.0, 1.0);
+            weight *= weight;
+            AccumulateMedium(
+                particle.VolumetricAlbedoAndExtinction.w * weight,
+                particle.VolumetricAlbedoAndExtinction.xyz,
+                particle.VolumetricRadiusAnisotropyAndFlags.y,
+                particle.VelocityRotation.xyz,
+                scattering,
+                totalExtinction,
+                weightedAnisotropy,
+                weightedVelocity);
+        }
+    }
+
+    float scatteringLuminance = dot(
+        scattering, vec3(0.2126, 0.7152, 0.0722));
+    float anisotropy = scatteringLuminance > 1.0e-6
+        ? clamp(weightedAnisotropy / scatteringLuminance, -0.9, 0.9)
+        : 0.0;
+    vec3 velocity = totalExtinction > 1.0e-6
+        ? weightedVelocity / totalExtinction
+        : vec3(0.0);
+    if (any(isnan(vec4(scattering, totalExtinction))) ||
+        any(isinf(vec4(scattering, totalExtinction))) ||
+        any(isnan(velocity)) || any(isinf(velocity)) ||
+        isnan(anisotropy) || isinf(anisotropy))
+    {
+        atomicAdd(FroxelDiagnostics.NonFiniteCount, 1u);
+        scattering = vec3(0.0);
+        totalExtinction = 0.0;
+        anisotropy = 0.0;
+        velocity = vec3(0.0);
+    }
+    if (FroxelIsDiagnosticSample(coordinate))
+    {
+        atomicAdd(FroxelDiagnostics.SampleCount, 1u);
+        if (totalExtinction > 1.0e-6)
+            atomicAdd(FroxelDiagnostics.MediumNonEmptyCount, 1u);
+        atomicMax(FroxelDiagnostics.MaximumExtinctionQ,
+            FroxelQuantizeDiagnostic(totalExtinction, 1024.0));
+        atomicAdd(FroxelDiagnostics.ExtinctionSumQ,
+            FroxelQuantizeDiagnostic(totalExtinction, 1024.0));
+    }
+    imageStore(FroxelMedium, ivec3(coordinate),
+        vec4(scattering, totalExtinction));
+    imageStore(FroxelMediumAuxiliary, ivec3(coordinate),
+        vec4(velocity, anisotropy));
+}

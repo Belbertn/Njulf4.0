@@ -1,0 +1,189 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "froxel_common.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+shared uint SharedSourceValid;
+shared uint SharedEncodedSource;
+shared uvec3 SharedMinimumCluster;
+shared uvec3 SharedMaximumCluster;
+
+bool ProjectSourceBounds(
+    vec3 center,
+    float radius,
+    out uvec3 minimumCluster,
+    out uvec3 maximumCluster)
+{
+    vec3 camera = FroxelFrame.CameraPositionAndTime.xyz;
+    float centerDistance = length(center - camera);
+    if (isnan(centerDistance) || isinf(centerDistance))
+        return false;
+    float minimumDistance = max(
+        FroxelFrame.DepthParameters.x,
+        centerDistance - radius);
+    float maximumDistance = min(
+        FroxelFrame.DepthParameters.y,
+        centerDistance + radius);
+    if (maximumDistance < minimumDistance || centerDistance - radius >
+        FroxelFrame.DepthParameters.y)
+        return false;
+
+    vec4 clip = MulRowMajor(vec4(center, 1.0),
+        FroxelFrame.ViewProjectionMatrix);
+    if (!(clip.w > 1.0e-5))
+        return false;
+    vec2 uv = clip.xy / clip.w * 0.5 + vec2(0.5);
+    float projectedRadius = radius /
+        max(centerDistance, FroxelFrame.DepthParameters.x);
+    projectedRadius *= max(FroxelFrame.GridProjection.x,
+        FroxelFrame.GridProjection.y);
+
+    float pixelSize = max(FroxelFrame.GridDimensions.w, 1.0);
+    float guard = FroxelFrame.DepthParameters.w;
+    vec2 gridCenter = uv * FroxelFrame.ScreenDimensions.xy / pixelSize +
+        vec2(guard);
+    vec2 gridRadius = vec2(projectedRadius) *
+        FroxelFrame.ScreenDimensions.xy / pixelSize + vec2(1.0);
+    vec2 minimumGrid = clamp(gridCenter - gridRadius, vec2(0.0),
+        FroxelFrame.GridDimensions.xy - vec2(1.0));
+    vec2 maximumGrid = clamp(gridCenter + gridRadius, vec2(0.0),
+        FroxelFrame.GridDimensions.xy - vec2(1.0));
+    float minimumSlice = FroxelContinuousSlice(minimumDistance);
+    float maximumSlice = FroxelContinuousSlice(maximumDistance);
+    uvec3 sourceCell = FroxelSourceClusterCellSize();
+    minimumCluster = uvec3(
+        uvec2(floor(minimumGrid)) / sourceCell.xy,
+        uint(max(floor(minimumSlice), 0.0)) / sourceCell.z);
+    maximumCluster = min(uvec3(
+        uvec2(floor(maximumGrid)) / sourceCell.xy,
+        uint(max(floor(maximumSlice), 0.0)) / sourceCell.z),
+        FroxelClusterGridSize() - uvec3(1u));
+    return all(lessThanEqual(minimumCluster, maximumCluster));
+}
+
+void AppendSourceToCluster(
+    uint encodedSource,
+    uvec3 cluster)
+{
+    uint capacity = FroxelClusterReferenceCapacity();
+    uint clusterCount = FroxelClusterCount();
+    uint clusterIndex = FroxelFlattenCluster(cluster);
+    uint slot = atomicAdd(FroxelClusterCounts[clusterIndex], 1u);
+    if (slot < capacity)
+    {
+        FroxelClusterReferences[clusterIndex * capacity + slot] =
+            encodedSource;
+    }
+    else
+    {
+        atomicAdd(FroxelClusterCounts[clusterCount], 1u);
+        atomicAdd(FroxelDiagnostics.ClusterOverflowCount, 1u);
+    }
+}
+
+void main()
+{
+    uint sourceIndex = gl_WorkGroupID.x +
+        gl_WorkGroupID.y * gl_NumWorkGroups.x;
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        SharedSourceValid = 0u;
+        uint localCount = uint(max(round(FroxelFrame.CountsAndDebug.x), 0.0));
+        uint cpuParticleCount = uint(max(round(FroxelFrame.CountsAndDebug.y), 0.0));
+        uint gpuParticleCapacity =
+            uint(max(round(FroxelFrame.CountsAndDebug.z), 0.0));
+        uint gpuParticleCount = gpuParticleCapacity > 0u
+            ? min(FroxelGpuParticleRenderedCount(), gpuParticleCapacity)
+            : 0u;
+        uint totalCount = localCount + cpuParticleCount + gpuParticleCount;
+        if (sourceIndex < totalCount)
+        {
+            uint sourceType;
+            uint typedIndex;
+            vec3 center;
+            float radius;
+            bool valid = true;
+            if (sourceIndex < localCount)
+            {
+                sourceType = FROXEL_SOURCE_LOCAL_VOLUME;
+                typedIndex = sourceIndex;
+                GPUVolumetricDensityVolume volume = FroxelVolumes[typedIndex];
+                valid = volume.Enabled != 0u;
+                center = volume.PositionAndShape.xyz;
+                radius = volume.PositionAndShape.w > 0.5
+                    ? volume.BoxExtentsAndRadius.w
+                    : length(volume.BoxExtentsAndRadius.xyz);
+            }
+            else
+            {
+                uint particleOrdinal = sourceIndex - localCount;
+                sourceType = particleOrdinal < cpuParticleCount
+                    ? FROXEL_SOURCE_CPU_PARTICLE
+                    : FROXEL_SOURCE_GPU_PARTICLE;
+                typedIndex = sourceType == FROXEL_SOURCE_CPU_PARTICLE
+                    ? particleOrdinal
+                    : particleOrdinal - cpuParticleCount;
+                GPUParticleInstance particle = FroxelReadParticle(
+                    sourceType, typedIndex);
+                valid = !any(isnan(particle.PositionSize)) &&
+                    !any(isinf(particle.PositionSize)) &&
+                    !any(isnan(particle.VolumetricAlbedoAndExtinction)) &&
+                    !any(isinf(particle.VolumetricAlbedoAndExtinction)) &&
+                    !any(isnan(particle.VolumetricRadiusAnisotropyAndFlags)) &&
+                    !any(isinf(particle.VolumetricRadiusAnisotropyAndFlags)) &&
+                    particle.VolumetricRadiusAnisotropyAndFlags.z >= 0.5 &&
+                    particle.VolumetricAlbedoAndExtinction.w > 0.0;
+                center = particle.PositionSize.xyz;
+                radius = max(particle.PositionSize.w *
+                    clamp(particle.VolumetricRadiusAnisotropyAndFlags.x,
+                        0.001, 64.0), 0.001);
+            }
+
+            valid = valid &&
+                !any(isnan(center)) && !any(isinf(center)) &&
+                !isnan(radius) && !isinf(radius) && radius > 0.0;
+            if (valid)
+            {
+                radius = min(radius, FroxelFrame.DepthParameters.y);
+                uvec3 minimumCluster;
+                uvec3 maximumCluster;
+                if (ProjectSourceBounds(
+                        center,
+                        radius,
+                        minimumCluster,
+                        maximumCluster))
+                {
+                    SharedEncodedSource =
+                        (sourceType << FROXEL_SOURCE_TYPE_SHIFT) |
+                        (typedIndex & FROXEL_SOURCE_INDEX_MASK);
+                    SharedMinimumCluster = minimumCluster;
+                    SharedMaximumCluster = maximumCluster;
+                    SharedSourceValid = 1u;
+                    atomicAdd(FroxelDiagnostics.AdmittedSourceCount, 1u);
+                }
+            }
+        }
+    }
+
+    barrier();
+    if (SharedSourceValid == 0u)
+        return;
+
+    uvec3 dimensions = SharedMaximumCluster - SharedMinimumCluster + uvec3(1u);
+    uint cellCount = dimensions.x * dimensions.y * dimensions.z;
+    for (uint ordinal = gl_LocalInvocationIndex;
+         ordinal < cellCount;
+         ordinal += gl_WorkGroupSize.x)
+    {
+        uint x = ordinal % dimensions.x;
+        uint yz = ordinal / dimensions.x;
+        uint y = yz % dimensions.y;
+        uint z = yz / dimensions.y;
+        AppendSourceToCluster(
+            SharedEncodedSource,
+            SharedMinimumCluster + uvec3(x, y, z));
+    }
+}

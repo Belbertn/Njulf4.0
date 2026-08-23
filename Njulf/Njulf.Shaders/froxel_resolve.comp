@@ -1,0 +1,110 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "froxel_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+float FroxelSurfaceDistance(vec2 uv, float depth)
+{
+    if (depth <= 1.0e-7)
+        return FroxelFrame.DepthParameters.y;
+    vec4 world = MulRowMajor(
+        vec4(uv * 2.0 - vec2(1.0), depth, 1.0),
+        FroxelFrame.InverseViewProjectionMatrix);
+    world.xyz /= max(abs(world.w), 1.0e-6);
+    return length(world.xyz - FroxelFrame.CameraPositionAndTime.xyz);
+}
+
+vec4 FroxelIntegratedAtBoundary(vec2 coordinate, float boundaryCoordinate)
+{
+    int depth = int(FroxelGridSize().z);
+    float boundedBoundary = clamp(boundaryCoordinate, 0.0, float(depth));
+    vec4 clearMedium = vec4(0.0, 0.0, 0.0, 1.0);
+    vec2 uv = (coordinate + vec2(0.5)) / FroxelFrame.GridDimensions.xy;
+    vec4 first = texture(FroxelMediumSampler, vec3(uv, 0.0));
+    if (boundedBoundary < 1.0)
+        return mix(clearMedium, first, boundedBoundary);
+    float integratedCoordinate = min(boundedBoundary - 1.0,
+        float(depth - 1));
+    int lower = int(floor(integratedCoordinate));
+    int upper = min(lower + 1, depth - 1);
+    return mix(
+        texture(FroxelMediumSampler, vec3(uv, float(lower))),
+        texture(FroxelMediumSampler, vec3(uv, float(upper))),
+        fract(integratedCoordinate));
+}
+
+vec4 FroxelCubicWeights(float fraction)
+{
+    float f2 = fraction * fraction;
+    float f3 = f2 * fraction;
+    return vec4(
+        (1.0 - 3.0 * fraction + 3.0 * f2 - f3) / 6.0,
+        (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0,
+        (1.0 + 3.0 * fraction + 3.0 * f2 - 3.0 * f3) / 6.0,
+        f3 / 6.0);
+}
+
+void main()
+{
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    uint resolveDivisor = uint(max(round(
+        FroxelFrame.LightingGridDimensions.w), 1.0));
+    uvec2 dimensions = uvec2(
+        (uint(FroxelFrame.ScreenDimensions.x) + resolveDivisor - 1u) /
+            resolveDivisor,
+        (uint(FroxelFrame.ScreenDimensions.y) + resolveDivisor - 1u) /
+            resolveDivisor);
+    if (any(greaterThanEqual(pixel, dimensions)))
+        return;
+
+    vec2 fullPixel = (vec2(pixel) + vec2(0.5)) *
+        float(resolveDivisor) - vec2(0.5);
+    vec2 uv = (fullPixel + vec2(0.5)) *
+        FroxelFrame.ScreenDimensions.zw;
+    float depth = texture(BindlessTextures[nonuniformEXT(
+        DEPTH_TEXTURE_INDEX)], uv).r;
+    float centerDistance = FroxelSurfaceDistance(uv, depth);
+    float boundaryCoordinate = FroxelContinuousSlice(centerDistance);
+
+    float pixelSize = max(FroxelFrame.GridDimensions.w, 1.0);
+    vec2 sampleCoordinate = (fullPixel + vec2(0.5)) / pixelSize +
+        vec2(FroxelFrame.DepthParameters.w) - vec2(0.5);
+    vec2 base = floor(sampleCoordinate) - vec2(1.0);
+    vec2 fraction = fract(sampleCoordinate);
+    vec4 weightsX = FroxelCubicWeights(fraction.x);
+    vec4 weightsY = FroxelCubicWeights(fraction.y);
+    vec2 group0 = vec2(
+        weightsX.x + weightsX.y,
+        weightsY.x + weightsY.y);
+    vec2 group1 = vec2(
+        weightsX.z + weightsX.w,
+        weightsY.z + weightsY.w);
+    vec2 position0 = base + vec2(
+        weightsX.y / max(group0.x, 1.0e-6),
+        weightsY.y / max(group0.y, 1.0e-6));
+    vec2 position1 = base + vec2(2.0) + vec2(
+        weightsX.w / max(group1.x, 1.0e-6),
+        weightsY.w / max(group1.y, 1.0e-6));
+    vec4 resolved =
+        FroxelIntegratedAtBoundary(
+            vec2(position0.x, position0.y), boundaryCoordinate) *
+            (group0.x * group0.y) +
+        FroxelIntegratedAtBoundary(
+            vec2(position1.x, position0.y), boundaryCoordinate) *
+            (group1.x * group0.y) +
+        FroxelIntegratedAtBoundary(
+            vec2(position0.x, position1.y), boundaryCoordinate) *
+            (group0.x * group1.y) +
+        FroxelIntegratedAtBoundary(
+            vec2(position1.x, position1.y), boundaryCoordinate) *
+            (group1.x * group1.y);
+    resolved.rgb = max(resolved.rgb, vec3(0.0));
+    resolved.a = clamp(resolved.a, 0.0, 1.0);
+    float minimumTransmittance = 1.0 -
+        clamp(FroxelFrame.FogColorAndOpacity.w, 0.0, 1.0);
+    resolved.a = max(resolved.a, minimumTransmittance);
+    imageStore(FroxelResolvedHalf, ivec3(pixel, 0), resolved);
+}

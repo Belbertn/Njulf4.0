@@ -6,7 +6,7 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -17,6 +17,7 @@ public sealed class SceneDocument
     public List<SceneLightDocument> Lights { get; init; } = [];
     public List<SceneReflectionProbeDocument> ReflectionProbes { get; init; } = [];
     public List<SceneGlobalIlluminationProbeVolumeDocument> GiProbeVolumes { get; init; } = [];
+    public List<SceneVolumetricDensityVolumeDocument> VolumetricDensityVolumes { get; init; } = [];
     public List<SceneInstanceBatchDocument> InstanceBatches { get; init; } = [];
     public List<SceneFoliagePrototypeDocument> FoliagePrototypes { get; init; } = [];
     public List<SceneFoliagePatchDocument> FoliagePatches { get; init; } = [];
@@ -165,6 +166,29 @@ public sealed class SceneGlobalIlluminationProbeVolumeDocument
     public float DirtyHysteresis { get; init; } = 0.72f;
     public int UpdatePriority { get; init; }
     public int DirtyRaysPerProbe { get; init; } = 64;
+}
+
+public sealed class SceneVolumetricDensityVolumeDocument
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public string Name { get; init; } = "Density Volume";
+    public bool Enabled { get; init; } = true;
+    public SceneVector3 Position { get; init; }
+    public SceneQuaternion Rotation { get; init; } = SceneQuaternion.Identity;
+    public string Shape { get; init; } = "Box";
+    public SceneVector3 BoxExtents { get; init; } = new(5f, 5f, 5f);
+    public float Radius { get; init; } = 5f;
+    public float EdgeFade { get; init; } = 1f;
+    public float DensityMultiplier { get; init; } = 1f;
+    public float ExtinctionPerMeter { get; init; } = 0.08f;
+    public SceneVector3 ScatteringAlbedo { get; init; } = new(0.9f, 0.9f, 0.9f);
+    public float Anisotropy { get; init; } = 0.2f;
+    public int Priority { get; init; }
+    public float NoiseScale { get; init; } = 0.1f;
+    public float NoiseStrength { get; init; } = 0.5f;
+    public float NoiseContrast { get; init; } = 1f;
+    public uint NoiseSeed { get; init; } = 1u;
+    public SceneVector3 FlowVelocity { get; init; }
 }
 
 public sealed class SceneInstanceBatchDocument

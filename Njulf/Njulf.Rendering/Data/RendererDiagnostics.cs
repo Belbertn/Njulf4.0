@@ -608,6 +608,58 @@ namespace Njulf.Rendering.Data
 
         public IReadOnlyList<TextureAssetMemoryEntry> LargestTextureAssets { get; init; } = [];
         public IReadOnlyList<MeshletQualityEntry> MeshletQualityEntries { get; init; } = [];
+        public FogTechnique FogRequestedTechnique { get; init; } = FogTechnique.Auto;
+        public FogTechnique FogEffectiveTechnique { get; init; } = FogTechnique.Analytic;
+        public string VolumetricFogStatus { get; init; } = "not-evaluated";
+        public uint VolumetricFogGridWidth { get; init; }
+        public uint VolumetricFogGridHeight { get; init; }
+        public uint VolumetricFogGridDepth { get; init; }
+        public uint VolumetricFogClusterCount { get; init; }
+        public ulong VolumetricFogAllocatedBytes { get; init; }
+        public int VolumetricFogLocalVolumeCount { get; init; }
+        public int VolumetricFogParticleSourceCount { get; init; }
+        public int VolumetricFogParticleCandidateCount { get; init; }
+        public int VolumetricFogParticleAdmittedCount { get; init; }
+        public int VolumetricFogMultipleScatteringIterations { get; init; }
+        public int VolumetricFogHistoryValid { get; init; }
+        public int VolumetricFogHistoryRejected { get; init; }
+        public int VolumetricFogDirectionalL2Active { get; init; }
+        public int VolumetricFogEnergyOwnershipSeparated { get; init; }
+        public int VolumetricFogOutputReadbackValid { get; init; }
+        public int VolumetricFogOutputProduced { get; init; }
+        public int VolumetricFogDiagnosticSampleCount { get; init; }
+        public int VolumetricFogMediumNonEmptyFroxelCount { get; init; }
+        public int VolumetricFogDirectNonZeroFroxelCount { get; init; }
+        public int VolumetricFogIndirectNonZeroFroxelCount { get; init; }
+        public int VolumetricFogDdgiSupportedFroxelCount { get; init; }
+        public int VolumetricFogHistoryAcceptedFroxelCount { get; init; }
+        public int VolumetricFogHistoryRejectedFroxelCount { get; init; }
+        public int VolumetricFogHistoryRejectedInvalidFroxelCount { get; init; }
+        public int VolumetricFogHistoryRejectedBoundsFroxelCount { get; init; }
+        public int VolumetricFogHistoryRejectedExtinctionFroxelCount { get; init; }
+        public int VolumetricFogHistoryRejectedRadianceFroxelCount { get; init; }
+        public int VolumetricFogHistoryRejectedVelocityFroxelCount { get; init; }
+        public int VolumetricFogClusterOverflowCount { get; init; }
+        public int VolumetricFogNonFiniteCount { get; init; }
+        public float VolumetricFogMaximumExtinction { get; init; }
+        public float VolumetricFogMeanExtinction { get; init; }
+        public float VolumetricFogMaximumDirectLuminance { get; init; }
+        public float VolumetricFogMeanDirectLuminance { get; init; }
+        public float VolumetricFogMaximumIndirectLuminance { get; init; }
+        public float VolumetricFogMeanIndirectLuminance { get; init; }
+        public float VolumetricFogMinimumTransmittance { get; init; } = 1f;
+        public float VolumetricFogMeanTransmittance { get; init; } = 1f;
+        public long GpuVolumetricFogNoiseMicroseconds { get; init; }
+        public long GpuVolumetricFogSourceCullMicroseconds { get; init; }
+        public long GpuVolumetricFogMediumMicroseconds { get; init; }
+        public long GpuVolumetricFogTransmittanceMicroseconds { get; init; }
+        public long GpuVolumetricFogDdgiBounceMicroseconds { get; init; }
+        public long GpuVolumetricFogLightingCacheMicroseconds { get; init; }
+        public long GpuVolumetricFogMultipleScatteringMicroseconds { get; init; }
+        public long GpuVolumetricFogTemporalMicroseconds { get; init; }
+        public long GpuVolumetricFogIntegrateMicroseconds { get; init; }
+        public long GpuVolumetricFogResolveMicroseconds { get; init; }
+        public long GpuVolumetricFogCompositeMicroseconds { get; init; }
         public ulong StableSceneInputUploadBytes { get; init; }
         public ulong CpuCandidateListUploadBytes { get; init; }
         public int CameraDrivenCpuDrawListRebuilt { get; init; }

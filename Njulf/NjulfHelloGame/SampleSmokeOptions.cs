@@ -74,7 +74,12 @@ public sealed record SampleSmokeOptions(
     string? BistroQualityCaptureDirectory = null,
     SampleBistroQualityCaptureVariant BistroQualityCaptureVariant =
         SampleBistroQualityCaptureVariant.SunScaleStep,
-    SampleBenchmarkQualitySequenceOptions? BenchmarkQualitySequence = null)
+    SampleBenchmarkQualitySequenceOptions? BenchmarkQualitySequence = null,
+    FogDebugView? FogDebugViewOverride = null,
+    FogDebugProjection? FogDebugProjectionOverride = null,
+    int? FogDebugSliceOverride = null,
+    string? VolumetricTemporalCaptureDirectory = null,
+    string? VolumetricTemporalAnalyzeDirectory = null)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
     public SampleBenchmarkQualitySequenceOptions BenchmarkQualitySequence { get; init; } =
@@ -107,12 +112,17 @@ public sealed record SampleSmokeOptions(
         SimpleDdgiStoragePackingModeOverride.HasValue ||
         SimpleDdgiSampledAtlasCoverageModeOverride.HasValue ||
         QualityPresetOverride.HasValue ||
+        FogDebugViewOverride.HasValue ||
+        FogDebugProjectionOverride.HasValue ||
+        FogDebugSliceOverride.HasValue ||
         EnableFarFieldClipmap ||
         EnableFarFieldForceAll ||
         !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory) ||
         !string.IsNullOrWhiteSpace(SponzaGiCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(SponzaTemporalCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(SponzaTemporalAnalyzeDirectory) ||
+        !string.IsNullOrWhiteSpace(VolumetricTemporalCaptureDirectory) ||
+        !string.IsNullOrWhiteSpace(VolumetricTemporalAnalyzeDirectory) ||
         !string.IsNullOrWhiteSpace(BistroQualityCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(MaterialGiCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(AdvancedGiPrerequisiteManifestPath) ||
@@ -136,6 +146,7 @@ public sealed record SampleSmokeOptions(
         BenchmarkQualitySequence.Enabled ||
         TailDdgiLongSoak ||
         !string.IsNullOrWhiteSpace(SponzaTemporalCaptureDirectory) ||
+        !string.IsNullOrWhiteSpace(VolumetricTemporalCaptureDirectory) ||
         !string.IsNullOrWhiteSpace(BistroQualityCaptureDirectory) ||
         PerformanceScenario ==
             SamplePerformanceScenario.BistroQualityMotionRelight;

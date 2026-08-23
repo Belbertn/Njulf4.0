@@ -22,6 +22,19 @@ public sealed class SceneDocumentTests
                 new SceneLightDocument { Id = second, Name = "second" },
                 new SceneLightDocument { Id = first, Name = "first" }
             ],
+            VolumetricDensityVolumes =
+            [
+                new SceneVolumetricDensityVolumeDocument
+                {
+                    Id = second,
+                    Name = "second volume"
+                },
+                new SceneVolumetricDensityVolumeDocument
+                {
+                    Id = first,
+                    Name = "first volume"
+                }
+            ],
             Dependencies = [new SceneAssetDependency("z.glb"), new SceneAssetDependency("a.glb")]
         };
 
@@ -33,6 +46,8 @@ public sealed class SceneDocumentTests
             Assert.That(twice, Is.EqualTo(once));
             Assert.That(once.IndexOf(first.ToString(), StringComparison.Ordinal), Is.LessThan(once.IndexOf(second.ToString(), StringComparison.Ordinal)));
             Assert.That(once.IndexOf("a.glb", StringComparison.Ordinal), Is.LessThan(once.IndexOf("z.glb", StringComparison.Ordinal)));
+            Assert.That(once.IndexOf("first volume", StringComparison.Ordinal),
+                Is.LessThan(once.IndexOf("second volume", StringComparison.Ordinal)));
         });
     }
 
@@ -270,6 +285,67 @@ public sealed class SceneDocumentTests
             {
                 Assert.That(loaded.GlobalIlluminationProbeVolumes, Has.Count.EqualTo(1));
                 Assert.That(loaded.GlobalIlluminationProbeVolumes[0].Id, Is.EqualTo(volumeId));
+                Assert.That(SceneDocumentJson.Serialize(recaptured),
+                    Is.EqualTo(SceneDocumentJson.Serialize(source)));
+            });
+        }
+        finally
+        {
+            loaded.Dispose();
+        }
+    }
+
+    [Test]
+    public void AuthoredVolumetricDensityVolumes_LoadAndSaveWithoutSchemaLoss()
+    {
+        Guid volumeId = Guid.Parse("30000000-0000-0000-0000-000000000001");
+        var source = new SceneDocument
+        {
+            Id = Guid.Parse("30000000-0000-0000-0000-000000000000"),
+            Name = "Authored volumetric scene",
+            VolumetricDensityVolumes =
+            [
+                new SceneVolumetricDensityVolumeDocument
+                {
+                    Id = volumeId,
+                    Name = "Moving smoke",
+                    Enabled = true,
+                    Position = new SceneVector3(2f, 3f, -4f),
+                    Rotation = SceneQuaternion.Identity,
+                    Shape = "Sphere",
+                    BoxExtents = new SceneVector3(7f, 6f, 5f),
+                    Radius = 4.5f,
+                    EdgeFade = 0.75f,
+                    DensityMultiplier = 1.7f,
+                    ExtinctionPerMeter = 0.32f,
+                    ScatteringAlbedo = new SceneVector3(0.7f, 0.8f, 0.9f),
+                    Anisotropy = 0.55f,
+                    Priority = 9,
+                    NoiseScale = 0.18f,
+                    NoiseStrength = 0.8f,
+                    NoiseContrast = 1.4f,
+                    NoiseSeed = 73u,
+                    FlowVelocity = new SceneVector3(1f, 0.25f, -2f)
+                }
+            ]
+        };
+
+        Scene loaded = new SceneDocumentLoader(
+            new ThrowingContentManager()).Load(source);
+        try
+        {
+            SceneDocument recaptured =
+                new SceneDocumentWriter().CreateDocument(loaded);
+            VolumetricDensityVolume volume =
+                loaded.VolumetricDensityVolumes.Single();
+            Assert.Multiple(() =>
+            {
+                Assert.That(volume.Id, Is.EqualTo(volumeId));
+                Assert.That(volume.Shape,
+                    Is.EqualTo(VolumetricDensityVolumeShape.Sphere));
+                Assert.That(volume.FlowVelocity,
+                    Is.EqualTo(new Vector3(1f, 0.25f, -2f)));
+                Assert.That(volume.NoiseSeed, Is.EqualTo(73u));
                 Assert.That(SceneDocumentJson.Serialize(recaptured),
                     Is.EqualTo(SceneDocumentJson.Serialize(source)));
             });

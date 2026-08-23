@@ -1,0 +1,44 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "froxel_common.glsl"
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 1) in;
+
+void main()
+{
+    uvec2 clusterXY = gl_GlobalInvocationID.xy;
+    uvec3 clusterDimensions = FroxelClusterGridSize();
+    if (any(greaterThanEqual(clusterXY, clusterDimensions.xy)))
+        return;
+
+    float transmittance = 1.0;
+    float opticalDepth = 0.0;
+    uvec3 grid = FroxelGridSize();
+    uvec3 sourceCell = FroxelSourceClusterCellSize();
+    for (uint clusterZ = 0u; clusterZ < clusterDimensions.z; clusterZ++)
+    {
+        uint z0 = clusterZ * sourceCell.z;
+        uint z1 = min(z0 + sourceCell.z, grid.z);
+        uvec2 centerXY = min(
+            clusterXY * sourceCell.xy + sourceCell.xy / 2u,
+            grid.xy - uvec2(1u));
+        float cellOpticalDepth = 0.0;
+        for (uint z = z0; z < z1; z++)
+        {
+            float segmentLength = FroxelSliceBoundary(float(z + 1u)) -
+                FroxelSliceBoundary(float(z));
+            float extinction = max(imageLoad(
+                FroxelMedium,
+                ivec3(centerXY, z)).a, 0.0);
+            cellOpticalDepth += extinction * segmentLength;
+        }
+        float cellTransmittance = exp(-min(cellOpticalDepth, 80.0));
+        imageStore(FroxelCoarseTransmittance,
+            ivec3(clusterXY, clusterZ),
+            vec4(transmittance, cellOpticalDepth, opticalDepth,
+                cellTransmittance));
+        opticalDepth += cellOpticalDepth;
+        transmittance *= cellTransmittance;
+    }
+}

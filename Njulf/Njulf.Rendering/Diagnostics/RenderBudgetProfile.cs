@@ -48,6 +48,13 @@ namespace Njulf.Rendering.Diagnostics
         /// </summary>
         public ulong GlobalIlluminationRenderTargetBudgetBytes { get; init; }
 
+        /// <summary>GPU-work budget for the complete froxel pass chain.</summary>
+        public double VolumetricFogGpuBudgetMilliseconds { get; init; } = 2.0;
+
+        /// <summary>Dedicated froxel images, buffers, and fog-only DDGI sidecars.</summary>
+        public ulong VolumetricFogMemoryBudgetBytes { get; init; } =
+            128UL * 1024UL * 1024UL;
+
         public static RenderBudgetProfile Development { get; } = new(
             RenderBudgetProfileKind.Development,
             "Development 1080p60",
@@ -106,6 +113,8 @@ namespace Njulf.Rendering.Diagnostics
             GlobalIlluminationMemoryBudgetBytes = 1,
             GlobalIlluminationRenderTargetBudgetBytes =
                 48UL * 1024UL * 1024UL,
+            VolumetricFogGpuBudgetMilliseconds = 0.0,
+            VolumetricFogMemoryBudgetBytes = 0UL,
             TransparentObjectBudget = 1_024
         };
 
@@ -117,6 +126,8 @@ namespace Njulf.Rendering.Diagnostics
             GpuFrameBudgetMilliseconds = 11.0,
             GlobalIlluminationRenderTargetBudgetBytes =
                 96UL * 1024UL * 1024UL,
+            VolumetricFogGpuBudgetMilliseconds = 0.0,
+            VolumetricFogMemoryBudgetBytes = 0UL,
             UploadBudgetBytesPerFrame = 16UL * 1024UL * 1024UL
         };
 
@@ -147,6 +158,8 @@ namespace Njulf.Rendering.Diagnostics
             GlobalIlluminationMemoryBudgetBytes = 192UL * 1024UL * 1024UL,
             GlobalIlluminationRenderTargetBudgetBytes =
                 192UL * 1024UL * 1024UL,
+            VolumetricFogGpuBudgetMilliseconds = 2.0,
+            VolumetricFogMemoryBudgetBytes = 128UL * 1024UL * 1024UL,
             TransparentObjectBudget = 6_144
         };
 
@@ -176,6 +189,8 @@ namespace Njulf.Rendering.Diagnostics
             GlobalIlluminationMemoryBudgetBytes = 384UL * 1024UL * 1024UL,
             GlobalIlluminationRenderTargetBudgetBytes =
                 384UL * 1024UL * 1024UL,
+            VolumetricFogGpuBudgetMilliseconds = 8.0,
+            VolumetricFogMemoryBudgetBytes = 320UL * 1024UL * 1024UL,
             TransparentObjectBudget = 8_192
         };
 
@@ -207,7 +222,9 @@ namespace Njulf.Rendering.Diagnostics
             ulong.MaxValue,
             int.MaxValue)
         {
-            GlobalIlluminationRenderTargetBudgetBytes = ulong.MaxValue
+            GlobalIlluminationRenderTargetBudgetBytes = ulong.MaxValue,
+            VolumetricFogGpuBudgetMilliseconds = double.MaxValue,
+            VolumetricFogMemoryBudgetBytes = ulong.MaxValue
         };
 
         public static IReadOnlyList<RenderBudgetProfile> Defaults { get; } =

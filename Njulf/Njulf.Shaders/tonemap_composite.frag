@@ -23,7 +23,7 @@ layout(push_constant) uniform CompositePushBlock
     uint AmbientOcclusionDebugTextureIndex;
     uint AutoExposureEnabled;
     uint AutoExposureStateBufferIndex;
-    uint Padding0;
+    uint DisplayReferredDebug;
     uint Padding1;
 } pc;
 
@@ -62,6 +62,19 @@ vec3 LinearToSrgb(vec3 color)
 void main()
 {
     vec3 hdr = max(texture(BindlessTextures[nonuniformEXT(int(pc.SceneColorTextureIndex))], inUv).rgb, vec3(0.0));
+
+    // Froxel debug shaders already write normalized, display-referred colors.
+    // Bypass exposure, bloom, and tone mapping so diagnostics remain readable
+    // and comparable across scene exposure settings.
+    if (pc.DisplayReferredDebug != 0u)
+    {
+        vec3 debugColor = clamp(hdr, 0.0, 1.0);
+        if (pc.OutputToSrgb != 0u)
+            debugColor = LinearToSrgb(debugColor);
+        outColor = vec4(debugColor, 1.0);
+        return;
+    }
+
     float exposure = max(pc.Exposure, 0.0);
     if (pc.AutoExposureEnabled != 0u)
         exposure = max(ReadStorageFloat(pc.AutoExposureStateBufferIndex, 0u), 0.0);

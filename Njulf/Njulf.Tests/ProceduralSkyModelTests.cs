@@ -407,7 +407,7 @@ public sealed class ProceduralSkyModelTests
             Assert.That(
                 BindlessIndex.StaticBufferCount,
                 Is.EqualTo(
-                    BindlessIndex.DirectionalShadowCounterBufferFrame1 + 1));
+                    BindlessIndex.VolumetricFogBounceRadianceBuffer + 1));
         });
     }
 

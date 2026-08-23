@@ -4,7 +4,9 @@ using System.Runtime.InteropServices;
 using Njulf.Core.Math;
 using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Debug;
 using Njulf.Rendering.Descriptors;
+using Njulf.Rendering.Memory;
 using Njulf.Rendering.Pipeline.PipelineObjects;
 using Njulf.Rendering.Resources;
 using Njulf.Rendering.Utilities;
@@ -31,19 +33,32 @@ namespace Njulf.Rendering.Pipeline
         private VkPipeline _receiverFeedbackPipeline;
         private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
             _receiverFeedbackRuntime;
+        private readonly FroxelFogRenderer _froxelRenderer;
 
         public FogPass(
             VulkanContext context,
             SwapchainManager swapchain,
             BindlessHeap bindlessHeap,
+            BufferManager bufferManager,
             RenderTargetManager renderTargets,
             RenderSettings settings,
+            SimpleDdgiVolumeManager? simpleDdgiVolumeManager,
+            RaySceneDescriptorBank raySceneDescriptors,
             SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime = null)
             : base("FogPass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _receiverFeedbackRuntime = receiverFeedbackRuntime;
+            _froxelRenderer = new FroxelFogRenderer(
+                context,
+                bindlessHeap,
+                bufferManager ?? throw new ArgumentNullException(nameof(bufferManager)),
+                renderTargets,
+                settings,
+                simpleDdgiVolumeManager,
+                raySceneDescriptors ??
+                    throw new ArgumentNullException(nameof(raySceneDescriptors)));
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -59,6 +74,7 @@ namespace Njulf.Rendering.Pipeline
                 _receiverFeedbackPipeline = CreatePipeline("fog_b1.comp.spv");
             }
             RecreateDescriptorSet();
+            _froxelRenderer.Initialize();
         }
 
         public override bool SupportsSecondaryCommandBuffer => true;
@@ -73,10 +89,24 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            Execute(cmd, frameIndex, sceneData, timestamps: null);
+        }
+
+        public override void Execute(
+            CommandBuffer cmd,
+            int frameIndex,
+            SceneRenderingData sceneData,
+            GpuTimestampRecorder? timestamps)
+        {
             FogSettings fog = _settings.Fog;
             bool enabled = fog.Enabled && fog.Mode != FogMode.Disabled;
             sceneData.ActiveSceneColorTextureIndex = BindlessIndex.HdrSceneColorTexture;
             sceneData.FogEnabled = enabled;
+            sceneData.FogRequestedTechnique = fog.Technique;
+            sceneData.FogEffectiveTechnique = FogTechnique.Analytic;
+            sceneData.VolumetricFogStatus = enabled
+                ? "analytic-selected"
+                : "fog-disabled";
             sceneData.FogMode = enabled ? fog.Mode : FogMode.Disabled;
             sceneData.FogColorMode = fog.ColorMode;
             sceneData.FogDebugView = fog.DebugView;
@@ -93,15 +123,37 @@ namespace Njulf.Rendering.Pipeline
             sceneData.FogFormat = enabled ? _renderTargets.FoggedSceneColor.Format.ToString() : string.Empty;
 
             if (!enabled)
+            {
+                _froxelRenderer.InvalidateHistory();
                 return;
-
-            _renderTargets.SceneColor.TransitionToComputeShaderRead(cmd);
-            _renderTargets.SceneDepth.TransitionToComputeDepthReadOnly(cmd);
+            }
 
             bool exactFeedback = TrySelectExactFeedbackPipeline(
                 frameIndex,
                 sceneData,
                 out VkPipeline pipeline);
+            if (!exactFeedback &&
+                _froxelRenderer.TryExecute(
+                    cmd,
+                    frameIndex,
+                    sceneData,
+                    timestamps,
+                    IsRecordingOnComputeQueue))
+            {
+                sceneData.ActiveSceneColorTextureIndex =
+                    BindlessIndex.FoggedSceneColorTexture;
+                return;
+            }
+            if (exactFeedback)
+            {
+                _froxelRenderer.InvalidateHistory();
+                sceneData.FogEffectiveTechnique = FogTechnique.Analytic;
+                sceneData.VolumetricFogStatus =
+                    "analytic-required-for-exact-receiver-feedback";
+            }
+
+            _renderTargets.SceneColor.TransitionToComputeShaderRead(cmd);
+            _renderTargets.SceneDepth.TransitionToComputeDepthReadOnly(cmd);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, pipeline);
 
             var storageSet = _bindlessHeap.StorageBufferSet;
@@ -168,11 +220,13 @@ namespace Njulf.Rendering.Pipeline
 
         public override void OnSwapchainRecreated()
         {
+            _froxelRenderer.OnSwapchainRecreated();
             RecreateDescriptorSet();
         }
 
         public override void Cleanup()
         {
+            _froxelRenderer.Dispose();
             if (_pipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(_context.Device, _pipeline, null);

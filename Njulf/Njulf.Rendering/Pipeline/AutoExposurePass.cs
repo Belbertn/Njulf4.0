@@ -56,15 +56,22 @@ namespace Njulf.Rendering.Pipeline
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             AutoExposureSettings settings = _settings.AutoExposure;
+            bool displayReferredFogDebug =
+                FogDebugViewPolicy.IsDisplayReferred(
+                    _settings.Fog.DebugView);
             AutoExposureSnapshot completed = _autoExposure.LastCompleted;
-            sceneData.AutoExposureEnabled = settings.Enabled;
+            sceneData.AutoExposureEnabled = settings.Enabled &&
+                !displayReferredFogDebug;
             sceneData.AutoExposureAverageLuminance = completed.AverageLuminance;
             sceneData.AutoExposureTargetExposure = completed.TargetExposure;
             sceneData.AutoExposureSampleCount = checked((int)Math.Min(completed.SampleCount, (uint)int.MaxValue));
             sceneData.AutoExposureStateBufferIndex = _autoExposure.GetStateBufferIndex(frameIndex);
-            sceneData.EffectiveExposure = settings.Enabled ? completed.Exposure : _settings.Exposure;
+            sceneData.EffectiveExposure = settings.Enabled &&
+                !displayReferredFogDebug
+                    ? completed.Exposure
+                    : _settings.Exposure;
 
-            if (!settings.Enabled)
+            if (!settings.Enabled || displayReferredFogDebug)
                 return;
 
             int activeSceneColorTextureIndex = sceneData.ActiveSceneColorTextureIndex == BindlessIndex.FoggedSceneColorTexture

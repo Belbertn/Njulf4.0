@@ -225,6 +225,7 @@ internal sealed class SampleInputController
     private readonly System.Action? _toggleDdgiDiagnosticsFilter;
     private readonly Func<SampleDiagnosticsFilter>? _getDiagnosticsFilter;
     private readonly System.Action? _restoreSceneRenderSettings;
+    private readonly Action<RenderSettings>? _applyScenePostQualityPreset;
     private readonly Func<string, bool>? _requestDiagnosticScreenshotCapture;
     private readonly Func<bool>? _suppressGameInput;
     private SampleLightingMode _lightingMode;
@@ -290,6 +291,9 @@ internal sealed class SampleInputController
     private bool _cycleAntiAliasingDebugPressed;
     private bool _toggleFogPressed;
     private bool _cycleFogDebugPressed;
+    private bool _cycleFogDebugProjectionPressed;
+    private bool _fogDebugSliceDownPressed;
+    private bool _fogDebugSliceUpPressed;
     private bool _fogDensityDownPressed;
     private bool _fogDensityUpPressed;
     private bool _fogHeightDensityDownPressed;
@@ -372,6 +376,7 @@ internal sealed class SampleInputController
         System.Action? toggleDdgiDiagnosticsFilter = null,
         Func<SampleDiagnosticsFilter>? getDiagnosticsFilter = null,
         System.Action? restoreSceneRenderSettings = null,
+        Action<RenderSettings>? applyScenePostQualityPreset = null,
         Func<string, bool>? requestDiagnosticScreenshotCapture = null,
         Func<bool>? suppressGameInput = null)
     {
@@ -390,6 +395,7 @@ internal sealed class SampleInputController
         _toggleDdgiDiagnosticsFilter = toggleDdgiDiagnosticsFilter;
         _getDiagnosticsFilter = getDiagnosticsFilter;
         _restoreSceneRenderSettings = restoreSceneRenderSettings;
+        _applyScenePostQualityPreset = applyScenePostQualityPreset;
         _requestDiagnosticScreenshotCapture = requestDiagnosticScreenshotCapture;
         _suppressGameInput = suppressGameInput;
         if (_renderer != null && _performanceScenarioRunner != null)
@@ -849,6 +855,52 @@ internal sealed class SampleInputController
             PrintGlobalIlluminationSettings("GI debug clear");
         }
 
+        if (_renderer != null &&
+            WasChordPressed(Key.X, ref _cycleFogDebugProjectionPressed))
+        {
+            if (IsShiftDown())
+            {
+                _renderer.Settings.Fog.DebugView = FogDebugView.None;
+                _renderer.Settings.Fog.Volumetric.DebugProjection =
+                    FogDebugProjection.MaxAlongRay;
+                _renderer.Settings.Fog.Volumetric.DebugSlice = -1;
+                PrintFogSettings("Fog debug clear");
+            }
+            else
+            {
+                VolumetricFogSettings volumetric =
+                    _renderer.Settings.Fog.Volumetric;
+                volumetric.DebugProjection = volumetric.DebugProjection switch
+                {
+                    FogDebugProjection.MaxAlongRay => FogDebugProjection.Surface,
+                    FogDebugProjection.Surface => FogDebugProjection.Slice,
+                    _ => FogDebugProjection.MaxAlongRay
+                };
+                if (volumetric.DebugProjection == FogDebugProjection.Slice &&
+                    volumetric.DebugSlice < 0)
+                {
+                    uint depth = VolumetricFogQualityProfile.ForPreset(
+                        _renderer.Settings.QualityPreset).DepthSlices;
+                    volumetric.DebugSlice = depth > 0u
+                        ? checked((int)(depth / 2u))
+                        : 0;
+                }
+                PrintFogSettings("Fog debug projection");
+            }
+        }
+
+        if (_renderer != null &&
+            WasChordPressed(Key.Down, ref _fogDebugSliceDownPressed))
+        {
+            ChangeFogDebugSlice(-1);
+        }
+
+        if (_renderer != null &&
+            WasChordPressed(Key.Up, ref _fogDebugSliceUpPressed))
+        {
+            ChangeFogDebugSlice(1);
+        }
+
         if (_renderer != null && WasPressed(CycleFogDebug, ref _cycleFogDebugPressed))
         {
             _renderer.Settings.Fog.DebugView = _renderer.Settings.Fog.DebugView switch
@@ -861,6 +913,13 @@ internal sealed class SampleInputController
                 FogDebugView.Inscattering => FogDebugView.LinearDepth,
                 FogDebugView.LinearDepth => FogDebugView.WorldHeight,
                 FogDebugView.WorldHeight => FogDebugView.FoggedScene,
+                FogDebugView.FoggedScene => FogDebugView.Density,
+                FogDebugView.Density => FogDebugView.Extinction,
+                FogDebugView.Extinction => FogDebugView.DirectRadiance,
+                FogDebugView.DirectRadiance => FogDebugView.IndirectRadiance,
+                FogDebugView.IndirectRadiance => FogDebugView.HistoryConfidence,
+                FogDebugView.HistoryConfidence => FogDebugView.FinalTransmittance,
+                FogDebugView.FinalTransmittance => FogDebugView.SelfShadowing,
                 _ => FogDebugView.None
             };
             PrintFogSettings("Fog debug");
@@ -2512,7 +2571,7 @@ internal sealed class SampleInputController
             case SamplePerformanceScenario.GiSponzaRightWallStationary:
                 ApplyPerformanceScenario(SamplePerformanceScenario.GiSponzaRightWallStationary);
                 MoveCamera(SponzaRightWallPosition, SponzaRightWallYaw, SponzaRightWallPitch);
-                _renderer.Settings.Diagnostics.DdgiForwardEstimateCountersEnabled = true;
+                _renderer!.Settings.Diagnostics.DdgiForwardEstimateCountersEnabled = true;
                 _renderer.Settings.Debug.AllowGpuTiming = false;
                 if (Enum.TryParse(
                         Environment.GetEnvironmentVariable("NJULF_EXACT_DDGI_DEBUG_VIEW"),
@@ -3227,11 +3286,29 @@ internal sealed class SampleInputController
 
         FogSettings fog = _renderer.Settings.Fog;
         Console.WriteLine(
-            $"{prefix}: {(fog.Enabled ? "enabled" : "disabled")}, mode={fog.Mode}, colorMode={fog.ColorMode}, " +
+            $"{prefix}: {(fog.Enabled ? "enabled" : "disabled")}, technique={fog.Technique}, mode={fog.Mode}, colorMode={fog.ColorMode}, " +
             $"density={fog.Density:F3}, start={fog.StartDistance:F1}, end={fog.EndDistance:F1}, " +
             $"height={fog.Height:F1}, heightDensity={fog.HeightDensity:F3}, falloff={fog.HeightFalloff:F3}, " +
             $"maxOpacity={fog.MaxOpacity:F2}, inscatter={(fog.DirectionalInscatteringEnabled ? "on" : "off")}, " +
-            $"debug={fog.DebugView}");
+            $"debug={fog.DebugView}, projection={fog.Volumetric.DebugProjection}, " +
+            $"slice={fog.Volumetric.DebugSlice}");
+    }
+
+    private void ChangeFogDebugSlice(int delta)
+    {
+        if (_renderer == null)
+            return;
+
+        VolumetricFogSettings volumetric = _renderer.Settings.Fog.Volumetric;
+        uint depth = VolumetricFogQualityProfile.ForPreset(
+            _renderer.Settings.QualityPreset).DepthSlices;
+        int maximum = Math.Max(checked((int)depth) - 1, 0);
+        int current = volumetric.DebugSlice < 0
+            ? maximum / 2
+            : volumetric.DebugSlice;
+        volumetric.DebugSlice = Math.Clamp(current + delta, 0, maximum);
+        volumetric.DebugProjection = FogDebugProjection.Slice;
+        PrintFogSettings("Fog debug slice");
     }
 
     private void PrintReflectionSettings(string prefix)
@@ -3444,6 +3521,7 @@ internal sealed class SampleInputController
             SampleLightingMode.DirectionalKey => SampleLightingMode.ThreePointDemo,
             SampleLightingMode.ThreePointDemo => SampleLightingMode.SpotShadowDemo,
             SampleLightingMode.SpotShadowDemo => SampleLightingMode.PointShadowDemo,
+            SampleLightingMode.PointShadowDemo => SampleLightingMode.VolumetricShowcase,
             _ => SampleLightingMode.DirectionalKey
         };
         if (_renderer != null)
@@ -3486,6 +3564,7 @@ internal sealed class SampleInputController
         SampleLighting.ConfigureRenderSettings(settings, _lightingMode);
         if (_performanceScenarioRunner != null)
             SampleGlobalIlluminationValidation.ConfigureRenderSettings(settings, _performanceScenarioRunner.CurrentScenario);
+        _applyScenePostQualityPreset?.Invoke(settings);
     }
 
     private void SelectDebugObject(int direction)

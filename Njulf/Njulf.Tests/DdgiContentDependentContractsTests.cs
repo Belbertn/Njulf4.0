@@ -99,7 +99,7 @@ public sealed class DdgiContentDependentContractsTests
     }
 
     [Test]
-    public void HighPreset_UsesTheCachedDiffuseProductionBaseline()
+    public void HighPreset_ProvisionsDirectionalL2ForFroxelFog()
     {
         var settings = new GlobalIlluminationSettings();
         settings.ApplyDdgiQualityTier(DdgiQualityTier.DdgiHigh);
@@ -113,7 +113,7 @@ public sealed class DdgiContentDependentContractsTests
             Assert.That(settings.EffectiveDdgiSkinnedGeometryMode,
                 Is.EqualTo(DdgiSkinnedGeometryMode.ConservativeProxy));
             Assert.That(settings.SimpleDdgiDirectionalRadianceMode,
-                Is.EqualTo(SimpleDdgiDirectionalRadianceMode.Off));
+                Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
             Assert.That(settings.ContentDependentRollout.ApprovedFeatures,
                 Is.EqualTo(DdgiContentRolloutPolicy.ProductionBaseline));
             Assert.That(settings.ActiveContentDependentFeatures,
@@ -125,13 +125,13 @@ public sealed class DdgiContentDependentContractsTests
                 Is.EqualTo(DdgiContentFeature.None),
                 "The RTX 3060-oriented High tier keeps foliage proxies Ultra-only.");
             Assert.That(settings.EffectiveSimpleDdgiDirectionalRadianceMode,
-                Is.EqualTo(SimpleDdgiDirectionalRadianceMode.Off));
+                Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
             Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,
                 Is.EqualTo(SimpleDdgiGlossyTransportMode.Off));
         });
 
-        // The modes remain explicit opt-ins on High; this also retains the
-        // independent rollout-gate coverage below.
+        // Glossy receiver use remains independently gated on High even though
+        // the production L2 publication is provisioned for froxel fog.
         settings.SimpleDdgiDirectionalRadianceMode =
             SimpleDdgiDirectionalRadianceMode.L2;
         settings.SimpleDdgiGlossyTransportMode =

@@ -341,7 +341,27 @@ internal sealed class SampleDiagnosticsReporter
             $"density={diagnostics.FogDensity:F3}, start={diagnostics.FogStartDistance:F1}, end={diagnostics.FogEndDistance:F1}, " +
             $"height={diagnostics.FogHeight:F1}, falloff={diagnostics.FogHeightFalloff:F3}, heightDensity={diagnostics.FogHeightDensity:F3}, " +
             $"maxOpacity={diagnostics.FogMaxOpacity:F2}, inscatter={diagnostics.FogDirectionalInscatteringEnabled}, " +
-            $"size={diagnostics.FogWidth}x{diagnostics.FogHeightPixels}, format={diagnostics.FogFormat}, debug={diagnostics.FogDebugView}.");
+            $"size={diagnostics.FogWidth}x{diagnostics.FogHeightPixels}, format={diagnostics.FogFormat}, debug={diagnostics.FogDebugView}, " +
+            $"technique={diagnostics.FogRequestedTechnique}->{diagnostics.FogEffectiveTechnique}, status={diagnostics.VolumetricFogStatus}, " +
+            $"froxel={diagnostics.VolumetricFogGridWidth}x{diagnostics.VolumetricFogGridHeight}x{diagnostics.VolumetricFogGridDepth}, " +
+            $"clusters={diagnostics.VolumetricFogClusterCount}, bytes={diagnostics.VolumetricFogAllocatedBytes}, " +
+            $"volumes={diagnostics.VolumetricFogLocalVolumeCount}, smokeParticles={diagnostics.VolumetricFogParticleAdmittedCount}/{diagnostics.VolumetricFogParticleCandidateCount}, " +
+            $"history={diagnostics.VolumetricFogHistoryValid}, L2={diagnostics.VolumetricFogDirectionalL2Active}, " +
+            $"energySplit={diagnostics.VolumetricFogEnergyOwnershipSeparated}, multiScatter={diagnostics.VolumetricFogMultipleScatteringIterations}.");
+        Console.WriteLine(
+            $"Frame diagnostics fog output: readback={diagnostics.VolumetricFogOutputReadbackValid}, produced={diagnostics.VolumetricFogOutputProduced}, " +
+            $"samples={diagnostics.VolumetricFogDiagnosticSampleCount}, sampled medium/direct/indirect/L2={diagnostics.VolumetricFogMediumNonEmptyFroxelCount}/{diagnostics.VolumetricFogDirectNonZeroFroxelCount}/{diagnostics.VolumetricFogIndirectNonZeroFroxelCount}/{diagnostics.VolumetricFogDdgiSupportedFroxelCount}, " +
+            $"extinction(max/mean)={diagnostics.VolumetricFogMaximumExtinction:F4}/{diagnostics.VolumetricFogMeanExtinction:F4}, " +
+            $"direct(max/mean)={diagnostics.VolumetricFogMaximumDirectLuminance:F4}/{diagnostics.VolumetricFogMeanDirectLuminance:F4}, " +
+            $"indirect(max/mean)={diagnostics.VolumetricFogMaximumIndirectLuminance:F4}/{diagnostics.VolumetricFogMeanIndirectLuminance:F4}, " +
+            $"transmittance(min/mean)={diagnostics.VolumetricFogMinimumTransmittance:F4}/{diagnostics.VolumetricFogMeanTransmittance:F4}, " +
+            $"historyAccepted/rejected={diagnostics.VolumetricFogHistoryAcceptedFroxelCount}/{diagnostics.VolumetricFogHistoryRejectedFroxelCount}, " +
+            $"rejected invalid/bounds/extinction/radiance/velocity={diagnostics.VolumetricFogHistoryRejectedInvalidFroxelCount}/{diagnostics.VolumetricFogHistoryRejectedBoundsFroxelCount}/{diagnostics.VolumetricFogHistoryRejectedExtinctionFroxelCount}/{diagnostics.VolumetricFogHistoryRejectedRadianceFroxelCount}/{diagnostics.VolumetricFogHistoryRejectedVelocityFroxelCount}, " +
+            $"overflow={diagnostics.VolumetricFogClusterOverflowCount}, nonFinite={diagnostics.VolumetricFogNonFiniteCount}.");
+        Console.WriteLine(
+            $"Frame diagnostics fog GPU stages: total={diagnostics.GpuFogMicroseconds}us, " +
+            $"noise/source/medium/transmittance/ddgi/cache/multiple/temporal/integrate/resolve/composite=" +
+            $"{diagnostics.GpuVolumetricFogNoiseMicroseconds}/{diagnostics.GpuVolumetricFogSourceCullMicroseconds}/{diagnostics.GpuVolumetricFogMediumMicroseconds}/{diagnostics.GpuVolumetricFogTransmittanceMicroseconds}/{diagnostics.GpuVolumetricFogDdgiBounceMicroseconds}/{diagnostics.GpuVolumetricFogLightingCacheMicroseconds}/{diagnostics.GpuVolumetricFogMultipleScatteringMicroseconds}/{diagnostics.GpuVolumetricFogTemporalMicroseconds}/{diagnostics.GpuVolumetricFogIntegrateMicroseconds}/{diagnostics.GpuVolumetricFogResolveMicroseconds}/{diagnostics.GpuVolumetricFogCompositeMicroseconds}us.");
         Console.WriteLine(
             $"Frame diagnostics AO: enabled={diagnostics.AmbientOcclusionEnabled}, mode={diagnostics.AmbientOcclusionMode}, " +
             $"size={diagnostics.AmbientOcclusionWidth}x{diagnostics.AmbientOcclusionHeight}, format={diagnostics.AmbientOcclusionFormat}, " +

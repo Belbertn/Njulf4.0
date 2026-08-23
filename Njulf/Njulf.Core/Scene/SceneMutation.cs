@@ -23,6 +23,7 @@ public enum SceneMutationKind : uint
     Foliage = 1u << 9,
     Content = 1u << 10,
     Emission = 1u << 11,
+    Volumetrics = 1u << 12,
     Global = 1u << 31
 }
 

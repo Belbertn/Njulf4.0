@@ -1,0 +1,147 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+// Fog publication runs on the canonical compute SSBO path. Sampled atlas
+// mirrors are graphics-owned and deliberately excluded from this transaction.
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+#define SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK 0
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 0
+#include "froxel_common.glsl"
+#include "ddgi_simple_shared.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+vec3 FroxelProjectionDirection(uint sampleIndex, uint sampleCount)
+{
+    const float goldenAngle = 2.39996322972865332;
+    float y = 1.0 - 2.0 * (float(sampleIndex) + 0.5) /
+        float(sampleCount);
+    float radius = sqrt(max(1.0 - y * y, 0.0));
+    float angle = goldenAngle * float(sampleIndex);
+    return vec3(cos(angle) * radius, y, sin(angle) * radius);
+}
+
+void InvalidateBounce(uint physicalProbe, uint mode)
+{
+    InvalidateSimpleDdgiRadianceShRecord(
+        uint(VOLUMETRIC_FOG_BOUNCE_RADIANCE_BUFFER_INDEX),
+        physicalProbe,
+        mode);
+}
+
+void main()
+{
+    uint queueOffset = gl_GlobalInvocationID.x;
+    uint updateCount = uint(max(round(
+        FroxelFrame.MultipleScattering.w), 0.0));
+    if (queueOffset >= updateCount)
+        return;
+    SimpleDdgiParams params = ReadSimpleDdgiParams(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    uint mode = SimpleDdgiDirectionalRadianceMode(params.residencyFlags);
+    if (mode != SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_L2)
+        return;
+
+    SimpleDdgiProbeUpdate update = ReadSimpleDdgiProbeUpdate(
+        uint(SIMPLE_DDGI_PROBE_UPDATE_QUEUE_BUFFER_INDEX),
+        queueOffset);
+    if (!SimpleDdgiUpdateMatchesLiveAddress(params, update))
+        return;
+    uint virtualProbeIndex = update.probeIndex;
+    uint volumeIndex = update.volumeIndex;
+    SimpleDdgiVolume volume = ReadSimpleDdgiVolume(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX), volumeIndex);
+
+    SimpleDdgiReceiverProbe receiver = ReadSimpleDdgiReceiverProbe(
+        uint(SIMPLE_DDGI_RECEIVER_PROBE_BUFFER_INDEX),
+        virtualProbeIndex,
+        volume.spacing);
+    uint physicalProbe = update.physicalProbeIndex;
+    if (physicalProbe == SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS ||
+        physicalProbe >= params.physicalProbeCapacity ||
+        receiver.atlasProbeAddress != physicalProbe ||
+        receiver.slotGeneration == 0u ||
+        !SimpleDdgiReceiverProbeSupportsGather(receiver))
+        return;
+
+    SimpleDdgiVolumePaging paging = ReadSimpleDdgiVolumePaging(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX), volumeIndex);
+    SimpleDdgiAtlasAddress address;
+    if (!TryBuildSimpleDdgiAtlasAddress(
+            params, volume, paging, physicalProbe, address))
+    {
+        InvalidateBounce(physicalProbe, mode);
+        return;
+    }
+
+    vec3 sourceCoefficients[9];
+    uint sourceSampleCount;
+    uint sourceQuality;
+    bool sourceHistory;
+    if (!ReadSimpleDdgiRadianceShRecord(
+            uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_BUFFER_INDEX),
+            physicalProbe,
+            mode,
+            receiver.slotGeneration,
+            sourceCoefficients,
+            sourceSampleCount,
+            sourceQuality,
+            sourceHistory) || sourceSampleCount == 0u)
+    {
+        InvalidateBounce(physicalProbe, mode);
+        return;
+    }
+
+    const uint sampleCount = 32u;
+    vec3 irradianceCoefficients[9];
+    for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+        irradianceCoefficients[coefficient] = vec3(0.0);
+    for (uint sampleIndex = 0u; sampleIndex < sampleCount; sampleIndex++)
+    {
+        vec3 direction = FroxelProjectionDirection(sampleIndex, sampleCount);
+        vec4 irradiance = SampleSimpleDdgiIrradianceBilinearAtAddress(
+            params.publishedIrradianceAtlasBufferIndex,
+            address,
+            direction,
+            params.irradianceTexels,
+            params);
+        if (!SimpleDdgiAtlasSupportsGather(irradiance))
+            continue;
+        for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+        {
+            irradianceCoefficients[coefficient] += max(irradiance.rgb,
+                vec3(0.0)) *
+                SimpleDdgiEvaluateRadianceShL2BasisCoefficientNormalized(
+                    direction, coefficient);
+        }
+    }
+
+    vec3 bounceCoefficients[9];
+    float projectionScale = 4.0 * FROXEL_PI / float(sampleCount);
+    for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+    {
+        uint band = coefficient == 0u ? 0u : coefficient <= 3u ? 1u : 2u;
+        float cosineKernel = band == 0u
+            ? FROXEL_PI
+            : band == 1u
+                ? 2.0 * FROXEL_PI / 3.0
+                : FROXEL_PI / 4.0;
+        vec3 totalIncident = irradianceCoefficients[coefficient] *
+            projectionScale / cosineKernel;
+        bounceCoefficients[coefficient] = clamp(
+            totalIncident - sourceCoefficients[coefficient],
+            vec3(-32752.0),
+            vec3(32752.0));
+    }
+
+    WriteSimpleDdgiRadianceShRecord(
+        uint(VOLUMETRIC_FOG_BOUNCE_RADIANCE_BUFFER_INDEX),
+        physicalProbe,
+        mode,
+        bounceCoefficients,
+        receiver.slotGeneration,
+        sampleCount,
+        2u,
+        sourceHistory);
+}

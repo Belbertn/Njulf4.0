@@ -413,7 +413,8 @@ public sealed class ModelLightImportTests
                 sourceStore);
             Assert.Multiple(() =>
             {
-                Assert.That(saved.SchemaVersion, Is.EqualTo(6));
+                Assert.That(saved.SchemaVersion,
+                    Is.EqualTo(SceneDocument.CurrentSchemaVersion));
                 Assert.That(saved.ImportedModelLightsEnabled, Is.True);
                 Assert.That(saved.Lights.Select(light => light.Id),
                     Is.EqualTo(new[] { authoredId }));
@@ -647,7 +648,8 @@ public sealed class ModelLightImportTests
         SceneLightDocument light = decoded.Lights.Single();
         Assert.Multiple(() =>
         {
-            Assert.That(decoded.SchemaVersion, Is.EqualTo(6));
+            Assert.That(decoded.SchemaVersion,
+                Is.EqualTo(SceneDocument.CurrentSchemaVersion));
             Assert.That(decoded.ImportedModelLightsEnabled, Is.True);
             Assert.That(light.InnerSpotAngle, Is.EqualTo(0.2f));
             Assert.That(light.AttenuationMode, Is.EqualTo("Polynomial"));

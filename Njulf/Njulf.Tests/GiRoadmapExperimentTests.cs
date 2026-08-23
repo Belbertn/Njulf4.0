@@ -38,6 +38,29 @@ public sealed class GiRoadmapExperimentTests
     }
 
     [Test]
+    public void B5_AdmitsQualifiedL2FroxelConsumerWithOwnedMemory()
+    {
+        const ulong allocatedBytes = 96UL * 1024UL * 1024UL;
+        GiExperimentAdmission admission =
+            SimpleDdgiDirectionalFogExperiment.EvaluateAdmission(
+                requested: true,
+                new SimpleDdgiDirectionalFogCapabilities(
+                    L2IncidentRadianceSidecarAvailable: true,
+                    FroxelPhaseIntegrationAvailable: true,
+                    DirectIndirectOwnershipSeparated: true),
+                productionQualified: true,
+                allocatedBytes: allocatedBytes);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admission.Active, Is.True);
+            Assert.That(admission.Stage, Is.EqualTo(GiExperimentStage.Active));
+            Assert.That(admission.AllocatedBytes, Is.EqualTo(allocatedBytes));
+            Assert.That(admission.Status, Is.EqualTo("active"));
+        });
+    }
+
+    [Test]
     public void B5_L2PhaseOracle_IsIsotropicAtGZeroAndDirectionalAtPositiveG()
     {
         float inverseY00 = 1.0f / 0.2820947918f;

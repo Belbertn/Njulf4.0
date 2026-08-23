@@ -466,4 +466,61 @@ bool EvaluateSimpleDdgiRadianceShRecord(
     return true;
 }
 
+// Convolution of an incident-radiance SH expansion with the normalized
+// Henyey-Greenstein phase function. Its Legendre moments are g^l, so an L2
+// sidecar needs only the exact band scales (1, g, g^2). Coefficients remain
+// signed until the final reconstruction to preserve low-frequency energy.
+bool EvaluateSimpleDdgiRadianceShRecordHenyeyGreenstein(
+    uint bufferIndex,
+    uint probeIndex,
+    uint mode,
+    uint expectedSlotGeneration,
+    vec3 outgoingDirection,
+    float anisotropy,
+    out vec3 radiance,
+    out vec3 negativeReconstruction)
+{
+    radiance = vec3(0.0);
+    negativeReconstruction = vec3(0.0);
+    float directionLengthSquared = dot(outgoingDirection, outgoingDirection);
+    if (!(directionLengthSquared > 1.0e-12) ||
+        isnan(directionLengthSquared) || isinf(directionLengthSquared))
+        return false;
+
+    vec3 coefficients[9];
+    uint validSampleCount;
+    uint qualityLevel;
+    bool hasHistory;
+    if (!ReadSimpleDdgiRadianceShRecord(
+            bufferIndex,
+            probeIndex,
+            mode,
+            expectedSlotGeneration,
+            coefficients,
+            validSampleCount,
+            qualityLevel,
+            hasHistory) || validSampleCount == 0u)
+        return false;
+
+    float basis[9];
+    SimpleDdgiEvaluateRadianceShL2Basis(
+        outgoingDirection * inversesqrt(directionLengthSquared), basis);
+    float g = clamp(anisotropy, -0.9, 0.9);
+    vec3 bandScales = vec3(1.0, g, g * g);
+    uint coefficientCount = SimpleDdgiRadianceShCoefficientCount(mode);
+    vec3 reconstructed = vec3(0.0);
+    for (uint coefficient = 0u; coefficient < coefficientCount; coefficient++)
+    {
+        uint band = coefficient == 0u ? 0u : coefficient <= 3u ? 1u : 2u;
+        reconstructed += coefficients[coefficient] *
+            (basis[coefficient] * bandScales[band]);
+    }
+    if (any(isnan(reconstructed)) || any(isinf(reconstructed)))
+        return false;
+
+    negativeReconstruction = max(-reconstructed, vec3(0.0));
+    radiance = max(reconstructed, vec3(0.0));
+    return true;
+}
+
 #endif

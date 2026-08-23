@@ -252,6 +252,19 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentNullException(nameof(frame));
 
             PopulateSceneData(sceneData, settings, frame.Stats);
+            int volumetricSourceCount = 0;
+            for (int index = 0; index < frame.Instances.Count; index++)
+            {
+                ParticleRenderInstance instance = frame.Instances[index];
+                if (instance.VolumetricInjectionEnabled &&
+                    instance.VolumetricDensity > 0f &&
+                    instance.Size > 0f)
+                {
+                    volumetricSourceCount++;
+                }
+            }
+            sceneData.CpuVolumetricParticleSourceCount =
+                volumetricSourceCount;
         }
 
         public static void PopulateSceneData(
@@ -280,6 +293,7 @@ namespace Njulf.Rendering.Resources
             sceneData.SimulatedParticleCount = stats.SimulatedParticles;
             sceneData.CulledParticleCount = stats.CulledParticles;
             sceneData.RenderedParticleCount = stats.RenderedParticles;
+            sceneData.CpuVolumetricParticleSourceCount = 0;
             sceneData.ParticleBatchCount = stats.Batches;
             sceneData.AlphaParticleCount = stats.AlphaParticles;
             sceneData.AdditiveParticleCount = stats.AdditiveParticles;
@@ -575,7 +589,13 @@ namespace Njulf.Rendering.Resources
                     emitterId,
                     material.BillboardMode,
                     material,
-                    distanceSquared));
+                    distanceSquared,
+                    definition.VolumetricInjectionEnabled,
+                    definition.VolumetricDensity,
+                    definition.VolumetricRadiusScale,
+                    definition.VolumetricScatteringAlbedo,
+                    definition.VolumetricAnisotropy,
+                    definition.VolumetricPriority));
 
                 renderedParticles++;
                 if (IsAlphaSorted(material.BlendMode))
@@ -771,7 +791,13 @@ namespace Njulf.Rendering.Resources
                 emitterId,
                 ParticleBillboardMode.RibbonSegment,
                 material,
-                distanceSquared));
+                distanceSquared,
+                false,
+                0.0f,
+                1.0f,
+                Vector3.One,
+                0.0f,
+                0));
         }
 
         private static void AgeTrailSamples(List<TrailSample> samples, float deltaSeconds, float lifetime)
@@ -908,7 +934,15 @@ namespace Njulf.Rendering.Resources
                     BlendMode = (uint)instance.Material.BlendMode,
                     BillboardMode = (uint)instance.BillboardMode,
                     DebugId = checked((uint)(((instance.EffectId & 0xFFFF) << 16) | (instance.EmitterId & 0xFFFF))),
-                    Padding0 = 0
+                    Padding0 = 0,
+                    VolumetricAlbedoAndExtinction = new Vector4(
+                        instance.VolumetricScatteringAlbedo,
+                        instance.VolumetricDensity),
+                    VolumetricRadiusAnisotropyAndFlags = new Vector4(
+                        instance.VolumetricRadiusScale,
+                        instance.VolumetricAnisotropy,
+                        instance.VolumetricInjectionEnabled ? 1.0f : 0.0f,
+                        instance.VolumetricPriority)
                 });
             }
 

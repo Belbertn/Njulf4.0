@@ -40,9 +40,16 @@
 #ifndef SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
 #define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 0
 #endif
+#ifndef SIMPLE_DDGI_DIRECTIONAL_RADIANCE_HG_PHASE
+#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_HG_PHASE 0
+#endif
+#ifndef SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER
+#define SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER 0
+#endif
 #if SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
 vec3 SimpleDdgiDirectionalRadianceQueryDirection = vec3(0.0, 1.0, 0.0);
 float SimpleDdgiDirectionalRadianceQueryRoughness = 1.0;
+float SimpleDdgiDirectionalRadianceQueryAnisotropy = 0.0;
 uint SimpleDdgiDirectionalRadianceQueryBufferIndex =
     uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_BUFFER_INDEX);
 
@@ -57,6 +64,17 @@ void SetSimpleDdgiDirectionalRadianceQuery(
 
 void SetSimpleDdgiDirectionalRadianceQueryBuffer(uint bufferIndex)
 {
+    SimpleDdgiDirectionalRadianceQueryBufferIndex = bufferIndex;
+}
+
+void SetSimpleDdgiDirectionalRadianceHenyeyGreensteinQuery(
+    vec3 direction,
+    float anisotropy,
+    uint bufferIndex)
+{
+    SimpleDdgiDirectionalRadianceQueryDirection = direction;
+    SimpleDdgiDirectionalRadianceQueryAnisotropy =
+        clamp(anisotropy, -0.9, 0.9);
     SimpleDdgiDirectionalRadianceQueryBufferIndex = bufferIndex;
 }
 #endif
@@ -5368,7 +5386,9 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         SimpleDdgiDirectionalRadianceQueryRoughness);
     bool evaluateDirectionalRadiance = directionalRadianceMode !=
             SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF &&
+#if !SIMPLE_DDGI_DIRECTIONAL_RADIANCE_HG_PHASE
         glossyTransportMode != SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_OFF &&
+#endif
         SimpleDdgiDirectionalRadianceQueryBufferIndex != 0u &&
         directionalRoughnessWeight > 0.0;
 #endif
@@ -5644,12 +5664,15 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
         vec3 toSurface = biasedWorldPos - probePos;
         float distanceToProbe = length(toSurface);
         vec3 probeToSurface = distanceToProbe > 0.00001 ? toSurface / distanceToProbe : safeNormal;
-        vec4 irradiance = SampleSimpleDdgiIrradianceBilinearAtAddress(
+        vec4 irradiance = vec4(0.0);
+#if !SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER
+        irradiance = SampleSimpleDdgiIrradianceBilinearAtAddress(
             p.publishedIrradianceAtlasBufferIndex,
             atlasAddress,
             safeNormal,
             p.irradianceTexels,
             p);
+#endif
         vec2 moments = SampleSimpleDdgiVisibilityBilinearAtAddress(
             uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX),
             atlasAddress,
@@ -5657,11 +5680,15 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
             p.visibilityTexels,
             p);
         bool atlasSupported;
+#if SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER
+        atlasSupported = true;
+#else
 #if NJULF_DDGI_DETAILED_COUNTERS
         rejectionMask = SimpleDdgiAtlasRejectionMask(irradiance);
         atlasSupported = rejectionMask == 0u;
 #else
         atlasSupported = SimpleDdgiAtlasSupportsGather(irradiance);
+#endif
 #endif
         if (!atlasSupported)
         {
@@ -5729,13 +5756,27 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
             gatherRole,
             selectedDirectionalWeight);
 #endif
+#if !SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER
         accumulated += max(irradiance.rgb, vec3(0.0)) * selectedDirectionalWeight;
+#endif
 #if SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
         if (evaluateDirectionalRadiance)
         {
             vec3 probeDirectionalRadiance;
             vec3 negativeReconstruction;
-            if (EvaluateSimpleDdgiRadianceShRecord(
+            if (
+#if SIMPLE_DDGI_DIRECTIONAL_RADIANCE_HG_PHASE
+                EvaluateSimpleDdgiRadianceShRecordHenyeyGreenstein(
+                    SimpleDdgiDirectionalRadianceQueryBufferIndex,
+                    atlasProbeAddress,
+                    directionalRadianceMode,
+                    directionalSlotGeneration,
+                    SimpleDdgiDirectionalRadianceQueryDirection,
+                    SimpleDdgiDirectionalRadianceQueryAnisotropy,
+                    probeDirectionalRadiance,
+                    negativeReconstruction)
+#else
+                EvaluateSimpleDdgiRadianceShRecord(
                     SimpleDdgiDirectionalRadianceQueryBufferIndex,
                     atlasProbeAddress,
                     directionalRadianceMode,
@@ -5743,7 +5784,9 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
                     SimpleDdgiDirectionalRadianceQueryDirection,
                     SimpleDdgiDirectionalRadianceQueryRoughness,
                     probeDirectionalRadiance,
-                    negativeReconstruction))
+                    negativeReconstruction)
+#endif
+                )
             {
                 directionalRadianceAccumulated +=
                     probeDirectionalRadiance * selectedDirectionalWeight;
@@ -5823,7 +5866,11 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     // becoming a second ambient-occlusion term. Physical shadowing is already in
     // the radiance traced into each probe.
     result.irradiance = directionalMass > 0.000001
+#if SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER
+        ? vec3(0.0)
+#else
         ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
+#endif
         : vec3(0.0);
 #if SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
     result.directionalRadiance = directionalRadianceMass > 0.000001

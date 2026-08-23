@@ -12,6 +12,28 @@ namespace Njulf.Tests;
 [TestFixture]
 public sealed class SampleSmokeOptionsParserTests
 {
+    [Test]
+    public void ParsesVolumetricFogDebugCaptureOverrides()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--scene", "vfx-showcase",
+            "--fog-debug-view", "indirect-radiance",
+            "--fog-debug-projection", "slice",
+            "--fog-debug-slice", "23"
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.FogDebugViewOverride,
+                Is.EqualTo(FogDebugView.IndirectRadiance));
+            Assert.That(options.FogDebugProjectionOverride,
+                Is.EqualTo(FogDebugProjection.Slice));
+            Assert.That(options.FogDebugSliceOverride, Is.EqualTo(23));
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.Startup));
+        });
+    }
+
     [SetUp]
     public void ClearEnvironment()
     {
@@ -1011,6 +1033,18 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void VolumetricBaselineKeepsProcessAliveForSettledCapture()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(new[]
+        {
+            "--scene", "vfx-showcase",
+            "--baseline-snapshot-dir", Path.GetTempPath()
+        });
+
+        Assert.That(options.FrameCount, Is.EqualTo(12));
+    }
+
+    [Test]
     public void ParsesBenchmarkOptionsAndEnablesGpuTiming()
     {
         string reportPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "njulf-benchmark.json");
@@ -1366,6 +1400,79 @@ public sealed class SampleSmokeOptionsParserTests
                 ]),
                 Throws.ArgumentException.With.Message.Contains(
                     "offline standalone"));
+        });
+    }
+
+    [Test]
+    public void ParsesVolumetricTemporalCaptureAtLockedProductionTarget()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "NjulfVolumetricTemporalCapture");
+
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--volumetric-temporal-capture-dir", directory
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.VolumetricTemporalCaptureDirectory,
+                Is.EqualTo(Path.GetFullPath(directory)));
+            Assert.That(options.SceneKind, Is.EqualTo(SampleSceneKind.VfxShowcase));
+            Assert.That(options.PerformanceScenario,
+                Is.EqualTo(SamplePerformanceScenario.Normal));
+            Assert.That(options.QualityPresetOverride,
+                Is.EqualTo(RenderQualityPreset.High));
+            Assert.That(options.UsesDeterministicSimulationClock, Is.True);
+            Assert.That(options.EnableGpuTiming, Is.True);
+            Assert.That(options.Mode, Is.EqualTo(SampleSmokeMode.None));
+            Assert.That(options.FrameCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void VolumetricTemporalCaptureAllowsUltraButRejectsLow()
+    {
+        Assert.Multiple(() =>
+        {
+            SampleSmokeOptions ultra = SampleSmokeOptionsParser.Parse(
+            [
+                "--volumetric-temporal-capture-dir", Path.GetTempPath(),
+                "--quality-preset", "ultra"
+            ]);
+            Assert.That(ultra.QualityPresetOverride,
+                Is.EqualTo(RenderQualityPreset.Ultra));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--volumetric-temporal-capture-dir", Path.GetTempPath(),
+                    "--quality-preset", "low"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "high, ddgi-high, or ultra"));
+        });
+    }
+
+    [Test]
+    public void ParsesVolumetricTemporalAnalysisAsOfflineStandaloneCommand()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "NjulfVolumetricTemporalAnalysis");
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--analyze-volumetric-temporal-capture-dir", directory
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.VolumetricTemporalAnalyzeDirectory,
+                Is.EqualTo(Path.GetFullPath(directory)));
+            Assert.That(options.VolumetricTemporalCaptureDirectory, Is.Null);
+            Assert.That(options.UsesDeterministicSimulationClock, Is.False);
+            Assert.That(options.EnableGpuTiming, Is.False);
         });
     }
 

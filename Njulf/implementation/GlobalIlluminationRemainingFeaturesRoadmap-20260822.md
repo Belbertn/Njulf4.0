@@ -1,6 +1,6 @@
 # Global Illumination Remaining Features Roadmap
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
 
 ## Current state
 
@@ -35,22 +35,22 @@ tint. The B5 directional-fog experiment cannot currently be admitted because the
 renderer has neither a production L2 incident-radiance sidecar nor a froxel phase
 consumer.
 
-- [ ] Add a camera-relative 3D froxel grid with logarithmic depth slicing.
-- [ ] Inject global height fog and bounded local density volumes.
-- [ ] Support animated 3D density noise, wind/flow, and particle/VFX smoke
+- [x] Add a camera-relative 3D froxel grid with logarithmic depth slicing.
+- [x] Inject global height fog and bounded local density volumes.
+- [x] Support animated 3D density noise, wind/flow, and particle/VFX smoke
       injection.
-- [ ] Inject sunlight, point lights, spotlights, and emissive lighting.
-- [ ] Apply shadow maps or ray-query visibility to direct volumetric lighting.
-- [ ] Sample directional L2 DDGI incident radiance per froxel or froxel cluster.
-- [ ] Convolve indirect radiance with a Henyey-Greenstein phase function.
-- [ ] Keep direct and indirect volumetric energy ownership explicitly separated.
-- [ ] Add temporal jitter, reprojection, history rejection, and depth-aware
+- [x] Inject sunlight, point lights, spotlights, and emissive lighting.
+- [x] Apply shadow maps or ray-query visibility to direct volumetric lighting.
+- [x] Sample directional L2 DDGI incident radiance per froxel or froxel cluster.
+- [x] Convolve indirect radiance with a Henyey-Greenstein phase function.
+- [x] Keep direct and indirect volumetric energy ownership explicitly separated.
+- [x] Add temporal jitter, reprojection, history rejection, and depth-aware
       upsampling.
-- [ ] Add volumetric self-shadowing and a coarse transmittance representation so
+- [x] Add volumetric self-shadowing and a coarse transmittance representation so
       dense smoke can attenuate both direct and indirect lighting.
-- [ ] Add a bounded multiple-scattering approximation after the single-scattering
+- [x] Add a bounded multiple-scattering approximation after the single-scattering
       path is qualified.
-- [ ] Add debug views for density, extinction, direct radiance, indirect radiance,
+- [x] Add debug views for density, extinction, direct radiance, indirect radiance,
       history confidence, and final transmittance.
 
 ### P0: Hybrid ray-query reflections

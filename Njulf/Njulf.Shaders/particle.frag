@@ -14,6 +14,7 @@ layout(location = 6) in vec2 inNextUv;
 layout(location = 7) flat in float inFlipbookBlend;
 layout(location = 8) in vec3 inWorldPosition;
 layout(location = 9) flat in vec3 inDdgiAmbient;
+layout(location = 10) in vec2 inLocalUv;
 
 layout(location = 0) out vec4 outColor;
 
@@ -28,6 +29,7 @@ const uint PARTICLE_DEBUG_FLIPBOOK_FRAME = 4u;
 const uint PARTICLE_DEBUG_LIFETIME = 6u;
 const uint PARTICLE_DEBUG_EMITTER_ID = 8u;
 const uint PARTICLE_BLEND_ALPHA_CLIP = 4u;
+const uint PARTICLE_BLEND_ALPHA = 0u;
 
 vec3 DebugColor(uint id)
 {
@@ -76,6 +78,12 @@ void main()
         vec4 nextSampleColor = texture(BindlessTextures[nonuniformEXT(int(inTextureIndex))], inNextUv);
         sampleColor = mix(sampleColor, nextSampleColor, clamp(inFlipbookBlend, 0.0, 1.0));
     }
+    if (inTextureIndex == uint(DEFAULT_WHITE_TEXTURE))
+    {
+        vec2 centeredUv = inLocalUv * 2.0 - vec2(1.0);
+        sampleColor.a *= 1.0 - smoothstep(
+            0.05, 1.0, dot(centeredUv, centeredUv));
+    }
 
     vec4 color = sampleColor * inColor;
     float softFade = SoftParticleFade();
@@ -117,5 +125,14 @@ void main()
     vec3 hdr = color.rgb * emissiveStrength;
     float nonEmissiveWeight = clamp(1.0 - max(emissiveStrength - 1.0, 0.0), 0.0, 1.0);
     hdr += inDdgiAmbient * nonEmissiveWeight;
+    // Premultiplied and additive pipelines use a source factor of one, so
+    // their shader output owns alpha/falloff weighting. Without this, an
+    // untextured smoke particle remains a bright square while its authored
+    // alpha fades, which looks like coarse or flickering froxel lighting.
+    if (inBlendMode != PARTICLE_BLEND_ALPHA &&
+        inBlendMode != PARTICLE_BLEND_ALPHA_CLIP)
+    {
+        hdr *= color.a;
+    }
     outColor = vec4(hdr, color.a);
 }

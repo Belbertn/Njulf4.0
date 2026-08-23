@@ -465,7 +465,15 @@ namespace Njulf.Rendering.Resources
                     Math.Max(0, definition.BurstCount),
                     Math.Max(0.0f, definition.BurstTimeSeconds),
                     Math.Max(0.0f, definition.StartDelaySeconds),
-                    Math.Max(0.0f, definition.DurationSeconds))
+                    Math.Max(0.0f, definition.DurationSeconds)),
+                VolumetricAlbedoAndExtinction = new Vector4(
+                    definition.VolumetricScatteringAlbedo,
+                    definition.VolumetricDensity),
+                VolumetricRadiusAnisotropyAndFlags = new Vector4(
+                    definition.VolumetricRadiusScale,
+                    definition.VolumetricAnisotropy,
+                    definition.VolumetricInjectionEnabled ? 1.0f : 0.0f,
+                    definition.VolumetricPriority)
             };
         }
 

@@ -17,7 +17,7 @@ internal static class SampleVfxEffects
         {
             Add(scene, CreateFirePit(), new Vector3(-2.2f, 0.12f, 0.6f), 1301u),
             Add(scene, CreateImpactBurst(), new Vector3(0.2f, 0.08f, -1.0f), 2402u),
-            Add(scene, CreateRainSheet(), new Vector3(0.0f, 4.2f, 0.0f), 3503u),
+            Add(scene, CreateSmokeBank(), new Vector3(1.8f, 0.2f, 0.2f), 3503u),
             Add(scene, CreateMagicOrb(), new Vector3(2.0f, 1.1f, 0.2f), 4604u)
         };
 
@@ -83,6 +83,9 @@ internal static class SampleVfxEffects
                     EmissiveOverLife = ParticleCurve.FromKeys(
                         new ParticleCurveKey(0.0f, 6.0f),
                         new ParticleCurveKey(1.0f, 1.5f)),
+                    GlobalIlluminationEmission = ParticleGiEmissionMode.Force,
+                    GlobalIlluminationPower = new Vector3(35f, 12f, 2f),
+                    GlobalIlluminationSourceShape = ParticleGiSourceShape.Cone,
                     InitialVelocityMin = new Vector3(-0.08f, 0.8f, -0.08f),
                     InitialVelocityMax = new Vector3(0.08f, 1.45f, 0.08f),
                     Acceleration = new Vector3(0.0f, 0.15f, 0.0f),
@@ -107,7 +110,13 @@ internal static class SampleVfxEffects
                     InitialVelocityMax = new Vector3(0.15f, 0.75f, 0.15f),
                     Acceleration = new Vector3(0.0f, 0.05f, 0.0f),
                     Drag = 0.25f,
-                    MaxParticles = 192
+                    MaxParticles = 192,
+                    VolumetricInjectionEnabled = true,
+                    VolumetricDensity = 0.14f,
+                    VolumetricRadiusScale = 1.25f,
+                    VolumetricScatteringAlbedo = new Vector3(0.65f, 0.62f, 0.58f),
+                    VolumetricAnisotropy = 0.35f,
+                    VolumetricPriority = 100
                 },
                 new ParticleEmitterDefinition
                 {
@@ -156,9 +165,10 @@ internal static class SampleVfxEffects
                 {
                     Name = "Dust",
                     Material = dust,
-                    Looping = false,
-                    BurstCount = 48,
-                    LifetimeSeconds = ParticleCurve.Linear(0.6f, 1.4f),
+                    Looping = true,
+                    DurationSeconds = 2.4f,
+                    BurstCount = 28,
+                    LifetimeSeconds = ParticleCurve.Linear(1.2f, 2.4f),
                     Size = ParticleCurve.Linear(0.12f, 0.6f),
                     ColorOverLife = ParticleGradient.Linear(
                         new Color(0.48f, 0.43f, 0.36f, 0.55f),
@@ -167,7 +177,13 @@ internal static class SampleVfxEffects
                     InitialVelocityMax = new Vector3(1.1f, 1.3f, 1.1f),
                     Acceleration = new Vector3(0.0f, -0.25f, 0.0f),
                     Drag = 0.7f,
-                    MaxParticles = 96
+                    MaxParticles = 96,
+                    VolumetricInjectionEnabled = true,
+                    VolumetricDensity = 0.11f,
+                    VolumetricRadiusScale = 1.25f,
+                    VolumetricScatteringAlbedo = new Vector3(0.72f, 0.62f, 0.48f),
+                    VolumetricAnisotropy = 0.15f,
+                    VolumetricPriority = 80
                 },
                 new ParticleEmitterDefinition
                 {
@@ -191,32 +207,50 @@ internal static class SampleVfxEffects
         };
     }
 
-    private static ParticleEffect CreateRainSheet()
+    private static ParticleEffect CreateSmokeBank()
     {
         return new ParticleEffect
         {
-            Name = "Vfx.RainSheet",
+            Name = "Vfx.SmokeBank",
             Emitters = new[]
             {
                 new ParticleEmitterDefinition
                 {
-                    Name = "Rain",
+                    Name = "DenseSmoke",
                     Material = new ParticleMaterialDefinition
                     {
-                        Name = "Vfx.RainSheet.Drops",
-                        BlendMode = ParticleBlendMode.AlphaBlend,
-                        BillboardMode = ParticleBillboardMode.StretchedVelocity,
-                        SoftParticles = false
+                        Name = "Vfx.SmokeBank.DenseSmoke",
+                        BlendMode = ParticleBlendMode.PremultipliedAlpha,
+                        SoftParticles = true
                     },
-                    SpawnShape = ParticleSpawnShape.Box(new Vector3(8.0f, 0.1f, 8.0f)),
-                    SpawnRatePerSecond = 450.0f,
-                    LifetimeSeconds = ParticleCurve.Linear(0.8f, 1.1f),
-                    Size = ParticleCurve.Constant(0.035f),
-                    ColorOverLife = ParticleGradient.Constant(new Color(0.65f, 0.78f, 1.0f, 0.28f)),
-                    InitialVelocityMin = new Vector3(-0.2f, -8.8f, -0.2f),
-                    InitialVelocityMax = new Vector3(0.2f, -7.5f, 0.2f),
-                    MaxParticles = 900,
-                    MaxDrawDistance = 18.0f
+                    SpawnShape = ParticleSpawnShape.Box(
+                        new Vector3(0.7f, 0.12f, 0.7f)),
+                    SpawnRatePerSecond = 30.0f,
+                    LifetimeSeconds = ParticleCurve.Linear(3.8f, 5.8f),
+                    Size = ParticleCurve.FromKeys(
+                        new ParticleCurveKey(0.0f, 0.32f),
+                        new ParticleCurveKey(0.45f, 0.95f),
+                        new ParticleCurveKey(1.0f, 1.45f)),
+                    ColorOverLife = ParticleGradient.FromKeys(
+                        new ParticleGradientKey(0.0f,
+                            new Color(0.11f, 0.13f, 0.17f, 0.0f)),
+                        new ParticleGradientKey(0.2f,
+                            new Color(0.13f, 0.16f, 0.21f, 0.48f)),
+                        new ParticleGradientKey(1.0f,
+                            new Color(0.2f, 0.23f, 0.28f, 0.0f))),
+                    InitialVelocityMin = new Vector3(-0.12f, 0.12f, -0.1f),
+                    InitialVelocityMax = new Vector3(0.18f, 0.38f, 0.08f),
+                    Acceleration = new Vector3(0.03f, 0.025f, -0.015f),
+                    Drag = 0.18f,
+                    MaxParticles = 224,
+                    MaxDrawDistance = 24.0f,
+                    VolumetricInjectionEnabled = true,
+                    VolumetricDensity = 0.22f,
+                    VolumetricRadiusScale = 1.35f,
+                    VolumetricScatteringAlbedo =
+                        new Vector3(0.5f, 0.57f, 0.68f),
+                    VolumetricAnisotropy = 0.42f,
+                    VolumetricPriority = 120
                 }
             }
         };
@@ -251,6 +285,9 @@ internal static class SampleVfxEffects
                         new Color(0.35f, 0.95f, 1.0f, 0.75f),
                         new Color(0.9f, 0.35f, 1.0f, 0.0f)),
                     EmissiveOverLife = ParticleCurve.Linear(4.0f, 0.0f),
+                    GlobalIlluminationEmission = ParticleGiEmissionMode.Force,
+                    GlobalIlluminationPower = new Vector3(5f, 18f, 25f),
+                    GlobalIlluminationSourceShape = ParticleGiSourceShape.Disk,
                     InitialVelocityMin = new Vector3(-0.25f, -0.05f, -0.25f),
                     InitialVelocityMax = new Vector3(0.25f, 0.45f, 0.25f),
                     Drag = 0.1f,

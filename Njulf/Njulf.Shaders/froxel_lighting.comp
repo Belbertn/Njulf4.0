@@ -1,0 +1,474 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : require
+
+#include "froxel_common.glsl"
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 8) in;
+
+layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
+
+shared vec3 FroxelClusterEmissiveIncident;
+shared float FroxelClusterEmissiveVisibility;
+shared vec3 FroxelClusterRepresentativeWorldPosition;
+shared vec4 FroxelClusterLightIncidentVisibility[96];
+shared vec4 FroxelClusterLightDirectionActive[96];
+shared vec4 FroxelClusterMediumSamples[128];
+shared vec4 FroxelClusterAuxiliarySamples[128];
+shared vec4 FroxelClusterReducedMedium;
+shared float FroxelClusterAnisotropy;
+
+float FroxelReverseDepthVisibility(float receiver, float sampled, float bias)
+{
+    if (receiver < 0.0 || receiver > 1.0)
+        return 1.0;
+    return receiver >= sampled - bias ? 1.0 : 0.0;
+}
+
+uint FroxelSelectCascade(float distanceFromCamera, vec4 splits, uint count)
+{
+    uint cascade = 0u;
+    if (count > 1u && distanceFromCamera > splits.x) cascade = 1u;
+    if (count > 2u && distanceFromCamera > splits.y) cascade = 2u;
+    if (count > 3u && distanceFromCamera > splits.z) cascade = 3u;
+    return min(cascade, count - 1u);
+}
+
+float FroxelDirectionalShadow(uint lightIndex, vec3 worldPosition)
+{
+    vec4 indices = ReadShadowIndices();
+    if (indices.x < 0.5 || int(round(indices.w)) != int(lightIndex))
+        return 1.0;
+    uint cascadeCount = clamp(uint(round(indices.y)), 1u,
+        uint(MAX_DIRECTIONAL_SHADOW_TEXTURES));
+    uint cascade = FroxelSelectCascade(
+        length(worldPosition - FroxelFrame.CameraPositionAndTime.xyz),
+        ReadShadowCascadeSplits(),
+        cascadeCount);
+    vec4 clip = MulRowMajor(vec4(worldPosition, 1.0),
+        ReadShadowMatrix(cascade));
+    if (!(clip.w > 1.0e-6))
+        return 1.0;
+    vec3 coordinate = clip.xyz / clip.w;
+    vec2 uv = coordinate.xy * 0.5 + vec2(0.5);
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return 1.0;
+    float sampled = texture(BindlessTextures[nonuniformEXT(
+        DIRECTIONAL_SHADOW_TEXTURE_BASE + int(cascade))], uv).r;
+    vec4 filterBias = ReadDirectionalShadowFilterAndBias();
+    float visibility = FroxelReverseDepthVisibility(
+        coordinate.z, sampled, max(filterBias.y, 0.00001));
+    return mix(1.0, visibility, clamp(ReadShadowSettings().x, 0.0, 1.0));
+}
+
+float FroxelSpotShadow(uint lightIndex, vec3 worldPosition)
+{
+    int shadowIndex = ReadLocalSpotShadowIndex(lightIndex);
+    if (shadowIndex < 0)
+        return 1.0;
+    GPUSpotShadow shadow = ReadSpotShadow(uint(shadowIndex));
+    if (shadow.Enabled == 0 || shadow.LightIndex != int(lightIndex))
+        return 1.0;
+    vec4 clip = MulRowMajor(vec4(worldPosition, 1.0),
+        shadow.LightViewProjection);
+    if (!(clip.w > 1.0e-6))
+        return 1.0;
+    vec3 coordinate = clip.xyz / clip.w;
+    vec2 localUv = coordinate.xy * 0.5 + vec2(0.5);
+    if (any(lessThan(localUv, vec2(0.0))) ||
+        any(greaterThan(localUv, vec2(1.0))))
+        return 1.0;
+    vec2 atlasUv = localUv * shadow.AtlasScaleOffset.xy +
+        shadow.AtlasScaleOffset.zw;
+    float sampled = texture(BindlessTextures[nonuniformEXT(
+        SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], atlasUv).r;
+    float visibility = FroxelReverseDepthVisibility(
+        coordinate.z, sampled, shadow.BiasStrengthTexelSize.y);
+    return mix(1.0, visibility,
+        clamp(shadow.BiasStrengthTexelSize.z, 0.0, 1.0));
+}
+
+uint FroxelPointFace(vec3 direction)
+{
+    vec3 absoluteDirection = abs(direction);
+    if (absoluteDirection.x >= absoluteDirection.y &&
+        absoluteDirection.x >= absoluteDirection.z)
+        return direction.x >= 0.0 ? 0u : 1u;
+    if (absoluteDirection.y >= absoluteDirection.z)
+        return direction.y >= 0.0 ? 2u : 3u;
+    return direction.z >= 0.0 ? 4u : 5u;
+}
+
+mat4 FroxelPointFaceMatrix(GPUPointShadow shadow, uint face)
+{
+    if (face == 0u) return shadow.FaceViewProjection0;
+    if (face == 1u) return shadow.FaceViewProjection1;
+    if (face == 2u) return shadow.FaceViewProjection2;
+    if (face == 3u) return shadow.FaceViewProjection3;
+    if (face == 4u) return shadow.FaceViewProjection4;
+    return shadow.FaceViewProjection5;
+}
+
+float FroxelPointShadow(uint lightIndex, vec3 worldPosition)
+{
+    int shadowIndex = ReadLocalPointShadowIndex(lightIndex);
+    if (shadowIndex < 0)
+        return 1.0;
+    GPUPointShadow shadow = ReadPointShadow(uint(shadowIndex));
+    if (shadow.Enabled == 0 || shadow.LightIndex != int(lightIndex))
+        return 1.0;
+    vec3 direction = worldPosition - shadow.PositionRange.xyz;
+    uint face = FroxelPointFace(direction);
+    vec4 clip = MulRowMajor(vec4(worldPosition, 1.0),
+        FroxelPointFaceMatrix(shadow, face));
+    if (!(clip.w > 1.0e-6))
+        return 1.0;
+    vec3 coordinate = clip.xyz / clip.w;
+    vec2 uv = coordinate.xy * 0.5 + vec2(0.5);
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return 1.0;
+    float layer = float(shadow.CubemapIndex * 6 + int(face));
+    float sampled = texture(BindlessArrayTextures[nonuniformEXT(
+        POINT_SHADOW_CUBEMAP_ARRAY_TEXTURE_INDEX)], vec3(uv, layer)).r;
+    float visibility = FroxelReverseDepthVisibility(
+        coordinate.z, sampled, shadow.BiasStrengthTexelSize.y);
+    return mix(1.0, visibility,
+        clamp(shadow.BiasStrengthTexelSize.z, 0.0, 1.0));
+}
+
+float FroxelShadowMapVisibility(
+    uint lightIndex,
+    GPULight light,
+    vec3 worldPosition)
+{
+    if ((uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u)
+        return 1.0;
+    if (light.Type == 1)
+        return FroxelDirectionalShadow(lightIndex, worldPosition);
+    if (light.Type == 2)
+        return FroxelSpotShadow(lightIndex, worldPosition);
+    return FroxelPointShadow(lightIndex, worldPosition);
+}
+
+float FroxelRayQueryVisibility(
+    vec3 worldPosition,
+    vec3 directionToLight,
+    float distanceToLight)
+{
+    float rayDistance = max(distanceToLight - 0.02, 0.0);
+    if (!(rayDistance > 0.001))
+        return 1.0;
+    rayQueryEXT query;
+    rayQueryInitializeEXT(
+        query,
+        SceneTlas,
+        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+        0xff,
+        worldPosition + directionToLight * 0.01,
+        0.001,
+        directionToLight,
+        rayDistance);
+    while (rayQueryProceedEXT(query))
+    {
+    }
+    return rayQueryGetIntersectionTypeEXT(query, true) ==
+        gl_RayQueryCommittedIntersectionNoneEXT
+            ? 1.0
+            : 0.0;
+}
+
+vec3 FroxelEvaluateDirect(
+    vec3 worldPosition,
+    vec3 toCamera,
+    vec3 sigmaS,
+    float anisotropy,
+    out float averageVisibility)
+{
+    vec3 direct = vec3(0.0);
+    float visibilitySum = 0.0;
+    uint visibilityCount = 0u;
+    uint lightCount = min(
+        uint(max(round(FroxelFrame.LightCounts.x), 0.0)), 96u);
+    for (uint lightIndex = 0u; lightIndex < lightCount; lightIndex++)
+    {
+        GPULight light = ReadLight(lightIndex);
+        vec3 directionToLight;
+        float attenuation = 1.0;
+        float lightDistance = FroxelFrame.NoiseSelfShadowAndHistory.z;
+        if (light.Type == 1)
+        {
+            directionToLight = normalize(-light.Direction);
+        }
+        else
+        {
+            vec3 offset = light.Position - worldPosition;
+            lightDistance = length(offset);
+            if (!(lightDistance > 0.0001) || lightDistance >= light.Range)
+                continue;
+            directionToLight = offset / lightDistance;
+            attenuation = EvaluateNjulfLightDistanceAttenuation(
+                light, lightDistance);
+            if (light.Type == 2)
+                attenuation *= EvaluateNjulfSpotAttenuation(
+                    light, directionToLight);
+            if (!(attenuation > 0.0))
+                continue;
+        }
+        float mapVisibility = FroxelShadowMapVisibility(
+            lightIndex, light, worldPosition);
+        float mediumVisibility = FroxelMediumTransmittance(
+            worldPosition, directionToLight, lightDistance);
+        float visibility = mapVisibility * mediumVisibility;
+        float phase = FroxelHenyeyGreenstein(
+            dot(-directionToLight, toCamera), anisotropy);
+        vec3 incident = max(light.Color, vec3(0.0)) *
+            max(light.Intensity, 0.0) * attenuation;
+        direct += sigmaS * incident * (phase * visibility);
+        visibilitySum += visibility;
+        visibilityCount++;
+    }
+
+    averageVisibility = visibilityCount > 0u
+        ? visibilitySum / float(visibilityCount)
+        : 1.0;
+    return direct;
+}
+
+void FroxelPrepareClusterDirectLight(
+    uint lightIndex,
+    vec3 worldPosition)
+{
+    FroxelClusterLightIncidentVisibility[lightIndex] = vec4(0.0);
+    FroxelClusterLightDirectionActive[lightIndex] = vec4(0.0);
+    GPULight light = ReadLight(lightIndex);
+    vec3 directionToLight;
+    float attenuation = 1.0;
+    float lightDistance = FroxelFrame.NoiseSelfShadowAndHistory.z;
+    if (light.Type == 1)
+    {
+        directionToLight = normalize(-light.Direction);
+    }
+    else
+    {
+        vec3 offset = light.Position - worldPosition;
+        lightDistance = length(offset);
+        if (!(lightDistance > 0.0001) || lightDistance >= light.Range)
+            return;
+        directionToLight = offset / lightDistance;
+        attenuation = EvaluateNjulfLightDistanceAttenuation(
+            light, lightDistance);
+        if (light.Type == 2)
+            attenuation *= EvaluateNjulfSpotAttenuation(
+                light, directionToLight);
+        if (!(attenuation > 0.0))
+            return;
+    }
+
+    float mapVisibility = FroxelShadowMapVisibility(
+        lightIndex, light, worldPosition);
+    float mediumVisibility = FroxelMediumTransmittance(
+        worldPosition, directionToLight, lightDistance);
+    float visibility = clamp(mapVisibility * mediumVisibility, 0.0, 1.0);
+    vec3 incident = max(light.Color, vec3(0.0)) *
+        max(light.Intensity, 0.0) * attenuation;
+    FroxelClusterLightIncidentVisibility[lightIndex] =
+        vec4(incident, visibility);
+    FroxelClusterLightDirectionActive[lightIndex] =
+        vec4(directionToLight, 1.0);
+}
+
+vec3 FroxelEvaluateClusterDirect(
+    vec3 toCamera,
+    vec3 sigmaS,
+    float anisotropy,
+    out float averageVisibility)
+{
+    vec3 direct = vec3(0.0);
+    float visibilitySum = 0.0;
+    uint visibilityCount = 0u;
+    uint lightCount = min(
+        uint(max(round(FroxelFrame.LightCounts.x), 0.0)), 96u);
+    for (uint lightIndex = 0u; lightIndex < lightCount; lightIndex++)
+    {
+        vec4 directionActive =
+            FroxelClusterLightDirectionActive[lightIndex];
+        if (directionActive.w < 0.5)
+            continue;
+        vec4 incidentVisibility =
+            FroxelClusterLightIncidentVisibility[lightIndex];
+        float phase = FroxelHenyeyGreenstein(
+            dot(-directionActive.xyz, toCamera), anisotropy);
+        direct += sigmaS * incidentVisibility.rgb *
+            (phase * incidentVisibility.a);
+        visibilitySum += incidentVisibility.a;
+        visibilityCount++;
+    }
+    averageVisibility = visibilityCount > 0u
+        ? visibilitySum / float(visibilityCount)
+        : 1.0;
+    return direct;
+}
+
+vec3 FroxelEvaluateEmissiveIncident(
+    vec3 worldPosition,
+    vec3 toCamera,
+    float anisotropy,
+    out float averageVisibility)
+{
+    vec3 incidentRadiance = vec3(0.0);
+    float visibilitySum = 0.0;
+    uint visibilityCount = 0u;
+    uint emissiveCount = min(
+        uint(max(round(FroxelFrame.LightCounts.w), 0.0)), 4u);
+    for (uint sourceIndex = 0u; sourceIndex < emissiveCount; sourceIndex++)
+    {
+        GPUDdgiEmissiveSource source = ReadDdgiEmissiveSource(sourceIndex);
+        vec3 center = source.Vertex0Area.xyz +
+            (source.Edge1AliasProbability.xyz + source.Edge2AliasFlags.xyz) /
+                3.0;
+        vec3 offset = center - worldPosition;
+        float distanceToSource = length(offset);
+        if (!(distanceToSource > 0.001))
+            continue;
+        vec3 directionToLight = offset / distanceToSource;
+        float area = max(source.Vertex0Area.w, 0.0001);
+        float attenuation = area /
+            max(distanceToSource * distanceToSource + area, 0.0001);
+        float visibility = FroxelRayQueryVisibility(
+            worldPosition, directionToLight, distanceToSource) *
+            FroxelMediumTransmittance(
+                worldPosition, directionToLight, distanceToSource);
+        float phase = FroxelHenyeyGreenstein(
+            dot(-directionToLight, toCamera), anisotropy);
+        incidentRadiance += max(source.RadianceSelectionProbability.xyz,
+            vec3(0.0)) * (attenuation * visibility * phase);
+        visibilitySum += visibility;
+        visibilityCount++;
+    }
+    averageVisibility = visibilityCount > 0u
+        ? visibilitySum / float(visibilityCount)
+        : 1.0;
+    return incidentRadiance;
+}
+
+void main()
+{
+    uvec3 lightingCoordinate = gl_WorkGroupID.xyz;
+    if (any(greaterThanEqual(lightingCoordinate, FroxelLightingGridSize())))
+        return;
+
+    uvec3 lightingCell = FroxelLightingCellSize();
+    uvec3 cellOrigin = lightingCoordinate * lightingCell;
+    uvec3 grid = FroxelGridSize();
+    uint lane = gl_LocalInvocationIndex;
+    vec4 localMediumSum = vec4(0.0);
+    float localWeightedAnisotropy = 0.0;
+    float localAnisotropyWeight = 0.0;
+    float localSampleCount = 0.0;
+    for (uint y = gl_LocalInvocationID.y;
+         y < lightingCell.y;
+         y += gl_WorkGroupSize.y)
+    for (uint x = gl_LocalInvocationID.x;
+         x < lightingCell.x;
+         x += gl_WorkGroupSize.x)
+    {
+        uvec3 coordinate = cellOrigin +
+            uvec3(x, y, gl_LocalInvocationID.z);
+        if (all(lessThan(coordinate, grid)))
+        {
+            vec4 sampleMedium = imageLoad(
+                FroxelMedium, ivec3(coordinate));
+            vec4 sampleAuxiliary = imageLoad(
+                FroxelMediumAuxiliary, ivec3(coordinate));
+            float scatteringLuminance = dot(sampleMedium.rgb,
+                vec3(0.2126, 0.7152, 0.0722));
+            localMediumSum += sampleMedium;
+            localWeightedAnisotropy +=
+                sampleAuxiliary.w * scatteringLuminance;
+            localAnisotropyWeight += scatteringLuminance;
+            localSampleCount += 1.0;
+        }
+    }
+    FroxelClusterMediumSamples[lane] = localMediumSum;
+    FroxelClusterAuxiliarySamples[lane] = vec4(
+        localWeightedAnisotropy,
+        localAnisotropyWeight,
+        localSampleCount,
+        0.0);
+    barrier();
+
+    if (lane == 0u)
+    {
+        vec4 mediumSum = vec4(0.0);
+        float weightedAnisotropy = 0.0;
+        float anisotropyWeight = 0.0;
+        float sampleCount = 0.0;
+        for (uint sampleIndex = 0u; sampleIndex < 128u; sampleIndex++)
+        {
+            vec4 sampleMedium = FroxelClusterMediumSamples[sampleIndex];
+            vec4 sampleAuxiliary = FroxelClusterAuxiliarySamples[sampleIndex];
+            mediumSum += sampleMedium;
+            weightedAnisotropy += sampleAuxiliary.x;
+            anisotropyWeight += sampleAuxiliary.y;
+            sampleCount += sampleAuxiliary.z;
+        }
+        FroxelClusterReducedMedium = mediumSum / max(sampleCount, 1.0);
+        FroxelClusterAnisotropy = anisotropyWeight > 1.0e-6
+            ? clamp(weightedAnisotropy / anisotropyWeight, -0.9, 0.9)
+            : 0.0;
+        uvec3 representative = min(
+            lightingCoordinate * lightingCell + lightingCell / 2u,
+            grid - uvec3(1u));
+        vec3 worldPosition = FroxelWorldPosition(representative);
+        FroxelClusterRepresentativeWorldPosition = worldPosition;
+        vec3 toCamera = normalize(
+            FroxelFrame.CameraPositionAndTime.xyz - worldPosition);
+        FroxelClusterEmissiveIncident = FroxelEvaluateEmissiveIncident(
+            worldPosition,
+            toCamera,
+            FroxelClusterAnisotropy,
+            FroxelClusterEmissiveVisibility);
+    }
+    barrier();
+
+    uint lightCount = min(
+        uint(max(round(FroxelFrame.LightCounts.x), 0.0)), 96u);
+    for (uint lightIndex = gl_LocalInvocationIndex;
+         lightIndex < lightCount;
+         lightIndex += gl_WorkGroupSize.x * gl_WorkGroupSize.y *
+            gl_WorkGroupSize.z)
+    {
+        FroxelPrepareClusterDirectLight(
+            lightIndex,
+            FroxelClusterRepresentativeWorldPosition);
+    }
+    barrier();
+    if (lane != 0u)
+        return;
+
+    vec3 toCamera = normalize(
+        FroxelFrame.CameraPositionAndTime.xyz -
+            FroxelClusterRepresentativeWorldPosition);
+    float directVisibility;
+    vec3 directIncident = FroxelEvaluateClusterDirect(
+        toCamera,
+        vec3(1.0),
+        FroxelClusterAnisotropy,
+        directVisibility);
+    directIncident += FroxelClusterEmissiveIncident;
+    directVisibility = min(directVisibility, FroxelClusterEmissiveVisibility);
+
+    if (any(isnan(vec4(directIncident, directVisibility))) ||
+        any(isinf(vec4(directIncident, directVisibility))))
+    {
+        atomicAdd(FroxelDiagnostics.NonFiniteCount, 1u);
+        directIncident = vec3(0.0);
+        directVisibility = 0.0;
+    }
+
+    imageStore(FroxelLightingMedium, ivec3(lightingCoordinate),
+        max(FroxelClusterReducedMedium, vec4(0.0)));
+    imageStore(FroxelDirectRadiance, ivec3(lightingCoordinate),
+        vec4(max(directIncident, vec3(0.0)), directVisibility));
+}

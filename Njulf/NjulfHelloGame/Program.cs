@@ -98,6 +98,14 @@ internal static class Program
                 Console.Out,
                 Console.Error);
         }
+        if (!string.IsNullOrWhiteSpace(
+                options.VolumetricTemporalAnalyzeDirectory))
+        {
+            return SampleVolumetricTemporalCaptureAnalyzer.RunOffline(
+                options.VolumetricTemporalAnalyzeDirectory,
+                Console.Out,
+                Console.Error);
+        }
         using var gateFailureGuard =
             options.KhronosMaterialGiRenderedGate is { } gateOptions
                 ? new SampleKhronosMaterialGiRenderedGateHostFailureGuard(gateOptions)
@@ -236,6 +244,7 @@ internal sealed class HelloGame : Game
     private const SampleEnvironmentMode EnvironmentMode = SampleEnvironmentMode.ProceduralOutdoor;
     private const SamplePerformanceScenario DefaultInteractiveScenario = SamplePerformanceScenario.Normal;
     private const int BaselineCaptureFrameCount = 900;
+    private const int VolumetricBaselineCaptureFrameCount = 12;
     internal const int BenchmarkDynamicScenarioDisturbanceFrameCount = 30;
     internal const float BenchmarkSimulationDeltaSeconds = 1.0f / 60.0f;
 
@@ -246,6 +255,8 @@ internal sealed class HelloGame : Game
     private IReadOnlyList<ParticleEffectInstance>? _sampleVfxEffects;
     private readonly SampleSmokeOptions _smokeOptions;
     private readonly SampleMaterialGiRolloutBootstrap _materialGiRolloutBootstrap;
+    private readonly SampleVfxVolumetricDemoOverride
+        _vfxVolumetricDemoOverride = new();
     private readonly RendererStartupLog _startupLog;
     private readonly SampleHealthReportWriter _healthReportWriter = new();
     private SampleSceneKind _sceneKind;
@@ -265,6 +276,8 @@ internal sealed class HelloGame : Game
     private SampleMaterialGiCaptureRunner? _materialGiCaptureRunner;
     private SampleSponzaTemporalCaptureRunner?
         _sponzaTemporalCaptureRunner;
+    private SampleVolumetricTemporalCaptureRunner?
+        _volumetricTemporalCaptureRunner;
     private SampleKhronosMaterialGiRenderedSceneBuild? _khronosMaterialGiRenderedScene;
     private SampleKhronosMaterialGiRenderedGateRunner? _khronosMaterialGiRenderedGateRunner;
     private string? _lastSuccessfulStartupStep;
@@ -311,15 +324,29 @@ internal sealed class HelloGame : Game
         WindowTitle = "Njulf Hello Game - Mesh Shader glTF Sample";
         bool sponzaTemporalCapture = !string.IsNullOrWhiteSpace(
             _smokeOptions.SponzaTemporalCaptureDirectory);
+        bool volumetricTemporalCapture = !string.IsNullOrWhiteSpace(
+            _smokeOptions.VolumetricTemporalCaptureDirectory);
         bool controlledProductionRun =
             _smokeOptions.Benchmark.Enabled ||
             _smokeOptions.BenchmarkQualitySequence.Enabled ||
             _smokeOptions.TailDdgiLongSoak ||
             !string.IsNullOrWhiteSpace(
                 _smokeOptions.BistroQualityCaptureDirectory);
-        WindowWidth = controlledProductionRun ? 1920 : 1600;
-        WindowHeight = controlledProductionRun ? 1080 : 900;
-        WindowBorderStyle = controlledProductionRun || sponzaTemporalCapture
+        if (volumetricTemporalCapture)
+        {
+            (WindowWidth, WindowHeight) =
+                SampleVolumetricTemporalCaptureContract.GetDimensions(
+                    _smokeOptions.QualityPresetOverride ??
+                    RenderQualityPreset.High);
+        }
+        else
+        {
+            WindowWidth = controlledProductionRun ? 1920 : 1600;
+            WindowHeight = controlledProductionRun ? 1080 : 900;
+        }
+        WindowBorderStyle = controlledProductionRun ||
+                            sponzaTemporalCapture ||
+                            volumetricTemporalCapture
             ? Silk.NET.Windowing.WindowBorder.Hidden
             : Silk.NET.Windowing.WindowBorder.Resizable;
         VSync = _smokeOptions.KhronosMaterialGiRenderedGate is null &&
@@ -328,6 +355,7 @@ internal sealed class HelloGame : Game
                    _smokeOptions.Benchmark.DisableVSync) ||
                   _smokeOptions.BenchmarkQualitySequence.Enabled ||
                   sponzaTemporalCapture ||
+                  volumetricTemporalCapture ||
                   !string.IsNullOrWhiteSpace(
                       _smokeOptions.BistroQualityCaptureDirectory));
     }
@@ -449,6 +477,7 @@ internal sealed class HelloGame : Game
             () => diagnosticsReporter.ToggleDdgiFilter(),
             () => diagnosticsReporter.Filter,
             () => RestoreSceneRenderSettings(renderer),
+            ApplyScenePostOverrides,
             CaptureDiagnosticScreenshot
 #if NJULF_EDITOR
             , () => _editorController?.SuppressGameInput == true
@@ -550,6 +579,19 @@ internal sealed class HelloGame : Game
                 _smokeOptions.AsyncComputeModeOverride ?? AsyncComputeMode.Disabled);
         }
         else if (!string.IsNullOrWhiteSpace(
+                     _smokeOptions.VolumetricTemporalCaptureDirectory))
+        {
+            _performanceScenarioRunner?.SetScenarioUpdateablesEnabled(false);
+            _volumetricTemporalCaptureRunner =
+                new SampleVolumetricTemporalCaptureRunner(
+                    renderer,
+                    camera,
+                    Scene,
+                    _smokeOptions.VolumetricTemporalCaptureDirectory,
+                    () => (WindowWidth, WindowHeight),
+                    Exit);
+        }
+        else if (!string.IsNullOrWhiteSpace(
                      _smokeOptions.SponzaTemporalCaptureDirectory))
         {
             _sponzaTemporalCaptureRunner =
@@ -600,7 +642,7 @@ internal sealed class HelloGame : Game
             SamplePerformanceScenario reloadScenario = ResolveStartupScenario();
             if (reloadScenario != SamplePerformanceScenario.Normal)
             {
-                _performanceScenarioRunner.Apply(reloadScenario);
+                _performanceScenarioRunner!.Apply(reloadScenario);
                 _sponzaAtmosphereFrozen = false;
                 SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, reloadScenario);
                 ApplySmokeRenderSettings(renderer);
@@ -651,6 +693,7 @@ internal sealed class HelloGame : Game
                     SampleLighting.ConfigureRenderSettings(
                         renderer.Settings,
                         ResolveSceneLightingMode());
+                    ApplyScenePostOverrides(renderer.Settings);
                 },
                 () => initialSettings.Restore(renderer.Settings),
                 () => renderer.Settings.QualityPreset,
@@ -908,6 +951,26 @@ internal sealed class HelloGame : Game
             renderer.Settings.GlobalIllumination.FarFieldForceAll = true;
 
         renderer.Settings.Transparency.Mode = _smokeOptions.TransparencyMode;
+        if (_smokeOptions.FogDebugViewOverride.HasValue)
+        {
+            renderer.Settings.Fog.DebugView =
+                _smokeOptions.FogDebugViewOverride.Value;
+        }
+        if (_smokeOptions.FogDebugProjectionOverride.HasValue)
+        {
+            renderer.Settings.Fog.Volumetric.DebugProjection =
+                _smokeOptions.FogDebugProjectionOverride.Value;
+        }
+        if (_smokeOptions.FogDebugSliceOverride.HasValue)
+        {
+            renderer.Settings.Fog.Volumetric.DebugSlice =
+                _smokeOptions.FogDebugSliceOverride.Value;
+            if (!_smokeOptions.FogDebugProjectionOverride.HasValue)
+            {
+                renderer.Settings.Fog.Volumetric.DebugProjection =
+                    FogDebugProjection.Slice;
+            }
+        }
         _materialGiRolloutBootstrap.Apply(renderer.Settings, Console.Out);
         if (_smokeOptions.TailDdgiLongSoak)
         {
@@ -932,6 +995,8 @@ internal sealed class HelloGame : Game
                     ? _smokeOptions.Benchmark.CaptureVariant
                     : _smokeOptions.BenchmarkQualitySequence.CaptureVariant);
         }
+
+        ApplyScenePostOverrides(renderer.Settings);
     }
 
     private void ApplyPreInitializationRenderSettings(RenderSettings settings)
@@ -942,7 +1007,14 @@ internal sealed class HelloGame : Game
             settings.ApplyQualityPreset(
                 _smokeOptions.QualityPresetOverride.Value);
         }
-        if (_smokeOptions.SceneKind == SampleSceneKind.Bistro)
+        if (_smokeOptions.SceneKind == SampleSceneKind.VfxShowcase)
+        {
+            _vfxVolumetricDemoOverride.Enter(settings);
+            SampleVfxShowcaseScene.ConfigurePreInitializationSettings(
+                settings,
+                _smokeOptions.QualityPresetOverride);
+        }
+        else if (_smokeOptions.SceneKind == SampleSceneKind.Bistro)
         {
             // C5 admission allocates immutable startup resources. Establish
             // the scene's enabled policy before renderer construction;
@@ -966,6 +1038,7 @@ internal sealed class HelloGame : Game
                 _smokeOptions.SimpleDdgiStoragePackingModeOverride.Value;
         }
         ApplyAdvancedGiSettings(settings.GlobalIllumination);
+        ApplyScenePostOverrides(settings);
     }
 
     private void ApplyAdvancedGiSettings(GlobalIlluminationSettings gi)
@@ -1027,6 +1100,7 @@ internal sealed class HelloGame : Game
             _khronosMaterialGiRenderedGateRunner == null &&
             _bistroQualityCaptureRunner == null &&
             _sponzaTemporalCaptureRunner == null &&
+            _volumetricTemporalCaptureRunner == null &&
             !_smokeOptions.Benchmark.Enabled &&
             !_smokeOptions.BenchmarkQualitySequence.Enabled)
             _inputController?.Update(
@@ -1090,6 +1164,7 @@ internal sealed class HelloGame : Game
         _sponzaTemporalCaptureRunner?.PrepareFrame(
             WindowWidth,
             WindowHeight);
+        _volumetricTemporalCaptureRunner?.PrepareFrame();
     }
 
     private void ApplySponzaScenarioFrameControls()
@@ -1418,6 +1493,8 @@ internal sealed class HelloGame : Game
         {
             _sponzaTemporalCaptureRunner?.OnFrameRendered(
                 temporalCaptureRenderer.LastDiagnostics);
+            _volumetricTemporalCaptureRunner?.OnFrameRendered(
+                temporalCaptureRenderer.LastDiagnostics);
         }
         _materialGiCaptureRunner?.OnFrameRendered();
         _khronosMaterialGiRenderedGateRunner?.OnFrameRendered();
@@ -1637,12 +1714,29 @@ internal sealed class HelloGame : Game
                     : string.Join(" ", qualityReport.Failures);
             }
         }
+        if (!string.IsNullOrWhiteSpace(
+                _smokeOptions.VolumetricTemporalCaptureDirectory))
+        {
+            if (_volumetricTemporalCaptureRunner?.Report is not { } fogReport)
+            {
+                _runtimeSmokeFailure ??=
+                    "Volumetric temporal capture closed before its quality report was published.";
+            }
+            else if (!fogReport.Passed)
+            {
+                _runtimeSmokeFailure ??=
+                    "Volumetric temporal capture failed its quality gates.";
+            }
+        }
 
         string? failure = _startupFailure ?? _runtimeSmokeFailure;
         string status = failure == null ? "passed" : "failed";
         SampleHealthReportEvaluation healthEvaluation =
             SampleHealthReportEvaluation.Evaluate(diagnostics);
-        if (_smokeOptions.Enabled && healthEvaluation.FirstGiDiagnosticError is { } giError)
+        bool volumetricCapturePassed =
+            _volumetricTemporalCaptureRunner?.Report?.Passed == true;
+        if (_smokeOptions.Enabled && !volumetricCapturePassed &&
+            healthEvaluation.FirstGiDiagnosticError is { } giError)
         {
             status = "failed";
             failure ??=
@@ -1938,6 +2032,7 @@ internal sealed class HelloGame : Game
     private void ConfigureSceneRenderSettings(VulkanRenderer renderer)
     {
         RenderSettings settings = renderer.Settings;
+        UpdateVfxVolumetricDemoOverrideOwnership(settings);
         if (_smokeOptions.KhronosMaterialGiRenderedGate is not null)
         {
             SampleKhronosMaterialGiRenderedGateRunner.ApplyLockedSettings(settings);
@@ -2027,6 +2122,27 @@ internal sealed class HelloGame : Game
         }
 
         ApplySmokeRenderSettings(renderer);
+    }
+
+    private void UpdateVfxVolumetricDemoOverrideOwnership(
+        RenderSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (_sceneKind == SampleSceneKind.VfxShowcase)
+        {
+            if (_vfxVolumetricDemoOverride.Active)
+                _vfxVolumetricDemoOverride.Apply(settings);
+            else
+                _vfxVolumetricDemoOverride.Enter(settings);
+            return;
+        }
+
+        _vfxVolumetricDemoOverride.Exit(settings);
+    }
+
+    private void ApplyScenePostOverrides(RenderSettings settings)
+    {
+        UpdateVfxVolumetricDemoOverrideOwnership(settings);
     }
 
     private static SamplePlazaGpuMemoryProfile ResolveSponzaGpuMemoryProfile(VulkanRenderer renderer)
@@ -2149,6 +2265,7 @@ internal sealed class HelloGame : Game
         FirstPersonCamera camera)
     {
         _sceneKind = sceneKind;
+        UpdateVfxVolumetricDemoOverrideOwnership(renderer.Settings);
         renderer.CaptureSceneKind = GetPerformanceCaptureSceneKind(_sceneKind);
 
         Model model = LoadSampleScene(meshManager, materialManager, lightManager);
@@ -2226,7 +2343,7 @@ internal sealed class HelloGame : Game
             SampleSceneKind.GlobalIlluminationTest => SampleLightingMode.PointShadowDemo,
             SampleSceneKind.FoliageShowcase => SampleLightingMode.DirectionalKey,
             SampleSceneKind.MaterialShowcase => SampleLightingMode.ThreePointDemo,
-            SampleSceneKind.VfxShowcase => SampleLightingMode.ThreePointDemo,
+            SampleSceneKind.VfxShowcase => SampleLightingMode.VolumetricShowcase,
             _ => LightingMode
         };
     }
@@ -2320,7 +2437,7 @@ internal sealed class HelloGame : Game
                 (new CoreVector3(-16.003326f, 2.5132222f, 1.2387409f), 1.6121571f, 0.0660575f, 500f),
             SampleSceneKind.MaterialShowcase => (new CoreVector3(0f, 1.65f, 7.8f), 0f, -0.11f, 120f),
             SampleSceneKind.FoliageShowcase => (new CoreVector3(0f, 1.6f, 5.5f), 0f, -0.14f, 180f),
-            SampleSceneKind.VfxShowcase => (new CoreVector3(0f, 1.45f, 6.2f), 0f, -0.16f, 120f),
+            SampleSceneKind.VfxShowcase => (new CoreVector3(0f, 1.7f, 7.2f), 0f, -0.12f, 100f),
             // Face across the courtyard on Sponza startup instead of directly
             // into the nearby wall.
             _ => (new CoreVector3(6f, 1.25f, 5.5f), -MathF.PI * 0.5f, -0.12f, 250f)
@@ -2335,7 +2452,7 @@ internal sealed class HelloGame : Game
             SampleSceneKind.Bistro => "Bistro",
             SampleSceneKind.MaterialShowcase => "Material Showcase",
             SampleSceneKind.FoliageShowcase => "Foliage Showcase",
-            SampleSceneKind.VfxShowcase => "VFX Showcase",
+            SampleSceneKind.VfxShowcase => "Volumetric VFX Showcase",
             _ => "Sponza Plaza"
         };
     }
@@ -2483,7 +2600,10 @@ internal sealed class HelloGame : Game
             return;
 
         _baselineScenarioRenderedFrames++;
-        if (_baselineScenarioRenderedFrames < BaselineCaptureFrameCount)
+        int requiredFrames = _sceneKind == SampleSceneKind.VfxShowcase
+            ? VolumetricBaselineCaptureFrameCount
+            : BaselineCaptureFrameCount;
+        if (_baselineScenarioRenderedFrames < requiredFrames)
             return;
 
         (string directoryName, string label) = ResolveBaselineSnapshotMetadata();
@@ -2508,6 +2628,9 @@ internal sealed class HelloGame : Game
     {
         if (_sceneKind == SampleSceneKind.Bistro)
             return ("bistro", "Baseline Bistro snapshot");
+        if (_sceneKind == SampleSceneKind.VfxShowcase)
+            return ("volumetric-vfx-showcase",
+                "Baseline volumetric VFX showcase snapshot");
 
         return ResolveBaselineSnapshotScenario() switch
         {

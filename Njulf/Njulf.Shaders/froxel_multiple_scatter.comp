@@ -1,0 +1,76 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "froxel_common.glsl"
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+vec3 FroxelSingleSource(ivec3 coordinate)
+{
+    return imageLoad(FroxelDirectRadiance, coordinate).rgb +
+        imageLoad(FroxelIndirectRadiance, coordinate).rgb;
+}
+
+vec3 FroxelPreviousMultipleSource(ivec3 coordinate)
+{
+    if (FroxelPush.MultipleScatteringIteration == 0u)
+        return FroxelSingleSource(coordinate);
+    return (FroxelPush.MultipleScatteringIteration & 1u) != 0u
+        ? imageLoad(FroxelMultipleScattering0, coordinate).rgb
+        : imageLoad(FroxelMultipleScattering1, coordinate).rgb;
+}
+
+void main()
+{
+    uvec3 coordinate = gl_GlobalInvocationID.xyz;
+    uvec3 grid = FroxelLightingGridSize();
+    if (any(greaterThanEqual(coordinate, grid)))
+        return;
+    ivec3 center = ivec3(coordinate);
+    const ivec3 offsets[6] = ivec3[](
+        ivec3(-1, 0, 0), ivec3(1, 0, 0),
+        ivec3(0, -1, 0), ivec3(0, 1, 0),
+        ivec3(0, 0, -1), ivec3(0, 0, 1));
+    vec3 neighborhood = vec3(0.0);
+    for (uint index = 0u; index < 6u; index++)
+    {
+        ivec3 sampleCoordinate = clamp(
+            center + offsets[index],
+            ivec3(0),
+            ivec3(grid) - ivec3(1));
+        neighborhood += FroxelPreviousMultipleSource(sampleCoordinate);
+    }
+    neighborhood /= 6.0;
+
+    vec4 medium = imageLoad(FroxelLightingMedium, center);
+    vec3 albedo = medium.a > 1.0e-6
+        ? clamp(medium.rgb / medium.a, vec3(0.0), vec3(1.0))
+        : vec3(0.0);
+    uvec3 lightingCell = FroxelLightingCellSize();
+    uint firstSlice = coordinate.z * lightingCell.z;
+    uint lastSlice = min(firstSlice + lightingCell.z, FroxelGridSize().z);
+    float segmentLength = FroxelSliceBoundary(float(lastSlice)) -
+        FroxelSliceBoundary(float(firstSlice));
+    float scatteredFraction = 1.0 - exp(-max(medium.a, 0.0) *
+        max(segmentLength, 0.0));
+    vec3 proposed = neighborhood * albedo * scatteredFraction;
+    if (FroxelPush.MultipleScatteringIteration > 0u)
+        proposed += imageLoad(FroxelMultipleScattering0, center).rgb;
+    vec3 maximumEnergy = FroxelSingleSource(center) *
+        clamp(FroxelFrame.MultipleScattering.y, 0.0, 0.5);
+    proposed = clamp(proposed, vec3(0.0), max(maximumEnergy, vec3(0.0)));
+
+    if ((FroxelPush.MultipleScatteringIteration & 1u) == 0u)
+        imageStore(FroxelMultipleScattering0, center, vec4(proposed, 1.0));
+    else
+        imageStore(FroxelMultipleScattering1, center, vec4(proposed, 1.0));
+
+    uint iterationCount = uint(max(round(
+        FroxelFrame.MultipleScattering.x), 0.0));
+    if (FroxelPush.MultipleScatteringIteration + 1u >= iterationCount)
+    {
+        vec4 indirect = imageLoad(FroxelIndirectRadiance, center);
+        imageStore(FroxelIndirectRadiance, center,
+            vec4(max(indirect.rgb + proposed, vec3(0.0)), indirect.a));
+    }
+}

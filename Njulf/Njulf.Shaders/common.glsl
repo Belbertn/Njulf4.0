@@ -266,7 +266,8 @@ const int DIRECTIONAL_SHADOW_DIAGNOSTIC_BUFFER_BASE_INDEX = 218;
 const int DIRECTIONAL_SHADOW_DIAGNOSTIC_BUFFER_FRAME1_INDEX = 219;
 const int DIRECTIONAL_SHADOW_COUNTER_BUFFER_BASE_INDEX = 220;
 const int DIRECTIONAL_SHADOW_COUNTER_BUFFER_FRAME1_INDEX = 221;
-const int STATIC_BUFFER_COUNT = 222;
+const int VOLUMETRIC_FOG_BOUNCE_RADIANCE_BUFFER_INDEX = 222;
+const int STATIC_BUFFER_COUNT = 223;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -448,6 +449,8 @@ struct GPUParticleInstance
     uint BillboardMode;
     uint DebugId;
     uint Padding0;
+    vec4 VolumetricAlbedoAndExtinction;
+    vec4 VolumetricRadiusAnisotropyAndFlags;
 };
 
 struct GPUParticleBatch
@@ -499,6 +502,8 @@ struct GPUParticleEmitter
     vec4 EmissiveAngularVelocity;
     vec4 RotationParams;
     vec4 TimingParams;
+    vec4 VolumetricAlbedoAndExtinction;
+    vec4 VolumetricRadiusAnisotropyAndFlags;
 };
 
 struct GPUParticleCurveSample
@@ -1444,11 +1449,11 @@ const int SIZEOF_GPU_MESH_INFO = 64;
 const int SIZEOF_GPU_VERTEX_SKINNING_DATA = 32;
 const int SIZEOF_GPU_SKINNING_DISPATCH = 32;
 const int SIZEOF_GPU_SKINNING_PUSH_CONSTANTS = 16;
-const int SIZEOF_GPU_PARTICLE_INSTANCE = 96;
+const int SIZEOF_GPU_PARTICLE_INSTANCE = 128;
 const int SIZEOF_GPU_PARTICLE_BATCH = 16;
 const int SIZEOF_GPU_PARTICLE_FRAME_DATA = 224;
 const int SIZEOF_GPU_PARTICLE_PUSH_CONSTANTS = 32;
-const int SIZEOF_GPU_PARTICLE_EMITTER = 256;
+const int SIZEOF_GPU_PARTICLE_EMITTER = 288;
 const int SIZEOF_GPU_PARTICLE_CURVE_SAMPLE = 32;
 const int SIZEOF_GPU_PARTICLE_STATE = 80;
 const int SIZEOF_GPU_PARTICLE_COUNTERS = 88;
@@ -1613,6 +1618,8 @@ const int OFFSET_GPU_PARTICLE_INSTANCE_COLOR = 32;
 const int OFFSET_GPU_PARTICLE_INSTANCE_EMISSIVE_LIFETIME_SOFT_CLIP = 48;
 const int OFFSET_GPU_PARTICLE_INSTANCE_TEXTURE_INDEX = 64;
 const int OFFSET_GPU_PARTICLE_INSTANCE_BLEND_MODE = 80;
+const int OFFSET_GPU_PARTICLE_INSTANCE_VOLUMETRIC_ALBEDO = 96;
+const int OFFSET_GPU_PARTICLE_INSTANCE_VOLUMETRIC_RADIUS = 112;
 const int OFFSET_GPU_PARTICLE_BATCH_START = 0;
 const int OFFSET_GPU_PARTICLE_BATCH_COUNT = 4;
 const int OFFSET_GPU_PARTICLE_FRAME_DATA_VIEW_PROJECTION_MATRIX = 0;
@@ -1640,6 +1647,8 @@ const int OFFSET_GPU_PARTICLE_EMITTER_COLOR_END = 192;
 const int OFFSET_GPU_PARTICLE_EMITTER_EMISSIVE_ANGULAR_VELOCITY = 208;
 const int OFFSET_GPU_PARTICLE_EMITTER_ROTATION_PARAMS = 224;
 const int OFFSET_GPU_PARTICLE_EMITTER_TIMING_PARAMS = 240;
+const int OFFSET_GPU_PARTICLE_EMITTER_VOLUMETRIC_ALBEDO = 256;
+const int OFFSET_GPU_PARTICLE_EMITTER_VOLUMETRIC_RADIUS = 272;
 const int OFFSET_GPU_PARTICLE_CURVE_SAMPLE_COLOR = 0;
 const int OFFSET_GPU_PARTICLE_CURVE_SAMPLE_PROPERTIES = 16;
 const int OFFSET_GPU_PARTICLE_STATE_POSITION_AGE = 0;
@@ -2906,6 +2915,8 @@ GPUParticleInstance ReadParticleInstance(uint bufferBaseIndex, uint frameIndex, 
     particle.BillboardMode = ReadStorageWord(bufferIndex, baseWord + 21u);
     particle.DebugId = ReadStorageWord(bufferIndex, baseWord + 22u);
     particle.Padding0 = ReadStorageWord(bufferIndex, baseWord + 23u);
+    particle.VolumetricAlbedoAndExtinction = ReadStorageVec4(bufferIndex, baseWord + 24u);
+    particle.VolumetricRadiusAnisotropyAndFlags = ReadStorageVec4(bufferIndex, baseWord + 28u);
     return particle;
 }
 
@@ -2961,6 +2972,8 @@ GPUParticleEmitter ReadParticleEmitter(uint frameIndex, uint emitterIndex)
     emitter.EmissiveAngularVelocity = ReadStorageVec4(bufferIndex, baseWord + 52u);
     emitter.RotationParams = ReadStorageVec4(bufferIndex, baseWord + 56u);
     emitter.TimingParams = ReadStorageVec4(bufferIndex, baseWord + 60u);
+    emitter.VolumetricAlbedoAndExtinction = ReadStorageVec4(bufferIndex, baseWord + 64u);
+    emitter.VolumetricRadiusAnisotropyAndFlags = ReadStorageVec4(bufferIndex, baseWord + 68u);
     return emitter;
 }
 
@@ -3020,6 +3033,8 @@ void WriteParticleInstance(uint bufferBaseIndex, uint frameIndex, uint instanceI
     WriteStorageWord(bufferIndex, baseWord + 21u, particle.BillboardMode);
     WriteStorageWord(bufferIndex, baseWord + 22u, particle.DebugId);
     WriteStorageWord(bufferIndex, baseWord + 23u, particle.Padding0);
+    WriteStorageVec4(bufferIndex, baseWord + 24u, particle.VolumetricAlbedoAndExtinction);
+    WriteStorageVec4(bufferIndex, baseWord + 28u, particle.VolumetricRadiusAnisotropyAndFlags);
 }
 
 void WriteParticleInstance(uint frameIndex, uint instanceIndex, GPUParticleInstance particle)

@@ -57,7 +57,7 @@ public sealed class SceneDocumentLoader
                 document);
         ValidateDocument(document);
 
-        if (scene.RenderObjects.Count != 0 || scene.Updateables.Count != 0 || scene.ReflectionProbes.Count != 0 || scene.GlobalIlluminationProbeVolumes.Count != 0 ||
+        if (scene.RenderObjects.Count != 0 || scene.Updateables.Count != 0 || scene.ReflectionProbes.Count != 0 || scene.GlobalIlluminationProbeVolumes.Count != 0 || scene.VolumetricDensityVolumes.Count != 0 ||
             scene.StaticInstanceBatches.Count != 0 || scene.FoliagePatches.Count != 0 || scene.ParticleEffects.Count != 0)
         {
             throw new InvalidOperationException("SceneDocumentLoader.Populate requires an empty scene. Clear and dispose the destination before reloading.");
@@ -83,6 +83,8 @@ public sealed class SceneDocumentLoader
                 scene.Add(ToReflectionProbe(record));
             foreach (SceneGlobalIlluminationProbeVolumeDocument record in document.GiProbeVolumes)
                 scene.Add(ToGiProbeVolume(record));
+            foreach (SceneVolumetricDensityVolumeDocument record in document.VolumetricDensityVolumes)
+                scene.Add(ToVolumetricDensityVolume(record));
 
             var prototypes = new Dictionary<Guid, FoliagePrototype>();
             foreach (SceneFoliagePrototypeDocument record in document.FoliagePrototypes)
@@ -458,6 +460,30 @@ public sealed class SceneDocumentLoader
         DirtyRaysPerProbe = record.DirtyRaysPerProbe
     };
 
+    private static VolumetricDensityVolume ToVolumetricDensityVolume(
+        SceneVolumetricDensityVolumeDocument record) => new()
+    {
+        Id = record.Id,
+        Name = record.Name,
+        Enabled = record.Enabled,
+        Position = ToVector3(record.Position),
+        Rotation = ToQuaternion(record.Rotation),
+        Shape = ParseEnum<VolumetricDensityVolumeShape>(record.Shape, record.Id, record.Name),
+        BoxExtents = ToVector3(record.BoxExtents),
+        Radius = record.Radius,
+        EdgeFade = record.EdgeFade,
+        DensityMultiplier = record.DensityMultiplier,
+        ExtinctionPerMeter = record.ExtinctionPerMeter,
+        ScatteringAlbedo = ToVector3(record.ScatteringAlbedo),
+        Anisotropy = record.Anisotropy,
+        Priority = record.Priority,
+        NoiseScale = record.NoiseScale,
+        NoiseStrength = record.NoiseStrength,
+        NoiseContrast = record.NoiseContrast,
+        NoiseSeed = record.NoiseSeed,
+        FlowVelocity = ToVector3(record.FlowVelocity)
+    };
+
     private static void ValidateDocument(SceneDocument document)
     {
         if (document.SchemaVersion < 1 || document.SchemaVersion > SceneDocument.CurrentSchemaVersion)
@@ -469,12 +495,18 @@ public sealed class SceneDocumentLoader
         AddIds(document.Lights, static item => item.Id, "light");
         AddIds(document.ReflectionProbes, static item => item.Id, "reflection probe");
         AddIds(document.GiProbeVolumes, static item => item.Id, "GI probe volume");
+        AddIds(document.VolumetricDensityVolumes, static item => item.Id, "volumetric density volume");
         AddIds(document.InstanceBatches, static item => item.Id, "instance batch");
         AddIds(document.FoliagePrototypes, static item => item.Id, "foliage prototype");
         AddIds(document.FoliagePatches, static item => item.Id, "foliage patch");
         AddIds(document.ParticleEffects, static item => item.Id, "particle effect");
         foreach (SceneLightDocument light in document.Lights)
             ValidateLight(light);
+        foreach (SceneVolumetricDensityVolumeDocument volume in
+                 document.VolumetricDensityVolumes)
+        {
+            ValidateVolumetricDensityVolume(volume);
+        }
         foreach (SceneObjectDocument record in document.Objects)
         {
             float alphaCutoff = record.MaterialOverride?.AlphaCutoff ?? 0.5f;
@@ -548,6 +580,65 @@ public sealed class SceneDocumentLoader
             {
                 throw new InvalidDataException(
                     $"Scene light '{light.Name}' ({light.Id}) has invalid polynomial attenuation.");
+            }
+        }
+
+        static void ValidateVolumetricDensityVolume(
+            SceneVolumetricDensityVolumeDocument volume)
+        {
+            if (!Enum.TryParse(
+                    volume.Shape,
+                    ignoreCase: true,
+                    out VolumetricDensityVolumeShape shape) ||
+                !Enum.IsDefined(shape))
+            {
+                throw new InvalidDataException(
+                    $"Volumetric density volume '{volume.Name}' ({volume.Id}) " +
+                    $"has unsupported shape '{volume.Shape}'.");
+            }
+
+            float rotationLengthSquared =
+                volume.Rotation.X * volume.Rotation.X +
+                volume.Rotation.Y * volume.Rotation.Y +
+                volume.Rotation.Z * volume.Rotation.Z +
+                volume.Rotation.W * volume.Rotation.W;
+            bool finite = IsFinite(volume.Position) &&
+                IsFinite(volume.BoxExtents) &&
+                IsFinite(volume.ScatteringAlbedo) &&
+                IsFinite(volume.FlowVelocity) &&
+                float.IsFinite(volume.Rotation.X) &&
+                float.IsFinite(volume.Rotation.Y) &&
+                float.IsFinite(volume.Rotation.Z) &&
+                float.IsFinite(volume.Rotation.W) &&
+                float.IsFinite(volume.Radius) &&
+                float.IsFinite(volume.EdgeFade) &&
+                float.IsFinite(volume.DensityMultiplier) &&
+                float.IsFinite(volume.ExtinctionPerMeter) &&
+                float.IsFinite(volume.Anisotropy) &&
+                float.IsFinite(volume.NoiseScale) &&
+                float.IsFinite(volume.NoiseStrength) &&
+                float.IsFinite(volume.NoiseContrast);
+            bool validRanges = rotationLengthSquared > 1e-12f &&
+                volume.BoxExtents.X > 0f &&
+                volume.BoxExtents.Y > 0f &&
+                volume.BoxExtents.Z > 0f &&
+                volume.Radius > 0f &&
+                volume.EdgeFade >= 0f &&
+                volume.DensityMultiplier >= 0f &&
+                volume.ExtinctionPerMeter >= 0f &&
+                volume.ScatteringAlbedo.X is >= 0f and <= 1f &&
+                volume.ScatteringAlbedo.Y is >= 0f and <= 1f &&
+                volume.ScatteringAlbedo.Z is >= 0f and <= 1f &&
+                volume.Anisotropy is >= -0.9f and <= 0.9f &&
+                volume.NoiseScale > 0f &&
+                volume.NoiseStrength is >= 0f and <= 1f &&
+                volume.NoiseContrast > 0f &&
+                volume.NoiseSeed != 0u;
+            if (!finite || !validRanges)
+            {
+                throw new InvalidDataException(
+                    $"Volumetric density volume '{volume.Name}' ({volume.Id}) " +
+                    "contains invalid numeric data.");
             }
         }
 

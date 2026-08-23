@@ -121,11 +121,19 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUVertexSkinningData>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningDispatch>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUSkinningPushConstants>(), Is.EqualTo(16));
-                Assert.That(Marshal.SizeOf<GPUParticleInstance>(), Is.EqualTo(96));
+                Assert.That(Marshal.SizeOf<GPUParticleInstance>(), Is.EqualTo(128));
                 Assert.That(Marshal.SizeOf<GPUParticleBatch>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUParticleFrameData>(), Is.EqualTo(224));
                 Assert.That(Marshal.SizeOf<GPUParticlePushConstants>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUParticleEmitter>(), Is.EqualTo(256));
+                Assert.That(Marshal.SizeOf<GPUParticleEmitter>(), Is.EqualTo(288));
+                Assert.That(Marshal.SizeOf<GPUVolumetricFogFrameData>(),
+                    Is.EqualTo(512));
+                Assert.That(Marshal.SizeOf<GPUVolumetricDensityVolume>(),
+                    Is.EqualTo(128));
+                Assert.That(Marshal.SizeOf<GPUVolumetricFogPushConstants>(),
+                    Is.EqualTo(32));
+                Assert.That(Marshal.SizeOf<GPUVolumetricFogDiagnostics>(),
+                    Is.EqualTo(96));
                 Assert.That(Marshal.SizeOf<GPUParticleCurveSample>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUParticleState>(), Is.EqualTo(80));
                 Assert.That(Marshal.SizeOf<GPUParticleCounters>(), Is.EqualTo(88));
@@ -661,6 +669,12 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUParticleInstance>(nameof(GPUParticleInstance.EmissiveLifetimeSoftClip), "OFFSET_GPU_PARTICLE_INSTANCE_EMISSIVE_LIFETIME_SOFT_CLIP");
                 AssertFieldOffset<GPUParticleInstance>(nameof(GPUParticleInstance.TextureIndex), "OFFSET_GPU_PARTICLE_INSTANCE_TEXTURE_INDEX");
                 AssertFieldOffset<GPUParticleInstance>(nameof(GPUParticleInstance.BlendMode), "OFFSET_GPU_PARTICLE_INSTANCE_BLEND_MODE");
+                AssertFieldOffset<GPUParticleInstance>(
+                    nameof(GPUParticleInstance.VolumetricAlbedoAndExtinction),
+                    "OFFSET_GPU_PARTICLE_INSTANCE_VOLUMETRIC_ALBEDO");
+                AssertFieldOffset<GPUParticleInstance>(
+                    nameof(GPUParticleInstance.VolumetricRadiusAnisotropyAndFlags),
+                    "OFFSET_GPU_PARTICLE_INSTANCE_VOLUMETRIC_RADIUS");
                 AssertFieldOffset<GPUParticleBatch>(nameof(GPUParticleBatch.Start), "OFFSET_GPU_PARTICLE_BATCH_START");
                 AssertFieldOffset<GPUParticleBatch>(nameof(GPUParticleBatch.Count), "OFFSET_GPU_PARTICLE_BATCH_COUNT");
                 AssertFieldOffset<GPUParticleEmitter>(nameof(GPUParticleEmitter.WorldMatrix), "OFFSET_GPU_PARTICLE_EMITTER_WORLD_MATRIX");
@@ -676,6 +690,12 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUParticleEmitter>(nameof(GPUParticleEmitter.EmissiveAngularVelocity), "OFFSET_GPU_PARTICLE_EMITTER_EMISSIVE_ANGULAR_VELOCITY");
                 AssertFieldOffset<GPUParticleEmitter>(nameof(GPUParticleEmitter.RotationParams), "OFFSET_GPU_PARTICLE_EMITTER_ROTATION_PARAMS");
                 AssertFieldOffset<GPUParticleEmitter>(nameof(GPUParticleEmitter.TimingParams), "OFFSET_GPU_PARTICLE_EMITTER_TIMING_PARAMS");
+                AssertFieldOffset<GPUParticleEmitter>(
+                    nameof(GPUParticleEmitter.VolumetricAlbedoAndExtinction),
+                    "OFFSET_GPU_PARTICLE_EMITTER_VOLUMETRIC_ALBEDO");
+                AssertFieldOffset<GPUParticleEmitter>(
+                    nameof(GPUParticleEmitter.VolumetricRadiusAnisotropyAndFlags),
+                    "OFFSET_GPU_PARTICLE_EMITTER_VOLUMETRIC_RADIUS");
                 AssertFieldOffset<GPUParticleCurveSample>(nameof(GPUParticleCurveSample.Color), "OFFSET_GPU_PARTICLE_CURVE_SAMPLE_COLOR");
                 AssertFieldOffset<GPUParticleCurveSample>(nameof(GPUParticleCurveSample.Properties), "OFFSET_GPU_PARTICLE_CURVE_SAMPLE_PROPERTIES");
                 AssertFieldOffset<GPUParticleState>(nameof(GPUParticleState.PositionAge), "OFFSET_GPU_PARTICLE_STATE_POSITION_AGE");

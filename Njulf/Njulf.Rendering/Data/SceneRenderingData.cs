@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Njulf.Core.Math;
+using Njulf.Core.Scene;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Memory;
 using Njulf.Rendering.Resources;
@@ -643,6 +644,50 @@ namespace Njulf.Rendering.Data
         public int AutoExposureStateBufferIndex { get; set; }
         public int ActiveSceneColorTextureIndex { get; set; }
         public bool FogEnabled { get; set; }
+        public FogTechnique FogRequestedTechnique { get; set; } = FogTechnique.Auto;
+        public FogTechnique FogEffectiveTechnique { get; set; } = FogTechnique.Analytic;
+        public string VolumetricFogStatus { get; set; } = "not-evaluated";
+        public uint VolumetricFogGridWidth { get; set; }
+        public uint VolumetricFogGridHeight { get; set; }
+        public uint VolumetricFogGridDepth { get; set; }
+        public uint VolumetricFogClusterCount { get; set; }
+        public ulong VolumetricFogAllocatedBytes { get; set; }
+        public int VolumetricFogLocalVolumeCount { get; set; }
+        public int VolumetricFogParticleSourceCount { get; set; }
+        public int VolumetricFogParticleCandidateCount { get; set; }
+        public int VolumetricFogParticleAdmittedCount { get; set; }
+        public int VolumetricFogMultipleScatteringIterations { get; set; }
+        public bool VolumetricFogHistoryValid { get; set; }
+        public bool VolumetricFogHistoryRejected { get; set; }
+        public bool VolumetricFogDirectionalL2Active { get; set; }
+        public bool VolumetricFogEnergyOwnershipSeparated { get; set; }
+        public bool VolumetricFogOutputReadbackValid { get; set; }
+        public bool VolumetricFogOutputProduced { get; set; }
+        public int VolumetricFogDiagnosticSampleCount { get; set; }
+        public int VolumetricFogMediumNonEmptyFroxelCount { get; set; }
+        public int VolumetricFogDirectNonZeroFroxelCount { get; set; }
+        public int VolumetricFogIndirectNonZeroFroxelCount { get; set; }
+        public int VolumetricFogDdgiSupportedFroxelCount { get; set; }
+        public int VolumetricFogHistoryAcceptedFroxelCount { get; set; }
+        public int VolumetricFogHistoryRejectedFroxelCount { get; set; }
+        public int VolumetricFogHistoryRejectedInvalidFroxelCount { get; set; }
+        public int VolumetricFogHistoryRejectedBoundsFroxelCount { get; set; }
+        public int VolumetricFogHistoryRejectedExtinctionFroxelCount { get; set; }
+        public int VolumetricFogHistoryRejectedRadianceFroxelCount { get; set; }
+        public int VolumetricFogHistoryRejectedVelocityFroxelCount { get; set; }
+        public int VolumetricFogClusterOverflowCount { get; set; }
+        public int VolumetricFogNonFiniteCount { get; set; }
+        public float VolumetricFogMaximumExtinction { get; set; }
+        public float VolumetricFogMeanExtinction { get; set; }
+        public float VolumetricFogMaximumDirectLuminance { get; set; }
+        public float VolumetricFogMeanDirectLuminance { get; set; }
+        public float VolumetricFogMaximumIndirectLuminance { get; set; }
+        public float VolumetricFogMeanIndirectLuminance { get; set; }
+        public float VolumetricFogMinimumTransmittance { get; set; } = 1f;
+        public float VolumetricFogMeanTransmittance { get; set; } = 1f;
+        public int CpuVolumetricParticleSourceCount { get; set; }
+        public VolumetricDensityVolume[] VolumetricDensityVolumes { get; set; } =
+            Array.Empty<VolumetricDensityVolume>();
         public FogMode FogMode { get; set; } = FogMode.Disabled;
         public FogColorMode FogColorMode { get; set; } = FogColorMode.ConstantColor;
         public FogDebugView FogDebugView { get; set; } = FogDebugView.None;
@@ -659,6 +704,17 @@ namespace Njulf.Rendering.Data
         public uint FogHeightPixels { get; set; }
         public string FogFormat { get; set; } = string.Empty;
         public long GpuFogMicroseconds { get; set; }
+        public long GpuVolumetricFogNoiseMicroseconds { get; set; }
+        public long GpuVolumetricFogSourceCullMicroseconds { get; set; }
+        public long GpuVolumetricFogMediumMicroseconds { get; set; }
+        public long GpuVolumetricFogTransmittanceMicroseconds { get; set; }
+        public long GpuVolumetricFogDdgiBounceMicroseconds { get; set; }
+        public long GpuVolumetricFogLightingCacheMicroseconds { get; set; }
+        public long GpuVolumetricFogMultipleScatteringMicroseconds { get; set; }
+        public long GpuVolumetricFogTemporalMicroseconds { get; set; }
+        public long GpuVolumetricFogIntegrateMicroseconds { get; set; }
+        public long GpuVolumetricFogResolveMicroseconds { get; set; }
+        public long GpuVolumetricFogCompositeMicroseconds { get; set; }
         public bool ReflectionsEnabled { get; set; }
         public ReflectionMode ReflectionMode { get; set; } = ReflectionMode.Disabled;
         public ReflectionDebugView ReflectionDebugView { get; set; } = ReflectionDebugView.None;
@@ -2093,6 +2149,49 @@ namespace Njulf.Rendering.Data
             AutoExposureStateBufferIndex = 0;
             ActiveSceneColorTextureIndex = 0;
             FogEnabled = false;
+            FogRequestedTechnique = FogTechnique.Auto;
+            FogEffectiveTechnique = FogTechnique.Analytic;
+            VolumetricFogStatus = "not-evaluated";
+            VolumetricFogGridWidth = 0;
+            VolumetricFogGridHeight = 0;
+            VolumetricFogGridDepth = 0;
+            VolumetricFogClusterCount = 0;
+            VolumetricFogAllocatedBytes = 0;
+            VolumetricFogLocalVolumeCount = 0;
+            VolumetricFogParticleSourceCount = 0;
+            VolumetricFogParticleCandidateCount = 0;
+            VolumetricFogParticleAdmittedCount = 0;
+            VolumetricFogMultipleScatteringIterations = 0;
+            VolumetricFogHistoryValid = false;
+            VolumetricFogHistoryRejected = false;
+            VolumetricFogDirectionalL2Active = false;
+            VolumetricFogEnergyOwnershipSeparated = false;
+            VolumetricFogOutputReadbackValid = false;
+            VolumetricFogOutputProduced = false;
+            VolumetricFogDiagnosticSampleCount = 0;
+            VolumetricFogMediumNonEmptyFroxelCount = 0;
+            VolumetricFogDirectNonZeroFroxelCount = 0;
+            VolumetricFogIndirectNonZeroFroxelCount = 0;
+            VolumetricFogDdgiSupportedFroxelCount = 0;
+            VolumetricFogHistoryAcceptedFroxelCount = 0;
+            VolumetricFogHistoryRejectedFroxelCount = 0;
+            VolumetricFogHistoryRejectedInvalidFroxelCount = 0;
+            VolumetricFogHistoryRejectedBoundsFroxelCount = 0;
+            VolumetricFogHistoryRejectedExtinctionFroxelCount = 0;
+            VolumetricFogHistoryRejectedRadianceFroxelCount = 0;
+            VolumetricFogHistoryRejectedVelocityFroxelCount = 0;
+            VolumetricFogClusterOverflowCount = 0;
+            VolumetricFogNonFiniteCount = 0;
+            VolumetricFogMaximumExtinction = 0f;
+            VolumetricFogMeanExtinction = 0f;
+            VolumetricFogMaximumDirectLuminance = 0f;
+            VolumetricFogMeanDirectLuminance = 0f;
+            VolumetricFogMaximumIndirectLuminance = 0f;
+            VolumetricFogMeanIndirectLuminance = 0f;
+            VolumetricFogMinimumTransmittance = 1f;
+            VolumetricFogMeanTransmittance = 1f;
+            CpuVolumetricParticleSourceCount = 0;
+            VolumetricDensityVolumes = Array.Empty<VolumetricDensityVolume>();
             FogMode = FogMode.Disabled;
             FogColorMode = FogColorMode.ConstantColor;
             FogDebugView = FogDebugView.None;
@@ -2109,6 +2208,17 @@ namespace Njulf.Rendering.Data
             FogHeightPixels = 0;
             FogFormat = string.Empty;
             GpuFogMicroseconds = 0;
+            GpuVolumetricFogNoiseMicroseconds = 0;
+            GpuVolumetricFogSourceCullMicroseconds = 0;
+            GpuVolumetricFogMediumMicroseconds = 0;
+            GpuVolumetricFogTransmittanceMicroseconds = 0;
+            GpuVolumetricFogDdgiBounceMicroseconds = 0;
+            GpuVolumetricFogLightingCacheMicroseconds = 0;
+            GpuVolumetricFogMultipleScatteringMicroseconds = 0;
+            GpuVolumetricFogTemporalMicroseconds = 0;
+            GpuVolumetricFogIntegrateMicroseconds = 0;
+            GpuVolumetricFogResolveMicroseconds = 0;
+            GpuVolumetricFogCompositeMicroseconds = 0;
             ReflectionsEnabled = false;
             ReflectionMode = ReflectionMode.Disabled;
             ReflectionDebugView = ReflectionDebugView.None;

@@ -28,6 +28,19 @@ namespace Njulf.Core.Vfx
         public float MaxDrawDistance { get; init; } = 1000.0f;
         public int Priority { get; init; }
 
+        /// <summary>Whether live particles inject participating medium into the froxel grid.</summary>
+        public bool VolumetricInjectionEnabled { get; init; }
+
+        /// <summary>Extinction contribution in inverse metres at the particle centre.</summary>
+        public float VolumetricDensity { get; init; } = 0.08f;
+
+        /// <summary>Multiplier applied to the visual particle radius for medium injection.</summary>
+        public float VolumetricRadiusScale { get; init; } = 1.0f;
+
+        public Vector3 VolumetricScatteringAlbedo { get; init; } = new(0.9f, 0.9f, 0.9f);
+        public float VolumetricAnisotropy { get; init; } = 0.2f;
+        public int VolumetricPriority { get; init; }
+
         /// <summary>
         /// Admission policy for the DDGI macro-emitter representation. The
         /// default keeps sustained fire/smoke-like emission automatic while

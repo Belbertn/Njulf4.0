@@ -25,6 +25,8 @@ public static class SampleSmokeOptionsParser
         "--sponza-gi-capture-mode",
         "--sponza-temporal-capture-dir",
         "--analyze-sponza-temporal-capture-dir",
+        "--volumetric-temporal-capture-dir",
+        "--analyze-volumetric-temporal-capture-dir",
         "--bistro-quality-capture-dir",
         "--bistro-quality-variant",
         "--material-gi-capture-dir",
@@ -50,6 +52,9 @@ public static class SampleSmokeOptionsParser
         "--khronos-material-gi-render-capture",
         "--khronos-material-gi-render-report",
         "--quality-preset",
+        "--fog-debug-view",
+        "--fog-debug-projection",
+        "--fog-debug-slice",
         "--long-run-report",
         "--long-run-warmup-frames",
         "--long-run-sample-interval",
@@ -146,6 +151,14 @@ public static class SampleSmokeOptionsParser
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
                     "NJULF_SPONZA_TEMPORAL_ANALYZE_DIR"));
+        string? volumetricTemporalCaptureDirectory =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_VOLUMETRIC_TEMPORAL_CAPTURE_DIR"));
+        string? volumetricTemporalAnalyzeDirectory =
+            RendererValidationSettings.NormalizeOptionalPath(
+                Environment.GetEnvironmentVariable(
+                    "NJULF_VOLUMETRIC_TEMPORAL_ANALYZE_DIR"));
         SampleSponzaGiCaptureMode sponzaGiCaptureMode =
             SampleSponzaGiCaptureMode.DetailedDiagnostics;
         bool sponzaGiCaptureModeSpecified = false;
@@ -237,6 +250,14 @@ public static class SampleSmokeOptionsParser
         string? khronosRenderReportPath = null;
         RenderQualityPreset? qualityPresetOverride = ParseQualityPreset(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_QUALITY_PRESET"));
+        FogDebugView? fogDebugViewOverride = ParseFogDebugView(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_FOG_DEBUG_VIEW"));
+        FogDebugProjection? fogDebugProjectionOverride =
+            ParseFogDebugProjection(Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_FOG_DEBUG_PROJECTION"));
+        int? fogDebugSliceOverride = ParseOptionalNonNegativeInt(
+            Environment.GetEnvironmentVariable("NJULF_RENDERER_FOG_DEBUG_SLICE"),
+            "NJULF_RENDERER_FOG_DEBUG_SLICE");
         int longRunWarmupFrames = ParseNonNegativeInt(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_LONG_RUN_WARMUP_FRAMES"),
             120,
@@ -553,6 +574,14 @@ public static class SampleSmokeOptionsParser
                     sponzaTemporalAnalyzeDirectory =
                         RequirePath(value, optionName);
                     break;
+                case "--volumetric-temporal-capture-dir":
+                    volumetricTemporalCaptureDirectory =
+                        RequirePath(value, optionName);
+                    break;
+                case "--analyze-volumetric-temporal-capture-dir":
+                    volumetricTemporalAnalyzeDirectory =
+                        RequirePath(value, optionName);
+                    break;
                 case "--bistro-quality-capture-dir":
                     bistroQualityCaptureDirectory =
                         RequirePath(value, optionName);
@@ -656,6 +685,21 @@ public static class SampleSmokeOptionsParser
                 case "--quality-preset":
                     qualityPresetOverride = ParseQualityPreset(value) ??
                         throw new ArgumentException("--quality-preset requires low, medium, high, ultra, or ddgi-high.");
+                    break;
+                case "--fog-debug-view":
+                    fogDebugViewOverride = ParseFogDebugView(value) ??
+                        throw new ArgumentException(
+                            "--fog-debug-view requires a FogDebugView name.");
+                    break;
+                case "--fog-debug-projection":
+                    fogDebugProjectionOverride =
+                        ParseFogDebugProjection(value) ??
+                        throw new ArgumentException(
+                            "--fog-debug-projection requires max-along-ray, surface, or slice.");
+                    break;
+                case "--fog-debug-slice":
+                    fogDebugSliceOverride = Math.Clamp(
+                        ParseNonNegativeInt(value, 0, optionName), 0, 95);
                     break;
                 case "--long-run-report":
                     longRunReportPath = RequirePath(value, "--long-run-report");
@@ -1288,12 +1332,14 @@ public static class SampleSmokeOptionsParser
             (!string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory) ? 1 : 0) +
             (!string.IsNullOrWhiteSpace(sponzaTemporalCaptureDirectory) ? 1 : 0) +
             (!string.IsNullOrWhiteSpace(sponzaTemporalAnalyzeDirectory) ? 1 : 0) +
+            (!string.IsNullOrWhiteSpace(volumetricTemporalCaptureDirectory) ? 1 : 0) +
+            (!string.IsNullOrWhiteSpace(volumetricTemporalAnalyzeDirectory) ? 1 : 0) +
             (!string.IsNullOrWhiteSpace(bistroQualityCaptureDirectory) ? 1 : 0) +
             (enableBenchmarkQualitySequence ? 1 : 0);
         if (standaloneCaptureModeCount > 1)
         {
             throw new ArgumentException(
-                "Material, Sponza GI, Sponza temporal, Bistro, analysis, and benchmark quality-sequence modes are independent and cannot be combined.");
+                "Material, Sponza GI, Sponza temporal, volumetric temporal, Bistro, analysis, and benchmark quality-sequence modes are independent and cannot be combined.");
         }
 
         if (!string.IsNullOrWhiteSpace(sponzaTemporalAnalyzeDirectory))
@@ -1318,6 +1364,28 @@ public static class SampleSmokeOptionsParser
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(volumetricTemporalAnalyzeDirectory))
+        {
+            string[] competingOptions = specifiedOptionNames
+                .Where(static option => !string.Equals(
+                    option,
+                    "--analyze-volumetric-temporal-capture-dir",
+                    StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (competingOptions.Length != 0 ||
+                mode != SampleSmokeMode.None ||
+                frameCount > 0 ||
+                enableBenchmark ||
+                longRunOptionsSpecified ||
+                !string.IsNullOrWhiteSpace(baselineSnapshotDirectory) ||
+                khronosRenderedGate is not null)
+            {
+                throw new ArgumentException(
+                    "--analyze-volumetric-temporal-capture-dir is an offline standalone command and cannot be combined with renderer options.");
+            }
+        }
+
         if (sponzaGiCaptureModeSpecified &&
             string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory))
         {
@@ -1339,7 +1407,8 @@ public static class SampleSmokeOptionsParser
                 "the BistroQualityMotionRelight performance scenario, or a Bistro benchmark trajectory.");
         }
 
-        if (!string.IsNullOrWhiteSpace(sponzaTemporalAnalyzeDirectory))
+        if (!string.IsNullOrWhiteSpace(sponzaTemporalAnalyzeDirectory) ||
+            !string.IsNullOrWhiteSpace(volumetricTemporalAnalyzeDirectory))
         {
             sceneKind = SampleSceneKind.GlobalIlluminationTest;
             performanceScenario = SamplePerformanceScenario.Normal;
@@ -1350,6 +1419,7 @@ public static class SampleSmokeOptionsParser
             if (!string.IsNullOrWhiteSpace(materialGiCaptureDirectory) ||
                 !string.IsNullOrWhiteSpace(sponzaGiCaptureDirectory) ||
                 !string.IsNullOrWhiteSpace(sponzaTemporalCaptureDirectory) ||
+                !string.IsNullOrWhiteSpace(volumetricTemporalCaptureDirectory) ||
                 !string.IsNullOrWhiteSpace(baselineSnapshotDirectory))
             {
                 throw new ArgumentException(
@@ -1448,6 +1518,41 @@ public static class SampleSmokeOptionsParser
 
             sceneKind = SampleSceneKind.MaterialShowcase;
             performanceScenario = SamplePerformanceScenario.Normal;
+            enableGpuTiming = true;
+        }
+        else if (!string.IsNullOrWhiteSpace(volumetricTemporalCaptureDirectory))
+        {
+            if (!string.IsNullOrWhiteSpace(baselineSnapshotDirectory) ||
+                longRunOptionsSpecified)
+            {
+                throw new ArgumentException(
+                    "--volumetric-temporal-capture-dir owns its evidence and deterministic frame sequence.");
+            }
+            if (sceneSpecified && sceneKind != SampleSceneKind.VfxShowcase)
+            {
+                throw new ArgumentException(
+                    "--volumetric-temporal-capture-dir requires the VFX showcase scene.");
+            }
+            if (performanceScenario != SamplePerformanceScenario.Normal ||
+                mode != SampleSmokeMode.None || frameCount > 0 ||
+                enableBenchmark)
+            {
+                throw new ArgumentException(
+                    "--volumetric-temporal-capture-dir owns the stationary VFX showcase sequence and cannot be combined with smoke, benchmark, or performance-scenario modes.");
+            }
+            if (qualityPresetOverride.HasValue &&
+                qualityPresetOverride.Value is not (
+                    RenderQualityPreset.High or
+                    RenderQualityPreset.DdgiHigh or
+                    RenderQualityPreset.Ultra))
+            {
+                throw new ArgumentException(
+                    "--volumetric-temporal-capture-dir requires the high, ddgi-high, or ultra quality preset.");
+            }
+
+            sceneKind = SampleSceneKind.VfxShowcase;
+            performanceScenario = SamplePerformanceScenario.Normal;
+            qualityPresetOverride ??= RenderQualityPreset.High;
             enableGpuTiming = true;
         }
         else if (!string.IsNullOrWhiteSpace(sponzaTemporalCaptureDirectory))
@@ -1824,6 +1929,14 @@ public static class SampleSmokeOptionsParser
                     mode = SampleSmokeMode.Startup;
                 if (mode == SampleSmokeMode.None && qualityPresetOverride.HasValue && !smokeModeSpecified)
                     mode = SampleSmokeMode.Startup;
+                if (mode == SampleSmokeMode.None &&
+                    (fogDebugViewOverride.HasValue ||
+                     fogDebugProjectionOverride.HasValue ||
+                     fogDebugSliceOverride.HasValue) &&
+                    !smokeModeSpecified)
+                {
+                    mode = SampleSmokeMode.Startup;
+                }
                 if (mode == SampleSmokeMode.None && longRunOptionsSpecified && !smokeModeSpecified)
                     mode = SampleSmokeMode.LongRun;
                 if (mode == SampleSmokeMode.None && frameCount > 0)
@@ -1864,6 +1977,14 @@ public static class SampleSmokeOptionsParser
                 SampleSmokeMode.TextureHotReload => 4,
                 _ => 3
             };
+        }
+        if (!string.IsNullOrWhiteSpace(baselineSnapshotDirectory) &&
+            sceneKind == SampleSceneKind.VfxShowcase &&
+            frameCount < 12)
+        {
+            // The volumetric baseline waits for history and diagnostics
+            // readback. Keep the smoke lifetime long enough to emit it.
+            frameCount = 12;
         }
         if (enableBenchmark || enableBenchmarkQualitySequence)
             enableGpuTiming = true;
@@ -2009,7 +2130,12 @@ public static class SampleSmokeOptionsParser
             advancedGiStartupProfilePath,
             bistroQualityCaptureDirectory,
             bistroQualityCaptureVariant,
-            benchmarkQualitySequence);
+            benchmarkQualitySequence,
+            fogDebugViewOverride,
+            fogDebugProjectionOverride,
+            fogDebugSliceOverride,
+            volumetricTemporalCaptureDirectory,
+            volumetricTemporalAnalyzeDirectory);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -2268,6 +2394,45 @@ public static class SampleSmokeOptionsParser
             "ddgihigh" => RenderQualityPreset.DdgiHigh,
             _ => throw new ArgumentException(
                 $"Invalid quality preset '{value}'. Valid values: low, medium, high, ultra, ddgi-high.")
+        };
+    }
+
+    private static FogDebugView? ParseFogDebugView(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        string normalized = value.Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal);
+        foreach (FogDebugView candidate in Enum.GetValues<FogDebugView>())
+        {
+            if (string.Equals(candidate.ToString(), normalized,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return candidate;
+            }
+        }
+        throw new ArgumentException(
+            $"Invalid fog debug view '{value}'. Use none, density, extinction, direct-radiance, indirect-radiance, history-confidence, final-transmittance, or self-shadowing.");
+    }
+
+    private static FogDebugProjection? ParseFogDebugProjection(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        string normalized = value.Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant();
+        return normalized switch
+        {
+            "max" or "maxalongray" => FogDebugProjection.MaxAlongRay,
+            "surface" => FogDebugProjection.Surface,
+            "slice" => FogDebugProjection.Slice,
+            _ => throw new ArgumentException(
+                $"Invalid fog debug projection '{value}'. Valid values: max-along-ray, surface, slice.")
         };
     }
 

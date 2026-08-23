@@ -31,6 +31,7 @@ public sealed class SceneDocumentWriter
                 .ToList(),
             ReflectionProbes = scene.ReflectionProbes.Select(ToReflectionProbe).ToList(),
             GiProbeVolumes = scene.GlobalIlluminationProbeVolumes.Select(ToGiProbeVolume).ToList(),
+            VolumetricDensityVolumes = scene.VolumetricDensityVolumes.Select(ToVolumetricDensityVolume).ToList(),
             InstanceBatches = scene.StaticInstanceBatches.Select(item => ToInstanceBatch(item, dependencies)).ToList(),
             FoliagePrototypes = scene.FoliagePrototypes.Select(item => ToFoliagePrototype(item, dependencies)).ToList(),
             FoliagePatches = scene.FoliagePatches.Select(ToFoliagePatch).ToList(),
@@ -82,6 +83,30 @@ public sealed class SceneDocumentWriter
         RaysPerProbe = source.RaysPerProbe, MaxProbeUpdatesPerFrame = source.MaxProbeUpdatesPerFrame, NormalBias = source.NormalBias, ViewBias = source.ViewBias,
         MaxRayDistance = source.MaxRayDistance, Intensity = source.Intensity, Hysteresis = source.Hysteresis, SteadyHysteresis = source.SteadyHysteresis,
         DirtyHysteresis = source.DirtyHysteresis, UpdatePriority = source.UpdatePriority, DirtyRaysPerProbe = source.DirtyRaysPerProbe
+    };
+
+    private static SceneVolumetricDensityVolumeDocument ToVolumetricDensityVolume(
+        VolumetricDensityVolume source) => new()
+    {
+        Id = source.Id,
+        Name = source.Name,
+        Enabled = source.Enabled,
+        Position = ToSceneVector(source.Position),
+        Rotation = ToSceneQuaternion(source.Rotation),
+        Shape = source.Shape.ToString(),
+        BoxExtents = ToSceneVector(source.BoxExtents),
+        Radius = source.Radius,
+        EdgeFade = source.EdgeFade,
+        DensityMultiplier = source.DensityMultiplier,
+        ExtinctionPerMeter = source.ExtinctionPerMeter,
+        ScatteringAlbedo = ToSceneVector(source.ScatteringAlbedo),
+        Anisotropy = source.Anisotropy,
+        Priority = source.Priority,
+        NoiseScale = source.NoiseScale,
+        NoiseStrength = source.NoiseStrength,
+        NoiseContrast = source.NoiseContrast,
+        NoiseSeed = source.NoiseSeed,
+        FlowVelocity = ToSceneVector(source.FlowVelocity)
     };
 
     private static SceneInstanceBatchDocument ToInstanceBatch(StaticInstanceBatch source, Dictionary<string, string?> dependencies) => new()

@@ -41,6 +41,7 @@ layout(location = 6) out vec2 outNextUv;
 layout(location = 7) flat out float outFlipbookBlend;
 layout(location = 8) out vec3 outWorldPosition;
 layout(location = 9) flat out vec3 outDdgiAmbient;
+layout(location = 10) out vec2 outLocalUv;
 
 layout(push_constant) uniform ParticlePushBlock
 {
@@ -232,6 +233,14 @@ float SimpleDdgiParticleMeanCoverage(
             BindlessTextures[nonuniformEXT(int(particle.TextureIndex))],
             nextOffset + localUv * uvSize,
             0.0).a;
+        if (particle.TextureIndex == uint(DEFAULT_WHITE_TEXTURE))
+        {
+            vec2 centeredUv = localUv * 2.0 - vec2(1.0);
+            float proceduralAlpha = 1.0 - smoothstep(
+                0.05, 1.0, dot(centeredUv, centeredUv));
+            currentAlpha *= proceduralAlpha;
+            nextAlpha *= proceduralAlpha;
+        }
         float alpha = clamp(
             mix(currentAlpha, nextAlpha, flipbookBlend) *
                 particle.Color.a * softFade,
@@ -582,6 +591,7 @@ void main()
 
     outUv = uvOffset + QuadUv[gl_VertexIndex] * uvSize;
     outNextUv = nextUvOffset + QuadUv[gl_VertexIndex] * uvSize;
+    outLocalUv = QuadUv[gl_VertexIndex];
     outFlipbookBlend = flipbookBlend;
     outColor = particle.Color;
     outParams = particle.EmissiveLifetimeSoftClip;

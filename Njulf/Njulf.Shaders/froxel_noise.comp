@@ -1,0 +1,46 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "froxel_common.glsl"
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+uint FroxelNoiseHash(uvec3 coordinate)
+{
+    uint value = coordinate.x * 0x9e3779b9u ^
+        coordinate.y * 0x85ebca6bu ^
+        coordinate.z * 0xc2b2ae35u ^ 0x68bc21ebu;
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
+
+float FroxelNoiseValue(uvec3 coordinate)
+{
+    return float(FroxelNoiseHash(coordinate) & 0x00ffffffu) /
+        16777215.0;
+}
+
+void main()
+{
+    uvec3 coordinate = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(coordinate, uvec3(64u))))
+        return;
+
+    // A periodic four-octave value field. Wrapping every octave at 64 makes
+    // animated wind translation seamless in all three dimensions.
+    float value = 0.0;
+    float weight = 0.0;
+    for (uint octave = 0u; octave < 4u; octave++)
+    {
+        uint frequency = 1u << octave;
+        uvec3 cell = (coordinate * frequency) & uvec3(63u);
+        float amplitude = exp2(-float(octave));
+        value += FroxelNoiseValue(cell) * amplitude;
+        weight += amplitude;
+    }
+    value /= max(weight, 0.0001);
+    imageStore(FroxelNoiseStorage, ivec3(coordinate), vec4(value));
+}

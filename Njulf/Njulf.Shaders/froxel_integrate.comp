@@ -1,0 +1,47 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "froxel_common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+void main()
+{
+    uvec2 coordinate = gl_GlobalInvocationID.xy;
+    uvec3 grid = FroxelGridSize();
+    if (any(greaterThanEqual(coordinate, grid.xy)))
+        return;
+
+    vec3 accumulatedScattering = vec3(0.0);
+    float accumulatedTransmittance = 1.0;
+    for (uint z = 0u; z < grid.z; z++)
+    {
+        ivec3 texel = ivec3(coordinate, z);
+        vec4 temporalSource = imageLoad(FroxelHistoryWrite, texel);
+        vec3 source = temporalSource.rgb;
+        float extinction = max(temporalSource.a, 0.0);
+        float segmentLength = FroxelSliceBoundary(float(z + 1u)) -
+            FroxelSliceBoundary(float(z));
+        float segmentTransmittance = exp(-min(
+            extinction * max(segmentLength, 0.0), 80.0));
+        vec3 segmentScattering = extinction > 1.0e-6
+            ? source * ((1.0 - segmentTransmittance) / extinction)
+            : source * max(segmentLength, 0.0);
+        accumulatedScattering += accumulatedTransmittance * segmentScattering;
+        accumulatedTransmittance *= segmentTransmittance;
+        if (FroxelIsDiagnosticSample(uvec3(coordinate, z)))
+        {
+            atomicMax(FroxelDiagnostics.MaximumOpacityQ,
+                FroxelQuantizeDiagnostic(1.0 - accumulatedTransmittance,
+                    65535.0));
+            atomicAdd(FroxelDiagnostics.TransmittanceSumQ,
+                FroxelQuantizeDiagnostic(accumulatedTransmittance,
+                    65535.0));
+        }
+        // Medium is dead after temporal reconstruction for this frame, so it
+        // becomes the integrated scattering/transmittance volume. This alias
+        // funds the higher quality grid without another full-volume image.
+        imageStore(FroxelMedium, texel,
+            vec4(accumulatedScattering, accumulatedTransmittance));
+    }
+}

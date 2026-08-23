@@ -603,6 +603,17 @@
       <NjulfShaderBuildTaskAssembly>$(MSBuildProjectDirectory)\obj\shader-build-task\$(NjulfShaderBuildTaskFingerprint)\Njulf.ShaderBuild.dll</NjulfShaderBuildTaskAssembly>
     </PropertyGroup>
 
+    <!-- Shader files are compiled by a custom target and therefore are not
+         ordinary Compile/EmbeddedResource inputs during IDE evaluation. Make
+         them explicit fast-up-to-date inputs so Rider/Visual Studio cannot
+         reuse a Njulf.Shaders.dll that predates the generated SPIR-V. The
+         direct MSBuild path still validates the generated resources before
+         CoreCompile; this closes the project-level shortcut around that path. -->
+    <ItemGroup>
+      <UpToDateCheckInput Include="$(MSBuildProjectDirectory)\*.task;$(MSBuildProjectDirectory)\*.mesh;$(MSBuildProjectDirectory)\*.vert;$(MSBuildProjectDirectory)\*.frag;$(MSBuildProjectDirectory)\*.comp;$(MSBuildProjectDirectory)\*.glsl" />
+      <UpToDateCheckInput Include="$(NjulfShaderBuildTaskProject);$(NjulfShaderBuildTaskSource);$(NjulfShaderBuildTaskLockFile)" />
+    </ItemGroup>
+
     <UsingTask TaskName="Njulf.ShaderBuild.CompileNjulfShaderArtifacts"
                AssemblyFile="$(NjulfShaderBuildTaskAssembly)" />
 

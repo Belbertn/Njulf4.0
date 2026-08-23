@@ -1,0 +1,160 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
+#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_HG_PHASE 1
+#define SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER 1
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE false
+#define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE false
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 0
+#define SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK 0
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+#define SIMPLE_DDGI_STORAGE_SHADER_MODE 2
+#include "froxel_common.glsl"
+#include "ddgi_simple_shared.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+vec4 FroxelSampleDirectionalDdgi(
+    vec3 worldPosition,
+    vec3 toCamera,
+    float anisotropy)
+{
+    SimpleDdgiParams parameters = ReadSimpleDdgiParams(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((parameters.flags &
+            (SIMPLE_DDGI_FLAG_ENABLED |
+                SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) !=
+            (SIMPLE_DDGI_FLAG_ENABLED |
+                SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) ||
+        parameters.probeCount == 0u || parameters.volumeCount == 0u)
+    {
+        return vec4(0.0);
+    }
+
+    vec3 safeNormal = -toCamera;
+    SetSimpleDdgiDirectionalRadianceHenyeyGreensteinQuery(
+        safeNormal,
+        anisotropy,
+        uint(VOLUMETRIC_FOG_BOUNCE_RADIANCE_BUFFER_INDEX));
+    uint selectedVolumeIndex;
+    SimpleDdgiVolume selectedVolume;
+    float edgeWeight;
+    bool refinementOrBaseFallback;
+    if (!SelectSimpleDdgiVolume(
+            parameters,
+            worldPosition,
+            true,
+            selectedVolumeIndex,
+            selectedVolume,
+            edgeWeight,
+            refinementOrBaseFallback))
+    {
+        return vec4(0.0);
+    }
+
+    bool selectedBiasOutside;
+    vec3 selectedPosition = SimpleDdgiResolveInterpolationPosition(
+        selectedVolume,
+        worldPosition,
+        safeNormal,
+        toCamera,
+        parameters,
+        selectedBiasOutside);
+    SimpleDdgiGatherResult selected = SampleSimpleDdgiVolumeGather(
+        parameters,
+        selectedVolume,
+        selectedVolumeIndex,
+        SIMPLE_DDGI_GATHER_ROLE_PRIMARY,
+        selectedPosition,
+        safeNormal);
+    float selectedAuthority = clamp(
+        SimpleDdgiRadiometricOwnership(selected) * edgeWeight,
+        0.0,
+        1.0);
+    float selectedMass = selected.directionalRadianceSupport *
+        selectedAuthority;
+    vec3 radianceSum = selected.directionalRadiance * selectedMass;
+    float totalMass = selectedMass;
+
+    if (selectedBiasOutside || selectedAuthority < 0.999)
+    {
+        uint fallbackVolumeIndex;
+        SimpleDdgiVolume fallbackVolume;
+        if (FindSimpleDdgiFallbackVolume(
+                parameters,
+                selectedVolumeIndex,
+                worldPosition,
+                fallbackVolumeIndex,
+                fallbackVolume))
+        {
+            bool fallbackBiasOutside;
+            vec3 fallbackPosition = SimpleDdgiResolveInterpolationPosition(
+                fallbackVolume,
+                worldPosition,
+                safeNormal,
+                toCamera,
+                parameters,
+                fallbackBiasOutside);
+            SimpleDdgiGatherResult fallback = SampleSimpleDdgiVolumeGather(
+                parameters,
+                fallbackVolume,
+                fallbackVolumeIndex,
+                SIMPLE_DDGI_GATHER_ROLE_FALLBACK,
+                fallbackPosition,
+                safeNormal);
+            float fallbackAuthority =
+                SimpleDdgiRadiometricOwnership(fallback);
+            float fallbackMass = (1.0 - selectedAuthority) *
+                fallback.directionalRadianceSupport * fallbackAuthority;
+            radianceSum += fallback.directionalRadiance * fallbackMass;
+            totalMass += fallbackMass;
+        }
+    }
+
+    return vec4(
+        totalMass > 1.0e-6 ? radianceSum / totalMass : vec3(0.0),
+        clamp(totalMass, 0.0, 1.0));
+}
+
+void main()
+{
+    uvec3 lightingCoordinate = gl_GlobalInvocationID.xyz;
+    if (any(greaterThanEqual(lightingCoordinate, FroxelLightingGridSize())))
+        return;
+
+    uvec3 lightingCell = FroxelLightingCellSize();
+    uvec3 grid = FroxelGridSize();
+    uvec3 representative = min(
+        lightingCoordinate * lightingCell + lightingCell / 2u,
+        grid - uvec3(1u));
+    vec3 worldPosition = FroxelWorldPosition(representative);
+    vec3 toCamera = normalize(
+        FroxelFrame.CameraPositionAndTime.xyz - worldPosition);
+    float anisotropy = clamp(imageLoad(
+        FroxelMediumAuxiliary, ivec3(representative)).w, -0.9, 0.9);
+    vec4 directionalDdgi = FroxelSampleDirectionalDdgi(
+        worldPosition,
+        toCamera,
+        anisotropy);
+
+    uvec3 sourceCluster = FroxelClusterForCoordinate(representative);
+    vec4 coarse = imageLoad(
+        FroxelCoarseTransmittance,
+        ivec3(sourceCluster));
+    float denseMediumVisibility = sqrt(clamp(
+        coarse.x * coarse.w, 0.0, 1.0));
+    vec3 indirectIncident = directionalDdgi.rgb *
+        (directionalDdgi.a * denseMediumVisibility);
+    if (any(isnan(vec4(indirectIncident, directionalDdgi.a))) ||
+        any(isinf(vec4(indirectIncident, directionalDdgi.a))))
+    {
+        atomicAdd(FroxelDiagnostics.NonFiniteCount, 1u);
+        indirectIncident = vec3(0.0);
+        directionalDdgi.a = 0.0;
+    }
+
+    imageStore(FroxelIndirectRadiance, ivec3(lightingCoordinate),
+        vec4(max(indirectIncident, vec3(0.0)), directionalDdgi.a));
+}
