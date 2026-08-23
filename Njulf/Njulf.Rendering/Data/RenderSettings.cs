@@ -717,7 +717,19 @@ namespace Njulf.Rendering.Data
         DdgiProbeResidency = 52,
         DdgiResidencyFallback = 53,
         DdgiPageAge = 54,
-        DdgiPhysicalPage = 55
+        DdgiPhysicalPage = 55,
+        C5SourceRadiance = 56,
+        C5RawCandidate = 57,
+        C5NearEstimate = 58,
+        C5LowEstimate = 59,
+        C5SignedResidual = 60,
+        C5FinalContribution = 61,
+        C5Confidence = 62,
+        C5HistoryLength = 63,
+        C5HistoryRejectionReason = 64,
+        C5TraceDistanceHitValidity = 65,
+        C5TileActivity = 66,
+        C5B3Footprint = 67
     }
 
     public enum AntiAliasingMode : uint
@@ -2083,6 +2095,9 @@ namespace Njulf.Rendering.Data
         public const SimpleDdgiNearFieldResidualMode
             DefaultSimpleDdgiNearFieldResidualMode =
                 SimpleDdgiNearFieldResidualMode.HiZAdaptive;
+        public const SimpleDdgiNearFieldResidualQualityPreset
+            DefaultSimpleDdgiNearFieldResidualQualityPreset =
+                SimpleDdgiNearFieldResidualQualityPreset.Balanced;
 
         private float _indirectIntensity = 1.0f;
         private float _environmentFallbackIntensity = 1.0f;
@@ -2249,6 +2264,13 @@ namespace Njulf.Rendering.Data
         private GiCausticMode _giCausticMode = DefaultGiCausticMode;
         private SimpleDdgiNearFieldResidualMode _simpleDdgiNearFieldResidualMode =
             DefaultSimpleDdgiNearFieldResidualMode;
+        private SimpleDdgiNearFieldResidualQualityPreset
+            _simpleDdgiNearFieldResidualQualityPreset =
+                DefaultSimpleDdgiNearFieldResidualQualityPreset;
+        private float _simpleDdgiNearFieldResidualMaximumTraceDistanceMeters = 8.0f;
+        private int _simpleDdgiNearFieldResidualRaysPerPixel = 2;
+        private int _simpleDdgiNearFieldResidualFilterIterationCount = 2;
+        private float _simpleDdgiNearFieldResidualIntensity = 1.0f;
         private string _simpleDdgiReceiverFeedbackQualificationId = string.Empty;
         private string _ddgiOpacityMicromapQualificationId = string.Empty;
         private string _simpleDdgiDirectionalGuidingQualificationId = string.Empty;
@@ -2756,6 +2778,49 @@ namespace Njulf.Rendering.Data
             set => _simpleDdgiNearFieldResidualMode = Enum.IsDefined(value)
                 ? value
                 : SimpleDdgiNearFieldResidualMode.Off;
+        }
+
+        public SimpleDdgiNearFieldResidualQualityPreset
+            SimpleDdgiNearFieldResidualQualityPreset
+        {
+            get => _simpleDdgiNearFieldResidualQualityPreset;
+            set => _simpleDdgiNearFieldResidualQualityPreset = Enum.IsDefined(value)
+                ? value
+                : DefaultSimpleDdgiNearFieldResidualQualityPreset;
+        }
+
+        /// <summary>
+        /// Enables the bounded developer controls below. AutoQualified still
+        /// cannot exceed the limits carried by its admitted evidence entry.
+        /// </summary>
+        public bool SimpleDdgiNearFieldResidualAdvancedOverridesEnabled { get; set; }
+
+        public float SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters
+        {
+            get => _simpleDdgiNearFieldResidualMaximumTraceDistanceMeters;
+            set => _simpleDdgiNearFieldResidualMaximumTraceDistanceMeters =
+                Clamp(value, 2.0f, 16.0f);
+        }
+
+        public int SimpleDdgiNearFieldResidualRaysPerPixel
+        {
+            get => _simpleDdgiNearFieldResidualRaysPerPixel;
+            set => _simpleDdgiNearFieldResidualRaysPerPixel =
+                Math.Clamp(value, 1, 4);
+        }
+
+        public int SimpleDdgiNearFieldResidualFilterIterationCount
+        {
+            get => _simpleDdgiNearFieldResidualFilterIterationCount;
+            set => _simpleDdgiNearFieldResidualFilterIterationCount =
+                Math.Clamp(value, 0, 4);
+        }
+
+        public float SimpleDdgiNearFieldResidualIntensity
+        {
+            get => _simpleDdgiNearFieldResidualIntensity;
+            set => _simpleDdgiNearFieldResidualIntensity =
+                Clamp(value, 0.0f, 2.0f);
         }
 
         /// <summary>
@@ -4822,7 +4887,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 13;
+        public const int SerializationVersion = 15;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5425,6 +5490,10 @@ namespace Njulf.Rendering.Data
             // complete nested directional-shadow production contract. Version
             // 13 adds finite-sun diameter scaling and adaptive per-cascade PCF;
             // older nested shadow objects default to scale 1 and constant radius.
+            // Version 14 adds C5 presets and bounded advanced overrides and
+            // invalidates every older C5 qualification ID. Version 15 makes
+            // explicit adaptive C5 the default and upgrades older
+            // AutoQualified requests while preserving explicit opt-outs.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -5861,6 +5930,13 @@ namespace Njulf.Rendering.Data
             public SimpleDdgiDirectionalGuidingMode? SimpleDdgiDirectionalGuidingMode { get; init; }
             public GiCausticMode? GiCausticMode { get; init; }
             public SimpleDdgiNearFieldResidualMode? SimpleDdgiNearFieldResidualMode { get; init; }
+            public SimpleDdgiNearFieldResidualQualityPreset?
+                SimpleDdgiNearFieldResidualQualityPreset { get; init; }
+            public bool? SimpleDdgiNearFieldResidualAdvancedOverridesEnabled { get; init; }
+            public float? SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters { get; init; }
+            public int? SimpleDdgiNearFieldResidualRaysPerPixel { get; init; }
+            public int? SimpleDdgiNearFieldResidualFilterIterationCount { get; init; }
+            public float? SimpleDdgiNearFieldResidualIntensity { get; init; }
             public string? SimpleDdgiReceiverFeedbackQualificationId { get; init; }
             public string? DdgiOpacityMicromapQualificationId { get; init; }
             public string? SimpleDdgiDirectionalGuidingQualificationId { get; init; }
@@ -6107,6 +6183,18 @@ namespace Njulf.Rendering.Data
                     GiCausticMode = settings.GiCausticMode,
                     SimpleDdgiNearFieldResidualMode =
                         settings.SimpleDdgiNearFieldResidualMode,
+                    SimpleDdgiNearFieldResidualQualityPreset =
+                        settings.SimpleDdgiNearFieldResidualQualityPreset,
+                    SimpleDdgiNearFieldResidualAdvancedOverridesEnabled =
+                        settings.SimpleDdgiNearFieldResidualAdvancedOverridesEnabled,
+                    SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters =
+                        settings.SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters,
+                    SimpleDdgiNearFieldResidualRaysPerPixel =
+                        settings.SimpleDdgiNearFieldResidualRaysPerPixel,
+                    SimpleDdgiNearFieldResidualFilterIterationCount =
+                        settings.SimpleDdgiNearFieldResidualFilterIterationCount,
+                    SimpleDdgiNearFieldResidualIntensity =
+                        settings.SimpleDdgiNearFieldResidualIntensity,
                     SimpleDdgiReceiverFeedbackQualificationId =
                         settings.SimpleDdgiReceiverFeedbackQualificationId,
                     DdgiOpacityMicromapQualificationId =
@@ -6434,6 +6522,49 @@ namespace Njulf.Rendering.Data
                     settings.SimpleDdgiNearFieldResidualMode =
                         SimpleDdgiNearFieldResidualMode.Value;
                 }
+                // AutoQualified was the schema-v14 rollout default, but without
+                // installed device evidence it resolved to Off. Schema v15
+                // intentionally upgrades that prior default to the bounded
+                // explicit V2 path. Current-schema AutoQualified remains a
+                // durable authored choice, and every other mode is preserved.
+                if (sourceVersion < 15 &&
+                    settings.SimpleDdgiNearFieldResidualMode ==
+                        global::Njulf.Rendering.Resources
+                            .SimpleDdgiNearFieldResidualMode.AutoQualified)
+                {
+                    settings.SimpleDdgiNearFieldResidualMode =
+                        global::Njulf.Rendering.Resources
+                            .SimpleDdgiNearFieldResidualMode.HiZAdaptive;
+                }
+                settings.SimpleDdgiNearFieldResidualQualityPreset =
+                    SimpleDdgiNearFieldResidualQualityPreset ??
+                    global::Njulf.Rendering.Resources
+                        .SimpleDdgiNearFieldResidualQualityPreset.Balanced;
+                if (SimpleDdgiNearFieldResidualAdvancedOverridesEnabled.HasValue)
+                {
+                    settings.SimpleDdgiNearFieldResidualAdvancedOverridesEnabled =
+                        SimpleDdgiNearFieldResidualAdvancedOverridesEnabled.Value;
+                }
+                if (SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters.HasValue)
+                {
+                    settings.SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters =
+                        SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters.Value;
+                }
+                if (SimpleDdgiNearFieldResidualRaysPerPixel.HasValue)
+                {
+                    settings.SimpleDdgiNearFieldResidualRaysPerPixel =
+                        SimpleDdgiNearFieldResidualRaysPerPixel.Value;
+                }
+                if (SimpleDdgiNearFieldResidualFilterIterationCount.HasValue)
+                {
+                    settings.SimpleDdgiNearFieldResidualFilterIterationCount =
+                        SimpleDdgiNearFieldResidualFilterIterationCount.Value;
+                }
+                if (SimpleDdgiNearFieldResidualIntensity.HasValue)
+                {
+                    settings.SimpleDdgiNearFieldResidualIntensity =
+                        SimpleDdgiNearFieldResidualIntensity.Value;
+                }
                 if (SimpleDdgiReceiverFeedbackQualificationId != null)
                 {
                     settings.SimpleDdgiReceiverFeedbackQualificationId =
@@ -6451,10 +6582,18 @@ namespace Njulf.Rendering.Data
                 }
                 if (GiCausticQualificationId != null)
                     settings.GiCausticQualificationId = GiCausticQualificationId;
-                if (SimpleDdgiNearFieldResidualQualificationId != null)
+                // GPU/evidence/source semantics all changed for v14. Preserve
+                // authored mode intent, but never carry a pre-v14 credential
+                // into the V12/V6 admission path.
+                if (sourceVersion >= 14 &&
+                    SimpleDdgiNearFieldResidualQualificationId != null)
                 {
                     settings.SimpleDdgiNearFieldResidualQualificationId =
                         SimpleDdgiNearFieldResidualQualificationId;
+                }
+                else if (sourceVersion < 14)
+                {
+                    settings.SimpleDdgiNearFieldResidualQualificationId = string.Empty;
                 }
                 settings.SimpleDdgiParticlesEnabled = SimpleDdgiParticlesEnabled;
                 if (sourceVersion < 9)

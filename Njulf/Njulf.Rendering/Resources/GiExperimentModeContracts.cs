@@ -64,6 +64,17 @@ public enum SimpleDdgiNearFieldResidualMode : uint
 }
 
 /// <summary>
+/// Stable production quality policy for the C5 screen-space diffuse residual.
+/// Numeric values are persisted by settings schema v14.
+/// </summary>
+public enum SimpleDdgiNearFieldResidualQualityPreset : uint
+{
+    Performance = 0,
+    Balanced = 1,
+    Quality = 2
+}
+
+/// <summary>
 /// The five user-facing Advanced GI switches.  This is deliberately a small,
 /// persistence-free command model: an editor host can carry it across a cold
 /// renderer restart without manufacturing a qualification profile.
@@ -896,8 +907,8 @@ public readonly record struct SimpleDdgiAdvancedExperimentMemoryPlan(
 
     /// <summary>
     /// Compiles the three C5 ownership categories from a complete selected
-    /// layout.  The layout is the sole byte authority: source, raw candidate,
-    /// hit identity, activity buffers, temporal history, and filter ping-pong
+    /// layout.  The layout is the sole byte authority: source, prepared
+    /// receivers, surface identity, activity buffers, temporal history, and filter ping-pong
     /// must all be represented.  The method rejects rather than reporting a
     /// deceptively smaller partial C5 allocation.
     /// </summary>
@@ -918,13 +929,19 @@ public readonly record struct SimpleDdgiAdvancedExperimentMemoryPlan(
         if (layout.TraceSourceBytes == 0UL ||
             layout.ReceiverPayloadBytes == 0UL ||
             layout.TraceFrameConstantsBytes == 0UL ||
+            layout.PreparedDepthFootprintBytes == 0UL ||
+            layout.PreparedReceiverPayloadBytes == 0UL ||
+            layout.PreparedMotionBytes == 0UL ||
+            layout.SourceLuminanceBytes == 0UL ||
             layout.RawCandidateBytes == 0UL ||
-            layout.HitMetadataBytes == 0UL ||
+            layout.HitMetadataBytes != 0UL ||
             layout.HistoryRadianceBytes == 0UL ||
             layout.MomentBytes == 0UL ||
             layout.HistoryValidityBytes == 0UL ||
             layout.HistoryMetadataBytes == 0UL ||
             layout.HistoryNormalBytes == 0UL ||
+            layout.SurfaceTableBytes == 0UL ||
+            layout.ActiveTileAndIndirectBytes == 0UL ||
             layout.TileBuffersBytes == 0UL ||
             layout.TelemetryReadbackBytes == 0UL ||
             (layout.FilterIterationCount == 0 && layout.FilterScratchBytes != 0UL) ||
@@ -942,8 +959,13 @@ public readonly record struct SimpleDdgiAdvancedExperimentMemoryPlan(
                 layout.TraceSourceBytes +
                 layout.ReceiverPayloadBytes +
                 layout.TraceFrameConstantsBytes +
+                layout.PreparedDepthFootprintBytes +
+                layout.PreparedReceiverPayloadBytes +
+                layout.PreparedMotionBytes +
+                layout.SourceLuminanceBytes +
                 layout.RawCandidateBytes +
-                layout.HitMetadataBytes +
+                layout.SurfaceTableBytes +
+                layout.ActiveTileAndIndirectBytes +
                 layout.TileBuffersBytes +
                 layout.TelemetryReadbackBytes);
             ulong historyAndMoments = checked(

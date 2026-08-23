@@ -6,13 +6,13 @@
 // C5 is intentionally a separate, opt-in ABI.  These stages are not part of
 // the global bindless contract until the renderer has explicitly created the
 // source attachment, history identity resources, barriers, and dispatch path.
-// V11 carries a full-weight distance separately from the outer cutoff so C5
-// can feather its bounded range without a hard transition.
+// V12 is the production SSGI-v2 ABI.
 // Keep this in lockstep with SimpleDdgiNearFieldResidualGpuAbi.
-const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000bu;
+const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000cu;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_MAGIC = 0x4335544du;
-const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS = 16u;
-const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS = 16u;
+const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS = 24u;
+const uint SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS = 64u;
+const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS = 20u;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE = 1u << 0u;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TEMPORAL_COMPLETE = 1u << 1u;
 const uint SIMPLE_DDGI_NEAR_FIELD_DIRECT_DIFFUSE_SOURCE = 1u << 0u;
@@ -30,6 +30,27 @@ const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_REVERSED_Z = 1u << 5u;
 const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_ATTACHMENT_VERIFIED = 1u << 6u;
 const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED = 1u << 7u;
 const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_COMPOSITE_VALID_ONLY = 1u << 8u;
+const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_FOLIAGE_MOTION_VALID = 1u << 9u;
+const uint SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_LIGHTING_EPOCH_CHANGED = 1u << 10u;
+const uint SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_SHIFT = 12u;
+const uint SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_MASK = 0xfu <<
+    SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_SHIFT;
+
+// Raw values of GlobalIlluminationDebugView. They travel through a dedicated
+// C5 frame channel and never enter the legacy forward debug-number namespace.
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_NONE = 0u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_SOURCE_RADIANCE = 56u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_RAW_CANDIDATE = 57u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_NEAR_ESTIMATE = 58u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_LOW_ESTIMATE = 59u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_SIGNED_RESIDUAL = 60u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_FINAL_CONTRIBUTION = 61u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_CONFIDENCE = 62u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_HISTORY_LENGTH = 63u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_HISTORY_REJECTION = 64u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_TRACE_DISTANCE_VALIDITY = 65u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_TILE_ACTIVITY = 66u;
+const uint SIMPLE_DDGI_NEAR_FIELD_DEBUG_B3_FOOTPRINT = 67u;
 
 const uint SIMPLE_DDGI_NEAR_FIELD_MAX_TRACE_STEPS = 256u;
 const uint SIMPLE_DDGI_NEAR_FIELD_MAX_MIP_VISITS = 32u;
@@ -37,6 +58,8 @@ const uint SIMPLE_DDGI_NEAR_FIELD_MAX_BINARY_REFINEMENTS = 16u;
 const uint SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_ITERATIONS = 8u;
 const uint SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS = 8u;
 const uint SIMPLE_DDGI_NEAR_FIELD_MAX_HISTORY_LENGTH = 64u;
+const uint SIMPLE_DDGI_NEAR_FIELD_MAX_SURFACE_TABLE_ENTRIES = 65534u;
+const uint SIMPLE_DDGI_NEAR_FIELD_INVALID_SURFACE_TOKEN = 0xffffu;
 const float SIMPLE_DDGI_NEAR_FIELD_MAX_ENCODED_TRACE_DISTANCE = 65504.0;
 const float SIMPLE_DDGI_NEAR_FIELD_MINIMUM_SIGNAL = 1.0e-6;
 const float SIMPLE_DDGI_NEAR_FIELD_MINIMUM_VARIANCE = 1.0e-12;
@@ -54,29 +77,40 @@ const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_SHIFT = 8u;
 const uint SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_MASK = 0x00ffffffu <<
     SIMPLE_DDGI_NEAR_FIELD_HISTORY_EPOCH_SHIFT;
 
-// The std430 representation is exactly ten 32-bit words (40 bytes), matching
-// GPUSimpleDdgiNearFieldResidualHitMetadata. Keep the identities as two uvec2
-// members: one uvec4 would raise the structure alignment to 16 bytes and make
-// an array stride 48 bytes even though the member payload still totals 40.
-// History metadata is double-buffered: current trace metadata is never
-// silently reused as prior-frame identity.
+// Exactly twelve 32-bit words (48 bytes). Flags occupy the lower 16 bits of
+// packedFlagsAndReceiverFootprint and the receiver's FP16 B3 footprint the
+// upper 16. Trace writes the current history bank directly; no third metadata
+// allocation exists.
 struct SimpleDdgiNearFieldResidualHitMetadata
 {
-    float receiverDepth;
-    float hitDepth;
-    float confidence;
-    uint packedFlags;
+    float receiverLinearDepth;
+    float hitLinearDepth;
+    uint packedFlagsAndReceiverFootprint;
+    uint packedHitNormal;
     uvec2 receiverIdentity;
     uvec2 hitIdentity;
-    vec2 hitUv;
+    uint packedReceiverRevisions;
+    uint packedHitRevisions;
+    uint packedHitUv;
+    uint packedHitSourceRadiance;
+};
+
+struct SimpleDdgiNearFieldSurfaceEntry
+{
+    uint stableObjectId;
+    uint stableMaterialId;
+    uint packedObjectMaterialRevisions;
+    uint coverageMotionFlags;
 };
 
 struct SimpleDdgiNearFieldResidualTraceFrameConstants
 {
     mat4 viewProjection;
     mat4 inverseViewProjection;
+    mat4 previousViewProjection;
+    mat4 previousInverseViewProjection;
     vec4 fullExtentAndInverse;
-    vec4 reserved;
+    vec4 clipAndSequence;
 };
 
 struct SimpleDdgiNearFieldResidualTileRecord
@@ -97,7 +131,21 @@ struct SimpleDdgiNearFieldResidualTileRecord
     uint squaredResidualEnergyBits;
     uint maximumAbsoluteResidualEnergyBits;
     uint flagsAndMaximumDistance;
+    uint detailedHistoryCounts0;
+    uint detailedHistoryCounts1;
+    uint detailedHistoryCounts2;
+    uint detailedHistoryCounts3;
 };
+
+uint SimpleDdgiNearFieldPackTraceCounts(
+    uint covered, uint valid, uint invalid, uint raysLaunched)
+{
+    // 8x8 populations need seven bits each; four rays per receiver need nine.
+    return min(covered, 64u) |
+        (min(valid, 64u) << 7u) |
+        (min(invalid, 64u) << 14u) |
+        (min(raysLaunched, 256u) << 21u);
+}
 
 uint SimpleDdgiNearFieldPackFourTileCounts(uvec4 counts)
 {
@@ -119,7 +167,7 @@ struct SimpleDdgiNearFieldResidualTracePushConstants
     uint frameIndex;
     uint historyEpoch;
     uint maximumTraceSteps;
-    uint maximumMipVisits;
+    uint raysPerPixel;
     uint binaryRefinementSteps;
     uint flags;
     float thickness;
@@ -145,6 +193,22 @@ struct SimpleDdgiNearFieldResidualResetPushConstants
     uint tileCount;
 };
 
+struct SimpleDdgiNearFieldResidualPreparePushConstants
+{
+    uint abiVersion;
+    uint fullWidth;
+    uint fullHeight;
+    uint traceWidth;
+    uint traceHeight;
+    uint flags;
+    uint tileCapacity;
+    uint raysPerPixel;
+    float nearPlane;
+    float farPlane;
+    uint activeTileHeaderWords;
+    uint indirectStageCount;
+};
+
 struct SimpleDdgiNearFieldResidualTemporalPushConstants
 {
     uint abiVersion;
@@ -158,7 +222,7 @@ struct SimpleDdgiNearFieldResidualTemporalPushConstants
     uint hizRevision;
     uint effectiveModeRevision;
     uint exposureDomainRevision;
-    uint projectionJitterRevision;
+    uint structuralProjectionRevision;
     uint originRebaseRevision;
     uint sceneGeneration;
     uint traceSourceContentRevision;
@@ -189,6 +253,22 @@ struct SimpleDdgiNearFieldResidualFilterPushConstants
     uint flags;
 };
 
+struct SimpleDdgiNearFieldResidualFrequencyPushConstants
+{
+    uint abiVersion;
+    uint traceWidth;
+    uint traceHeight;
+    uint historyEpoch;
+    uint activeTileHeaderWords;
+    uint flags;
+    float depthTolerance;
+    float minimumNormalDot;
+    uint maximumOuterStride;
+    uint debugView;
+    uint reserved1;
+    uint reserved2;
+};
+
 struct SimpleDdgiNearFieldResidualCompositePushConstants
 {
     uint abiVersion;
@@ -202,8 +282,22 @@ struct SimpleDdgiNearFieldResidualCompositePushConstants
     float confidenceFloor;
     float reserved0;
     float reserved1;
-    uint reserved2;
+    uint debugView;
 };
+
+bool SimpleDdgiNearFieldIsDebugView(uint view)
+{
+    return view >= SIMPLE_DDGI_NEAR_FIELD_DEBUG_SOURCE_RADIANCE &&
+        view <= SIMPLE_DDGI_NEAR_FIELD_DEBUG_B3_FOOTPRINT;
+}
+
+uint SimpleDdgiNearFieldRejectionReason(
+    SimpleDdgiNearFieldResidualHitMetadata metadata)
+{
+    return ((metadata.packedFlagsAndReceiverFootprint & 0xffffu) &
+        SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_MASK) >>
+        SIMPLE_DDGI_NEAR_FIELD_REJECTION_REASON_SHIFT;
+}
 
 bool SimpleDdgiNearFieldFinite(float value)
 {
@@ -228,6 +322,44 @@ bool SimpleDdgiNearFieldHasFlag(uint flags, uint flag)
     return (flags & flag) != 0u;
 }
 
+uint SimpleDdgiNearFieldMetadataFlags(
+    SimpleDdgiNearFieldResidualHitMetadata metadata)
+{
+    return metadata.packedFlagsAndReceiverFootprint & 0xffffu;
+}
+
+void SimpleDdgiNearFieldSetMetadataFlags(
+    inout SimpleDdgiNearFieldResidualHitMetadata metadata,
+    uint flags)
+{
+    metadata.packedFlagsAndReceiverFootprint =
+        (metadata.packedFlagsAndReceiverFootprint & 0xffff0000u) |
+        (flags & 0xffffu);
+}
+
+float SimpleDdgiNearFieldReceiverFootprint(
+    SimpleDdgiNearFieldResidualHitMetadata metadata)
+{
+    return unpackHalf2x16(
+        metadata.packedFlagsAndReceiverFootprint & 0xffff0000u).y;
+}
+
+void SimpleDdgiNearFieldSetReceiverFootprint(
+    inout SimpleDdgiNearFieldResidualHitMetadata metadata,
+    float footprint)
+{
+    uint packed = packHalf2x16(vec2(0.0, max(footprint, 0.0)));
+    metadata.packedFlagsAndReceiverFootprint =
+        (metadata.packedFlagsAndReceiverFootprint & 0xffffu) |
+        (packed & 0xffff0000u);
+}
+
+vec2 SimpleDdgiNearFieldHitUv(
+    SimpleDdgiNearFieldResidualHitMetadata metadata)
+{
+    return unpackHalf2x16(metadata.packedHitUv);
+}
+
 vec3 SimpleDdgiNearFieldDecodeOctNormal(vec2 encoded)
 {
     vec2 f = clamp(encoded, vec2(-1.0), vec2(1.0));
@@ -243,6 +375,22 @@ vec3 SimpleDdgiNearFieldDecodeOctNormal(vec2 encoded)
     return lengthSquared > 1.0e-12 && SimpleDdgiNearFieldFinite(normal)
         ? normal * inversesqrt(lengthSquared)
         : vec3(0.0);
+}
+
+vec2 SimpleDdgiNearFieldEncodeOctNormal(vec3 value)
+{
+    float lengthSquared = dot(value, value);
+    if (lengthSquared <= 1.0e-12 || !SimpleDdgiNearFieldFinite(value))
+        return vec2(0.0);
+    vec3 normal = value * inversesqrt(lengthSquared);
+    normal /= abs(normal.x) + abs(normal.y) + abs(normal.z);
+    if (normal.z < 0.0)
+    {
+        normal.xy = (vec2(1.0) - abs(normal.yx)) *
+            vec2(normal.x >= 0.0 ? 1.0 : -1.0,
+                 normal.y >= 0.0 ? 1.0 : -1.0);
+    }
+    return clamp(normal.xy, vec2(-1.0), vec2(1.0));
 }
 
 uint SimpleDdgiNearFieldPackHistoryValidity(uint historyLength, uint historyEpoch)
@@ -341,27 +489,32 @@ SimpleDdgiNearFieldResidualHitMetadata
 SimpleDdgiNearFieldZeroMetadata()
 {
     SimpleDdgiNearFieldResidualHitMetadata metadata;
-    metadata.receiverDepth = 0.0;
-    metadata.hitDepth = 0.0;
-    metadata.confidence = 0.0;
-    metadata.packedFlags = 0u;
+    metadata.receiverLinearDepth = 0.0;
+    metadata.hitLinearDepth = 0.0;
+    metadata.packedFlagsAndReceiverFootprint = 0u;
+    metadata.packedHitNormal = 0u;
     metadata.receiverIdentity = uvec2(0u);
     metadata.hitIdentity = uvec2(0u);
-    metadata.hitUv = vec2(0.0);
+    metadata.packedReceiverRevisions = 0u;
+    metadata.packedHitRevisions = 0u;
+    metadata.packedHitUv = 0u;
+    metadata.packedHitSourceRadiance = 0u;
     return metadata;
 }
 
 void SimpleDdgiNearFieldDecodeReceiverPayload(
     uvec4 payload,
     out vec4 packedNormals,
-    out uvec2 identity,
-    out vec3 diffuseThroughput)
+    out uint surfaceToken,
+    out vec3 diffuseBase,
+    out vec3 dielectricF0)
 {
     packedNormals = vec4(
         unpackSnorm2x16(payload.x),
         unpackSnorm2x16(payload.y));
-    identity = uvec2(payload.z & 0xffffu, payload.z >> 16u);
-    diffuseThroughput = NjulfC5UnpackRgb9E5(payload.w);
+    surfaceToken = payload.z & 0xffffu;
+    dielectricF0 = NjulfC5UnpackRgb565(payload.z >> 16u);
+    diffuseBase = NjulfC5UnpackRgb9E5(payload.w);
 }
 
 #endif

@@ -1,4 +1,5 @@
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests;
@@ -82,7 +83,7 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(13));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(15));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));
@@ -223,6 +224,174 @@ public sealed class RenderSettingsFileIoTests
                     Is.EqualTo(DirectionalPcfRadiusMode.Constant));
                 Assert.That(loaded.DirectionalSoftAngularDiameterScale,
                     Is.EqualTo(1f));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_Version13PreservesC5ModeButInvalidatesEvidenceAndDefaultsBalanced()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "version-13-c5.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 13,
+                  "GlobalIllumination": {
+                    "SimpleDdgiNearFieldResidualMode": 4,
+                    "SimpleDdgiNearFieldResidualQualificationId": "stale-v5-evidence"
+                  }
+                }
+                """);
+
+            GlobalIlluminationSettings loaded = RenderSettings.Load(path)
+                .GlobalIllumination;
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.SimpleDdgiNearFieldResidualMode,
+                    Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
+                Assert.That(loaded.SimpleDdgiNearFieldResidualQualityPreset,
+                    Is.EqualTo(SimpleDdgiNearFieldResidualQualityPreset.Balanced));
+                Assert.That(loaded.SimpleDdgiNearFieldResidualQualificationId,
+                    Is.Empty);
+                Assert.That(
+                    loaded.SimpleDdgiNearFieldResidualAdvancedOverridesEnabled,
+                    Is.False);
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_Version14UpgradesAutoQualifiedC5AndPreservesV2Settings()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "version-14-auto-c5.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 14,
+                  "GlobalIllumination": {
+                    "SimpleDdgiNearFieldResidualMode": 3,
+                    "SimpleDdgiNearFieldResidualQualityPreset": 2,
+                    "SimpleDdgiNearFieldResidualAdvancedOverridesEnabled": true,
+                    "SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters": 12.0,
+                    "SimpleDdgiNearFieldResidualRaysPerPixel": 3,
+                    "SimpleDdgiNearFieldResidualFilterIterationCount": 3,
+                    "SimpleDdgiNearFieldResidualIntensity": 1.25,
+                    "SimpleDdgiNearFieldResidualQualificationId": "c5-v6-current"
+                  }
+                }
+                """);
+
+            GlobalIlluminationSettings loaded = RenderSettings.Load(path)
+                .GlobalIllumination;
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.SimpleDdgiNearFieldResidualMode,
+                    Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
+                Assert.That(loaded.SimpleDdgiNearFieldResidualQualityPreset,
+                    Is.EqualTo(SimpleDdgiNearFieldResidualQualityPreset.Quality));
+                Assert.That(
+                    loaded.SimpleDdgiNearFieldResidualAdvancedOverridesEnabled,
+                    Is.True);
+                Assert.That(
+                    loaded.SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters,
+                    Is.EqualTo(12.0f));
+                Assert.That(loaded.SimpleDdgiNearFieldResidualRaysPerPixel,
+                    Is.EqualTo(3));
+                Assert.That(
+                    loaded.SimpleDdgiNearFieldResidualFilterIterationCount,
+                    Is.EqualTo(3));
+                Assert.That(loaded.SimpleDdgiNearFieldResidualIntensity,
+                    Is.EqualTo(1.25f));
+                Assert.That(loaded.SimpleDdgiNearFieldResidualQualificationId,
+                    Is.EqualTo("c5-v6-current"));
+            });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Load_Version14PreservesExplicitC5Off()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "version-14-off-c5.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Version": 14,
+                  "GlobalIllumination": {
+                    "SimpleDdgiNearFieldResidualMode": 0
+                  }
+                }
+                """);
+
+            GlobalIlluminationSettings loaded = RenderSettings.Load(path)
+                .GlobalIllumination;
+
+            Assert.That(loaded.SimpleDdgiNearFieldResidualMode,
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void SaveLoad_C5CurrentControlsRoundTripAfterBoundedClamping()
+    {
+        string directory = CreateTemporaryDirectory();
+        string path = Path.Combine(directory, "current-c5.json");
+        try
+        {
+            var settings = new RenderSettings();
+            GlobalIlluminationSettings c5 = settings.GlobalIllumination;
+            c5.SimpleDdgiNearFieldResidualQualityPreset =
+                SimpleDdgiNearFieldResidualQualityPreset.Quality;
+            c5.SimpleDdgiNearFieldResidualAdvancedOverridesEnabled = true;
+            c5.SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters = 100.0f;
+            c5.SimpleDdgiNearFieldResidualRaysPerPixel = 10;
+            c5.SimpleDdgiNearFieldResidualFilterIterationCount = -1;
+            c5.SimpleDdgiNearFieldResidualIntensity = float.NaN;
+            c5.SimpleDdgiNearFieldResidualQualificationId = "c5-v6-current";
+
+            settings.Save(path);
+            GlobalIlluminationSettings loaded = RenderSettings.Load(path)
+                .GlobalIllumination;
+            Assert.Multiple(() =>
+            {
+                Assert.That(loaded.SimpleDdgiNearFieldResidualQualityPreset,
+                    Is.EqualTo(SimpleDdgiNearFieldResidualQualityPreset.Quality));
+                Assert.That(
+                    loaded.SimpleDdgiNearFieldResidualAdvancedOverridesEnabled,
+                    Is.True);
+                Assert.That(
+                    loaded.SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters,
+                    Is.EqualTo(16.0f));
+                Assert.That(loaded.SimpleDdgiNearFieldResidualRaysPerPixel,
+                    Is.EqualTo(4));
+                Assert.That(
+                    loaded.SimpleDdgiNearFieldResidualFilterIterationCount,
+                    Is.Zero);
+                Assert.That(loaded.SimpleDdgiNearFieldResidualIntensity,
+                    Is.Zero);
+                Assert.That(loaded.SimpleDdgiNearFieldResidualQualificationId,
+                    Is.EqualTo("c5-v6-current"));
             });
         }
         finally

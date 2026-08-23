@@ -17,6 +17,8 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         [
             new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Reset,
                 0L, 11L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Prepare,
+                0L, 13L, true),
             new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Trace,
                 0L, 101L, true),
             new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
@@ -27,6 +29,9 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
             new PassTiming(
                 SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(1),
                 0L, 23L, true),
+            new PassTiming(
+                SimpleDdgiNearFieldResidualGpuPassNames.FrequencySeparation,
+                0L, 19L, true),
             new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Composite,
                 0L, 17L, true)
         ]);
@@ -38,11 +43,14 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         {
             Assert.That(available, Is.True);
             Assert.That(timings.SourceMicroseconds, Is.Zero);
-            Assert.That(timings.RawTraceMicroseconds, Is.EqualTo(112UL));
+            Assert.That(timings.PrepareCompactionMicroseconds, Is.EqualTo(24UL));
+            Assert.That(timings.RawTraceMicroseconds, Is.EqualTo(101UL));
             Assert.That(timings.TemporalMicroseconds, Is.EqualTo(53UL));
             Assert.That(timings.FilterMicroseconds, Is.EqualTo(52UL));
+            Assert.That(timings.FrequencySeparationMicroseconds,
+                Is.EqualTo(19UL));
             Assert.That(timings.CompositeMicroseconds, Is.EqualTo(17UL));
-            Assert.That(timings.TotalMicroseconds, Is.EqualTo(234UL));
+            Assert.That(timings.TotalMicroseconds, Is.EqualTo(266UL));
         });
     }
 
@@ -53,6 +61,8 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         [
             new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Reset,
                 0L, 1L, true),
+            new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Prepare,
+                0L, 1L, true),
             new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Trace,
                 0L, 2L, true),
             new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
@@ -60,6 +70,9 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
             new PassTiming(
                 SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(0),
                 0L, 4L, true),
+            new PassTiming(
+                SimpleDdgiNearFieldResidualGpuPassNames.FrequencySeparation,
+                0L, 1L, true),
             new PassTiming(SimpleDdgiNearFieldResidualGpuPassNames.Composite,
                 0L, 5L, true)
         ]);
@@ -181,7 +194,7 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         Assert.That(layout.IsValid, Is.True);
         Assert.That((layout.TraceWidth, layout.TraceHeight), Is.EqualTo((9, 9)));
         var words = new uint[checked((int)(layout.TileBuffersBytes / 4UL))];
-        uint[] covered = [64U, 8U, 8U, 1U];
+        const uint covered = 64U;
         uint validSum = 0U;
         uint invalidSum = 0U;
         uint raySum = 0U;
@@ -190,37 +203,35 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
             SimpleDdgiNearFieldResidualGpuAbi.TelemetryHeaderWordCount);
         int tileWords = checked((int)
             SimpleDdgiNearFieldResidualGpuAbi.TileRecordWordCount);
-        for (int tile = 0; tile < covered.Length; tile++)
+        for (int tile = 0; tile < 1; tile++)
         {
             int word = headerWords + tile * tileWords;
-            uint valid = tile == 0 ? 56U : 0U;
-            uint invalid = covered[tile] - valid;
+            const uint valid = 56U;
+            uint invalid = covered - valid;
             uint rays = valid;
-            uint hits = tile == 0 ? 48U : 0U;
-            uint accepted = tile == 0 ? 32U : 0U;
+            const uint hits = 48U;
+            const uint accepted = 32U;
             words[word] = (uint)tile;
-            words[word + 1] = PackTileCounts(covered[tile], valid, invalid, rays);
+            words[word + 1] = PackTraceCounts(covered, valid, invalid, rays);
             words[word + 2] = PackTileCounts(0U, invalid, 0U, 0U);
             words[word + 3] = 0U;
             words[word + 4] = PackTileCounts(0U, valid, accepted, 0U);
             words[word + 5] = 0U;
             words[word + 6] = 0U;
-            words[word + 7] = tile == 0 ? 12U | (4U << 16) : 0U;
-            words[word + 8] = tile == 0
-                ? 2U | (12U << 16) | (4U << 25)
-                : 0U;
+            words[word + 7] = 12U | (4U << 16);
+            words[word + 8] = 2U | (12U << 16) | (4U << 25);
             words[word + 9] = BitConverter.SingleToUInt32Bits(
-                tile == 0 ? 4.0f : 0.0f);
+                4.0f);
             words[word + 10] = BitConverter.SingleToUInt32Bits(
-                tile == 0 ? 0.25f : 0.0f);
+                0.25f);
             words[word + 11] = BitConverter.SingleToUInt32Bits(
-                tile == 0 ? -1.0f : 0.0f);
+                -1.0f);
             words[word + 12] = BitConverter.SingleToUInt32Bits(
-                tile == 0 ? 3.0f : 0.0f);
+                3.0f);
             words[word + 13] = BitConverter.SingleToUInt32Bits(
-                tile == 0 ? 5.0f : 0.0f);
+                5.0f);
             words[word + 14] = BitConverter.SingleToUInt32Bits(
-                tile == 0 ? 0.75f : 0.0f);
+                0.75f);
             uint halfDistance = BitConverter.HalfToUInt16Bits((Half)7.5f);
             words[word + 15] = halfDistance |
                 (SimpleDdgiNearFieldResidualGpuAbi.TelemetryRequiredCompletionMask << 16);
@@ -235,7 +246,8 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         words[3] = 0U;
         words[4] = (uint)layout.TraceWidth;
         words[5] = (uint)layout.TraceHeight;
-        words[6] = (uint)covered.Length;
+        const uint tileCount = 4U;
+        words[6] = tileCount;
         words[7] =
             SimpleDdgiNearFieldResidualGpuAbi.TelemetryRequiredCompletionMask;
         words[8] = validSum + invalidSum;
@@ -246,6 +258,11 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         words[13] = 0U;
         words[14] = invalidSum;
         words[15] = 0U;
+        words[16] = tileCount;
+        words[17] = 1U;
+        words[18] = 1U;
+        words[19] = tileCount - 1U;
+        words[20] = 0U;
 
         bool validReadback =
             SimpleDdgiNearFieldResidualCompletionValidator.TryValidate(
@@ -259,14 +276,16 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         {
             Assert.That(validReadback, Is.True, reason);
             Assert.That(witness.CompletedFrameSerial, Is.EqualTo(17UL));
-            Assert.That(witness.Trace.CandidateReceiverCount, Is.EqualTo(81UL));
+            Assert.That(witness.Trace.CandidateReceiverCount, Is.EqualTo(64UL));
             Assert.That(witness.Trace.RayHitCount, Is.EqualTo(48UL));
             Assert.That(witness.Trace.RayMissCount, Is.EqualTo(8UL));
             Assert.That(witness.Trace.InvalidReceiverRejectedCount,
-                Is.EqualTo(25UL));
+                Is.EqualTo(8UL));
             Assert.That(witness.History.AcceptedHistoryCount, Is.EqualTo(32UL));
             Assert.That(witness.Tiles.CandidateTileCount, Is.EqualTo(4U));
             Assert.That(witness.Tiles.CompactedTileCount, Is.EqualTo(1U));
+            Assert.That(witness.Tiles.ActiveTileCount, Is.EqualTo(1U));
+            Assert.That(witness.Tiles.EmptyTileCount, Is.EqualTo(3U));
             Assert.That(witness.MaximumTraceDistance, Is.EqualTo(7.5f));
             Assert.That(witness.ResidualEnergy.LowFrequencyLeakage,
                 Is.EqualTo(1.0 / 56.0).Within(1.0e-6));
@@ -286,6 +305,16 @@ public sealed class SimpleDdgiNearFieldResidualDiagnosticsTests
         Assert.That(z, Is.LessThanOrEqualTo(64U));
         Assert.That(w, Is.LessThanOrEqualTo(64U));
         return x | (y << 8) | (z << 16) | (w << 24);
+    }
+
+    private static uint PackTraceCounts(uint covered, uint valid, uint invalid,
+        uint rays)
+    {
+        Assert.That(covered, Is.LessThanOrEqualTo(64U));
+        Assert.That(valid, Is.LessThanOrEqualTo(64U));
+        Assert.That(invalid, Is.LessThanOrEqualTo(64U));
+        Assert.That(rays, Is.LessThanOrEqualTo(256U));
+        return covered | (valid << 7) | (invalid << 14) | (rays << 21);
     }
 
     [Test]

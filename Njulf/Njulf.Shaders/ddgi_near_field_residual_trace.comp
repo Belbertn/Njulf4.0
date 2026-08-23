@@ -10,11 +10,11 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D directDiffuseEmissiveSource;
 layout(set = 0, binding = 1) uniform sampler2D depthHierarchy;
-layout(set = 0, binding = 2) uniform sampler2D receiverDepth;
+layout(set = 0, binding = 2) uniform sampler2D preparedDepthFootprint;
 // One integer payload replaces four full-resolution auxiliary MRTs. It owns
-// octahedral geometric/shading normals, 16-bit object/material identity, and
-// the exact Lambertian cosine-sample throughput.
-layout(set = 0, binding = 3) uniform usampler2D receiverPayload;
+// octahedral normals, a 16-bit frame-local surface token, RGB9E5 diffuse base,
+// and RGB565 dielectric F0.
+layout(set = 0, binding = 3) uniform usampler2D preparedReceiverPayload;
 layout(rgba16f, set = 0, binding = 4) uniform writeonly image2D rawResidualOutput;
 layout(std430, set = 0, binding = 5) buffer TraceHitMetadataBuffer
 {
@@ -32,14 +32,22 @@ layout(std430, set = 0, binding = 7) readonly buffer TraceFrameConstantsBuffer
 {
     SimpleDdgiNearFieldResidualTraceFrameConstants frame;
 } traceFrameConstants;
+layout(std430, set = 0, binding = 8) readonly buffer TraceSurfaceTableBuffer
+{
+    SimpleDdgiNearFieldSurfaceEntry values[];
+} traceSurfaceTable;
+layout(std430, set = 0, binding = 9) readonly buffer TraceActiveTileBuffer
+{
+    uint words[];
+} traceActiveTiles;
+layout(set = 0, binding = 10) uniform usampler2D fullReceiverPayload;
+layout(set = 0, binding = 11) uniform sampler2D sourceLuminance;
 
 layout(push_constant) uniform NearFieldTracePushBlock
 {
     SimpleDdgiNearFieldResidualTracePushConstants pc;
 };
 
-shared vec3 c5TileNear[64];
-shared vec3 c5TileLow[64];
 shared float c5TileConfidence[64];
 shared uint c5TileValid[64];
 shared uint c5TileHit[64];
@@ -48,7 +56,12 @@ shared uint c5TileReasonFlags[64];
 shared uint c5TileRayLaunched[64];
 shared uint c5TileTraceSteps[64];
 shared uint c5TileMipVisits[64];
+shared uint c5TileMaximumTraceSteps[64];
+shared uint c5TileMaximumMipVisits[64];
 shared uint c5TileRefinementVisits[64];
+// Complete binary sum tree: node 1 is the tile total and leaves 64..127
+// correspond to the active 8x8 tile. Multi-ray tiers build it once per tile.
+shared float c5SourceLuminanceHierarchy[128];
 
 const uint C5_TRACE_REASON_SCREEN_EXIT = 1u << 0u;
 const uint C5_TRACE_REASON_INVALID_RECEIVER = 1u << 1u;
@@ -64,7 +77,7 @@ const uint C5_TRACE_REASON_MISS = 1u << 9u;
 bool IsInsideUv(vec2 uv)
 {
     return all(greaterThanEqual(uv, vec2(0.0))) &&
-        all(lessThanEqual(uv, vec2(1.0)));
+        all(lessThan(uv, vec2(1.0)));
 }
 
 bool CrossesDepth(float rayDepth, float sceneDepth, float thickness, bool reversedZ)
@@ -100,84 +113,400 @@ bool C5ReconstructWorldPosition(vec2 uv, float depth, out vec3 worldPosition)
     return SimpleDdgiNearFieldFinite(worldPosition);
 }
 
-bool C5ProjectWorldPosition(vec3 worldPosition, out vec3 projected)
+float C5PositiveLinearDepth(float storedDepth)
 {
-    projected = vec3(0.0);
-    vec4 clip = C5MulRowMajor(vec4(worldPosition, 1.0),
-        traceFrameConstants.frame.viewProjection);
-    if (!C5Finite(clip) || abs(clip.w) <= 1.0e-7)
-        return false;
-    vec3 ndc = clip.xyz / clip.w;
-    projected = vec3(ndc.xy * 0.5 + vec2(0.5), ndc.z);
-    return SimpleDdgiNearFieldFinite(projected);
+    float nearPlane = max(traceFrameConstants.frame.clipAndSequence.x, 0.001);
+    float farPlane = max(traceFrameConstants.frame.clipAndSequence.y,
+        nearPlane + 0.01);
+    bool reversedZ = SimpleDdgiNearFieldHasFlag(
+        pc.flags, SIMPLE_DDGI_NEAR_FIELD_FLAG_REVERSED_Z);
+    float denominator = reversedZ
+        ? nearPlane + storedDepth * (farPlane - nearPlane)
+        : farPlane - storedDepth * (farPlane - nearPlane);
+    return nearPlane * farPlane / max(denominator, 1.0e-7);
+}
+
+float C5StoredDepthFromPositiveLinear(float linearDepth)
+{
+    float nearPlane = max(traceFrameConstants.frame.clipAndSequence.x, 0.001);
+    float farPlane = max(traceFrameConstants.frame.clipAndSequence.y,
+        nearPlane + 0.01);
+    float reciprocalTerm = nearPlane * farPlane / max(linearDepth, nearPlane);
+    bool reversedZ = SimpleDdgiNearFieldHasFlag(
+        pc.flags, SIMPLE_DDGI_NEAR_FIELD_FLAG_REVERSED_Z);
+    return reversedZ
+        ? (reciprocalTerm - nearPlane) / (farPlane - nearPlane)
+        : (farPlane - reciprocalTerm) / (farPlane - nearPlane);
+}
+
+bool C5ReconstructWorldPositionFromLinear(
+    vec2 uv,
+    float linearDepth,
+    out vec3 worldPosition)
+{
+    return C5ReconstructWorldPosition(
+        uv, C5StoredDepthFromPositiveLinear(linearDepth), worldPosition);
+}
+
+float C5ReceiverPixelFootprintMeters(
+    vec2 uv,
+    float linearDepth,
+    vec3 receiverWorldPosition)
+{
+    vec2 inverseExtent = traceFrameConstants.frame.fullExtentAndInverse.zw;
+    vec2 xUv = vec2(
+        uv.x + (uv.x + inverseExtent.x < 1.0
+            ? inverseExtent.x : -inverseExtent.x),
+        uv.y);
+    vec2 yUv = vec2(
+        uv.x,
+        uv.y + (uv.y + inverseExtent.y < 1.0
+            ? inverseExtent.y : -inverseExtent.y));
+    vec3 xWorld;
+    vec3 yWorld;
+    if (!C5ReconstructWorldPositionFromLinear(xUv, linearDepth, xWorld) ||
+        !C5ReconstructWorldPositionFromLinear(yUv, linearDepth, yWorld))
+        return 0.0;
+    float footprint = max(
+        length(xWorld - receiverWorldPosition),
+        length(yWorld - receiverWorldPosition));
+    return SimpleDdgiNearFieldFinite(footprint)
+        ? max(footprint, 0.0)
+        : 0.0;
 }
 
 bool C5CreateProjectedRay(
-    vec2 receiverUv,
-    float receiverDepthValue,
     vec3 receiverWorldPosition,
     vec3 direction,
-    out vec3 projectedRay)
+    float receiverPixelFootprintMeters,
+    out vec4 startClip,
+    out vec4 endClip)
 {
-    projectedRay = vec3(0.0);
-    vec3 projectedEnd;
-    if (!C5ProjectWorldPosition(
-            receiverWorldPosition + direction * pc.maximumTraceDistance,
-            projectedEnd))
+    float startBiasMeters = max(0.001,
+        receiverPixelFootprintMeters * max(pc.startBias, 0.0));
+    vec3 startWorldPosition = receiverWorldPosition +
+        direction * startBiasMeters;
+    vec3 endWorldPosition = receiverWorldPosition +
+        direction * pc.maximumTraceDistance;
+    startClip = C5MulRowMajor(vec4(startWorldPosition, 1.0),
+        traceFrameConstants.frame.viewProjection);
+    endClip = C5MulRowMajor(vec4(endWorldPosition, 1.0),
+        traceFrameConstants.frame.viewProjection);
+    return C5Finite(startClip) && C5Finite(endClip);
+}
+
+float C5PerspectiveLineParameter(
+    float screenParameter,
+    float startW,
+    float endW)
+{
+    float startWeight = (1.0 - screenParameter) / startW;
+    float endWeight = screenParameter / endW;
+    float weightSum = startWeight + endWeight;
+    return abs(weightSum) > 1.0e-8
+        ? clamp(endWeight / weightSum, 0.0, 1.0)
+        : screenParameter;
+}
+
+float C5NextCellBoundaryParameter(
+    vec2 startPixel,
+    vec2 pixelDelta,
+    float currentParameter,
+    uint mip)
+{
+    float cellSize = exp2(float(mip));
+    vec2 currentPixel = startPixel + pixelDelta * currentParameter;
+    float nextParameter = 2.0;
+    const float directionEpsilon = 1.0e-7;
+    const float parameterEpsilon = 1.0e-7;
+
+    if (abs(pixelDelta.x) > directionEpsilon)
+    {
+        float cell = floor(currentPixel.x / cellSize);
+        float boundary = pixelDelta.x > 0.0
+            ? (cell + 1.0) * cellSize
+            : cell * cellSize;
+        float candidate = currentParameter +
+            (boundary - currentPixel.x) / pixelDelta.x;
+        if (candidate <= currentParameter + parameterEpsilon)
+        {
+            boundary += sign(pixelDelta.x) * cellSize;
+            candidate = currentParameter +
+                (boundary - currentPixel.x) / pixelDelta.x;
+        }
+        if (candidate > currentParameter)
+            nextParameter = min(nextParameter, candidate);
+    }
+
+    if (abs(pixelDelta.y) > directionEpsilon)
+    {
+        float cell = floor(currentPixel.y / cellSize);
+        float boundary = pixelDelta.y > 0.0
+            ? (cell + 1.0) * cellSize
+            : cell * cellSize;
+        float candidate = currentParameter +
+            (boundary - currentPixel.y) / pixelDelta.y;
+        if (candidate <= currentParameter + parameterEpsilon)
+        {
+            boundary += sign(pixelDelta.y) * cellSize;
+            candidate = currentParameter +
+                (boundary - currentPixel.y) / pixelDelta.y;
+        }
+        if (candidate > currentParameter)
+            nextParameter = min(nextParameter, candidate);
+    }
+
+    // Step a sub-texel distance into the next cell. Without this nudge a ray
+    // landing exactly on a negative-direction boundary can revisit the cell
+    // it just left due to floating-point rounding.
+    float traversalEpsilon = max(
+        1.0e-6,
+        1.0e-4 / max(max(abs(pixelDelta.x), abs(pixelDelta.y)), 1.0));
+    return nextParameter + traversalEpsilon;
+}
+
+bool C5ReadSurface(uint token, out SimpleDdgiNearFieldSurfaceEntry surface)
+{
+    surface.stableObjectId = 0u;
+    surface.stableMaterialId = 0u;
+    surface.packedObjectMaterialRevisions = 0u;
+    surface.coverageMotionFlags = 0u;
+    if (token >= SIMPLE_DDGI_NEAR_FIELD_MAX_SURFACE_TABLE_ENTRIES ||
+        token >= uint(traceSurfaceTable.values.length()))
     {
         return false;
     }
-    projectedRay = projectedEnd - vec3(receiverUv, receiverDepthValue);
-    return SimpleDdgiNearFieldFinite(projectedRay) &&
-        length(projectedRay.xy) > 1.0e-6;
+    surface = traceSurfaceTable.values[token];
+    // coverage-valid and motion-valid are bits 4 and 5.
+    return surface.stableObjectId != 0u &&
+        surface.stableMaterialId != 0u &&
+        (surface.coverageMotionFlags & (1u << 4u)) != 0u &&
+        (surface.coverageMotionFlags & (1u << 5u)) != 0u;
 }
 
-uint C5ProjectedFootprintRadius(
-    vec3 worldPosition,
-    vec3 shadingNormal)
+float C5ReadGuideLuminance(ivec2 guidePixel)
 {
-    float worldRadius = traceFrameConstants.frame.reserved.x;
-    if (!SimpleDdgiNearFieldFinite(worldRadius) || worldRadius <= 0.0)
-        return 0u;
-    vec3 tangent;
-    vec3 bitangent;
-    NjulfC5OrthonormalBasis(shadingNormal, tangent, bitangent);
-    vec3 centre;
-    vec3 tangentPoint;
-    vec3 bitangentPoint;
-    if (!C5ProjectWorldPosition(worldPosition, centre) ||
-        !C5ProjectWorldPosition(worldPosition + tangent * worldRadius,
-            tangentPoint) ||
-        !C5ProjectWorldPosition(worldPosition + bitangent * worldRadius,
-            bitangentPoint))
+    ivec2 extent = textureSize(sourceLuminance, 0);
+    if (any(lessThan(guidePixel, ivec2(0))) ||
+        any(greaterThanEqual(guidePixel, extent)))
+        return 0.0;
+    float luminance = texelFetch(sourceLuminance, guidePixel, 0).r;
+    float depth = texelFetch(preparedDepthFootprint, guidePixel, 0).r;
+    return SimpleDdgiNearFieldFinite(luminance) && luminance > 0.0 &&
+        SimpleDdgiNearFieldFinite(depth) && depth > 0.0
+        ? luminance
+        : 0.0;
+}
+
+ivec2 C5GuideTileBase(ivec2 receiverPixel)
+{
+    return (receiverPixel / 8) * 8;
+}
+
+float C5GuideWeightSum()
+{
+    float total = c5SourceLuminanceHierarchy[1];
+    return SimpleDdgiNearFieldFinite(total) ? max(total, 0.0) : 0.0;
+}
+
+float C5GuideHierarchyWeight(
+    ivec2 receiverPixel,
+    ivec2 guidePixel)
+{
+    ivec2 local = guidePixel - C5GuideTileBase(receiverPixel);
+    if (any(lessThan(local, ivec2(0))) ||
+        any(greaterThanEqual(local, ivec2(8))))
+        return 0.0;
+    uint leaf = uint(local.y * 8 + local.x);
+    float weight = c5SourceLuminanceHierarchy[64u + leaf];
+    return SimpleDdgiNearFieldFinite(weight) ? max(weight, 0.0) : 0.0;
+}
+
+uint C5SelectGuideHierarchyLeaf(float selector)
+{
+    uint node = 1u;
+    for (uint level = 0u; level < 6u; ++level)
     {
-        return 0u;
+        uint left = node * 2u;
+        float leftWeight = max(c5SourceLuminanceHierarchy[left], 0.0);
+        if (selector < leftWeight)
+        {
+            node = left;
+        }
+        else
+        {
+            selector -= leftWeight;
+            node = left + 1u;
+        }
     }
-    vec2 fullExtent = traceFrameConstants.frame.fullExtentAndInverse.xy;
-    float pixelRadius = max(
-        length((tangentPoint.xy - centre.xy) * fullExtent),
-        length((bitangentPoint.xy - centre.xy) * fullExtent));
-    if (!SimpleDdgiNearFieldFinite(pixelRadius) || pixelRadius <= 0.0)
-        return 0u;
-    return uint(clamp(ceil(pixelRadius), 1.0,
-        float(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS)));
+    return node - 64u;
 }
 
-uint EstimateMip(vec2 rayDirection, uint step, int maximumAvailableMip)
+bool C5ProjectedTexelWorldArea(
+    vec2 uv,
+    float linearDepth,
+    vec2 texelInverseExtent,
+    out float worldArea)
 {
-    float screenSpan = length(rayDirection) *
-        max(float(pc.fullWidth), float(pc.fullHeight));
-    float estimate = screenSpan <= 0.0
-        ? 0.0
-        : floor(log2(1.0 + screenSpan / max(float(step), 1.0)));
-    uint maximumMip = uint(max(maximumAvailableMip, 0));
-    return min(uint(max(estimate, 0.0)), maximumMip);
+    worldArea = 0.0;
+    vec3 centre;
+    vec3 xPoint;
+    vec3 yPoint;
+    vec2 xUv = vec2(
+        uv.x + (uv.x + texelInverseExtent.x < 1.0
+            ? texelInverseExtent.x : -texelInverseExtent.x),
+        uv.y);
+    vec2 yUv = vec2(
+        uv.x,
+        uv.y + (uv.y + texelInverseExtent.y < 1.0
+            ? texelInverseExtent.y : -texelInverseExtent.y));
+    if (!C5ReconstructWorldPositionFromLinear(uv, linearDepth, centre) ||
+        !C5ReconstructWorldPositionFromLinear(xUv, linearDepth, xPoint) ||
+        !C5ReconstructWorldPositionFromLinear(yUv, linearDepth, yPoint))
+        return false;
+    worldArea = length(cross(xPoint - centre, yPoint - centre));
+    return SimpleDdgiNearFieldFinite(worldArea) && worldArea > 1.0e-10;
+}
+
+bool C5CreateSourceGuidedDirection(
+    ivec2 receiverPixel,
+    uvec2 receiverIdentity,
+    uint sequenceIndex,
+    vec3 receiverWorldPosition,
+    out vec3 direction,
+    out float guidedPdf,
+    out ivec2 targetPixel,
+    out float targetDepth)
+{
+    direction = vec3(0.0);
+    guidedPdf = 0.0;
+    targetPixel = ivec2(-1);
+    targetDepth = 0.0;
+    ivec2 guideExtent = textureSize(sourceLuminance, 0);
+    if (guideExtent.x <= 0 || guideExtent.y <= 0 ||
+        textureSize(preparedDepthFootprint, 0) != guideExtent ||
+        textureSize(preparedReceiverPayload, 0) != guideExtent)
+        return false;
+    float weightSum = C5GuideWeightSum();
+    if (!SimpleDdgiNearFieldFinite(weightSum) || weightSum <= 0.0)
+        return false;
+    vec2 sampleValue;
+    if (!NjulfC5CreateStableSample2D(
+            uvec2(receiverPixel), receiverIdentity, sequenceIndex,
+            sampleValue))
+        return false;
+    float selector = sampleValue.x * weightSum;
+    uint selectedLeaf = C5SelectGuideHierarchyLeaf(selector);
+    targetPixel = C5GuideTileBase(receiverPixel) + ivec2(
+        int(selectedLeaf & 7u), int(selectedLeaf >> 3u));
+    float selectedWeight = C5GuideHierarchyWeight(
+        receiverPixel, targetPixel);
+    if (selectedWeight <= 0.0 || all(equal(targetPixel, receiverPixel)) ||
+        any(lessThan(targetPixel, ivec2(0))) ||
+        any(greaterThanEqual(targetPixel, guideExtent)))
+        return false;
+
+    targetDepth = texelFetch(
+        preparedDepthFootprint, targetPixel, 0).r;
+    vec2 targetUv = (vec2(targetPixel) + vec2(0.5)) / vec2(guideExtent);
+    vec3 targetWorldPosition;
+    if (!C5ReconstructWorldPositionFromLinear(
+            targetUv, targetDepth, targetWorldPosition))
+        return false;
+    uvec4 targetPayload = texelFetch(
+        preparedReceiverPayload, targetPixel, 0);
+    vec4 targetPackedNormals;
+    uint ignoredToken;
+    vec3 ignoredDiffuse;
+    vec3 ignoredF0;
+    SimpleDdgiNearFieldDecodeReceiverPayload(
+        targetPayload, targetPackedNormals, ignoredToken,
+        ignoredDiffuse, ignoredF0);
+    vec3 targetNormal = SimpleDdgiNearFieldDecodeOctNormal(
+        targetPackedNormals.xy);
+    vec3 targetVector = targetWorldPosition - receiverWorldPosition;
+    float distanceSquared = dot(targetVector, targetVector);
+    if (dot(targetNormal, targetNormal) <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(distanceSquared) ||
+        distanceSquared <= 1.0e-8 ||
+        distanceSquared > pc.maximumTraceDistance * pc.maximumTraceDistance)
+        return false;
+    direction = targetVector * inversesqrt(distanceSquared);
+    float targetCosine = dot(targetNormal, -direction);
+    float worldArea;
+    if (targetCosine <= 0.0 ||
+        !C5ProjectedTexelWorldArea(
+            targetUv,
+            targetDepth,
+            1.0 / vec2(guideExtent),
+            worldArea))
+        return false;
+    float texelProbability = selectedWeight / weightSum;
+    guidedPdf = texelProbability * distanceSquared /
+        (targetCosine * worldArea);
+    return SimpleDdgiNearFieldFinite(guidedPdf) && guidedPdf > 0.0 &&
+        SimpleDdgiNearFieldFinite(direction);
+}
+
+float C5GuidedPdfForHit(
+    ivec2 receiverPixel,
+    vec3 receiverWorldPosition,
+    vec2 hitUv,
+    float hitLinearDepth,
+    vec3 hitWorldPosition,
+    vec3 hitNormal,
+    vec3 direction)
+{
+    ivec2 guideExtent = textureSize(sourceLuminance, 0);
+    ivec2 hitGuidePixel = clamp(
+        ivec2(hitUv * vec2(guideExtent)),
+        ivec2(0),
+        max(guideExtent - ivec2(1), ivec2(0)));
+    if (all(equal(hitGuidePixel, receiverPixel)))
+        return 0.0;
+    float weightSum = C5GuideWeightSum();
+    float hitWeight = C5GuideHierarchyWeight(
+        receiverPixel, hitGuidePixel);
+    float distanceSquared = dot(
+        hitWorldPosition - receiverWorldPosition,
+        hitWorldPosition - receiverWorldPosition);
+    float targetCosine = dot(hitNormal, -direction);
+    float worldArea;
+    if (weightSum <= 0.0 || hitWeight <= 0.0 ||
+        distanceSquared <= 0.0 || targetCosine <= 0.0 ||
+        !C5ProjectedTexelWorldArea(
+            hitUv,
+            hitLinearDepth,
+            1.0 / vec2(guideExtent),
+            worldArea))
+        return 0.0;
+    float pdf = (hitWeight / weightSum) * distanceSquared /
+        (targetCosine * worldArea);
+    return SimpleDdgiNearFieldFinite(pdf) ? max(pdf, 0.0) : 0.0;
+}
+
+bool C5ClipPositiveHalfSpace(
+    float startValue,
+    float endValue,
+    inout float enter,
+    inout float exit)
+{
+    if (startValue >= 0.0 && endValue >= 0.0)
+        return true;
+    if (startValue < 0.0 && endValue < 0.0)
+        return false;
+    float crossing = startValue / (startValue - endValue);
+    if (startValue < 0.0)
+        enter = max(enter, crossing);
+    else
+        exit = min(exit, crossing);
+    return enter <= exit;
 }
 
 bool TraceShortDepthRay(
-    vec2 startUv,
-    vec3 projectedRay,
-    float startDepth,
+    vec4 unclippedStart,
+    vec4 unclippedEnd,
+    float receiverPixelFootprintMeters,
     out vec2 hitUv,
     out float hitRayDepth,
     out float hitSceneDepth,
@@ -193,41 +522,83 @@ bool TraceShortDepthRay(
     traceSteps = 0u;
     mipVisits = 0u;
     refinementVisits = 0u;
-    if (!SimpleDdgiNearFieldFinite(startDepth) ||
-        !SimpleDdgiNearFieldFinite(projectedRay) ||
-        length(projectedRay.xy) <= 1.0e-6)
+    if (!C5Finite(unclippedStart) || !C5Finite(unclippedEnd))
     {
         failureFlags = C5_TRACE_REASON_INVALID_RAY |
             C5_TRACE_REASON_NONFINITE;
         return false;
     }
 
-    uint stepCount = min(pc.maximumTraceSteps,
+    uint depthTestBudget = min(pc.maximumTraceSteps,
         SIMPLE_DDGI_NEAR_FIELD_MAX_TRACE_STEPS);
-    uint maximumMipVisits = min(pc.maximumMipVisits,
-        SIMPLE_DDGI_NEAR_FIELD_MAX_MIP_VISITS);
-    if (stepCount == 0u || maximumMipVisits == 0u)
+    if (depthTestBudget == 0u)
     {
-        failureFlags = (stepCount == 0u
-            ? C5_TRACE_REASON_STEP_BUDGET
-            : C5_TRACE_REASON_MIP_BUDGET) |
-            C5_TRACE_REASON_MISS;
+        failureFlags = C5_TRACE_REASON_STEP_BUDGET | C5_TRACE_REASON_MISS;
         return false;
     }
 
-    bool reversedZ = SimpleDdgiNearFieldHasFlag(pc.flags,
-        SIMPLE_DDGI_NEAR_FIELD_FLAG_REVERSED_Z);
-    float previousT = 0.0;
-    float endDepth = startDepth + projectedRay.z;
-    int maximumAvailableMip = textureQueryLevels(depthHierarchy) - 1;
-    for (uint step = 1u; step <= SIMPLE_DDGI_NEAR_FIELD_MAX_TRACE_STEPS; ++step)
+    // Clip in homogeneous space against w>0, the Vulkan near/far planes, and
+    // exact screen bounds before any division. This keeps near-plane exits and
+    // perspective interpolation well-defined for both forward and reversed Z.
+    float enter = 0.0;
+    float exit = 1.0;
+    const float minimumW = 1.0e-5;
+    if (!C5ClipPositiveHalfSpace(unclippedStart.w - minimumW,
+            unclippedEnd.w - minimumW, enter, exit) ||
+        !C5ClipPositiveHalfSpace(unclippedStart.z, unclippedEnd.z,
+            enter, exit) ||
+        !C5ClipPositiveHalfSpace(unclippedStart.w - unclippedStart.z,
+            unclippedEnd.w - unclippedEnd.z, enter, exit) ||
+        !C5ClipPositiveHalfSpace(unclippedStart.x + unclippedStart.w,
+            unclippedEnd.x + unclippedEnd.w, enter, exit) ||
+        !C5ClipPositiveHalfSpace(unclippedStart.w - unclippedStart.x,
+            unclippedEnd.w - unclippedEnd.x, enter, exit) ||
+        !C5ClipPositiveHalfSpace(unclippedStart.y + unclippedStart.w,
+            unclippedEnd.y + unclippedEnd.w, enter, exit) ||
+        !C5ClipPositiveHalfSpace(unclippedStart.w - unclippedStart.y,
+            unclippedEnd.w - unclippedEnd.y, enter, exit))
     {
-        if (step > stepCount)
-            break;
-        traceSteps = step;
+        failureFlags = C5_TRACE_REASON_SCREEN_EXIT | C5_TRACE_REASON_MISS;
+        return false;
+    }
+    vec4 startClip = mix(unclippedStart, unclippedEnd, enter);
+    vec4 endClip = mix(unclippedStart, unclippedEnd, exit);
+    vec2 startUv = startClip.xy / startClip.w * 0.5 + vec2(0.5);
+    vec2 endUv = endClip.xy / endClip.w * 0.5 + vec2(0.5);
+    vec2 fullExtent = vec2(pc.fullWidth, pc.fullHeight);
+    vec2 startPixel = startUv * fullExtent;
+    vec2 pixelDelta = (endUv - startUv) * fullExtent;
+    float screenSpan = max(abs(pixelDelta.x), abs(pixelDelta.y));
+    if (!SimpleDdgiNearFieldFinite(screenSpan) || screenSpan <= 1.0e-5)
+    {
+        failureFlags = C5_TRACE_REASON_INVALID_RAY | C5_TRACE_REASON_MISS;
+        return false;
+    }
 
-        float t = float(step) / float(stepCount);
-        vec2 sampleUv = startUv + projectedRay.xy * t;
+    int maximumAvailableMip = textureQueryLevels(depthHierarchy) - 1;
+    uint mip = uint(clamp(floor(log2(max(
+        screenSpan / float(depthTestBudget), 1.0))),
+        0.0, float(max(maximumAvailableMip, 0))));
+    float t = max(1.0 / screenSpan, 1.0e-5);
+    float previousT = 0.0;
+    float thicknessMeters = max(0.02,
+        receiverPixelFootprintMeters * max(pc.thickness, 0.0));
+    for (uint iteration = 0u;
+         iteration < SIMPLE_DDGI_NEAR_FIELD_MAX_TRACE_STEPS;
+         ++iteration)
+    {
+        if (traceSteps >= depthTestBudget || t > 1.0)
+            break;
+        float rayParameter = C5PerspectiveLineParameter(
+            t, startClip.w, endClip.w);
+        vec4 rayClip = mix(startClip, endClip, rayParameter);
+        if (!C5Finite(rayClip) || rayClip.w <= minimumW)
+        {
+            failureFlags = C5_TRACE_REASON_NONFINITE | C5_TRACE_REASON_MISS;
+            return false;
+        }
+        vec3 rayNdc = rayClip.xyz / rayClip.w;
+        vec2 sampleUv = rayNdc.xy * 0.5 + vec2(0.5);
         if (!IsInsideUv(sampleUv))
         {
             failureFlags = C5_TRACE_REASON_SCREEN_EXIT |
@@ -235,16 +606,12 @@ bool TraceShortDepthRay(
             return false;
         }
 
-        if (mipVisits >= maximumMipVisits)
-        {
-            failureFlags = C5_TRACE_REASON_MIP_BUDGET |
-                C5_TRACE_REASON_MISS;
-            return false;
-        }
-        uint mip = EstimateMip(projectedRay.xy, step, maximumAvailableMip);
-        float sceneDepth = textureLod(depthHierarchy, sampleUv, float(mip)).r;
+        float storedSceneDepth = textureLod(
+            depthHierarchy, sampleUv, float(mip)).r;
+        traceSteps++;
         mipVisits++;
-        float rayDepth = mix(startDepth + pc.startBias, endDepth, t);
+        float sceneDepth = C5PositiveLinearDepth(storedSceneDepth);
+        float rayDepth = C5PositiveLinearDepth(rayNdc.z);
         if (!SimpleDdgiNearFieldFinite(sceneDepth) ||
             !SimpleDdgiNearFieldFinite(rayDepth))
         {
@@ -252,9 +619,31 @@ bool TraceShortDepthRay(
                 C5_TRACE_REASON_MISS;
             return false;
         }
-        if (!CrossesDepth(rayDepth, sceneDepth, pc.thickness, reversedZ))
+        float separation = rayDepth - sceneDepth;
+        if (separation < -thicknessMeters)
         {
             previousT = t;
+            if (mip < uint(max(maximumAvailableMip, 0)))
+                mip++;
+            t = C5NextCellBoundaryParameter(
+                startPixel, pixelDelta, t, mip);
+            continue;
+        }
+
+        // A conservative coarse minimum behind the ray can come from a
+        // foreground texel beside a thin gap or depth step. Resolve the exact
+        // texel before enforcing the upper thickness/discontinuity bound.
+        if (mip > 0u)
+        {
+            mip--;
+            continue;
+        }
+
+        if (separation > thicknessMeters + max(pc.depthTolerance, 0.02))
+        {
+            previousT = t;
+            t = C5NextCellBoundaryParameter(
+                startPixel, pixelDelta, t, 0u);
             continue;
         }
 
@@ -269,20 +658,26 @@ bool TraceShortDepthRay(
         {
             if (refinement >= refinementCount)
                 break;
-            if (mipVisits >= maximumMipVisits)
+            if (traceSteps >= depthTestBudget)
             {
-                failureFlags = C5_TRACE_REASON_MIP_BUDGET |
+                failureFlags = C5_TRACE_REASON_STEP_BUDGET |
                     C5_TRACE_REASON_MISS;
                 return false;
             }
             float mid = 0.5 * (lo + hi);
             refinementVisits++;
-            vec2 midUv = startUv + projectedRay.xy * mid;
+            float midParameter = C5PerspectiveLineParameter(
+                mid, startClip.w, endClip.w);
+            vec4 midClip = mix(startClip, endClip, midParameter);
+            vec3 midNdc = midClip.xyz / midClip.w;
+            vec2 midUv = midNdc.xy * 0.5 + vec2(0.5);
             if (!IsInsideUv(midUv))
                 break;
-            float midDepth = textureLod(depthHierarchy, midUv, 0.0).r;
+            float midDepth = C5PositiveLinearDepth(
+                textureLod(depthHierarchy, midUv, 0.0).r);
+            traceSteps++;
             mipVisits++;
-            float midRayDepth = mix(startDepth + pc.startBias, endDepth, mid);
+            float midRayDepth = C5PositiveLinearDepth(midNdc.z);
             if (!SimpleDdgiNearFieldFinite(midDepth) ||
                 !SimpleDdgiNearFieldFinite(midRayDepth))
             {
@@ -290,7 +685,8 @@ bool TraceShortDepthRay(
                     C5_TRACE_REASON_MISS;
                 return false;
             }
-            if (CrossesDepth(midRayDepth, midDepth, pc.thickness, reversedZ))
+            float midSeparation = midRayDepth - midDepth;
+            if (midSeparation >= -thicknessMeters)
             {
                 hi = mid;
                 refinedSceneDepth = midDepth;
@@ -301,133 +697,21 @@ bool TraceShortDepthRay(
             }
         }
 
-        hitUv = startUv + projectedRay.xy * hi;
-        hitRayDepth = mix(startDepth + pc.startBias, endDepth, hi);
+        float hitParameter = C5PerspectiveLineParameter(
+            hi, startClip.w, endClip.w);
+        vec4 hitClip = mix(startClip, endClip, hitParameter);
+        vec3 hitNdc = hitClip.xyz / hitClip.w;
+        hitUv = hitNdc.xy * 0.5 + vec2(0.5);
+        hitRayDepth = C5PositiveLinearDepth(hitNdc.z);
         hitSceneDepth = refinedSceneDepth;
         return IsInsideUv(hitUv) && SimpleDdgiNearFieldFinite(hitRayDepth) &&
             SimpleDdgiNearFieldFinite(hitSceneDepth);
     }
 
-    failureFlags = C5_TRACE_REASON_STEP_BUDGET |
-        C5_TRACE_REASON_MISS;
+    failureFlags = C5_TRACE_REASON_MISS;
+    if (traceSteps >= depthTestBudget)
+        failureFlags |= C5_TRACE_REASON_STEP_BUDGET;
     return false;
-}
-
-float B3Kernel(float distanceInLobes)
-{
-    float x = abs(distanceInLobes);
-    if (x < 1.0)
-        return 2.0 / 3.0 - x * x + 0.5 * x * x * x;
-    if (x < 2.0)
-    {
-        float tail = 2.0 - x;
-        return tail * tail * tail / 6.0;
-    }
-    return 0.0;
-}
-
-// B3-frequency separation uses only the permitted source and geometry
-// metadata.  Taps are bounded explicitly (independent of sampler wrap mode),
-// reject depth/normal/material discontinuities, and renormalize at edges.
-bool DirectDiffuseEmissiveLowFrequencyEstimate(
-    vec2 uv,
-    float centreDepth,
-    uvec4 centrePayload,
-    uint footprintRadius,
-    out vec3 estimate)
-{
-    estimate = vec3(0.0);
-    ivec2 extent = textureSize(directDiffuseEmissiveSource, 0);
-    ivec2 centre = clamp(ivec2(uv * vec2(extent)), ivec2(0),
-        max(extent - ivec2(1), ivec2(0)));
-    vec4 centrePackedNormals;
-    uvec2 centreIdentity;
-    vec3 centreThroughput;
-    SimpleDdgiNearFieldDecodeReceiverPayload(
-        centrePayload, centrePackedNormals, centreIdentity, centreThroughput);
-    vec3 centreGeometric = SimpleDdgiNearFieldDecodeOctNormal(
-        centrePackedNormals.xy);
-    vec3 centreShading = SimpleDdgiNearFieldDecodeOctNormal(
-        centrePackedNormals.zw);
-    if (dot(centreGeometric, centreGeometric) <= 0.0 ||
-        dot(centreShading, centreShading) <= 0.0)
-    {
-        return false;
-    }
-
-    uint maximumRadius = min(pc.maximumB3FootprintRadius,
-        SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS);
-    if (pc.minimumB3FootprintRadius == 0u ||
-        pc.minimumB3FootprintRadius > maximumRadius)
-    {
-        return false;
-    }
-    uint boundedRadius = clamp(footprintRadius,
-        pc.minimumB3FootprintRadius, maximumRadius);
-    float radiusScale = 2.0 / max(float(boundedRadius) + 1.0, 1.0);
-    vec3 sum = vec3(0.0);
-    float weightSum = 0.0;
-    for (int y = -int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS);
-         y <= int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS); ++y)
-    {
-        if (abs(y) > int(boundedRadius))
-            continue;
-        float wy = B3Kernel(float(abs(y)) * radiusScale);
-        for (int x = -int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS);
-             x <= int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS); ++x)
-        {
-            if (abs(x) > int(boundedRadius))
-                continue;
-            ivec2 samplePixel = centre + ivec2(x, y);
-            if (any(lessThan(samplePixel, ivec2(0))) ||
-                any(greaterThanEqual(samplePixel, extent)))
-            {
-                continue;
-            }
-
-            float sampleDepth = texelFetch(receiverDepth, samplePixel, 0).r;
-            uvec4 payload = texelFetch(receiverPayload, samplePixel, 0);
-            vec4 packedNormals;
-            uvec2 identity;
-            vec3 ignoredThroughput;
-            SimpleDdgiNearFieldDecodeReceiverPayload(
-                payload, packedNormals, identity, ignoredThroughput);
-            vec3 geometric = SimpleDdgiNearFieldDecodeOctNormal(
-                packedNormals.xy);
-            vec3 shading = SimpleDdgiNearFieldDecodeOctNormal(
-                packedNormals.zw);
-            if (!SimpleDdgiNearFieldFinite(sampleDepth) ||
-                any(notEqual(identity, centreIdentity)) ||
-                dot(geometric, centreGeometric) < pc.minimumNormalDot ||
-                dot(shading, centreShading) < pc.minimumNormalDot)
-            {
-                continue;
-            }
-
-            float weight = B3Kernel(float(abs(x)) * radiusScale) * wy *
-                SimpleDdgiNearFieldDepthWeight(
-                    centreDepth, sampleDepth, pc.depthTolerance);
-            vec4 sampleSource = texelFetch(
-                directDiffuseEmissiveSource, samplePixel, 0);
-            vec3 sampleValue = sampleSource.rgb;
-            if (!SimpleDdgiNearFieldFinite(sampleValue) ||
-                !SimpleDdgiNearFieldFinite(sampleSource.a) ||
-                sampleSource.a <= 0.5 ||
-                !SimpleDdgiNearFieldFinite(weight) || weight <= 0.0)
-            {
-                continue;
-            }
-            sum += max(sampleValue, vec3(0.0)) * weight;
-            weightSum += weight;
-        }
-    }
-    if (!SimpleDdgiNearFieldFinite(sum) ||
-        !SimpleDdgiNearFieldFinite(weightSum) || weightSum <= 0.0)
-    {
-        return false;
-    }
-    estimate = sum / weightSum;
-    return SimpleDdgiNearFieldFinite(estimate);
 }
 
 void WriteInvalid(ivec2 pixel, uint metadataIndex)
@@ -437,7 +721,7 @@ void WriteInvalid(ivec2 pixel, uint metadataIndex)
         traceHitMetadata.values[metadataIndex] = SimpleDdgiNearFieldZeroMetadata();
 }
 
-void RecordTileSummary()
+void RecordTileSummary(uint tileIndex)
 {
     uint coveredCount = 0u;
     uint validCount = 0u;
@@ -467,8 +751,10 @@ void RecordTileSummary()
         totalSteps += c5TileTraceSteps[lane];
         totalMipVisits += c5TileMipVisits[lane];
         totalRefinementVisits += c5TileRefinementVisits[lane];
-        maximumSteps = max(maximumSteps, c5TileTraceSteps[lane]);
-        maximumMipVisits = max(maximumMipVisits, c5TileMipVisits[lane]);
+        maximumSteps = max(maximumSteps,
+            c5TileMaximumTraceSteps[lane]);
+        maximumMipVisits = max(maximumMipVisits,
+            c5TileMaximumMipVisits[lane]);
         if (c5TileValid[lane] != 0u)
             validCount++;
         else
@@ -485,7 +771,6 @@ void RecordTileSummary()
         sourceRejects += (reasons & C5_TRACE_REASON_SOURCE) != 0u ? 1u : 0u;
         nonFiniteRejects += (reasons & C5_TRACE_REASON_NONFINITE) != 0u ? 1u : 0u;
     }
-    uint tileIndex = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
     uint recordBase = SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS +
         tileIndex * SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TILE_WORDS;
     if (recordBase > uint(traceTileRecords.words.length()) ||
@@ -498,8 +783,8 @@ void RecordTileSummary()
     }
     traceTileRecords.words[recordBase + 0u] = tileIndex;
     traceTileRecords.words[recordBase + 1u] =
-        SimpleDdgiNearFieldPackFourTileCounts(uvec4(
-            coveredCount, validCount, invalidCount, raysLaunched));
+        SimpleDdgiNearFieldPackTraceCounts(
+            coveredCount, validCount, invalidCount, raysLaunched);
     traceTileRecords.words[recordBase + 2u] =
         SimpleDdgiNearFieldPackFourTileCounts(uvec4(
             screenExits, invalidReceivers, invalidRays, stepBudgetRejects));
@@ -527,6 +812,10 @@ void RecordTileSummary()
         vec2(pc.maximumTraceDistance, 0.0)) & 0xffffu;
     traceTileRecords.words[recordBase + 15u] = maximumDistanceHalf |
         (SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE << 16u);
+    traceTileRecords.words[recordBase + 16u] = 0u;
+    traceTileRecords.words[recordBase + 17u] = 0u;
+    traceTileRecords.words[recordBase + 18u] = 0u;
+    traceTileRecords.words[recordBase + 19u] = 0u;
 
     // Aggregate once per tile; no trace pixel performs a global atomic.
     atomicAdd(traceTileRecords.words[8u], coveredCount);
@@ -548,11 +837,11 @@ void RecordTileSummary()
     }
 }
 
-bool EvaluateCandidate(
+bool EvaluateSingleCandidate(
     ivec2 pixel,
     uint metadataIndex,
+    uint rayOrdinal,
     out vec3 nearEstimate,
-    out vec3 lowEstimate,
     out float confidence,
     out SimpleDdgiNearFieldResidualHitMetadata metadata,
     out uint failureFlags,
@@ -562,7 +851,6 @@ bool EvaluateCandidate(
     out uint refinementVisits)
 {
     nearEstimate = vec3(0.0);
-    lowEstimate = vec3(0.0);
     confidence = 0.0;
     metadata = SimpleDdgiNearFieldZeroMetadata();
     failureFlags = C5_TRACE_REASON_INVALID_RECEIVER;
@@ -592,8 +880,7 @@ bool EvaluateCandidate(
             float(pc.fullWidth) - 1.0) > 1.0e-5 ||
         abs(traceFrameConstants.frame.fullExtentAndInverse.w *
             float(pc.fullHeight) - 1.0) > 1.0e-5 ||
-        traceFrameConstants.frame.reserved.y != pc.maximumTraceDistance ||
-        floatBitsToUint(traceFrameConstants.frame.reserved.w) != 3u ||
+        floatBitsToUint(traceFrameConstants.frame.clipAndSequence.w) != 4u ||
         metadataIndex >= uint(traceHitMetadata.values.length()))
     {
         failureFlags |= C5_TRACE_REASON_SOURCE;
@@ -602,41 +889,52 @@ bool EvaluateCandidate(
 
     vec2 traceUv = (vec2(pixel) + vec2(0.5)) /
         max(vec2(pc.traceWidth, pc.traceHeight), vec2(1.0));
-    ivec2 receiverExtent = textureSize(receiverDepth, 0);
-    if (receiverExtent != ivec2(pc.fullWidth, pc.fullHeight) ||
-        textureSize(receiverPayload, 0) != receiverExtent ||
-        textureSize(directDiffuseEmissiveSource, 0) != receiverExtent)
+    ivec2 receiverExtent = textureSize(preparedDepthFootprint, 0);
+    ivec2 fullExtent = textureSize(directDiffuseEmissiveSource, 0);
+    if (receiverExtent.x < int(pc.traceWidth) ||
+        receiverExtent.y < int(pc.traceHeight) ||
+        textureSize(preparedReceiverPayload, 0) != receiverExtent ||
+        textureSize(fullReceiverPayload, 0) != fullExtent ||
+        fullExtent != ivec2(pc.fullWidth, pc.fullHeight))
     {
         failureFlags |= C5_TRACE_REASON_SOURCE;
         return false;
     }
-    ivec2 receiverPixel = clamp(ivec2(traceUv * vec2(receiverExtent)),
-        ivec2(0), max(receiverExtent - ivec2(1), ivec2(0)));
-    vec2 receiverUv = (vec2(receiverPixel) + vec2(0.5)) /
-        vec2(receiverExtent);
-    float startDepth = texelFetch(receiverDepth, receiverPixel, 0).r;
+    ivec2 receiverPixel = pixel;
+    vec2 receiverUv = traceUv;
+    vec2 preparedDepth = texelFetch(
+        preparedDepthFootprint, receiverPixel, 0).rg;
+    float startDepth = preparedDepth.x;
     uvec4 receiverPayloadValue = texelFetch(
-        receiverPayload, receiverPixel, 0);
+        preparedReceiverPayload, receiverPixel, 0);
     vec4 receiverPackedNormals;
-    uvec2 receiverIds;
-    vec3 receiverThroughput;
+    uint receiverSurfaceToken;
+    vec3 receiverDiffuseBase;
+    vec3 receiverDielectricF0;
     SimpleDdgiNearFieldDecodeReceiverPayload(
         receiverPayloadValue,
         receiverPackedNormals,
-        receiverIds,
-        receiverThroughput);
+        receiverSurfaceToken,
+        receiverDiffuseBase,
+        receiverDielectricF0);
+    SimpleDdgiNearFieldSurfaceEntry receiverSurface;
     vec3 receiverGeometric = SimpleDdgiNearFieldDecodeOctNormal(
         receiverPackedNormals.xy);
     vec3 receiverShading = SimpleDdgiNearFieldDecodeOctNormal(
         receiverPackedNormals.zw);
-    vec4 receiverSource = texelFetch(
-        directDiffuseEmissiveSource, receiverPixel, 0);
+    vec4 receiverSource = vec4(0.0, 0.0, 0.0, preparedDepth.y);
     vec3 receiverWorldPosition;
     vec3 generationDirection;
     float generationPdf;
-    vec3 projectedRay;
+    bool guidedProposal = pc.raysPerPixel >= 2u && rayOrdinal > 0u &&
+        (rayOrdinal & 1u) != 0u;
+    ivec2 guidedTargetPixel = ivec2(-1);
+    float guidedTargetDepth = 0.0;
+    vec4 projectedStart;
+    vec4 projectedEnd;
     if (!SimpleDdgiNearFieldFinite(startDepth) ||
-        !SimpleDdgiNearFieldFinite(receiverThroughput))
+        !SimpleDdgiNearFieldFinite(receiverDiffuseBase) ||
+        !SimpleDdgiNearFieldFinite(receiverDielectricF0))
     {
         failureFlags |= C5_TRACE_REASON_NONFINITE;
         return false;
@@ -644,27 +942,51 @@ bool EvaluateCandidate(
     if (dot(receiverGeometric, receiverGeometric) <= 0.0 ||
         dot(receiverShading, receiverShading) <= 0.0 ||
         !SimpleDdgiNearFieldFinite(receiverSource.a) ||
-        receiverSource.a <= 0.5 ||
-        any(lessThan(receiverThroughput, vec3(0.0))))
+        receiverSource.a <= 0.0 ||
+        any(lessThan(receiverDiffuseBase, vec3(0.0))) ||
+        !C5ReadSurface(receiverSurfaceToken, receiverSurface))
     {
         failureFlags |= C5_TRACE_REASON_SOURCE;
         return false;
     }
-    if (!C5ReconstructWorldPosition(
-            receiverUv, startDepth, receiverWorldPosition) ||
-        !NjulfC5CreateStableCosineDirection(
-            uvec2(receiverPixel),
-            receiverIds,
-            floatBitsToUint(traceFrameConstants.frame.reserved.z),
-            receiverShading,
-            generationDirection,
-            generationPdf) ||
-        !C5CreateProjectedRay(
-            receiverUv,
-            startDepth,
+    uint sampleSequence =
+        floatBitsToUint(traceFrameConstants.frame.clipAndSequence.z) * 4u +
+        rayOrdinal;
+    if (!C5ReconstructWorldPositionFromLinear(
+            receiverUv, startDepth, receiverWorldPosition))
+    {
+        failureFlags = C5_TRACE_REASON_INVALID_RAY |
+            C5_TRACE_REASON_NONFINITE;
+        return false;
+    }
+    float receiverPixelFootprint = C5ReceiverPixelFootprintMeters(
+        receiverUv, startDepth, receiverWorldPosition);
+    bool directionCreated = guidedProposal
+        ? C5CreateSourceGuidedDirection(
+            receiverPixel,
+            uvec2(receiverSurface.stableObjectId,
+                receiverSurface.stableMaterialId),
+            sampleSequence,
             receiverWorldPosition,
             generationDirection,
-            projectedRay))
+            generationPdf,
+            guidedTargetPixel,
+            guidedTargetDepth)
+        : NjulfC5CreateStableCosineDirection(
+            uvec2(receiverPixel),
+            uvec2(receiverSurface.stableObjectId,
+                receiverSurface.stableMaterialId),
+            sampleSequence,
+            receiverShading,
+            generationDirection,
+            generationPdf);
+    if (!directionCreated ||
+        !C5CreateProjectedRay(
+            receiverWorldPosition,
+            generationDirection,
+            receiverPixelFootprint,
+            projectedStart,
+            projectedEnd))
     {
         failureFlags = C5_TRACE_REASON_INVALID_RAY |
             C5_TRACE_REASON_NONFINITE;
@@ -675,21 +997,25 @@ bool EvaluateCandidate(
     // Receiver identity owns temporal/spatial reuse. Populate it before the
     // stochastic trace so a bounded miss can still contribute a valid zero
     // Monte Carlo sample and preserve the receiver's accumulation.
-    metadata.receiverDepth = startDepth;
-    metadata.hitDepth = startDepth;
-    metadata.confidence = 1.0;
-    metadata.packedFlags =
+    metadata.receiverLinearDepth = startDepth;
+    metadata.hitLinearDepth = startDepth;
+    SimpleDdgiNearFieldSetMetadataFlags(metadata,
         SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE |
         SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_ATTACHMENT_VERIFIED |
-        SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED;
-    metadata.receiverIdentity = receiverIds;
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED);
+    SimpleDdgiNearFieldSetReceiverFootprint(metadata, receiverSource.a);
+    metadata.receiverIdentity = uvec2(
+        receiverSurface.stableObjectId, receiverSurface.stableMaterialId);
     metadata.hitIdentity = uvec2(0u);
-    metadata.hitUv = receiverUv;
+    metadata.packedReceiverRevisions =
+        receiverSurface.packedObjectMaterialRevisions;
+    metadata.packedHitUv = packHalf2x16(receiverUv);
 
     vec2 hitUv;
     float hitRayDepth;
     float hitSceneDepth;
-    if (!TraceShortDepthRay(receiverUv, projectedRay, startDepth,
+    if (!TraceShortDepthRay(projectedStart, projectedEnd,
+            receiverPixelFootprint,
             hitUv, hitRayDepth, hitSceneDepth, failureFlags,
             traceSteps, mipVisits, refinementVisits))
     {
@@ -707,23 +1033,45 @@ bool EvaluateCandidate(
         return false;
     }
 
-    ivec2 hitPixel = clamp(ivec2(hitUv * vec2(receiverExtent)), ivec2(0),
-        max(receiverExtent - ivec2(1), ivec2(0)));
-    uvec4 hitPayloadValue = texelFetch(receiverPayload, hitPixel, 0);
+    if (guidedProposal)
+    {
+        ivec2 guideExtent = textureSize(sourceLuminance, 0);
+        ivec2 actualGuidePixel = clamp(
+            ivec2(hitUv * vec2(guideExtent)),
+            ivec2(0), max(guideExtent - ivec2(1), ivec2(0)));
+        if (any(notEqual(actualGuidePixel, guidedTargetPixel)) ||
+            abs(hitSceneDepth - guidedTargetDepth) >
+                max(pc.depthTolerance, 0.02))
+        {
+            // A nearer surface occluded the sampled guide target. It is a
+            // valid zero branch, never a contribution under the target PDF.
+            failureFlags = C5_TRACE_REASON_DEPTH | C5_TRACE_REASON_MISS;
+            confidence = 1.0;
+            return true;
+        }
+    }
+
+    ivec2 hitPixel = clamp(ivec2(hitUv * vec2(fullExtent)), ivec2(0),
+        max(fullExtent - ivec2(1), ivec2(0)));
+    uvec4 hitPayloadValue = texelFetch(fullReceiverPayload, hitPixel, 0);
     vec4 hitPackedNormals;
-    uvec2 hitIds;
-    vec3 ignoredHitThroughput;
+    uint hitSurfaceToken;
+    vec3 ignoredHitDiffuseBase;
+    vec3 ignoredHitF0;
     SimpleDdgiNearFieldDecodeReceiverPayload(
         hitPayloadValue,
         hitPackedNormals,
-        hitIds,
-        ignoredHitThroughput);
+        hitSurfaceToken,
+        ignoredHitDiffuseBase,
+        ignoredHitF0);
+    SimpleDdgiNearFieldSurfaceEntry hitSurface;
     vec3 hitGeometric = SimpleDdgiNearFieldDecodeOctNormal(
         hitPackedNormals.xy);
     vec3 hitShading = SimpleDdgiNearFieldDecodeOctNormal(
         hitPackedNormals.zw);
     if (dot(hitGeometric, hitGeometric) <= 0.0 ||
-        dot(hitShading, hitShading) <= 0.0)
+        dot(hitShading, hitShading) <= 0.0 ||
+        !C5ReadSurface(hitSurfaceToken, hitSurface))
     {
         // The receiver and its stochastic ray are valid, but this screen hit
         // is outside the source domain. It is the zero branch of the bounded
@@ -734,12 +1082,12 @@ bool EvaluateCandidate(
     }
 
     float receiverCosine = max(dot(receiverShading, generationDirection), 0.0);
-    float expectedPdf = receiverCosine / 3.14159265359;
+    float cosinePdf = receiverCosine / 3.14159265359;
     float hitFrontFaceCosine = dot(hitGeometric, -generationDirection);
     if (!SimpleDdgiNearFieldFinite(generationPdf) ||
-        generationPdf <= 0.0 || generationPdf > 0.31831 ||
+        generationPdf <= 0.0 || receiverCosine <= 0.0 ||
         dot(generationDirection, generationDirection) <= 0.0 ||
-        abs(generationPdf - expectedPdf) > 2.0e-4 ||
+        (!guidedProposal && abs(generationPdf - cosinePdf) > 2.0e-4) ||
         !SimpleDdgiNearFieldFinite(hitFrontFaceCosine))
     {
         failureFlags = C5_TRACE_REASON_INVALID_RAY |
@@ -757,26 +1105,15 @@ bool EvaluateCandidate(
         directDiffuseEmissiveSource, hitPixel, 0);
     vec3 directAtHit = max(directAtHitPayload.rgb, vec3(0.0));
     vec3 hitWorldPosition;
-    vec3 directLowFrequency;
-    uint footprintRadius = 0u;
     if (!SimpleDdgiNearFieldFinite(directAtHit) ||
         !SimpleDdgiNearFieldFinite(directAtHitPayload.a) ||
-        directAtHitPayload.a <= 0.5 ||
-        !C5ReconstructWorldPosition(
-            hitUv, hitSceneDepth, hitWorldPosition) ||
-        (footprintRadius = C5ProjectedFootprintRadius(
-            hitWorldPosition, hitShading)) == 0u ||
-        !DirectDiffuseEmissiveLowFrequencyEstimate(
-            hitUv,
-            hitSceneDepth,
-            hitPayloadValue,
-            footprintRadius,
-            directLowFrequency))
+        directAtHitPayload.a <= 0.0 ||
+        !C5ReconstructWorldPositionFromLinear(
+            hitUv, hitSceneDepth, hitWorldPosition))
     {
-        // Missing source ownership, an unusable reconstruction, or a
-        // discontinuity-bounded B3 footprint means C5 owns no contribution
-        // for this launched sample. Preserve a valid zero so isolated source
-        // hits cannot become persistent salt-and-pepper impulses.
+        // Missing source/B3 ownership or an unusable reconstruction means C5
+        // owns no contribution for this launched sample. Preserve a valid
+        // zero so isolated source hits cannot become persistent impulses.
         failureFlags = C5_TRACE_REASON_SOURCE | C5_TRACE_REASON_MISS;
         confidence = 1.0;
         return true;
@@ -793,73 +1130,251 @@ bool EvaluateCandidate(
         pc.maximumTraceDistance,
         hitDistance);
     confidence = depthConfidence * normalConfidence;
-    nearEstimate = directAtHit * receiverThroughput * distanceWeight;
-    lowEstimate = directLowFrequency * receiverThroughput * distanceWeight;
+    float guidedPdf = C5GuidedPdfForHit(
+        receiverPixel,
+        receiverWorldPosition,
+        hitUv,
+        hitSceneDepth,
+        hitWorldPosition,
+        hitGeometric,
+        generationDirection);
+    float guidedWeight = float(pc.raysPerPixel / 2u) /
+        float(pc.raysPerPixel);
+    float mixturePdf = (1.0 - guidedWeight) * cosinePdf +
+        guidedWeight * guidedPdf;
+    float monteCarloWeight = mixturePdf > 0.0
+        ? receiverCosine / (3.14159265359 * mixturePdf)
+        : 0.0;
+    vec3 receiverThroughput = receiverDiffuseBase *
+        (vec3(1.0) - clamp(receiverDielectricF0, vec3(0.0), vec3(1.0)));
+    nearEstimate = directAtHit * receiverThroughput * distanceWeight *
+        monteCarloWeight;
     if (!SimpleDdgiNearFieldFinite(confidence) || confidence <= 0.0 ||
         !SimpleDdgiNearFieldFinite(hitDistance) ||
         !SimpleDdgiNearFieldFinite(distanceWeight) ||
-        !SimpleDdgiNearFieldFinite(nearEstimate) ||
-        !SimpleDdgiNearFieldFinite(lowEstimate))
+        !SimpleDdgiNearFieldFinite(mixturePdf) || mixturePdf <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(monteCarloWeight) ||
+        monteCarloWeight <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(nearEstimate))
     {
         return false;
     }
 
-    metadata.hitDepth = hitSceneDepth;
-    metadata.confidence = confidence;
-    metadata.packedFlags = SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE |
+    metadata.hitLinearDepth = hitSceneDepth;
+    SimpleDdgiNearFieldSetMetadataFlags(metadata,
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE |
         SIMPLE_DDGI_NEAR_FIELD_FLAG_SCREEN_SPACE_HIT |
         SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_ATTACHMENT_VERIFIED |
-        SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED;
-    metadata.receiverIdentity = receiverIds;
-    metadata.hitIdentity = hitIds;
-    metadata.hitUv = hitUv;
+        SIMPLE_DDGI_NEAR_FIELD_FLAG_INVALID_AND_MISS_ZEROED);
+    metadata.packedHitNormal = packSnorm2x16(
+        SimpleDdgiNearFieldEncodeOctNormal(hitGeometric));
+    metadata.hitIdentity = uvec2(
+        hitSurface.stableObjectId, hitSurface.stableMaterialId);
+    metadata.packedHitRevisions = hitSurface.packedObjectMaterialRevisions;
+    metadata.packedHitUv = packHalf2x16(hitUv);
+    metadata.packedHitSourceRadiance = NjulfC5PackRgb9E5(directAtHit);
     failureFlags = 0u;
     return true;
 }
 
+bool EvaluateCandidate(
+    ivec2 pixel,
+    uint metadataIndex,
+    out vec3 nearEstimate,
+    out float confidence,
+    out SimpleDdgiNearFieldResidualHitMetadata metadata,
+    out uint failureFlags,
+    out uint rayLaunched,
+    out uint rayHitCount,
+    out uint traceSteps,
+    out uint mipVisits,
+    out uint maximumTraceSteps,
+    out uint maximumMipVisits,
+    out uint refinementVisits)
+{
+    nearEstimate = vec3(0.0);
+    confidence = 0.0;
+    metadata = SimpleDdgiNearFieldZeroMetadata();
+    failureFlags = 0u;
+    rayLaunched = 0u;
+    rayHitCount = 0u;
+    traceSteps = 0u;
+    mipVisits = 0u;
+    maximumTraceSteps = 0u;
+    maximumMipVisits = 0u;
+    refinementVisits = 0u;
+    if (pc.raysPerPixel == 0u || pc.raysPerPixel > 4u)
+    {
+        failureFlags = C5_TRACE_REASON_INVALID_RAY;
+        return false;
+    }
+
+    uint validSampleCount = 0u;
+    float confidenceSum = 0.0;
+    float representativeScore = -1.0;
+    bool hasRepresentative = false;
+    for (uint rayOrdinal = 0u; rayOrdinal < 4u; ++rayOrdinal)
+    {
+        if (rayOrdinal >= pc.raysPerPixel)
+            break;
+        vec3 singleNear;
+        float singleConfidence;
+        SimpleDdgiNearFieldResidualHitMetadata singleMetadata;
+        uint singleFailureFlags;
+        uint singleRayLaunched;
+        uint singleTraceSteps;
+        uint singleMipVisits;
+        uint singleRefinementVisits;
+        bool singleValid = EvaluateSingleCandidate(
+            pixel,
+            metadataIndex,
+            rayOrdinal,
+            singleNear,
+            singleConfidence,
+            singleMetadata,
+            singleFailureFlags,
+            singleRayLaunched,
+            singleTraceSteps,
+            singleMipVisits,
+            singleRefinementVisits);
+        rayLaunched += singleRayLaunched;
+        traceSteps += singleTraceSteps;
+        mipVisits += singleMipVisits;
+        maximumTraceSteps = max(maximumTraceSteps, singleTraceSteps);
+        maximumMipVisits = max(maximumMipVisits, singleMipVisits);
+        refinementVisits += singleRefinementVisits;
+        failureFlags |= singleFailureFlags;
+        if (!singleValid)
+            continue;
+
+        bool screenHit = SimpleDdgiNearFieldHasFlag(
+            SimpleDdgiNearFieldMetadataFlags(singleMetadata),
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_SCREEN_SPACE_HIT);
+        validSampleCount++;
+        rayHitCount += screenHit ? 1u : 0u;
+        nearEstimate += singleNear;
+        // A miss remains a zero Monte Carlo sample while retaining a small
+        // confidence floor so stable all-miss receivers accumulate instead
+        // of flashing between invalid and newly valid states.
+        confidenceSum += singleConfidence * (screenHit ? 1.0 : 0.25);
+        float score = screenHit
+            ? dot(abs(singleNear), vec3(0.2126, 0.7152, 0.0722)) *
+                max(singleConfidence, 0.0)
+            : 0.0;
+        if (!hasRepresentative || score > representativeScore)
+        {
+            metadata = singleMetadata;
+            representativeScore = score;
+            hasRepresentative = true;
+        }
+    }
+
+    if (rayLaunched == 0u || validSampleCount == 0u || !hasRepresentative)
+    {
+        failureFlags |= C5_TRACE_REASON_INVALID_RAY;
+        return false;
+    }
+    float reciprocalLaunched = 1.0 / float(rayLaunched);
+    nearEstimate *= reciprocalLaunched;
+    float validRayCoverage = float(validSampleCount) * reciprocalLaunched;
+    confidence = clamp(confidenceSum * reciprocalLaunched *
+        validRayCoverage, 0.0, 1.0);
+    return SimpleDdgiNearFieldFinite(nearEstimate) &&
+        SimpleDdgiNearFieldFinite(confidence) && confidence > 0.0;
+}
+
 void main()
 {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    uint activeIndex = gl_WorkGroupID.x;
+    uint activeCount = uint(traceActiveTiles.words.length()) > 1u
+        ? traceActiveTiles.words[1]
+        : 0u;
+    bool activeTile = uint(traceActiveTiles.words.length()) > 4u &&
+        traceActiveTiles.words[4u] == 0u && activeIndex < activeCount &&
+        SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex <
+            uint(traceActiveTiles.words.length());
+    uint tileIndex = activeTile
+        ? traceActiveTiles.words[
+            SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex]
+        : 0u;
+    uint tileCountX = (pc.traceWidth + 7u) / 8u;
+    uvec2 tile = tileCountX > 0u
+        ? uvec2(tileIndex % tileCountX, tileIndex / tileCountX)
+        : uvec2(0u);
+    ivec2 pixel = ivec2(tile * 8u + gl_LocalInvocationID.xy);
     ivec2 outputExtent = imageSize(rawResidualOutput);
-    bool covered = pixel.x < outputExtent.x && pixel.y < outputExtent.y &&
+    bool covered = activeTile &&
+        pixel.x < outputExtent.x && pixel.y < outputExtent.y &&
         pixel.x < int(pc.traceWidth) && pixel.y < int(pc.traceHeight);
     uint metadataIndex = covered
         ? uint(pixel.y) * pc.traceWidth + uint(pixel.x)
         : 0u;
     uint localIndex = gl_LocalInvocationIndex;
 
+    // Build the optional source-luminance hierarchy once for this compacted
+    // tile. One-ray tiers keep the tree at zero and never enter the guided
+    // proposal path. Partial edge tiles contribute exact-zero leaves.
+    float guideWeight = 0.0;
+    if (activeTile && pc.raysPerPixel >= 2u)
+        guideWeight = C5ReadGuideLuminance(pixel);
+    c5SourceLuminanceHierarchy[64u + localIndex] = guideWeight;
+    if (localIndex == 0u)
+        c5SourceLuminanceHierarchy[0] = 0.0;
+    barrier();
+    for (uint nodeBase = 32u; nodeBase > 0u; nodeBase >>= 1u)
+    {
+        if (localIndex < nodeBase)
+        {
+            uint node = nodeBase + localIndex;
+            c5SourceLuminanceHierarchy[node] =
+                c5SourceLuminanceHierarchy[node * 2u] +
+                c5SourceLuminanceHierarchy[node * 2u + 1u];
+        }
+        barrier();
+    }
+
     vec3 nearEstimate = vec3(0.0);
-    vec3 lowEstimate = vec3(0.0);
     float confidence = 0.0;
     SimpleDdgiNearFieldResidualHitMetadata metadata =
         SimpleDdgiNearFieldZeroMetadata();
     uint failureFlags = covered ? C5_TRACE_REASON_INVALID_RECEIVER : 0u;
     uint rayLaunched = 0u;
+    uint rayHitCount = 0u;
     uint traceSteps = 0u;
     uint mipVisits = 0u;
+    uint maximumTraceSteps = 0u;
+    uint maximumMipVisits = 0u;
     uint refinementVisits = 0u;
     bool valid = covered && EvaluateCandidate(
-        pixel, metadataIndex, nearEstimate, lowEstimate, confidence, metadata,
-        failureFlags, rayLaunched, traceSteps, mipVisits, refinementVisits);
+        pixel, metadataIndex, nearEstimate, confidence, metadata,
+        failureFlags, rayLaunched, rayHitCount, traceSteps, mipVisits,
+        maximumTraceSteps, maximumMipVisits, refinementVisits);
 
     c5TileCovered[localIndex] = covered ? 1u : 0u;
     c5TileValid[localIndex] = valid ? 1u : 0u;
-    c5TileHit[localIndex] = valid && SimpleDdgiNearFieldHasFlag(
-        metadata.packedFlags,
-        SIMPLE_DDGI_NEAR_FIELD_FLAG_SCREEN_SPACE_HIT) ? 1u : 0u;
-    c5TileNear[localIndex] = valid ? nearEstimate : vec3(0.0);
-    c5TileLow[localIndex] = valid ? lowEstimate : vec3(0.0);
+    c5TileHit[localIndex] = valid ? rayHitCount : 0u;
     c5TileConfidence[localIndex] = valid ? confidence : 0.0;
     c5TileReasonFlags[localIndex] = failureFlags;
     c5TileRayLaunched[localIndex] = rayLaunched;
     c5TileTraceSteps[localIndex] = traceSteps;
     c5TileMipVisits[localIndex] = mipVisits;
+    c5TileMaximumTraceSteps[localIndex] = maximumTraceSteps;
+    // The diagnostics ABI carries this peak in six bits. Saturation is
+    // diagnostic-only; traversal is governed solely by maximumTraceSteps.
+    c5TileMaximumMipVisits[localIndex] = min(maximumMipVisits, 0x3fu);
     c5TileRefinementVisits[localIndex] = refinementVisits;
     barrier();
 
     if (localIndex == 0u)
     {
-        RecordTileSummary();
+        RecordTileSummary(tileIndex);
+        if (activeIndex == 0u)
+        {
+            traceTileRecords.words[4u] = pc.traceWidth;
+            traceTileRecords.words[5u] = pc.traceHeight;
+            atomicOr(traceTileRecords.words[7u],
+                SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_TRACE_COMPLETE);
+        }
     }
     barrier();
 
@@ -876,13 +1391,12 @@ void main()
     // workgroup boundary and spreads one bright stochastic hit across the
     // other valid pixels as a dark residual. Preserve the per-receiver control
     // variate and let temporal/spatial filtering reduce its variance.
-    vec3 signedResidual = nearEstimate - lowEstimate;
-    if (!SimpleDdgiNearFieldFinite(signedResidual))
+    if (!SimpleDdgiNearFieldFinite(nearEstimate))
     {
         WriteInvalid(pixel, metadataIndex);
         return;
     }
     imageStore(rawResidualOutput, pixel,
-        vec4(signedResidual, confidence));
+        vec4(nearEstimate, confidence));
     traceHitMetadata.values[metadataIndex] = metadata;
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,16 +14,14 @@ namespace Njulf.Rendering.Resources;
 /// </summary>
 public sealed record AdvancedGiRuntimeEvidenceBundleDocument
 {
-    public const uint CurrentSchemaRevision = 1u;
+    public const uint CurrentSchemaRevision = 2u;
     public const int MaximumDocumentBytes = 512 * 1024;
+    public const int MaximumNearFieldResidualEntries = 64;
 
     public uint SchemaRevision { get; init; } = CurrentSchemaRevision;
     public GiCausticRuntimeEvidenceDocument? Caustics { get; init; }
-    public SimpleDdgiNearFieldResidualRuntimeEvidenceDocument? NearFieldResidual
-    {
-        get;
-        init;
-    }
+    public SimpleDdgiNearFieldResidualRuntimeEvidenceDocument[]
+        NearFieldResiduals { get; init; } = [];
 }
 
 public sealed record GiCausticRuntimeEvidenceDocument
@@ -104,6 +103,30 @@ public static class AdvancedGiRuntimeEvidenceBundleCodec
                 utf8Json,
                 MaximumJsonDepth,
                 "Advanced GI runtime evidence bundle");
+            using (JsonDocument header = JsonDocument.Parse(
+                       utf8Json.ToArray(),
+                       new JsonDocumentOptions
+                       {
+                           AllowTrailingCommas = false,
+                           CommentHandling = JsonCommentHandling.Disallow,
+                           MaxDepth = MaximumJsonDepth
+                       }))
+            {
+                if (!header.RootElement.TryGetProperty(
+                        "schemaRevision", out JsonElement schema) ||
+                    !schema.TryGetUInt32(out uint schemaRevision))
+                {
+                    failureDetail =
+                        "advanced-gi-runtime-evidence-bundle-schema-missing";
+                    return false;
+                }
+                if (schemaRevision == 1U)
+                {
+                    failureDetail =
+                        "advanced-gi-runtime-evidence-bundle-schema-1-obsolete-evidence";
+                    return false;
+                }
+            }
             AdvancedGiRuntimeEvidenceBundleDocument? parsed =
                 JsonSerializer.Deserialize<
                     AdvancedGiRuntimeEvidenceBundleDocument>(
@@ -204,6 +227,12 @@ public static class AdvancedGiRuntimeEvidenceBundleCodec
                 "advanced-gi-runtime-evidence-bundle-null";
             return false;
         }
+        if (bundle.SchemaRevision == 1U)
+        {
+            failureDetail =
+                "advanced-gi-runtime-evidence-bundle-schema-1-obsolete-evidence";
+            return false;
+        }
         if (bundle.SchemaRevision !=
             AdvancedGiRuntimeEvidenceBundleDocument.CurrentSchemaRevision)
         {
@@ -211,7 +240,16 @@ public static class AdvancedGiRuntimeEvidenceBundleCodec
                 "advanced-gi-runtime-evidence-bundle-schema-mismatch";
             return false;
         }
-        if (bundle.Caustics is null && bundle.NearFieldResidual is null)
+        SimpleDdgiNearFieldResidualRuntimeEvidenceDocument[] nearFields =
+            bundle.NearFieldResiduals ?? [];
+        if (nearFields.Length >
+            AdvancedGiRuntimeEvidenceBundleDocument.MaximumNearFieldResidualEntries)
+        {
+            failureDetail =
+                "advanced-gi-runtime-evidence-C5-entry-count-exceeds-bound";
+            return false;
+        }
+        if (bundle.Caustics is null && nearFields.Length == 0)
         {
             failureDetail =
                 "advanced-gi-runtime-evidence-bundle-empty";
@@ -223,10 +261,48 @@ public static class AdvancedGiRuntimeEvidenceBundleCodec
         {
             return false;
         }
-        if (bundle.NearFieldResidual is { } nearField &&
-            !TryValidateNearField(nearField, out failureDetail))
+        var evidenceIds = new HashSet<string>(StringComparer.Ordinal);
+        var tierKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (SimpleDdgiNearFieldResidualRuntimeEvidenceDocument nearField in
+                 nearFields)
         {
-            return false;
+            if (nearField is null)
+            {
+                failureDetail =
+                    "advanced-gi-runtime-evidence-C5-entry-null";
+                return false;
+            }
+            if (!TryValidateNearField(nearField, out failureDetail))
+            {
+                return false;
+            }
+            if (!evidenceIds.Add(nearField.Evidence.EvidenceId))
+            {
+                failureDetail =
+                    "advanced-gi-runtime-evidence-C5-duplicate-evidence-id";
+                return false;
+            }
+            SimpleDdgiNearFieldResidualEvidenceBinding binding =
+                nearField.Evidence.Binding;
+            string tierKey = string.Concat(
+                binding.DeviceQualificationKey,
+                "\u001f",
+                binding.CorpusId,
+                "\u001f",
+                binding.ContentRevision.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                "\u001f",
+                binding.QualityPreset.ToString(),
+                "\u001f",
+                binding.Tier.ToString(),
+                "\u001f",
+                binding.ShaderSetHash);
+            if (!tierKeys.Add(tierKey))
+            {
+                failureDetail =
+                    "advanced-gi-runtime-evidence-C5-duplicate-device-profile-tier";
+                return false;
+            }
         }
 
         failureDetail = "valid";

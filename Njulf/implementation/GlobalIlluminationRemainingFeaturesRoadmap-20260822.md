@@ -28,7 +28,7 @@ already have implementations. This document tracks the remaining work instead.
 
 ## Remaining feature work
 
-### P0: True froxel volumetric fog and smoke
+### P0: True froxel volumetric fog and smoke //DONE
 
 The existing fog path is analytic distance/height fog with a coarse DDGI ambient
 tint. The B5 directional-fog experiment cannot currently be admitted because the

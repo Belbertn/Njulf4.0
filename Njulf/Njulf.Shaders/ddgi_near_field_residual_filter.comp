@@ -15,6 +15,11 @@ layout(std430, set = 0, binding = 1) readonly buffer FilterMetadataBuffer
 } filterMetadata;
 layout(rgba16f, set = 0, binding = 2) uniform writeonly image2D filteredResidualOutput;
 layout(set = 0, binding = 3) uniform usampler2D receiverPayload;
+layout(std430, set = 0, binding = 4) readonly buffer FilterActiveTileBuffer
+{
+    uint words[];
+} filterActiveTiles;
+layout(set = 0, binding = 5) uniform sampler2D temporalMomentsInput;
 
 layout(push_constant) uniform NearFieldFilterPushBlock
 {
@@ -23,11 +28,27 @@ layout(push_constant) uniform NearFieldFilterPushBlock
 
 void main()
 {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    uint activeIndex = gl_WorkGroupID.x;
+    uint activeCount = uint(filterActiveTiles.words.length()) > 1u
+        ? filterActiveTiles.words[1]
+        : 0u;
+    bool activeTile = uint(filterActiveTiles.words.length()) > 4u &&
+        filterActiveTiles.words[4u] == 0u && activeIndex < activeCount &&
+        SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex <
+            uint(filterActiveTiles.words.length());
+    uint tileIndex = activeTile
+        ? filterActiveTiles.words[
+            SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex]
+        : 0u;
+    uint tileCountX = (pc.traceWidth + 7u) / 8u;
+    uvec2 tile = tileCountX > 0u
+        ? uvec2(tileIndex % tileCountX, tileIndex / tileCountX)
+        : uvec2(0u);
+    ivec2 pixel = ivec2(tile * 8u + gl_LocalInvocationID.xy);
     ivec2 extent = min(
         ivec2(pc.traceWidth, pc.traceHeight),
         imageSize(filteredResidualOutput));
-    if (pixel.x >= extent.x || pixel.y >= extent.y)
+    if (!activeTile || pixel.x >= extent.x || pixel.y >= extent.y)
     {
         return;
     }
@@ -52,22 +73,32 @@ void main()
     ivec2 centreReceiverPixel = clamp(ivec2(uv * vec2(receiverExtent)),
         ivec2(0), max(receiverExtent - ivec2(1), ivec2(0)));
     vec4 centrePackedNormals;
-    uvec2 ignoredCentreIdentity;
-    vec3 ignoredCentreThroughput;
+    uint ignoredCentreSurfaceToken;
+    vec3 ignoredCentreDiffuseBase;
+    vec3 ignoredCentreF0;
     SimpleDdgiNearFieldDecodeReceiverPayload(
         texelFetch(receiverPayload, centreReceiverPixel, 0),
         centrePackedNormals,
-        ignoredCentreIdentity,
-        ignoredCentreThroughput);
+        ignoredCentreSurfaceToken,
+        ignoredCentreDiffuseBase,
+        ignoredCentreF0);
     vec3 centreGeometric = SimpleDdgiNearFieldDecodeOctNormal(
         centrePackedNormals.xy);
     vec3 centreShading = SimpleDdgiNearFieldDecodeOctNormal(
         centrePackedNormals.zw);
+    vec2 centreMoments = texelFetch(temporalMomentsInput, pixel, 0).rg;
+    float centreVariance = centreMoments.y -
+        centreMoments.x * centreMoments.x;
     if (!SimpleDdgiNearFieldIsValidCandidate(centreResidual) ||
-        !SimpleDdgiNearFieldHasFlag(centre.packedFlags,
+        !SimpleDdgiNearFieldHasFlag(
+            SimpleDdgiNearFieldMetadataFlags(centre),
             SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) ||
         dot(centreGeometric, centreGeometric) <= 0.0 ||
-        dot(centreShading, centreShading) <= 0.0)
+        dot(centreShading, centreShading) <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(centreMoments.x) ||
+        !SimpleDdgiNearFieldFinite(centreMoments.y) ||
+        !SimpleDdgiNearFieldFinite(centreVariance) ||
+        centreVariance < -1.0e-5)
     {
         imageStore(filteredResidualOutput, pixel, vec4(0.0));
         return;
@@ -80,6 +111,7 @@ void main()
     float squaredWeightSum = 0.0;
     float weightSum = 0.0;
     int radius = int(pc.filterRadius);
+    int stride = 1 << int(min(pc.iterationIndex, 2u));
     for (int y = -int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS);
          y <= int(SIMPLE_DDGI_NEAR_FIELD_MAX_FILTER_RADIUS); ++y)
     {
@@ -90,7 +122,7 @@ void main()
         {
             if (abs(x) > radius)
                 continue;
-            ivec2 neighbourPixel = pixel + ivec2(x, y);
+            ivec2 neighbourPixel = pixel + ivec2(x, y) * stride;
             if (any(lessThan(neighbourPixel, ivec2(0))) ||
                 any(greaterThanEqual(neighbourPixel, extent)))
             {
@@ -106,7 +138,8 @@ void main()
             SimpleDdgiNearFieldResidualHitMetadata neighbour =
                 filterMetadata.values[neighbourIndex];
             if (!SimpleDdgiNearFieldIsValidCandidate(neighbourResidual) ||
-                !SimpleDdgiNearFieldHasFlag(neighbour.packedFlags,
+                !SimpleDdgiNearFieldHasFlag(
+                    SimpleDdgiNearFieldMetadataFlags(neighbour),
                     SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) ||
                 any(notEqual(
                     neighbour.receiverIdentity,
@@ -121,13 +154,15 @@ void main()
                 ivec2(neighbourUv * vec2(receiverExtent)),
                 ivec2(0), max(receiverExtent - ivec2(1), ivec2(0)));
             vec4 neighbourPackedNormals;
-            uvec2 ignoredNeighbourIdentity;
-            vec3 ignoredNeighbourThroughput;
+            uint ignoredNeighbourSurfaceToken;
+            vec3 ignoredNeighbourDiffuseBase;
+            vec3 ignoredNeighbourF0;
             SimpleDdgiNearFieldDecodeReceiverPayload(
                 texelFetch(receiverPayload, neighbourReceiverPixel, 0),
                 neighbourPackedNormals,
-                ignoredNeighbourIdentity,
-                ignoredNeighbourThroughput);
+                ignoredNeighbourSurfaceToken,
+                ignoredNeighbourDiffuseBase,
+                ignoredNeighbourF0);
             vec3 neighbourGeometric = SimpleDdgiNearFieldDecodeOctNormal(
                 neighbourPackedNormals.xy);
             vec3 neighbourShading = SimpleDdgiNearFieldDecodeOctNormal(
@@ -146,13 +181,40 @@ void main()
             }
 
             float depthWeight = SimpleDdgiNearFieldDepthWeight(
-                centre.receiverDepth,
-                neighbour.receiverDepth,
+                centre.receiverLinearDepth,
+                neighbour.receiverLinearDepth,
                 pc.depthTolerance);
             float normalWeight = pow(clamp(normalDot, 0.0, 1.0),
                 max(pc.normalPower, 0.0));
-            float spatialWeight = 1.0 / (1.0 + float(x * x + y * y));
-            float weight = depthWeight * normalWeight * spatialWeight *
+            if (neighbour.packedReceiverRevisions !=
+                centre.packedReceiverRevisions)
+                continue;
+            float footprintDelta = abs(
+                SimpleDdgiNearFieldReceiverFootprint(neighbour) -
+                SimpleDdgiNearFieldReceiverFootprint(centre));
+            float footprintScale = max(
+                SimpleDdgiNearFieldReceiverFootprint(centre), 1.0e-4);
+            if (footprintDelta > footprintScale * 0.25)
+                continue;
+            vec2 neighbourMoments = texelFetch(
+                temporalMomentsInput, neighbourPixel, 0).rg;
+            float neighbourVariance = neighbourMoments.y -
+                neighbourMoments.x * neighbourMoments.x;
+            if (!SimpleDdgiNearFieldFinite(neighbourMoments.x) ||
+                !SimpleDdgiNearFieldFinite(neighbourMoments.y) ||
+                !SimpleDdgiNearFieldFinite(neighbourVariance) ||
+                neighbourVariance < -1.0e-5)
+                continue;
+            neighbourVariance = max(neighbourVariance, 0.0);
+            float varianceWeight = 1.0 /
+                (1.0 + abs(log2(neighbourVariance +
+                    SIMPLE_DDGI_NEAR_FIELD_MINIMUM_VARIANCE) -
+                    log2(max(centreVariance, 0.0) +
+                    SIMPLE_DDGI_NEAR_FIELD_MINIMUM_VARIANCE)));
+            float spatialWeight = 1.0 /
+                (1.0 + float(x * x + y * y));
+            float weight = depthWeight * normalWeight * varianceWeight *
+                spatialWeight *
                 clamp(neighbourResidual.a, 0.0, 1.0);
             if (!SimpleDdgiNearFieldFinite(weight) || weight <= 0.0)
                 continue;
@@ -197,7 +259,9 @@ void main()
         SIMPLE_DDGI_NEAR_FIELD_SPATIAL_SNR_LOW,
         SIMPLE_DDGI_NEAR_FIELD_SPATIAL_SNR_HIGH);
     float spatialEvidence = supportConfidence * signalConfidence;
+    // Preserve the signed estimate itself. Evidence belongs in alpha so the
+    // full-resolution composite remains the sole confidence multiplier.
     imageStore(filteredResidualOutput, pixel, vec4(
-        meanResidual * spatialEvidence,
-        clamp(weightedConfidence / weightSum, 0.0, 1.0)));
+        meanResidual,
+        clamp(weightedConfidence / weightSum * spatialEvidence, 0.0, 1.0)));
 }

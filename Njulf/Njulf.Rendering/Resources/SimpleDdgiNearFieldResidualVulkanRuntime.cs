@@ -15,17 +15,18 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 namespace Njulf.Rendering.Resources;
 
 internal readonly record struct SimpleDdgiNearFieldResidualVulkanBuffers(
-    BufferHandle HitMetadata,
     BufferHandle HistoryMetadata0,
     BufferHandle HistoryMetadata1,
+    BufferHandle SurfaceTable,
+    BufferHandle ActiveTileAndIndirect,
     BufferHandle TileRecords,
     BufferHandle TraceFrameConstants0,
     BufferHandle TraceFrameConstants1,
     BufferHandle TelemetryReadback0,
     BufferHandle TelemetryReadback1)
 {
-    public bool IsComplete => HitMetadata.IsValid &&
-        HistoryMetadata0.IsValid && HistoryMetadata1.IsValid &&
+    public bool IsComplete => HistoryMetadata0.IsValid && HistoryMetadata1.IsValid &&
+        SurfaceTable.IsValid && ActiveTileAndIndirect.IsValid &&
         TileRecords.IsValid && TraceFrameConstants0.IsValid &&
         TraceFrameConstants1.IsValid && TelemetryReadback0.IsValid &&
         TelemetryReadback1.IsValid;
@@ -56,11 +57,65 @@ internal enum SimpleDdgiNearFieldResidualRecordedStage : byte
 {
     Idle = 0,
     Reset = 1,
-    Trace = 2,
-    Temporal = 3,
-    Filtering = 4,
-    Composite = 5,
-    Invalid = 6
+    Prepare = 2,
+    Trace = 3,
+    Temporal = 4,
+    Filtering = 5,
+    FrequencySeparation = 6,
+    Composite = 7,
+    Invalid = 8
+}
+
+/// <summary>
+/// Immutable view of the shared scene attachments and one complete C5 image
+/// bank. A pending generation can build descriptors against this view without
+/// publishing its images through <see cref="RenderTargetManager"/> first.
+/// </summary>
+internal sealed class SimpleDdgiNearFieldResidualTargetBinding
+{
+    private readonly RenderTargetManager _sharedTargets;
+    private readonly SimpleDdgiNearFieldResidualRenderTargetGeneration
+        _generation;
+
+    public SimpleDdgiNearFieldResidualTargetBinding(
+        RenderTargetManager sharedTargets,
+        SimpleDdgiNearFieldResidualRenderTargetGeneration generation)
+    {
+        _sharedTargets = sharedTargets ??
+            throw new ArgumentNullException(nameof(sharedTargets));
+        _generation = generation ??
+            throw new ArgumentNullException(nameof(generation));
+    }
+
+    public RenderTarget SceneColor => _sharedTargets.SceneColor;
+    public RenderTarget SceneDepth => _sharedTargets.SceneDepth;
+    public RenderTarget MotionVectors => _sharedTargets.MotionVectors;
+    public int ResizeCount => _sharedTargets.ResizeCount;
+
+    public RenderTarget NearFieldDirectSource => _generation.DirectSource;
+    public RenderTarget NearFieldReceiverPayload => _generation.ReceiverPayload;
+    public RenderTarget NearFieldResidualRaw => _generation.RawResidual;
+    public RenderTarget NearFieldPreparedDepthFootprint =>
+        _generation.PreparedDepthFootprint;
+    public RenderTarget NearFieldPreparedReceiverPayload =>
+        _generation.PreparedReceiverPayload;
+    public RenderTarget NearFieldPreparedMotion => _generation.PreparedMotion;
+    public RenderTarget NearFieldSourceLuminance =>
+        _generation.SourceLuminance;
+    public RenderTarget NearFieldResidualHistory0 => _generation.History0;
+    public RenderTarget NearFieldResidualHistory1 => _generation.History1;
+    public RenderTarget NearFieldResidualMoments0 => _generation.Moments0;
+    public RenderTarget NearFieldResidualMoments1 => _generation.Moments1;
+    public RenderTarget NearFieldResidualValidity0 => _generation.Validity0;
+    public RenderTarget NearFieldResidualValidity1 => _generation.Validity1;
+    public RenderTarget NearFieldResidualHistoryNormals0 =>
+        _generation.HistoryNormals0;
+    public RenderTarget NearFieldResidualHistoryNormals1 =>
+        _generation.HistoryNormals1;
+    public RenderTarget? NearFieldResidualFilterScratch0 =>
+        _generation.FilterScratch0;
+    public RenderTarget? NearFieldResidualFilterScratch1 =>
+        _generation.FilterScratch1;
 }
 
 /// <summary>
@@ -74,11 +129,16 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
     private readonly object _sync = new();
     private readonly VulkanContext _context;
     private readonly BufferManager _bufferManager;
-    private readonly RenderTargetManager _renderTargets;
+    private readonly FoliageManager _foliageManager;
+    private readonly SimpleDdgiNearFieldResidualTargetBinding _renderTargets;
     private readonly HiZDepthPyramid _hiZ;
     private readonly SimpleDdgiNearFieldResidualLayout _layout;
     private readonly SimpleDdgiNearFieldResidualGpuConfiguration _configuration;
     private readonly uint _b3OwnershipRevision;
+    private readonly ulong _calibratedSourceCostUpperBoundMicroseconds;
+    private readonly bool _sourceCostAuthoritative;
+    private readonly SimpleDdgiNearFieldResidualCaptureIdentifiers
+        _captureIdentifiers;
     private readonly SimpleDdgiNearFieldResidualGpuManager _manager = new();
     private readonly BorrowedGraphAllocationAdapter _allocationAdapter;
     private readonly SimpleDdgiNearFieldResidualVulkanBuffers _buffers;
@@ -97,6 +157,11 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
     private ulong _lastCameraCutSerial;
     private bool _hasCameraCutSerial;
     private bool _historyInputValid;
+    private uint _publishedSourceLightingEpoch;
+    private bool _hasPublishedSourceLightingEpoch;
+    private Matrix4x4 _previousViewProjection = Matrix4x4.Identity;
+    private Matrix4x4 _previousInverseViewProjection = Matrix4x4.Identity;
+    private bool _hasPreviousTraceMatrices;
     private SimpleDdgiNearFieldResidualCompletionWitness _lastCompletedWitness;
     private SimpleDdgiNearFieldResidualDiagnostics _diagnostics =
         SimpleDdgiNearFieldResidualDiagnostics.Disabled();
@@ -113,29 +178,60 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         BindlessHeap bindlessHeap,
         RenderTargetManager renderTargets,
         HiZDepthPyramid hiZ,
+        FoliageManager foliageManager,
         in SimpleDdgiNearFieldResidualLayout layout,
         in SimpleDdgiNearFieldResidualGpuConfiguration configuration,
         bool adaptiveResolutionEnabled,
         uint b3OwnershipRevision,
-        ulong admittedBudgetBytes)
+        ulong admittedBudgetBytes,
+        ulong calibratedSourceCostUpperBoundMicroseconds = 0UL,
+        bool sourceCostAuthoritative = false,
+        SimpleDdgiNearFieldResidualExecutionScale? startingScale = null,
+        bool promotionEnabled = true,
+        SimpleDdgiNearFieldResidualCaptureIdentifiers captureIdentifiers =
+            default,
+        SimpleDdgiNearFieldResidualRenderTargetGeneration? targetGeneration =
+            null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bufferManager = bufferManager ?? throw new ArgumentNullException(nameof(bufferManager));
+        _foliageManager = foliageManager ??
+            throw new ArgumentNullException(nameof(foliageManager));
         ArgumentNullException.ThrowIfNull(bindlessHeap);
-        _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
+        ArgumentNullException.ThrowIfNull(renderTargets);
+        targetGeneration ??=
+            renderTargets.CurrentNearFieldResidualGeneration ??
+            throw new InvalidOperationException(
+                "C5 requires a complete render-target generation.");
+        if (targetGeneration.Layout != layout)
+        {
+            throw new ArgumentException(
+                "The C5 render-target generation does not match the admitted layout.",
+                nameof(targetGeneration));
+        }
+        _renderTargets = new SimpleDdgiNearFieldResidualTargetBinding(
+            renderTargets,
+            targetGeneration);
         _hiZ = hiZ ?? throw new ArgumentNullException(nameof(hiZ));
         _layout = layout;
         _configuration = configuration;
         _resolutionGovernor =
             new SimpleDdgiNearFieldResidualAdaptiveResolution(
                 layout.TraceResolutionScale,
-                adaptiveResolutionEnabled);
+                adaptiveResolutionEnabled,
+                startingScale,
+                promotionEnabled && sourceCostAuthoritative);
         _executionExtent = _resolutionGovernor.CreateExtent(
             layout.SourceWidth,
             layout.SourceHeight);
         _b3OwnershipRevision = b3OwnershipRevision == 0u
             ? throw new ArgumentOutOfRangeException(nameof(b3OwnershipRevision))
             : b3OwnershipRevision;
+        _calibratedSourceCostUpperBoundMicroseconds =
+            calibratedSourceCostUpperBoundMicroseconds;
+        _sourceCostAuthoritative = sourceCostAuthoritative &&
+            calibratedSourceCostUpperBoundMicroseconds != 0UL;
+        _captureIdentifiers = captureIdentifiers.Normalize();
         if (admittedBudgetBytes == 0UL || layout.TotalBytes > admittedBudgetBytes)
             throw new ArgumentOutOfRangeException(nameof(admittedBudgetBytes));
 
@@ -146,9 +242,10 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             _layout,
             _configuration);
 
-        BufferHandle hitMetadata = BufferHandle.Invalid;
         BufferHandle historyMetadata0 = BufferHandle.Invalid;
         BufferHandle historyMetadata1 = BufferHandle.Invalid;
+        BufferHandle surfaceTable = BufferHandle.Invalid;
+        BufferHandle activeTileAndIndirect = BufferHandle.Invalid;
         BufferHandle tileRecords = BufferHandle.Invalid;
         BufferHandle traceFrameConstants0 = BufferHandle.Invalid;
         BufferHandle traceFrameConstants1 = BufferHandle.Invalid;
@@ -159,12 +256,6 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         {
             const BufferUsageFlags usage = BufferUsageFlags.StorageBufferBit |
                 BufferUsageFlags.TransferDstBit | BufferUsageFlags.TransferSrcBit;
-            hitMetadata = _bufferManager.CreateDeviceBuffer(
-                _layout.HitMetadataBytes,
-                usage,
-                requireDeviceAddress: false,
-                MemoryBudgetCategory.GlobalIllumination,
-                "C5 Current Hit Metadata");
             historyMetadata0 = _bufferManager.CreateDeviceBuffer(
                 _layout.HistoryMetadataBytes / 2UL,
                 usage,
@@ -177,6 +268,18 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 requireDeviceAddress: false,
                 MemoryBudgetCategory.GlobalIllumination,
                 "C5 History Metadata 1");
+            surfaceTable = _bufferManager.CreateDeviceBuffer(
+                _layout.SurfaceTableBytes,
+                usage,
+                requireDeviceAddress: false,
+                MemoryBudgetCategory.GlobalIllumination,
+                "C5 Frame-Buffered Surface Table");
+            activeTileAndIndirect = _bufferManager.CreateDeviceBuffer(
+                _layout.ActiveTileAndIndirectBytes,
+                usage | BufferUsageFlags.IndirectBufferBit,
+                requireDeviceAddress: false,
+                MemoryBudgetCategory.GlobalIllumination,
+                "C5 Active Tiles And Indirect Arguments");
             tileRecords = _bufferManager.CreateDeviceBuffer(
                 _layout.TileBuffersBytes,
                 usage,
@@ -222,9 +325,10 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 "C5 Telemetry Readback 1",
                 MemoryBudgetCategory.GlobalIllumination);
             _buffers = new SimpleDdgiNearFieldResidualVulkanBuffers(
-                hitMetadata,
                 historyMetadata0,
                 historyMetadata1,
+                surfaceTable,
+                activeTileAndIndirect,
                 tileRecords,
                 traceFrameConstants0,
                 traceFrameConstants1,
@@ -249,21 +353,6 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                         CreateAdaptiveResolutionTelemetry()
                 };
 
-            _allocationAdapter = new BorrowedGraphAllocationAdapter(_layout);
-            SimpleDdgiNearFieldResidualGpuRuntimeSnapshot snapshot =
-                _manager.Reconcile(
-                    new SimpleDdgiNearFieldResidualGpuRuntimeRequest(
-                        IsEffectivelyEnabled: true,
-                        _layout,
-                        _configuration,
-                        CreateIntegratedCapabilities(_layout)),
-                    _allocationAdapter);
-            if (!snapshot.IsContractReadyForRendererIntegration)
-            {
-                throw new InvalidOperationException(
-                    "C5 lifecycle admission failed: " + snapshot.Reason);
-            }
-
             recorder = new SimpleDdgiNearFieldResidualGpuCommandRecorder(
                 _context,
                 _bufferManager,
@@ -274,6 +363,23 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 _configuration,
                 _buffers);
             _recorder = recorder;
+            _allocationAdapter = new BorrowedGraphAllocationAdapter(_layout);
+            SimpleDdgiNearFieldResidualGpuRuntimeSnapshot snapshot =
+                _manager.Reconcile(
+                    new SimpleDdgiNearFieldResidualGpuRuntimeRequest(
+                        IsEffectivelyEnabled: true,
+                        _layout,
+                        _configuration,
+                        CreateIntegratedCapabilities(
+                            _layout,
+                            recorder,
+                            _actualAllocationBytes <= admittedBudgetBytes)),
+                    _allocationAdapter);
+            if (!snapshot.IsContractReadyForRendererIntegration)
+            {
+                throw new InvalidOperationException(
+                    "C5 lifecycle admission failed: " + snapshot.Reason);
+            }
             _active = true;
             _recordedStage = SimpleDdgiNearFieldResidualRecordedStage.Idle;
         }
@@ -285,9 +391,10 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             DestroyBuffer(traceFrameConstants1);
             DestroyBuffer(traceFrameConstants0);
             DestroyBuffer(tileRecords);
+            DestroyBuffer(activeTileAndIndirect);
+            DestroyBuffer(surfaceTable);
             DestroyBuffer(historyMetadata1);
             DestroyBuffer(historyMetadata0);
-            DestroyBuffer(hitMetadata);
             _manager.Dispose();
             throw;
         }
@@ -392,16 +499,23 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         {
             if (_disposed || !_active)
                 return;
-            _frameAdmission = admitted;
-            if (!admitted)
+            bool governorAvailable = _resolutionGovernor.AdvanceFrame();
+            _frameAdmission = admitted && governorAvailable;
+            if (!_frameAdmission)
             {
                 _recordedStage =
                     SimpleDdgiNearFieldResidualRecordedStage.Idle;
                 _recordedFrameIndex = -1;
                 _diagnostics = SimpleDdgiNearFieldResidualDiagnostics.Disabled(
-                    string.IsNullOrWhiteSpace(reason)
-                        ? "near-field-runtime-content-binding-rejected"
-                        : reason.Trim());
+                    !governorAvailable
+                        ? "near-field-runtime-suspended-after-lowest-tier-budget-overrun"
+                        : string.IsNullOrWhiteSpace(reason)
+                            ? "near-field-runtime-content-binding-rejected"
+                            : reason.Trim()) with
+                    {
+                        AdaptiveResolution =
+                            CreateAdaptiveResolutionTelemetry()
+                    };
             }
         }
     }
@@ -454,7 +568,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         lock (_sync)
         {
             ValidateStage(commandBuffer, frameIndex, sceneData,
-                SimpleDdgiNearFieldResidualRecordedStage.Reset);
+                SimpleDdgiNearFieldResidualRecordedStage.Prepare);
             _recorder.RecordTrace(
                 commandBuffer,
                 frameIndex,
@@ -475,6 +589,40 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         }
     }
 
+    internal void RecordPrepare(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        SceneRenderingData sceneData)
+    {
+        lock (_sync)
+        {
+            ValidateStage(commandBuffer, frameIndex, sceneData,
+                SimpleDdgiNearFieldResidualRecordedStage.Reset);
+            FoliageRuntimeBuffers foliage =
+                _foliageManager.GetBuffers(frameIndex);
+            _recorder.RecordPrepare(
+                commandBuffer,
+                frameIndex,
+                _frameToken,
+                _recordedExecutionExtent,
+                sceneData.CaptureCameraNearPlane,
+                sceneData.CaptureCameraFarPlane,
+                sceneData.ObjectDataBuffer,
+                sceneData.MaterialDataBuffer,
+                foliage.PrototypeBuffer,
+                foliage.PatchBuffer,
+                foliage.ClusterBuffer,
+                checked((uint)Math.Clamp(
+                    sceneData.ObjectCount,
+                    0,
+                    (int)SimpleDdgiNearFieldResidualGpuAbi
+                        .MaximumSurfaceTableEntryCount)),
+                sceneData.MotionVectorsEnabled != 0 &&
+                    sceneData.FoliageMotionVectorsEnabled);
+            _recordedStage = SimpleDdgiNearFieldResidualRecordedStage.Prepare;
+        }
+    }
+
     internal void RecordTemporal(
         CommandBuffer commandBuffer,
         int frameIndex,
@@ -489,6 +637,9 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 _frameToken,
                 CreateHistoryRevision(sceneData),
                 _historyInputValid,
+                !_hasPublishedSourceLightingEpoch ||
+                    _publishedSourceLightingEpoch !=
+                    sceneData.SimpleDdgiSourceLightingGeneration,
                 _recordedExecutionExtent);
             SimpleDdgiNearFieldResidualGpuStageResult completion =
                 _manager.CompleteTemporal(
@@ -552,7 +703,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         lock (_sync)
         {
             ValidateStage(commandBuffer, frameIndex, sceneData,
-                SimpleDdgiNearFieldResidualRecordedStage.Temporal);
+                SimpleDdgiNearFieldResidualRecordedStage.FrequencySeparation);
             if (_configuration.FilterIterationCount != _recordedFilterIterations)
             {
                 FailFrame("C5 composite observed incomplete filtering.");
@@ -563,7 +714,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             _recorder.RecordComposite(
                 commandBuffer,
                 _frameToken,
-                _recordedExecutionExtent);
+                _recordedExecutionExtent,
+                sceneData.NearFieldResidualDebugView);
             RecordTelemetryReadback(
                 commandBuffer,
                 frameIndex,
@@ -579,8 +731,46 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                         OnlyValidSignedResidualComposited: true,
                         InvalidResidualPayloadWasZero: true));
             RequireCompletion(completion);
+            _publishedSourceLightingEpoch =
+                sceneData.SimpleDdgiSourceLightingGeneration;
+            _hasPublishedSourceLightingEpoch = true;
             _recordedStage = SimpleDdgiNearFieldResidualRecordedStage.Composite;
             _recordedFrameIndex = -1;
+        }
+    }
+
+    internal void RecordFrequencySeparation(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        SceneRenderingData sceneData)
+    {
+        lock (_sync)
+        {
+            ValidateStage(commandBuffer, frameIndex, sceneData,
+                SimpleDdgiNearFieldResidualRecordedStage.Temporal);
+            if (_configuration.FilterIterationCount != _recordedFilterIterations)
+            {
+                FailFrame("C5 frequency separation observed incomplete filtering.");
+                throw new InvalidOperationException(
+                    "C5 frequency separation requires every admitted atrous pass.");
+            }
+            _recorder.RecordFrequencySeparation(
+                commandBuffer,
+                _frameToken,
+                _recordedExecutionExtent,
+                sceneData.NearFieldResidualDebugView);
+            SimpleDdgiNearFieldResidualGpuStageResult completion =
+                _manager.CompleteFrequencySeparation(
+                    _frameToken,
+                    new
+                        SimpleDdgiNearFieldResidualGpuFrequencySeparationCompletion(
+                            QueueOrderedCommandsRecorded: true,
+                            B3FootprintSupportValidated: true,
+                            PerIdentityConfidenceWeightedMeanRemoved: true,
+                            InvalidResidualPayloadWasZero: true));
+            RequireCompletion(completion);
+            _recordedStage =
+                SimpleDdgiNearFieldResidualRecordedStage.FrequencySeparation;
         }
     }
 
@@ -656,6 +846,8 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 if (TryResolveStageTimings(
                         frameTimings,
                         _configuration.FilterIterationCount,
+                        _calibratedSourceCostUpperBoundMicroseconds,
+                        _sourceCostAuthoritative,
                         out SimpleDdgiNearFieldResidualStageTimings timings))
                 {
                     bool resolutionChanged =
@@ -677,7 +869,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                             witness.History,
                             witness.ResidualEnergy,
                             witness.Tiles,
-                            SimpleDdgiNearFieldResidualCaptureIdentifiers.None)
+                            _captureIdentifiers)
                         with
                     {
                         AdaptiveResolution =
@@ -718,6 +910,19 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         FrameTimingSnapshot snapshot,
         int filterIterationCount,
         out SimpleDdgiNearFieldResidualStageTimings timings)
+        => TryResolveStageTimings(
+            snapshot,
+            filterIterationCount,
+            calibratedSourceMicroseconds: 0UL,
+            sourceCostAuthoritative: false,
+            out timings);
+
+    internal static bool TryResolveStageTimings(
+        FrameTimingSnapshot snapshot,
+        int filterIterationCount,
+        ulong calibratedSourceMicroseconds,
+        bool sourceCostAuthoritative,
+        out SimpleDdgiNearFieldResidualStageTimings timings)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         timings = SimpleDdgiNearFieldResidualStageTimings.Empty;
@@ -728,12 +933,20 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 out ulong reset) ||
             !TryReadGpuMicroseconds(
                 snapshot,
+                SimpleDdgiNearFieldResidualGpuPassNames.Prepare,
+                out ulong prepare) ||
+            !TryReadGpuMicroseconds(
+                snapshot,
                 SimpleDdgiNearFieldResidualGpuPassNames.Trace,
                 out ulong trace) ||
             !TryReadGpuMicroseconds(
                 snapshot,
                 SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
                 out ulong temporal) ||
+            !TryReadGpuMicroseconds(
+                snapshot,
+                SimpleDdgiNearFieldResidualGpuPassNames.FrequencySeparation,
+                out ulong frequencySeparation) ||
             !TryReadGpuMicroseconds(
                 snapshot,
                 SimpleDdgiNearFieldResidualGpuPassNames.Composite,
@@ -755,15 +968,18 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             filter = SaturatingAdd(filter, iterationMicroseconds);
         }
 
-        // Reset is mandatory C5 work and is included with raw trace. Source is
-        // zero until the MRT producer gains a genuinely exclusive timestamp;
-        // assigning the whole Forward+ pass would overstate C5 cost.
         timings = new SimpleDdgiNearFieldResidualStageTimings(
-            SourceMicroseconds: 0UL,
-            RawTraceMicroseconds: SaturatingAdd(reset, trace),
+            SourceMicroseconds: calibratedSourceMicroseconds,
+            RawTraceMicroseconds: trace,
             TemporalMicroseconds: temporal,
             FilterMicroseconds: filter,
-            CompositeMicroseconds: composite);
+            CompositeMicroseconds: composite)
+        {
+            PrepareCompactionMicroseconds = SaturatingAdd(reset, prepare),
+            FrequencySeparationMicroseconds = frequencySeparation,
+            SourceCostAuthoritative = sourceCostAuthoritative &&
+                calibratedSourceMicroseconds != 0UL
+        };
         return true;
     }
 
@@ -795,7 +1011,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             if (!HasExactTargetExtents())
             {
                 DisableAndReleaseAfterDeviceIdle(
-                    "near-field-resize-requires-new-bound-evidence");
+                    "near-field-generation-target-extent-mismatch");
                 return;
             }
 
@@ -806,10 +1022,10 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
     }
 
     /// <summary>
-    /// Retires all runtime-owned C5 objects at a renderer-controlled
-    /// device-idle transition. The immutable qualification evidence cannot be
-    /// rebound to a different extent, so resize disables rather than silently
-    /// reusing it. This method is idempotent.
+    /// Retires all runtime-owned C5 objects after the caller has supplied an
+    /// external completion guarantee. Ordinary generation transactions use
+    /// fence retirement; this boundary is retained for terminal shutdown and
+    /// fail-closed renderer teardown. This method is idempotent.
     /// </summary>
     internal void DisableAndReleaseAfterDeviceIdle(string reason)
     {
@@ -894,11 +1110,12 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         !_disposed && _active &&
         sceneData.ScreenWidth == (uint)_layout.SourceWidth &&
         sceneData.ScreenHeight == (uint)_layout.SourceHeight &&
-        sceneData.FoliageClusterCount == 0 &&
-        sceneData.ObjectCount is >= 0 and <= 65_536 &&
-        sceneData.MaterialCount is >= 0 and <= 65_536 &&
-        sceneData.DebugViewMode == 0u &&
+        IsCompatibleDebugView(sceneData.NearFieldResidualDebugView) &&
         HasExactTargetExtents();
+
+    private static bool IsCompatibleDebugView(uint debugView) =>
+        debugView == (uint)GlobalIlluminationDebugView.None ||
+        SimpleDdgiNearFieldResidualDebugViewContract.IsC5View(debugView);
 
     private bool HasExactTargetExtents()
     {
@@ -909,6 +1126,14 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         return HasExtent(_renderTargets.NearFieldDirectSource, sourceWidth, sourceHeight) &&
             HasExtent(_renderTargets.NearFieldReceiverPayload,
                 sourceWidth, sourceHeight) &&
+            HasExtent(_renderTargets.NearFieldPreparedDepthFootprint,
+                traceWidth, traceHeight) &&
+            HasExtent(_renderTargets.NearFieldPreparedReceiverPayload,
+                traceWidth, traceHeight) &&
+            HasExtent(_renderTargets.NearFieldPreparedMotion,
+                traceWidth, traceHeight) &&
+            HasExtent(_renderTargets.NearFieldSourceLuminance,
+                traceWidth, traceHeight) &&
             HasExtent(_renderTargets.NearFieldResidualRaw, traceWidth, traceHeight) &&
             HasExtent(_renderTargets.NearFieldResidualHistory0, traceWidth, traceHeight) &&
             HasExtent(_renderTargets.NearFieldResidualHistory1, traceWidth, traceHeight) &&
@@ -935,18 +1160,28 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         {
             ViewProjection = sceneData.ViewProjectionMatrix,
             InverseViewProjection = sceneData.InverseViewProjectionMatrix,
+            PreviousViewProjection = _hasPreviousTraceMatrices
+                ? _previousViewProjection
+                : sceneData.ViewProjectionMatrix,
+            PreviousInverseViewProjection = _hasPreviousTraceMatrices
+                ? _previousInverseViewProjection
+                : sceneData.InverseViewProjectionMatrix,
             FullExtentAndInverse = new Vector4(
                 _layout.SourceWidth,
                 _layout.SourceHeight,
                 1.0f / _layout.SourceWidth,
                 1.0f / _layout.SourceHeight),
-            Reserved = new Vector4(
-                ForwardNearFieldDirectSourceContract.ReferenceB3WorldFootprintRadius,
-                _configuration.MaximumTraceDistance,
+            ClipAndSequence = new Vector4(
+                MathF.Max(sceneData.CaptureCameraNearPlane, 0.001f),
+                MathF.Max(sceneData.CaptureCameraFarPlane,
+                    MathF.Max(sceneData.CaptureCameraNearPlane, 0.001f) + 0.01f),
                 BitConverter.UInt32BitsToSingle(sceneData.TemporalSampleIndex),
                 BitConverter.UInt32BitsToSingle(
                     ForwardNearFieldDirectSourceContract.ShaderSemanticVersion))
         };
+        _previousViewProjection = sceneData.ViewProjectionMatrix;
+        _previousInverseViewProjection = sceneData.InverseViewProjectionMatrix;
+        _hasPreviousTraceMatrices = true;
         _bufferManager.FlushBuffer(
             handle,
             0UL,
@@ -978,7 +1213,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             EffectiveModeRevision: SimpleDdgiNearFieldResidualGpuAbi.Version,
             ExposureDomainRevision: 1u,
             CameraCut: cameraCut,
-            ProjectionJitterRevision: HashProjectionAndJitter(sceneData),
+            StructuralProjectionRevision: HashStructuralProjection(sceneData),
             OriginRebaseRevision: 1u,
             SceneGeneration: NonZeroHash(
                 unchecked((uint)sceneData.SceneContentRevision),
@@ -995,7 +1230,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 _configuration.TraceSourceContract.LayoutRevision);
     }
 
-    private static uint HashProjectionAndJitter(SceneRenderingData sceneData)
+    private static uint HashStructuralProjection(SceneRenderingData sceneData)
     {
         uint hash = 2166136261u;
         void Add(float value)
@@ -1008,9 +1243,6 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         Add(sceneData.ProjectionMatrix.M33);
         Add(sceneData.ProjectionMatrix.M34);
         Add(sceneData.ProjectionMatrix.M43);
-        Add(sceneData.JitterX);
-        Add(sceneData.JitterY);
-        hash ^= unchecked((uint)sceneData.JitterEnabled);
         return hash == 0u ? 1u : hash;
     }
 
@@ -1153,7 +1385,15 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                     checked((uint)_resolutionGovernor.PromotionWindowStreak),
                 PromotionCount: _resolutionGovernor.PromotionCount,
                 DemotionCount: _resolutionGovernor.DemotionCount,
-                ResolutionChangedAfterSample: resolutionChangedAfterSample);
+                ResolutionChangedAfterSample: resolutionChangedAfterSample)
+            {
+                LowestTierOverBudgetEvaluationStreak = checked((uint)
+                    _resolutionGovernor.LowestTierOverBudgetEvaluationStreak),
+                SuspendedFramesRemaining = checked((uint)
+                    _resolutionGovernor.SuspendedFramesRemaining),
+                SuspensionCount = _resolutionGovernor.SuspensionCount,
+                PromotionEnabled = _resolutionGovernor.PromotionEnabled
+            };
 
     private void DestroyRuntimeBuffersNoLock()
     {
@@ -1162,9 +1402,10 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         DestroyBuffer(_buffers.TraceFrameConstants1);
         DestroyBuffer(_buffers.TraceFrameConstants0);
         DestroyBuffer(_buffers.TileRecords);
+        DestroyBuffer(_buffers.ActiveTileAndIndirect);
+        DestroyBuffer(_buffers.SurfaceTable);
         DestroyBuffer(_buffers.HistoryMetadata1);
         DestroyBuffer(_buffers.HistoryMetadata0);
-        DestroyBuffer(_buffers.HitMetadata);
     }
 
     private void DestroyBuffer(BufferHandle handle)
@@ -1181,6 +1422,10 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         ulong imageBytes = checked(
             ImageBytes(_renderTargets.NearFieldDirectSource) +
             ImageBytes(_renderTargets.NearFieldReceiverPayload) +
+            ImageBytes(_renderTargets.NearFieldPreparedDepthFootprint) +
+            ImageBytes(_renderTargets.NearFieldPreparedReceiverPayload) +
+            ImageBytes(_renderTargets.NearFieldPreparedMotion) +
+            ImageBytes(_renderTargets.NearFieldSourceLuminance) +
             ImageBytes(_renderTargets.NearFieldResidualRaw) +
             ImageBytes(_renderTargets.NearFieldResidualHistory0) +
             ImageBytes(_renderTargets.NearFieldResidualHistory1) +
@@ -1193,9 +1438,10 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
             ImageBytes(_renderTargets.NearFieldResidualFilterScratch0) +
             ImageBytes(_renderTargets.NearFieldResidualFilterScratch1));
         ulong bufferBytes = checked(
-            _bufferManager.GetBufferAllocationSize(_buffers.HitMetadata) +
             _bufferManager.GetBufferAllocationSize(_buffers.HistoryMetadata0) +
             _bufferManager.GetBufferAllocationSize(_buffers.HistoryMetadata1) +
+            _bufferManager.GetBufferAllocationSize(_buffers.SurfaceTable) +
+            _bufferManager.GetBufferAllocationSize(_buffers.ActiveTileAndIndirect) +
             _bufferManager.GetBufferAllocationSize(_buffers.TileRecords) +
             _bufferManager.GetBufferAllocationSize(_buffers.TraceFrameConstants0) +
             _bufferManager.GetBufferAllocationSize(_buffers.TraceFrameConstants1) +
@@ -1225,7 +1471,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
 
     private static void ValidatePhysicalIntegration(
         VulkanContext context,
-        RenderTargetManager targets,
+        SimpleDdgiNearFieldResidualTargetBinding targets,
         HiZDepthPyramid hiZ,
         in SimpleDdgiNearFieldResidualLayout layout,
         in SimpleDdgiNearFieldResidualGpuConfiguration configuration)
@@ -1273,33 +1519,79 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         width == Math.Max(1u, checked((uint)layout.SourceWidth) / 2u) &&
         height == Math.Max(1u, checked((uint)layout.SourceHeight) / 2u);
 
-    private static SimpleDdgiNearFieldResidualGpuIntegrationCapabilities
-        CreateIntegratedCapabilities(in SimpleDdgiNearFieldResidualLayout layout) => new(
-            TracePassRegistered: true,
-            TemporalPassRegistered: true,
-            FilterPassRegistered: true,
-            CompositePassRegistered: true,
-            DirectDiffuseEmissiveAttachmentAvailable: true,
-            HiZAvailable: true,
-            ReceiverMetadataAvailable: true,
-            StableSampleRayInputAvailable: true,
-            ReceiverBrdfPdfInputAvailable: true,
-            MotionVectorsAvailable: true,
-            DoubleBufferedHistoryIdentityAvailable: true,
-            HistoryIdentityMemoryBudgeted: layout.HistoryMetadataBytes != 0UL,
-            TileRecordLayoutValidated: true,
-            RequiredImageFormatsValidated: true,
-            DescriptorAndBarrierContractValidated: true,
-            ShaderArtifactsValidated: true,
-            ResetPassRegistered: true,
-            PingPongBankBindingAndSynchronizationValidated: true,
-            DirectSourceVariantProvenanceValidated: true,
-            GeometricAndShadingNormalHistoryAvailable: true,
-            HitUvAndSourceRevisionValidationAvailable: true,
-            TemporalVarianceClippingAndBoundedHistoryAvailable: true,
-            B3FootprintFrequencySeparationValidated: true,
-            MeasuredQualificationEvidenceVerified: true,
-            DeviceLimitsAndActualAllocationRequirementsValidated: true);
+    private SimpleDdgiNearFieldResidualGpuIntegrationCapabilities
+        CreateIntegratedCapabilities(
+            in SimpleDdgiNearFieldResidualLayout layout,
+            SimpleDdgiNearFieldResidualGpuCommandRecorder recorder,
+            bool actualAllocationRequirementsValidated)
+    {
+        bool nativePipelines = recorder.ShaderPipelinesValidated;
+        bool descriptorContract = recorder.DescriptorContractValidated;
+        bool exactTargets = HasExactTargetExtents();
+        bool historyBanks = _buffers.HistoryMetadata0.IsValid &&
+            _buffers.HistoryMetadata1.IsValid &&
+            layout.HistoryMetadataBytes != 0UL;
+        bool sourceContract = _configuration.TraceSourceContract
+            .TryValidateForLayout(layout, out _);
+        return new SimpleDdgiNearFieldResidualGpuIntegrationCapabilities(
+            TracePassRegistered: nativePipelines,
+            TemporalPassRegistered: nativePipelines,
+            FilterPassRegistered: nativePipelines,
+            CompositePassRegistered: nativePipelines,
+            DirectDiffuseEmissiveAttachmentAvailable:
+                exactTargets && sourceContract,
+            HiZAvailable: IsCompatibleHiZExtent(
+                layout,
+                _hiZ.Extent.Width,
+                _hiZ.Extent.Height),
+            ReceiverMetadataAvailable:
+                exactTargets && layout.ReceiverPayloadBytes != 0UL,
+            StableSampleRayInputAvailable:
+                _buffers.TraceFrameConstants0.IsValid &&
+                _buffers.TraceFrameConstants1.IsValid &&
+                layout.PreparedReceiverPayloadBytes != 0UL,
+            ReceiverBrdfPdfInputAvailable:
+                layout.ReceiverPayloadBytes != 0UL,
+            MotionVectorsAvailable: exactTargets,
+            DoubleBufferedHistoryIdentityAvailable: historyBanks,
+            HistoryIdentityMemoryBudgeted: historyBanks,
+            TileRecordLayoutValidated:
+                layout.TileBuffersBytes != 0UL &&
+                _buffers.TileRecords.IsValid,
+            RequiredImageFormatsValidated: exactTargets &&
+                layout.SourceFormat ==
+                    SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat,
+            DescriptorAndBarrierContractValidated: descriptorContract,
+            ShaderArtifactsValidated: nativePipelines,
+            ResetPassRegistered: nativePipelines,
+            PingPongBankBindingAndSynchronizationValidated:
+                descriptorContract && historyBanks,
+            DirectSourceVariantProvenanceValidated: sourceContract,
+            GeometricAndShadingNormalHistoryAvailable:
+                exactTargets && layout.HistoryNormalBytes != 0UL,
+            HitUvAndSourceRevisionValidationAvailable:
+                layout.HistoryMetadataBytes != 0UL &&
+                SimpleDdgiNearFieldResidualGpuAbi.HitMetadataByteCount == 48U,
+            TemporalVarianceClippingAndBoundedHistoryAvailable:
+                exactTargets && layout.MomentBytes != 0UL &&
+                _configuration.MaximumHistoryLength <=
+                    SimpleDdgiNearFieldResidualGpuAbi
+                        .MaximumTemporalHistoryLength,
+            B3FootprintFrequencySeparationValidated:
+                nativePipelines && layout.SourceLuminanceBytes != 0UL,
+            MeasuredQualificationEvidenceVerified:
+                _sourceCostAuthoritative,
+            DeviceLimitsAndActualAllocationRequirementsValidated:
+                actualAllocationRequirementsValidated)
+        {
+            PreparePassRegistered = nativePipelines,
+            FrequencySeparationPassRegistered = nativePipelines,
+            IndirectDispatchContractValidated =
+                descriptorContract && _buffers.ActiveTileAndIndirect.IsValid,
+            SurfaceTableAvailable = _buffers.SurfaceTable.IsValid &&
+                layout.SurfaceTableBytes != 0UL
+        };
+    }
 
     private void ThrowIfDisposed()
     {
@@ -1377,7 +1669,21 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                     SimpleDdgiNearFieldResidualGpuResourceKind.TelemetryReadback0),
                 Resource(layout.TelemetryReadbackBytes / 2UL,
                     SimpleDdgiNearFieldResidualGpuResourceKind.TelemetryReadback1),
-                SimpleDdgiNearFieldResidualGpuAllocation.ExpectedDescriptorCount(layout));
+                SimpleDdgiNearFieldResidualGpuAllocation.ExpectedDescriptorCount(layout))
+            {
+                PreparedDepthFootprint = Resource(layout.PreparedDepthFootprintBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.PreparedDepthFootprint),
+                PreparedReceiverPayload = Resource(layout.PreparedReceiverPayloadBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.PreparedReceiverPayload),
+                PreparedMotion = Resource(layout.PreparedMotionBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.PreparedMotion),
+                SourceLuminance = Resource(layout.SourceLuminanceBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.SourceLuminance),
+                SurfaceTable = Resource(layout.SurfaceTableBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.SurfaceTable),
+                ActiveTileAndIndirect = Resource(layout.ActiveTileAndIndirectBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.ActiveTileAndIndirect)
+            };
         }
 
         public void Retire(SimpleDdgiNearFieldResidualGpuAllocation allocation)

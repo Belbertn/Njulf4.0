@@ -1,0 +1,282 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_near_field_residual.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D nearEstimateInput;
+layout(set = 0, binding = 1) uniform sampler2D preparedDepthFootprintInput;
+layout(set = 0, binding = 2) uniform usampler2D preparedPayloadInput;
+layout(std430, set = 0, binding = 3) readonly buffer FrequencyMetadataBuffer
+{
+    SimpleDdgiNearFieldResidualHitMetadata values[];
+} frequencyMetadata;
+layout(rgba16f, set = 0, binding = 4) uniform writeonly image2D bandResidualOutput;
+layout(std430, set = 0, binding = 5) readonly buffer ActiveTileBuffer
+{
+    uint words[];
+} activeTiles;
+layout(std430, set = 0, binding = 6) readonly buffer FrequencyFrameConstantsBuffer
+{
+    SimpleDdgiNearFieldResidualTraceFrameConstants frame;
+} frequencyFrameConstants;
+
+layout(push_constant) uniform NearFieldFrequencyPushBlock
+{
+    SimpleDdgiNearFieldResidualFrequencyPushConstants pc;
+};
+
+shared vec3 tileBand[64];
+shared float tileConfidence[64];
+shared uvec2 tileIdentity[64];
+shared float tileDepth[64];
+shared vec3 tileNormal[64];
+shared uint tileValid[64];
+
+float B3(float x)
+{
+    x = abs(x);
+    if (x < 1.0)
+        return 2.0 / 3.0 - x * x + 0.5 * x * x * x;
+    if (x < 2.0)
+    {
+        float tail = 2.0 - x;
+        return tail * tail * tail / 6.0;
+    }
+    return 0.0;
+}
+
+vec4 C5FrequencyMulRowMajor(vec4 value, mat4 matrix)
+{
+    return vec4(
+        dot(value, vec4(matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0])),
+        dot(value, vec4(matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1])),
+        dot(value, vec4(matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2])),
+        dot(value, vec4(matrix[0][3], matrix[1][3], matrix[2][3], matrix[3][3])));
+}
+
+float C5FrequencyStoredDepthFromLinear(float linearDepth)
+{
+    float nearPlane = max(
+        frequencyFrameConstants.frame.clipAndSequence.x, 0.001);
+    float farPlane = max(
+        frequencyFrameConstants.frame.clipAndSequence.y,
+        nearPlane + 0.01);
+    float reciprocalTerm = nearPlane * farPlane /
+        max(linearDepth, nearPlane);
+    bool reversedZ = SimpleDdgiNearFieldHasFlag(
+        pc.flags, SIMPLE_DDGI_NEAR_FIELD_FLAG_REVERSED_Z);
+    return reversedZ
+        ? (reciprocalTerm - nearPlane) / (farPlane - nearPlane)
+        : (farPlane - reciprocalTerm) / (farPlane - nearPlane);
+}
+
+float C5ProjectedTraceFootprintRadius(
+    vec2 uv,
+    float linearDepth,
+    vec3 normal,
+    float worldRadius)
+{
+    if (!SimpleDdgiNearFieldFinite(linearDepth) || linearDepth <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(worldRadius) || worldRadius <= 0.0)
+        return 0.0;
+    vec4 world = C5FrequencyMulRowMajor(
+        vec4(uv * 2.0 - vec2(1.0),
+            C5FrequencyStoredDepthFromLinear(linearDepth), 1.0),
+        frequencyFrameConstants.frame.inverseViewProjection);
+    if (any(isnan(world)) || any(isinf(world)) || abs(world.w) <= 1.0e-7)
+        return 0.0;
+    vec3 worldPosition = world.xyz / world.w;
+    vec3 tangent;
+    vec3 bitangent;
+    NjulfC5OrthonormalBasis(normal, tangent, bitangent);
+    vec4 centreClip = C5FrequencyMulRowMajor(
+        vec4(worldPosition, 1.0),
+        frequencyFrameConstants.frame.viewProjection);
+    vec4 tangentClip = C5FrequencyMulRowMajor(
+        vec4(worldPosition + tangent * worldRadius, 1.0),
+        frequencyFrameConstants.frame.viewProjection);
+    vec4 bitangentClip = C5FrequencyMulRowMajor(
+        vec4(worldPosition + bitangent * worldRadius, 1.0),
+        frequencyFrameConstants.frame.viewProjection);
+    if (any(isnan(centreClip)) || any(isinf(centreClip)) ||
+        any(isnan(tangentClip)) || any(isinf(tangentClip)) ||
+        any(isnan(bitangentClip)) || any(isinf(bitangentClip)) ||
+        min(abs(centreClip.w), min(abs(tangentClip.w),
+            abs(bitangentClip.w))) <= 1.0e-7)
+        return 0.0;
+    vec2 centreUv = centreClip.xy / centreClip.w * 0.5 + vec2(0.5);
+    vec2 tangentUv = tangentClip.xy / tangentClip.w * 0.5 + vec2(0.5);
+    vec2 bitangentUv = bitangentClip.xy / bitangentClip.w * 0.5 + vec2(0.5);
+    vec2 traceExtent = vec2(pc.traceWidth, pc.traceHeight);
+    return max(length((tangentUv - centreUv) * traceExtent),
+        length((bitangentUv - centreUv) * traceExtent));
+}
+
+void main()
+{
+    uint localIndex = gl_LocalInvocationIndex;
+    uint activeIndex = gl_WorkGroupID.x;
+    uint activeCount = activeTiles.words.length() > 1
+        ? activeTiles.words[1]
+        : 0u;
+    bool tileIsActive = pc.abiVersion ==
+            SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION &&
+        activeTiles.words.length() > 4 && activeTiles.words[4] == 0 &&
+        activeIndex < activeCount && pc.activeTileHeaderWords >= 64u &&
+        pc.activeTileHeaderWords + activeIndex <
+            uint(activeTiles.words.length());
+    uint tileIndex = tileIsActive
+        ? activeTiles.words[pc.activeTileHeaderWords + activeIndex]
+        : 0u;
+    uint tileCountX = (pc.traceWidth + 7u) / 8u;
+    uvec2 tile = tileCountX > 0u
+        ? uvec2(tileIndex % tileCountX, tileIndex / tileCountX)
+        : uvec2(0u);
+    ivec2 pixel = ivec2(tile * 8u + gl_LocalInvocationID.xy);
+    ivec2 extent = ivec2(pc.traceWidth, pc.traceHeight);
+    bool covered = tileIsActive && all(lessThan(pixel, extent));
+    uint pixelIndex = covered
+        ? uint(pixel.y) * pc.traceWidth + uint(pixel.x)
+        : 0u;
+
+    vec3 band = vec3(0.0);
+    vec3 nearSignal = vec3(0.0);
+    vec3 lowSignal = vec3(0.0);
+    float confidence = 0.0;
+    uvec2 identity = uvec2(0u);
+    float centreDepth = 0.0;
+    vec3 centreNormal = vec3(0.0);
+    bool valid = covered && pixelIndex < uint(frequencyMetadata.values.length());
+    if (valid)
+    {
+        vec4 centre = texelFetch(nearEstimateInput, pixel, 0);
+        SimpleDdgiNearFieldResidualHitMetadata centreMetadata =
+            frequencyMetadata.values[pixelIndex];
+        vec4 packedNormals;
+        uint ignoredToken;
+        vec3 ignoredDiffuse;
+        vec3 ignoredF0;
+        SimpleDdgiNearFieldDecodeReceiverPayload(
+            texelFetch(preparedPayloadInput, pixel, 0), packedNormals,
+            ignoredToken, ignoredDiffuse, ignoredF0);
+        centreNormal = SimpleDdgiNearFieldDecodeOctNormal(packedNormals.zw);
+        centreDepth = centreMetadata.receiverLinearDepth;
+        identity = centreMetadata.receiverIdentity;
+        valid = SimpleDdgiNearFieldIsValidCandidate(centre) &&
+            SimpleDdgiNearFieldHasFlag(
+                SimpleDdgiNearFieldMetadataFlags(centreMetadata),
+                SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) &&
+            dot(centreNormal, centreNormal) > 0.0;
+        if (valid)
+        {
+            nearSignal = centre.rgb;
+            vec2 centreUv = (vec2(pixel) + vec2(0.5)) / vec2(extent);
+            float projectedFootprint = C5ProjectedTraceFootprintRadius(
+                centreUv,
+                centreDepth,
+                centreNormal,
+                SimpleDdgiNearFieldReceiverFootprint(centreMetadata));
+            int stride = int(clamp(ceil(projectedFootprint),
+                1.0, float(pc.maximumOuterStride)));
+            vec3 lowSum = vec3(0.0);
+            float lowWeight = 0.0;
+            for (int y = -2; y <= 2; ++y)
+            {
+                for (int x = -2; x <= 2; ++x)
+                {
+                    ivec2 tapPixel = pixel + ivec2(x, y) * stride;
+                    if (any(lessThan(tapPixel, ivec2(0))) ||
+                        any(greaterThanEqual(tapPixel, extent)))
+                        continue;
+                    uint tapIndex = uint(tapPixel.y) * pc.traceWidth +
+                        uint(tapPixel.x);
+                    if (tapIndex >= uint(frequencyMetadata.values.length()))
+                        continue;
+                    vec4 tap = texelFetch(nearEstimateInput, tapPixel, 0);
+                    SimpleDdgiNearFieldResidualHitMetadata tapMetadata =
+                        frequencyMetadata.values[tapIndex];
+                    if (!SimpleDdgiNearFieldIsValidCandidate(tap) ||
+                        any(notEqual(tapMetadata.receiverIdentity, identity)) ||
+                        tapMetadata.packedReceiverRevisions !=
+                            centreMetadata.packedReceiverRevisions)
+                        continue;
+                    vec4 tapPackedNormals;
+                    SimpleDdgiNearFieldDecodeReceiverPayload(
+                        texelFetch(preparedPayloadInput, tapPixel, 0),
+                        tapPackedNormals, ignoredToken, ignoredDiffuse, ignoredF0);
+                    vec3 tapNormal = SimpleDdgiNearFieldDecodeOctNormal(
+                        tapPackedNormals.zw);
+                    float normalWeight = clamp(dot(
+                        centreNormal, tapNormal), 0.0, 1.0);
+                    float depthWeight = SimpleDdgiNearFieldDepthWeight(
+                        centreDepth, tapMetadata.receiverLinearDepth,
+                        pc.depthTolerance);
+                    float kernelWeight = B3(float(x) * 0.75) *
+                        B3(float(y) * 0.75);
+                    float weight = kernelWeight * depthWeight * normalWeight *
+                        clamp(tap.a, 0.0, 1.0);
+                    if (normalWeight < pc.minimumNormalDot || weight <= 0.0)
+                        continue;
+                    lowSum += tap.rgb * weight;
+                    lowWeight += weight;
+                }
+            }
+            if (lowWeight > 0.0 && SimpleDdgiNearFieldFinite(lowSum))
+            {
+                lowSignal = lowSum / lowWeight;
+                band = centre.rgb - lowSignal;
+                confidence = clamp(centre.a, 0.0, 1.0);
+            }
+            else
+            {
+                valid = false;
+            }
+        }
+    }
+
+    tileBand[localIndex] = valid ? band : vec3(0.0);
+    tileConfidence[localIndex] = valid ? confidence : 0.0;
+    tileIdentity[localIndex] = identity;
+    tileDepth[localIndex] = centreDepth;
+    tileNormal[localIndex] = centreNormal;
+    tileValid[localIndex] = valid ? 1u : 0u;
+    barrier();
+
+    if (!covered)
+        return;
+    if (!valid)
+    {
+        imageStore(bandResidualOutput, pixel, vec4(0.0));
+        return;
+    }
+
+    vec3 meanSum = vec3(0.0);
+    float meanWeight = 0.0;
+    for (uint lane = 0u; lane < 64u; ++lane)
+    {
+        if (tileValid[lane] == 0u ||
+            any(notEqual(tileIdentity[lane], identity)) ||
+            abs(tileDepth[lane] - centreDepth) > pc.depthTolerance ||
+            dot(tileNormal[lane], centreNormal) < pc.minimumNormalDot)
+            continue;
+        float weight = tileConfidence[lane];
+        meanSum += tileBand[lane] * weight;
+        meanWeight += weight;
+    }
+    vec3 identityMean = meanWeight > 0.0
+        ? meanSum / meanWeight
+        : vec3(0.0);
+    vec3 zeroMeanBand = band - identityMean;
+    vec3 selectedSignal = pc.debugView ==
+            SIMPLE_DDGI_NEAR_FIELD_DEBUG_NEAR_ESTIMATE
+        ? nearSignal
+        : (pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_LOW_ESTIMATE
+            ? lowSignal
+            : zeroMeanBand);
+    imageStore(bandResidualOutput, pixel,
+        SimpleDdgiNearFieldFinite(selectedSignal)
+            ? vec4(selectedSignal, confidence)
+            : vec4(0.0));
+}

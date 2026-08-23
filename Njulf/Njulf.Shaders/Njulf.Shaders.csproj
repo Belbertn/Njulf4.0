@@ -367,6 +367,22 @@
       <ForwardSimpleFragmentShader Include="forward.frag" />
       <ForwardWeightedOitFragmentShader Include="forward.frag" />
       <FoliageForwardFragmentShader Include="foliage_forward.frag" />
+      <NearFieldDirectSourceShaderVariant Include="foliage_forward_ddgi_near_field_direct_source.frag">
+        <Source>foliage_forward.frag</Source>
+        <Defines>-DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="foliage_forward_ddgi_b1_near_field_direct_source.frag">
+        <Source>foliage_forward.frag</Source>
+        <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="foliage_forward_ddgi_c4_c5.frag">
+        <Source>foliage_forward.frag</Source>
+        <Defines>-DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="foliage_forward_ddgi_b1_c4_c5.frag">
+        <Source>foliage_forward.frag</Source>
+        <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
+      </NearFieldDirectSourceShaderVariant>
       <MaterialTransportProvenanceShaderVariant Include="forward_opaque_ddgi_provenance.frag">
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_OPAQUE=1 -DNJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT=1</Defines>
@@ -389,27 +405,27 @@
            attachment contract has been admitted by the renderer. -->
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_near_field_direct_source.frag">
         <Source>forward.frag</Source>
-      <Defines>-DFORWARD_OPAQUE=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      <Defines>-DFORWARD_OPAQUE=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_near_field_direct_source.frag">
         <Source>forward.frag</Source>
-      <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_near_field_direct_source.frag">
         <Source>forward.frag</Source>
-      <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+      <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_near_field_direct_source_cache_required.frag">
         <Source>forward.frag</Source>
-        <Defines>-DFORWARD_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+        <Defines>-DFORWARD_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_near_field_direct_source_cache_required.frag">
         <Source>forward.frag</Source>
-        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_near_field_direct_source_cache_required.frag">
         <Source>forward.frag</Source>
-        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_DDGI_RECEIVER_CACHE=1 -DFORWARD_DDGI_RECEIVER_CACHE_REQUIRED=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
       </NearFieldDirectSourceShaderVariant>
       <!-- C4 receiver facts use a distinct two-attachment opaque MRT variant. -->
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_c4_receiver.frag">
@@ -430,15 +446,15 @@
            ownership: SceneColor, C4 receiver, C5 source, C5 receiver. -->
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_c4_c5.frag">
         <Source>forward.frag</Source>
-        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_c4_c5.frag">
         <Source>forward.frag</Source>
-        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
       </NearFieldDirectSourceShaderVariant>
       <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_c4_c5.frag">
         <Source>forward.frag</Source>
-        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3</Defines>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
       </NearFieldDirectSourceShaderVariant>
       <ReceiverFeedbackShaderVariant Include="ddgi_simple_receiver_cache_b1.comp">
         <Source>ddgi_simple_receiver_cache.comp</Source>

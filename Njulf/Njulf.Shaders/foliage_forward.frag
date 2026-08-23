@@ -5,7 +5,25 @@
 #define NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION 0
 #endif
 
-#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#ifndef NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+#define NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT 0
+#endif
+
+#ifndef NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION
+#define NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION 0
+#endif
+
+#ifndef NJULF_C4_RECEIVER_OUTPUT
+#define NJULF_C4_RECEIVER_OUTPUT 0
+#endif
+
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT && \
+    NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 4
+#error "C5 foliage source requires semantic version 4."
+#endif
+
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION || \
+    NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_ballot : require
@@ -13,8 +31,12 @@
 
 #include "common.glsl"
 #include "foliage_coverage.glsl"
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+#include "c5_receiver_payload.glsl"
+#endif
 
-#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION || \
+    NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 #define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT 0u
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE false
 #define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE false
@@ -32,6 +54,9 @@
 #undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
 #undef SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE
 #undef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
+#endif
+
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
 #include "ddgi_receiver_feedback_source_abi.glsl"
 #include "ddgi_receiver_feedback_producer.glsl"
 #include "ddgi_receiver_feedback_surface_producer.glsl"
@@ -60,6 +85,18 @@ layout(location = 9) flat in vec4 fragDdgiIrradianceCoverage;
 layout(location = 0) out vec4 outColor;
 #if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 layout(location = 1) out float outMaterialTransportProvenance;
+#endif
+#if NJULF_C4_RECEIVER_OUTPUT
+layout(location = 1) out uvec4 outC4ReceiverPayload;
+#endif
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+#if NJULF_C4_RECEIVER_OUTPUT
+layout(location = 2) out vec4 outC5DirectDiffuseEmissive;
+layout(location = 3) out uvec4 outC5ReceiverPayload;
+#else
+layout(location = 1) out vec4 outC5DirectDiffuseEmissive;
+layout(location = 2) out uvec4 outC5ReceiverPayload;
+#endif
 #endif
 
 layout(push_constant) uniform FoliageDrawPushConstantBlock
@@ -129,8 +166,79 @@ vec3 ApplyFoliageLighting(vec3 baseColor, vec3 normal, vec3 viewDirection, GPUFo
     return baseColor * (0.18 + diffuse * 0.92) * heightShade;
 }
 
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+float C5FoliageB3FootprintRadius()
+{
+    SimpleDdgiParams c5Params = ReadSimpleDdgiParams(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((c5Params.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u ||
+        c5Params.probeCount == 0u || c5Params.volumeCount == 0u)
+        return 0.0;
+    uint selectedVolumeIndex;
+    SimpleDdgiVolume selectedVolume;
+    float selectedEdgeWeight;
+    bool refinementOrBaseFallback;
+    SelectSimpleDdgiVolume(
+        c5Params,
+        fragWorldPosition,
+        selectedVolumeIndex,
+        selectedVolume,
+        selectedEdgeWeight,
+        refinementOrBaseFallback);
+    float spacing = selectedVolume.spacing;
+    if (isnan(spacing) || isinf(spacing) || spacing <= 0.0)
+        return 0.0;
+    return 0.25 * spacing;
+}
+
+bool C5CreateFoliagePayload(
+    vec3 geometricNormal,
+    vec3 shadingNormal,
+    vec3 diffuseBase,
+    out uvec4 payload)
+{
+    payload = uvec4(0u);
+    if (any(isnan(diffuseBase)) || any(isinf(diffuseBase)) ||
+        any(lessThan(diffuseBase, vec3(0.0))))
+        return false;
+    vec3 geometric = SafeNormalize(geometricNormal, vec3(0.0, 1.0, 0.0));
+    vec3 shading = SafeNormalize(shadingNormal, vec3(0.0, 1.0, 0.0));
+    geometric /= abs(geometric.x) + abs(geometric.y) + abs(geometric.z);
+    shading /= abs(shading.x) + abs(shading.y) + abs(shading.z);
+    vec2 geometricOct = geometric.z < 0.0
+        ? (vec2(1.0) - abs(geometric.yx)) * sign(geometric.xy)
+        : geometric.xy;
+    vec2 shadingOct = shading.z < 0.0
+        ? (vec2(1.0) - abs(shading.yx)) * sign(shading.xy)
+        : shading.xy;
+    // Padding2 is the first foliage token, equal to the current scene-object
+    // count. This creates one collision-free frame-local namespace while the
+    // table entry itself carries stable patch/prototype identity.
+    uint surfaceTokenBase = pc.Push.Padding2;
+    if (surfaceTokenBase >= 65534u ||
+        fragClusterIndex >= 65534u - surfaceTokenBase)
+        return false;
+    uint surfaceToken = surfaceTokenBase + fragClusterIndex;
+    payload = uvec4(
+        packSnorm2x16(geometricOct),
+        packSnorm2x16(shadingOct),
+        surfaceToken | (NjulfC5PackRgb565(vec3(0.04)) << 16u),
+        NjulfC5PackRgb9E5(diffuseBase));
+    return surfaceToken < 65534u;
+}
+#endif
+
 void main()
 {
+#if NJULF_C4_RECEIVER_OUTPUT
+    // Qualified C5 foliage remains inside the combined MRT pass. C4 does not
+    // own a foliage transport payload, so its attachment is explicitly invalid.
+    outC4ReceiverPayload = uvec4(0u);
+#endif
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+    outC5DirectDiffuseEmissive = vec4(0.0);
+    outC5ReceiverPayload = uvec4(0u);
+#endif
     WriteFoliageMaterialTransportProvenance(255u);
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
     vec4 sampledAlbedo;
@@ -212,6 +320,18 @@ void main()
         (baseColor / 3.14159265359) * ddgiIrradianceCoverage.a;
     vec3 foliageLighting = clamp(foliageDirectLighting + ddgiIndirect, vec3(0.0), vec3(64.0));
     WriteFoliageForwardColor(vec4(foliageLighting, 1.0));
+#if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+    float c5Footprint = C5FoliageB3FootprintRadius();
+    uvec4 c5Payload;
+    if (c5Footprint > 0.0 && C5CreateFoliagePayload(
+            fragNormal, normal, max(baseColor, vec3(0.0)), c5Payload))
+    {
+        outC5DirectDiffuseEmissive = vec4(clamp(
+            foliageDirectLighting + max(material.Emissive.rgb, vec3(0.0)),
+            vec3(0.0), vec3(65504.0)), c5Footprint);
+        outC5ReceiverPayload = c5Payload;
+    }
+#endif
     // Foliage carries a precomputed DDGI estimate rather than enough per-probe
     // metadata to identify a compact/far contributor. Mark covered foliage as
     // the detailed mesh path and leave unsupported pixels explicitly unknown.

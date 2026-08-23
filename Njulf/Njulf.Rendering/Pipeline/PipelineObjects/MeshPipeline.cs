@@ -482,6 +482,31 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             return combinedPipeline.Handle != 0;
         }
 
+        /// <summary>
+        /// Commits an extent-bound source contract for a replacement C5
+        /// generation. Graphics pipeline binaries are extent-independent, so
+        /// their already validated MRT variants remain reusable.
+        /// </summary>
+        internal void PublishNearFieldDirectSourceGeneration(
+            in ForwardNearFieldDirectSourcePipelineConfiguration configuration)
+        {
+            if (!ForwardNearFieldDirectSourceContract
+                    .TryValidatePipelineConfiguration(
+                        configuration,
+                        out string failure))
+            {
+                throw new InvalidOperationException(failure);
+            }
+            if (!NearFieldDirectSourceAttachmentEnabled)
+            {
+                throw new InvalidOperationException(
+                    "C5 source pipeline variants are unavailable for generation publication.");
+            }
+
+            _nearFieldDirectSourceConfiguration = configuration;
+            NearFieldDirectSourceFailureReason = "valid";
+        }
+
         private bool TryEnsureNearFieldDirectSourcePipeline(
             VkPipeline exactPipeline,
             bool receiverCacheRequired)

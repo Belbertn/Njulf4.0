@@ -30,6 +30,11 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
     int MaximumHistoryLength,
     float HitUvTolerance)
 {
+    public SimpleDdgiNearFieldResidualQualityPreset Preset { get; init; } =
+        SimpleDdgiNearFieldResidualQualityPreset.Balanced;
+    public int RaysPerPixel { get; init; } = 2;
+    public float ResidualIntensity { get; init; } = 1.0f;
+
     public static SimpleDdgiNearFieldResidualGpuConfiguration CreateReference(
         SimpleDdgiNearFieldResidualLayout layout,
         SimpleDdgiNearFieldResidualProfile profile,
@@ -44,15 +49,17 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
                 traceSourceAbiRevision,
                 traceSourceLayoutRevision,
                 traceSourceRevision),
-        MaximumTraceSteps: 64,
-        MaximumMipVisits: 8,
-        BinaryRefinementSteps: 4,
-        FilterIterationCount: 2,
+        MaximumTraceSteps: profile.MaximumTraceSteps,
+        MaximumMipVisits: profile.MaximumMipVisits,
+        BinaryRefinementSteps: profile.BinaryRefinementSteps,
+        FilterIterationCount: profile.FilterIterationCount,
         // A 7x7 receiver-bounded footprint overlaps the sparse screen-hit
         // population without crossing object/material/depth/normal edges.
         FilterRadius: 3,
-        Thickness: 0.02f,
-        StartBias: 0.001f,
+        // Multipliers for the reconstructed receiver pixel footprint. Shader
+        // minima remain 2 cm thickness and 1 mm start bias.
+        Thickness: 2.0f,
+        StartBias: 1.0f,
         // Match the 64-sample running average at saturation. Receiver depth,
         // identity, normal, and revision gates provide motion responsiveness;
         // shortening a stationary estimate to an effective ten-frame EMA
@@ -62,12 +69,17 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
         MinimumNormalDot: 0.85f,
         // Preserve the original four-metre high-frequency response, then
         // feather it smoothly across a four-metre guard band.
-        MaximumTraceDistance: 8.0f,
-        FullWeightTraceDistance: 4.0f,
+        MaximumTraceDistance: profile.MaximumTraceDistanceMeters,
+        FullWeightTraceDistance: profile.FullWeightTraceDistanceMeters,
         MinimumB3FootprintRadius: 1,
         MaximumB3FootprintRadius: 4,
         MaximumHistoryLength: 64,
-        HitUvTolerance: 0.0025f);
+        HitUvTolerance: 0.0025f)
+    {
+        Preset = profile.Preset,
+        RaysPerPixel = profile.MaximumRaysPerPixel,
+        ResidualIntensity = 1.0f
+    };
 
     public SimpleDdgiNearFieldResidualGpuConfigurationValidation Validate(
         in SimpleDdgiNearFieldResidualLayout layout)
@@ -92,6 +104,11 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuConfiguration(
             FilterRadius is < 1 or > (int)SimpleDdgiNearFieldResidualGpuAbi.MaximumFilterRadius)
         {
             return Invalid("near-field-gpu-loop-bound-invalid");
+        }
+        if (!Enum.IsDefined(Preset) || RaysPerPixel is < 1 or > 4 ||
+            !float.IsFinite(ResidualIntensity) || ResidualIntensity is < 0.0f or > 2.0f)
+        {
+            return Invalid("near-field-gpu-quality-profile-invalid");
         }
         if (layout.FilterIterationCount != FilterIterationCount)
             return Invalid("near-field-filter-iteration-layout-mismatch");
@@ -167,8 +184,15 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuIntegrationCapabilit
     bool MeasuredQualificationEvidenceVerified = false,
     bool DeviceLimitsAndActualAllocationRequirementsValidated = false)
 {
+    public bool PreparePassRegistered { get; init; }
+    public bool FrequencySeparationPassRegistered { get; init; }
+    public bool IndirectDispatchContractValidated { get; init; }
+    public bool SurfaceTableAvailable { get; init; }
+
     public bool IsReady => TracePassRegistered && TemporalPassRegistered &&
         FilterPassRegistered && CompositePassRegistered && ResetPassRegistered &&
+        PreparePassRegistered && FrequencySeparationPassRegistered &&
+        IndirectDispatchContractValidated && SurfaceTableAvailable &&
         DirectDiffuseEmissiveAttachmentAvailable && HiZAvailable &&
         ReceiverMetadataAvailable && StableSampleRayInputAvailable &&
         ReceiverBrdfPdfInputAvailable && MotionVectorsAvailable &&
@@ -182,7 +206,6 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuIntegrationCapabilit
         HitUvAndSourceRevisionValidationAvailable &&
         TemporalVarianceClippingAndBoundedHistoryAvailable &&
         B3FootprintFrequencySeparationValidated &&
-        MeasuredQualificationEvidenceVerified &&
         DeviceLimitsAndActualAllocationRequirementsValidated;
 
     public string FailureReason
@@ -194,6 +217,14 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuIntegrationCapabilit
             {
                 return "near-field-renderer-passes-not-integrated";
             }
+            if (!PreparePassRegistered)
+                return "near-field-prepare-pass-not-integrated";
+            if (!FrequencySeparationPassRegistered)
+                return "near-field-frequency-separation-pass-not-integrated";
+            if (!IndirectDispatchContractValidated)
+                return "near-field-indirect-dispatch-contract-unvalidated";
+            if (!SurfaceTableAvailable)
+                return "near-field-surface-table-unavailable";
             if (!DirectDiffuseEmissiveAttachmentAvailable)
                 return "near-field-direct-diffuse-emissive-source-attachment-unavailable";
             if (!HiZAvailable)
@@ -230,8 +261,6 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuIntegrationCapabilit
                 return "near-field-temporal-variance-or-history-length-unvalidated";
             if (!B3FootprintFrequencySeparationValidated)
                 return "near-field-b3-footprint-frequency-separation-unvalidated";
-            if (!MeasuredQualificationEvidenceVerified)
-                return "near-field-measured-qualification-evidence-unverified";
             if (!DeviceLimitsAndActualAllocationRequirementsValidated)
                 return "near-field-device-limits-or-allocation-requirements-unvalidated";
             return "valid";
@@ -272,7 +301,13 @@ public enum SimpleDdgiNearFieldResidualGpuResourceKind : byte
     TraceFrameConstants0 = 17,
     TraceFrameConstants1 = 18,
     TelemetryReadback0 = 19,
-    TelemetryReadback1 = 20
+    TelemetryReadback1 = 20,
+    PreparedDepthFootprint = 21,
+    PreparedReceiverPayload = 22,
+    PreparedMotion = 23,
+    SourceLuminance = 24,
+    SurfaceTable = 25,
+    ActiveTileAndIndirect = 26
 }
 
 /// <summary>
@@ -319,6 +354,30 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
     SimpleDdgiNearFieldResidualGpuResource TelemetryReadback1,
     uint DescriptorCount)
 {
+    public SimpleDdgiNearFieldResidualGpuResource PreparedDepthFootprint
+        { get; init; } = new(0UL, 0UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.PreparedDepthFootprint);
+
+    public SimpleDdgiNearFieldResidualGpuResource PreparedReceiverPayload
+        { get; init; } = new(0UL, 0UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.PreparedReceiverPayload);
+
+    public SimpleDdgiNearFieldResidualGpuResource PreparedMotion
+        { get; init; } = new(0UL, 0UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.PreparedMotion);
+
+    public SimpleDdgiNearFieldResidualGpuResource SourceLuminance
+        { get; init; } = new(0UL, 0UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.SourceLuminance);
+
+    public SimpleDdgiNearFieldResidualGpuResource SurfaceTable
+        { get; init; } = new(0UL, 0UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.SurfaceTable);
+
+    public SimpleDdgiNearFieldResidualGpuResource ActiveTileAndIndirect
+        { get; init; } = new(0UL, 0UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.ActiveTileAndIndirect);
+
     public void Validate(in SimpleDdgiNearFieldResidualLayout layout)
     {
         if (AllocationId == 0UL)
@@ -326,9 +385,15 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         if (!layout.IsValid || layout.TotalBytes == 0UL ||
             layout.ReceiverPayloadBytes == 0UL ||
             layout.TraceFrameConstantsBytes == 0UL ||
+            layout.PreparedDepthFootprintBytes == 0UL ||
+            layout.PreparedReceiverPayloadBytes == 0UL ||
+            layout.PreparedMotionBytes == 0UL ||
+            layout.SourceLuminanceBytes == 0UL ||
             layout.HistoryRadianceBytes == 0UL || layout.MomentBytes == 0UL ||
             layout.HistoryValidityBytes == 0UL || layout.HistoryMetadataBytes == 0UL ||
             layout.HistoryNormalBytes == 0UL ||
+            layout.SurfaceTableBytes == 0UL ||
+            layout.ActiveTileAndIndirectBytes == 0UL ||
             layout.TelemetryReadbackBytes == 0UL ||
             (layout.TraceFrameConstantsBytes & 1UL) != 0UL ||
             (layout.HistoryRadianceBytes & 1UL) != 0UL ||
@@ -357,6 +422,18 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         ValidateResource(RawCandidate, layout.RawCandidateBytes,
             SimpleDdgiNearFieldResidualGpuResourceKind.RawCandidate,
             nameof(RawCandidate));
+        ValidateResource(PreparedDepthFootprint, layout.PreparedDepthFootprintBytes,
+            SimpleDdgiNearFieldResidualGpuResourceKind.PreparedDepthFootprint,
+            nameof(PreparedDepthFootprint));
+        ValidateResource(PreparedReceiverPayload, layout.PreparedReceiverPayloadBytes,
+            SimpleDdgiNearFieldResidualGpuResourceKind.PreparedReceiverPayload,
+            nameof(PreparedReceiverPayload));
+        ValidateResource(PreparedMotion, layout.PreparedMotionBytes,
+            SimpleDdgiNearFieldResidualGpuResourceKind.PreparedMotion,
+            nameof(PreparedMotion));
+        ValidateResource(SourceLuminance, layout.SourceLuminanceBytes,
+            SimpleDdgiNearFieldResidualGpuResourceKind.SourceLuminance,
+            nameof(SourceLuminance));
         ValidateResource(HitMetadata, layout.HitMetadataBytes,
             SimpleDdgiNearFieldResidualGpuResourceKind.HitMetadata,
             nameof(HitMetadata));
@@ -396,6 +473,12 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         ValidateResource(FilterScratch1, layout.FilterScratchBytes / 2UL,
             SimpleDdgiNearFieldResidualGpuResourceKind.FilterScratch1,
             nameof(FilterScratch1));
+        ValidateResource(SurfaceTable, layout.SurfaceTableBytes,
+            SimpleDdgiNearFieldResidualGpuResourceKind.SurfaceTable,
+            nameof(SurfaceTable));
+        ValidateResource(ActiveTileAndIndirect, layout.ActiveTileAndIndirectBytes,
+            SimpleDdgiNearFieldResidualGpuResourceKind.ActiveTileAndIndirect,
+            nameof(ActiveTileAndIndirect));
         ValidateResource(TileBuffers, layout.TileBuffersBytes,
             SimpleDdgiNearFieldResidualGpuResourceKind.TileBuffers,
             nameof(TileBuffers));
@@ -428,13 +511,16 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         ulong actualBytes = checked(
             DirectDiffuseEmissiveSource.Bytes + ReceiverPayload.Bytes +
             TraceFrameConstants0.Bytes + TraceFrameConstants1.Bytes +
-            RawCandidate.Bytes + HitMetadata.Bytes +
+            PreparedDepthFootprint.Bytes + PreparedReceiverPayload.Bytes +
+            PreparedMotion.Bytes + SourceLuminance.Bytes + RawCandidate.Bytes +
+            HitMetadata.Bytes +
             HistoryRadiance0.Bytes + HistoryRadiance1.Bytes +
             HistoryMoments0.Bytes + HistoryMoments1.Bytes +
             HistoryValidity0.Bytes + HistoryValidity1.Bytes +
             HistoryMetadata0.Bytes + HistoryMetadata1.Bytes +
             HistoryNormal0.Bytes + HistoryNormal1.Bytes +
-            FilterScratch0.Bytes + FilterScratch1.Bytes + TileBuffers.Bytes +
+            FilterScratch0.Bytes + FilterScratch1.Bytes + SurfaceTable.Bytes +
+            ActiveTileAndIndirect.Bytes + TileBuffers.Bytes +
             TelemetryReadback0.Bytes + TelemetryReadback1.Bytes);
         if (actualBytes != layout.TotalBytes)
         {
@@ -456,6 +542,10 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         yield return ReceiverPayload;
         yield return TraceFrameConstants0;
         yield return TraceFrameConstants1;
+        yield return PreparedDepthFootprint;
+        yield return PreparedReceiverPayload;
+        yield return PreparedMotion;
+        yield return SourceLuminance;
         yield return RawCandidate;
         yield return HitMetadata;
         yield return HistoryRadiance0;
@@ -470,6 +560,8 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         yield return HistoryNormal1;
         yield return FilterScratch0;
         yield return FilterScratch1;
+        yield return SurfaceTable;
+        yield return ActiveTileAndIndirect;
         yield return TileBuffers;
         yield return TelemetryReadback0;
         yield return TelemetryReadback1;
@@ -523,7 +615,8 @@ public enum SimpleDdgiNearFieldResidualGpuResourceState : byte
     TraceReadyForTemporal = 3,
     TemporalReadyForFilter = 4,
     ReadyForComposite = 5,
-    CompositeComplete = 6
+    CompositeComplete = 6,
+    ReadyForFrequencySeparation = 7
 }
 
 /// <summary>
@@ -538,7 +631,7 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuHistoryRevision(
     uint EffectiveModeRevision,
     uint ExposureDomainRevision,
     bool CameraCut,
-    uint ProjectionJitterRevision = 0u,
+    uint StructuralProjectionRevision = 0u,
     uint OriginRebaseRevision = 0u,
     uint SceneGeneration = 0u,
     uint TraceSourceContentRevision = 0u,
@@ -553,7 +646,7 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuHistoryRevision(
         TraceSourceAbiRevision == other.TraceSourceAbiRevision &&
         EffectiveModeRevision == other.EffectiveModeRevision &&
         ExposureDomainRevision == other.ExposureDomainRevision &&
-        ProjectionJitterRevision == other.ProjectionJitterRevision &&
+        StructuralProjectionRevision == other.StructuralProjectionRevision &&
         OriginRebaseRevision == other.OriginRebaseRevision &&
         SceneGeneration == other.SceneGeneration &&
         TraceSourceContentRevision == other.TraceSourceContentRevision &&
@@ -564,7 +657,7 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuHistoryRevision(
     public SimpleDdgiNearFieldResidualGpuHistoryRevision WithoutCameraCut() =>
         new(ViewportRevision, HiZRevision, TraceSourceAbiRevision,
             EffectiveModeRevision, ExposureDomainRevision, false,
-            ProjectionJitterRevision, OriginRebaseRevision, SceneGeneration,
+            StructuralProjectionRevision, OriginRebaseRevision, SceneGeneration,
             TraceSourceContentRevision, NearFieldLayoutRevision,
             B3OwnershipRevision, TraceSourceLayoutRevision);
 }
@@ -608,6 +701,13 @@ public readonly record struct SimpleDdgiNearFieldResidualGpuFilterCompletion(
     bool QueueOrderedCommandsRecorded,
     bool EdgeAwareValidityChecked,
     uint ExecutedIterationCount);
+
+public readonly record struct
+    SimpleDdgiNearFieldResidualGpuFrequencySeparationCompletion(
+        bool QueueOrderedCommandsRecorded,
+        bool B3FootprintSupportValidated,
+        bool PerIdentityConfidenceWeightedMeanRemoved,
+        bool InvalidResidualPayloadWasZero);
 
 public readonly record struct SimpleDdgiNearFieldResidualGpuCompositeCompletion(
     bool QueueOrderedCommandsRecorded,
@@ -916,7 +1016,8 @@ public sealed class SimpleDdgiNearFieldResidualGpuManager : IDisposable
             // are fence-delayed telemetry and never publication authority.
             _currentFrameHasPublishableHistoryBank = true;
             _state = _configuration.FilterIterationCount == 0
-                ? SimpleDdgiNearFieldResidualGpuResourceState.ReadyForComposite
+                ? SimpleDdgiNearFieldResidualGpuResourceState
+                    .ReadyForFrequencySeparation
                 : SimpleDdgiNearFieldResidualGpuResourceState.TemporalReadyForFilter;
             _reason = "temporal-recorded-coherent-history-bank";
             return SimpleDdgiNearFieldResidualGpuStageResult.Success(_reason);
@@ -942,9 +1043,54 @@ public sealed class SimpleDdgiNearFieldResidualGpuManager : IDisposable
             if (completion.ExecutedIterationCount != (uint)_configuration.FilterIterationCount)
                 return AbortCurrentFrameNoLock("near-field-filter-iteration-count-mismatch");
 
-            _state = SimpleDdgiNearFieldResidualGpuResourceState.ReadyForComposite;
+            _state = SimpleDdgiNearFieldResidualGpuResourceState
+                .ReadyForFrequencySeparation;
             _reason = "filter-recorded";
             return SimpleDdgiNearFieldResidualGpuStageResult.Success("filter-recorded");
+        }
+    }
+
+    public SimpleDdgiNearFieldResidualGpuStageResult
+        CompleteFrequencySeparation(
+            in SimpleDdgiNearFieldResidualGpuFrameToken token,
+            in SimpleDdgiNearFieldResidualGpuFrequencySeparationCompletion
+                completion)
+    {
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (!MatchesCurrentTokenNoLock(token) ||
+                _state != SimpleDdgiNearFieldResidualGpuResourceState
+                    .ReadyForFrequencySeparation)
+            {
+                return new(false,
+                    "near-field-frequency-token-or-state-mismatch");
+            }
+            if (!completion.QueueOrderedCommandsRecorded)
+            {
+                return AbortCurrentFrameNoLock(
+                    "near-field-frequency-command-recording-incomplete");
+            }
+            if (!completion.B3FootprintSupportValidated)
+            {
+                return AbortCurrentFrameNoLock(
+                    "near-field-frequency-B3-support-unvalidated");
+            }
+            if (!completion.PerIdentityConfidenceWeightedMeanRemoved)
+            {
+                return AbortCurrentFrameNoLock(
+                    "near-field-frequency-identity-mean-not-removed");
+            }
+            if (!completion.InvalidResidualPayloadWasZero)
+            {
+                return AbortCurrentFrameNoLock(
+                    "near-field-frequency-invalid-residual-not-zero");
+            }
+
+            _state = SimpleDdgiNearFieldResidualGpuResourceState
+                .ReadyForComposite;
+            _reason = "frequency-separation-recorded";
+            return SimpleDdgiNearFieldResidualGpuStageResult.Success(_reason);
         }
     }
 
@@ -1080,7 +1226,10 @@ public sealed class SimpleDdgiNearFieldResidualGpuManager : IDisposable
         if (!layout.IsValid || layout.SourceWidth <= 0 || layout.SourceHeight <= 0 ||
             layout.TraceWidth <= 0 || layout.TraceHeight <= 0 || layout.TotalBytes == 0UL ||
             layout.TraceSourceBytes == 0UL || layout.RawCandidateBytes == 0UL ||
-            layout.HitMetadataBytes == 0UL || layout.HistoryRadianceBytes == 0UL ||
+            layout.PreparedDepthFootprintBytes == 0UL ||
+            layout.PreparedReceiverPayloadBytes == 0UL ||
+            layout.PreparedMotionBytes == 0UL ||
+            layout.HitMetadataBytes != 0UL || layout.HistoryRadianceBytes == 0UL ||
             layout.MomentBytes == 0UL || layout.HistoryValidityBytes == 0UL ||
             layout.HistoryMetadataBytes == 0UL || layout.HistoryNormalBytes == 0UL ||
             layout.TileBuffersBytes == 0UL || layout.TelemetryReadbackBytes == 0UL)

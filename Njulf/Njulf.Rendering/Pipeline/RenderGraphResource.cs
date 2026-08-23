@@ -157,7 +157,14 @@ namespace Njulf.Rendering.Pipeline
         DirectionalShadowHistory,
         DirectionalShadowScratch,
         DirectionalShadowDiagnostics,
-        DirectionalShadowCounters
+        DirectionalShadowCounters,
+        // C5 V12 append-only resources.
+        NearFieldPreparedDepthFootprint,
+        NearFieldPreparedReceiverPayload,
+        NearFieldPreparedMotion,
+        NearFieldSourceLuminance,
+        NearFieldSurfaceTable,
+        NearFieldActiveTilesAndIndirectArguments
     }
 
     public enum RenderGraphResourceKind

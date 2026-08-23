@@ -15,20 +15,177 @@ layout(std430, set = 0, binding = 2) readonly buffer CompositeMetadataBuffer
     SimpleDdgiNearFieldResidualHitMetadata values[];
 } compositeMetadata;
 layout(rgba16f, set = 0, binding = 3) uniform writeonly image2D canonicalSceneColorOutput;
+layout(std430, set = 0, binding = 4) readonly buffer CompositeActiveTileBuffer
+{
+    uint words[];
+} compositeActiveTiles;
+layout(set = 0, binding = 5) uniform usampler2D fullReceiverPayload;
+layout(set = 0, binding = 6) uniform sampler2D fullReceiverDepth;
+layout(std430, set = 0, binding = 7) readonly buffer CompositeSurfaceTableBuffer
+{
+    SimpleDdgiNearFieldSurfaceEntry values[];
+} compositeSurfaceTable;
+layout(set = 0, binding = 8) uniform usampler2D preparedReceiverPayload;
+layout(std430, set = 0, binding = 9) readonly buffer CompositeFrameConstantsBuffer
+{
+    SimpleDdgiNearFieldResidualTraceFrameConstants frame;
+} compositeFrameConstants;
+layout(set = 0, binding = 10) uniform sampler2D fullDirectSource;
+layout(set = 0, binding = 11) uniform usampler2D compositeHistoryValidity;
 
 layout(push_constant) uniform NearFieldCompositePushBlock
 {
     SimpleDdgiNearFieldResidualCompositePushConstants pc;
 };
 
+float C5CompositePositiveLinearDepth(float storedDepth)
+{
+    float nearPlane = max(
+        compositeFrameConstants.frame.clipAndSequence.x, 0.001);
+    float farPlane = max(
+        compositeFrameConstants.frame.clipAndSequence.y,
+        nearPlane + 0.01);
+    bool reversedZ = SimpleDdgiNearFieldHasFlag(
+        pc.flags, SIMPLE_DDGI_NEAR_FIELD_FLAG_REVERSED_Z);
+    float denominator = reversedZ
+        ? nearPlane + storedDepth * (farPlane - nearPlane)
+        : farPlane - storedDepth * (farPlane - nearPlane);
+    return nearPlane * farPlane / max(denominator, 1.0e-7);
+}
+
+bool C5CompositeReadSurface(
+    uint token,
+    out SimpleDdgiNearFieldSurfaceEntry surface)
+{
+    surface.stableObjectId = 0u;
+    surface.stableMaterialId = 0u;
+    surface.packedObjectMaterialRevisions = 0u;
+    surface.coverageMotionFlags = 0u;
+    if (token >= SIMPLE_DDGI_NEAR_FIELD_MAX_SURFACE_TABLE_ENTRIES ||
+        token >= uint(compositeSurfaceTable.values.length()))
+        return false;
+    surface = compositeSurfaceTable.values[token];
+    return surface.stableObjectId != 0u &&
+        surface.stableMaterialId != 0u &&
+        (surface.coverageMotionFlags & (1u << 4u)) != 0u;
+}
+
+vec3 C5CompositeFallback(vec3 canonical)
+{
+    return SimpleDdgiNearFieldIsDebugView(pc.debugView)
+        ? vec3(0.0)
+        : canonical;
+}
+
+vec3 C5CompositeSignedDebug(vec3 value)
+{
+    vec3 bounded = value / (vec3(1.0) + abs(value));
+    return clamp(vec3(0.5) + 0.5 * bounded, vec3(0.0), vec3(1.0));
+}
+
+vec3 C5CompositeRejectionColor(uint reason)
+{
+    if (reason == 0u) return vec3(0.08, 0.75, 0.16); // accepted / no reject
+    if (reason == 1u) return vec3(0.20, 0.35, 1.00); // epoch
+    if (reason == 2u) return vec3(1.00, 0.15, 0.15); // receiver identity
+    if (reason == 3u) return vec3(1.00, 0.45, 0.10); // receiver revision
+    if (reason == 4u) return vec3(0.90, 0.10, 0.65); // hit identity
+    if (reason == 5u) return vec3(0.75, 0.20, 1.00); // hit revision
+    if (reason == 6u) return vec3(0.10, 0.85, 1.00); // reprojection
+    if (reason == 7u) return vec3(0.95, 0.85, 0.10); // depth
+    if (reason == 8u) return vec3(0.20, 0.95, 0.65); // normal
+    if (reason == 9u) return vec3(1.00, 0.55, 0.55); // source revision
+    if (reason == 10u) return vec3(0.65, 0.65, 0.65); // variance clip
+    if (reason == 11u) return vec3(1.00, 1.00, 1.00); // non-finite
+    if (reason == 12u) return vec3(0.10, 0.55, 0.95); // source reactive
+    return vec3(0.45, 0.05, 0.05); // invalid current / reserved
+}
+
+vec3 C5CompositeTileActivity(ivec2 fullPixel, ivec2 fullExtent)
+{
+    if (uint(compositeActiveTiles.words.length()) > 4u &&
+        compositeActiveTiles.words[4u] != 0u)
+        return vec3(1.0, 0.05, 0.05);
+    uvec2 traceExtent = uvec2(pc.traceWidth, pc.traceHeight);
+    uvec2 tracePixel = min(
+        (uvec2(fullPixel) * traceExtent) /
+            max(uvec2(fullExtent), uvec2(1u)),
+        traceExtent - uvec2(1u));
+    uvec2 tileBegin = (tracePixel / 8u) * 8u;
+    for (uint y = 0u; y < 8u; ++y)
+    {
+        for (uint x = 0u; x < 8u; ++x)
+        {
+            uvec2 tap = tileBegin + uvec2(x, y);
+            if (any(greaterThanEqual(tap, traceExtent)))
+                continue;
+            uvec4 payload = texelFetch(
+                preparedReceiverPayload, ivec2(tap), 0);
+            uint token = payload.z & 0xffffu;
+            if (token < SIMPLE_DDGI_NEAR_FIELD_MAX_SURFACE_TABLE_ENTRIES)
+                return vec3(0.08, 0.9, 0.18);
+        }
+    }
+    return vec3(0.0);
+}
+
 void main()
 {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 outputExtent = imageSize(canonicalSceneColorOutput);
-    if (pixel.x >= outputExtent.x || pixel.y >= outputExtent.y ||
-        pixel.x >= int(pc.fullWidth) || pixel.y >= int(pc.fullHeight))
+    bool debugView = SimpleDdgiNearFieldIsDebugView(pc.debugView);
+    ivec2 pixel;
+    if (debugView)
     {
-        return;
+        pixel = ivec2(gl_GlobalInvocationID.xy);
+        if (any(greaterThanEqual(pixel, outputExtent)) ||
+            pixel.x >= int(pc.fullWidth) || pixel.y >= int(pc.fullHeight))
+            return;
+    }
+    else
+    {
+        uint maximumFullTileWidth =
+            (8u * pc.fullWidth + pc.traceWidth - 1u) / max(pc.traceWidth, 1u);
+        uint maximumFullTileHeight =
+            (8u * pc.fullHeight + pc.traceHeight - 1u) / max(pc.traceHeight, 1u);
+        uint subgroupCountX = max(1u, (maximumFullTileWidth + 7u) / 8u);
+        uint subgroupCountY = max(1u, (maximumFullTileHeight + 7u) / 8u);
+        uint groupsPerActiveTile = subgroupCountX * subgroupCountY;
+        uint activeIndex = gl_WorkGroupID.x / groupsPerActiveTile;
+        uint subgroupIndex = gl_WorkGroupID.x % groupsPerActiveTile;
+        uint activeCount = uint(compositeActiveTiles.words.length()) > 1u
+            ? compositeActiveTiles.words[1]
+            : 0u;
+        if (uint(compositeActiveTiles.words.length()) <= 4u ||
+            compositeActiveTiles.words[4u] != 0u ||
+            activeIndex >= activeCount ||
+            SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex >=
+                uint(compositeActiveTiles.words.length()))
+            return;
+        uint tileIndex = compositeActiveTiles.words[
+            SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS + activeIndex];
+        uint traceTileCountX = (pc.traceWidth + 7u) / 8u;
+        uvec2 traceTile = uvec2(
+            tileIndex % max(traceTileCountX, 1u),
+            tileIndex / max(traceTileCountX, 1u));
+        uvec2 traceBegin = traceTile * 8u;
+        uvec2 traceEnd = min(traceBegin + uvec2(8u),
+            uvec2(pc.traceWidth, pc.traceHeight));
+        uvec2 fullBegin = uvec2(
+            (traceBegin.x * pc.fullWidth) / max(pc.traceWidth, 1u),
+            (traceBegin.y * pc.fullHeight) / max(pc.traceHeight, 1u));
+        uvec2 fullEnd = uvec2(
+            (traceEnd.x * pc.fullWidth + pc.traceWidth - 1u) /
+                max(pc.traceWidth, 1u),
+            (traceEnd.y * pc.fullHeight + pc.traceHeight - 1u) /
+                max(pc.traceHeight, 1u));
+        uvec2 subgroup = uvec2(
+            subgroupIndex % subgroupCountX,
+            subgroupIndex / subgroupCountX);
+        pixel = ivec2(fullBegin + subgroup * 8u + gl_LocalInvocationID.xy);
+        if (any(greaterThanEqual(pixel, outputExtent)) ||
+            pixel.x >= int(pc.fullWidth) || pixel.y >= int(pc.fullHeight) ||
+            pixel.x >= int(fullEnd.x) || pixel.y >= int(fullEnd.y))
+            return;
     }
 
     vec2 fullUv = (vec2(pixel) + vec2(0.5)) / max(vec2(outputExtent), vec2(1.0));
@@ -41,7 +198,15 @@ void main()
             SIMPLE_DDGI_NEAR_FIELD_FLAG_COMPOSITE_VALID_ONLY);
     if (!validAbi)
     {
-        imageStore(canonicalSceneColorOutput, pixel, vec4(canonical, 1.0));
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(C5CompositeFallback(canonical), 1.0));
+        return;
+    }
+
+    if (pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_TILE_ACTIVITY)
+    {
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(C5CompositeTileActivity(pixel, outputExtent), 1.0));
         return;
     }
 
@@ -52,46 +217,227 @@ void main()
     ivec2 residualExtent = min(
         ivec2(pc.traceWidth, pc.traceHeight),
         physicalResidualExtent);
-    ivec2 residualPixel = clamp(ivec2(fullUv * vec2(residualExtent)), ivec2(0),
-        max(residualExtent - ivec2(1), ivec2(0)));
-    uint residualIndex = uint(residualPixel.y) * pc.traceWidth +
-        uint(residualPixel.x);
-    if (residualIndex >= uint(compositeMetadata.values.length()))
+    if (residualExtent.x <= 0 || residualExtent.y <= 0)
     {
-        imageStore(canonicalSceneColorOutput, pixel, vec4(canonical, 1.0));
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(C5CompositeFallback(canonical), 1.0));
         return;
     }
 
-    vec4 residual = texelFetch(filteredResidualInput, residualPixel, 0);
-    SimpleDdgiNearFieldResidualHitMetadata metadata =
-        compositeMetadata.values[residualIndex];
-    bool validResidual = SimpleDdgiNearFieldIsValidCandidate(residual) &&
-        SimpleDdgiNearFieldHasFlag(metadata.packedFlags,
-            SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) &&
-        // A newly exposed receiver has only one stochastic sample. Keep the
-        // canonical DDGI result until temporal validation has accepted a prior
-        // receiver estimate; this prevents disocclusion sparkles.
-        SimpleDdgiNearFieldHasFlag(metadata.packedFlags,
-            SIMPLE_DDGI_NEAR_FIELD_FLAG_HISTORY_ACCEPTED) &&
-        SimpleDdgiNearFieldFinite(metadata.confidence) && metadata.confidence > 0.0;
-    if (!validResidual)
+    vec4 fullPackedNormals;
+    uint fullSurfaceToken;
+    vec3 ignoredDiffuse;
+    vec3 ignoredF0;
+    SimpleDdgiNearFieldDecodeReceiverPayload(
+        texelFetch(fullReceiverPayload, pixel, 0),
+        fullPackedNormals,
+        fullSurfaceToken,
+        ignoredDiffuse,
+        ignoredF0);
+    SimpleDdgiNearFieldSurfaceEntry fullSurface;
+    vec3 fullGeometric = SimpleDdgiNearFieldDecodeOctNormal(
+        fullPackedNormals.xy);
+    vec3 fullShading = SimpleDdgiNearFieldDecodeOctNormal(
+        fullPackedNormals.zw);
+    float fullLinearDepth = C5CompositePositiveLinearDepth(
+        texelFetch(fullReceiverDepth, pixel, 0).r);
+    float fullFootprint = texelFetch(fullDirectSource, pixel, 0).a;
+    if (!C5CompositeReadSurface(fullSurfaceToken, fullSurface) ||
+        dot(fullGeometric, fullGeometric) <= 0.0 ||
+        dot(fullShading, fullShading) <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(fullLinearDepth) ||
+        fullLinearDepth <= 0.0 ||
+        !SimpleDdgiNearFieldFinite(fullFootprint) || fullFootprint <= 0.0)
     {
-        imageStore(canonicalSceneColorOutput, pixel, vec4(canonical, 1.0));
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(C5CompositeFallback(canonical), 1.0));
         return;
     }
 
-    // Metadata owns the canonical C5 confidence. Residual alpha is carried
-    // through filtering for neighbourhood weighting only; multiplying both
-    // would square one trace confidence and systematically darken the result.
-    float confidence = clamp(metadata.confidence, 0.0, 1.0);
-    if (!SimpleDdgiNearFieldFinite(confidence) || confidence < pc.confidenceFloor)
+    if (pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_SOURCE_RADIANCE)
     {
-        imageStore(canonicalSceneColorOutput, pixel, vec4(canonical, 1.0));
+        vec3 source = max(texelFetch(fullDirectSource, pixel, 0).rgb,
+            vec3(0.0));
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(source / (vec3(1.0) + source), 1.0));
+        return;
+    }
+    if (pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_B3_FOOTPRINT)
+    {
+        float footprint = fullFootprint / (1.0 + fullFootprint);
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(vec3(footprint), 1.0));
+        return;
+    }
+
+    // 3x3 joint reconstruction. Each tap must represent the same stable
+    // receiver and compatible revision/depth/B3 ownership. Invalid support
+    // contributes exactly zero.
+    vec3 weightedResidual = vec3(0.0);
+    float weightedConfidence = 0.0;
+    float weightSum = 0.0;
+    float selectedTapWeight = -1.0;
+    ivec2 selectedTapPixel = ivec2(0);
+    SimpleDdgiNearFieldResidualHitMetadata selectedMetadata =
+        SimpleDdgiNearFieldZeroMetadata();
+    vec2 residualPosition = fullUv * vec2(residualExtent) - vec2(0.5);
+    ivec2 residualBase = ivec2(floor(residualPosition));
+    vec2 residualFraction = fract(residualPosition);
+    for (int y = -1; y <= 1; ++y)
+    {
+        for (int x = -1; x <= 1; ++x)
+        {
+            ivec2 tapPixel = residualBase + ivec2(x, y);
+            if (any(lessThan(tapPixel, ivec2(0))) ||
+                any(greaterThanEqual(tapPixel, residualExtent)))
+                continue;
+            uint tapIndex = uint(tapPixel.y) * pc.traceWidth +
+                uint(tapPixel.x);
+            if (tapIndex >= uint(compositeMetadata.values.length()))
+                continue;
+            vec4 tapResidual = texelFetch(filteredResidualInput, tapPixel, 0);
+            SimpleDdgiNearFieldResidualHitMetadata tapMetadata =
+                compositeMetadata.values[tapIndex];
+            if (!SimpleDdgiNearFieldIsValidCandidate(tapResidual) ||
+                !SimpleDdgiNearFieldHasFlag(
+                    SimpleDdgiNearFieldMetadataFlags(tapMetadata),
+                    SIMPLE_DDGI_NEAR_FIELD_FLAG_VALID_CANDIDATE) ||
+                any(notEqual(tapMetadata.receiverIdentity, uvec2(
+                    fullSurface.stableObjectId,
+                    fullSurface.stableMaterialId))) ||
+                tapMetadata.packedReceiverRevisions !=
+                    fullSurface.packedObjectMaterialRevisions)
+                continue;
+
+            vec4 tapPackedNormals;
+            uint ignoredTapToken;
+            SimpleDdgiNearFieldDecodeReceiverPayload(
+                texelFetch(preparedReceiverPayload, tapPixel, 0),
+                tapPackedNormals,
+                ignoredTapToken,
+                ignoredDiffuse,
+                ignoredF0);
+            vec3 tapGeometric = SimpleDdgiNearFieldDecodeOctNormal(
+                tapPackedNormals.xy);
+            vec3 tapShading = SimpleDdgiNearFieldDecodeOctNormal(
+                tapPackedNormals.zw);
+            float normalWeight = min(
+                dot(fullGeometric, tapGeometric),
+                dot(fullShading, tapShading));
+            if (!SimpleDdgiNearFieldFinite(normalWeight) ||
+                normalWeight < 0.85)
+                continue;
+
+            vec2 tapOffset = vec2(x, y) - residualFraction;
+            float tentWeight = max(0.0, 1.5 - abs(tapOffset.x)) *
+                max(0.0, 1.5 - abs(tapOffset.y));
+            float depthWeight = SimpleDdgiNearFieldDepthWeight(
+                fullLinearDepth,
+                tapMetadata.receiverLinearDepth,
+                max(abs(fullLinearDepth) * 0.01, 0.02));
+            float tapFootprint = SimpleDdgiNearFieldReceiverFootprint(
+                tapMetadata);
+            float footprintWeight = clamp(1.0 - abs(
+                fullFootprint - tapFootprint) /
+                max(fullFootprint, 1.0e-4), 0.0, 1.0);
+            float weight = tentWeight * depthWeight *
+                pow(clamp(normalWeight, 0.0, 1.0), 8.0) * footprintWeight *
+                clamp(tapResidual.a, 0.0, 1.0);
+            if (!SimpleDdgiNearFieldFinite(weight) || weight <= 0.0)
+                continue;
+            weightedResidual += tapResidual.rgb * weight;
+            weightedConfidence += tapResidual.a * weight;
+            weightSum += weight;
+            if (weight > selectedTapWeight)
+            {
+                selectedTapWeight = weight;
+                selectedTapPixel = tapPixel;
+                selectedMetadata = tapMetadata;
+            }
+        }
+    }
+    if (!SimpleDdgiNearFieldFinite(weightSum) || weightSum <= 0.0)
+    {
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(C5CompositeFallback(canonical), 1.0));
+        return;
+    }
+    vec3 residual = weightedResidual / weightSum;
+    float confidence = clamp(weightedConfidence / weightSum, 0.0, 1.0);
+    if (!SimpleDdgiNearFieldFinite(confidence))
+    {
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(C5CompositeFallback(canonical), 1.0));
+        return;
+    }
+
+    if (pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_RAW_CANDIDATE ||
+        pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_NEAR_ESTIMATE ||
+        pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_LOW_ESTIMATE ||
+        pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_SIGNED_RESIDUAL)
+    {
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(C5CompositeSignedDebug(residual), 1.0));
+        return;
+    }
+    if (pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_CONFIDENCE)
+    {
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(vec3(confidence), 1.0));
+        return;
+    }
+    if (pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_HISTORY_LENGTH)
+    {
+        uint historyLength;
+        uint packedValidity = texelFetch(
+            compositeHistoryValidity, selectedTapPixel, 0).r;
+        bool validHistory = SimpleDdgiNearFieldUnpackHistoryValidity(
+            packedValidity, pc.historyEpoch, historyLength);
+        float normalizedLength = validHistory
+            ? float(historyLength) /
+                float(SIMPLE_DDGI_NEAR_FIELD_MAX_HISTORY_LENGTH)
+            : 0.0;
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(normalizedLength, normalizedLength,
+                validHistory ? 1.0 : 0.0, 1.0));
+        return;
+    }
+    if (pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_HISTORY_REJECTION)
+    {
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(C5CompositeRejectionColor(
+                SimpleDdgiNearFieldRejectionReason(selectedMetadata)), 1.0));
+        return;
+    }
+    if (pc.debugView ==
+        SIMPLE_DDGI_NEAR_FIELD_DEBUG_TRACE_DISTANCE_VALIDITY)
+    {
+        uint metadataFlags = SimpleDdgiNearFieldMetadataFlags(selectedMetadata);
+        bool screenHit = SimpleDdgiNearFieldHasFlag(metadataFlags,
+            SIMPLE_DDGI_NEAR_FIELD_FLAG_SCREEN_SPACE_HIT) &&
+            selectedMetadata.hitLinearDepth > 0.0;
+        float distance = abs(selectedMetadata.hitLinearDepth -
+            selectedMetadata.receiverLinearDepth);
+        float normalizedDistance = SimpleDdgiNearFieldFinite(distance)
+            ? distance / (distance + 10.0)
+            : 0.0;
+        vec3 traceColor = screenHit
+            ? vec3(normalizedDistance, 1.0, 0.1)
+            : vec3(1.0, 0.0, 0.0);
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(traceColor, 1.0));
+        return;
+    }
+
+    if (confidence < pc.confidenceFloor)
+    {
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(C5CompositeFallback(canonical), 1.0));
         return;
     }
 
     float intensity = max(pc.residualIntensity, 0.0);
-    vec3 contribution = residual.rgb * confidence * intensity;
+    vec3 contribution = residual * confidence * intensity;
     // A quarter-resolution signed residual must never erase or explosively
     // brighten the canonical solution when one rare screen-space path carries
     // unusual radiance. Scale the RGB vector uniformly to preserve hue while
@@ -104,6 +450,12 @@ void main()
     float correctionScale = min(1.0,
         min(correctionRatio.x, min(correctionRatio.y, correctionRatio.z)));
     contribution *= clamp(correctionScale, 0.0, 1.0);
+    if (pc.debugView == SIMPLE_DDGI_NEAR_FIELD_DEBUG_FINAL_CONTRIBUTION)
+    {
+        imageStore(canonicalSceneColorOutput, pixel,
+            vec4(C5CompositeSignedDebug(contribution), 1.0));
+        return;
+    }
     vec3 composed = canonical + contribution;
     imageStore(canonicalSceneColorOutput, pixel,
         vec4(SimpleDdgiNearFieldFinite(composed)

@@ -135,7 +135,13 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUParticleSimulatePushConstants>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUParticleSortPushConstants>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
-                Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(208));
+                Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(224));
+                Assert.That(Marshal.OffsetOf<GPUObjectData>(
+                    nameof(GPUObjectData.NearFieldStableObjectId)).ToInt32(),
+                    Is.EqualTo(208));
+                Assert.That(Marshal.OffsetOf<GPUObjectData>(
+                    nameof(GPUObjectData.NearFieldCoverageMotionFlags)).ToInt32(),
+                    Is.EqualTo(220));
                 Assert.That(Marshal.SizeOf<GPUDebugLineVertex>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(320));
                 Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(548));
@@ -535,9 +541,11 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.PrototypeIndex), "OFFSET_GPU_FOLIAGE_PATCH_PROTOTYPE_INDEX");
                 AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.ClusterOffset), "OFFSET_GPU_FOLIAGE_PATCH_CLUSTER_OFFSET");
                 AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.ClusterCount), "OFFSET_GPU_FOLIAGE_PATCH_CLUSTER_COUNT");
-                AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.DensityTextureIndex), "OFFSET_GPU_FOLIAGE_PATCH_DENSITY_TEXTURE_INDEX");
+                AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.NearFieldStableObjectId), "OFFSET_GPU_FOLIAGE_PATCH_NEAR_FIELD_STABLE_OBJECT_ID");
                 AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.Seed), "OFFSET_GPU_FOLIAGE_PATCH_SEED");
                 AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.Flags), "OFFSET_GPU_FOLIAGE_PATCH_FLAGS");
+                AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.NearFieldStableMaterialId), "OFFSET_GPU_FOLIAGE_PATCH_NEAR_FIELD_STABLE_MATERIAL_ID");
+                AssertFieldOffset<GPUFoliagePatch>(nameof(GPUFoliagePatch.NearFieldPackedObjectMaterialRevisions), "OFFSET_GPU_FOLIAGE_PATCH_NEAR_FIELD_PACKED_OBJECT_MATERIAL_REVISIONS");
 
                 AssertFieldOffset<GPUFoliageCluster>(nameof(GPUFoliageCluster.WorldCenterRadius), "OFFSET_GPU_FOLIAGE_CLUSTER_WORLD_CENTER_RADIUS");
                 AssertFieldOffset<GPUFoliageCluster>(nameof(GPUFoliageCluster.BoundsMinDensity), "OFFSET_GPU_FOLIAGE_CLUSTER_BOUNDS_MIN_DENSITY");

@@ -221,10 +221,9 @@ public readonly record struct SimpleDdgiNearFieldTraceSourceContract
             failure = "trace-source-abi-revision-required";
             return false;
         }
-        if (Format != SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat &&
-            Format != SimpleDdgiNearFieldResidualFormat.B10G11R11UfloatPack32)
+        if (Format != SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat)
         {
-            failure = "trace-source-format-unrecognized";
+            failure = "trace-source-r16g16b16a16-sfloat-required";
             return false;
         }
         if (!Extent.TryValidate(out failure))
@@ -318,9 +317,10 @@ public enum SimpleDdgiNearFieldHistoryRejectionReason : byte
 }
 
 /// <summary>
-/// Receiver-owned identity used to decide whether residual history is reusable.
-/// Hit fields remain in the diagnostic contract, but stochastic hit variation is
-/// deliberately not a temporal rejection condition.
+/// Receiver- and hit-owned identity used to decide whether residual history is
+/// reusable. A different Monte Carlo ray may be launched, but previously
+/// accumulated radiance is retained only while the reconstructed hit still
+/// resolves to the same object/material revisions and pose.
 /// </summary>
 public readonly record struct SimpleDdgiNearFieldHistoryIdentity(
     bool CurrentCandidateValid,
@@ -339,13 +339,24 @@ public readonly record struct SimpleDdgiNearFieldHistoryIdentity(
     float HitDepth,
     Vector3 ReceiverGeometricNormal,
     Vector3 ReceiverShadingNormal,
-    uint ProjectionJitterRevision = 0u,
+    uint StructuralProjectionRevision = 0u,
     uint OriginRebaseRevision = 0u,
     uint SceneGeneration = 0u,
     uint TraceSourceContentRevision = 0u,
     uint NearFieldLayoutRevision = 0u,
     uint B3OwnershipRevision = 0u,
-    uint TraceSourceLayoutRevision = 0u);
+    uint TraceSourceLayoutRevision = 0u)
+{
+    public uint ReceiverObjectRevision { get; init; }
+    public uint ReceiverMaterialId { get; init; }
+    public uint HitMaterialId { get; init; }
+    public uint HitObjectRevision { get; init; }
+    public float ReceiverB3Footprint { get; init; } = 0.25f;
+    public uint SourceLightingEpoch { get; init; }
+    public Vector3 HitSourceRadiance { get; init; }
+    public bool ReceiverMotionVectorsValid { get; init; } = true;
+    public bool HitPoseChanged { get; init; }
+}
 
 public readonly record struct SimpleDdgiNearFieldHistoryValidation(
     bool Accepted,
@@ -420,10 +431,41 @@ public static class SimpleDdgiNearFieldResidualReference
     }
 
     /// <summary>
+    /// A newly valid C5 sample contributes immediately at one quarter of trace
+    /// confidence and reaches full authority no later than its eighth stable
+    /// frame. This is independent of whether a previous history tap existed.
+    /// </summary>
+    public static float EvaluateImmediateCompositeConfidence(
+        float traceConfidence,
+        int stableFrameCount)
+    {
+        if (!float.IsFinite(traceConfidence) || stableFrameCount < 1)
+            return 0.0f;
+        float ramp = 0.25f + 0.75f * Math.Clamp(
+            (stableFrameCount - 1) / 7.0f, 0.0f, 1.0f);
+        return Math.Clamp(traceConfidence, 0.0f, 1.0f) * ramp;
+    }
+
+    /// <summary>Returns 1 below 5%, fades to zero at 25%, then rejects.</summary>
+    public static float EvaluateSourceReactiveHistoryWeight(
+        Vector3 storedRadiance,
+        Vector3 currentRadiance)
+    {
+        if (!IsFinite(storedRadiance) || !IsFinite(currentRadiance))
+            return 0.0f;
+        float denominator = MathF.Max(storedRadiance.Length(), 1.0e-4f);
+        float relative = (currentRadiance - storedRadiance).Length() / denominator;
+        if (relative <= 0.05f)
+            return 1.0f;
+        if (relative >= 0.25f)
+            return 0.0f;
+        return 1.0f - (relative - 0.05f) / 0.20f;
+    }
+
+    /// <summary>
     /// Mirrors the temporal shader's evidence gate. A valid zero miss remains
-    /// in history, but a visible correction is admitted only after the signed
-    /// mean has both enough history and enough signal relative to its standard
-    /// error.
+    /// in history while composite confidence follows the bounded eight-frame
+    /// ramp above.
     /// </summary>
     public static float EvaluateTemporalEvidenceConfidence(
         float firstMoment,
@@ -503,7 +545,7 @@ public static class SimpleDdgiNearFieldResidualReference
             return SimpleDdgiNearFieldHistoryValidation.Reject(
                 SimpleDdgiNearFieldHistoryRejectionReason.ExposureDomainChanged);
         }
-        if (current.ProjectionJitterRevision != previous.ProjectionJitterRevision ||
+        if (current.StructuralProjectionRevision != previous.StructuralProjectionRevision ||
             current.OriginRebaseRevision != previous.OriginRebaseRevision)
         {
             return SimpleDdgiNearFieldHistoryValidation.Reject(
@@ -544,6 +586,42 @@ public static class SimpleDdgiNearFieldResidualReference
             return SimpleDdgiNearFieldHistoryValidation.Reject(
                 SimpleDdgiNearFieldHistoryRejectionReason.ReceiverMaterialRevisionMismatch);
         }
+        if (current.ReceiverObjectRevision != previous.ReceiverObjectRevision ||
+            current.ReceiverMaterialId != previous.ReceiverMaterialId ||
+            !current.ReceiverMotionVectorsValid)
+        {
+            return SimpleDdgiNearFieldHistoryValidation.Reject(
+                SimpleDdgiNearFieldHistoryRejectionReason.ReceiverMaterialRevisionMismatch);
+        }
+        if (current.HitPoseChanged || current.HitObjectId != previous.HitObjectId ||
+            current.HitMaterialId != previous.HitMaterialId ||
+            current.HitObjectRevision != previous.HitObjectRevision ||
+            current.HitMaterialRevision != previous.HitMaterialRevision)
+        {
+            return SimpleDdgiNearFieldHistoryValidation.Reject(
+                SimpleDdgiNearFieldHistoryRejectionReason.HitMaterialRevisionMismatch);
+        }
+        float footprintScale = MathF.Max(
+            MathF.Max(current.ReceiverB3Footprint, previous.ReceiverB3Footprint),
+            1.0e-4f);
+        if (!float.IsFinite(current.ReceiverB3Footprint) ||
+            !float.IsFinite(previous.ReceiverB3Footprint) ||
+            MathF.Abs(current.ReceiverB3Footprint - previous.ReceiverB3Footprint) >
+                footprintScale * 0.25f)
+        {
+            return SimpleDdgiNearFieldHistoryValidation.Reject(
+                SimpleDdgiNearFieldHistoryRejectionReason.NearFieldLayoutOrB3OwnershipChanged);
+        }
+        float sourceReactiveWeight = current.SourceLightingEpoch ==
+                previous.SourceLightingEpoch
+            ? 1.0f
+            : EvaluateSourceReactiveHistoryWeight(
+                previous.HitSourceRadiance, current.HitSourceRadiance);
+        if (sourceReactiveWeight <= 0.0f)
+        {
+            return SimpleDdgiNearFieldHistoryValidation.Reject(
+                SimpleDdgiNearFieldHistoryRejectionReason.SceneOrTraceSourceContentRevisionChanged);
+        }
         if (current.ProbeOwnershipRevision != previous.ProbeOwnershipRevision)
         {
             return SimpleDdgiNearFieldHistoryValidation.Reject(
@@ -557,7 +635,7 @@ public static class SimpleDdgiNearFieldResidualReference
         return new SimpleDdgiNearFieldHistoryValidation(
             true,
             SimpleDdgiNearFieldHistoryRejectionReason.None,
-            depthConfidence);
+            depthConfidence * sourceReactiveWeight);
     }
 
     private static bool FiniteIdentity(in SimpleDdgiNearFieldHistoryIdentity identity) =>
@@ -649,11 +727,6 @@ public static class SimpleDdgiNearFieldTraceReference
             if (uv.X < 0.0f || uv.X > 1.0f || uv.Y < 0.0f || uv.Y > 1.0f)
                 return SimpleDdgiNearFieldTraceResult.Miss(step, mipVisits, "screen-exit");
 
-            if (mipVisits >= configuration.MaximumMipVisits)
-            {
-                return SimpleDdgiNearFieldTraceResult.Miss(
-                    step - 1, mipVisits, "mip-visit-budget");
-            }
             int mip = Math.Min(hierarchy.MaximumMipLevel,
                 EstimateMip(startUv, endUv, step));
             if (!hierarchy.TrySample(uv, mip, out float sampledDepth) || !float.IsFinite(sampledDepth))
@@ -673,11 +746,11 @@ public static class SimpleDdgiNearFieldTraceReference
             int refinements = 0;
             for (; refinements < configuration.BinaryRefinementSteps; refinements++)
             {
-                if (mipVisits >= configuration.MaximumMipVisits)
-                {
-                    return SimpleDdgiNearFieldTraceResult.Miss(
-                        step, mipVisits, "mip-visit-budget");
-                }
+                // Refinement depth tests consume the same global trace-step
+                // budget as hierarchy tests. There is deliberately no second
+                // mip-visit rejection in V12.
+                if (mipVisits >= configuration.MaximumSteps)
+                    break;
                 float mid = 0.5f * (lo + hi);
                 Vector2 midUv = Vector2.Lerp(startUv, endUv, mid);
                 if (!hierarchy.TrySample(midUv, 0, out float midDepth) || !float.IsFinite(midDepth))

@@ -896,7 +896,7 @@ public sealed class SimpleDdgiReceiverFeedbackV2Tests
     }
 
     [Test]
-    public void AdvancedModes_DefaultRequestedPolicyAndRoundTripPreserveIntentAndEvidence()
+    public void AdvancedModes_DefaultRequestedPolicyAndCurrentSchemaRoundTripPreserveIntentAndEvidence()
     {
         var settings = new RenderSettings();
         GlobalIlluminationSettings gi = settings.GlobalIllumination;

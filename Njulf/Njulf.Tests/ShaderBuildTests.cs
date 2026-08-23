@@ -45,7 +45,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(255));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(261));
 
         foreach (string shaderName in RequiredShaders)
         {

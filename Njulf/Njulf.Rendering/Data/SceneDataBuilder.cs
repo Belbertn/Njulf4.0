@@ -1000,6 +1000,17 @@ namespace Njulf.Rendering.Data
                 MaterialRenderMode renderMode = metadata.RenderMode;
                 MaterialForwardClass forwardClass = MaterialForwardClassifier.Classify(material, metadata);
                 bool isGeometryDecal = metadata.IsGeometryDecal;
+                uint nearFieldStableObjectId =
+                    AccelerationStructureManager.StableInstanceIdentity(
+                        renderObject.Id);
+                uint nearFieldStableMaterialId =
+                    CreateNearFieldStableMaterialIdentity(materialHandle);
+                uint nearFieldPackedRevisions = PackNearFieldRevisions(
+                    renderObject.Revision,
+                    _materialManager.GetMaterialContentRevision(materialIndex));
+                uint nearFieldFlags = CreateNearFieldSurfaceFlags(
+                    renderMode,
+                    isGeometryDecal);
                 if (CaptureCpuSnapshots)
                 {
                     var localBounds = new BoundingBox(
@@ -1065,7 +1076,12 @@ namespace Njulf.Rendering.Data
                             ? checked((int)skinned.SkinnedVertexOffset)
                             : 0,
                         SkinningEnabled = renderObject is SkinnedRenderObject enabledSkinned && enabledSkinned.SkinningEnabled ? 1 : 0,
-                        PreviousWorldMatrix = GetPreviousWorldMatrix(renderObject, renderObject.WorldMatrix)
+                        PreviousWorldMatrix = GetPreviousWorldMatrix(renderObject, renderObject.WorldMatrix),
+                        NearFieldStableObjectId = nearFieldStableObjectId,
+                        NearFieldStableMaterialId = nearFieldStableMaterialId,
+                        NearFieldPackedObjectMaterialRevisions =
+                            nearFieldPackedRevisions,
+                        NearFieldCoverageMotionFlags = nearFieldFlags
                     });
                     instanceId = (uint)(_objectData.Count - 1);
                 }
@@ -1076,6 +1092,11 @@ namespace Njulf.Rendering.Data
                     instanceId = (uint)objectDataIndex;
                     GPUObjectData objectData = _objectData[objectDataIndex];
                     objectData.PreviousWorldMatrix = GetPreviousWorldMatrix(renderObject, objectData.WorldMatrix);
+                    objectData.NearFieldStableObjectId = nearFieldStableObjectId;
+                    objectData.NearFieldStableMaterialId = nearFieldStableMaterialId;
+                    objectData.NearFieldPackedObjectMaterialRevisions =
+                        nearFieldPackedRevisions;
+                    objectData.NearFieldCoverageMotionFlags = nearFieldFlags;
                     _objectData[objectDataIndex] = objectData;
                 }
                 _previousRenderObjectMatrices[renderObject] = renderObject.WorldMatrix;
@@ -1240,6 +1261,13 @@ namespace Njulf.Rendering.Data
                 MaterialRenderMode renderMode = metadata.RenderMode;
                 MaterialForwardClass forwardClass = MaterialForwardClassifier.Classify(material, metadata);
                 bool isGeometryDecal = metadata.IsGeometryDecal;
+                uint nearFieldStableMaterialId =
+                    CreateNearFieldStableMaterialIdentity(materialHandle);
+                uint nearFieldMaterialRevision =
+                    _materialManager.GetMaterialContentRevision(materialIndex);
+                uint nearFieldFlags = CreateNearFieldSurfaceFlags(
+                    renderMode,
+                    isGeometryDecal);
 
                 Vector3 localCenter = (ToCoreVector(meshInfo.BoundingBoxMin) + ToCoreVector(meshInfo.BoundingBoxMax)) * 0.5f;
                 float localRadius = Distance(ToCoreVector(meshInfo.BoundingBoxMin), localCenter);
@@ -1313,7 +1341,20 @@ namespace Njulf.Rendering.Data
                             MaterialIndex = materialIndex,
                             SkinnedVertexOffset = 0,
                             SkinningEnabled = 0,
-                            PreviousWorldMatrix = GetPreviousWorldMatrix(batch, instance, worldMatrix)
+                            PreviousWorldMatrix = GetPreviousWorldMatrix(batch, instance, worldMatrix),
+                            NearFieldStableObjectId =
+                                AccelerationStructureManager
+                                    .StableInstanceIdentity(
+                                        batch.Id,
+                                        checked((uint)instance)),
+                            NearFieldStableMaterialId =
+                                nearFieldStableMaterialId,
+                            NearFieldPackedObjectMaterialRevisions =
+                                PackNearFieldRevisions(
+                                    ((ulong)batch.Revision << 32) |
+                                    checked((uint)instance + 1u),
+                                    nearFieldMaterialRevision),
+                            NearFieldCoverageMotionFlags = nearFieldFlags
                         });
                         instanceId = (uint)(_objectData.Count - 1);
                     }
@@ -1324,6 +1365,18 @@ namespace Njulf.Rendering.Data
                         instanceId = (uint)objectDataIndex;
                         GPUObjectData objectData = _objectData[objectDataIndex];
                         objectData.PreviousWorldMatrix = GetPreviousWorldMatrix(batch, instance, objectData.WorldMatrix);
+                        objectData.NearFieldStableObjectId =
+                            AccelerationStructureManager.StableInstanceIdentity(
+                                batch.Id,
+                                checked((uint)instance));
+                        objectData.NearFieldStableMaterialId =
+                            nearFieldStableMaterialId;
+                        objectData.NearFieldPackedObjectMaterialRevisions =
+                            PackNearFieldRevisions(
+                                ((ulong)batch.Revision << 32) |
+                                checked((uint)instance + 1u),
+                                nearFieldMaterialRevision);
+                        objectData.NearFieldCoverageMotionFlags = nearFieldFlags;
                         _objectData[objectDataIndex] = objectData;
                     }
                     _previousStaticInstanceMatrices[new StaticInstanceKey(batch, instance)] = worldMatrix;
@@ -1803,6 +1856,49 @@ namespace Njulf.Rendering.Data
 
             effectiveLodLevel = 2;
             return new MeshletLodRange(meshInfo.MeshletLod2Offset, meshInfo.MeshletLod2Count);
+        }
+
+        internal static uint CreateNearFieldStableMaterialIdentity(
+            MaterialHandle material)
+        {
+            if (!material.IsValid)
+                return 0u;
+
+            uint hash = 2166136261u;
+            hash = (hash ^ unchecked((uint)material.Index)) * 16777619u;
+            hash = (hash ^ material.Generation) * 16777619u;
+            return hash == 0u ? 1u : hash;
+        }
+
+        internal static uint PackNearFieldRevisions(
+            ulong objectRevision,
+            uint materialRevision)
+        {
+            // Reserve zero for invalid. Modulo 65,535 gives every supported
+            // revision a non-zero 16-bit value; SceneContentRevision is also
+            // part of C5's structural history identity, so a wrap cannot
+            // alias an older history generation.
+            uint objectRevision16 = checked((uint)(objectRevision % 65_535UL)) + 1u;
+            uint materialRevision16 = materialRevision == 0u
+                ? 1u
+                : (materialRevision - 1u) % 65_535u + 1u;
+            return objectRevision16 | (materialRevision16 << 16);
+        }
+
+        internal static uint CreateNearFieldSurfaceFlags(
+            MaterialRenderMode renderMode,
+            bool isGeometryDecal)
+        {
+            if (isGeometryDecal || renderMode == MaterialRenderMode.Blend)
+                return 0u;
+
+            SimpleDdgiNearFieldSurfaceFlags flags = renderMode ==
+                MaterialRenderMode.Mask
+                    ? SimpleDdgiNearFieldSurfaceFlags.AlphaMasked
+                    : SimpleDdgiNearFieldSurfaceFlags.Opaque;
+            flags |= SimpleDdgiNearFieldSurfaceFlags.CoverageValid |
+                SimpleDdgiNearFieldSurfaceFlags.MotionVectorsValid;
+            return (uint)flags;
         }
 
         private static Vector3 ToCoreVector(System.Numerics.Vector3 value)

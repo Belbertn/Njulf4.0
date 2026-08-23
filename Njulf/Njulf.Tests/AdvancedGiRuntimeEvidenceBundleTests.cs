@@ -25,15 +25,15 @@ public sealed class AdvancedGiRuntimeEvidenceBundleTests
                 Is.EqualTo(AdvancedGiRuntimeEvidenceBundleDocument
                     .CurrentSchemaRevision));
             Assert.That(actual.Caustics, Is.Not.Null);
-            Assert.That(actual.NearFieldResidual, Is.Not.Null);
+            Assert.That(actual.NearFieldResiduals, Has.Length.EqualTo(1));
             Assert.That(actual.Caustics!.Evidence,
                 Is.EqualTo(expected.Caustics!.Evidence));
             Assert.That(actual.Caustics.Configuration,
                 Is.EqualTo(expected.Caustics.Configuration));
-            Assert.That(actual.NearFieldResidual!.Evidence,
-                Is.EqualTo(expected.NearFieldResidual!.Evidence));
-            Assert.That(actual.NearFieldResidual.Configuration,
-                Is.EqualTo(expected.NearFieldResidual.Configuration));
+            Assert.That(actual.NearFieldResiduals[0].Evidence,
+                Is.EqualTo(expected.NearFieldResiduals[0].Evidence));
+            Assert.That(actual.NearFieldResiduals[0].Configuration,
+                Is.EqualTo(expected.NearFieldResiduals[0].Configuration));
         });
     }
 
@@ -63,8 +63,8 @@ public sealed class AdvancedGiRuntimeEvidenceBundleTests
                 Assert.That(accepted, Is.True, failure);
                 Assert.That(actual.Caustics!.Evidence.EvidenceId,
                     Is.EqualTo(expected.Caustics!.Evidence.EvidenceId));
-                Assert.That(actual.NearFieldResidual!.Evidence.EvidenceId,
-                    Is.EqualTo(expected.NearFieldResidual!.Evidence.EvidenceId));
+                Assert.That(actual.NearFieldResiduals[0].Evidence.EvidenceId,
+                    Is.EqualTo(expected.NearFieldResiduals[0].Evidence.EvidenceId));
             });
         }
         finally
@@ -79,12 +79,12 @@ public sealed class AdvancedGiRuntimeEvidenceBundleTests
         AdvancedGiRuntimeEvidenceBundleDocument valid = CreateValidBundle();
         string validJson = AdvancedGiRuntimeEvidenceBundleCodec.Serialize(valid);
         string duplicate = validJson.Replace(
-            "\"schemaRevision\": 1",
-            "\"schemaRevision\": 1, \"schemaRevision\": 1",
+            "\"schemaRevision\": 2",
+            "\"schemaRevision\": 2, \"schemaRevision\": 2",
             StringComparison.Ordinal);
         string unknown = validJson.Replace(
-            "\"schemaRevision\": 1",
-            "\"schemaRevision\": 1, \"unreviewedOverride\": true",
+            "\"schemaRevision\": 2",
+            "\"schemaRevision\": 2, \"unreviewedOverride\": true",
             StringComparison.Ordinal);
         AdvancedGiRuntimeEvidenceBundleDocument stale = valid with
         {
@@ -119,7 +119,7 @@ public sealed class AdvancedGiRuntimeEvidenceBundleTests
         {
             Assert.That(emptyAccepted, Is.False);
             Assert.That(emptyFailure,
-                Is.EqualTo("advanced-gi-runtime-evidence-bundle-empty"));
+                Is.EqualTo("advanced-gi-runtime-evidence-bundle-schema-missing"));
             Assert.That(duplicateAccepted, Is.False);
             Assert.That(duplicateFailure, Does.Contain("duplicate"));
             Assert.That(unknownAccepted, Is.False);
@@ -137,19 +137,45 @@ public sealed class AdvancedGiRuntimeEvidenceBundleTests
         AdvancedGiRuntimeEvidenceBundleDocument valid = CreateValidBundle();
         AdvancedGiRuntimeEvidenceBundleDocument invalid = valid with
         {
-            NearFieldResidual = valid.NearFieldResidual! with
-            {
-                Evidence = valid.NearFieldResidual!.Evidence with
+            NearFieldResiduals =
+            [
+                valid.NearFieldResiduals[0] with
                 {
-                    TemporalStabilityVerified = false
+                    Evidence = valid.NearFieldResiduals[0].Evidence with
+                    {
+                        TemporalStabilityVerified = false
+                    }
                 }
-            }
+            ]
         };
 
         Assert.That(
             () => AdvancedGiRuntimeEvidenceBundleCodec.Serialize(invalid),
             Throws.ArgumentException.With.Message.Contains(
                 "advanced-gi-runtime-evidence-C5-invalid"));
+    }
+
+    [Test]
+    public void SchemaOneBundle_IsReadableOnlyAsObsoleteEvidenceDiagnostic()
+    {
+        const string schemaOne = """
+            {
+              "schemaRevision": 1,
+              "nearFieldResidual": {}
+            }
+            """;
+
+        bool accepted = AdvancedGiRuntimeEvidenceBundleCodec.TryDeserialize(
+            Encoding.UTF8.GetBytes(schemaOne),
+            out _,
+            out string failure);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(accepted, Is.False);
+            Assert.That(failure, Is.EqualTo(
+                "advanced-gi-runtime-evidence-bundle-schema-1-obsolete-evidence"));
+        });
     }
 
     private static AdvancedGiRuntimeEvidenceBundleDocument CreateValidBundle()
@@ -160,7 +186,7 @@ public sealed class AdvancedGiRuntimeEvidenceBundleTests
         return new AdvancedGiRuntimeEvidenceBundleDocument
         {
             Caustics = caustics,
-            NearFieldResidual = nearField
+            NearFieldResiduals = [nearField]
         };
     }
 
@@ -275,7 +301,14 @@ public sealed class AdvancedGiRuntimeEvidenceBundleTests
             CorpusId: "c5-runtime-bundle-corpus-v1",
             ContentRevision: 21UL,
             B3QualificationId: "b3-runtime-bundle-evidence-v1",
-            B3QualificationRevision: 2u);
+            B3QualificationRevision: 2u)
+        {
+            ShaderSetHash = "sha256:c5-runtime-bundle-shaders-v2",
+            VendorId = 0x10deu,
+            DeviceId = 0x2520u,
+            DriverVersion = 1u,
+            ApiVersion = 1u
+        };
         var evidence = new SimpleDdgiNearFieldResidualQualificationEvidence(
             EvidenceId: "c5-runtime-bundle-evidence-v1",
             Binding: SimpleDdgiNearFieldResidualEvidenceBinding.Create(
@@ -310,7 +343,25 @@ public sealed class AdvancedGiRuntimeEvidenceBundleTests
             TraceSourceIndependenceVerified: true,
             TemporalStabilityVerified: true,
             SignedResidualEnergyVerified: true,
-            WholeFrameRegressionVerified: true);
+            WholeFrameRegressionVerified: true)
+        {
+            C5P99Milliseconds = 0.90,
+            SourceMrtCostUpperBoundMilliseconds = 0.10,
+            SourceCostAuthoritative = true,
+            AbsoluteSignedNetResidualEnergyFraction = 0.005,
+            LowFrequencyLeakageFraction = 0.01,
+            BenchmarkCaptureId = "c5-runtime-bundle-capture-v2",
+            ReferenceManifestId = "c5-runtime-bundle-reference-v2",
+            LongRunTraversalMinutes =
+                SimpleDdgiNearFieldResidualEvidenceAbi
+                    .MinimumLongRunTraversalMinutes,
+            PeakSteadyMemoryBytes = layout.TotalBytes,
+            PeakHotSwapMemoryBytes = checked(layout.TotalBytes * 2UL),
+            StableMemoryVerified = true,
+            NoRetirementGrowthVerified = true,
+            NoCounterOverflowVerified = true,
+            NoNonFiniteOutputVerified = true
+        };
         return new SimpleDdgiNearFieldResidualRuntimeEvidenceDocument
         {
             Evidence = evidence,

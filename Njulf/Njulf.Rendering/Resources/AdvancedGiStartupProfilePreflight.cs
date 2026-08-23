@@ -225,7 +225,7 @@ public static class AdvancedGiStartupProfilePreflight
                 if (c5Auto)
                 {
                     Add(checks, "C5-runtime-evidence",
-                        evidence.NearFieldResidual is not null,
+                        evidence.NearFieldResiduals is { Length: > 0 },
                         "near-field-evidence-present",
                         "near-field-evidence-missing");
                 }

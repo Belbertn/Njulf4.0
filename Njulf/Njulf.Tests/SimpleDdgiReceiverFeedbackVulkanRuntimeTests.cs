@@ -298,6 +298,32 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
     }
 
     [Test]
+    public void PostUploadReconciliation_DefersOnlyAfterRecordingSummaryBankRead()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                VulkanRenderer
+                    .ShouldReconcileSimpleDdgiReceiverFeedbackAfterUpload(
+                        currentCommandBufferReferencesSummaryBank: false),
+                Is.True,
+                "Initial activation and rejected bindings may reconcile immediately.");
+            Assert.That(
+                VulkanRenderer
+                    .ShouldReconcileSimpleDdgiReceiverFeedbackAfterUpload(
+                        currentCommandBufferReferencesSummaryBank: true),
+                Is.False,
+                "A recorded read must keep its allocation alive through submission.");
+            Assert.That(
+                VulkanRenderer
+                    .ShouldReconcileSimpleDdgiReceiverFeedbackAfterUpload(
+                        currentCommandBufferReferencesSummaryBank: false),
+                Is.True,
+                "The following frame may retry the deferred transition.");
+        });
+    }
+
+    [Test]
     public void VulkanRuntimeSources_UseFullStageOrderingAndDoNotReferenceLegacyGatherEntries()
     {
         string runtime = ReadRepoText(

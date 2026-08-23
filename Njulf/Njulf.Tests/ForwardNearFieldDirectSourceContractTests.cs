@@ -59,7 +59,8 @@ public sealed class ForwardNearFieldDirectSourceContractTests
                     out string formatFailure),
                 Is.False);
             Assert.That(formatFailure,
-                Is.EqualTo("near-field-direct-source-r16g16b16a16-sfloat-required"));
+                Is.EqualTo(
+                    "near-field-direct-source-trace-source-r16g16b16a16-sfloat-required"));
         });
     }
 
@@ -74,7 +75,7 @@ public sealed class ForwardNearFieldDirectSourceContractTests
             "Njulf.Rendering", "Pipeline", "ForwardPlusPass.cs");
         string normalizedForward = Regex.Replace(forward, @"\s+", " ");
         const string sourceWrite =
-            "outDirectDiffuseAndEmissive = vec4( clamp(directDiffuseSource + emissive, vec3(0.0), vec3(C5_MAXIMUM_FINITE_FP16)), c5ReceiverPayloadValid ? 1.0 : 0.0);";
+            "outDirectDiffuseAndEmissive = vec4( clamp(directDiffuseSource + emissive, vec3(0.0), vec3(C5_MAXIMUM_FINITE_FP16)), c5ReceiverPayloadValid ? c5B3FootprintRadius : 0.0);";
         int sourceWriteIndex = normalizedForward.IndexOf(
             sourceWrite,
             StringComparison.Ordinal);
@@ -122,7 +123,7 @@ public sealed class ForwardNearFieldDirectSourceContractTests
             Assert.That(shaderProject,
                 Does.Contain("-DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1"));
             Assert.That(shaderProject,
-                Does.Contain("-DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=3"));
+                Does.Contain("-DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4"));
             Assert.That(shaderProject,
                 Does.Contain("forward_opaque_ddgi_near_field_direct_source_cache_required.frag"));
             Assert.That(shaderProject,

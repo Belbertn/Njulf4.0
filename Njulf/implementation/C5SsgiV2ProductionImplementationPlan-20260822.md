@@ -8,8 +8,8 @@ The finished path will:
 
 - Correct Hi-Z tracing, TAA history, moving-hit validation, reconstruction, B3 frequency separation, foliage coverage, tile compaction, timing, resizing, controls, diagnostics, and qualification.
 - Preserve the 0.75 ms P95 RTX 3060-class budget, 96 MiB steady memory, and 192 MiB one-generation hot-swap ceiling.
-- Make `AutoQualified` the fresh-install default; missing or mismatched evidence falls back to canonical DDGI+B3.
-- Migrate existing settings but reject all existing C5 evidence.
+- Make explicit `HiZAdaptive` the fresh-install default; hard runtime, ABI, layout, memory, and allocation failures still fall back to canonical DDGI+B3.
+- Migrate existing `AutoQualified` settings to `HiZAdaptive`, preserve explicit opt-outs, and reject all pre-v14 C5 evidence.
 - Qualify per device across RTX 3060-class, current NVIDIA, AMD, and Intel Vulkan hardware.
 
 ## Public Contracts and Versioning
@@ -22,8 +22,8 @@ The finished path will:
   - `RaysPerPixel`, clamped to 1–4
   - `FilterIterationCount`, clamped to 0–4
   - `Intensity`, clamped to 0–2
-- Advance settings serialization to v14. Preserve authored modes during migration, initialize missing quality fields to Balanced, and clear stale C5 qualification IDs.
-- Change fresh defaults and production sample profiles to `AutoQualified`; deterministic validation/CLI profiles may explicitly select `HiZAdaptive`.
+- Advance settings serialization through v15. V14 adds the C5 controls, initializes missing quality fields to Balanced, and clears stale pre-v14 evidence; v15 upgrades older `AutoQualified` requests to `HiZAdaptive` while preserving `Off` and every other authored mode.
+- Change fresh defaults and production sample profiles to `HiZAdaptive`. Keep `AutoQualified` available as an evidence-bound authored mode in current-schema files.
 - Advance:
   - C5 GPU ABI to V12 (`0x4335000C`)
   - Forward source semantic version to 4
@@ -178,7 +178,7 @@ For tiers with multiple rays:
 - Publish separate receiver identity, receiver revision, hit identity, hit revision, source-reactive, reprojection, depth, normal, and variance rejection counters.
 - Derive runtime capability flags from actual resources, descriptors, pass registration, accepted evidence, and shader validation. Remove unconditional claims of hit validation or measured qualification.
 - Update the evidence bundle with bounded per-device tier entries and source-MRT calibration. Old C5 ABI/evidence fingerprints fail closed.
-- Keep `AutoQualified` disabled until the new cross-vendor evidence bundle is archived and installed.
+- Keep `AutoQualified` disabled until the new cross-vendor evidence bundle is archived and installed; the default `HiZAdaptive` path is an explicit bounded selection and does not claim promotion evidence.
 
 ## Test and Acceptance Plan
 
@@ -192,7 +192,7 @@ For tiers with multiple rays:
 - Add reconstruction tests for à-trous strides, variance weighting, B3-sized low support, per-identity mean preservation, signed residuals, guided upsampling, immediate first-frame contribution, and exact-zero invalid output.
 - Add indirect-dispatch tests proving zero work for empty tiles, correct active counts/arguments, no stale outputs, and fail-closed overflow.
 - Add lifecycle tests covering pending/active/retired generations, resize coalescing, fence ordering, allocation failure, 96/192 MiB enforcement, and no device-idle wait.
-- Add settings-v14 migration, preset/override clamping, profile fingerprint, diagnostics-v3, evidence-schema-2, and obsolete-evidence rejection tests.
+- Add settings-v14/v15 migration, default-on and explicit-opt-out, preset/override clamping, profile fingerprint, diagnostics-v3, evidence-schema-2, and obsolete-evidence rejection tests.
 - Run the full Release solution build, managed/shader suite, and explicit Vulkan integration gate.
 
 Qualification requires:

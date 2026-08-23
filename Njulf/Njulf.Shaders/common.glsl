@@ -622,6 +622,10 @@ struct GPUObjectData
     int SkinnedVertexOffset;
     int SkinningEnabled;
     mat4 PreviousWorldMatrix;
+    uint NearFieldStableObjectId;
+    uint NearFieldStableMaterialId;
+    uint NearFieldPackedObjectMaterialRevisions;
+    uint NearFieldCoverageMotionFlags;
 };
 
 struct GPUMaterialData
@@ -815,11 +819,11 @@ struct GPUFoliagePatch
     uint PrototypeIndex;
     uint ClusterOffset;
     uint ClusterCount;
-    uint DensityTextureIndex;
+    uint NearFieldStableObjectId;
     uint Seed;
     uint Flags;
-    uint Padding0;
-    uint Padding1;
+    uint NearFieldStableMaterialId;
+    uint NearFieldPackedObjectMaterialRevisions;
 };
 
 struct GPUFoliageCluster
@@ -1454,7 +1458,7 @@ const int SIZEOF_GPU_PARTICLE_RESET_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_PARTICLE_SIMULATE_PUSH_CONSTANTS = 48;
 const int SIZEOF_GPU_PARTICLE_SORT_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_MESHLET = 48;
-const int SIZEOF_GPU_OBJECT_DATA = 208;
+const int SIZEOF_GPU_OBJECT_DATA = 224;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
 const int SIZEOF_GPU_MATERIAL_DATA = 320;
 const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
@@ -1721,9 +1725,11 @@ const int OFFSET_GPU_FOLIAGE_PATCH_BOUNDS_MAX_SEED = 16;
 const int OFFSET_GPU_FOLIAGE_PATCH_PROTOTYPE_INDEX = 32;
 const int OFFSET_GPU_FOLIAGE_PATCH_CLUSTER_OFFSET = 36;
 const int OFFSET_GPU_FOLIAGE_PATCH_CLUSTER_COUNT = 40;
-const int OFFSET_GPU_FOLIAGE_PATCH_DENSITY_TEXTURE_INDEX = 44;
+const int OFFSET_GPU_FOLIAGE_PATCH_NEAR_FIELD_STABLE_OBJECT_ID = 44;
 const int OFFSET_GPU_FOLIAGE_PATCH_SEED = 48;
 const int OFFSET_GPU_FOLIAGE_PATCH_FLAGS = 52;
+const int OFFSET_GPU_FOLIAGE_PATCH_NEAR_FIELD_STABLE_MATERIAL_ID = 56;
+const int OFFSET_GPU_FOLIAGE_PATCH_NEAR_FIELD_PACKED_OBJECT_MATERIAL_REVISIONS = 60;
 
 const int OFFSET_GPU_FOLIAGE_CLUSTER_WORLD_CENTER_RADIUS = 0;
 const int OFFSET_GPU_FOLIAGE_CLUSTER_BOUNDS_MIN_DENSITY = 16;
@@ -3156,11 +3162,11 @@ GPUFoliagePatch ReadFoliagePatch(uint patchIndex)
     foliagePatch.PrototypeIndex = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 8u);
     foliagePatch.ClusterOffset = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 9u);
     foliagePatch.ClusterCount = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 10u);
-    foliagePatch.DensityTextureIndex = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 11u);
+    foliagePatch.NearFieldStableObjectId = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 11u);
     foliagePatch.Seed = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 12u);
     foliagePatch.Flags = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 13u);
-    foliagePatch.Padding0 = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 14u);
-    foliagePatch.Padding1 = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 15u);
+    foliagePatch.NearFieldStableMaterialId = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 14u);
+    foliagePatch.NearFieldPackedObjectMaterialRevisions = ReadStorageWord(uint(FOLIAGE_PATCH_BUFFER_INDEX), baseWord + 15u);
     return foliagePatch;
 }
 
@@ -3262,6 +3268,14 @@ GPUObjectData ReadInstanceData(uint frameIndex, uint instanceIndex)
     objectData.SkinnedVertexOffset = int(ReadStorageWord(bufferIndex, baseWord + 34u));
     objectData.SkinningEnabled = int(ReadStorageWord(bufferIndex, baseWord + 35u));
     objectData.PreviousWorldMatrix = mat4(1.0);
+    objectData.NearFieldStableObjectId =
+        ReadStorageWord(bufferIndex, baseWord + 52u);
+    objectData.NearFieldStableMaterialId =
+        ReadStorageWord(bufferIndex, baseWord + 53u);
+    objectData.NearFieldPackedObjectMaterialRevisions =
+        ReadStorageWord(bufferIndex, baseWord + 54u);
+    objectData.NearFieldCoverageMotionFlags =
+        ReadStorageWord(bufferIndex, baseWord + 55u);
     return objectData;
 }
 

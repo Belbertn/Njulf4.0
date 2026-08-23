@@ -10,6 +10,280 @@ namespace Njulf.Tests;
 public sealed class SimpleDdgiNearFieldResidualReferenceTests
 {
     [Test]
+    public void ProductionQualityPresets_AreFrozenToTheV2Contract()
+    {
+        SimpleDdgiNearFieldResidualProfile performance =
+            SimpleDdgiNearFieldResidualProfile.Performance;
+        SimpleDdgiNearFieldResidualProfile balanced =
+            SimpleDdgiNearFieldResidualProfile.Balanced;
+        SimpleDdgiNearFieldResidualProfile quality =
+            SimpleDdgiNearFieldResidualProfile.Quality;
+
+        Assert.Multiple(() =>
+        {
+            AssertProfile(performance, 3.0f, 6.0f, 48, 1, 1,
+                SimpleDdgiNearFieldResidualResolutionScales.Eighth |
+                SimpleDdgiNearFieldResidualResolutionScales.Quarter);
+            AssertProfile(balanced, 4.0f, 8.0f, 64, 2, 2,
+                SimpleDdgiNearFieldResidualResolutionScales.Eighth |
+                SimpleDdgiNearFieldResidualResolutionScales.Quarter |
+                SimpleDdgiNearFieldResidualResolutionScales.Half);
+            AssertProfile(quality, 6.0f, 12.0f, 96, 4, 3,
+                SimpleDdgiNearFieldResidualResolutionScales.Eighth |
+                SimpleDdgiNearFieldResidualResolutionScales.Quarter |
+                SimpleDdgiNearFieldResidualResolutionScales.Half);
+            Assert.That(performance.BinaryRefinementSteps, Is.EqualTo(4));
+            Assert.That(balanced.BinaryRefinementSteps, Is.EqualTo(4));
+            Assert.That(quality.BinaryRefinementSteps, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public void V2Sampling_IsStableAndAveragesMissesAsZero()
+    {
+        var key = new SimpleDdgiNearFieldSampleKey(
+            SequenceIndex: 7,
+            RayOrdinal: 1,
+            StableSurfaceIdentity: 0x1234u,
+            PixelX: 19,
+            PixelY: 37);
+        Vector2 first = SimpleDdgiNearFieldSamplingReference.OwenSobol2D(key);
+        Vector2 repeated = SimpleDdgiNearFieldSamplingReference.OwenSobol2D(key);
+        Vector2 nextRay = SimpleDdgiNearFieldSamplingReference.OwenSobol2D(
+            key with { RayOrdinal = 2 });
+        float guided = SimpleDdgiNearFieldSamplingReference
+            .GuidedTexelToSolidAnglePdf(0.125f, 4.0f, 0.5f, 0.25f);
+        float mixture = SimpleDdgiNearFieldSamplingReference.MixturePdf(
+            cosinePdf: 0.2f, guidedPdf: guided, guidedWeight: 0.5f);
+        Vector3[] contributions = [new(2.0f, 0.0f, 0.0f), new(50.0f)];
+        bool[] hits = [true, false];
+        (Vector3 mean, float coverage) = SimpleDdgiNearFieldSamplingReference
+            .AggregateLaunchedRays(contributions, hits);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(repeated));
+            Assert.That(nextRay, Is.Not.EqualTo(first));
+            Assert.That(first.X, Is.InRange(0.0f, 1.0f));
+            Assert.That(first.Y, Is.InRange(0.0f, 1.0f));
+            Assert.That(guided, Is.EqualTo(4.0f).Within(1.0e-6f));
+            Assert.That(mixture, Is.EqualTo(2.1f).Within(1.0e-6f));
+            Assert.That(mean, Is.EqualTo(new Vector3(1.0f, 0.0f, 0.0f)));
+            Assert.That(coverage, Is.EqualTo(0.5f));
+        });
+    }
+
+    [Test]
+    public void V2ViewSpaceConfiguration_UsesMetricFootprintMinima()
+    {
+        var tiny = new SimpleDdgiNearFieldViewTraceConfiguration(
+            MaximumTraceSteps: 64,
+            MipZeroRefinementSteps: 4,
+            NearPlaneMeters: 0.1f,
+            MaximumDistanceMeters: 8.0f,
+            ReceiverPixelFootprintMeters: 0.0001f,
+            BiasFootprintScale: 1.0f,
+            ThicknessFootprintScale: 2.0f,
+            DepthDiscontinuityScale: 2.0f,
+            ViewportExtent: new Vector2(1920.0f, 1080.0f));
+        var large = tiny with { ReceiverPixelFootprintMeters = 0.05f };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tiny.StartBiasMeters, Is.EqualTo(0.001f));
+            Assert.That(tiny.ThicknessMeters, Is.EqualTo(0.02f));
+            Assert.That(large.StartBiasMeters, Is.EqualTo(0.05f));
+            Assert.That(large.ThicknessMeters, Is.EqualTo(0.1f));
+            Assert.That(() => tiny.Validate(), Throws.Nothing);
+        });
+    }
+
+    [Test]
+    public void ViewSpaceDda_UsesPerspectiveInterpolationAndMipZeroRefinement()
+    {
+        var hierarchy = new ConstantLinearDepthHierarchy(3.0f, maxMip: 6);
+        SimpleDdgiNearFieldViewTraceConfiguration configuration =
+            ViewTraceConfiguration(maximumTraceSteps: 64) with
+            {
+                ReceiverPixelFootprintMeters = 0.05f
+            };
+
+        SimpleDdgiNearFieldTraceResult result =
+            SimpleDdgiNearFieldViewSpaceTraceReference.Trace(
+                hierarchy,
+                receiverViewPosition: new Vector3(0.0f, 0.0f, -1.0f),
+                viewDirection: new Vector3(0.75f, 0.0f, -1.0f),
+                projection: ViewProjection(),
+                configuration);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Hit, Is.True, result.RejectionReason);
+            Assert.That(result.RayDepth, Is.EqualTo(result.SceneDepth)
+                .Within(configuration.ThicknessMeters *
+                    configuration.DepthDiscontinuityScale));
+            Assert.That(result.HitUv.X, Is.GreaterThan(0.5f));
+            Assert.That(result.HitUv.X, Is.LessThan(1.0f));
+            Assert.That(result.RefinementCount,
+                Is.EqualTo(configuration.MipZeroRefinementSteps));
+            Assert.That(result.StepCount,
+                Is.LessThanOrEqualTo(configuration.MaximumTraceSteps));
+        });
+    }
+
+    [Test]
+    public void ViewSpaceDda_ConsumesTheCompleteSixtyFourDepthTestBudget()
+    {
+        var hierarchy = new ConstantLinearDepthHierarchy(1_000.0f, maxMip: 0);
+        SimpleDdgiNearFieldViewTraceConfiguration configuration =
+            ViewTraceConfiguration(maximumTraceSteps: 64) with
+            {
+                ViewportExtent = new Vector2(512.0f, 512.0f)
+            };
+
+        SimpleDdgiNearFieldTraceResult result =
+            SimpleDdgiNearFieldViewSpaceTraceReference.Trace(
+                hierarchy,
+                receiverViewPosition: new Vector3(0.0f, 0.0f, -1.0f),
+                viewDirection: new Vector3(0.75f, 0.0f, -1.0f),
+                projection: ViewProjection(),
+                configuration);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Hit, Is.False);
+            Assert.That(result.RejectionReason, Is.EqualTo("step-limit"));
+            Assert.That(result.StepCount, Is.EqualTo(64));
+            Assert.That(result.MipVisitCount, Is.EqualTo(64));
+        });
+    }
+
+    [Test]
+    public void ViewSpaceDda_TraversesAThinGapAndRefinesTheDepthStepBehindIt()
+    {
+        // Coarse levels conservatively contain the two-metre foreground.
+        // Mip zero exposes a narrow empty interval followed by a four-metre
+        // surface. The ray stays in front of the foreground, passes through
+        // the gap, and must not turn the coarse minimum into a false hit.
+        var hierarchy = new FunctionalLinearDepthHierarchy(
+            maximumMipLevel: 6,
+            sample: (uv, mip) => mip > 0
+                ? 2.0f
+                : uv.X < 0.64f
+                    ? 2.0f
+                    : uv.X < 0.66f
+                        ? null
+                        : 4.0f);
+        SimpleDdgiNearFieldViewTraceConfiguration configuration =
+            ViewTraceConfiguration(maximumTraceSteps: 96) with
+            {
+                ReceiverPixelFootprintMeters = 0.05f,
+                ViewportExtent = new Vector2(512.0f, 512.0f)
+            };
+
+        SimpleDdgiNearFieldTraceResult result =
+            SimpleDdgiNearFieldViewSpaceTraceReference.Trace(
+                hierarchy,
+                receiverViewPosition: new Vector3(0.0f, 0.0f, -1.0f),
+                viewDirection: new Vector3(0.75f, 0.0f, -1.0f),
+                projection: ViewProjection(),
+                configuration);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Hit, Is.True, result.RejectionReason);
+            Assert.That(result.SceneDepth, Is.EqualTo(4.0f));
+            Assert.That(result.HitUv.X, Is.GreaterThan(0.66f));
+            Assert.That(result.RefinementCount,
+                Is.EqualTo(configuration.MipZeroRefinementSteps));
+            Assert.That(result.StepCount,
+                Is.LessThanOrEqualTo(configuration.MaximumTraceSteps));
+        });
+    }
+
+    [Test]
+    public void ViewSpaceDda_ClipsNearPlaneAndRejectsSegmentsOutsideTheFrustum()
+    {
+        var hierarchy = new ConstantLinearDepthHierarchy(0.5f, maxMip: 5);
+        SimpleDdgiNearFieldViewTraceConfiguration configuration =
+            ViewTraceConfiguration(maximumTraceSteps: 64) with
+            {
+                ReceiverPixelFootprintMeters = 1.0f,
+                BiasFootprintScale = 0.0f
+            };
+
+        SimpleDdgiNearFieldTraceResult clippedHit =
+            SimpleDdgiNearFieldViewSpaceTraceReference.Trace(
+                hierarchy,
+                receiverViewPosition: new Vector3(0.0f, 0.0f, -0.05f),
+                viewDirection: new Vector3(0.25f, 0.0f, -1.0f),
+                projection: ViewProjection(),
+                configuration);
+        SimpleDdgiNearFieldTraceResult behindNearPlane =
+            SimpleDdgiNearFieldViewSpaceTraceReference.Trace(
+                hierarchy,
+                receiverViewPosition: new Vector3(0.0f, 0.0f, -0.05f),
+                viewDirection: new Vector3(0.25f, 0.0f, 1.0f),
+                projection: ViewProjection(),
+                configuration);
+        SimpleDdgiNearFieldTraceResult outsideViewport =
+            SimpleDdgiNearFieldViewSpaceTraceReference.Trace(
+                hierarchy,
+                receiverViewPosition: new Vector3(4.0f, 0.0f, -1.0f),
+                viewDirection: new Vector3(1.0f, 0.0f, -1.0f),
+                projection: ViewProjection(),
+                configuration);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(clippedHit.Hit, Is.True, clippedHit.RejectionReason);
+            Assert.That(clippedHit.RayDepth,
+                Is.GreaterThanOrEqualTo(configuration.NearPlaneMeters));
+            Assert.That(behindNearPlane.RejectionReason,
+                Is.EqualTo("near-plane-clipped"));
+            Assert.That(outsideViewport.RejectionReason,
+                Is.EqualTo("screen-exit"));
+        });
+    }
+
+    [Test]
+    public void DepthConventionReference_ProducesForwardAndReversedZParity()
+    {
+        var hierarchy = new ConstantDepthHierarchy(0.5f, maxMip: 5);
+        var forwardConfiguration = new SimpleDdgiNearFieldTraceConfiguration(
+            MaximumSteps: 64,
+            MaximumMipVisits: 32,
+            BinaryRefinementSteps: 4,
+            Thickness: 0.0f,
+            StartBias: 0.0f,
+            DepthConvention: SimpleDdgiNearFieldDepthConvention.ForwardZ);
+        SimpleDdgiNearFieldTraceConfiguration reversedConfiguration =
+            forwardConfiguration with
+            {
+                DepthConvention = SimpleDdgiNearFieldDepthConvention.ReversedZ
+            };
+
+        SimpleDdgiNearFieldTraceResult forward =
+            SimpleDdgiNearFieldTraceReference.Trace(
+                hierarchy, new Vector2(0.2f, 0.5f), new Vector2(0.8f, 0.5f),
+                startDepth: 0.1f, endDepth: 0.9f, forwardConfiguration);
+        SimpleDdgiNearFieldTraceResult reversed =
+            SimpleDdgiNearFieldTraceReference.Trace(
+                hierarchy, new Vector2(0.2f, 0.5f), new Vector2(0.8f, 0.5f),
+                startDepth: 0.9f, endDepth: 0.1f, reversedConfiguration);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(forward.Hit, Is.True);
+            Assert.That(reversed.Hit, Is.True);
+            Assert.That(reversed.HitUv.X,
+                Is.EqualTo(forward.HitUv.X).Within(1.0f / 1_024.0f));
+            Assert.That(Math.Abs(reversed.StepCount - forward.StepCount),
+                Is.LessThanOrEqualTo(1));
+        });
+    }
+
+    [Test]
     public void TraceSource_FreezesDirectSceneLinearProducerFormatCoverageAndScaledExtent()
     {
         SimpleDdgiNearFieldResidualProfile profile =
@@ -202,7 +476,7 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
     }
 
     [Test]
-    public void History_ReusesStochasticHitChangesButRejectsReceiverAndRevisionChanges()
+    public void History_RejectsChangedHitIdentityReceiverAndGlobalRevisions()
     {
         SimpleDdgiNearFieldHistoryIdentity baseline = Identity();
         SimpleDdgiNearFieldHistoryValidation stochasticHitChanged =
@@ -240,7 +514,10 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(stochasticHitChanged.Accepted, Is.True);
+            Assert.That(stochasticHitChanged.Accepted, Is.False);
+            Assert.That(stochasticHitChanged.Reason,
+                Is.EqualTo(SimpleDdgiNearFieldHistoryRejectionReason
+                    .HitMaterialRevisionMismatch));
             Assert.That(receiverChanged.Reason,
                 Is.EqualTo(SimpleDdgiNearFieldHistoryRejectionReason.ReceiverObjectMismatch));
             Assert.That(abiChanged.Reason,
@@ -272,11 +549,12 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
             Assert.That(valid.ReceiverPayloadBytes,
                 Is.GreaterThanOrEqualTo(1_920UL * 1_080UL * 16UL));
             Assert.That(valid.TraceFrameConstantsBytes,
-                Is.EqualTo(512UL));
+                Is.EqualTo(1_024UL));
             Assert.That(valid.TelemetryReadbackBytes,
                 Is.EqualTo(valid.TileBuffersBytes *
                     (ulong)RenderingConstants.FramesInFlight));
-            Assert.That(valid.HitMetadataBytes, Is.GreaterThan(0));
+            Assert.That(valid.HitMetadataBytes, Is.Zero,
+                "V12 writes trace metadata directly into the current history bank.");
             Assert.That(valid.HistoryRadianceBytes, Is.GreaterThan(0));
             Assert.That(valid.HistoryNormalBytes, Is.GreaterThan(0));
             Assert.That(rejected.IsValid, Is.False);
@@ -321,9 +599,8 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
             Assert.That(hdQuarter.TraceWidth, Is.EqualTo(480));
             Assert.That(hdQuarter.TraceHeight, Is.EqualTo(270));
             Assert.That(qhdQuarter.IsValid, Is.False);
-            Assert.That(qhdEighth.IsValid, Is.True);
-            Assert.That(qhdEighth.TraceWidth, Is.EqualTo(320));
-            Assert.That(qhdEighth.TraceHeight, Is.EqualTo(180));
+            Assert.That(qhdEighth.IsValid, Is.False,
+                "The full-resolution 128-bit payload is never silently dropped to fit.");
             Assert.That(uhdEighth.IsValid, Is.False);
         });
     }
@@ -386,7 +663,7 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
     }
 
     [Test]
-    public void BoundedTrace_RejectsRatherThanExceedingItsHierarchicalVisitBudget()
+    public void BoundedTrace_ChargesDepthTestsToTheStepBudgetNotAMipVisitBudget()
     {
         var hierarchy = new ConstantDepthHierarchy(0.5f, maxMip: 5);
         var configuration = new SimpleDdgiNearFieldTraceConfiguration(
@@ -403,9 +680,10 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.Hit, Is.False);
-            Assert.That(result.MipVisitCount, Is.LessThanOrEqualTo(2));
-            Assert.That(result.RejectionReason, Is.EqualTo("mip-visit-budget"));
+            Assert.That(result.Hit, Is.True);
+            Assert.That(result.StepCount, Is.LessThanOrEqualTo(8));
+            Assert.That(result.MipVisitCount, Is.GreaterThan(2));
+            Assert.That(result.RejectionReason, Is.EqualTo("hit"));
         });
     }
 
@@ -487,6 +765,88 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
         ReceiverGeometricNormal: Vector3.UnitZ,
         ReceiverShadingNormal: Vector3.UnitZ,
         TraceSourceLayoutRevision: 1u);
+
+    private static void AssertProfile(
+        SimpleDdgiNearFieldResidualProfile profile,
+        float fullDistance,
+        float maximumDistance,
+        int steps,
+        int rays,
+        int filters,
+        SimpleDdgiNearFieldResidualResolutionScales scales)
+    {
+        Assert.That(profile.FullWeightTraceDistanceMeters,
+            Is.EqualTo(fullDistance));
+        Assert.That(profile.MaximumTraceDistanceMeters,
+            Is.EqualTo(maximumDistance));
+        Assert.That(profile.MaximumTraceSteps, Is.EqualTo(steps));
+        Assert.That(profile.MaximumRaysPerPixel, Is.EqualTo(rays));
+        Assert.That(profile.FilterIterationCount, Is.EqualTo(filters));
+        Assert.That(profile.AllowedResolutionScales, Is.EqualTo(scales));
+    }
+
+    private static SimpleDdgiNearFieldViewTraceConfiguration
+        ViewTraceConfiguration(int maximumTraceSteps) => new(
+            MaximumTraceSteps: maximumTraceSteps,
+            MipZeroRefinementSteps: 4,
+            NearPlaneMeters: 0.1f,
+            MaximumDistanceMeters: 8.0f,
+            ReceiverPixelFootprintMeters: 0.01f,
+            BiasFootprintScale: 1.0f,
+            ThicknessFootprintScale: 2.0f,
+            DepthDiscontinuityScale: 2.0f,
+            ViewportExtent: new Vector2(256.0f, 256.0f));
+
+    private static Matrix4x4 ViewProjection() =>
+        Matrix4x4.CreatePerspectiveFieldOfView(
+            MathF.PI / 2.0f, 1.0f, 0.1f, 100.0f);
+
+    private sealed class ConstantLinearDepthHierarchy :
+        ISimpleDdgiNearFieldLinearDepthHierarchy
+    {
+        private readonly float _depth;
+
+        public ConstantLinearDepthHierarchy(float depth, int maxMip)
+        {
+            _depth = depth;
+            MaximumMipLevel = maxMip;
+        }
+
+        public int MaximumMipLevel { get; }
+
+        public bool TrySampleLinearDepth(
+            Vector2 uv, int mipLevel, out float linearDepth)
+        {
+            linearDepth = _depth;
+            return mipLevel >= 0 && mipLevel <= MaximumMipLevel;
+        }
+    }
+
+    private sealed class FunctionalLinearDepthHierarchy :
+        ISimpleDdgiNearFieldLinearDepthHierarchy
+    {
+        private readonly Func<Vector2, int, float?> _sample;
+
+        public FunctionalLinearDepthHierarchy(
+            int maximumMipLevel,
+            Func<Vector2, int, float?> sample)
+        {
+            MaximumMipLevel = maximumMipLevel;
+            _sample = sample;
+        }
+
+        public int MaximumMipLevel { get; }
+
+        public bool TrySampleLinearDepth(
+            Vector2 uv, int mipLevel, out float linearDepth)
+        {
+            float? sampled = mipLevel >= 0 && mipLevel <= MaximumMipLevel
+                ? _sample(uv, mipLevel)
+                : null;
+            linearDepth = sampled.GetValueOrDefault();
+            return sampled.HasValue;
+        }
+    }
 
     private sealed class ConstantDepthHierarchy : ISimpleDdgiNearFieldDepthHierarchy
     {

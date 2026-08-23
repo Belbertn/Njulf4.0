@@ -10,17 +10,27 @@ namespace Njulf.Rendering.Resources;
 /// </summary>
 public static class SimpleDdgiNearFieldResidualEvidenceAbi
 {
-    // V5 additionally binds the production P95 GPU-time ceiling. Prior
-    // artifacts carried an equal-cost average but could hide frame spikes.
-    public const uint Version = 0x4335_0105u;
+    // V6 additionally binds device/tier identity and the production P95 GPU
+    // time ceiling. Prior artifacts could be reused across incompatible
+    // hardware or hide frame spikes behind an equal-cost average.
+    public const uint Version = 0x4335_0106u;
 
     // These values deliberately live in the evidence ABI rather than in a
     // preset.  Changing a promotion floor invalidates prior evidence.
     public const uint MinimumReferenceSequenceCount = 3u;
     public const uint MinimumReferenceFrameCount = 120u;
     public const uint MinimumIndependentRunCount = 3u;
+    public const uint MinimumLongRunTraversalMinutes = 60u;
+    public const ulong MaximumSteadyMemoryBytes =
+        96UL * 1024UL * 1024UL;
+    public const ulong MaximumHotSwapMemoryBytes =
+        192UL * 1024UL * 1024UL;
     public const double MaximumEqualCostRelativeDifference = 0.05;
     public const double MaximumProductionP95Milliseconds = 0.75;
+    public const double MaximumProductionP99Milliseconds = 1.0;
+    public const double MaximumStartupP95Milliseconds = 0.60;
+    public const double MaximumSignedNetResidualFraction = 0.01;
+    public const double MaximumLowFrequencyLeakageFraction = 0.02;
 }
 
 /// <summary>
@@ -36,6 +46,16 @@ public readonly record struct SimpleDdgiNearFieldResidualAdmissionContext(
     uint B3QualificationRevision,
     uint NearFieldResidualAbiRevision = SimpleDdgiNearFieldResidualGpuAbi.Version)
 {
+    /// <summary>
+    /// Aggregate of the validated C5 SPIR-V modules and compiler/toolchain
+    /// identity. A bundle may never supply a placeholder for AutoQualified.
+    /// </summary>
+    public string ShaderSetHash { get; init; } = string.Empty;
+    public uint VendorId { get; init; }
+    public uint DeviceId { get; init; }
+    public uint DriverVersion { get; init; }
+    public uint ApiVersion { get; init; }
+
     public bool IsValid => TryValidate(out _);
 
     public bool TryValidate(out string failure)
@@ -65,6 +85,17 @@ public readonly record struct SimpleDdgiNearFieldResidualAdmissionContext(
             failure = "near-field-residual-ABI-revision-mismatch";
             return false;
         }
+        if (!IsStableKey(ShaderSetHash, 256))
+        {
+            failure = "near-field-shader-set-hash-required";
+            return false;
+        }
+        if (VendorId == 0U || DeviceId == 0U || DriverVersion == 0U ||
+            ApiVersion == 0U)
+        {
+            failure = "near-field-physical-device-driver-api-identity-required";
+            return false;
+        }
 
         failure = "valid";
         return true;
@@ -85,6 +116,75 @@ public readonly record struct SimpleDdgiNearFieldResidualAdmissionContext(
         }
 
         return false;
+    }
+}
+
+/// <summary>
+/// Closed extent envelope covered by one qualification. Source and trace
+/// dimensions, aspect ratio, and native-layout bytes must all fit; satisfying
+/// only one of these bounds is deliberately insufficient.
+/// </summary>
+public readonly record struct SimpleDdgiNearFieldResidualExtentEnvelope(
+    int MinimumSourceWidth,
+    int MinimumSourceHeight,
+    int MaximumSourceWidth,
+    int MaximumSourceHeight,
+    int MinimumTraceWidth,
+    int MinimumTraceHeight,
+    int MaximumTraceWidth,
+    int MaximumTraceHeight,
+    double MinimumAspectRatio,
+    double MaximumAspectRatio,
+    ulong MaximumLayoutBytes)
+{
+    public bool IsValid =>
+        MinimumSourceWidth > 0 && MinimumSourceHeight > 0 &&
+        MaximumSourceWidth >= MinimumSourceWidth &&
+        MaximumSourceHeight >= MinimumSourceHeight &&
+        MinimumTraceWidth > 0 && MinimumTraceHeight > 0 &&
+        MaximumTraceWidth >= MinimumTraceWidth &&
+        MaximumTraceHeight >= MinimumTraceHeight &&
+        double.IsFinite(MinimumAspectRatio) &&
+        double.IsFinite(MaximumAspectRatio) &&
+        MinimumAspectRatio > 0.0 &&
+        MaximumAspectRatio >= MinimumAspectRatio &&
+        MaximumLayoutBytes > 0UL;
+
+    public bool Contains(in SimpleDdgiNearFieldResidualLayout layout)
+    {
+        if (!IsValid || !layout.IsValid || layout.TotalBytes == 0UL)
+            return false;
+        double aspect = (double)layout.SourceWidth / layout.SourceHeight;
+        return layout.SourceWidth >= MinimumSourceWidth &&
+            layout.SourceHeight >= MinimumSourceHeight &&
+            layout.SourceWidth <= MaximumSourceWidth &&
+            layout.SourceHeight <= MaximumSourceHeight &&
+            layout.TraceWidth >= MinimumTraceWidth &&
+            layout.TraceHeight >= MinimumTraceHeight &&
+            layout.TraceWidth <= MaximumTraceWidth &&
+            layout.TraceHeight <= MaximumTraceHeight &&
+            aspect >= MinimumAspectRatio && aspect <= MaximumAspectRatio &&
+            layout.TotalBytes <= MaximumLayoutBytes;
+    }
+
+    public static SimpleDdgiNearFieldResidualExtentEnvelope Exact(
+        in SimpleDdgiNearFieldResidualLayout layout)
+    {
+        if (!layout.IsValid)
+            return default;
+        double aspect = (double)layout.SourceWidth / layout.SourceHeight;
+        return new SimpleDdgiNearFieldResidualExtentEnvelope(
+            layout.SourceWidth,
+            layout.SourceHeight,
+            layout.SourceWidth,
+            layout.SourceHeight,
+            layout.TraceWidth,
+            layout.TraceHeight,
+            layout.TraceWidth,
+            layout.TraceHeight,
+            aspect,
+            aspect,
+            layout.TotalBytes);
     }
 }
 
@@ -110,6 +210,16 @@ public readonly record struct SimpleDdgiNearFieldResidualEvidenceBinding(
     int TraceHeight,
     ulong LayoutTotalBytes)
 {
+    public SimpleDdgiNearFieldResidualQualityPreset QualityPreset { get; init; }
+    public SimpleDdgiNearFieldResidualExecutionScale Tier { get; init; }
+    public SimpleDdgiNearFieldResidualExtentEnvelope ExtentEnvelope { get; init; }
+    public ulong FormatFingerprint { get; init; }
+    public string ShaderSetHash { get; init; } = string.Empty;
+    public uint VendorId { get; init; }
+    public uint DeviceId { get; init; }
+    public uint DriverVersion { get; init; }
+    public uint ApiVersion { get; init; }
+
     public ulong Fingerprint =>
         SimpleDdgiNearFieldResidualEvidenceEvaluator.ComputeBindingFingerprint(this);
 
@@ -123,7 +233,14 @@ public readonly record struct SimpleDdgiNearFieldResidualEvidenceBinding(
             ContentRevision,
             B3QualificationId,
             B3QualificationRevision,
-            NearFieldResidualAbiRevision);
+            NearFieldResidualAbiRevision)
+        {
+            ShaderSetHash = ShaderSetHash,
+            VendorId = VendorId,
+            DeviceId = DeviceId,
+            DriverVersion = DriverVersion,
+            ApiVersion = ApiVersion
+        };
         if (!context.TryValidate(out failure))
             return false;
         if (EvidenceAbiRevision != SimpleDdgiNearFieldResidualEvidenceAbi.Version)
@@ -151,6 +268,30 @@ public readonly record struct SimpleDdgiNearFieldResidualEvidenceBinding(
             failure = "near-field-evidence-profile-or-layout-binding-invalid";
             return false;
         }
+        if (!Enum.IsDefined(QualityPreset) || !Enum.IsDefined(Tier) ||
+            !ExtentEnvelope.IsValid || FormatFingerprint == 0UL ||
+            !SimpleDdgiNearFieldResidualAdmissionContext.IsStableKey(
+                ShaderSetHash, 256))
+        {
+            failure = "near-field-evidence-envelope-preset-tier-format-or-shader-binding-invalid";
+            return false;
+        }
+        double anchorAspect = (double)SourceWidth / SourceHeight;
+        if (SourceWidth < ExtentEnvelope.MinimumSourceWidth ||
+            SourceHeight < ExtentEnvelope.MinimumSourceHeight ||
+            SourceWidth > ExtentEnvelope.MaximumSourceWidth ||
+            SourceHeight > ExtentEnvelope.MaximumSourceHeight ||
+            TraceWidth < ExtentEnvelope.MinimumTraceWidth ||
+            TraceHeight < ExtentEnvelope.MinimumTraceHeight ||
+            TraceWidth > ExtentEnvelope.MaximumTraceWidth ||
+            TraceHeight > ExtentEnvelope.MaximumTraceHeight ||
+            anchorAspect < ExtentEnvelope.MinimumAspectRatio ||
+            anchorAspect > ExtentEnvelope.MaximumAspectRatio ||
+            LayoutTotalBytes > ExtentEnvelope.MaximumLayoutBytes)
+        {
+            failure = "near-field-evidence-anchor-layout-outside-extent-envelope";
+            return false;
+        }
 
         failure = "valid";
         return true;
@@ -176,7 +317,22 @@ public readonly record struct SimpleDdgiNearFieldResidualEvidenceBinding(
             layout.SourceHeight,
             layout.TraceWidth,
             layout.TraceHeight,
-            layout.TotalBytes);
+            layout.TotalBytes)
+        {
+            QualityPreset = configuration.Profile.Preset,
+            Tier = SimpleDdgiNearFieldResidualEvidenceEvaluator.ToExecutionScale(
+                configuration.Profile.ResolutionScale),
+            ExtentEnvelope =
+                SimpleDdgiNearFieldResidualExtentEnvelope.Exact(layout),
+            FormatFingerprint =
+                SimpleDdgiNearFieldResidualEvidenceEvaluator
+                    .ComputeFormatFingerprint(layout),
+            ShaderSetHash = context.ShaderSetHash,
+            VendorId = context.VendorId,
+            DeviceId = context.DeviceId,
+            DriverVersion = context.DriverVersion,
+            ApiVersion = context.ApiVersion
+        };
 }
 
 /// <summary>
@@ -220,6 +376,21 @@ public readonly record struct SimpleDdgiNearFieldResidualQualificationEvidence(
     bool SignedResidualEnergyVerified,
     bool WholeFrameRegressionVerified)
 {
+    public double C5P99Milliseconds { get; init; }
+    public double SourceMrtCostUpperBoundMilliseconds { get; init; }
+    public bool SourceCostAuthoritative { get; init; }
+    public double AbsoluteSignedNetResidualEnergyFraction { get; init; }
+    public double LowFrequencyLeakageFraction { get; init; }
+    public string BenchmarkCaptureId { get; init; } = string.Empty;
+    public string ReferenceManifestId { get; init; } = string.Empty;
+    public uint LongRunTraversalMinutes { get; init; }
+    public ulong PeakSteadyMemoryBytes { get; init; }
+    public ulong PeakHotSwapMemoryBytes { get; init; }
+    public bool StableMemoryVerified { get; init; }
+    public bool NoRetirementGrowthVerified { get; init; }
+    public bool NoCounterOverflowVerified { get; init; }
+    public bool NoNonFiniteOutputVerified { get; init; }
+
     public bool HasEvidenceId =>
         SimpleDdgiNearFieldResidualAdmissionContext.IsStableKey(EvidenceId, 256);
 }
@@ -420,6 +591,97 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
                 SimpleDdgiNearFieldResidualDecision.No(
                     "near-field-evidence-P95-GPU-budget-exceeded"));
         }
+        if (!double.IsFinite(evidence.C5P99Milliseconds) ||
+            evidence.C5P99Milliseconds < evidence.C5P95Milliseconds ||
+            evidence.C5P99Milliseconds >
+                SimpleDdgiNearFieldResidualEvidenceAbi
+                    .MaximumProductionP99Milliseconds)
+        {
+            return Reject(
+                GiExperimentFallbackReason.QualificationNotPassed,
+                "near-field-evidence-P99-GPU-budget-exceeded",
+                evidence,
+                SimpleDdgiNearFieldResidualDecision.No(
+                    "near-field-evidence-P99-GPU-budget-exceeded"));
+        }
+        if (!evidence.SourceCostAuthoritative ||
+            !double.IsFinite(evidence.SourceMrtCostUpperBoundMilliseconds) ||
+            evidence.SourceMrtCostUpperBoundMilliseconds <= 0.0 ||
+            evidence.SourceMrtCostUpperBoundMilliseconds >=
+                evidence.C5P95Milliseconds)
+        {
+            return Reject(
+                GiExperimentFallbackReason.EvidenceInvalid,
+                "near-field-authoritative-source-MRT-calibration-required",
+                evidence,
+                SimpleDdgiNearFieldResidualDecision.No(
+                    "near-field-authoritative-source-MRT-calibration-required"));
+        }
+        if (!double.IsFinite(
+                evidence.AbsoluteSignedNetResidualEnergyFraction) ||
+            evidence.AbsoluteSignedNetResidualEnergyFraction < 0.0 ||
+            evidence.AbsoluteSignedNetResidualEnergyFraction >
+                SimpleDdgiNearFieldResidualEvidenceAbi
+                    .MaximumSignedNetResidualFraction ||
+            !double.IsFinite(evidence.LowFrequencyLeakageFraction) ||
+            evidence.LowFrequencyLeakageFraction < 0.0 ||
+            evidence.LowFrequencyLeakageFraction >
+                SimpleDdgiNearFieldResidualEvidenceAbi
+                    .MaximumLowFrequencyLeakageFraction)
+        {
+            return Reject(
+                GiExperimentFallbackReason.QualificationNotPassed,
+                "near-field-residual-energy-or-low-frequency-leakage-limit-exceeded",
+                evidence,
+                SimpleDdgiNearFieldResidualDecision.No(
+                    "near-field-residual-energy-or-low-frequency-leakage-limit-exceeded"));
+        }
+        if (!SimpleDdgiNearFieldResidualAdmissionContext.IsStableKey(
+                evidence.BenchmarkCaptureId, 256) ||
+            !SimpleDdgiNearFieldResidualAdmissionContext.IsStableKey(
+                evidence.ReferenceManifestId, 256))
+        {
+            return Reject(
+                GiExperimentFallbackReason.EvidenceInvalid,
+                "near-field-capture-and-reference-manifest-identities-required",
+                evidence,
+                SimpleDdgiNearFieldResidualDecision.No(
+                    "near-field-capture-and-reference-manifest-identities-required"));
+        }
+        if (evidence.LongRunTraversalMinutes <
+                SimpleDdgiNearFieldResidualEvidenceAbi
+                    .MinimumLongRunTraversalMinutes ||
+            evidence.PeakSteadyMemoryBytes < evidence.Binding.LayoutTotalBytes ||
+            evidence.Binding.ExtentEnvelope.MaximumLayoutBytes >
+                SimpleDdgiNearFieldResidualEvidenceAbi
+                    .MaximumSteadyMemoryBytes ||
+            evidence.PeakSteadyMemoryBytes >
+                SimpleDdgiNearFieldResidualEvidenceAbi
+                    .MaximumSteadyMemoryBytes ||
+            evidence.PeakHotSwapMemoryBytes < evidence.PeakSteadyMemoryBytes ||
+            evidence.PeakHotSwapMemoryBytes >
+                SimpleDdgiNearFieldResidualEvidenceAbi
+                    .MaximumHotSwapMemoryBytes)
+        {
+            return Reject(
+                GiExperimentFallbackReason.QualificationNotPassed,
+                "near-field-long-run-duration-or-memory-envelope-invalid",
+                evidence,
+                SimpleDdgiNearFieldResidualDecision.No(
+                    "near-field-long-run-duration-or-memory-envelope-invalid"));
+        }
+        if (!evidence.StableMemoryVerified ||
+            !evidence.NoRetirementGrowthVerified ||
+            !evidence.NoCounterOverflowVerified ||
+            !evidence.NoNonFiniteOutputVerified)
+        {
+            return Reject(
+                GiExperimentFallbackReason.QualificationNotPassed,
+                "near-field-long-run-stability-witness-missing",
+                evidence,
+                SimpleDdgiNearFieldResidualDecision.No(
+                    "near-field-long-run-stability-witness-missing"));
+        }
         if (!evidence.B3ConvergenceVerified ||
             !evidence.CpuOrImageSpaceOracleVerified ||
             !evidence.TraceSourceIndependenceVerified ||
@@ -461,7 +723,14 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
         ulong hash = FnvOffsetBasis;
         hash = Add(hash, (ulong)(uint)SimpleDdgiNearFieldResidualEvidenceAbi.Version);
         hash = Add(hash, (ulong)(uint)profile.SourceFormat);
+        hash = Add(hash, (ulong)(uint)profile.Preset);
         hash = Add(hash, BitConverter.SingleToUInt32Bits(profile.ResolutionScale));
+        hash = Add(hash, BitConverter.SingleToUInt32Bits(
+            profile.FullWeightTraceDistanceMeters));
+        hash = Add(hash, BitConverter.SingleToUInt32Bits(
+            profile.MaximumTraceDistanceMeters));
+        hash = Add(hash, (ulong)(uint)profile.MaximumRaysPerPixel);
+        hash = Add(hash, (ulong)(uint)profile.AllowedResolutionScales);
         hash = Add(hash, (ulong)(uint)profile.MaximumTraceSteps);
         hash = Add(hash, (ulong)(uint)profile.MaximumMipVisits);
         hash = Add(hash, (ulong)(uint)profile.BinaryRefinementSteps);
@@ -475,29 +744,54 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
     {
         ulong hash = FnvOffsetBasis;
         hash = Add(hash, (ulong)(uint)SimpleDdgiNearFieldResidualEvidenceAbi.Version);
-        hash = Add(hash, (ulong)(uint)layout.SourceWidth);
-        hash = Add(hash, (ulong)(uint)layout.SourceHeight);
         hash = Add(hash, (ulong)(uint)layout.SourceFormat);
         hash = Add(hash, BitConverter.SingleToUInt32Bits(layout.TraceResolutionScale));
-        hash = Add(hash, (ulong)(uint)layout.TraceWidth);
-        hash = Add(hash, (ulong)(uint)layout.TraceHeight);
         hash = Add(hash, (ulong)(uint)layout.FilterIterationCount);
-        hash = Add(hash, layout.TraceSourceBytes);
-        hash = Add(hash, layout.ReceiverPayloadBytes);
-        hash = Add(hash, layout.TraceFrameConstantsBytes);
-        hash = Add(hash, layout.RawCandidateBytes);
+        hash = Add(hash, layout.TraceSourceBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.ReceiverPayloadBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.TraceFrameConstantsBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.PreparedDepthFootprintBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.PreparedReceiverPayloadBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.PreparedMotionBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.SourceLuminanceBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.RawCandidateBytes != 0UL ? 1UL : 0UL);
         hash = Add(hash, layout.HitMetadataBytes);
-        hash = Add(hash, layout.HistoryRadianceBytes);
-        hash = Add(hash, layout.MomentBytes);
-        hash = Add(hash, layout.HistoryValidityBytes);
-        hash = Add(hash, layout.HistoryMetadataBytes);
-        hash = Add(hash, layout.HistoryNormalBytes);
-        hash = Add(hash, layout.FilterScratchBytes);
-        hash = Add(hash, layout.TileBuffersBytes);
-        hash = Add(hash, layout.TelemetryReadbackBytes);
-        hash = Add(hash, layout.TotalBytes);
+        hash = Add(hash, layout.HistoryRadianceBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.MomentBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.HistoryValidityBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.HistoryMetadataBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.HistoryNormalBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.FilterScratchBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.SurfaceTableBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.ActiveTileAndIndirectBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.TileBuffersBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.TelemetryReadbackBytes != 0UL ? 1UL : 0UL);
         return Add(hash, layout.IsValid ? 1UL : 0UL);
     }
+
+    public static ulong ComputeFormatFingerprint(
+        in SimpleDdgiNearFieldResidualLayout layout)
+    {
+        ulong hash = FnvOffsetBasis;
+        hash = Add(hash, SimpleDdgiNearFieldResidualEvidenceAbi.Version);
+        hash = Add(hash, (ulong)(uint)layout.SourceFormat);
+        // The remaining v2 formats are fixed by ABI: RGBA32_UINT payload,
+        // RG32F prepared depth/footprint, RG16F motion/moments, R16F
+        // luminance, RGBA16F residual/history, R32_UINT validity and the
+        // 48-byte std430 metadata bank.
+        hash = Add(hash, 0x52474241_33325549UL);
+        hash = Add(hash, 0x52473332_52473136UL);
+        return Add(hash, SimpleDdgiNearFieldResidualGpuAbi.HitMetadataByteCount);
+    }
+
+    public static SimpleDdgiNearFieldResidualExecutionScale ToExecutionScale(
+        float scale) => scale switch
+        {
+            0.125f => SimpleDdgiNearFieldResidualExecutionScale.Eighth,
+            0.25f => SimpleDdgiNearFieldResidualExecutionScale.Quarter,
+            0.5f => SimpleDdgiNearFieldResidualExecutionScale.Half,
+            _ => throw new ArgumentOutOfRangeException(nameof(scale))
+        };
 
     public static ulong ComputeBindingFingerprint(
         in SimpleDdgiNearFieldResidualEvidenceBinding binding)
@@ -514,6 +808,15 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
         hash = AddTraceSourceContract(hash, binding.TraceSourceContract);
         hash = Add(hash, binding.ProfileFingerprint);
         hash = Add(hash, binding.LayoutFingerprint);
+        hash = Add(hash, (ulong)(uint)binding.QualityPreset);
+        hash = Add(hash, (ulong)(uint)binding.Tier);
+        hash = Add(hash, binding.FormatFingerprint);
+        hash = AddString(hash, binding.ShaderSetHash);
+        hash = Add(hash, binding.VendorId);
+        hash = Add(hash, binding.DeviceId);
+        hash = Add(hash, binding.DriverVersion);
+        hash = Add(hash, binding.ApiVersion);
+        hash = AddExtentEnvelope(hash, binding.ExtentEnvelope);
         hash = Add(hash, (ulong)(uint)binding.SourceWidth);
         hash = Add(hash, (ulong)(uint)binding.SourceHeight);
         hash = Add(hash, (ulong)(uint)binding.TraceWidth);
@@ -531,21 +834,27 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
         string.Equals(binding.B3QualificationId, context.B3QualificationId,
             StringComparison.Ordinal) &&
         binding.B3QualificationRevision == context.B3QualificationRevision &&
-        binding.NearFieldResidualAbiRevision == context.NearFieldResidualAbiRevision;
+        binding.NearFieldResidualAbiRevision == context.NearFieldResidualAbiRevision &&
+        string.Equals(binding.ShaderSetHash, context.ShaderSetHash,
+            StringComparison.Ordinal) &&
+        binding.VendorId == context.VendorId &&
+        binding.DeviceId == context.DeviceId &&
+        binding.DriverVersion == context.DriverVersion &&
+        binding.ApiVersion == context.ApiVersion;
 
     private static bool BindingMatchesConfiguration(
         in SimpleDdgiNearFieldResidualEvidenceBinding binding,
         in SimpleDdgiNearFieldResidualConfiguration configuration,
         in SimpleDdgiNearFieldResidualLayout layout) =>
-        binding.TraceSourceContract == configuration.SourceContract &&
-        binding.TraceSourceContract.TryValidateForLayout(layout, out _) &&
+        TraceSourceSemanticsMatch(
+            binding.TraceSourceContract, configuration.SourceContract) &&
+        configuration.SourceContract.TryValidateForLayout(layout, out _) &&
         binding.ProfileFingerprint == ComputeProfileFingerprint(configuration.Profile) &&
         binding.LayoutFingerprint == ComputeLayoutFingerprint(layout) &&
-        binding.SourceWidth == layout.SourceWidth &&
-        binding.SourceHeight == layout.SourceHeight &&
-        binding.TraceWidth == layout.TraceWidth &&
-        binding.TraceHeight == layout.TraceHeight &&
-        binding.LayoutTotalBytes == layout.TotalBytes;
+        binding.QualityPreset == configuration.Profile.Preset &&
+        binding.Tier == ToExecutionScale(configuration.Profile.ResolutionScale) &&
+        binding.FormatFingerprint == ComputeFormatFingerprint(layout) &&
+        binding.ExtentEnvelope.Contains(layout);
 
     private static bool MeasurementMatchesBinding(
         in SimpleDdgiNearFieldResidualMeasurement measurement,
@@ -554,6 +863,21 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
             StringComparison.Ordinal) &&
         measurement.ContentRevision == binding.ContentRevision &&
         measurement.B3QualificationRevision == binding.B3QualificationRevision;
+
+    private static bool TraceSourceSemanticsMatch(
+        in SimpleDdgiNearFieldTraceSourceContract qualified,
+        in SimpleDdgiNearFieldTraceSourceContract live) =>
+        qualified.Terms == live.Terms &&
+        qualified.AbiRevision == live.AbiRevision &&
+        qualified.Format == live.Format &&
+        qualified.ColorSpace == live.ColorSpace &&
+        qualified.Producer == live.Producer &&
+        qualified.AlphaCoverage == live.AlphaCoverage &&
+        qualified.LayoutRevision == live.LayoutRevision &&
+        qualified.SourceRevision == live.SourceRevision &&
+        BitConverter.SingleToUInt32Bits(
+            qualified.Extent.ResolutionScale) ==
+        BitConverter.SingleToUInt32Bits(live.Extent.ResolutionScale);
 
     private static bool HasEqualCostComparison(
         double c5AddedMilliseconds,
@@ -613,6 +937,25 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
         hash = Add(hash, (ulong)contract.AlphaCoverage);
         hash = Add(hash, contract.LayoutRevision);
         return Add(hash, contract.SourceRevision);
+    }
+
+    private static ulong AddExtentEnvelope(
+        ulong hash,
+        in SimpleDdgiNearFieldResidualExtentEnvelope envelope)
+    {
+        hash = Add(hash, (ulong)(uint)envelope.MinimumSourceWidth);
+        hash = Add(hash, (ulong)(uint)envelope.MinimumSourceHeight);
+        hash = Add(hash, (ulong)(uint)envelope.MaximumSourceWidth);
+        hash = Add(hash, (ulong)(uint)envelope.MaximumSourceHeight);
+        hash = Add(hash, (ulong)(uint)envelope.MinimumTraceWidth);
+        hash = Add(hash, (ulong)(uint)envelope.MinimumTraceHeight);
+        hash = Add(hash, (ulong)(uint)envelope.MaximumTraceWidth);
+        hash = Add(hash, (ulong)(uint)envelope.MaximumTraceHeight);
+        hash = Add(hash, unchecked((ulong)BitConverter.DoubleToInt64Bits(
+            envelope.MinimumAspectRatio)));
+        hash = Add(hash, unchecked((ulong)BitConverter.DoubleToInt64Bits(
+            envelope.MaximumAspectRatio)));
+        return Add(hash, envelope.MaximumLayoutBytes);
     }
 
     private static ulong AddString(ulong hash, string? value)

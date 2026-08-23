@@ -250,8 +250,8 @@ public sealed class AdvancedGiScratchArenaTests
             RenderGraphResourceId.OpacityMicromapCompactionHeadroom,
             RenderGraphResourceId.SimpleDdgiGuidingScratch,
             RenderGraphResourceId.GiCausticScratch,
-            RenderGraphResourceId.NearFieldResidualHitMetadata,
-            RenderGraphResourceId.NearFieldResidualTileBuffers
+            RenderGraphResourceId.NearFieldResidualTileBuffers,
+            RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments
         ];
         foreach (RenderGraphResourceId id in transientBuffers)
         {
@@ -271,7 +271,8 @@ public sealed class AdvancedGiScratchArenaTests
             RenderGraphResourceId.SimpleDdgiGuidingDistributions,
             RenderGraphResourceId.GiCausticPhotons,
             RenderGraphResourceId.GiCausticCache,
-            RenderGraphResourceId.NearFieldResidualHistoryMetadata
+            RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+            RenderGraphResourceId.NearFieldSurfaceTable
         ];
         foreach (RenderGraphResourceId id in persistentBuffers)
         {

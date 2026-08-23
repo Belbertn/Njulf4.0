@@ -26,7 +26,6 @@ public sealed class FoliageManager : IDisposable
     private const uint PatchFlagVisible = 1u << 0;
     private const uint PrototypeFlagCastShadows = 1u << 0;
     private const uint PrototypeFlagFarImpostor = 1u << 1;
-    private const uint InvalidTextureIndex = uint.MaxValue;
     public static readonly ulong CounterStride = (ulong)Marshal.SizeOf<GPUFoliageCounters>();
 
     private static readonly UploadBarrierDescription FoliageUploadBarrier = new(
@@ -399,8 +398,15 @@ public sealed class FoliageManager : IDisposable
         {
             FoliagePatch patch = scene.FoliagePatches[patchIndex];
             uint prototypeIndex = (uint)GetPrototypeIndex(_prototypeScratch, patch.Prototype);
+            GPUFoliagePrototype gpuPrototype =
+                _gpuPrototypeScratch[checked((int)prototypeIndex)];
+            MaterialHandle nearFieldMaterial =
+                ResolveMaterialHandle(patch.Prototype);
+            uint nearFieldMaterialRevision = _materialManager is null
+                ? patch.Prototype.Revision
+                : _materialManager.GetMaterialContentRevision(
+                    checked((int)gpuPrototype.MaterialIndex));
             uint clusterOffset = (uint)_gpuClusterScratch.Count;
-            uint firstInstance = logicalFirstInstance;
             GeneratePatchClusters(patch, prototypeIndex, (uint)patchIndex, settings, ref logicalFirstInstance, ref clusterBudget);
             uint clusterCount = (uint)_gpuClusterScratch.Count - clusterOffset;
 
@@ -419,11 +425,16 @@ public sealed class FoliageManager : IDisposable
                 PrototypeIndex = prototypeIndex,
                 ClusterOffset = clusterOffset,
                 ClusterCount = clusterCount,
-                DensityTextureIndex = InvalidTextureIndex,
+                NearFieldStableObjectId = AccelerationStructureManager
+                    .StableInstanceIdentity(patch.Id),
                 Seed = patch.Seed,
                 Flags = patch.Visible ? PatchFlagVisible : 0u,
-                Padding0 = firstInstance,
-                Padding1 = 0
+                NearFieldStableMaterialId = SceneDataBuilder
+                    .CreateNearFieldStableMaterialIdentity(nearFieldMaterial),
+                NearFieldPackedObjectMaterialRevisions = SceneDataBuilder
+                    .PackNearFieldRevisions(
+                        patch.ContentRevision,
+                        nearFieldMaterialRevision)
             });
         }
 
@@ -501,15 +512,9 @@ public sealed class FoliageManager : IDisposable
 
     private uint ResolveMaterialIndex(FoliagePrototype prototype)
     {
+        MaterialHandle handle = ResolveMaterialHandle(prototype);
         if (_materialManager == null)
-            return prototype.Material is MaterialHandle materialHandle && materialHandle.IsValid
-                ? (uint)materialHandle.Index
-                : 0u;
-
-        MaterialHandle handle = SceneDataBuilder.ResolveRenderObjectMaterialHandle(
-            prototype.Material,
-            _materialManager.DefaultMaterialHandle,
-            prototype.Name);
+            return handle.IsValid ? checked((uint)handle.Index) : 0u;
         try
         {
             return (uint)_materialManager.ResolveMaterialIndex(handle);
@@ -518,6 +523,22 @@ public sealed class FoliageManager : IDisposable
         {
             return (uint)_materialManager.ResolveMaterialIndex(_materialManager.DefaultMaterialHandle);
         }
+    }
+
+    private MaterialHandle ResolveMaterialHandle(FoliagePrototype prototype)
+    {
+        if (_materialManager == null)
+        {
+            return prototype.Material is MaterialHandle materialHandle &&
+                materialHandle.IsValid
+                    ? materialHandle
+                    : MaterialHandle.Invalid;
+        }
+
+        return SceneDataBuilder.ResolveRenderObjectMaterialHandle(
+            prototype.Material,
+            _materialManager.DefaultMaterialHandle,
+            prototype.Name);
     }
 
     private void GeneratePatchClusters(

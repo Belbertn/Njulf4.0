@@ -59,6 +59,8 @@ namespace Njulf.Rendering
             16UL * 1024UL * 1024UL;
         private const ulong SimpleDdgiNearFieldResidualExperimentBudgetBytes =
             96UL * 1024UL * 1024UL;
+        private const ulong SimpleDdgiNearFieldResidualHotSwapBudgetBytes =
+            192UL * 1024UL * 1024UL;
         private const ulong GiCausticExperimentBudgetBytes =
             96UL * 1024UL * 1024UL;
 
@@ -211,7 +213,17 @@ namespace Njulf.Rendering
             _simpleDdgiNearFieldResidualAdmissionContext;
         private SimpleDdgiNearFieldResidualProfile
             _simpleDdgiNearFieldResidualRequestedProfile =
-                SimpleDdgiNearFieldResidualProfile.QuarterResolutionPerformance;
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Balanced,
+                    0.25f);
+        private SimpleDdgiNearFieldResidualProfile
+            _simpleDdgiNearFieldResidualEffectiveProfile =
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Balanced,
+                    0.25f);
+        private SimpleDdgiNearFieldResidualExecutionScale
+            _simpleDdgiNearFieldResidualStartupScale =
+                SimpleDdgiNearFieldResidualExecutionScale.Quarter;
         private SimpleDdgiNearFieldResidualPlan _simpleDdgiNearFieldResidualPlan;
         private SimpleDdgiNearFieldResidualGpuConfiguration
             _simpleDdgiNearFieldResidualGpuConfiguration;
@@ -224,6 +236,9 @@ namespace Njulf.Rendering
                 ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
         private SimpleDdgiNearFieldResidualVulkanRuntime?
             _simpleDdgiNearFieldResidualRuntime;
+        private SimpleDdgiNearFieldResidualGenerationTransaction<
+            SimpleDdgiNearFieldResidualVulkanGenerationResources>?
+            _simpleDdgiNearFieldResidualGenerations;
         private bool _nearFieldResidualUsesCandidateAuthorization;
         private FarFieldClipmapManager? _farFieldClipmapManager;
         private AccelerationStructureManager? _accelerationStructureManager;
@@ -574,7 +589,18 @@ namespace Njulf.Rendering
         /// </summary>
         public SimpleDdgiNearFieldResidualGpuRuntimeSnapshot
             SimpleDdgiNearFieldResidualRuntimeSnapshot =>
-            _simpleDdgiNearFieldResidualRuntime?.Snapshot ?? default;
+            IsNearFieldResidualGenerationExecutable()
+                ? _simpleDdgiNearFieldResidualRuntime!.Snapshot
+                : default;
+
+        /// <summary>
+        /// C5's active/pending/retired image-and-runtime ownership state. The
+        /// snapshot includes the independent 96/192 MiB budget charges and
+        /// the greatest active-generation fence reference.
+        /// </summary>
+        public SimpleDdgiNearFieldResidualGenerationSnapshot
+            SimpleDdgiNearFieldResidualGenerationSnapshot =>
+            _simpleDdgiNearFieldResidualGenerations?.Snapshot ?? default;
 
         /// <summary>
         /// Explicit development-only sparse residency command. Merely selecting
@@ -910,6 +936,7 @@ namespace Njulf.Rendering
             _simpleDdgiNearFieldResidualEvidence = evidence;
             _simpleDdgiNearFieldResidualAdmissionContext = admissionContext;
             _simpleDdgiNearFieldResidualRequestedProfile = profile;
+            _simpleDdgiNearFieldResidualStartupScale = evidence.Binding.Tier;
             _hasSimpleDdgiNearFieldResidualEvidence = true;
         }
 
@@ -919,9 +946,22 @@ namespace Njulf.Rendering
         {
             SimpleDdgiNearFieldResidualProfile[] candidates =
             [
-                SimpleDdgiNearFieldResidualProfile.HalfResolutionReference,
-                SimpleDdgiNearFieldResidualProfile.QuarterResolutionPerformance,
-                SimpleDdgiNearFieldResidualProfile.EighthResolutionMemoryBound
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Performance, 0.125f),
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Performance, 0.25f),
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Balanced, 0.125f),
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Balanced, 0.25f),
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Balanced, 0.5f),
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Quality, 0.125f),
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Quality, 0.25f),
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Quality, 0.5f)
             ];
             foreach (SimpleDdgiNearFieldResidualProfile candidate in candidates)
             {
@@ -1069,12 +1109,18 @@ namespace Njulf.Rendering
                         caustics.AdmissionContext,
                         caustics.Configuration);
                 }
-                if (bundle.NearFieldResidual is { } nearField)
+                if (TrySelectNearFieldRuntimeEvidence(
+                        bundle.NearFieldResiduals,
+                        out SimpleDdgiNearFieldResidualRuntimeEvidenceDocument?
+                            nearField,
+                        out SimpleDdgiNearFieldResidualExecutionScale
+                            startupScale))
                 {
                     ConfigureSimpleDdgiNearFieldResidualEvidence(
-                        nearField.Evidence,
+                        nearField!.Evidence,
                         nearField.AdmissionContext,
                         nearField.Configuration.Profile);
+                    _simpleDdgiNearFieldResidualStartupScale = startupScale;
                 }
 
                 failureDetail = "valid";
@@ -1101,7 +1147,11 @@ namespace Njulf.Rendering
             _simpleDdgiNearFieldResidualEvidence = default;
             _simpleDdgiNearFieldResidualAdmissionContext = default;
             _simpleDdgiNearFieldResidualRequestedProfile =
-                SimpleDdgiNearFieldResidualProfile.QuarterResolutionPerformance;
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    SimpleDdgiNearFieldResidualQualityPreset.Balanced,
+                    0.25f);
+            _simpleDdgiNearFieldResidualStartupScale =
+                SimpleDdgiNearFieldResidualExecutionScale.Quarter;
         }
         /// <summary>
         /// Optional application-supplied scene-kind identifier included in performance
@@ -1574,29 +1624,7 @@ namespace Njulf.Rendering
 
             if (_advancedGiGraphModes.UsesNearFieldHiZResidual)
             {
-                _simpleDdgiNearFieldResidualRuntime =
-                    new SimpleDdgiNearFieldResidualVulkanRuntime(
-                        _context,
-                        _bufferManager,
-                        _bindlessHeap,
-                        _renderTargets!,
-                        _hizDepthPyramid!,
-                        _simpleDdgiNearFieldResidualPlan.Layout,
-                        _simpleDdgiNearFieldResidualGpuConfiguration,
-                        Settings.GlobalIllumination
-                                .SimpleDdgiNearFieldResidualMode is
-                            SimpleDdgiNearFieldResidualMode
-                                .HiZAdaptive or
-                            SimpleDdgiNearFieldResidualMode.AutoQualified,
-                        Settings.GlobalIllumination
-                                .SimpleDdgiNearFieldResidualMode is
-                            SimpleDdgiNearFieldResidualMode
-                                .HiZHalfResolutionExperiment or
-                            SimpleDdgiNearFieldResidualMode.HiZAdaptive
-                            ? SimpleDdgiNearFieldResidualEvidenceAbi.Version
-                            : _simpleDdgiNearFieldResidualAdmissionContext
-                                .B3QualificationRevision,
-                        SimpleDdgiNearFieldResidualExperimentBudgetBytes);
+                InitializeNearFieldResidualGenerationTransaction();
             }
 
             RunStartupStep("VulkanRenderer.CreatePipelines", CreatePipelines);
@@ -1617,6 +1645,198 @@ namespace Njulf.Rendering
 
             _isInitialized = true;
             System.Diagnostics.Debug.WriteLine("VulkanRenderer initialized.");
+        }
+
+        private SimpleDdgiNearFieldResidualVulkanRuntime
+            CreateNearFieldResidualVulkanRuntime(
+                SimpleDdgiNearFieldResidualLayout layout,
+                SimpleDdgiNearFieldResidualRenderTargetGeneration
+                    targetGeneration)
+        {
+            if (!_simpleDdgiNearFieldResidualPlan.Layout.Equals(layout) ||
+                !targetGeneration.Layout.Equals(layout))
+            {
+                throw new InvalidOperationException(
+                    "C5 runtime allocation does not match the requested generation layout.");
+            }
+            return new SimpleDdgiNearFieldResidualVulkanRuntime(
+                _context,
+                _bufferManager,
+                _bindlessHeap,
+                _renderTargets ?? throw new InvalidOperationException(
+                    "C5 requires render targets before runtime allocation."),
+                _hizDepthPyramid ?? throw new InvalidOperationException(
+                    "C5 requires Hi-Z before runtime allocation."),
+                _foliageManager,
+                layout,
+                _simpleDdgiNearFieldResidualGpuConfiguration,
+                Settings.GlobalIllumination
+                        .SimpleDdgiNearFieldResidualMode is
+                    SimpleDdgiNearFieldResidualMode.HiZAdaptive or
+                    SimpleDdgiNearFieldResidualMode.AutoQualified,
+                Settings.GlobalIllumination
+                        .SimpleDdgiNearFieldResidualMode is
+                    SimpleDdgiNearFieldResidualMode
+                        .HiZHalfResolutionExperiment or
+                    SimpleDdgiNearFieldResidualMode.HiZAdaptive
+                    ? SimpleDdgiNearFieldResidualEvidenceAbi.Version
+                    : _simpleDdgiNearFieldResidualAdmissionContext
+                        .B3QualificationRevision,
+                SimpleDdgiNearFieldResidualExperimentBudgetBytes,
+                calibratedSourceCostUpperBoundMicroseconds:
+                    _hasSimpleDdgiNearFieldResidualEvidence
+                        ? checked((ulong)Math.Ceiling(
+                            _simpleDdgiNearFieldResidualEvidence
+                                .SourceMrtCostUpperBoundMilliseconds * 1000.0))
+                        : 0UL,
+                sourceCostAuthoritative:
+                    Settings.GlobalIllumination
+                            .SimpleDdgiNearFieldResidualMode ==
+                        SimpleDdgiNearFieldResidualMode.AutoQualified &&
+                    _hasSimpleDdgiNearFieldResidualEvidence &&
+                    _simpleDdgiNearFieldResidualEvidence
+                        .SourceCostAuthoritative,
+                startingScale:
+                    Settings.GlobalIllumination
+                            .SimpleDdgiNearFieldResidualMode ==
+                        SimpleDdgiNearFieldResidualMode.AutoQualified &&
+                    _hasSimpleDdgiNearFieldResidualEvidence
+                        ? _simpleDdgiNearFieldResidualStartupScale
+                        : null,
+                promotionEnabled:
+                    Settings.GlobalIllumination
+                            .SimpleDdgiNearFieldResidualMode ==
+                        SimpleDdgiNearFieldResidualMode.AutoQualified,
+                captureIdentifiers:
+                    _hasSimpleDdgiNearFieldResidualEvidence
+                        ? new SimpleDdgiNearFieldResidualCaptureIdentifiers(
+                            _simpleDdgiNearFieldResidualEvidence
+                                .BenchmarkCaptureId,
+                            _simpleDdgiNearFieldResidualEvidence
+                                .ReferenceManifestId)
+                        : SimpleDdgiNearFieldResidualCaptureIdentifiers.None,
+                targetGeneration: targetGeneration);
+        }
+
+        private void InitializeNearFieldResidualGenerationTransaction()
+        {
+            RenderTargetManager targets = _renderTargets ??
+                throw new InvalidOperationException(
+                    "C5 requires render targets before generation admission.");
+            var backend =
+                new SimpleDdgiNearFieldResidualVulkanGenerationBackend(
+                    targets,
+                    CreateNearFieldResidualVulkanRuntime);
+            var generations =
+                new SimpleDdgiNearFieldResidualGenerationTransaction<
+                    SimpleDdgiNearFieldResidualVulkanGenerationResources>(
+                    backend,
+                    SimpleDdgiNearFieldResidualExperimentBudgetBytes,
+                    SimpleDdgiNearFieldResidualHotSwapBudgetBytes);
+            _simpleDdgiNearFieldResidualGenerations = generations;
+            if (!generations.TryInitialize(
+                    _simpleDdgiNearFieldResidualPlan.Layout,
+                    out string failure) ||
+                !TryPublishNearFieldResidualActiveGeneration(out failure))
+            {
+                RejectNearFieldResidualAtStartup(failure);
+            }
+        }
+
+        private bool TryPublishNearFieldResidualActiveGeneration(
+            out string failure)
+        {
+            failure = "near-field-generation-controller-unavailable";
+            if (_simpleDdgiNearFieldResidualGenerations is not { }
+                    generations ||
+                !generations.TryGetActiveAllocation(out var allocation) ||
+                allocation is null)
+            {
+                return false;
+            }
+
+            SimpleDdgiNearFieldResidualVulkanGenerationResources resources =
+                allocation.Resources;
+            if (!allocation.Layout.Equals(
+                    _simpleDdgiNearFieldResidualPlan.Layout) ||
+                !resources.Runtime.IsActive ||
+                !ForwardNearFieldDirectSourceContract
+                    .TryValidatePipelineConfiguration(
+                        _nearFieldDirectSourcePipelineConfiguration,
+                        out failure))
+            {
+                failure = string.IsNullOrWhiteSpace(failure)
+                    ? "near-field-generation-publication-invalid"
+                    : failure;
+                return false;
+            }
+
+            _renderTargets!.PublishNearFieldResidualGeneration(
+                resources.Targets);
+            _simpleDdgiNearFieldResidualRuntime = resources.Runtime;
+            _meshPipeline?.PublishNearFieldDirectSourceGeneration(
+                _nearFieldDirectSourcePipelineConfiguration);
+            _forwardPlusPass?.PublishNearFieldDirectSourceGeneration(
+                new ForwardNearFieldDirectSourceAttachmentBinding(
+                    resources.Targets.DirectSource,
+                    resources.Targets.ReceiverPayload,
+                    _nearFieldDirectSourcePipelineConfiguration));
+            failure = "valid";
+            return true;
+        }
+
+        private bool IsNearFieldResidualGenerationExecutable()
+        {
+            if (_simpleDdgiNearFieldResidualRuntime is not { IsActive: true }
+                    runtime ||
+                _simpleDdgiNearFieldResidualGenerations is not { }
+                    generations ||
+                !generations.CanExecuteFor(
+                    _simpleDdgiNearFieldResidualPlan.Layout) ||
+                !generations.TryGetActiveAllocation(out var allocation) ||
+                allocation is null)
+            {
+                return false;
+            }
+
+            return ReferenceEquals(allocation.Resources.Runtime, runtime);
+        }
+
+        private void RejectNearFieldResidualAtStartup(string reason)
+        {
+            if (string.IsNullOrWhiteSpace(reason))
+                reason = "near-field-generation-startup-allocation-failed";
+            _simpleDdgiNearFieldResidualGenerations?.Dispose();
+            _simpleDdgiNearFieldResidualGenerations = null;
+            _simpleDdgiNearFieldResidualRuntime = null;
+            if (_renderTargets?.CurrentNearFieldResidualGeneration is { }
+                    remainingTargets)
+            {
+                _renderTargets.ReleaseNearFieldResidualGeneration(
+                    remainingTargets);
+            }
+            _simpleDdgiNearFieldResidualPlan =
+                SimpleDdgiNearFieldResidualExperiment.InvalidateRuntimePlan(
+                    _simpleDdgiNearFieldResidualPlan,
+                    reason,
+                    GiExperimentFallbackReason.ResourceIncomplete);
+            _simpleDdgiNearFieldResidualMode =
+                _simpleDdgiNearFieldResidualMode with
+                {
+                    AdmittedMode = SimpleDdgiNearFieldResidualMode.Off,
+                    EffectiveMode = SimpleDdgiNearFieldResidualMode.Off,
+                    FallbackReason =
+                        GiExperimentFallbackReason.ResourceIncomplete,
+                    FallbackDetail = reason
+                };
+            _advancedGiGraphModes = _advancedGiGraphModes with
+            {
+                NearFieldResidual = SimpleDdgiNearFieldResidualMode.Off,
+                NearFieldProfile = default
+            };
+            _simpleDdgiNearFieldResidualGpuConfiguration = default;
+            _nearFieldDirectSourcePipelineConfiguration =
+                ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
         }
 
         private void CreatePipelines()
@@ -1648,7 +1868,9 @@ namespace Njulf.Rendering
                     RenderTargetManager.MotionVectorFormat,
                     _swapchain.DepthFormat,
                     Settings,
-                    _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested);
+                    _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested,
+                    _nearFieldDirectSourcePipelineConfiguration,
+                    _giCausticReceiverPipelineConfiguration);
             });
 
             // Create compute pipeline for light culling
@@ -1892,7 +2114,7 @@ namespace Njulf.Rendering
                 _giPipelineCacheService,
                 nearFieldDirectSourceBinding,
                 nearFieldDirectSourceRuntimeAvailable: () =>
-                    _simpleDdgiNearFieldResidualRuntime is { IsActive: true },
+                    IsNearFieldResidualGenerationExecutable(),
                 giCausticReceiverBinding: giCausticReceiverBinding,
                 giCausticRuntimeAvailable: () =>
                     _giCausticFrameAvailable,
@@ -1936,16 +2158,26 @@ namespace Njulf.Rendering
 
             if (_advancedGiGraphModes.UsesNearFieldHiZResidual)
             {
-                SimpleDdgiNearFieldResidualVulkanRuntime nearFieldRuntime =
-                    _simpleDdgiNearFieldResidualRuntime ??
+                if (_simpleDdgiNearFieldResidualRuntime is null)
                     throw new InvalidOperationException(
                         "The admitted C5 graph has no concrete Vulkan runtime.");
+                Func<SimpleDdgiNearFieldResidualVulkanRuntime?>
+                    nearFieldRuntimeProvider = () =>
+                        IsNearFieldResidualGenerationExecutable()
+                            ? _simpleDdgiNearFieldResidualRuntime
+                            : null;
                 AddPassInstance(new SimpleDdgiNearFieldResidualResetPass(
-                    _context, _swapchain, _bindlessHeap, nearFieldRuntime));
+                    _context, _swapchain, _bindlessHeap,
+                    nearFieldRuntimeProvider));
+                AddPassInstance(new SimpleDdgiNearFieldResidualPreparePass(
+                    _context, _swapchain, _bindlessHeap,
+                    nearFieldRuntimeProvider));
                 AddPassInstance(new SimpleDdgiNearFieldResidualTracePass(
-                    _context, _swapchain, _bindlessHeap, nearFieldRuntime));
+                    _context, _swapchain, _bindlessHeap,
+                    nearFieldRuntimeProvider));
                 AddPassInstance(new SimpleDdgiNearFieldResidualTemporalPass(
-                    _context, _swapchain, _bindlessHeap, nearFieldRuntime));
+                    _context, _swapchain, _bindlessHeap,
+                    nearFieldRuntimeProvider));
                 for (int iteration = 0;
                      iteration < _simpleDdgiNearFieldResidualPlan.Layout
                          .FilterIterationCount;
@@ -1955,11 +2187,16 @@ namespace Njulf.Rendering
                         _context,
                         _swapchain,
                         _bindlessHeap,
-                        nearFieldRuntime,
+                        nearFieldRuntimeProvider,
                         iteration));
                 }
+                AddPassInstance(
+                    new SimpleDdgiNearFieldResidualFrequencySeparationPass(
+                        _context, _swapchain, _bindlessHeap,
+                        nearFieldRuntimeProvider));
                 AddPassInstance(new SimpleDdgiNearFieldResidualCompositePass(
-                    _context, _swapchain, _bindlessHeap, nearFieldRuntime));
+                    _context, _swapchain, _bindlessHeap,
+                    nearFieldRuntimeProvider));
             }
 
             var simpleDdgiPageDemandPass = new SimpleDdgiPageDemandPass(
@@ -2276,6 +2513,87 @@ namespace Njulf.Rendering
             System.Diagnostics.Debug.WriteLine("Render graph initialized.");
         }
 
+        private bool TrySelectNearFieldRuntimeEvidence(
+            IReadOnlyList<SimpleDdgiNearFieldResidualRuntimeEvidenceDocument>
+                entries,
+            out SimpleDdgiNearFieldResidualRuntimeEvidenceDocument? selected,
+            out SimpleDdgiNearFieldResidualExecutionScale startupScale)
+        {
+            selected = null;
+            startupScale = SimpleDdgiNearFieldResidualExecutionScale.Eighth;
+            if (entries.Count == 0)
+                return false;
+
+            PhysicalDeviceProperties properties = default;
+            _context.Api.GetPhysicalDeviceProperties(
+                _context.PhysicalDevice,
+                &properties);
+            string shaderSetHash = string.IsNullOrWhiteSpace(
+                _captureShaderBundleHash)
+                ? ResolvePerformanceCaptureShaderBundleHash()
+                : _captureShaderBundleHash;
+            SimpleDdgiNearFieldResidualQualityPreset requestedPreset =
+                Settings.GlobalIllumination
+                    .SimpleDdgiNearFieldResidualQualityPreset;
+
+            var matched = new
+                SimpleDdgiNearFieldResidualRuntimeEvidenceDocument?[3];
+            foreach (SimpleDdgiNearFieldResidualRuntimeEvidenceDocument entry in
+                     entries)
+            {
+                SimpleDdgiNearFieldResidualAdmissionContext context =
+                    entry.AdmissionContext;
+                SimpleDdgiNearFieldResidualQualificationEvidence evidence =
+                    entry.Evidence;
+                if (context.VendorId != properties.VendorID ||
+                    context.DeviceId != properties.DeviceID ||
+                    context.DriverVersion != properties.DriverVersion ||
+                    context.ApiVersion != properties.ApiVersion ||
+                    !string.Equals(
+                        context.ShaderSetHash,
+                        shaderSetHash,
+                        StringComparison.Ordinal) ||
+                    evidence.Binding.QualityPreset != requestedPreset ||
+                    !evidence.SourceCostAuthoritative ||
+                    evidence.Binding.ProfileFingerprint !=
+                        SimpleDdgiNearFieldResidualEvidenceEvaluator
+                            .ComputeProfileFingerprint(
+                                ApplyNearFieldAdvancedOverrides(
+                                    entry.Configuration.Profile,
+                                    Settings.GlobalIllumination)))
+                {
+                    continue;
+                }
+                matched[(int)evidence.Binding.Tier] = entry;
+            }
+
+            int startupIndex = -1;
+            for (int index = matched.Length - 1; index >= 0; index--)
+            {
+                if (matched[index] is { } entry &&
+                    entry.Evidence.C5P95Milliseconds <=
+                        SimpleDdgiNearFieldResidualEvidenceAbi
+                            .MaximumStartupP95Milliseconds)
+                {
+                    startupIndex = index;
+                    break;
+                }
+            }
+            if (startupIndex < 0)
+                return false;
+
+            int maximumContiguousIndex = startupIndex;
+            while (maximumContiguousIndex + 1 < matched.Length &&
+                   matched[maximumContiguousIndex + 1] is not null)
+            {
+                maximumContiguousIndex++;
+            }
+            selected = matched[maximumContiguousIndex];
+            startupScale =
+                (SimpleDdgiNearFieldResidualExecutionScale)startupIndex;
+            return selected is not null;
+        }
+
         private void RunStartupStep(string name, Action action)
         {
             ArgumentNullException.ThrowIfNull(action);
@@ -2384,7 +2702,12 @@ namespace Njulf.Rendering
                     ? _simpleDdgiNearFieldResidualRequestedProfile
                     : ResolveExplicitNearFieldProfile(
                         sceneRenderExtent,
-                        gi.SimpleDdgiNearFieldResidualMode));
+                        gi.SimpleDdgiNearFieldResidualMode,
+                        gi));
+            nearFieldProfile = ApplyNearFieldAdvancedOverrides(
+                nearFieldProfile,
+                gi);
+            _simpleDdgiNearFieldResidualEffectiveProfile = nearFieldProfile;
             AdvancedGiPrerequisiteGateResult nearFieldGate =
                 _advancedGiPrerequisiteManifest.Evaluate(
                     AdvancedGiPrerequisiteFeature.NearFieldResidual);
@@ -2401,7 +2724,16 @@ namespace Njulf.Rendering
             SimpleDdgiNearFieldTraceSourceContract sourceContract =
                 _hasSimpleDdgiNearFieldResidualEvidence
                     ? _simpleDdgiNearFieldResidualEvidence.Binding
-                        .TraceSourceContract
+                        .TraceSourceContract with
+                        {
+                            Extent = new
+                                SimpleDdgiNearFieldTraceSourceScaledExtent(
+                                    preliminaryLayout.SourceWidth,
+                                    preliminaryLayout.SourceHeight,
+                                    preliminaryLayout.TraceWidth,
+                                    preliminaryLayout.TraceHeight,
+                                    nearFieldProfile.ResolutionScale)
+                        }
                     : nearFieldCandidate is not null
                         ? nearFieldCandidate.Configuration.SourceContract
                     : preliminaryLayout.IsValid
@@ -2528,7 +2860,11 @@ namespace Njulf.Rendering
                         BinaryRefinementSteps =
                             nearFieldProfile.BinaryRefinementSteps,
                         FilterIterationCount =
-                            nearFieldProfile.FilterIterationCount
+                            nearFieldProfile.FilterIterationCount,
+                        ResidualIntensity = gi
+                                .SimpleDdgiNearFieldResidualAdvancedOverridesEnabled
+                            ? gi.SimpleDdgiNearFieldResidualIntensity
+                            : 1.0f
                     };
                 _nearFieldDirectSourcePipelineConfiguration = new(
                     IsC5EffectivelyEnabled: true,
@@ -2800,30 +3136,25 @@ namespace Njulf.Rendering
         private static SimpleDdgiNearFieldResidualProfile
             ResolveExplicitNearFieldProfile(
                 Extent2D sceneRenderExtent,
-                SimpleDdgiNearFieldResidualMode mode)
+                SimpleDdgiNearFieldResidualMode mode,
+                GlobalIlluminationSettings settings)
         {
-            ReadOnlySpan<SimpleDdgiNearFieldResidualProfile> profiles =
+            SimpleDdgiNearFieldResidualQualityPreset preset = settings
+                .SimpleDdgiNearFieldResidualQualityPreset;
+            ReadOnlySpan<float> scales =
                 mode == SimpleDdgiNearFieldResidualMode.HiZAdaptive
-                    ?
-                    [
-                        SimpleDdgiNearFieldResidualProfile
-                            .QuarterResolutionPerformance,
-                        SimpleDdgiNearFieldResidualProfile
-                            .EighthResolutionMemoryBound
-                    ]
-                    :
-                    [
-                        SimpleDdgiNearFieldResidualProfile
-                            .HalfResolutionReference,
-                        SimpleDdgiNearFieldResidualProfile
-                            .QuarterResolutionPerformance,
-                        SimpleDdgiNearFieldResidualProfile
-                            .EighthResolutionMemoryBound
-                    ];
+                    ? [0.25f, 0.125f]
+                    : [0.5f, 0.25f, 0.125f];
             int width = checked((int)sceneRenderExtent.Width);
             int height = checked((int)sceneRenderExtent.Height);
-            foreach (SimpleDdgiNearFieldResidualProfile profile in profiles)
+            foreach (float scale in scales)
             {
+                SimpleDdgiNearFieldResidualProfile profile =
+                    ApplyNearFieldAdvancedOverrides(
+                        SimpleDdgiNearFieldResidualProfile.ForPreset(
+                            preset,
+                            scale),
+                        settings);
                 if (SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
                         width,
                         height,
@@ -2838,8 +3169,34 @@ namespace Njulf.Rendering
             // Return the smallest complete profile so the normal plan compiler
             // produces one authoritative memory/capability failure rather than
             // constructing a partial layout.
-            return SimpleDdgiNearFieldResidualProfile
-                .EighthResolutionMemoryBound;
+            return ApplyNearFieldAdvancedOverrides(
+                SimpleDdgiNearFieldResidualProfile.ForPreset(
+                    preset,
+                    0.125f),
+                settings);
+        }
+
+        private static SimpleDdgiNearFieldResidualProfile
+            ApplyNearFieldAdvancedOverrides(
+                in SimpleDdgiNearFieldResidualProfile profile,
+                GlobalIlluminationSettings settings)
+        {
+            if (!settings.SimpleDdgiNearFieldResidualAdvancedOverridesEnabled)
+                return profile;
+
+            float maximumDistance = settings
+                .SimpleDdgiNearFieldResidualMaximumTraceDistanceMeters;
+            return profile with
+            {
+                MaximumTraceDistanceMeters = maximumDistance,
+                FullWeightTraceDistanceMeters = MathF.Min(
+                    profile.FullWeightTraceDistanceMeters,
+                    maximumDistance * 0.5f),
+                MaximumRaysPerPixel = settings
+                    .SimpleDdgiNearFieldResidualRaysPerPixel,
+                FilterIterationCount = settings
+                    .SimpleDdgiNearFieldResidualFilterIterationCount
+            };
         }
 
         private bool TryValidateNearFieldRuntimePreflight(
@@ -3261,6 +3618,10 @@ namespace Njulf.Rendering
                     _gpuTimestamps.LastCompletedSnapshot,
                     out _);
             }
+            // Fence-complete readback belongs to the generation that recorded
+            // the reused frame slot. Only after consuming it may a prepared
+            // generation become active or an older one be reclaimed.
+            AdvanceNearFieldResidualGenerationAtFrameBoundary();
             RecordCompletedAsyncComputeTimingFrame(_currentFrame, _gpuTimestamps.LastCompletedSnapshot);
             bool completedSchedulerFeedbackAvailable = false;
             GPUSimpleDdgiSchedulerFeedback completedSchedulerFeedback = default;
@@ -3388,7 +3749,7 @@ namespace Njulf.Rendering
             _lastAsyncComputeSubmitMicroseconds = 0;
             bool gpuTimingRequested =
                 Settings.Debug.AllowGpuTiming ||
-                _simpleDdgiNearFieldResidualRuntime is { IsActive: true };
+                IsNearFieldResidualGenerationExecutable();
             BeginReflectionProbeCaptureFrame(
                 _gpuTimestamps.Supported && gpuTimingRequested);
             _frameInProgress = true;
@@ -3534,6 +3895,8 @@ namespace Njulf.Rendering
                 _ddgiFrameSerial == ulong.MaxValue
                     ? ulong.MaxValue
                     : _ddgiFrameSerial + 1UL;
+            _simpleDdgiNearFieldResidualGenerations?.RecordActiveReference(
+                _submittedGraphicsFrameFenceValues[_currentFrame]);
             if (_pendingSimpleDdgiSubmittedFrameEvidence.Valid)
             {
                 _simpleDdgiSubmittedFrameRing.MarkSubmitted(
@@ -4109,6 +4472,14 @@ namespace Njulf.Rendering
             sceneData.EffectiveExposure = Settings.Exposure;
             sceneData.FogDirectionalInscatteringDirection = ResolveFogDirectionalInscatteringDirection(lightSnapshot);
             sceneData.DebugViewMode = forwardDebugViewMode;
+            GlobalIlluminationDebugView resolvedNearFieldDebugView =
+                RendererBuildFeatures.ResolveGlobalIlluminationDebugView(
+                    Settings.GlobalIllumination.DebugView);
+            sceneData.NearFieldResidualDebugView =
+                SimpleDdgiNearFieldResidualDebugViewContract.IsC5View(
+                    resolvedNearFieldDebugView)
+                    ? (uint)resolvedNearFieldDebugView
+                    : (uint)GlobalIlluminationDebugView.None;
             sceneData.JitterEnabled = jitter.X != 0.0f || jitter.Y != 0.0f ? 1 : 0;
             sceneData.JitterX = jitter.X;
             sceneData.JitterY = jitter.Y;
@@ -4378,6 +4749,14 @@ namespace Njulf.Rendering
                 GlobalIlluminationDebugView effectiveDebugView =
                     RendererBuildFeatures.ResolveGlobalIlluminationDebugView(
                         Settings.GlobalIllumination.DebugView);
+                if (SimpleDdgiNearFieldResidualDebugViewContract.IsC5View(
+                        effectiveDebugView))
+                {
+                    // C5 owns these visualizations in its final compute pass.
+                    // Forward must still execute its normal lighting path so
+                    // the independent direct-diffuse/emissive MRT is valid.
+                    return 0u;
+                }
                 return effectiveDebugView switch
                 {
                     GlobalIlluminationDebugView.FinalIndirect => 80u,
@@ -6768,6 +7147,56 @@ namespace Njulf.Rendering
             sceneData.GlobalIlluminationCpuTimingSampleCount = stats.Count;
         }
 
+        private SimpleDdgiNearFieldResidualDiagnostics
+            ResolveNearFieldResidualDiagnostics()
+        {
+            if (IsNearFieldResidualGenerationExecutable() &&
+                _simpleDdgiNearFieldResidualRuntime is { } runtime)
+            {
+                return runtime.Diagnostics;
+            }
+
+            if (_simpleDdgiNearFieldResidualGenerations is { }
+                    generations)
+            {
+                SimpleDdgiNearFieldResidualGenerationSnapshot generation =
+                    generations.Snapshot;
+                var memory =
+                    new SimpleDdgiNearFieldResidualMemoryTelemetry(
+                        _simpleDdgiNearFieldResidualPlan.Layout.TotalBytes,
+                        _simpleDdgiNearFieldResidualPlan.Active
+                            ? _simpleDdgiNearFieldResidualPlan.Layout.TotalBytes
+                            : 0UL,
+                        generation.LiveBytes,
+                        generation.PeakLiveBytes,
+                        generation.RetiredBytes);
+                return generation.HasActive || generation.HasPending ||
+                    generation.HasRetired
+                        ? SimpleDdgiNearFieldResidualDiagnostics
+                            .PendingGpuReadback(memory, generation.State)
+                        : SimpleDdgiNearFieldResidualDiagnostics
+                            .PendingRendererIntegration(
+                                memory,
+                                generation.State);
+            }
+
+            return _simpleDdgiNearFieldResidualPlan.Requested
+                ? SimpleDdgiNearFieldResidualDiagnostics
+                    .PendingRendererIntegration(
+                        new SimpleDdgiNearFieldResidualMemoryTelemetry(
+                            _simpleDdgiNearFieldResidualPlan.AllocatedBytes,
+                            _simpleDdgiNearFieldResidualPlan.Active
+                                ? _simpleDdgiNearFieldResidualPlan
+                                    .AllocatedBytes
+                                : 0UL,
+                            0UL,
+                            0UL,
+                            0UL),
+                        _simpleDdgiNearFieldResidualPlan.Status)
+                : SimpleDdgiNearFieldResidualDiagnostics.Disabled(
+                    _simpleDdgiNearFieldResidualPlan.Status);
+        }
+
         private RendererDiagnostics BuildDiagnostics(SceneRenderingData sceneData)
         {
             ModelRenderUploadDiagnostics uploadDiagnostics = _modelUploadService.LastUploadDiagnostics;
@@ -7307,21 +7736,7 @@ namespace Njulf.Rendering
                         "Simple DDGI is inactive."),
                 GiRoadmapExperiments = sceneData.GiRoadmapExperiments,
                 SimpleDdgiNearFieldResidual =
-                    _simpleDdgiNearFieldResidualRuntime?.Diagnostics ??
-                    (_simpleDdgiNearFieldResidualPlan.Requested
-                        ? SimpleDdgiNearFieldResidualDiagnostics
-                            .PendingRendererIntegration(
-                                new SimpleDdgiNearFieldResidualMemoryTelemetry(
-                                    _simpleDdgiNearFieldResidualPlan.AllocatedBytes,
-                                    _simpleDdgiNearFieldResidualPlan.Active
-                                        ? _simpleDdgiNearFieldResidualPlan.AllocatedBytes
-                                        : 0UL,
-                                    0UL,
-                                    0UL,
-                                    0UL),
-                                _simpleDdgiNearFieldResidualPlan.Status)
-                        : SimpleDdgiNearFieldResidualDiagnostics.Disabled(
-                            _simpleDdgiNearFieldResidualPlan.Status)),
+                    ResolveNearFieldResidualDiagnostics(),
                 SimpleDdgiContentMemory =
                     sceneData.SimpleDdgiContentMemory,
                 SimpleDdgiRayScratchBytes = giUsesSimpleDdgi
@@ -10980,7 +11395,9 @@ namespace Njulf.Rendering
                     simpleDdgi.RelocationClassificationBuffer,
                     simpleDdgi.GpuSchedulerArenaBuffer);
             SimpleDdgiNearFieldResidualVulkanBuffers nearFieldBuffers =
-                _simpleDdgiNearFieldResidualRuntime?.Buffers ?? default;
+                IsNearFieldResidualGenerationExecutable()
+                    ? _simpleDdgiNearFieldResidualRuntime!.Buffers
+                    : default;
             GiCausticVulkanBuffers causticBuffers =
                 _giCausticRuntime?.Buffers ?? default;
             SimpleDdgiGuidingGraphResourceSnapshot guidingResources =
@@ -11045,9 +11462,10 @@ namespace Njulf.Rendering
                     guidingResources.DirectionPayloadBytes,
                     guidingResources.DirectionPayloadGeneration),
                 new NearFieldResidualAsyncBufferIdentity(
-                    nearFieldBuffers.HitMetadata,
                     nearFieldBuffers.HistoryMetadata0,
                     nearFieldBuffers.HistoryMetadata1,
+                    nearFieldBuffers.SurfaceTable,
+                    nearFieldBuffers.ActiveTileAndIndirect,
                     nearFieldBuffers.TileRecords,
                     nearFieldBuffers.TraceFrameConstants0,
                     nearFieldBuffers.TraceFrameConstants1));
@@ -11076,7 +11494,12 @@ namespace Njulf.Rendering
 
             foreach (RenderGraphResourceId resource in Enum.GetValues<RenderGraphResourceId>())
             {
-                IReadOnlyList<RenderTarget> targets = _renderGraph.GetOwnedRenderTargets(resource);
+                IReadOnlyList<RenderTarget> targets =
+                    _renderGraph.GetLayoutTrackedRenderTargets(resource);
+                if (targets.Count == 0)
+                    continue;
+                RenderGraphResourceLifetime lifetime =
+                    _renderGraph.GetResourceLifetime(resource);
                 for (int targetIndex = 0; targetIndex < targets.Count; targetIndex++)
                 {
                     RenderTarget target = targets[targetIndex];
@@ -11086,35 +11509,10 @@ namespace Njulf.Rendering
                         target,
                         queueFamilies,
                         graphicsFamily,
-                        RenderGraphResourceLifetime.Persistent,
+                        lifetime,
                         targetIndex,
                         targets.Count > 1 ? targetIndex : -1);
                 }
-            }
-
-            // These two renderer-owned targets are graph imports rather than graph-owned
-            // allocations. They are nevertheless concrete Vulkan images and must participate in
-            // a plan before Hi-Z, fog, or bloom can be placed on compute.
-            if (_renderTargets != null)
-            {
-                AddRenderTargetBinding(
-                    bindings,
-                    RenderGraphResourceId.SceneColor,
-                    _renderTargets.SceneColor,
-                    queueFamilies,
-                    graphicsFamily,
-                    RenderGraphResourceLifetime.Imported,
-                    bindingIndex: 0,
-                    historyIndex: -1);
-                AddRenderTargetBinding(
-                    bindings,
-                    RenderGraphResourceId.SceneDepth,
-                    _renderTargets.SceneDepth,
-                    queueFamilies,
-                    graphicsFamily,
-                    RenderGraphResourceLifetime.Imported,
-                    bindingIndex: 0,
-                    historyIndex: -1);
             }
 
             if (_hizDepthPyramid is { Image.Handle: not 0 } hiz)
@@ -11456,18 +11854,11 @@ namespace Njulf.Rendering
                 }
             }
 
-            if (_simpleDdgiNearFieldResidualRuntime is { IsActive: true }
-                nearFieldRuntime)
+            if (IsNearFieldResidualGenerationExecutable() &&
+                _simpleDdgiNearFieldResidualRuntime is { } nearFieldRuntime)
             {
                 SimpleDdgiNearFieldResidualVulkanBuffers nearField =
                     nearFieldRuntime.Buffers;
-                AddAsyncComputeBufferBinding(
-                    bindings,
-                    RenderGraphResourceId.NearFieldResidualHitMetadata,
-                    "C5 current hit metadata",
-                    nearField.HitMetadata,
-                    queueFamilies,
-                    graphicsFamily);
                 AddAsyncComputeBufferBinding(
                     bindings,
                     RenderGraphResourceId.NearFieldResidualHistoryMetadata,
@@ -11484,6 +11875,20 @@ namespace Njulf.Rendering
                     queueFamilies,
                     graphicsFamily,
                     historyIndex: 1);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.NearFieldSurfaceTable,
+                    "C5 frame-buffered surface table",
+                    nearField.SurfaceTable,
+                    queueFamilies,
+                    graphicsFamily);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments,
+                    "C5 active tile list and indirect arguments",
+                    nearField.ActiveTileAndIndirect,
+                    queueFamilies,
+                    graphicsFamily);
                 AddAsyncComputeBufferBinding(
                     bindings,
                     RenderGraphResourceId.NearFieldResidualTileBuffers,
@@ -12153,9 +12558,10 @@ namespace Njulf.Rendering
             BufferHandle Scheduler);
 
         private readonly record struct NearFieldResidualAsyncBufferIdentity(
-            BufferHandle HitMetadata,
             BufferHandle HistoryMetadata0,
             BufferHandle HistoryMetadata1,
+            BufferHandle SurfaceTable,
+            BufferHandle ActiveTileAndIndirect,
             BufferHandle TileRecords,
             BufferHandle TraceFrameConstants0,
             BufferHandle TraceFrameConstants1);
@@ -13087,15 +13493,22 @@ namespace Njulf.Rendering
                         sceneData.DdgiFrameSerial)
                     : SimpleDdgiReceiverFeedbackGpuSchedulingBinding.Disabled(
                         "receiver-feedback-runtime-or-render-targets-unavailable");
-            if (receiverFeedbackBinding.UseFeedback &&
-                !receiverFeedbackRuntime!.TryRecordSchedulingReadBarrier(
-                    _currentCommandBuffer,
-                    receiverFeedbackBinding,
-                    out string receiverFeedbackBarrierReason))
+            bool receiverFeedbackSummaryBankReadRecorded = false;
+            if (receiverFeedbackBinding.UseFeedback)
             {
-                receiverFeedbackBinding =
-                    SimpleDdgiReceiverFeedbackGpuSchedulingBinding.Disabled(
-                        receiverFeedbackBarrierReason);
+                if (!receiverFeedbackRuntime!.TryRecordSchedulingReadBarrier(
+                        _currentCommandBuffer,
+                        receiverFeedbackBinding,
+                        out string receiverFeedbackBarrierReason))
+                {
+                    receiverFeedbackBinding =
+                        SimpleDdgiReceiverFeedbackGpuSchedulingBinding.Disabled(
+                            receiverFeedbackBarrierReason);
+                }
+                else
+                {
+                    receiverFeedbackSummaryBankReadRecorded = true;
+                }
             }
             _simpleDdgiVolumeManager.SetReceiverFeedbackSchedulingBinding(
                 receiverFeedbackBinding,
@@ -13130,8 +13543,17 @@ namespace Njulf.Rendering
             // Upload establishes the initial physical probe domain, however,
             // so reconcile once more before any advanced-GI commands are
             // recorded. This makes ordinary explicit switches effective on
-            // the first renderable frame instead of waiting for frame two.
-            ReconcileSimpleDdgiReceiverFeedback(simpleDdgiActive: true);
+            // the first renderable frame instead of waiting for frame two. If
+            // this command buffer already names the previous summary bank,
+            // keep that allocation and its descriptor publication immutable
+            // until submission. The next frame's pre-upload reconciliation
+            // will apply the still-pending configuration change after waiting
+            // every submitted descriptor reader.
+            if (ShouldReconcileSimpleDdgiReceiverFeedbackAfterUpload(
+                    receiverFeedbackSummaryBankReadRecorded))
+            {
+                ReconcileSimpleDdgiReceiverFeedback(simpleDdgiActive: true);
+            }
             if (_simpleDdgiGuidingFrameConfiguration.IsEnabled &&
                 _simpleDdgiGuidingFrameConfiguration.Equals(
                     _simpleDdgiGuidingAppliedArenaConfiguration))
@@ -13616,6 +14038,11 @@ namespace Njulf.Rendering
             _simpleDdgiGuidingAppliedArenaConfiguration =
                 guidingArenaConfiguration;
         }
+
+        internal static bool
+            ShouldReconcileSimpleDdgiReceiverFeedbackAfterUpload(
+                bool currentCommandBufferReferencesSummaryBank) =>
+            !currentCommandBufferReferencesSummaryBank;
 
         private bool TryReconcileAdvancedGiScratchArena(
             AdvancedGiTransientBufferArena arena,
@@ -14672,7 +15099,8 @@ namespace Njulf.Rendering
             SimpleDdgiAdvancedExperimentMemoryPlan nearFieldMemory =
                 _simpleDdgiNearFieldResidualPlan.Memory;
             if (_simpleDdgiNearFieldResidualPlan.Active &&
-                (_simpleDdgiNearFieldResidualRuntime is not { IsActive: true }
+                (!IsNearFieldResidualGenerationExecutable() ||
+                 _simpleDdgiNearFieldResidualRuntime is not { }
                     nearFieldRuntime ||
                  nearFieldRuntime.ActualAllocationBytes !=
                     nearFieldMemory.AllocatedBytes))
@@ -15192,7 +15620,7 @@ namespace Njulf.Rendering
                     supported: true,
                     gi.SimpleDdgiDirectionalGuidingQualificationId);
             bool residualRuntimeReady =
-                _simpleDdgiNearFieldResidualRuntime is { IsActive: true };
+                IsNearFieldResidualGenerationExecutable();
             // Both scheduler backends have an authoritative work source. The
             // GPU-resident path is compacted by ddgi_guiding_prepare.comp and
             // therefore must use the same qualification/runtime diagnostics
@@ -20512,28 +20940,351 @@ namespace Njulf.Rendering
             ]);
         }
 
-        private void DisableNearFieldResidualForIncompatibleExtent(
+        private bool TryCompileNearFieldResidualGeneration(
+            Extent2D nextSceneExtent,
+            out SimpleDdgiNearFieldResidualPlan plan,
+            out SimpleDdgiNearFieldResidualGpuConfiguration gpuConfiguration,
+            out ForwardNearFieldDirectSourcePipelineConfiguration
+                pipelineConfiguration,
+            out string failure)
+        {
+            plan = default;
+            gpuConfiguration = default;
+            pipelineConfiguration =
+                ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
+            failure = "near-field-generation-not-requested";
+            if (!_advancedGiGraphModes.UsesNearFieldHiZResidual)
+                return false;
+
+            SimpleDdgiNearFieldResidualProfile profile =
+                _simpleDdgiNearFieldResidualEffectiveProfile;
+            SimpleDdgiNearFieldResidualLayout layout =
+                SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
+                    checked((int)nextSceneExtent.Width),
+                    checked((int)nextSceneExtent.Height),
+                    profile,
+                    SimpleDdgiNearFieldResidualExperimentBudgetBytes);
+            if (!layout.IsValid)
+            {
+                failure = layout.FailureReason;
+                return false;
+            }
+
+            SimpleDdgiNearFieldTraceSourceContract sourceContract =
+                _simpleDdgiNearFieldResidualGpuConfiguration
+                    .TraceSourceContract with
+                {
+                    Extent = new SimpleDdgiNearFieldTraceSourceScaledExtent(
+                        layout.SourceWidth,
+                        layout.SourceHeight,
+                        layout.TraceWidth,
+                        layout.TraceHeight,
+                        profile.ResolutionScale)
+                };
+            var configuration = new SimpleDdgiNearFieldResidualConfiguration(
+                Enabled: true,
+                Width: layout.SourceWidth,
+                Height: layout.SourceHeight,
+                MemoryBudgetBytes:
+                    SimpleDdgiNearFieldResidualExperimentBudgetBytes,
+                Profile: profile,
+                SourceContract: sourceContract);
+            AdvancedGiPrerequisiteGateResult gate =
+                _advancedGiPrerequisiteManifest.Evaluate(
+                    AdvancedGiPrerequisiteFeature.NearFieldResidual);
+            SimpleDdgiNearFieldResidualQualificationEvidence evidence =
+                _hasSimpleDdgiNearFieldResidualEvidence
+                    ? _simpleDdgiNearFieldResidualEvidence
+                    : default;
+            var prerequisites = new SimpleDdgiNearFieldResidualPrerequisites(
+                RefinementBricksActive: gate.Passed,
+                RefinementQualityGatePassed: gate.Passed,
+                RemainingContactScaleErrorMeasured:
+                    _hasSimpleDdgiNearFieldResidualEvidence,
+                SourceOwnershipImplemented: true,
+                DisocclusionRejectionImplemented: true,
+                CameraAndScreenEdgeStabilityPassed:
+                    evidence.TemporalStabilityVerified,
+                ReferenceErrorPerMillisecondImproved:
+                    evidence.WholeFrameRegressionVerified,
+                NoDoubleCountingOrFalseDarkening:
+                    evidence.SignedResidualEnergyVerified &&
+                    evidence.TraceSourceIndependenceVerified);
+            SimpleDdgiNearFieldResidualMode requestedMode = Settings
+                .GlobalIllumination.SimpleDdgiNearFieldResidualMode;
+            if (_nearFieldResidualUsesCandidateAuthorization &&
+                _advancedGiCandidateProfile?.NearFieldResidual is not null &&
+                TryAuthorizeAdvancedGiCandidate(out _))
+            {
+                plan = SimpleDdgiNearFieldResidualExperiment
+                    .CreateCandidatePlan(
+                        configuration,
+                        prerequisites,
+                        _simpleDdgiNearFieldResidualAdmissionContext,
+                        _advancedGiCandidateProfile.Authorization);
+            }
+            else if (requestedMode is
+                     SimpleDdgiNearFieldResidualMode
+                         .HiZHalfResolutionExperiment or
+                     SimpleDdgiNearFieldResidualMode.HiZAdaptive)
+            {
+                plan = SimpleDdgiNearFieldResidualExperiment
+                    .CreateExplicitPlan(configuration, prerequisites);
+            }
+            else
+            {
+                plan = SimpleDdgiNearFieldResidualExperiment.CreatePlan(
+                    configuration,
+                    prerequisites,
+                    evidence,
+                    _simpleDdgiNearFieldResidualAdmissionContext);
+            }
+
+            if (!plan.Active)
+            {
+                failure = plan.Status;
+                return false;
+            }
+            if (!TryValidateNearFieldRuntimePreflight(
+                    plan,
+                    out string preflightFailure))
+            {
+                failure = preflightFailure;
+                return false;
+            }
+
+            gpuConfiguration =
+                SimpleDdgiNearFieldResidualGpuConfiguration.CreateReference(
+                    plan.Layout,
+                    profile,
+                    sourceContract.AbiRevision,
+                    sourceContract.LayoutRevision,
+                    sourceContract.SourceRevision) with
+                {
+                    TraceSourceContract = sourceContract,
+                    MaximumTraceSteps = profile.MaximumTraceSteps,
+                    MaximumMipVisits = profile.MaximumMipVisits,
+                    BinaryRefinementSteps = profile.BinaryRefinementSteps,
+                    FilterIterationCount = profile.FilterIterationCount,
+                    ResidualIntensity = Settings.GlobalIllumination
+                        .SimpleDdgiNearFieldResidualAdvancedOverridesEnabled
+                            ? Settings.GlobalIllumination
+                                .SimpleDdgiNearFieldResidualIntensity
+                            : 1.0f
+                };
+            if (!gpuConfiguration.Validate(plan.Layout).IsValid)
+            {
+                failure = "near-field-generation-gpu-configuration-invalid";
+                return false;
+            }
+            pipelineConfiguration = new(
+                IsC5EffectivelyEnabled: true,
+                sourceContract,
+                ForwardNearFieldDirectSourceContract.ShaderSemanticVersion);
+            if (!ForwardNearFieldDirectSourceContract
+                    .TryValidatePipelineConfiguration(
+                        pipelineConfiguration,
+                        out failure))
+            {
+                return false;
+            }
+            failure = "valid";
+            return true;
+        }
+
+        private bool PrepareNearFieldResidualGenerationAfterDeviceIdle(
             Extent2D nextSceneExtent)
         {
             if (!_advancedGiGraphModes.UsesNearFieldHiZResidual)
-                return;
-
-            SimpleDdgiNearFieldResidualLayout layout =
+                return false;
+            SimpleDdgiNearFieldResidualLayout current =
                 _simpleDdgiNearFieldResidualPlan.Layout;
-            if (layout.IsValid && nextSceneExtent.Width == (uint)layout.SourceWidth &&
-                nextSceneExtent.Height == (uint)layout.SourceHeight)
+            if (current.IsValid &&
+                nextSceneExtent.Width == (uint)current.SourceWidth &&
+                nextSceneExtent.Height == (uint)current.SourceHeight)
+            {
+                return false;
+            }
+
+            if (!TryCompileNearFieldResidualGeneration(
+                    nextSceneExtent,
+                    out SimpleDdgiNearFieldResidualPlan plan,
+                    out SimpleDdgiNearFieldResidualGpuConfiguration
+                        gpuConfiguration,
+                    out ForwardNearFieldDirectSourcePipelineConfiguration
+                        pipelineConfiguration,
+                    out string failure))
+            {
+                DisableNearFieldResidualAfterDeviceIdle(failure);
+                return false;
+            }
+
+            // Stage only immutable plan/configuration state. The active C5
+            // bank remains untouched and fence-accounted until a complete
+            // pending image/runtime generation is ready to publish.
+            _simpleDdgiNearFieldResidualPlan = plan;
+            _simpleDdgiNearFieldResidualGpuConfiguration = gpuConfiguration;
+            _nearFieldDirectSourcePipelineConfiguration =
+                pipelineConfiguration;
+            _forwardPlusPass?.PublishNearFieldDirectSourceGeneration(null);
+            return true;
+        }
+
+        private void CompleteNearFieldResidualGenerationAfterTargetRecreate()
+        {
+            if (!_advancedGiGraphModes.UsesNearFieldHiZResidual ||
+                _simpleDdgiNearFieldResidualGenerations is not { }
+                    generations)
             {
                 return;
             }
 
-            const string reason =
-                "near-field-resize-requires-new-bound-evidence";
+            try
+            {
+                ulong completedFenceValue =
+                    ObserveAllGraphicsSubmissionsCompletedAfterDeviceIdle();
+                var progress = new GpuCompletionProgress(
+                    completedFenceValue,
+                    0UL,
+                    0UL);
+                _ = generations.PollCompleted(progress, _ddgiFrameSerial);
+
+                if (!generations.CanExecuteFor(
+                        _simpleDdgiNearFieldResidualPlan.Layout))
+                {
+                    SimpleDdgiNearFieldResidualExtentEnvelope envelope =
+                        ResolveNearFieldResidualReplacementEnvelope(
+                            _simpleDdgiNearFieldResidualPlan.Layout);
+                    SimpleDdgiNearFieldResidualGenerationRequestResult request =
+                        generations.RequestReplacement(
+                            _simpleDdgiNearFieldResidualPlan.Layout,
+                            envelope);
+                    if (!request.Accepted)
+                    {
+                        _forwardPlusPass?
+                            .PublishNearFieldDirectSourceGeneration(null);
+                        return;
+                    }
+                    if (!request.ReplacementReady)
+                    {
+                        _forwardPlusPass?
+                            .PublishNearFieldDirectSourceGeneration(null);
+                        return;
+                    }
+                }
+
+                AdvanceNearFieldResidualGenerationAtFrameBoundary();
+                _ = generations.PollCompleted(progress, _ddgiFrameSerial);
+                if (!IsNearFieldResidualGenerationExecutable())
+                {
+                    _forwardPlusPass?
+                        .PublishNearFieldDirectSourceGeneration(null);
+                }
+            }
+            catch (Exception exception)
+            {
+                DisableNearFieldResidualAfterDeviceIdle(
+                    "near-field-generation-allocation-failed:" +
+                    exception.GetType().Name);
+            }
+        }
+
+        private SimpleDdgiNearFieldResidualExtentEnvelope
+            ResolveNearFieldResidualReplacementEnvelope(
+                in SimpleDdgiNearFieldResidualLayout layout)
+        {
+            bool requiresArchivedEnvelope = Settings.GlobalIllumination
+                    .SimpleDdgiNearFieldResidualMode ==
+                SimpleDdgiNearFieldResidualMode.AutoQualified &&
+                !_nearFieldResidualUsesCandidateAuthorization;
+            return requiresArchivedEnvelope &&
+                _hasSimpleDdgiNearFieldResidualEvidence
+                    ? _simpleDdgiNearFieldResidualEvidence.Binding
+                        .ExtentEnvelope
+                    : SimpleDdgiNearFieldResidualExtentEnvelope.Exact(layout);
+        }
+
+        private void AdvanceNearFieldResidualGenerationAtFrameBoundary()
+        {
+            if (_simpleDdgiNearFieldResidualGenerations is not { }
+                    generations)
+            {
+                return;
+            }
+
+            var progress = new GpuCompletionProgress(
+                _completedGraphicsFrameFenceValue,
+                0UL,
+                0UL);
+            _ = generations.PollCompleted(progress, _ddgiFrameSerial);
+            if (!generations.Snapshot.HasPending)
+                return;
+            if (!generations.TryCommitAtFrameBoundary(
+                    greatestReferencingFrameFenceValue: 0UL,
+                    currentFrame: _ddgiFrameSerial,
+                    out string failure))
+            {
+                if (!string.Equals(
+                        failure,
+                        "near-field-generation-retirement-slot-occupied",
+                        StringComparison.Ordinal))
+                {
+                    _forwardPlusPass?
+                        .PublishNearFieldDirectSourceGeneration(null);
+                }
+                return;
+            }
+
+            if (!TryPublishNearFieldResidualActiveGeneration(out failure))
+            {
+                throw new InvalidOperationException(failure);
+            }
+
+            // A prior generation may already be complete (notably when this
+            // frame boundary follows the renderer's existing resize idle).
+            // Reclaim it immediately without introducing another wait.
+            _ = generations.PollCompleted(progress, _ddgiFrameSerial);
+        }
+
+        private ulong ObserveAllGraphicsSubmissionsCompletedAfterDeviceIdle()
+        {
+            ulong completedFenceValue = _completedGraphicsFrameFenceValue;
+            for (int frameIndex = 0;
+                 frameIndex < RenderingConstants.FramesInFlight;
+                 frameIndex++)
+            {
+                completedFenceValue = Math.Max(
+                    completedFenceValue,
+                    _submittedGraphicsFrameFenceValues[frameIndex]);
+            }
+            _completedGraphicsFrameFenceValue = completedFenceValue;
+            return completedFenceValue;
+        }
+
+        private void DisableNearFieldResidualAfterDeviceIdle(string reason)
+        {
+            if (!_advancedGiGraphModes.UsesNearFieldHiZResidual)
+                return;
+            if (string.IsNullOrWhiteSpace(reason))
+                reason = "near-field-generation-unavailable";
             int filterIterationCount = Math.Max(
                 0,
                 _simpleDdgiNearFieldResidualPlan.Layout.FilterIterationCount);
-            _simpleDdgiNearFieldResidualRuntime?
-                .DisableAndReleaseAfterDeviceIdle(reason);
-            _renderTargets?.ReleaseNearFieldResidualTargetsAfterDeviceIdle();
+            if (_simpleDdgiNearFieldResidualGenerations is { } generations)
+            {
+                generations.Dispose();
+                _simpleDdgiNearFieldResidualGenerations = null;
+                _simpleDdgiNearFieldResidualRuntime = null;
+            }
+            else
+            {
+                _simpleDdgiNearFieldResidualRuntime?
+                    .DisableAndReleaseAfterDeviceIdle(reason);
+                _simpleDdgiNearFieldResidualRuntime = null;
+                _renderTargets?
+                    .ReleaseNearFieldResidualTargetsAfterDeviceIdle();
+            }
+            _forwardPlusPass?.PublishNearFieldDirectSourceGeneration(null);
             _meshPipeline?.DisableNearFieldDirectSourceAfterDeviceIdle(reason);
             _simpleDdgiNearFieldResidualPlan =
                 SimpleDdgiNearFieldResidualExperiment.InvalidateRuntimePlan(
@@ -20563,11 +21314,13 @@ namespace Njulf.Rendering
             ProductionRenderPipelineDeclaration.Instance.DeclarePassResources(
                 _renderGraph,
                 _advancedGiGraphModes);
-            var c5PassNames = new List<string>(filterIterationCount + 4)
+            var c5PassNames = new List<string>(filterIterationCount + 6)
             {
                 SimpleDdgiNearFieldResidualGpuPassNames.Reset,
+                SimpleDdgiNearFieldResidualGpuPassNames.Prepare,
                 SimpleDdgiNearFieldResidualGpuPassNames.Trace,
                 SimpleDdgiNearFieldResidualGpuPassNames.Temporal,
+                SimpleDdgiNearFieldResidualGpuPassNames.FrequencySeparation,
                 SimpleDdgiNearFieldResidualGpuPassNames.Composite
             };
             for (int iteration = 0; iteration < filterIterationCount; iteration++)
@@ -20580,8 +21333,11 @@ namespace Njulf.Rendering
             [
                 RenderGraphResourceId.NearFieldDirectSource,
                 RenderGraphResourceId.NearFieldReceiverPayload,
+                RenderGraphResourceId.NearFieldPreparedDepthFootprint,
+                RenderGraphResourceId.NearFieldPreparedReceiverPayload,
+                RenderGraphResourceId.NearFieldPreparedMotion,
+                RenderGraphResourceId.NearFieldSourceLuminance,
                 RenderGraphResourceId.NearFieldResidualRaw,
-                RenderGraphResourceId.NearFieldResidualHitMetadata,
                 RenderGraphResourceId.NearFieldResidualHistory,
                 RenderGraphResourceId.NearFieldResidualMoments,
                 RenderGraphResourceId.NearFieldResidualValidity,
@@ -20589,6 +21345,8 @@ namespace Njulf.Rendering
                 RenderGraphResourceId.NearFieldResidualHistoryNormals,
                 RenderGraphResourceId.NearFieldResidualFilterScratch,
                 RenderGraphResourceId.NearFieldResidualTileBuffers,
+                RenderGraphResourceId.NearFieldSurfaceTable,
+                RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments,
                 RenderGraphResourceId.NearFieldResidualTraceFrameConstants
             ]);
         }
@@ -20614,7 +21372,7 @@ namespace Njulf.Rendering
             DynamicResolutionScaleDecision scaleDecision = ResolveSceneResolutionScaleDecision();
             float effectiveResolutionScale = scaleDecision.CommittedScale;
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, effectiveResolutionScale);
-            sceneRenderExtent = PreserveExtentBoundAdvancedGiSceneExtent(
+            sceneRenderExtent = PreserveExtentBoundCausticSceneExtent(
                 sceneRenderExtent);
             bool featureTargetsChanged =
                 _lastAmbientOcclusionTargetEnabled != aoEnabled ||
@@ -20647,7 +21405,8 @@ namespace Njulf.Rendering
                 $"Render target profile rebuild: {recreateReason}",
                 _context.WaitIdle);
             DisableGiCausticForIncompatibleExtent(sceneRenderExtent);
-            DisableNearFieldResidualForIncompatibleExtent(sceneRenderExtent);
+            PrepareNearFieldResidualGenerationAfterDeviceIdle(
+                sceneRenderExtent);
             motionVectorTargetEnabled =
                 ResolveSurfaceHistoryConsumers().RequiresMotionVectors();
             _renderTargets.Recreate(
@@ -20673,6 +21432,7 @@ namespace Njulf.Rendering
             }
             _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
             _hizVisibilityPolicyState.PyramidValid = false;
+            CompleteNearFieldResidualGenerationAfterTargetRecreate();
             RegisterSceneRenderTextures();
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.HiZDepthTexture,
@@ -20856,10 +21616,11 @@ namespace Njulf.Rendering
             _sync.EnsureRenderFinishedSemaphoreCapacity(_swapchain.ImageCount);
             float sceneResolutionScale = ResolveSceneResolutionScale();
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, sceneResolutionScale);
-            sceneRenderExtent = PreserveExtentBoundAdvancedGiSceneExtent(
+            sceneRenderExtent = PreserveExtentBoundCausticSceneExtent(
                 sceneRenderExtent);
             DisableGiCausticForIncompatibleExtent(sceneRenderExtent);
-            DisableNearFieldResidualForIncompatibleExtent(sceneRenderExtent);
+            PrepareNearFieldResidualGenerationAfterDeviceIdle(
+                sceneRenderExtent);
             _hizDepthPyramid?.Recreate(CreateHiZExtent(sceneRenderExtent));
             _hizVisibilityPolicyState.PyramidValid = false;
             _renderTargets?.Recreate(
@@ -20873,6 +21634,7 @@ namespace Njulf.Rendering
                 IsFogTargetEnabled(Settings),
                 IsWeightedOitTargetEnabled(Settings),
                 IsMaterialTransportProvenanceTargetEnabled(Settings));
+            CompleteNearFieldResidualGenerationAfterTargetRecreate();
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.DepthTexture,
                 _renderTargets!.SceneDepth.View,
@@ -20997,17 +21759,14 @@ namespace Njulf.Rendering
                     Settings,
                     frameMicroseconds);
             if (!_isInitialized ||
-                !_advancedGiGraphModes.UsesCausticWorldCache &&
-                !_advancedGiGraphModes.UsesNearFieldHiZResidual)
+                !_advancedGiGraphModes.UsesCausticWorldCache)
             {
                 return decision;
             }
 
-            // C4/C5 own extent-shaped immutable layouts and runtimes. Keep
-            // their internal scene extent stable for this renderer lifetime;
-            // the existing final composite still scales it to a resized
-            // swapchain. A feature toggle reconstructs the renderer and picks
-            // a fresh optimal extent.
+            // C4 still owns an immutable extent-bound cache. C5 uses a
+            // replacement generation and therefore follows committed dynamic
+            // resolution changes without freezing the scene extent.
             return new DynamicResolutionScaleDecision(
                 decision.RequestedScale,
                 _lastEffectiveResolutionScale,
@@ -21015,12 +21774,11 @@ namespace Njulf.Rendering
                 CommitReason: string.Empty);
         }
 
-        private Extent2D PreserveExtentBoundAdvancedGiSceneExtent(
+        private Extent2D PreserveExtentBoundCausticSceneExtent(
             Extent2D proposed)
         {
             if (!_isInitialized ||
-                !_advancedGiGraphModes.UsesCausticWorldCache &&
-                !_advancedGiGraphModes.UsesNearFieldHiZResidual ||
+                !_advancedGiGraphModes.UsesCausticWorldCache ||
                 _lastSceneRenderExtent.Width == 0u ||
                 _lastSceneRenderExtent.Height == 0u)
             {
@@ -21367,9 +22125,23 @@ namespace Njulf.Rendering
                     _reflectionProbeCapturePass = null;
                 });
 
+            // The generation owner releases C5 descriptor/buffer state and
+            // every graph-owned image bank while the graph still owns those
+            // targets. Terminal device idle is the sole shutdown guarantee;
+            // ordinary resize uses fence polling instead.
+            AddResourceStage(
+                "simple-ddgi-near-field-residual-runtime",
+                () =>
+                {
+                    _simpleDdgiNearFieldResidualGenerations?.Dispose();
+                    _simpleDdgiNearFieldResidualGenerations = null;
+                    _simpleDdgiNearFieldResidualRuntime = null;
+                });
+
             AddResourceStage(
                 "render-graph",
-                _renderGraph.Cleanup);
+                _renderGraph.Cleanup,
+                "simple-ddgi-near-field-residual-runtime");
             AddResourceStage(
                 "gi-pipeline-cache",
                 () =>
@@ -21441,14 +22213,6 @@ namespace Njulf.Rendering
                     _simpleDdgiGuidingRuntime?.Dispose();
                     _simpleDdgiGuidingRuntime = null;
                 });
-            AddResourceStage(
-                "simple-ddgi-near-field-residual-runtime",
-                () =>
-                {
-                    _simpleDdgiNearFieldResidualRuntime?.Dispose();
-                    _simpleDdgiNearFieldResidualRuntime = null;
-                },
-                "render-graph");
             AddResourceStage(
                 "gi-caustic-runtime",
                 () =>

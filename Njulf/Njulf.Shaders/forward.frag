@@ -57,7 +57,7 @@ layout(early_fragment_tests) in;
 #if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 #error "C5 direct source cannot share the forward MRT variant with material provenance."
 #endif
-#if NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 3
+#if NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 4
 #error "C5 direct source shader semantics version mismatch."
 #endif
 #elif NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 0
@@ -3381,7 +3381,6 @@ bool C5CreateReceiverPayload(
     vec3 shadingNormal,
     vec3 diffuseBase,
     vec3 dielectricF0,
-    vec3 viewDirection,
     out uvec4 payload)
 {
     payload = uvec4(0u);
@@ -3396,51 +3395,51 @@ bool C5CreateReceiverPayload(
         return false;
     }
 
-    if (fragObjectIndex > 0xffffu || fragMaterialIndex > 0xffffu ||
+    // The object publication assigns this frame-local token while building
+    // the matching frame-buffered C5 surface table. 0xffff is invalid and
+    // 0xfffe is intentionally unassigned, leaving exactly 65,534 entries.
+    uint surfaceToken = fragObjectIndex;
+    if (surfaceToken >= 65534u ||
         any(isnan(diffuseBase)) || any(isinf(diffuseBase)) ||
         any(isnan(dielectricF0)) || any(isinf(dielectricF0)) ||
-        any(isnan(viewDirection)) || any(isinf(viewDirection)))
+        any(lessThan(diffuseBase, vec3(0.0))) ||
+        any(lessThan(dielectricF0, vec3(0.0))))
     {
         return false;
     }
 
-    vec3 generationDirection;
-    float generationPdf;
-    if (!NjulfC5CreateStableCosineDirection(
-            uvec2(gl_FragCoord.xy),
-            uvec2(fragObjectIndex, fragMaterialIndex),
-            floatBitsToUint(pc.Push.Time),
-            shadingNormal,
-            generationDirection,
-            generationPdf))
-    {
-        return false;
-    }
-    float receiverCosine = max(dot(shadingNormal, generationDirection), 0.0);
-    float receiverViewCosine = max(dot(shadingNormal, viewDirection), 0.0);
-    vec3 diffuseBrdf = EvaluateGiDiffuseBrdf(
-        diffuseBase,
-        dielectricF0,
-        receiverCosine,
-        receiverViewCosine);
-    vec3 exactThroughput = diffuseBrdf * receiverCosine / generationPdf;
-    if (any(isnan(exactThroughput)) || any(isinf(exactThroughput)) ||
-        any(lessThan(exactThroughput, vec3(0.0))))
-    {
-        return false;
-    }
-
-    // The generation-time direction and PDF are reproduced bit-for-bit by
-    // trace from semantic identity; this payload stores their matching
-    // non-negative f*cos/pdf throughput. RGB9E5 is the frozen V6 transport
-    // encoding and is covered by qualification error bounds.
     payload = uvec4(
         packSnorm2x16(encodedGeometric),
         packSnorm2x16(encodedShading),
-        (fragObjectIndex & 0xffffu) |
-            ((fragMaterialIndex & 0xffffu) << 16u),
-        NjulfC5PackRgb9E5(exactThroughput));
+        surfaceToken | (NjulfC5PackRgb565(dielectricF0) << 16u),
+        NjulfC5PackRgb9E5(diffuseBase));
     return true;
+}
+
+float C5ResolveB3FootprintRadius()
+{
+    SimpleDdgiParams c5Params = ReadSimpleDdgiParams(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    if ((c5Params.flags & SIMPLE_DDGI_FLAG_ENABLED) == 0u ||
+        c5Params.probeCount == 0u || c5Params.volumeCount == 0u)
+    {
+        return 0.0;
+    }
+    uint selectedVolumeIndex;
+    SimpleDdgiVolume selectedVolume;
+    float selectedEdgeWeight;
+    bool refinementOrBaseFallback;
+    SelectSimpleDdgiVolume(
+        c5Params,
+        fragWorldPosition,
+        selectedVolumeIndex,
+        selectedVolume,
+        selectedEdgeWeight,
+        refinementOrBaseFallback);
+    float spacing = selectedVolume.spacing;
+    return !isnan(spacing) && !isinf(spacing) && spacing > 0.0
+        ? spacing * 0.25
+        : 0.0;
 }
 #endif
 
@@ -5186,12 +5185,18 @@ void main()
         normal,
         directionalDiffuseBase,
         dielectricF0,
-        viewDirection,
         outNearFieldReceiverPayload);
+    float c5B3FootprintRadius = c5ReceiverPayloadValid
+        ? C5ResolveB3FootprintRadius()
+        : 0.0;
+    c5ReceiverPayloadValid = c5ReceiverPayloadValid &&
+        c5B3FootprintRadius > 0.0;
+    if (!c5ReceiverPayloadValid)
+        outNearFieldReceiverPayload = uvec4(0u);
     outDirectDiffuseAndEmissive = vec4(
         clamp(directDiffuseSource + emissive,
             vec3(0.0), vec3(C5_MAXIMUM_FINITE_FP16)),
-        c5ReceiverPayloadValid ? 1.0 : 0.0);
+        c5ReceiverPayloadValid ? c5B3FootprintRadius : 0.0);
 #endif
 
 #if NJULF_C4_RECEIVER_OUTPUT

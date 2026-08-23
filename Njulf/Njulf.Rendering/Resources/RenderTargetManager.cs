@@ -8,6 +8,49 @@ using Silk.NET.Vulkan;
 
 namespace Njulf.Rendering.Resources
 {
+    /// <summary>
+    /// Complete graph-owned image bank for one C5 layout generation. Shared
+    /// scene colour/depth/motion and Hi-Z remain renderer-generation inputs;
+    /// every C5-owned attachment is contained here and can overlap one prior
+    /// bank during a fence-backed hot swap.
+    /// </summary>
+    public sealed record SimpleDdgiNearFieldResidualRenderTargetGeneration(
+        SimpleDdgiNearFieldResidualLayout Layout,
+        RenderTarget DirectSource,
+        RenderTarget ReceiverPayload,
+        RenderTarget RawResidual,
+        RenderTarget PreparedDepthFootprint,
+        RenderTarget PreparedReceiverPayload,
+        RenderTarget PreparedMotion,
+        RenderTarget SourceLuminance,
+        RenderTarget History0,
+        RenderTarget History1,
+        RenderTarget Moments0,
+        RenderTarget Moments1,
+        RenderTarget Validity0,
+        RenderTarget Validity1,
+        RenderTarget HistoryNormals0,
+        RenderTarget HistoryNormals1,
+        RenderTarget? FilterScratch0,
+        RenderTarget? FilterScratch1)
+    {
+        public ulong EstimatedByteSize => checked(
+            DirectSource.EstimatedByteSize +
+            ReceiverPayload.EstimatedByteSize +
+            RawResidual.EstimatedByteSize +
+            PreparedDepthFootprint.EstimatedByteSize +
+            PreparedReceiverPayload.EstimatedByteSize +
+            PreparedMotion.EstimatedByteSize +
+            SourceLuminance.EstimatedByteSize +
+            History0.EstimatedByteSize + History1.EstimatedByteSize +
+            Moments0.EstimatedByteSize + Moments1.EstimatedByteSize +
+            Validity0.EstimatedByteSize + Validity1.EstimatedByteSize +
+            HistoryNormals0.EstimatedByteSize +
+            HistoryNormals1.EstimatedByteSize +
+            (FilterScratch0?.EstimatedByteSize ?? 0UL) +
+            (FilterScratch1?.EstimatedByteSize ?? 0UL));
+    }
+
     public sealed class RenderTargetManager : IDisposable
     {
         public const Format SceneColorFormat = Format.R16G16B16A16Sfloat;
@@ -24,6 +67,10 @@ namespace Njulf.Rendering.Resources
         public const Format NearFieldResidualMomentsFormat = Format.R16G16Sfloat;
         public const Format NearFieldResidualValidityFormat = Format.R32Uint;
         public const Format NearFieldResidualNormalsFormat = Format.R16G16B16A16Sfloat;
+        public const Format NearFieldPreparedDepthFootprintFormat = Format.R32G32Sfloat;
+        public const Format NearFieldPreparedPayloadFormat = Format.R32G32B32A32Uint;
+        public const Format NearFieldPreparedMotionFormat = Format.R16G16Sfloat;
+        public const Format NearFieldSourceLuminanceFormat = Format.R16Sfloat;
         public const Format GiCausticReceiverPayloadFormat =
             GiCausticScreenGpuAbi.ReceiverPayloadFormat;
         public const Format GiCausticRadianceFormat =
@@ -36,6 +83,8 @@ namespace Njulf.Rendering.Resources
         private float _nearFieldResidualResolutionScale =
             SimpleDdgiNearFieldResidualProfile.HalfResolutionReference
                 .ResolutionScale;
+        private SimpleDdgiNearFieldResidualRenderTargetGeneration?
+            _nearFieldResidualGeneration;
         private bool _disposed;
 
         private static readonly RenderTargetDescriptor HdrSceneColorDescriptor = new(
@@ -78,6 +127,16 @@ namespace Njulf.Rendering.Resources
             colorAttachment: false,
             sampled: true,
             storage: true);
+
+        // C5 resets transient and current-history images with transfer clears
+        // before compacted indirect work begins. Keep that capability local to
+        // the C5 bank rather than widening every storage target in the renderer.
+        private static readonly RenderTargetDescriptor
+            NearFieldStorageSampledDescriptor = new(
+                colorAttachment: false,
+                sampled: true,
+                storage: true,
+                transferDestination: true);
 
         private static readonly RenderTargetDescriptor ColorSampledDescriptor = new(
             colorAttachment: true,
@@ -213,7 +272,31 @@ namespace Njulf.Rendering.Resources
                     "Near-Field Raw Signed Residual",
                     NearFieldResidualRadianceFormat,
                     traceExtent,
-                    StorageSampledDescriptor);
+                    NearFieldStorageSampledDescriptor);
+                NearFieldPreparedDepthFootprint = CreateGraphOwnedRenderTarget(
+                    RenderGraphResourceId.NearFieldPreparedDepthFootprint,
+                    "Near-Field Prepared Linear Depth and B3 Footprint",
+                    NearFieldPreparedDepthFootprintFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                NearFieldPreparedReceiverPayload = CreateGraphOwnedRenderTarget(
+                    RenderGraphResourceId.NearFieldPreparedReceiverPayload,
+                    "Near-Field Prepared Receiver Payload",
+                    NearFieldPreparedPayloadFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                NearFieldPreparedMotion = CreateGraphOwnedRenderTarget(
+                    RenderGraphResourceId.NearFieldPreparedMotion,
+                    "Near-Field Prepared Motion",
+                    NearFieldPreparedMotionFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                NearFieldSourceLuminance = CreateGraphOwnedRenderTarget(
+                    RenderGraphResourceId.NearFieldSourceLuminance,
+                    "Near-Field Source Luminance",
+                    NearFieldSourceLuminanceFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
                 CreateNearFieldHistoryTargets(traceExtent);
                 if (nearFieldResidualLayout.FilterScratchBytes != 0UL)
                 {
@@ -222,14 +305,19 @@ namespace Njulf.Rendering.Resources
                         "Near-Field Filter Scratch 0",
                         NearFieldResidualRadianceFormat,
                         traceExtent,
-                        StorageSampledDescriptor);
+                        NearFieldStorageSampledDescriptor);
                     NearFieldResidualFilterScratch1 = CreateGraphOwnedRenderTarget(
                         RenderGraphResourceId.NearFieldResidualFilterScratch,
                         "Near-Field Filter Scratch 1",
                         NearFieldResidualRadianceFormat,
                         traceExtent,
-                        StorageSampledDescriptor);
+                        NearFieldStorageSampledDescriptor);
                 }
+                _nearFieldResidualGeneration =
+                    CapturePublishedNearFieldResidualGeneration(
+                        nearFieldResidualLayout);
+                PublishNearFieldResidualGraphBindings(
+                    _nearFieldResidualGeneration);
             }
             if (giCausticEnabled)
             {
@@ -322,6 +410,10 @@ namespace Njulf.Rendering.Resources
         public RenderTarget? NearFieldDirectSource { get; private set; }
         public RenderTarget? NearFieldReceiverPayload { get; private set; }
         public RenderTarget? NearFieldResidualRaw { get; private set; }
+        public RenderTarget? NearFieldPreparedDepthFootprint { get; private set; }
+        public RenderTarget? NearFieldPreparedReceiverPayload { get; private set; }
+        public RenderTarget? NearFieldPreparedMotion { get; private set; }
+        public RenderTarget? NearFieldSourceLuminance { get; private set; }
         public RenderTarget? NearFieldResidualHistory0 { get; private set; }
         public RenderTarget? NearFieldResidualHistory1 { get; private set; }
         public RenderTarget? NearFieldResidualMoments0 { get; private set; }
@@ -332,6 +424,9 @@ namespace Njulf.Rendering.Resources
         public RenderTarget? NearFieldResidualHistoryNormals1 { get; private set; }
         public RenderTarget? NearFieldResidualFilterScratch0 { get; private set; }
         public RenderTarget? NearFieldResidualFilterScratch1 { get; private set; }
+        internal SimpleDdgiNearFieldResidualRenderTargetGeneration?
+            CurrentNearFieldResidualGeneration =>
+                _nearFieldResidualGeneration;
         public RenderTarget? GiCausticReceiverPayload { get; private set; }
         public RenderTarget? GiCausticRadiance { get; private set; }
         public RenderTarget? GiCausticMoments { get; private set; }
@@ -349,7 +444,8 @@ namespace Njulf.Rendering.Resources
         public int ResizeCount { get; private set; }
         public int RenderTargetCount => 15 + _bloomMipChain.Count +
             (NearFieldDirectSource is null ? 0 :
-                11 + (NearFieldResidualFilterScratch0 is null ? 0 : 2)) +
+                14 + (NearFieldSourceLuminance is null ? 0 : 1) +
+                (NearFieldResidualFilterScratch0 is null ? 0 : 2)) +
             (GiCausticReceiverPayload is null ? 0 : 3);
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
@@ -371,6 +467,10 @@ namespace Njulf.Rendering.Resources
         public ulong NearFieldResidualRenderTargetBytes =>
             NearFieldResidualSourceRenderTargetBytes + SumEnabledBytes(
                 NearFieldResidualRaw,
+                NearFieldPreparedDepthFootprint,
+                NearFieldPreparedReceiverPayload,
+                NearFieldPreparedMotion,
+                NearFieldSourceLuminance,
                 NearFieldResidualHistory0,
                 NearFieldResidualHistory1,
                 NearFieldResidualMoments0,
@@ -381,6 +481,416 @@ namespace Njulf.Rendering.Resources
                 NearFieldResidualHistoryNormals1,
                 NearFieldResidualFilterScratch0,
                 NearFieldResidualFilterScratch1);
+
+        internal SimpleDdgiNearFieldResidualRenderTargetGeneration
+            AllocateNearFieldResidualGeneration(
+                ulong generation,
+                in SimpleDdgiNearFieldResidualLayout layout)
+        {
+            if (generation == 0UL || !layout.IsValid ||
+                layout.SourceFormat !=
+                    SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat)
+            {
+                throw new ArgumentException(
+                    "C5 generation allocation requires a valid V12 layout.",
+                    nameof(layout));
+            }
+
+            var sourceExtent = new Extent2D
+            {
+                Width = checked((uint)layout.SourceWidth),
+                Height = checked((uint)layout.SourceHeight)
+            };
+            var traceExtent = new Extent2D
+            {
+                Width = checked((uint)layout.TraceWidth),
+                Height = checked((uint)layout.TraceHeight)
+            };
+            var created = new List<(RenderGraphResourceId Id,
+                RenderTarget Target)>(17);
+            RenderTarget Create(
+                RenderGraphResourceId id,
+                string name,
+                Format format,
+                Extent2D extent,
+                RenderTargetDescriptor descriptor)
+            {
+                RenderTarget target = CreateGraphOwnedRenderTarget(
+                    id,
+                    $"{name} G{generation}",
+                    format,
+                    extent,
+                    descriptor);
+                created.Add((id, target));
+                return target;
+            }
+
+            try
+            {
+                RenderTarget source = Create(
+                    RenderGraphResourceId.NearFieldDirectSource,
+                    "Near-Field Direct Diffuse and Emissive",
+                    ForwardNearFieldDirectSourceContract
+                        .RequiredAttachmentFormat,
+                    sourceExtent,
+                    ColorSampledDescriptor);
+                RenderTarget receiver = Create(
+                    RenderGraphResourceId.NearFieldReceiverPayload,
+                    "Near-Field Compact Receiver Payload",
+                    ForwardNearFieldDirectSourceContract
+                        .ReceiverPayloadFormat,
+                    sourceExtent,
+                    ColorSampledDescriptor);
+                RenderTarget raw = Create(
+                    RenderGraphResourceId.NearFieldResidualRaw,
+                    "Near-Field Raw Signed Residual",
+                    NearFieldResidualRadianceFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget preparedDepth = Create(
+                    RenderGraphResourceId.NearFieldPreparedDepthFootprint,
+                    "Near-Field Prepared Linear Depth and B3 Footprint",
+                    NearFieldPreparedDepthFootprintFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget preparedPayload = Create(
+                    RenderGraphResourceId.NearFieldPreparedReceiverPayload,
+                    "Near-Field Prepared Receiver Payload",
+                    NearFieldPreparedPayloadFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget preparedMotion = Create(
+                    RenderGraphResourceId.NearFieldPreparedMotion,
+                    "Near-Field Prepared Motion",
+                    NearFieldPreparedMotionFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget luminance = Create(
+                    RenderGraphResourceId.NearFieldSourceLuminance,
+                    "Near-Field Source Luminance",
+                    NearFieldSourceLuminanceFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget history0 = Create(
+                    RenderGraphResourceId.NearFieldResidualHistory,
+                    "Near-Field Residual History 0",
+                    NearFieldResidualRadianceFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget history1 = Create(
+                    RenderGraphResourceId.NearFieldResidualHistory,
+                    "Near-Field Residual History 1",
+                    NearFieldResidualRadianceFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget moments0 = Create(
+                    RenderGraphResourceId.NearFieldResidualMoments,
+                    "Near-Field Residual Moments 0",
+                    NearFieldResidualMomentsFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget moments1 = Create(
+                    RenderGraphResourceId.NearFieldResidualMoments,
+                    "Near-Field Residual Moments 1",
+                    NearFieldResidualMomentsFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget validity0 = Create(
+                    RenderGraphResourceId.NearFieldResidualValidity,
+                    "Near-Field Residual Validity 0",
+                    NearFieldResidualValidityFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget validity1 = Create(
+                    RenderGraphResourceId.NearFieldResidualValidity,
+                    "Near-Field Residual Validity 1",
+                    NearFieldResidualValidityFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget normals0 = Create(
+                    RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                    "Near-Field Residual Normal History 0",
+                    NearFieldResidualNormalsFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget normals1 = Create(
+                    RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                    "Near-Field Residual Normal History 1",
+                    NearFieldResidualNormalsFormat,
+                    traceExtent,
+                    NearFieldStorageSampledDescriptor);
+                RenderTarget? scratch0 = null;
+                RenderTarget? scratch1 = null;
+                if (layout.FilterScratchBytes != 0UL)
+                {
+                    scratch0 = Create(
+                        RenderGraphResourceId.NearFieldResidualFilterScratch,
+                        "Near-Field Filter Scratch 0",
+                        NearFieldResidualRadianceFormat,
+                        traceExtent,
+                        NearFieldStorageSampledDescriptor);
+                    scratch1 = Create(
+                        RenderGraphResourceId.NearFieldResidualFilterScratch,
+                        "Near-Field Filter Scratch 1",
+                        NearFieldResidualRadianceFormat,
+                        traceExtent,
+                        NearFieldStorageSampledDescriptor);
+                }
+                return new SimpleDdgiNearFieldResidualRenderTargetGeneration(
+                    layout, source, receiver, raw, preparedDepth,
+                    preparedPayload, preparedMotion, luminance, history0,
+                    history1, moments0, moments1, validity0, validity1,
+                    normals0, normals1, scratch0, scratch1);
+            }
+            catch
+            {
+                for (int index = created.Count - 1; index >= 0; index--)
+                {
+                    ReleaseOrDisposeOwnedTarget(
+                        created[index].Id,
+                        created[index].Target);
+                }
+                throw;
+            }
+        }
+
+        internal void PublishNearFieldResidualGeneration(
+            SimpleDdgiNearFieldResidualRenderTargetGeneration generation)
+        {
+            ArgumentNullException.ThrowIfNull(generation);
+            _nearFieldResidualGeneration = generation;
+            _nearFieldResidualResolutionScale =
+                generation.Layout.TraceResolutionScale;
+            NearFieldDirectSource = generation.DirectSource;
+            NearFieldReceiverPayload = generation.ReceiverPayload;
+            NearFieldResidualRaw = generation.RawResidual;
+            NearFieldPreparedDepthFootprint =
+                generation.PreparedDepthFootprint;
+            NearFieldPreparedReceiverPayload =
+                generation.PreparedReceiverPayload;
+            NearFieldPreparedMotion = generation.PreparedMotion;
+            NearFieldSourceLuminance = generation.SourceLuminance;
+            NearFieldResidualHistory0 = generation.History0;
+            NearFieldResidualHistory1 = generation.History1;
+            NearFieldResidualMoments0 = generation.Moments0;
+            NearFieldResidualMoments1 = generation.Moments1;
+            NearFieldResidualValidity0 = generation.Validity0;
+            NearFieldResidualValidity1 = generation.Validity1;
+            NearFieldResidualHistoryNormals0 = generation.HistoryNormals0;
+            NearFieldResidualHistoryNormals1 = generation.HistoryNormals1;
+            NearFieldResidualFilterScratch0 = generation.FilterScratch0;
+            NearFieldResidualFilterScratch1 = generation.FilterScratch1;
+            PublishNearFieldResidualGraphBindings(generation);
+        }
+
+        internal void ReleaseNearFieldResidualGeneration(
+            SimpleDdgiNearFieldResidualRenderTargetGeneration generation)
+        {
+            ArgumentNullException.ThrowIfNull(generation);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldDirectSource,
+                generation.DirectSource);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldReceiverPayload,
+                generation.ReceiverPayload);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldResidualRaw,
+                generation.RawResidual);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldPreparedDepthFootprint,
+                generation.PreparedDepthFootprint);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldPreparedReceiverPayload,
+                generation.PreparedReceiverPayload);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldPreparedMotion,
+                generation.PreparedMotion);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldSourceLuminance,
+                generation.SourceLuminance);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldResidualHistory,
+                generation.History0);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldResidualHistory,
+                generation.History1);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldResidualMoments,
+                generation.Moments0);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldResidualMoments,
+                generation.Moments1);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldResidualValidity,
+                generation.Validity0);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldResidualValidity,
+                generation.Validity1);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                generation.HistoryNormals0);
+            ReleaseOrDisposeOwnedTarget(
+                RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                generation.HistoryNormals1);
+            if (generation.FilterScratch0 is not null)
+            {
+                ReleaseOrDisposeOwnedTarget(
+                    RenderGraphResourceId.NearFieldResidualFilterScratch,
+                    generation.FilterScratch0);
+            }
+            if (generation.FilterScratch1 is not null)
+            {
+                ReleaseOrDisposeOwnedTarget(
+                    RenderGraphResourceId.NearFieldResidualFilterScratch,
+                    generation.FilterScratch1);
+            }
+
+            if (ReferenceEquals(_nearFieldResidualGeneration, generation))
+            {
+                ClearPublishedNearFieldResidualGeneration();
+            }
+        }
+
+        private SimpleDdgiNearFieldResidualRenderTargetGeneration
+            CapturePublishedNearFieldResidualGeneration(
+                in SimpleDdgiNearFieldResidualLayout layout) => new(
+                    layout,
+                    NearFieldDirectSource!,
+                    NearFieldReceiverPayload!,
+                    NearFieldResidualRaw!,
+                    NearFieldPreparedDepthFootprint!,
+                    NearFieldPreparedReceiverPayload!,
+                    NearFieldPreparedMotion!,
+                    NearFieldSourceLuminance!,
+                    NearFieldResidualHistory0!,
+                    NearFieldResidualHistory1!,
+                    NearFieldResidualMoments0!,
+                    NearFieldResidualMoments1!,
+                    NearFieldResidualValidity0!,
+                    NearFieldResidualValidity1!,
+                    NearFieldResidualHistoryNormals0!,
+                    NearFieldResidualHistoryNormals1!,
+                    NearFieldResidualFilterScratch0,
+                    NearFieldResidualFilterScratch1);
+
+        private void ClearPublishedNearFieldResidualGeneration()
+        {
+            PublishEmptyNearFieldResidualGraphBindings();
+            _nearFieldResidualGeneration = null;
+            NearFieldDirectSource = null;
+            NearFieldReceiverPayload = null;
+            NearFieldResidualRaw = null;
+            NearFieldPreparedDepthFootprint = null;
+            NearFieldPreparedReceiverPayload = null;
+            NearFieldPreparedMotion = null;
+            NearFieldSourceLuminance = null;
+            NearFieldResidualHistory0 = null;
+            NearFieldResidualHistory1 = null;
+            NearFieldResidualMoments0 = null;
+            NearFieldResidualMoments1 = null;
+            NearFieldResidualValidity0 = null;
+            NearFieldResidualValidity1 = null;
+            NearFieldResidualHistoryNormals0 = null;
+            NearFieldResidualHistoryNormals1 = null;
+            NearFieldResidualFilterScratch0 = null;
+            NearFieldResidualFilterScratch1 = null;
+        }
+
+        private void PublishNearFieldResidualGraphBindings(
+            SimpleDdgiNearFieldResidualRenderTargetGeneration generation)
+        {
+            if (_renderGraph is null)
+                return;
+
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldDirectSource,
+                [generation.DirectSource]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldReceiverPayload,
+                [generation.ReceiverPayload]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldResidualRaw,
+                [generation.RawResidual]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldPreparedDepthFootprint,
+                [generation.PreparedDepthFootprint]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldPreparedReceiverPayload,
+                [generation.PreparedReceiverPayload]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldPreparedMotion,
+                [generation.PreparedMotion]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldSourceLuminance,
+                [generation.SourceLuminance]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldResidualHistory,
+                [generation.History0, generation.History1]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldResidualMoments,
+                [generation.Moments0, generation.Moments1]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldResidualValidity,
+                [generation.Validity0, generation.Validity1]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                [generation.HistoryNormals0, generation.HistoryNormals1]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldResidualFilterScratch,
+                generation.FilterScratch0 is not null &&
+                generation.FilterScratch1 is not null
+                    ? [generation.FilterScratch0, generation.FilterScratch1]
+                    : []);
+        }
+
+        private void PublishEmptyNearFieldResidualGraphBindings()
+        {
+            if (_renderGraph is null)
+                return;
+
+            ReadOnlySpan<RenderGraphResourceId> resources =
+            [
+                RenderGraphResourceId.NearFieldDirectSource,
+                RenderGraphResourceId.NearFieldReceiverPayload,
+                RenderGraphResourceId.NearFieldResidualRaw,
+                RenderGraphResourceId.NearFieldPreparedDepthFootprint,
+                RenderGraphResourceId.NearFieldPreparedReceiverPayload,
+                RenderGraphResourceId.NearFieldPreparedMotion,
+                RenderGraphResourceId.NearFieldSourceLuminance,
+                RenderGraphResourceId.NearFieldResidualHistory,
+                RenderGraphResourceId.NearFieldResidualMoments,
+                RenderGraphResourceId.NearFieldResidualValidity,
+                RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                RenderGraphResourceId.NearFieldResidualFilterScratch
+            ];
+            foreach (RenderGraphResourceId resource in resources)
+                _renderGraph.PublishOwnedRenderTargets(resource, []);
+        }
+
+        /// <summary>
+        /// Selects the validated trace shape before the renderer recreates the
+        /// graph-owned images for a replacement C5 generation.
+        /// </summary>
+        internal void PrepareNearFieldResidualGeneration(
+            in SimpleDdgiNearFieldResidualLayout layout)
+        {
+            if (!layout.IsValid ||
+                layout.SourceFormat !=
+                    SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat ||
+                layout.TraceResolutionScale is not (0.5f or 0.25f or 0.125f))
+            {
+                throw new ArgumentException(
+                    "C5 replacement render targets require a valid V12 layout.",
+                    nameof(layout));
+            }
+            if (NearFieldDirectSource is null)
+            {
+                throw new InvalidOperationException(
+                    "C5 replacement targets were not admitted at startup.");
+            }
+            _nearFieldResidualResolutionScale =
+                layout.TraceResolutionScale;
+        }
         public ulong GiCausticRenderTargetBytes => SumEnabledBytes(
             GiCausticReceiverPayload,
             GiCausticRadiance,
@@ -415,7 +925,6 @@ namespace Njulf.Rendering.Resources
                 MaterialTransportProvenance,
                 materialTransportProvenanceEnabled ? extent : PlaceholderExtent);
             RecreateGiCausticTargets(extent);
-            RecreateNearFieldResidualSourceTargets(extent);
             RecreateAntiAliasingTargets(extent, outputExtent, antiAliasingMode, motionVectorsEnabled);
             RecreateWeightedOitTargets(extent, weightedOitEnabled);
             RecreateBloomTargets(extent, bloomMipCount);
@@ -461,6 +970,19 @@ namespace Njulf.Rendering.Resources
             Extent2D traceExtent = CalculateNearFieldTraceExtent(extent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.NearFieldResidualRaw,
                 NearFieldResidualRaw!, traceExtent);
+            RecreateGraphOwnedTarget(
+                RenderGraphResourceId.NearFieldPreparedDepthFootprint,
+                NearFieldPreparedDepthFootprint!, traceExtent);
+            RecreateGraphOwnedTarget(
+                RenderGraphResourceId.NearFieldPreparedReceiverPayload,
+                NearFieldPreparedReceiverPayload!, traceExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.NearFieldPreparedMotion,
+                NearFieldPreparedMotion!, traceExtent);
+            if (NearFieldSourceLuminance is not null)
+            {
+                RecreateGraphOwnedTarget(RenderGraphResourceId.NearFieldSourceLuminance,
+                    NearFieldSourceLuminance, traceExtent);
+            }
             RecreateGraphOwnedTarget(RenderGraphResourceId.NearFieldResidualHistory,
                 NearFieldResidualHistory0!, traceExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.NearFieldResidualHistory,
@@ -543,63 +1065,8 @@ namespace Njulf.Rendering.Resources
         /// </summary>
         internal void ReleaseNearFieldResidualTargetsAfterDeviceIdle()
         {
-            if (NearFieldDirectSource is not null)
-                ReleaseOrDisposeOwnedTarget(RenderGraphResourceId.NearFieldDirectSource,
-                    NearFieldDirectSource);
-            if (NearFieldReceiverPayload is not null)
-                ReleaseOrDisposeOwnedTarget(RenderGraphResourceId.NearFieldReceiverPayload,
-                    NearFieldReceiverPayload);
-            if (NearFieldResidualRaw is not null)
-                ReleaseOrDisposeOwnedTarget(RenderGraphResourceId.NearFieldResidualRaw,
-                    NearFieldResidualRaw);
-            if (NearFieldResidualHistory0 is not null)
-                ReleaseOrDisposeOwnedTarget(RenderGraphResourceId.NearFieldResidualHistory,
-                    NearFieldResidualHistory0);
-            if (NearFieldResidualHistory1 is not null)
-                ReleaseOrDisposeOwnedTarget(RenderGraphResourceId.NearFieldResidualHistory,
-                    NearFieldResidualHistory1);
-            if (NearFieldResidualMoments0 is not null)
-                ReleaseOrDisposeOwnedTarget(RenderGraphResourceId.NearFieldResidualMoments,
-                    NearFieldResidualMoments0);
-            if (NearFieldResidualMoments1 is not null)
-                ReleaseOrDisposeOwnedTarget(RenderGraphResourceId.NearFieldResidualMoments,
-                    NearFieldResidualMoments1);
-            if (NearFieldResidualValidity0 is not null)
-                ReleaseOrDisposeOwnedTarget(RenderGraphResourceId.NearFieldResidualValidity,
-                    NearFieldResidualValidity0);
-            if (NearFieldResidualValidity1 is not null)
-                ReleaseOrDisposeOwnedTarget(RenderGraphResourceId.NearFieldResidualValidity,
-                    NearFieldResidualValidity1);
-            if (NearFieldResidualHistoryNormals0 is not null)
-                ReleaseOrDisposeOwnedTarget(
-                    RenderGraphResourceId.NearFieldResidualHistoryNormals,
-                    NearFieldResidualHistoryNormals0);
-            if (NearFieldResidualHistoryNormals1 is not null)
-                ReleaseOrDisposeOwnedTarget(
-                    RenderGraphResourceId.NearFieldResidualHistoryNormals,
-                    NearFieldResidualHistoryNormals1);
-            if (NearFieldResidualFilterScratch0 is not null)
-                ReleaseOrDisposeOwnedTarget(
-                    RenderGraphResourceId.NearFieldResidualFilterScratch,
-                    NearFieldResidualFilterScratch0);
-            if (NearFieldResidualFilterScratch1 is not null)
-                ReleaseOrDisposeOwnedTarget(
-                    RenderGraphResourceId.NearFieldResidualFilterScratch,
-                    NearFieldResidualFilterScratch1);
-
-            NearFieldDirectSource = null;
-            NearFieldReceiverPayload = null;
-            NearFieldResidualRaw = null;
-            NearFieldResidualHistory0 = null;
-            NearFieldResidualHistory1 = null;
-            NearFieldResidualMoments0 = null;
-            NearFieldResidualMoments1 = null;
-            NearFieldResidualValidity0 = null;
-            NearFieldResidualValidity1 = null;
-            NearFieldResidualHistoryNormals0 = null;
-            NearFieldResidualHistoryNormals1 = null;
-            NearFieldResidualFilterScratch0 = null;
-            NearFieldResidualFilterScratch1 = null;
+            if (_nearFieldResidualGeneration is { } generation)
+                ReleaseNearFieldResidualGeneration(generation);
         }
 
         private void CreateNearFieldHistoryTargets(Extent2D traceExtent)
@@ -609,49 +1076,49 @@ namespace Njulf.Rendering.Resources
                 "Near-Field Residual History 0",
                 NearFieldResidualRadianceFormat,
                 traceExtent,
-                StorageSampledDescriptor);
+                NearFieldStorageSampledDescriptor);
             NearFieldResidualHistory1 = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.NearFieldResidualHistory,
                 "Near-Field Residual History 1",
                 NearFieldResidualRadianceFormat,
                 traceExtent,
-                StorageSampledDescriptor);
+                NearFieldStorageSampledDescriptor);
             NearFieldResidualMoments0 = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.NearFieldResidualMoments,
                 "Near-Field Residual Moments 0",
                 NearFieldResidualMomentsFormat,
                 traceExtent,
-                StorageSampledDescriptor);
+                NearFieldStorageSampledDescriptor);
             NearFieldResidualMoments1 = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.NearFieldResidualMoments,
                 "Near-Field Residual Moments 1",
                 NearFieldResidualMomentsFormat,
                 traceExtent,
-                StorageSampledDescriptor);
+                NearFieldStorageSampledDescriptor);
             NearFieldResidualValidity0 = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.NearFieldResidualValidity,
                 "Near-Field Residual Validity 0",
                 NearFieldResidualValidityFormat,
                 traceExtent,
-                StorageSampledDescriptor);
+                NearFieldStorageSampledDescriptor);
             NearFieldResidualValidity1 = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.NearFieldResidualValidity,
                 "Near-Field Residual Validity 1",
                 NearFieldResidualValidityFormat,
                 traceExtent,
-                StorageSampledDescriptor);
+                NearFieldStorageSampledDescriptor);
             NearFieldResidualHistoryNormals0 = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.NearFieldResidualHistoryNormals,
                 "Near-Field Residual Normal History 0",
                 NearFieldResidualNormalsFormat,
                 traceExtent,
-                StorageSampledDescriptor);
+                NearFieldStorageSampledDescriptor);
             NearFieldResidualHistoryNormals1 = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.NearFieldResidualHistoryNormals,
                 "Near-Field Residual Normal History 1",
                 NearFieldResidualNormalsFormat,
                 traceExtent,
-                StorageSampledDescriptor);
+                NearFieldStorageSampledDescriptor);
         }
 
         private Extent2D CalculateNearFieldTraceExtent(Extent2D extent) => new()
@@ -856,6 +1323,14 @@ namespace Njulf.Rendering.Resources
                 NearFieldReceiverPayload);
             DisposeIfManagerOwned(RenderGraphResourceId.NearFieldResidualRaw,
                 NearFieldResidualRaw);
+            DisposeIfManagerOwned(RenderGraphResourceId.NearFieldPreparedDepthFootprint,
+                NearFieldPreparedDepthFootprint);
+            DisposeIfManagerOwned(RenderGraphResourceId.NearFieldPreparedReceiverPayload,
+                NearFieldPreparedReceiverPayload);
+            DisposeIfManagerOwned(RenderGraphResourceId.NearFieldPreparedMotion,
+                NearFieldPreparedMotion);
+            DisposeIfManagerOwned(RenderGraphResourceId.NearFieldSourceLuminance,
+                NearFieldSourceLuminance);
             DisposeIfManagerOwned(RenderGraphResourceId.NearFieldResidualHistory,
                 NearFieldResidualHistory0);
             DisposeIfManagerOwned(RenderGraphResourceId.NearFieldResidualHistory,

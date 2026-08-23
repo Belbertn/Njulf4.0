@@ -349,6 +349,12 @@ namespace Njulf.Rendering.Data
         public ulong GpuParticleSortKeyBufferSize { get; set; }
         public float OcclusionBias { get; set; } = 0.0005f;
         public uint DebugViewMode { get; set; }
+        /// <summary>
+        /// Raw <see cref="GlobalIlluminationDebugView"/> value for C5 only.
+        /// This is separate from <see cref="DebugViewMode"/>, whose numeric
+        /// namespace is shared by forward material, animation, and GI views.
+        /// </summary>
+        public uint NearFieldResidualDebugView { get; set; }
         public int MaxLightsPerTile { get; set; }
         public int MaxLightsInAnyTile { get; set; }
         public float AverageLightsPerNonEmptyTile { get; set; }
@@ -1731,6 +1737,7 @@ namespace Njulf.Rendering.Data
             GpuParticleIndirectDrawBufferSize = 0;
             GpuParticleSortKeyBufferSize = 0;
             DebugViewMode = 0;
+            NearFieldResidualDebugView = 0;
             MaxLightsPerTile = 0;
             MaxLightsInAnyTile = 0;
             AverageLightsPerNonEmptyTile = 0.0f;

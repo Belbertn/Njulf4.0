@@ -114,6 +114,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         if (modes.UsesNearFieldHiZResidual)
         {
             latePasses.Add("SimpleDdgiNearFieldResidualResetPass");
+            latePasses.Add("SimpleDdgiNearFieldResidualPreparePass");
             latePasses.Add("SimpleDdgiNearFieldResidualTracePass");
             latePasses.Add("SimpleDdgiNearFieldResidualTemporalPass");
             for (int iteration = 0;
@@ -122,6 +123,7 @@ internal sealed class ProductionRenderPipelineDeclaration
             {
                 latePasses.Add(GetNearFieldFilterPassName(iteration));
             }
+            latePasses.Add("SimpleDdgiNearFieldResidualFrequencySeparationPass");
             latePasses.Add("SimpleDdgiNearFieldResidualCompositePass");
         }
         if (latePasses.Count != 0)
@@ -813,25 +815,94 @@ internal sealed class ProductionRenderPipelineDeclaration
 
         if (modes.UsesNearFieldHiZResidual)
         {
+            var nearFieldResetUsages = new List<RenderGraphResourceUsage>
+            {
+                WriteTransferAndComputeBuffer(
+                    RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                    RenderGraphHistoryBindingSelection.Current),
+                WriteTransferAndComputeBuffer(
+                    RenderGraphResourceId.NearFieldResidualTileBuffers),
+                ReadWriteComputeIndirectBuffer(
+                    RenderGraphResourceId
+                        .NearFieldActiveTilesAndIndirectArguments),
+                WriteTransferStorage(
+                    RenderGraphResourceId.NearFieldResidualRaw),
+                WriteTransferStorage(
+                    RenderGraphResourceId.NearFieldResidualHistory,
+                    RenderGraphHistoryBindingSelection.Current),
+                WriteTransferStorage(
+                    RenderGraphResourceId.NearFieldResidualMoments,
+                    RenderGraphHistoryBindingSelection.Current),
+                WriteTransferStorage(
+                    RenderGraphResourceId.NearFieldResidualValidity,
+                    RenderGraphHistoryBindingSelection.Current),
+                WriteTransferStorage(
+                    RenderGraphResourceId.NearFieldResidualHistoryNormals,
+                    RenderGraphHistoryBindingSelection.Current)
+            };
+            if (modes.UsesNearFieldFiltering)
+            {
+                nearFieldResetUsages.Add(WriteTransferStorage(
+                    RenderGraphResourceId.NearFieldResidualFilterScratch,
+                    RenderGraphHistoryBindingSelection.All));
+            }
+
             declarations.AddRange([
                 Pass("SimpleDdgiNearFieldResidualResetPass",
-                    WriteComputeBuffer(RenderGraphResourceId.NearFieldResidualHitMetadata),
+                    nearFieldResetUsages.ToArray()),
+                Pass("SimpleDdgiNearFieldResidualPreparePass",
+                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+                    ReadComputeSampled(RenderGraphResourceId.NearFieldDirectSource),
+                    ReadComputeSampled(RenderGraphResourceId.NearFieldReceiverPayload),
+                    ReadComputeSampled(RenderGraphResourceId.MotionVectors),
+                    ReadComputeBuffer(RenderGraphResourceId.SceneSubmissionBuffers),
+                    ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
+                    ReadComputeBuffer(RenderGraphResourceId.FoliageBuffers),
+                    WriteComputeStorage(
+                        RenderGraphResourceId.NearFieldPreparedDepthFootprint),
+                    WriteComputeStorage(
+                        RenderGraphResourceId.NearFieldPreparedReceiverPayload),
+                    WriteComputeStorage(RenderGraphResourceId.NearFieldPreparedMotion),
+                    WriteComputeStorage(RenderGraphResourceId.NearFieldSourceLuminance),
+                    ReadWriteComputeIndirectBuffer(
+                        RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments),
+                    WriteComputeBuffer(RenderGraphResourceId.NearFieldSurfaceTable),
                     WriteComputeBuffer(RenderGraphResourceId.NearFieldResidualTileBuffers)),
                 Pass("SimpleDdgiNearFieldResidualTracePass",
                     ReadComputeSampled(RenderGraphResourceId.NearFieldDirectSource),
-                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
                     ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
+                    ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldPreparedDepthFootprint),
+                    ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldPreparedReceiverPayload),
                     ReadComputeSampled(RenderGraphResourceId.NearFieldReceiverPayload),
+                    ReadComputeSampled(RenderGraphResourceId.NearFieldSourceLuminance),
+                    ReadComputeBuffer(RenderGraphResourceId.NearFieldSurfaceTable),
+                    ReadComputeIndirectBuffer(
+                        RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments),
                     ReadComputeBuffer(
                         RenderGraphResourceId.NearFieldResidualTraceFrameConstants),
                     WriteComputeStorage(RenderGraphResourceId.NearFieldResidualRaw),
-                    WriteComputeBuffer(RenderGraphResourceId.NearFieldResidualHitMetadata),
+                    WriteComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                        RenderGraphHistoryBindingSelection.Current),
                     WriteComputeBuffer(RenderGraphResourceId.NearFieldResidualTileBuffers)),
                 Pass("SimpleDdgiNearFieldResidualTemporalPass",
                     ReadComputeSampled(RenderGraphResourceId.NearFieldResidualRaw),
-                    ReadComputeBuffer(RenderGraphResourceId.NearFieldResidualHitMetadata),
-                    ReadComputeSampled(RenderGraphResourceId.MotionVectors),
+                    ReadComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                        RenderGraphHistoryBindingSelection.Current),
+                    ReadComputeSampled(RenderGraphResourceId.NearFieldPreparedMotion),
+                    ReadComputeSampled(
+                        RenderGraphResourceId.NearFieldPreparedReceiverPayload),
+                    ReadComputeSampled(RenderGraphResourceId.NearFieldDirectSource),
+                    ReadComputeDepth(RenderGraphResourceId.SceneDepth),
                     ReadComputeSampled(RenderGraphResourceId.NearFieldReceiverPayload),
+                    ReadComputeBuffer(
+                        RenderGraphResourceId.NearFieldResidualTraceFrameConstants),
+                    ReadComputeBuffer(RenderGraphResourceId.NearFieldSurfaceTable),
+                    ReadComputeIndirectBuffer(
+                        RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments),
                     ReadComputeSampled(
                         RenderGraphResourceId.NearFieldResidualHistory,
                         RenderGraphHistoryBindingSelection.Previous),
@@ -889,7 +960,12 @@ internal sealed class ProductionRenderPipelineDeclaration
                     RenderGraphResourceId.NearFieldResidualHistoryMetadata,
                     RenderGraphHistoryBindingSelection.Current));
                 filterUsages.Add(ReadComputeSampled(
-                    RenderGraphResourceId.NearFieldReceiverPayload));
+                    RenderGraphResourceId.NearFieldPreparedReceiverPayload));
+                filterUsages.Add(ReadComputeSampled(
+                    RenderGraphResourceId.NearFieldResidualMoments,
+                    RenderGraphHistoryBindingSelection.Current));
+                filterUsages.Add(ReadComputeIndirectBuffer(
+                    RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments));
                 filterUsages.Add(WriteComputeStorage(
                     RenderGraphResourceId.NearFieldResidualFilterScratch,
                     historyBinding: destinationBank));
@@ -898,7 +974,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                     filterUsages.ToArray()));
             }
 
-            RenderGraphResourceUsage compositeInput = modes.UsesNearFieldFiltering
+            RenderGraphResourceUsage frequencyInput = modes.UsesNearFieldFiltering
                 ? ReadComputeSampled(
                     RenderGraphResourceId.NearFieldResidualFilterScratch,
                     GetNearFieldScratchBank(
@@ -906,13 +982,40 @@ internal sealed class ProductionRenderPipelineDeclaration
                 : ReadComputeSampled(
                     RenderGraphResourceId.NearFieldResidualHistory,
                     RenderGraphHistoryBindingSelection.Current);
+            declarations.Add(Pass("SimpleDdgiNearFieldResidualFrequencySeparationPass",
+                frequencyInput,
+                ReadComputeSampled(
+                    RenderGraphResourceId.NearFieldPreparedDepthFootprint),
+                ReadComputeSampled(
+                    RenderGraphResourceId.NearFieldPreparedReceiverPayload),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.NearFieldResidualHistoryMetadata,
+                    RenderGraphHistoryBindingSelection.Current),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.NearFieldResidualTraceFrameConstants),
+                ReadComputeIndirectBuffer(
+                    RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments),
+                WriteComputeStorage(RenderGraphResourceId.NearFieldResidualRaw)));
             declarations.Add(Pass("SimpleDdgiNearFieldResidualCompositePass",
-                compositeInput,
+                ReadComputeSampled(RenderGraphResourceId.NearFieldResidualRaw),
                 ReadComputeBuffer(
                     RenderGraphResourceId.NearFieldResidualHistoryMetadata,
                     RenderGraphHistoryBindingSelection.Current),
                 ReadWriteComputeStorage(RenderGraphResourceId.SceneColor,
-                    ImageLayout.ShaderReadOnlyOptimal)));
+                    ImageLayout.ShaderReadOnlyOptimal),
+                ReadComputeSampled(RenderGraphResourceId.NearFieldReceiverPayload),
+                ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+                ReadComputeSampled(
+                    RenderGraphResourceId.NearFieldPreparedReceiverPayload),
+                ReadComputeSampled(RenderGraphResourceId.NearFieldDirectSource),
+                ReadComputeSampled(
+                    RenderGraphResourceId.NearFieldResidualValidity,
+                    RenderGraphHistoryBindingSelection.Current),
+                ReadComputeBuffer(RenderGraphResourceId.NearFieldSurfaceTable),
+                ReadComputeBuffer(
+                    RenderGraphResourceId.NearFieldResidualTraceFrameConstants),
+                ReadComputeIndirectBuffer(
+                    RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments)));
         }
 
         return declarations;
@@ -1100,9 +1203,6 @@ internal sealed class ProductionRenderPipelineDeclaration
                 "Near-field residual raw candidates",
                 Format.R16G16B16A16Sfloat,
                 traceSizePolicy));
-            descriptors.Add(TransientBufferSetResource(
-                RenderGraphResourceId.NearFieldResidualHitMetadata,
-                "Near-field residual hit metadata SSBO"));
             descriptors.Add(OwnedImageChainResource(
                 RenderGraphResourceId.NearFieldResidualHistory,
                 "Near-field residual double-buffered history",
@@ -1138,6 +1238,12 @@ internal sealed class ProductionRenderPipelineDeclaration
                 RenderGraphResourceId.NearFieldResidualTileBuffers,
                 "Near-field residual compact tiles"));
             descriptors.Add(BufferSetResource(
+                RenderGraphResourceId.NearFieldSurfaceTable,
+                "Near-field frame-buffered surface table"));
+            descriptors.Add(TransientBufferSetResource(
+                RenderGraphResourceId.NearFieldActiveTilesAndIndirectArguments,
+                "Near-field active tiles and indirect dispatch arguments"));
+            descriptors.Add(BufferSetResource(
                 RenderGraphResourceId.NearFieldResidualTraceFrameConstants,
                 "Near-field residual per-frame reconstruction constants"));
             descriptors.Add(TransientImageResource(
@@ -1145,6 +1251,26 @@ internal sealed class ProductionRenderPipelineDeclaration
                 "Near-field C5 compact receiver payload",
                 Format.R32G32B32A32Uint,
                 RenderGraphResourceSizePolicy.SceneResolution));
+            descriptors.Add(TransientImageResource(
+                RenderGraphResourceId.NearFieldPreparedDepthFootprint,
+                "Near-field prepared linear depth and B3 footprint",
+                Format.R32G32Sfloat,
+                traceSizePolicy));
+            descriptors.Add(TransientImageResource(
+                RenderGraphResourceId.NearFieldPreparedReceiverPayload,
+                "Near-field prepared receiver payload",
+                Format.R32G32B32A32Uint,
+                traceSizePolicy));
+            descriptors.Add(TransientImageResource(
+                RenderGraphResourceId.NearFieldPreparedMotion,
+                "Near-field prepared receiver motion",
+                Format.R16G16Sfloat,
+                traceSizePolicy));
+            descriptors.Add(TransientImageResource(
+                RenderGraphResourceId.NearFieldSourceLuminance,
+                "Near-field source-guiding luminance base level",
+                Format.R16Sfloat,
+                traceSizePolicy));
         }
 
         return descriptors;
@@ -1552,6 +1678,20 @@ internal sealed class ProductionRenderPipelineDeclaration
             RenderGraphQueueIntent.Compute);
     }
 
+    private static RenderGraphResourceUsage ReadComputeIndirectBuffer(
+        RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.ComputeShaderBit |
+                PipelineStageFlags2.DrawIndirectBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.IndirectCommandReadBit,
+            ImageLayout.Undefined,
+            RenderGraphQueueIntent.Compute);
+    }
+
     private static RenderGraphResourceUsage ReadComputeAccelerationStructure(RenderGraphResourceId resource)
     {
         return new RenderGraphResourceUsage(
@@ -1774,6 +1914,21 @@ internal sealed class ProductionRenderPipelineDeclaration
             historyBinding);
     }
 
+    private static RenderGraphResourceUsage WriteTransferStorage(
+        RenderGraphResourceId resource,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Write,
+            PipelineStageFlags2.TransferBit,
+            AccessFlags2.TransferWriteBit,
+            ImageLayout.General,
+            RenderGraphQueueIntent.Compute,
+            HistoryBinding: historyBinding);
+    }
+
     private static RenderGraphResourceUsage WriteComputeBuffer(
         RenderGraphResourceId resource,
         RenderGraphHistoryBindingSelection historyBinding =
@@ -1790,7 +1945,9 @@ internal sealed class ProductionRenderPipelineDeclaration
     }
 
     private static RenderGraphResourceUsage WriteTransferAndComputeBuffer(
-        RenderGraphResourceId resource)
+        RenderGraphResourceId resource,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
     {
         return new RenderGraphResourceUsage(
             resource,
@@ -1798,7 +1955,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             PipelineStageFlags2.TransferBit | PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.TransferWriteBit | AccessFlags2.ShaderStorageWriteBit,
             ImageLayout.Undefined,
-            RenderGraphQueueIntent.Compute);
+            RenderGraphQueueIntent.Compute,
+            HistoryBinding: historyBinding);
     }
 
     private static RenderGraphResourceUsage ReadWriteComputeBuffer(RenderGraphResourceId resource)

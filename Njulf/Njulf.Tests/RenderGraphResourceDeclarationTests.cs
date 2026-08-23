@@ -368,6 +368,9 @@ public sealed class RenderGraphResourceDeclarationTests
         {
             Assert.That(graph.OwnsResource(RenderGraphResourceId.SceneColor), Is.False);
             Assert.That(graph.GetLayoutTrackedRenderTargets(RenderGraphResourceId.SceneColor), Is.EqualTo(new[] { target }));
+            Assert.That(
+                graph.GetResourceLifetime(RenderGraphResourceId.SceneColor),
+                Is.EqualTo(RenderGraphResourceLifetime.Imported));
         });
     }
 

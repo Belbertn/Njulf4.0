@@ -17,15 +17,21 @@ namespace Njulf.Rendering.Pipeline;
 public static class SimpleDdgiNearFieldResidualGpuPassNames
 {
     public const string Reset = "SimpleDdgiNearFieldResidualResetPass";
+    public const string Prepare = "SimpleDdgiNearFieldResidualPreparePass";
     public const string Trace = "SimpleDdgiNearFieldResidualTracePass";
     public const string Temporal = "SimpleDdgiNearFieldResidualTemporalPass";
     public const string Filter = "SimpleDdgiNearFieldResidualFilterPass";
+    public const string FrequencySeparation =
+        "SimpleDdgiNearFieldResidualFrequencySeparationPass";
     public const string Composite = "SimpleDdgiNearFieldResidualCompositePass";
 
     public const string ResetShader = "ddgi_near_field_residual_reset.comp.spv";
+    public const string PrepareShader = "ddgi_near_field_residual_prepare.comp.spv";
     public const string TraceShader = "ddgi_near_field_residual_trace.comp.spv";
     public const string TemporalShader = "ddgi_near_field_residual_temporal.comp.spv";
     public const string FilterShader = "ddgi_near_field_residual_filter.comp.spv";
+    public const string FrequencySeparationShader =
+        "ddgi_near_field_residual_frequency.comp.spv";
     public const string CompositeShader = "ddgi_near_field_residual_composite.comp.spv";
 
     public static string FilterIteration(int iteration) => iteration switch
@@ -39,9 +45,11 @@ public static class SimpleDdgiNearFieldResidualGpuPassNames
 internal enum SimpleDdgiNearFieldResidualPassKind : byte
 {
     Reset,
+    Prepare,
     Trace,
     Temporal,
     Filter,
+    FrequencySeparation,
     Composite
 }
 
@@ -59,7 +67,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
     private readonly VulkanContext _context;
     private readonly BufferManager _bufferManager;
     private readonly BindlessHeap _bindlessHeap;
-    private readonly RenderTargetManager _targets;
+    private readonly SimpleDdgiNearFieldResidualTargetBinding _targets;
     private readonly HiZDepthPyramid _hiZ;
     private readonly SimpleDdgiNearFieldResidualLayout _layout;
     private readonly SimpleDdgiNearFieldResidualGpuConfiguration _configuration;
@@ -67,27 +75,35 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
     private readonly nint _entryPointName;
 
     private DescriptorSetLayout _resetSetLayout;
+    private DescriptorSetLayout _prepareSetLayout;
     private DescriptorSetLayout _traceSetLayout;
     private DescriptorSetLayout _temporalSetLayout;
     private DescriptorSetLayout _filterSetLayout;
+    private DescriptorSetLayout _frequencySetLayout;
     private DescriptorSetLayout _compositeSetLayout;
     private DescriptorPool _descriptorPool;
-    private DescriptorSet _resetSet;
+    private readonly DescriptorSet[] _resetSets = new DescriptorSet[2];
+    private readonly DescriptorSet[] _prepareSets = new DescriptorSet[2];
     private readonly DescriptorSet[] _traceSets = new DescriptorSet[2];
     private readonly DescriptorSet[] _temporalSets = new DescriptorSet[2];
     private readonly DescriptorSet[] _filterSets;
+    private readonly DescriptorSet[] _frequencySets = new DescriptorSet[2];
     private readonly DescriptorSet[] _compositeSets = new DescriptorSet[2];
 
     private PipelineLayout _resetPipelineLayout;
+    private PipelineLayout _preparePipelineLayout;
     private PipelineLayout _tracePipelineLayout;
     private PipelineLayout _temporalPipelineLayout;
     private PipelineLayout _filterPipelineLayout;
+    private PipelineLayout _frequencyPipelineLayout;
     private PipelineLayout _compositePipelineLayout;
     private PipelineCache _pipelineCache;
     private VkPipeline _resetPipeline;
+    private VkPipeline _preparePipeline;
     private VkPipeline _tracePipeline;
     private VkPipeline _temporalPipeline;
     private VkPipeline _filterPipeline;
+    private VkPipeline _frequencyPipeline;
     private VkPipeline _compositePipeline;
     private bool _disposed;
 
@@ -95,7 +111,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         VulkanContext context,
         BufferManager bufferManager,
         BindlessHeap bindlessHeap,
-        RenderTargetManager targets,
+        SimpleDdgiNearFieldResidualTargetBinding targets,
         HiZDepthPyramid hiZ,
         in SimpleDdgiNearFieldResidualLayout layout,
         in SimpleDdgiNearFieldResidualGpuConfiguration configuration,
@@ -123,6 +139,10 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
                 _resetSetLayout,
                 SimpleDdgiNearFieldResidualGpuAbi.ResetPushConstantByteCount,
                 "C5 Reset Pipeline Layout");
+            _preparePipelineLayout = CreatePipelineLayout(
+                _prepareSetLayout,
+                SimpleDdgiNearFieldResidualGpuAbi.PreparePushConstantByteCount,
+                "C5 Prepare Pipeline Layout");
             _tracePipelineLayout = CreatePipelineLayout(
                 _traceSetLayout,
                 SimpleDdgiNearFieldResidualGpuAbi.TracePushConstantByteCount,
@@ -135,18 +155,29 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
                 _filterSetLayout,
                 SimpleDdgiNearFieldResidualGpuAbi.FilterPushConstantByteCount,
                 "C5 Filter Pipeline Layout");
+            _frequencyPipelineLayout = CreatePipelineLayout(
+                _frequencySetLayout,
+                SimpleDdgiNearFieldResidualGpuAbi
+                    .FrequencySeparationPushConstantByteCount,
+                "C5 Frequency Separation Pipeline Layout");
             _compositePipelineLayout = CreatePipelineLayout(
                 _compositeSetLayout,
                 SimpleDdgiNearFieldResidualGpuAbi.CompositePushConstantByteCount,
                 "C5 Composite Pipeline Layout");
             _resetPipeline = CreatePipeline(SimpleDdgiNearFieldResidualGpuPassNames.ResetShader,
                 _resetPipelineLayout, "C5 Reset Pipeline");
+            _preparePipeline = CreatePipeline(
+                SimpleDdgiNearFieldResidualGpuPassNames.PrepareShader,
+                _preparePipelineLayout, "C5 Prepare Pipeline");
             _tracePipeline = CreatePipeline(SimpleDdgiNearFieldResidualGpuPassNames.TraceShader,
                 _tracePipelineLayout, "C5 Trace Pipeline");
             _temporalPipeline = CreatePipeline(SimpleDdgiNearFieldResidualGpuPassNames.TemporalShader,
                 _temporalPipelineLayout, "C5 Temporal Pipeline");
             _filterPipeline = CreatePipeline(SimpleDdgiNearFieldResidualGpuPassNames.FilterShader,
                 _filterPipelineLayout, "C5 Filter Pipeline");
+            _frequencyPipeline = CreatePipeline(
+                SimpleDdgiNearFieldResidualGpuPassNames.FrequencySeparationShader,
+                _frequencyPipelineLayout, "C5 Frequency Separation Pipeline");
             _compositePipeline = CreatePipeline(SimpleDdgiNearFieldResidualGpuPassNames.CompositeShader,
                 _compositePipelineLayout, "C5 Composite Pipeline");
             RewriteDescriptors();
@@ -158,10 +189,40 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         }
     }
 
+    internal bool ShaderPipelinesValidated => !_disposed &&
+        _resetPipeline.Handle != 0UL && _preparePipeline.Handle != 0UL &&
+        _tracePipeline.Handle != 0UL && _temporalPipeline.Handle != 0UL &&
+        _filterPipeline.Handle != 0UL && _frequencyPipeline.Handle != 0UL &&
+        _compositePipeline.Handle != 0UL;
+
+    internal bool DescriptorContractValidated => !_disposed &&
+        _descriptorPool.Handle != 0UL &&
+        _resetSetLayout.Handle != 0UL && _prepareSetLayout.Handle != 0UL &&
+        _traceSetLayout.Handle != 0UL && _temporalSetLayout.Handle != 0UL &&
+        _filterSetLayout.Handle != 0UL && _frequencySetLayout.Handle != 0UL &&
+        _compositeSetLayout.Handle != 0UL &&
+        AllSetsValid(_resetSets) && AllSetsValid(_prepareSets) &&
+        AllSetsValid(_traceSets) && AllSetsValid(_temporalSets) &&
+        AllSetsValid(_filterSets) && AllSetsValid(_frequencySets) &&
+        AllSetsValid(_compositeSets);
+
+    private static bool AllSetsValid(ReadOnlySpan<DescriptorSet> sets)
+    {
+        foreach (DescriptorSet set in sets)
+        {
+            if (set.Handle == 0UL)
+                return false;
+        }
+        return true;
+    }
+
     internal void RewriteDescriptors()
     {
         ThrowIfDisposed();
-        WriteResetDescriptorSet();
+        for (int writeBank = 0; writeBank < 2; writeBank++)
+            WriteResetDescriptorSet(writeBank);
+        for (int frameSlot = 0; frameSlot < 2; frameSlot++)
+            WritePrepareDescriptorSet(frameSlot);
         for (int frameSlot = 0; frameSlot < 2; frameSlot++)
             WriteTraceDescriptorSet(frameSlot);
         for (int writeBank = 0; writeBank < 2; writeBank++)
@@ -173,6 +234,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             {
                 WriteFilterDescriptorSet(writeBank, iteration);
             }
+            WriteFrequencyDescriptorSet(writeBank);
             WriteCompositeDescriptorSet(writeBank);
         }
     }
@@ -185,6 +247,46 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
     {
         ThrowIfDisposed();
         ValidateExecutionExtent(extent);
+        var activeTileBuffer =
+            _bufferManager.GetBuffer(_buffers.ActiveTileAndIndirect);
+        _context.Api.CmdFillBuffer(
+            commandBuffer,
+            activeTileBuffer,
+            0UL,
+            _bufferManager.GetBufferSize(_buffers.ActiveTileAndIndirect),
+            0u);
+        _context.Api.CmdFillBuffer(
+            commandBuffer,
+            _bufferManager.GetBuffer(
+                _buffers.HistoryMetadata(token.HistoryWriteIndex)),
+            0UL,
+            _bufferManager.GetBufferSize(
+                _buffers.HistoryMetadata(token.HistoryWriteIndex)),
+            0u);
+        _context.Api.CmdFillBuffer(
+            commandBuffer,
+            _bufferManager.GetBuffer(_buffers.TileRecords),
+            0UL,
+            _bufferManager.GetBufferSize(_buffers.TileRecords),
+            0u);
+        // Indirect dispatch deliberately skips inactive tiles. Clear every
+        // transient image and the complete current history-write bank first,
+        // so neither a zero-work frame nor a later tier promotion can expose
+        // pixels left by an earlier use of this generation.
+        ClearStorageImage(commandBuffer, _targets.NearFieldResidualRaw);
+        ClearStorageImage(commandBuffer,
+            HistoryRadiance(token.HistoryWriteIndex));
+        ClearStorageImage(commandBuffer,
+            HistoryMoments(token.HistoryWriteIndex));
+        ClearStorageImage(commandBuffer,
+            HistoryValidity(token.HistoryWriteIndex));
+        ClearStorageImage(commandBuffer,
+            HistoryNormals(token.HistoryWriteIndex));
+        if (_targets.NearFieldResidualFilterScratch0 is { } scratch0)
+            ClearStorageImage(commandBuffer, scratch0);
+        if (_targets.NearFieldResidualFilterScratch1 is { } scratch1)
+            ClearStorageImage(commandBuffer, scratch1);
+        RecordTransferWriteBarrier(commandBuffer);
         uint tileCount = CalculateTileCount(extent);
         var push = new GPUSimpleDdgiNearFieldResidualResetPushConstants
         {
@@ -202,12 +304,81 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             TileCount = tileCount
         };
         BindAndPush(commandBuffer, _resetPipeline, _resetPipelineLayout,
-            _resetSet, &push,
+            _resetSets[token.HistoryWriteIndex], &push,
             SimpleDdgiNearFieldResidualGpuAbi.ResetPushConstantByteCount);
         uint workItems = Math.Max(push.MetadataCount, push.TileWordCount);
         _context.Api.CmdDispatch(commandBuffer,
             DivideRoundUp(workItems, ResetLocalSize), 1u, 1u);
         RecordComputeWriteBarrier(commandBuffer);
+    }
+
+    internal void RecordPrepare(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        in SimpleDdgiNearFieldResidualGpuFrameToken token,
+        in SimpleDdgiNearFieldResidualExecutionExtent extent,
+        float nearPlane,
+        float farPlane,
+        BufferHandle objectData,
+        BufferHandle materialData,
+        BufferHandle foliagePrototypes,
+        BufferHandle foliagePatches,
+        BufferHandle foliageClusters,
+        uint foliageTokenBase,
+        bool foliageMotionVectorsValid)
+    {
+        ThrowIfDisposed();
+        ValidateExecutionExtent(extent);
+        RenderingConstants.ValidateFrameIndex(frameIndex);
+        if (!objectData.IsValid || !materialData.IsValid)
+            throw new InvalidOperationException(
+                "C5 prepare requires the exact scene object/material buffers.");
+        WritePrepareSceneDescriptors(
+            frameIndex,
+            objectData,
+            materialData,
+            foliagePrototypes,
+            foliagePatches,
+            foliageClusters);
+        uint tileCapacity = checked(
+            DivideRoundUp(checked((uint)_layout.TraceWidth), ComputeLocalSize) *
+            DivideRoundUp(checked((uint)_layout.TraceHeight), ComputeLocalSize));
+        var push = new GPUSimpleDdgiNearFieldResidualPreparePushConstants
+        {
+            AbiVersion = SimpleDdgiNearFieldResidualGpuAbi.Version,
+            FullWidth = checked((uint)_layout.SourceWidth),
+            FullHeight = checked((uint)_layout.SourceHeight),
+            TraceWidth = checked((uint)extent.Width),
+            TraceHeight = checked((uint)extent.Height),
+            Flags = (SimpleDdgiNearFieldResidualGpuFlags)(
+                (uint)BaseFlags |
+                (foliageMotionVectorsValid
+                    ? (uint)SimpleDdgiNearFieldResidualGpuFlags
+                        .FoliageMotionVectorsValid
+                    : 0u) |
+                (Math.Min(
+                    foliageTokenBase,
+                    SimpleDdgiNearFieldResidualGpuAbi
+                        .MaximumSurfaceTableEntryCount) << 16)),
+            TileCapacity = tileCapacity,
+            RaysPerPixel = checked((uint)_configuration.RaysPerPixel),
+            NearPlane = MathF.Max(nearPlane, 0.001f),
+            FarPlane = MathF.Max(farPlane, MathF.Max(nearPlane, 0.001f) + 0.01f),
+            ActiveTileHeaderWords =
+                SimpleDdgiNearFieldResidualGpuAbi.ActiveTileHeaderWordCount,
+            IndirectStageCount = SimpleDdgiNearFieldResidualGpuAbi.IndirectStageCount
+        };
+        BindAndPush(commandBuffer, _preparePipeline, _preparePipelineLayout,
+            _prepareSets[frameIndex], &push,
+            SimpleDdgiNearFieldResidualGpuAbi.PreparePushConstantByteCount);
+        // Dispatch the complete admitted extent. The shader writes exact-zero
+        // prepared data outside the currently selected tier, so a later tier
+        // promotion cannot expose stale receiver state.
+        _context.Api.CmdDispatch(commandBuffer,
+            DivideRoundUp(checked((uint)_layout.TraceWidth), ComputeLocalSize),
+            DivideRoundUp(checked((uint)_layout.TraceHeight), ComputeLocalSize),
+            1u);
+        RecordComputeWriteBarrier(commandBuffer, includeIndirectRead: true);
     }
 
     internal void RecordTrace(
@@ -229,7 +400,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             FrameIndex = checked((uint)frameIndex),
             HistoryEpoch = token.HistoryEpoch,
             MaximumTraceSteps = checked((uint)_configuration.MaximumTraceSteps),
-            MaximumMipVisits = checked((uint)_configuration.MaximumMipVisits),
+            RaysPerPixel = checked((uint)_configuration.RaysPerPixel),
             BinaryRefinementSteps = checked((uint)_configuration.BinaryRefinementSteps),
             Flags = BaseFlags,
             Thickness = _configuration.Thickness,
@@ -245,7 +416,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         BindAndPush(commandBuffer, _tracePipeline, _tracePipelineLayout,
             _traceSets[frameIndex & 1], &push,
             SimpleDdgiNearFieldResidualGpuAbi.TracePushConstantByteCount);
-        DispatchTraceExtent(commandBuffer, extent);
+        DispatchIndirect(commandBuffer,
+            SimpleDdgiNearFieldResidualGpuAbi.TraceIndirectStage);
         RecordComputeWriteBarrier(commandBuffer);
     }
 
@@ -254,6 +426,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         in SimpleDdgiNearFieldResidualGpuFrameToken token,
         in SimpleDdgiNearFieldResidualGpuHistoryRevision revision,
         bool historyInputValid,
+        bool sourceLightingEpochChanged,
         in SimpleDdgiNearFieldResidualExecutionExtent extent)
     {
         ThrowIfDisposed();
@@ -263,6 +436,11 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             flags |= SimpleDdgiNearFieldResidualGpuFlags.HistoryInputValid;
         if (revision.CameraCut)
             flags |= SimpleDdgiNearFieldResidualGpuFlags.CameraCut;
+        if (sourceLightingEpochChanged)
+        {
+            flags |= SimpleDdgiNearFieldResidualGpuFlags
+                .SourceLightingEpochChanged;
+        }
         var push = new GPUSimpleDdgiNearFieldResidualTemporalPushConstants
         {
             AbiVersion = SimpleDdgiNearFieldResidualGpuAbi.Version,
@@ -276,7 +454,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             HiZRevision = revision.HiZRevision,
             EffectiveModeRevision = revision.EffectiveModeRevision,
             ExposureDomainRevision = revision.ExposureDomainRevision,
-            ProjectionJitterRevision = revision.ProjectionJitterRevision,
+            StructuralProjectionRevision = revision.StructuralProjectionRevision,
             OriginRebaseRevision = revision.OriginRebaseRevision,
             SceneGeneration = revision.SceneGeneration,
             TraceSourceContentRevision = revision.TraceSourceContentRevision,
@@ -294,7 +472,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         BindAndPush(commandBuffer, _temporalPipeline, _temporalPipelineLayout,
             set, &push,
             SimpleDdgiNearFieldResidualGpuAbi.TemporalPushConstantByteCount);
-        DispatchTraceExtent(commandBuffer, extent);
+        DispatchIndirect(commandBuffer,
+            SimpleDdgiNearFieldResidualGpuAbi.TemporalIndirectStage);
         RecordComputeWriteBarrier(commandBuffer);
     }
 
@@ -326,14 +505,56 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         BindAndPush(commandBuffer, _filterPipeline, _filterPipelineLayout,
             set, &push,
             SimpleDdgiNearFieldResidualGpuAbi.FilterPushConstantByteCount);
-        DispatchTraceExtent(commandBuffer, extent);
+        DispatchIndirect(commandBuffer, checked(
+            SimpleDdgiNearFieldResidualGpuAbi.FirstFilterIndirectStage +
+            (uint)iteration));
+        RecordComputeWriteBarrier(commandBuffer);
+    }
+
+    internal void RecordFrequencySeparation(
+        CommandBuffer commandBuffer,
+        in SimpleDdgiNearFieldResidualGpuFrameToken token,
+        in SimpleDdgiNearFieldResidualExecutionExtent extent,
+        uint debugView)
+    {
+        ThrowIfDisposed();
+        ValidateExecutionExtent(extent);
+        var push = new GPUSimpleDdgiNearFieldResidualFrequencyPushConstants
+        {
+            AbiVersion = SimpleDdgiNearFieldResidualGpuAbi.Version,
+            TraceWidth = checked((uint)extent.Width),
+            TraceHeight = checked((uint)extent.Height),
+            HistoryEpoch = token.HistoryEpoch,
+            ActiveTileHeaderWords =
+                SimpleDdgiNearFieldResidualGpuAbi.ActiveTileHeaderWordCount,
+            Flags = BaseFlags,
+            DepthTolerance = _configuration.DepthTolerance,
+            MinimumNormalDot = _configuration.MinimumNormalDot,
+            MaximumOuterStride = SimpleDdgiNearFieldResidualGpuAbi
+                .MaximumB3FootprintRadius,
+            DebugView = debugView
+        };
+        if (debugView == (uint)GlobalIlluminationDebugView.C5RawCandidate)
+        {
+            // The trace candidate already lives in NearFieldResidualRaw. A
+            // frequency dispatch would overwrite it with the filtered band.
+            RecordComputeWriteBarrier(commandBuffer);
+            return;
+        }
+        BindAndPush(commandBuffer, _frequencyPipeline, _frequencyPipelineLayout,
+            _frequencySets[token.HistoryWriteIndex], &push,
+            SimpleDdgiNearFieldResidualGpuAbi
+                .FrequencySeparationPushConstantByteCount);
+        DispatchIndirect(commandBuffer,
+            SimpleDdgiNearFieldResidualGpuAbi.FrequencySeparationIndirectStage);
         RecordComputeWriteBarrier(commandBuffer);
     }
 
     internal void RecordComposite(
         CommandBuffer commandBuffer,
         in SimpleDdgiNearFieldResidualGpuFrameToken token,
-        in SimpleDdgiNearFieldResidualExecutionExtent extent)
+        in SimpleDdgiNearFieldResidualExecutionExtent extent,
+        uint debugView)
     {
         ThrowIfDisposed();
         ValidateExecutionExtent(extent);
@@ -347,16 +568,28 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             HistoryEpoch = token.HistoryEpoch,
             Flags = BaseFlags |
                 SimpleDdgiNearFieldResidualGpuFlags.CompositeUsesValidResidualOnly,
-            ResidualIntensity = 1.0f,
-            ConfidenceFloor = 1.0e-4f
+            ResidualIntensity = _configuration.ResidualIntensity,
+            ConfidenceFloor = 1.0e-4f,
+            DebugView = debugView
         };
         BindAndPush(commandBuffer, _compositePipeline, _compositePipelineLayout,
             _compositeSets[token.HistoryWriteIndex], &push,
             SimpleDdgiNearFieldResidualGpuAbi.CompositePushConstantByteCount);
-        _context.Api.CmdDispatch(commandBuffer,
-            DivideRoundUp(push.FullWidth, ComputeLocalSize),
-            DivideRoundUp(push.FullHeight, ComputeLocalSize),
-            1u);
+        if (SimpleDdgiNearFieldResidualDebugViewContract.IsC5View(debugView))
+        {
+            // Debug views must clear unsupported and inactive pixels instead
+            // of leaving canonical scene colour behind. This full-screen path
+            // is diagnostic-only; production composition remains compacted.
+            _context.Api.CmdDispatch(commandBuffer,
+                DivideRoundUp(checked((uint)_layout.SourceWidth), 8u),
+                DivideRoundUp(checked((uint)_layout.SourceHeight), 8u),
+                1u);
+        }
+        else
+        {
+            DispatchIndirect(commandBuffer,
+                SimpleDdgiNearFieldResidualGpuAbi.CompositeIndirectStage);
+        }
         RecordComputeWriteBarrier(commandBuffer);
     }
 
@@ -369,13 +602,11 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         in SimpleDdgiNearFieldResidualExecutionExtent extent) => checked(
         (uint)extent.Width * (uint)extent.Height);
 
-    private void DispatchTraceExtent(
-        CommandBuffer commandBuffer,
-        in SimpleDdgiNearFieldResidualExecutionExtent extent) =>
-        _context.Api.CmdDispatch(commandBuffer,
-            DivideRoundUp(checked((uint)extent.Width), ComputeLocalSize),
-            DivideRoundUp(checked((uint)extent.Height), ComputeLocalSize),
-            1u);
+    private void DispatchIndirect(CommandBuffer commandBuffer, uint stage) =>
+        _context.Api.CmdDispatchIndirect(
+            commandBuffer,
+            _bufferManager.GetBuffer(_buffers.ActiveTileAndIndirect),
+            SimpleDdgiNearFieldResidualGpuAbi.IndirectArgumentOffset(stage));
 
     private static uint CalculateTileCount(
         in SimpleDdgiNearFieldResidualExecutionExtent extent) => checked(
@@ -420,16 +651,24 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             pushConstants);
     }
 
-    private void RecordComputeWriteBarrier(CommandBuffer commandBuffer)
+    private void RecordComputeWriteBarrier(
+        CommandBuffer commandBuffer,
+        bool includeIndirectRead = false)
     {
         var barrier = new MemoryBarrier2
         {
             SType = StructureType.MemoryBarrier2,
             SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
             SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
-            DstStageMask = PipelineStageFlags2.ComputeShaderBit,
+            DstStageMask = PipelineStageFlags2.ComputeShaderBit |
+                (includeIndirectRead
+                    ? PipelineStageFlags2.DrawIndirectBit
+                    : PipelineStageFlags2.None),
             DstAccessMask = AccessFlags2.ShaderStorageReadBit |
-                AccessFlags2.ShaderStorageWriteBit
+                AccessFlags2.ShaderStorageWriteBit |
+                (includeIndirectRead
+                    ? AccessFlags2.IndirectCommandReadBit
+                    : AccessFlags2.None)
         };
         var dependency = new DependencyInfo
         {
@@ -440,6 +679,56 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
     }
 
+    private void RecordTransferWriteBarrier(CommandBuffer commandBuffer)
+    {
+        var barrier = new MemoryBarrier2
+        {
+            SType = StructureType.MemoryBarrier2,
+            SrcStageMask = PipelineStageFlags2.TransferBit,
+            SrcAccessMask = AccessFlags2.TransferWriteBit,
+            DstStageMask = PipelineStageFlags2.ComputeShaderBit |
+                PipelineStageFlags2.DrawIndirectBit,
+            DstAccessMask = AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit |
+                AccessFlags2.IndirectCommandReadBit
+        };
+        var dependency = new DependencyInfo
+        {
+            SType = StructureType.DependencyInfo,
+            MemoryBarrierCount = 1u,
+            PMemoryBarriers = &barrier
+        };
+        _context.Api.CmdPipelineBarrier2(commandBuffer, &dependency);
+    }
+
+    private void ClearStorageImage(
+        CommandBuffer commandBuffer,
+        RenderTarget target)
+    {
+        if ((target.Usage & ImageUsageFlags.TransferDstBit) == 0)
+        {
+            throw new InvalidOperationException(
+                $"C5 reset target '{target.Name}' lacks transfer-destination usage.");
+        }
+
+        ClearColorValue zero = default;
+        var range = new ImageSubresourceRange
+        {
+            AspectMask = ImageAspectFlags.ColorBit,
+            BaseMipLevel = 0u,
+            LevelCount = 1u,
+            BaseArrayLayer = 0u,
+            LayerCount = 1u
+        };
+        _context.Api.CmdClearColorImage(
+            commandBuffer,
+            target.Image,
+            ImageLayout.General,
+            &zero,
+            1u,
+            &range);
+    }
+
     private void CreateDescriptorSetLayouts()
     {
         _resetSetLayout = CreateDescriptorSetLayout(
@@ -447,6 +736,25 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             new(0u, DescriptorType.StorageBuffer),
             new(1u, DescriptorType.StorageBuffer)
         ], "C5 Reset Descriptor Set Layout");
+        _prepareSetLayout = CreateDescriptorSetLayout(
+        [
+            new(0u, DescriptorType.CombinedImageSampler),
+            new(1u, DescriptorType.CombinedImageSampler),
+            new(2u, DescriptorType.CombinedImageSampler),
+            new(3u, DescriptorType.CombinedImageSampler),
+            new(4u, DescriptorType.StorageImage),
+            new(5u, DescriptorType.StorageImage),
+            new(6u, DescriptorType.StorageImage),
+            new(7u, DescriptorType.StorageImage),
+            new(8u, DescriptorType.StorageBuffer)
+            ,new(9u, DescriptorType.StorageBuffer)
+            ,new(10u, DescriptorType.StorageBuffer)
+            ,new(11u, DescriptorType.StorageBuffer)
+            ,new(12u, DescriptorType.StorageBuffer)
+            ,new(13u, DescriptorType.StorageBuffer)
+            ,new(14u, DescriptorType.StorageBuffer)
+            ,new(15u, DescriptorType.StorageBuffer)
+        ], "C5 Prepare Descriptor Set Layout");
         _traceSetLayout = CreateDescriptorSetLayout(
         [
             new(0u, DescriptorType.CombinedImageSampler),
@@ -456,7 +764,11 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             new(4u, DescriptorType.StorageImage),
             new(5u, DescriptorType.StorageBuffer),
             new(6u, DescriptorType.StorageBuffer),
-            new(7u, DescriptorType.StorageBuffer)
+            new(7u, DescriptorType.StorageBuffer),
+            new(8u, DescriptorType.StorageBuffer),
+            new(9u, DescriptorType.StorageBuffer),
+            new(10u, DescriptorType.CombinedImageSampler),
+            new(11u, DescriptorType.CombinedImageSampler)
         ], "C5 Trace Descriptor Set Layout");
         _temporalSetLayout = CreateDescriptorSetLayout(
         [
@@ -474,21 +786,47 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             new(11u, DescriptorType.CombinedImageSampler),
             new(12u, DescriptorType.CombinedImageSampler),
             new(13u, DescriptorType.StorageImage),
-            new(14u, DescriptorType.StorageBuffer)
+            new(14u, DescriptorType.StorageBuffer),
+            new(15u, DescriptorType.StorageBuffer),
+            new(16u, DescriptorType.CombinedImageSampler),
+            new(17u, DescriptorType.CombinedImageSampler),
+            new(18u, DescriptorType.CombinedImageSampler),
+            new(19u, DescriptorType.StorageBuffer),
+            new(20u, DescriptorType.StorageBuffer)
         ], "C5 Temporal Descriptor Set Layout");
         _filterSetLayout = CreateDescriptorSetLayout(
         [
             new(0u, DescriptorType.CombinedImageSampler),
             new(1u, DescriptorType.StorageBuffer),
             new(2u, DescriptorType.StorageImage),
-            new(3u, DescriptorType.CombinedImageSampler)
+            new(3u, DescriptorType.CombinedImageSampler),
+            new(4u, DescriptorType.StorageBuffer),
+            new(5u, DescriptorType.CombinedImageSampler)
         ], "C5 Filter Descriptor Set Layout");
+        _frequencySetLayout = CreateDescriptorSetLayout(
+        [
+            new(0u, DescriptorType.CombinedImageSampler),
+            new(1u, DescriptorType.CombinedImageSampler),
+            new(2u, DescriptorType.CombinedImageSampler),
+            new(3u, DescriptorType.StorageBuffer),
+            new(4u, DescriptorType.StorageImage),
+            new(5u, DescriptorType.StorageBuffer),
+            new(6u, DescriptorType.StorageBuffer)
+        ], "C5 Frequency Separation Descriptor Set Layout");
         _compositeSetLayout = CreateDescriptorSetLayout(
         [
             new(0u, DescriptorType.CombinedImageSampler),
             new(1u, DescriptorType.CombinedImageSampler),
             new(2u, DescriptorType.StorageBuffer),
-            new(3u, DescriptorType.StorageImage)
+            new(3u, DescriptorType.StorageImage),
+            new(4u, DescriptorType.StorageBuffer),
+            new(5u, DescriptorType.CombinedImageSampler),
+            new(6u, DescriptorType.CombinedImageSampler),
+            new(7u, DescriptorType.StorageBuffer),
+            new(8u, DescriptorType.CombinedImageSampler),
+            new(9u, DescriptorType.StorageBuffer),
+            new(10u, DescriptorType.CombinedImageSampler),
+            new(11u, DescriptorType.CombinedImageSampler)
         ], "C5 Composite Descriptor Set Layout");
     }
 
@@ -554,11 +892,13 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         if (result != Result.Success)
             throw new VulkanException("Failed to create C5 descriptor pool.", result);
 
-        _resetSet = AllocateDescriptorSet(_resetSetLayout);
         for (int i = 0; i < 2; i++)
         {
+            _resetSets[i] = AllocateDescriptorSet(_resetSetLayout);
+            _prepareSets[i] = AllocateDescriptorSet(_prepareSetLayout);
             _traceSets[i] = AllocateDescriptorSet(_traceSetLayout);
             _temporalSets[i] = AllocateDescriptorSet(_temporalSetLayout);
+            _frequencySets[i] = AllocateDescriptorSet(_frequencySetLayout);
             _compositeSets[i] = AllocateDescriptorSet(_compositeSetLayout);
         }
         for (int i = 0; i < _filterSets.Length; i++)
@@ -659,21 +999,95 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         }
     }
 
-    private void WriteResetDescriptorSet()
+    private void WriteResetDescriptorSet(int writeBank)
     {
-        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[2];
-        buffers[0] = BufferInfo(_buffers.HitMetadata);
+        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[3];
+        buffers[0] = BufferInfo(_buffers.HistoryMetadata(writeBank));
         buffers[1] = BufferInfo(_buffers.TileRecords);
         WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[2];
-        writes[0] = BufferWrite(_resetSet, 0u, &buffers[0]);
-        writes[1] = BufferWrite(_resetSet, 1u, &buffers[1]);
+        writes[0] = BufferWrite(_resetSets[writeBank], 0u, &buffers[0]);
+        writes[1] = BufferWrite(_resetSets[writeBank], 1u, &buffers[1]);
         _context.Api.UpdateDescriptorSets(_context.Device, 2u, writes, 0u, null);
+    }
+
+    private void WritePrepareDescriptorSet(int frameSlot)
+    {
+        DescriptorSet set = _prepareSets[frameSlot];
+        DescriptorImageInfo* images = stackalloc DescriptorImageInfo[8];
+        images[0] = SampledDepth(_targets.SceneDepth, _bindlessHeap.ScreenSampler);
+        images[1] = Sampled(_targets.NearFieldDirectSource!, _bindlessHeap.ScreenSampler);
+        images[2] = Sampled(_targets.NearFieldReceiverPayload!, _bindlessHeap.HiZSampler);
+        images[3] = Sampled(_targets.MotionVectors, _bindlessHeap.ScreenSampler);
+        images[4] = Storage(_targets.NearFieldPreparedDepthFootprint!);
+        images[5] = Storage(_targets.NearFieldPreparedReceiverPayload!);
+        images[6] = Storage(_targets.NearFieldPreparedMotion!);
+        images[7] = Storage(_targets.NearFieldSourceLuminance!);
+        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[8];
+        buffers[0] = BufferInfo(_buffers.ActiveTileAndIndirect);
+        ulong surfaceBankBytes = _layout.SurfaceTableBytes /
+            (ulong)RenderingConstants.FramesInFlight;
+        buffers[1] = BufferInfo(_buffers.SurfaceTable,
+            checked((ulong)frameSlot * surfaceBankBytes), surfaceBankBytes);
+        // Valid placeholders are replaced for this frame slot after its fence
+        // has completed and immediately before prepare records.
+        buffers[2] = buffers[1];
+        buffers[3] = buffers[1];
+        buffers[4] = BufferInfo(_buffers.TileRecords);
+        buffers[5] = buffers[1];
+        buffers[6] = buffers[1];
+        buffers[7] = buffers[1];
+        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[16];
+        for (uint binding = 0u; binding <= 3u; binding++)
+            writes[binding] = ImageWrite(set, binding,
+                DescriptorType.CombinedImageSampler, &images[binding]);
+        for (uint binding = 4u; binding <= 7u; binding++)
+            writes[binding] = ImageWrite(set, binding,
+                DescriptorType.StorageImage, &images[binding]);
+        writes[8] = BufferWrite(set, 8u, &buffers[0]);
+        writes[9] = BufferWrite(set, 9u, &buffers[1]);
+        writes[10] = BufferWrite(set, 10u, &buffers[2]);
+        writes[11] = BufferWrite(set, 11u, &buffers[3]);
+        writes[12] = BufferWrite(set, 12u, &buffers[4]);
+        writes[13] = BufferWrite(set, 13u, &buffers[5]);
+        writes[14] = BufferWrite(set, 14u, &buffers[6]);
+        writes[15] = BufferWrite(set, 15u, &buffers[7]);
+        _context.Api.UpdateDescriptorSets(_context.Device, 16u, writes, 0u, null);
+    }
+
+    private void WritePrepareSceneDescriptors(
+        int frameSlot,
+        BufferHandle objectData,
+        BufferHandle materialData,
+        BufferHandle foliagePrototypes,
+        BufferHandle foliagePatches,
+        BufferHandle foliageClusters)
+    {
+        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[5];
+        buffers[0] = BufferInfo(objectData);
+        buffers[1] = BufferInfo(materialData);
+        BufferHandle fallback = _buffers.SurfaceTable;
+        buffers[2] = BufferInfo(foliagePrototypes.IsValid
+            ? foliagePrototypes
+            : fallback);
+        buffers[3] = BufferInfo(foliagePatches.IsValid
+            ? foliagePatches
+            : fallback);
+        buffers[4] = BufferInfo(foliageClusters.IsValid
+            ? foliageClusters
+            : fallback);
+        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[5];
+        writes[0] = BufferWrite(_prepareSets[frameSlot], 10u, &buffers[0]);
+        writes[1] = BufferWrite(_prepareSets[frameSlot], 11u, &buffers[1]);
+        writes[2] = BufferWrite(_prepareSets[frameSlot], 13u, &buffers[2]);
+        writes[3] = BufferWrite(_prepareSets[frameSlot], 14u, &buffers[3]);
+        writes[4] = BufferWrite(_prepareSets[frameSlot], 15u, &buffers[4]);
+        _context.Api.UpdateDescriptorSets(_context.Device, 5u, writes, 0u, null);
     }
 
     private void WriteTraceDescriptorSet(int frameSlot)
     {
         DescriptorSet set = _traceSets[frameSlot];
-        DescriptorImageInfo* images = stackalloc DescriptorImageInfo[5];
+        DescriptorImageInfo* images = stackalloc DescriptorImageInfo[8];
         images[0] = Sampled(_targets.NearFieldDirectSource!, _bindlessHeap.ScreenSampler);
         images[1] = new DescriptorImageInfo
         {
@@ -681,14 +1095,23 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             ImageView = _hiZ.FullView,
             ImageLayout = ImageLayout.ShaderReadOnlyOptimal
         };
-        images[2] = SampledDepth(_targets.SceneDepth, _bindlessHeap.ScreenSampler);
-        images[3] = Sampled(_targets.NearFieldReceiverPayload!, _bindlessHeap.HiZSampler);
+        images[2] = Sampled(_targets.NearFieldPreparedDepthFootprint!,
+            _bindlessHeap.HiZSampler);
+        images[3] = Sampled(_targets.NearFieldPreparedReceiverPayload!,
+            _bindlessHeap.HiZSampler);
         images[4] = Storage(_targets.NearFieldResidualRaw!);
-        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[4];
-        buffers[0] = BufferInfo(_buffers.HitMetadata);
+        images[5] = Sampled(_targets.NearFieldReceiverPayload!, _bindlessHeap.HiZSampler);
+        images[6] = Sampled(_targets.NearFieldSourceLuminance!, _bindlessHeap.ScreenSampler);
+        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[5];
+        buffers[0] = BufferInfo(_buffers.HistoryMetadata(frameSlot));
         buffers[1] = BufferInfo(_buffers.TileRecords);
         buffers[2] = BufferInfo(_buffers.TraceFrameConstants(frameSlot));
-        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[8];
+        ulong surfaceBankBytes = _layout.SurfaceTableBytes /
+            (ulong)RenderingConstants.FramesInFlight;
+        buffers[3] = BufferInfo(_buffers.SurfaceTable,
+            checked((ulong)frameSlot * surfaceBankBytes), surfaceBankBytes);
+        buffers[4] = BufferInfo(_buffers.ActiveTileAndIndirect);
+        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[12];
         for (uint binding = 0u; binding <= 3u; binding++)
             writes[binding] = ImageWrite(set, binding,
                 DescriptorType.CombinedImageSampler, &images[binding]);
@@ -696,7 +1119,13 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         writes[5] = BufferWrite(set, 5u, &buffers[0]);
         writes[6] = BufferWrite(set, 6u, &buffers[1]);
         writes[7] = BufferWrite(set, 7u, &buffers[2]);
-        _context.Api.UpdateDescriptorSets(_context.Device, 8u, writes, 0u, null);
+        writes[8] = BufferWrite(set, 8u, &buffers[3]);
+        writes[9] = BufferWrite(set, 9u, &buffers[4]);
+        writes[10] = ImageWrite(set, 10u,
+            DescriptorType.CombinedImageSampler, &images[5]);
+        writes[11] = ImageWrite(set, 11u,
+            DescriptorType.CombinedImageSampler, &images[6]);
+        _context.Api.UpdateDescriptorSets(_context.Device, 12u, writes, 0u, null);
     }
 
     private void WriteTemporalDescriptorSet(int writeBank)
@@ -712,7 +1141,7 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         RenderTarget validityWrite = HistoryValidity(writeBank);
         RenderTarget normalWrite = HistoryNormals(writeBank);
 
-        DescriptorImageInfo* images = stackalloc DescriptorImageInfo[11];
+        DescriptorImageInfo* images = stackalloc DescriptorImageInfo[14];
         images[0] = Sampled(_targets.NearFieldResidualRaw!, _bindlessHeap.ScreenSampler);
         images[1] = Sampled(historyRead, _bindlessHeap.ScreenSampler);
         images[2] = Sampled(momentsRead, _bindlessHeap.ScreenSampler);
@@ -724,17 +1153,27 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         images[4] = Storage(historyWrite);
         images[5] = Storage(momentsWrite);
         images[6] = Storage(validityWrite);
-        images[7] = Sampled(_targets.MotionVectors, _bindlessHeap.ScreenSampler);
-        images[8] = Sampled(_targets.NearFieldReceiverPayload!, _bindlessHeap.HiZSampler);
+        images[7] = Sampled(_targets.NearFieldPreparedMotion!, _bindlessHeap.ScreenSampler);
+        images[8] = Sampled(_targets.NearFieldPreparedReceiverPayload!,
+            _bindlessHeap.HiZSampler);
         images[9] = Sampled(normalRead, _bindlessHeap.ScreenSampler);
         images[10] = Storage(normalWrite);
-        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[4];
-        buffers[0] = BufferInfo(_buffers.HitMetadata);
+        images[11] = Sampled(_targets.NearFieldDirectSource!, _bindlessHeap.ScreenSampler);
+        images[12] = SampledDepth(_targets.SceneDepth, _bindlessHeap.ScreenSampler);
+        images[13] = Sampled(_targets.NearFieldReceiverPayload!, _bindlessHeap.HiZSampler);
+        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[7];
+        buffers[0] = BufferInfo(_buffers.HistoryMetadata(writeBank));
         buffers[1] = BufferInfo(_buffers.HistoryMetadata(readBank));
         buffers[2] = BufferInfo(_buffers.HistoryMetadata(writeBank));
         buffers[3] = BufferInfo(_buffers.TileRecords);
+        buffers[4] = BufferInfo(_buffers.ActiveTileAndIndirect);
+        buffers[5] = BufferInfo(_buffers.TraceFrameConstants(writeBank));
+        ulong surfaceBankBytes = _layout.SurfaceTableBytes /
+            (ulong)RenderingConstants.FramesInFlight;
+        buffers[6] = BufferInfo(_buffers.SurfaceTable,
+            checked((ulong)writeBank * surfaceBankBytes), surfaceBankBytes);
 
-        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[15];
+        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[21];
         writes[0] = ImageWrite(set, 0u, DescriptorType.CombinedImageSampler, &images[0]);
         writes[1] = BufferWrite(set, 1u, &buffers[0]);
         writes[2] = ImageWrite(set, 2u, DescriptorType.CombinedImageSampler, &images[1]);
@@ -750,7 +1189,16 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         writes[12] = ImageWrite(set, 12u, DescriptorType.CombinedImageSampler, &images[9]);
         writes[13] = ImageWrite(set, 13u, DescriptorType.StorageImage, &images[10]);
         writes[14] = BufferWrite(set, 14u, &buffers[3]);
-        _context.Api.UpdateDescriptorSets(_context.Device, 15u, writes, 0u, null);
+        writes[15] = BufferWrite(set, 15u, &buffers[4]);
+        writes[16] = ImageWrite(set, 16u,
+            DescriptorType.CombinedImageSampler, &images[11]);
+        writes[17] = ImageWrite(set, 17u,
+            DescriptorType.CombinedImageSampler, &images[12]);
+        writes[18] = ImageWrite(set, 18u,
+            DescriptorType.CombinedImageSampler, &images[13]);
+        writes[19] = BufferWrite(set, 19u, &buffers[5]);
+        writes[20] = BufferWrite(set, 20u, &buffers[6]);
+        _context.Api.UpdateDescriptorSets(_context.Device, 21u, writes, 0u, null);
     }
 
     private void WriteFilterDescriptorSet(int writeBank, int iteration)
@@ -760,41 +1208,102 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             ? HistoryRadiance(writeBank)
             : FilterScratch((iteration - 1) & 1);
         RenderTarget output = FilterScratch(iteration & 1);
-        DescriptorImageInfo* images = stackalloc DescriptorImageInfo[3];
+        DescriptorImageInfo* images = stackalloc DescriptorImageInfo[4];
         images[0] = Sampled(input, _bindlessHeap.ScreenSampler);
         images[1] = Storage(output);
-        images[2] = Sampled(_targets.NearFieldReceiverPayload!, _bindlessHeap.HiZSampler);
-        DescriptorBufferInfo metadata = BufferInfo(_buffers.HistoryMetadata(writeBank));
-        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[4];
+        images[2] = Sampled(_targets.NearFieldPreparedReceiverPayload!,
+            _bindlessHeap.HiZSampler);
+        images[3] = Sampled(HistoryMoments(writeBank),
+            _bindlessHeap.ScreenSampler);
+        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[2];
+        buffers[0] = BufferInfo(_buffers.HistoryMetadata(writeBank));
+        buffers[1] = BufferInfo(_buffers.ActiveTileAndIndirect);
+        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[7];
         writes[0] = ImageWrite(set, 0u, DescriptorType.CombinedImageSampler, &images[0]);
-        writes[1] = BufferWrite(set, 1u, &metadata);
+        writes[1] = BufferWrite(set, 1u, &buffers[0]);
         writes[2] = ImageWrite(set, 2u, DescriptorType.StorageImage, &images[1]);
         writes[3] = ImageWrite(set, 3u, DescriptorType.CombinedImageSampler, &images[2]);
-        _context.Api.UpdateDescriptorSets(_context.Device, 4u, writes, 0u, null);
+        writes[4] = BufferWrite(set, 4u, &buffers[1]);
+        writes[5] = ImageWrite(set, 5u,
+            DescriptorType.CombinedImageSampler, &images[3]);
+        _context.Api.UpdateDescriptorSets(_context.Device, 6u, writes, 0u, null);
+    }
+
+    private void WriteFrequencyDescriptorSet(int writeBank)
+    {
+        DescriptorSet set = _frequencySets[writeBank];
+        RenderTarget nearEstimate = _configuration.FilterIterationCount == 0
+            ? HistoryRadiance(writeBank)
+            : FilterScratch((_configuration.FilterIterationCount - 1) & 1);
+        DescriptorImageInfo* images = stackalloc DescriptorImageInfo[4];
+        images[0] = Sampled(nearEstimate, _bindlessHeap.ScreenSampler);
+        images[1] = Sampled(_targets.NearFieldPreparedDepthFootprint!,
+            _bindlessHeap.HiZSampler);
+        images[2] = Sampled(_targets.NearFieldPreparedReceiverPayload!,
+            _bindlessHeap.HiZSampler);
+        images[3] = Storage(_targets.NearFieldResidualRaw!);
+        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[3];
+        buffers[0] = BufferInfo(_buffers.HistoryMetadata(writeBank));
+        buffers[1] = BufferInfo(_buffers.ActiveTileAndIndirect);
+        buffers[2] = BufferInfo(_buffers.TraceFrameConstants(writeBank));
+        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[7];
+        writes[0] = ImageWrite(set, 0u, DescriptorType.CombinedImageSampler, &images[0]);
+        writes[1] = ImageWrite(set, 1u, DescriptorType.CombinedImageSampler, &images[1]);
+        writes[2] = ImageWrite(set, 2u, DescriptorType.CombinedImageSampler, &images[2]);
+        writes[3] = BufferWrite(set, 3u, &buffers[0]);
+        writes[4] = ImageWrite(set, 4u, DescriptorType.StorageImage, &images[3]);
+        writes[5] = BufferWrite(set, 5u, &buffers[1]);
+        writes[6] = BufferWrite(set, 6u, &buffers[2]);
+        _context.Api.UpdateDescriptorSets(_context.Device, 7u, writes, 0u, null);
     }
 
     private void WriteCompositeDescriptorSet(int writeBank)
     {
         DescriptorSet set = _compositeSets[writeBank];
-        RenderTarget residual = _configuration.FilterIterationCount == 0
-            ? HistoryRadiance(writeBank)
-            : FilterScratch((_configuration.FilterIterationCount - 1) & 1);
-        DescriptorImageInfo* images = stackalloc DescriptorImageInfo[3];
+        DescriptorImageInfo* images = stackalloc DescriptorImageInfo[8];
         images[0] = new DescriptorImageInfo
         {
             Sampler = _bindlessHeap.ScreenSampler,
             ImageView = _targets.SceneColor.View,
             ImageLayout = ImageLayout.General
         };
-        images[1] = Sampled(residual, _bindlessHeap.ScreenSampler);
+        images[1] = Sampled(_targets.NearFieldResidualRaw!, _bindlessHeap.ScreenSampler);
         images[2] = Storage(_targets.SceneColor);
-        DescriptorBufferInfo metadata = BufferInfo(_buffers.HistoryMetadata(writeBank));
-        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[4];
+        images[3] = Sampled(_targets.NearFieldReceiverPayload!, _bindlessHeap.HiZSampler);
+        images[4] = SampledDepth(_targets.SceneDepth, _bindlessHeap.ScreenSampler);
+        images[5] = Sampled(_targets.NearFieldPreparedReceiverPayload!,
+            _bindlessHeap.HiZSampler);
+        images[6] = Sampled(_targets.NearFieldDirectSource!,
+            _bindlessHeap.ScreenSampler);
+        images[7] = Sampled(HistoryValidity(writeBank),
+            _bindlessHeap.HiZSampler);
+        DescriptorBufferInfo* buffers = stackalloc DescriptorBufferInfo[4];
+        buffers[0] = BufferInfo(_buffers.HistoryMetadata(writeBank));
+        buffers[1] = BufferInfo(_buffers.ActiveTileAndIndirect);
+        ulong surfaceBankBytes = _layout.SurfaceTableBytes /
+            (ulong)RenderingConstants.FramesInFlight;
+        buffers[2] = BufferInfo(_buffers.SurfaceTable,
+            checked((ulong)writeBank * surfaceBankBytes), surfaceBankBytes);
+        buffers[3] = BufferInfo(_buffers.TraceFrameConstants(writeBank));
+        WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[12];
         writes[0] = ImageWrite(set, 0u, DescriptorType.CombinedImageSampler, &images[0]);
         writes[1] = ImageWrite(set, 1u, DescriptorType.CombinedImageSampler, &images[1]);
-        writes[2] = BufferWrite(set, 2u, &metadata);
+        writes[2] = BufferWrite(set, 2u, &buffers[0]);
         writes[3] = ImageWrite(set, 3u, DescriptorType.StorageImage, &images[2]);
-        _context.Api.UpdateDescriptorSets(_context.Device, 4u, writes, 0u, null);
+        writes[4] = BufferWrite(set, 4u, &buffers[1]);
+        writes[5] = ImageWrite(set, 5u,
+            DescriptorType.CombinedImageSampler, &images[3]);
+        writes[6] = ImageWrite(set, 6u,
+            DescriptorType.CombinedImageSampler, &images[4]);
+        writes[7] = BufferWrite(set, 7u, &buffers[2]);
+        writes[8] = ImageWrite(set, 8u,
+            DescriptorType.CombinedImageSampler, &images[5]);
+        writes[9] = BufferWrite(set, 9u, &buffers[3]);
+        writes[10] = ImageWrite(set, 10u,
+            DescriptorType.CombinedImageSampler, &images[6]);
+        writes[11] = ImageWrite(set, 11u,
+            DescriptorType.CombinedImageSampler, &images[7]);
+        _context.Api.UpdateDescriptorSets(_context.Device, 12u, writes, 0u, null);
     }
 
     private DescriptorBufferInfo BufferInfo(BufferHandle handle) => new()
@@ -802,6 +1311,16 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
         Buffer = _bufferManager.GetBuffer(handle),
         Offset = 0UL,
         Range = _bufferManager.GetBufferSize(handle)
+    };
+
+    private DescriptorBufferInfo BufferInfo(
+        BufferHandle handle,
+        ulong offset,
+        ulong range) => new()
+    {
+        Buffer = _bufferManager.GetBuffer(handle),
+        Offset = offset,
+        Range = range
     };
 
     private static DescriptorImageInfo Sampled(RenderTarget target, Sampler sampler) => new()
@@ -894,21 +1413,27 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
             return;
         _disposed = true;
         DestroyPipeline(_resetPipeline);
+        DestroyPipeline(_preparePipeline);
         DestroyPipeline(_tracePipeline);
         DestroyPipeline(_temporalPipeline);
         DestroyPipeline(_filterPipeline);
+        DestroyPipeline(_frequencyPipeline);
         DestroyPipeline(_compositePipeline);
         DestroyPipelineLayout(_resetPipelineLayout);
+        DestroyPipelineLayout(_preparePipelineLayout);
         DestroyPipelineLayout(_tracePipelineLayout);
         DestroyPipelineLayout(_temporalPipelineLayout);
         DestroyPipelineLayout(_filterPipelineLayout);
+        DestroyPipelineLayout(_frequencyPipelineLayout);
         DestroyPipelineLayout(_compositePipelineLayout);
         if (_descriptorPool.Handle != 0)
             _context.Api.DestroyDescriptorPool(_context.Device, _descriptorPool, null);
         DestroyDescriptorSetLayout(_resetSetLayout);
+        DestroyDescriptorSetLayout(_prepareSetLayout);
         DestroyDescriptorSetLayout(_traceSetLayout);
         DestroyDescriptorSetLayout(_temporalSetLayout);
         DestroyDescriptorSetLayout(_filterSetLayout);
+        DestroyDescriptorSetLayout(_frequencySetLayout);
         DestroyDescriptorSetLayout(_compositeSetLayout);
         if (_pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
@@ -945,7 +1470,12 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
 
 internal abstract class SimpleDdgiNearFieldResidualGraphPass : RenderPassBase
 {
-    protected readonly SimpleDdgiNearFieldResidualVulkanRuntime Runtime;
+    private readonly Func<SimpleDdgiNearFieldResidualVulkanRuntime?>
+        _runtimeProvider;
+
+    protected SimpleDdgiNearFieldResidualVulkanRuntime Runtime =>
+        _runtimeProvider() ?? throw new InvalidOperationException(
+            "The active C5 resource generation is unavailable.");
 
     protected SimpleDdgiNearFieldResidualGraphPass(
         string name,
@@ -953,12 +1483,23 @@ internal abstract class SimpleDdgiNearFieldResidualGraphPass : RenderPassBase
         SwapchainManager swapchain,
         BindlessHeap bindlessHeap,
         SimpleDdgiNearFieldResidualVulkanRuntime runtime)
+        : this(name, context, swapchain, bindlessHeap, () => runtime)
+    {
+    }
+
+    protected SimpleDdgiNearFieldResidualGraphPass(
+        string name,
+        VulkanContext context,
+        SwapchainManager swapchain,
+        BindlessHeap bindlessHeap,
+        Func<SimpleDdgiNearFieldResidualVulkanRuntime?> runtimeProvider)
         : base(name, context, swapchain, bindlessHeap) =>
-        Runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _runtimeProvider = runtimeProvider ??
+            throw new ArgumentNullException(nameof(runtimeProvider));
 
     public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
     public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData) =>
-        Runtime.CanExecute(sceneData);
+        _runtimeProvider()?.CanExecute(sceneData) == true;
     public override void Initialize()
     {
     }
@@ -966,7 +1507,8 @@ internal abstract class SimpleDdgiNearFieldResidualGraphPass : RenderPassBase
     {
         yield break;
     }
-    public override void OnSwapchainRecreated() => Runtime.OnRenderTargetsRecreated();
+    public override void OnSwapchainRecreated() =>
+        _runtimeProvider()?.OnRenderTargetsRecreated();
 }
 
 internal sealed class SimpleDdgiNearFieldResidualResetPass :
@@ -977,6 +1519,14 @@ internal sealed class SimpleDdgiNearFieldResidualResetPass :
         SimpleDdgiNearFieldResidualVulkanRuntime runtime)
         : base(SimpleDdgiNearFieldResidualGpuPassNames.Reset, context,
             swapchain, bindlessHeap, runtime)
+    {
+    }
+
+    public SimpleDdgiNearFieldResidualResetPass(VulkanContext context,
+        SwapchainManager swapchain, BindlessHeap bindlessHeap,
+        Func<SimpleDdgiNearFieldResidualVulkanRuntime?> runtimeProvider)
+        : base(SimpleDdgiNearFieldResidualGpuPassNames.Reset, context,
+            swapchain, bindlessHeap, runtimeProvider)
     {
     }
 
@@ -995,8 +1545,39 @@ internal sealed class SimpleDdgiNearFieldResidualTracePass :
     {
     }
 
+    public SimpleDdgiNearFieldResidualTracePass(VulkanContext context,
+        SwapchainManager swapchain, BindlessHeap bindlessHeap,
+        Func<SimpleDdgiNearFieldResidualVulkanRuntime?> runtimeProvider)
+        : base(SimpleDdgiNearFieldResidualGpuPassNames.Trace, context,
+            swapchain, bindlessHeap, runtimeProvider)
+    {
+    }
+
     public override void Execute(CommandBuffer cmd, int frameIndex,
         SceneRenderingData sceneData) => Runtime.RecordTrace(cmd, frameIndex, sceneData);
+}
+
+internal sealed class SimpleDdgiNearFieldResidualPreparePass :
+    SimpleDdgiNearFieldResidualGraphPass
+{
+    public SimpleDdgiNearFieldResidualPreparePass(VulkanContext context,
+        SwapchainManager swapchain, BindlessHeap bindlessHeap,
+        SimpleDdgiNearFieldResidualVulkanRuntime runtime)
+        : base(SimpleDdgiNearFieldResidualGpuPassNames.Prepare, context,
+            swapchain, bindlessHeap, runtime)
+    {
+    }
+
+    public SimpleDdgiNearFieldResidualPreparePass(VulkanContext context,
+        SwapchainManager swapchain, BindlessHeap bindlessHeap,
+        Func<SimpleDdgiNearFieldResidualVulkanRuntime?> runtimeProvider)
+        : base(SimpleDdgiNearFieldResidualGpuPassNames.Prepare, context,
+            swapchain, bindlessHeap, runtimeProvider)
+    {
+    }
+
+    public override void Execute(CommandBuffer cmd, int frameIndex,
+        SceneRenderingData sceneData) => Runtime.RecordPrepare(cmd, frameIndex, sceneData);
 }
 
 internal sealed class SimpleDdgiNearFieldResidualTemporalPass :
@@ -1007,6 +1588,14 @@ internal sealed class SimpleDdgiNearFieldResidualTemporalPass :
         SimpleDdgiNearFieldResidualVulkanRuntime runtime)
         : base(SimpleDdgiNearFieldResidualGpuPassNames.Temporal, context,
             swapchain, bindlessHeap, runtime)
+    {
+    }
+
+    public SimpleDdgiNearFieldResidualTemporalPass(VulkanContext context,
+        SwapchainManager swapchain, BindlessHeap bindlessHeap,
+        Func<SimpleDdgiNearFieldResidualVulkanRuntime?> runtimeProvider)
+        : base(SimpleDdgiNearFieldResidualGpuPassNames.Temporal, context,
+            swapchain, bindlessHeap, runtimeProvider)
     {
     }
 
@@ -1028,6 +1617,16 @@ internal sealed class SimpleDdgiNearFieldResidualFilterPass :
         _iteration = iteration;
     }
 
+    public SimpleDdgiNearFieldResidualFilterPass(VulkanContext context,
+        SwapchainManager swapchain, BindlessHeap bindlessHeap,
+        Func<SimpleDdgiNearFieldResidualVulkanRuntime?> runtimeProvider,
+        int iteration)
+        : base(SimpleDdgiNearFieldResidualGpuPassNames.FilterIteration(iteration),
+            context, swapchain, bindlessHeap, runtimeProvider)
+    {
+        _iteration = iteration;
+    }
+
     public override void Execute(CommandBuffer cmd, int frameIndex,
         SceneRenderingData sceneData) =>
         Runtime.RecordFilter(cmd, frameIndex, sceneData, _iteration);
@@ -1044,6 +1643,40 @@ internal sealed class SimpleDdgiNearFieldResidualCompositePass :
     {
     }
 
+    public SimpleDdgiNearFieldResidualCompositePass(VulkanContext context,
+        SwapchainManager swapchain, BindlessHeap bindlessHeap,
+        Func<SimpleDdgiNearFieldResidualVulkanRuntime?> runtimeProvider)
+        : base(SimpleDdgiNearFieldResidualGpuPassNames.Composite, context,
+            swapchain, bindlessHeap, runtimeProvider)
+    {
+    }
+
     public override void Execute(CommandBuffer cmd, int frameIndex,
         SceneRenderingData sceneData) => Runtime.RecordComposite(cmd, frameIndex, sceneData);
+}
+
+internal sealed class SimpleDdgiNearFieldResidualFrequencySeparationPass :
+    SimpleDdgiNearFieldResidualGraphPass
+{
+    public SimpleDdgiNearFieldResidualFrequencySeparationPass(VulkanContext context,
+        SwapchainManager swapchain, BindlessHeap bindlessHeap,
+        SimpleDdgiNearFieldResidualVulkanRuntime runtime)
+        : base(SimpleDdgiNearFieldResidualGpuPassNames.FrequencySeparation,
+            context, swapchain, bindlessHeap, runtime)
+    {
+    }
+
+    public SimpleDdgiNearFieldResidualFrequencySeparationPass(
+        VulkanContext context,
+        SwapchainManager swapchain,
+        BindlessHeap bindlessHeap,
+        Func<SimpleDdgiNearFieldResidualVulkanRuntime?> runtimeProvider)
+        : base(SimpleDdgiNearFieldResidualGpuPassNames.FrequencySeparation,
+            context, swapchain, bindlessHeap, runtimeProvider)
+    {
+    }
+
+    public override void Execute(CommandBuffer cmd, int frameIndex,
+        SceneRenderingData sceneData) =>
+        Runtime.RecordFrequencySeparation(cmd, frameIndex, sceneData);
 }

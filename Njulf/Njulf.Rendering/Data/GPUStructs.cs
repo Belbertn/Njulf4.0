@@ -300,6 +300,13 @@ namespace Njulf.Rendering.Data
         public int SkinnedVertexOffset;
         public int SkinningEnabled;
         public Matrix4x4 PreviousWorldMatrix;
+        // C5 V12 publication metadata. The visible-object index remains the
+        // frame-local 16-bit surface token; these fields make the table entry
+        // stable across compaction, sorting, and scene rebuilds.
+        public uint NearFieldStableObjectId;
+        public uint NearFieldStableMaterialId;
+        public uint NearFieldPackedObjectMaterialRevisions;
+        public uint NearFieldCoverageMotionFlags;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -612,11 +619,11 @@ namespace Njulf.Rendering.Data
         public uint PrototypeIndex;
         public uint ClusterOffset;
         public uint ClusterCount;
-        public uint DensityTextureIndex;
+        public uint NearFieldStableObjectId;
         public uint Seed;
         public uint Flags;
-        public uint Padding0;
-        public uint Padding1;
+        public uint NearFieldStableMaterialId;
+        public uint NearFieldPackedObjectMaterialRevisions;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

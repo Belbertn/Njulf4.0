@@ -1,0 +1,353 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "ddgi_near_field_residual.glsl"
+
+#ifndef NJULF_C5_SOURCE_GUIDING
+#define NJULF_C5_SOURCE_GUIDING 1
+#endif
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D fullDepthInput;
+layout(set = 0, binding = 1) uniform sampler2D fullSourceInput;
+layout(set = 0, binding = 2) uniform usampler2D fullPayloadInput;
+layout(set = 0, binding = 3) uniform sampler2D fullMotionInput;
+layout(rg32f, set = 0, binding = 4) uniform writeonly image2D preparedDepthFootprintOutput;
+layout(rgba32ui, set = 0, binding = 5) uniform writeonly uimage2D preparedPayloadOutput;
+layout(rg16f, set = 0, binding = 6) uniform writeonly image2D preparedMotionOutput;
+#if NJULF_C5_SOURCE_GUIDING
+layout(r16f, set = 0, binding = 7) uniform writeonly image2D sourceLuminanceOutput;
+#endif
+layout(std430, set = 0, binding = 8) buffer ActiveTileAndIndirectBuffer
+{
+    uint words[];
+} activeTiles;
+layout(std430, set = 0, binding = 9) writeonly buffer SurfaceTableBuffer
+{
+    SimpleDdgiNearFieldSurfaceEntry values[];
+} surfaceTable;
+layout(std430, set = 0, binding = 10) readonly buffer SceneObjectWordBuffer
+{
+    uint words[];
+} sceneObjects;
+layout(std430, set = 0, binding = 11) readonly buffer SceneMaterialWordBuffer
+{
+    uint words[];
+} sceneMaterials;
+layout(std430, set = 0, binding = 12) buffer PrepareTelemetryHeaderBuffer
+{
+    uint words[];
+} prepareTelemetry;
+layout(std430, set = 0, binding = 13) readonly buffer FoliagePrototypeWordBuffer
+{
+    uint words[];
+} foliagePrototypes;
+layout(std430, set = 0, binding = 14) readonly buffer FoliagePatchWordBuffer
+{
+    uint words[];
+} foliagePatches;
+layout(std430, set = 0, binding = 15) readonly buffer FoliageClusterWordBuffer
+{
+    uint words[];
+} foliageClusters;
+
+layout(push_constant) uniform NearFieldPreparePushBlock
+{
+    SimpleDdgiNearFieldResidualPreparePushConstants pc;
+};
+
+shared uint tileHasReceiver;
+shared uint tileIntersectsTrace;
+
+float PositiveLinearDepth(float storedDepth)
+{
+    float nearPlane = max(pc.nearPlane, 0.001);
+    float farPlane = max(pc.farPlane, nearPlane + 0.01);
+    bool reversedZ = SimpleDdgiNearFieldHasFlag(
+        pc.flags, SIMPLE_DDGI_NEAR_FIELD_FLAG_REVERSED_Z);
+    float denominator = reversedZ
+        ? nearPlane + storedDepth * (farPlane - nearPlane)
+        : farPlane - storedDepth * (farPlane - nearPlane);
+    return nearPlane * farPlane / max(denominator, 1.0e-7);
+}
+
+bool ValidPayloadAndSource(uvec4 payload, vec4 source)
+{
+    vec4 normals;
+    uint surfaceToken;
+    vec3 diffuseBase;
+    vec3 dielectricF0;
+    SimpleDdgiNearFieldDecodeReceiverPayload(
+        payload, normals, surfaceToken, diffuseBase, dielectricF0);
+    return surfaceToken < SIMPLE_DDGI_NEAR_FIELD_MAX_SURFACE_TABLE_ENTRIES &&
+        source.a > 0.0 && SimpleDdgiNearFieldFinite(source.rgb) &&
+        SimpleDdgiNearFieldFinite(source.a) &&
+        dot(SimpleDdgiNearFieldDecodeOctNormal(normals.xy),
+            SimpleDdgiNearFieldDecodeOctNormal(normals.xy)) > 0.0 &&
+        dot(SimpleDdgiNearFieldDecodeOctNormal(normals.zw),
+            SimpleDdgiNearFieldDecodeOctNormal(normals.zw)) > 0.0;
+}
+
+bool PublishSurfaceEntry(uvec4 payload)
+{
+    vec4 ignoredNormals;
+    uint token;
+    vec3 ignoredDiffuse;
+    vec3 ignoredF0;
+    SimpleDdgiNearFieldDecodeReceiverPayload(
+        payload, ignoredNormals, token, ignoredDiffuse, ignoredF0);
+    uint foliageTokenBase = pc.flags >> 16u;
+    if (token >= foliageTokenBase)
+    {
+        const uint PROTOTYPE_STRIDE_WORDS = 24u;
+        const uint PATCH_STRIDE_WORDS = 16u;
+        const uint CLUSTER_STRIDE_WORDS = 16u;
+        uint clusterIndex = token - foliageTokenBase;
+        uint clusterBase = clusterIndex * CLUSTER_STRIDE_WORDS;
+        if (token >= SIMPLE_DDGI_NEAR_FIELD_MAX_SURFACE_TABLE_ENTRIES ||
+            token >= uint(surfaceTable.values.length()) ||
+            clusterBase + CLUSTER_STRIDE_WORDS >
+                uint(foliageClusters.words.length()))
+            return false;
+        uint patchIndex = foliageClusters.words[clusterBase + 12u];
+        uint patchBase = patchIndex * PATCH_STRIDE_WORDS;
+        if (patchBase + PATCH_STRIDE_WORDS >
+            uint(foliagePatches.words.length()))
+            return false;
+        uint prototypeIndex = foliagePatches.words[patchBase + 8u];
+        uint prototypeBase = prototypeIndex * PROTOTYPE_STRIDE_WORDS;
+        if (prototypeBase + PROTOTYPE_STRIDE_WORDS >
+            uint(foliagePrototypes.words.length()))
+            return false;
+        uint stableObjectId = foliagePatches.words[patchBase + 11u];
+        uint stableMaterialId = foliagePatches.words[patchBase + 14u];
+        uint packedRevisions = foliagePatches.words[patchBase + 15u];
+        uint geometryMode = foliagePrototypes.words[prototypeBase + 8u];
+        bool motionValid = SimpleDdgiNearFieldHasFlag(
+            pc.flags, SIMPLE_DDGI_NEAR_FIELD_FLAG_FOLIAGE_MOTION_VALID);
+        if (stableObjectId == 0u || stableMaterialId == 0u ||
+            (packedRevisions & 0xffffu) == 0u ||
+            (packedRevisions >> 16u) == 0u || !motionValid)
+            return false;
+        SimpleDdgiNearFieldSurfaceEntry foliageEntry;
+        foliageEntry.stableObjectId = stableObjectId;
+        foliageEntry.stableMaterialId = stableMaterialId;
+        foliageEntry.packedObjectMaterialRevisions = packedRevisions;
+        foliageEntry.coverageMotionFlags =
+            (1u << 1u) | // alpha-mask coverage
+            (geometryMode == 1u ? (1u << 2u) : (1u << 3u)) |
+            (1u << 4u) | (1u << 5u); // receiver and hit motion contracts
+        atomicExchange(surfaceTable.values[token].stableObjectId,
+            foliageEntry.stableObjectId);
+        atomicExchange(surfaceTable.values[token].stableMaterialId,
+            foliageEntry.stableMaterialId);
+        atomicExchange(
+            surfaceTable.values[token].packedObjectMaterialRevisions,
+            foliageEntry.packedObjectMaterialRevisions);
+        atomicExchange(surfaceTable.values[token].coverageMotionFlags,
+            foliageEntry.coverageMotionFlags);
+        return true;
+    }
+    const uint OBJECT_STRIDE_WORDS = 56u;
+    const uint MATERIAL_STRIDE_WORDS = 80u;
+    const uint MATERIAL_REVISION_WORD = 59u;
+    uint objectBase = token * OBJECT_STRIDE_WORDS;
+    if (token >= SIMPLE_DDGI_NEAR_FIELD_MAX_SURFACE_TABLE_ENTRIES ||
+        token >= uint(surfaceTable.values.length()) ||
+        objectBase + OBJECT_STRIDE_WORDS > uint(sceneObjects.words.length()))
+        return false;
+    int materialIndex = int(sceneObjects.words[objectBase + 33u]);
+    if (materialIndex < 0)
+        return false;
+    uint materialBase = uint(materialIndex) * MATERIAL_STRIDE_WORDS;
+    if (materialBase + MATERIAL_STRIDE_WORDS >
+        uint(sceneMaterials.words.length()))
+        return false;
+
+    uint stableObjectId = sceneObjects.words[objectBase + 52u];
+    uint stableMaterialId = sceneObjects.words[objectBase + 53u];
+    uint packedRevisions = sceneObjects.words[objectBase + 54u];
+    uint coverageFlags = sceneObjects.words[objectBase + 55u];
+    if (stableObjectId == 0u || stableMaterialId == 0u ||
+        (packedRevisions & 0xffffu) == 0u ||
+        (packedRevisions >> 16u) == 0u ||
+        (coverageFlags & (1u << 4u)) == 0u ||
+        (coverageFlags & (1u << 5u)) == 0u)
+        return false;
+    SimpleDdgiNearFieldSurfaceEntry entry;
+    entry.stableObjectId = stableObjectId;
+    entry.stableMaterialId = stableMaterialId;
+    entry.packedObjectMaterialRevisions = packedRevisions;
+    entry.coverageMotionFlags = coverageFlags;
+    atomicExchange(surfaceTable.values[token].stableObjectId,
+        entry.stableObjectId);
+    atomicExchange(surfaceTable.values[token].stableMaterialId,
+        entry.stableMaterialId);
+    atomicExchange(surfaceTable.values[token].packedObjectMaterialRevisions,
+        entry.packedObjectMaterialRevisions);
+    atomicExchange(surfaceTable.values[token].coverageMotionFlags,
+        entry.coverageMotionFlags);
+    return true;
+}
+
+void WriteInvalid(ivec2 pixel)
+{
+    imageStore(preparedDepthFootprintOutput, pixel, vec4(0.0));
+    imageStore(preparedPayloadOutput, pixel, uvec4(0u));
+    imageStore(preparedMotionOutput, pixel, vec4(0.0));
+#if NJULF_C5_SOURCE_GUIDING
+    imageStore(sourceLuminanceOutput, pixel, vec4(0.0));
+#endif
+}
+
+void main()
+{
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        tileHasReceiver = 0u;
+        tileIntersectsTrace =
+            gl_WorkGroupID.x * 8u < pc.traceWidth &&
+            gl_WorkGroupID.y * 8u < pc.traceHeight ? 1u : 0u;
+    }
+    barrier();
+
+    ivec2 tracePixel = ivec2(gl_GlobalInvocationID.xy);
+    bool inTrace = tracePixel.x < int(pc.traceWidth) &&
+        tracePixel.y < int(pc.traceHeight);
+    bool validContract = pc.abiVersion ==
+            SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION &&
+        pc.fullWidth > 0u && pc.fullHeight > 0u &&
+        pc.traceWidth > 0u && pc.traceHeight > 0u &&
+        pc.tileCapacity > 0u && pc.activeTileHeaderWords >= 64u &&
+        pc.indirectStageCount > 0u &&
+        uint(prepareTelemetry.words.length()) >=
+            SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS;
+    bool inAllocated = tracePixel.x < imageSize(preparedDepthFootprintOutput).x &&
+        tracePixel.y < imageSize(preparedDepthFootprintOutput).y;
+    if (!inTrace || !validContract)
+    {
+        if (inAllocated)
+            WriteInvalid(tracePixel);
+    }
+    else
+    {
+    ivec2 fullExtent = ivec2(pc.fullWidth, pc.fullHeight);
+    ivec2 begin = ivec2(
+        (uint(tracePixel.x) * pc.fullWidth) / pc.traceWidth,
+        (uint(tracePixel.y) * pc.fullHeight) / pc.traceHeight);
+    ivec2 end = ivec2(
+        ((uint(tracePixel.x) + 1u) * pc.fullWidth + pc.traceWidth - 1u) /
+            pc.traceWidth,
+        ((uint(tracePixel.y) + 1u) * pc.fullHeight + pc.traceHeight - 1u) /
+            pc.traceHeight);
+    end = clamp(end, begin + ivec2(1), fullExtent);
+
+    float nearestDepth = 3.402823466e+38;
+    ivec2 selectedPixel = ivec2(-1);
+    vec4 selectedSource = vec4(0.0);
+    // The production scales bound a trace footprint to at most 8x8 pixels.
+    for (int y = 0; y < 8; ++y)
+    {
+        if (begin.y + y >= end.y)
+            break;
+        for (int x = 0; x < 8; ++x)
+        {
+            if (begin.x + x >= end.x)
+                break;
+            ivec2 fullPixel = begin + ivec2(x, y);
+            float storedDepth = texelFetch(fullDepthInput, fullPixel, 0).r;
+            vec4 source = texelFetch(fullSourceInput, fullPixel, 0);
+            uvec4 payload = texelFetch(fullPayloadInput, fullPixel, 0);
+            float linearDepth = PositiveLinearDepth(storedDepth);
+            if (!SimpleDdgiNearFieldFinite(linearDepth) || linearDepth <= 0.0 ||
+                !ValidPayloadAndSource(payload, source) ||
+                linearDepth >= nearestDepth)
+                continue;
+            nearestDepth = linearDepth;
+            selectedPixel = fullPixel;
+            selectedSource = source;
+        }
+    }
+
+    if (selectedPixel.x < 0)
+    {
+        WriteInvalid(tracePixel);
+    }
+    else
+    {
+        uvec4 selectedPayload = texelFetch(
+            fullPayloadInput, selectedPixel, 0);
+        if (!PublishSurfaceEntry(selectedPayload))
+        {
+            atomicAdd(prepareTelemetry.words[21u], 1u);
+            WriteInvalid(tracePixel);
+        }
+        else
+        {
+        imageStore(preparedDepthFootprintOutput, tracePixel,
+            vec4(nearestDepth, selectedSource.a, 0.0, 0.0));
+        imageStore(preparedPayloadOutput, tracePixel,
+            selectedPayload);
+        imageStore(preparedMotionOutput, tracePixel,
+            vec4(texelFetch(fullMotionInput, selectedPixel, 0).xy, 0.0, 0.0));
+#if NJULF_C5_SOURCE_GUIDING
+        float luminance = dot(max(selectedSource.rgb, vec3(0.0)),
+            vec3(0.2126, 0.7152, 0.0722));
+        imageStore(sourceLuminanceOutput, tracePixel,
+            vec4(max(luminance, 0.0), 0.0, 0.0, 0.0));
+#endif
+        atomicOr(tileHasReceiver, 1u);
+        }
+    }
+    }
+    barrier();
+
+    if (gl_LocalInvocationIndex != 0u)
+        return;
+    if (!validContract || tileIntersectsTrace == 0u)
+        return;
+    atomicAdd(activeTiles.words[0], 1u); // candidate tiles
+    atomicAdd(prepareTelemetry.words[16u], 1u);
+    if (tileHasReceiver == 0u)
+    {
+        atomicAdd(activeTiles.words[3], 1u); // empty tiles
+        atomicAdd(prepareTelemetry.words[19u], 1u);
+        return;
+    }
+    uint activeIndex = atomicAdd(activeTiles.words[1], 1u);
+    atomicAdd(prepareTelemetry.words[17u], 1u);
+    if (activeIndex >= pc.tileCapacity ||
+        pc.activeTileHeaderWords + activeIndex >=
+            uint(activeTiles.words.length()))
+    {
+        atomicAdd(activeTiles.words[4], 1u);
+        atomicAdd(prepareTelemetry.words[20u], 1u);
+        atomicOr(prepareTelemetry.words[15u], 1u);
+        return;
+    }
+    activeTiles.words[pc.activeTileHeaderWords + activeIndex] =
+        gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    atomicAdd(activeTiles.words[2], 1u); // compacted tiles
+    atomicAdd(prepareTelemetry.words[18u], 1u);
+    // Each indirect stage uses one workgroup per active tile.
+    for (uint stage = 0u; stage < pc.indirectStageCount; ++stage)
+    {
+        uint argumentBase = 8u + stage * 3u;
+        uint groupMultiplier = 1u;
+        if (stage == 7u)
+        {
+            uint maximumFullTileWidth =
+                (8u * pc.fullWidth + pc.traceWidth - 1u) / pc.traceWidth;
+            uint maximumFullTileHeight =
+                (8u * pc.fullHeight + pc.traceHeight - 1u) / pc.traceHeight;
+            groupMultiplier = max(1u,
+                ((maximumFullTileWidth + 7u) / 8u) *
+                ((maximumFullTileHeight + 7u) / 8u));
+        }
+        atomicMax(activeTiles.words[argumentBase],
+            (activeIndex + 1u) * groupMultiplier);
+        activeTiles.words[argumentBase + 1u] = 1u;
+        activeTiles.words[argumentBase + 2u] = 1u;
+    }
+}

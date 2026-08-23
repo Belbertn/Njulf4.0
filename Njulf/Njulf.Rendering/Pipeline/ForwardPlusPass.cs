@@ -48,7 +48,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly GiPipelineCacheService? _giPipelineCacheService;
         private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
             _simpleDdgiReceiverFeedbackRuntime;
-        private readonly ForwardNearFieldDirectSourceAttachmentBinding?
+        private ForwardNearFieldDirectSourceAttachmentBinding?
             _nearFieldDirectSourceBinding;
         private readonly Func<bool>? _nearFieldDirectSourceRuntimeAvailable;
         private readonly ForwardGiCausticReceiverAttachmentBinding?
@@ -184,6 +184,20 @@ namespace Njulf.Rendering.Pipeline
             "near-field-direct-source-disabled";
         public string GiCausticReceiverFailureReason { get; private set; } =
             "caustic-forward-receiver-disabled";
+
+        /// <summary>
+        /// Publishes the source attachments and extent-bound V12 contract for
+        /// a newly committed C5 generation. The renderer calls this only at a
+        /// frame boundary while the old generation is no longer recordable.
+        /// </summary>
+        internal void PublishNearFieldDirectSourceGeneration(
+            ForwardNearFieldDirectSourceAttachmentBinding? binding)
+        {
+            _nearFieldDirectSourceBinding = binding;
+            NearFieldDirectSourceFailureReason = binding is null
+                ? "near-field-direct-source-generation-unavailable"
+                : "near-field-direct-source-generation-published";
+        }
 
         public override void Initialize()
         {
@@ -1086,12 +1100,26 @@ namespace Njulf.Rendering.Pipeline
                     giCausticReceiverEnabled);
             }
 
-            if (nearFieldDirectSourceEnabled || giCausticReceiverEnabled)
+            if (nearFieldDirectSourceEnabled)
             {
-                // Foliage remains visible in SceneColor, but deliberately has
-                // no C5 source write until its own qualified source contract
-                // exists. Transparent and particle paths are separate passes
-                // and therefore never bind the direct-source attachment.
+                bool foliageAdvancedGiWritten = DrawFoliageForward(
+                    cmd,
+                    sceneData,
+                    nearFieldDirectSource: true,
+                    combinedAdvancedGi: giCausticReceiverEnabled);
+                _context.KhrDynamicRendering.CmdEndRendering(cmd);
+                if (!foliageAdvancedGiWritten)
+                {
+                    DrawFoliageWithoutNearFieldDirectSource(
+                        cmd,
+                        sceneData,
+                        renderExtent);
+                }
+            }
+            else if (giCausticReceiverEnabled)
+            {
+                // C4 has no foliage transport contract. Preserve SceneColor
+                // and leave its cleared payload invalid for foliage pixels.
                 _context.KhrDynamicRendering.CmdEndRendering(cmd);
                 DrawFoliageWithoutNearFieldDirectSource(
                     cmd,
@@ -2287,16 +2315,19 @@ namespace Njulf.Rendering.Pipeline
                 return false;
             }
 
-            // Any forward debug path can return before direct-light evaluation.
-            // The shader initializes the attachment to zero defensively, but an
-            // active C5 trace must never consume those debug pixels as source.
+            // Any forward-owned debug path can return before direct-light
+            // evaluation. C5 views are different: forward remains on its normal
+            // lighting path and the final C5 compute pass owns visualization.
+            bool c5DebugView =
+                SimpleDdgiNearFieldResidualDebugViewContract.IsC5View(
+                    sceneData.NearFieldResidualDebugView);
             if (sceneData.DebugViewMode != 0u ||
                 sceneData.AmbientOcclusionDebugView != AmbientOcclusionDebugView.None ||
                 sceneData.TransparencyDebugView != TransparencyDebugView.None ||
                 sceneData.AnimationDebugView != AnimationDebugView.None ||
                 sceneData.ReflectionDebugView != ReflectionDebugView.None ||
                 _settings.GlobalIllumination.DebugView !=
-                    GlobalIlluminationDebugView.None ||
+                    GlobalIlluminationDebugView.None && !c5DebugView ||
                 _settings.Environment.DebugView != EnvironmentDebugView.None)
             {
                 NearFieldDirectSourceFailureReason =
@@ -2409,16 +2440,33 @@ namespace Njulf.Rendering.Pipeline
                    sceneData.DepthPrePassEnabled;
         }
 
-        private void DrawFoliageForward(CommandBuffer cmd, Data.SceneRenderingData sceneData)
+        private bool DrawFoliageForward(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData,
+            bool nearFieldDirectSource = false,
+            bool combinedAdvancedGi = false)
         {
             if (_foliagePipeline == null || sceneData.FoliageClusterCount <= 0 || sceneData.FoliageDrawBufferBytes == 0)
-                return;
+                return true;
 
-            VkPipeline foliagePipeline =
-                (_simpleDdgiFoliageFeedbackRequiredForCurrentView ||
-                 _simpleDdgiReflectionFeedbackRequiredForCurrentView)
-                    ? _foliagePipeline.ForwardReceiverFeedbackPipeline
-                    : _foliagePipeline.ForwardPipeline;
+            bool receiverFeedback =
+                _simpleDdgiFoliageFeedbackRequiredForCurrentView ||
+                _simpleDdgiReflectionFeedbackRequiredForCurrentView;
+            if (!_foliagePipeline.TryResolveForwardPipeline(
+                    authored: false,
+                    receiverFeedback,
+                    nearFieldDirectSource,
+                    combinedAdvancedGi,
+                    out VkPipeline foliagePipeline) ||
+                !_foliagePipeline.TryResolveForwardPipeline(
+                    authored: true,
+                    receiverFeedback,
+                    nearFieldDirectSource,
+                    combinedAdvancedGi,
+                    out VkPipeline authoredFoliagePipeline))
+            {
+                return false;
+            }
             _context.Api.CmdBindPipeline(
                 cmd,
                 PipelineBindPoint.Graphics,
@@ -2438,7 +2486,11 @@ namespace Njulf.Rendering.Pipeline
                     _simpleDdgiReflectionFeedbackRequiredForCurrentView,
                     _reflectionFeedbackCubemapArrayLayer),
                 DebugView = sceneData.FoliageDebugView,
-                ShadowDensityScale = 1.0f
+                ShadowDensityScale = 1.0f,
+                Padding2 = checked((uint)Math.Min(
+                    sceneData.ObjectCount,
+                    (int)SimpleDdgiNearFieldResidualGpuAbi
+                        .MaximumSurfaceTableEntryCount))
             };
 
             _context.Api.CmdPushConstants(
@@ -2452,7 +2504,11 @@ namespace Njulf.Rendering.Pipeline
             sceneData.ForwardTaskInvocations += sceneData.FoliageClusterCount;
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.FoliageClusterCount, 1, 1);
 
-            DrawAuthoredFoliageForward(cmd, sceneData);
+            DrawAuthoredFoliageForward(
+                cmd,
+                sceneData,
+                authoredFoliagePipeline);
+            return true;
         }
 
         private void DrawFoliageWithoutNearFieldDirectSource(
@@ -2505,7 +2561,10 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        private void DrawAuthoredFoliageForward(CommandBuffer cmd, Data.SceneRenderingData sceneData)
+        private void DrawAuthoredFoliageForward(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData,
+            VkPipeline authoredFoliagePipeline)
         {
             if (_foliagePipeline == null || _bufferManager == null || _foliageManager == null || sceneData.FoliageDrawBufferBytes == 0)
                 return;
@@ -2514,11 +2573,6 @@ namespace Njulf.Rendering.Pipeline
             if (!buffers.IndirectDispatchBuffer.IsValid || buffers.MeshletDrawCapacity <= 0)
                 return;
 
-            VkPipeline authoredFoliagePipeline =
-                (_simpleDdgiFoliageFeedbackRequiredForCurrentView ||
-                 _simpleDdgiReflectionFeedbackRequiredForCurrentView)
-                    ? _foliagePipeline.AuthoredForwardReceiverFeedbackPipeline
-                    : _foliagePipeline.AuthoredForwardPipeline;
             _context.Api.CmdBindPipeline(
                 cmd,
                 PipelineBindPoint.Graphics,
@@ -2538,7 +2592,11 @@ namespace Njulf.Rendering.Pipeline
                     _simpleDdgiReflectionFeedbackRequiredForCurrentView,
                     _reflectionFeedbackCubemapArrayLayer),
                 DebugView = sceneData.FoliageDebugView,
-                ShadowDensityScale = 1.0f
+                ShadowDensityScale = 1.0f,
+                Padding2 = checked((uint)Math.Min(
+                    sceneData.ObjectCount,
+                    (int)SimpleDdgiNearFieldResidualGpuAbi
+                        .MaximumSurfaceTableEntryCount))
             };
 
             _context.Api.CmdPushConstants(

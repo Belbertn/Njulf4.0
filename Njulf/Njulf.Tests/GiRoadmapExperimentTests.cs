@@ -541,11 +541,12 @@ public sealed class GiRoadmapExperimentTests
         Assert.Multiple(() =>
         {
             Assert.That(plan.Active, Is.True);
-            Assert.That(plan.Width, Is.EqualTo(960));
-            Assert.That(plan.Height, Is.EqualTo(540));
+            Assert.That(plan.Width, Is.EqualTo(480));
+            Assert.That(plan.Height, Is.EqualTo(270));
             Assert.That(plan.AllocatedBytes, Is.GreaterThan(0UL));
             Assert.That(plan.Layout.TraceSourceBytes, Is.GreaterThan(0UL));
-            Assert.That(plan.Layout.HitMetadataBytes, Is.GreaterThan(0UL));
+            Assert.That(plan.Layout.HitMetadataBytes, Is.Zero,
+                "V12 trace writes directly into the current 48-byte history bank.");
             Assert.That(plan.TraceBytes, Is.EqualTo(
                 plan.Memory.NearFieldTraceTargets.AllocatedBytes));
             Assert.That(plan.HistoryBytes, Is.EqualTo(
@@ -555,8 +556,13 @@ public sealed class GiRoadmapExperimentTests
                 plan.Layout.TraceSourceBytes +
                 plan.Layout.ReceiverPayloadBytes +
                 plan.Layout.TraceFrameConstantsBytes +
+                plan.Layout.PreparedDepthFootprintBytes +
+                plan.Layout.PreparedReceiverPayloadBytes +
+                plan.Layout.PreparedMotionBytes +
+                plan.Layout.SourceLuminanceBytes +
                 plan.Layout.RawCandidateBytes +
-                plan.Layout.HitMetadataBytes +
+                plan.Layout.SurfaceTableBytes +
+                plan.Layout.ActiveTileAndIndirectBytes +
                 plan.Layout.TileBuffersBytes +
                 plan.Layout.TelemetryReadbackBytes));
             Assert.That(plan.HistoryBytes, Is.EqualTo(
@@ -811,6 +817,56 @@ public sealed class GiRoadmapExperimentTests
     }
 
     [Test]
+    public void C5_EvidenceRequiresSixtyMinuteStableBoundedTraversal()
+    {
+        var prerequisites = new SimpleDdgiNearFieldResidualPrerequisites(
+            true, true, true, true, true, true, true, true);
+        SimpleDdgiNearFieldResidualConfiguration configuration =
+            ResidualConfiguration(enabled: true);
+        SimpleDdgiNearFieldResidualAdmissionContext context = ResidualContext();
+        SimpleDdgiNearFieldResidualQualificationEvidence baseline =
+            QualifiedResidualEvidence(configuration, context);
+        SimpleDdgiNearFieldResidualQualificationEvidence[] invalid =
+        [
+            baseline with
+            {
+                LongRunTraversalMinutes =
+                    SimpleDdgiNearFieldResidualEvidenceAbi
+                        .MinimumLongRunTraversalMinutes - 1u
+            },
+            baseline with
+            {
+                PeakSteadyMemoryBytes =
+                    SimpleDdgiNearFieldResidualEvidenceAbi
+                        .MaximumSteadyMemoryBytes + 1UL
+            },
+            baseline with { NoRetirementGrowthVerified = false },
+            baseline with { NoCounterOverflowVerified = false },
+            baseline with { NoNonFiniteOutputVerified = false }
+        ];
+
+        foreach (SimpleDdgiNearFieldResidualQualificationEvidence evidence in
+                 invalid)
+        {
+            SimpleDdgiNearFieldResidualPlan plan =
+                SimpleDdgiNearFieldResidualExperiment.CreatePlan(
+                    configuration,
+                    prerequisites,
+                    evidence,
+                    context);
+            Assert.Multiple(() =>
+            {
+                Assert.That(plan.Active, Is.False);
+                Assert.That(plan.AllocatedBytes, Is.Zero);
+                Assert.That(plan.EvidenceValidation.FallbackReason,
+                    Is.EqualTo(
+                        GiExperimentFallbackReason.QualificationNotPassed));
+                Assert.That(plan.Status, Does.StartWith("near-field-long-run-"));
+            });
+        }
+    }
+
+    [Test]
     public void C5_ActivePlanAttachesItsExactCategoriesToCentralContentMemory()
     {
         var prerequisites = new SimpleDdgiNearFieldResidualPrerequisites(
@@ -1002,10 +1058,12 @@ public sealed class GiRoadmapExperimentTests
         ResidualConfiguration(bool enabled)
     {
         SimpleDdgiNearFieldResidualProfile profile =
-            SimpleDdgiNearFieldResidualProfile.HalfResolutionReference;
+            SimpleDdgiNearFieldResidualProfile.ForPreset(
+                SimpleDdgiNearFieldResidualQualityPreset.Balanced,
+                0.25f);
         const int width = 1_920;
         const int height = 1_080;
-        const ulong budgetBytes = 256UL * 1024UL * 1024UL;
+        const ulong budgetBytes = 96UL * 1024UL * 1024UL;
         SimpleDdgiNearFieldResidualLayout layout =
             SimpleDdgiNearFieldResidualLayoutCompiler.Compile(
                 width, height, profile, budgetBytes);
@@ -1016,8 +1074,7 @@ public sealed class GiRoadmapExperimentTests
             Width: width,
             Height: height,
             // The qualified fixture keeps the complete double-buffered hit
-            // identity/normal history; it must not obtain a false pass by
-            // omitting that state to fit the old 96 MiB placeholder.
+            // identity/normal history inside the production 96 MiB envelope.
             MemoryBudgetBytes: budgetBytes,
             Profile: profile,
             SourceContract: SimpleDdgiNearFieldTraceSourceContract
@@ -1030,11 +1087,18 @@ public sealed class GiRoadmapExperimentTests
     }
 
     private static SimpleDdgiNearFieldResidualAdmissionContext ResidualContext() => new(
-        DeviceQualificationKey: "10de-2520-driver-610.62-c5-v1",
+        DeviceQualificationKey: "10de-2520-driver-610.62-c5-v2",
         CorpusId: "hands-and-crease-reference-v1",
         ContentRevision: 1UL,
         B3QualificationId: "b3-qualified-reference-v1",
-        B3QualificationRevision: 1u);
+        B3QualificationRevision: 1u)
+    {
+        ShaderSetHash = "c5-v12-test-shader-set",
+        VendorId = 0x10deu,
+        DeviceId = 0x2520u,
+        DriverVersion = 61062u,
+        ApiVersion = 0x00403000u
+    };
 
     private static SimpleDdgiNearFieldResidualQualificationEvidence
         QualifiedResidualEvidence(
@@ -1078,7 +1142,25 @@ public sealed class GiRoadmapExperimentTests
             TraceSourceIndependenceVerified: true,
             TemporalStabilityVerified: true,
             SignedResidualEnergyVerified: true,
-            WholeFrameRegressionVerified: true);
+            WholeFrameRegressionVerified: true)
+        {
+            C5P99Milliseconds = 0.90,
+            SourceMrtCostUpperBoundMilliseconds = 0.05,
+            SourceCostAuthoritative = true,
+            AbsoluteSignedNetResidualEnergyFraction = 0.005,
+            LowFrequencyLeakageFraction = 0.01,
+            BenchmarkCaptureId = "c5-v2-test-capture",
+            ReferenceManifestId = "c5-v2-test-reference-manifest",
+            LongRunTraversalMinutes =
+                SimpleDdgiNearFieldResidualEvidenceAbi
+                    .MinimumLongRunTraversalMinutes,
+            PeakSteadyMemoryBytes = layout.TotalBytes,
+            PeakHotSwapMemoryBytes = checked(layout.TotalBytes * 2UL),
+            StableMemoryVerified = true,
+            NoRetirementGrowthVerified = true,
+            NoCounterOverflowVerified = true,
+            NoNonFiniteOutputVerified = true
+        };
     }
 
     private static string ReadRepoText(params string[] relativeParts)

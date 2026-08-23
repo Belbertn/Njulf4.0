@@ -28,13 +28,13 @@ public static class ForwardNearFieldDirectSourceContract
     /// Compile-time semantic stamp required by every dedicated fragment
     /// variant.  Bump this whenever the source ownership expression changes.
     /// </summary>
-    public const uint ShaderSemanticVersion = 3u;
+    public const uint ShaderSemanticVersion = 4u;
 
     // SceneColor plus radiance and a compact 128-bit receiver payload. The
-    // payload packs two octahedral normals, 16-bit object/material indices,
-    // and RGB9E5 Lambertian throughput. Ray projection is reconstructed from
-    // depth and frame matrices by the trace pass instead of consuming two more
-    // full-resolution MRTs.
+    // payload packs two octahedral normals, a 16-bit frame-local surface-table
+    // token, RGB9E5 Lambertian throughput, and RGB565 dielectric F0. Ray
+    // projection is reconstructed from depth and frame matrices by the trace
+    // pass instead of consuming two more full-resolution MRTs.
     public const uint ColorAttachmentCount = 3u;
     public const Format ReceiverPayloadFormat = Format.R32G32B32A32Uint;
 

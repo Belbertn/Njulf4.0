@@ -18,6 +18,12 @@ namespace Njulf.Rendering.Pipeline
         private readonly Dictionary<RenderGraphResourceId, RenderGraphResourceDescriptor> _resources = new();
         private readonly Dictionary<string, List<RenderGraphResourceUsage>> _passResourceUsages = new(StringComparer.Ordinal);
         private readonly Dictionary<RenderGraphResourceId, List<RenderTarget>> _ownedRenderTargets = new();
+        // Generation-swapped resources may have active plus pending/retired
+        // physical allocations under one logical ID. Ownership and layout
+        // tracking are deliberately separate: only the atomically published
+        // bank may be named by new command buffers.
+        private readonly Dictionary<RenderGraphResourceId, List<RenderTarget>>
+            _publishedOwnedRenderTargets = new();
         // Imported renderer targets participate in the same primary-command-buffer layout
         // planning as graph-owned targets, but the graph must never dispose them.
         private readonly Dictionary<RenderGraphResourceId, List<RenderTarget>> _importedRenderTargets = new();
@@ -283,6 +289,7 @@ namespace Njulf.Rendering.Pipeline
                 }
 
                 _resources.Remove(id);
+                _publishedOwnedRenderTargets.Remove(id);
                 removed++;
             }
 
@@ -412,6 +419,12 @@ namespace Njulf.Rendering.Pipeline
                 throw new InvalidOperationException($"Resource '{id}' does not own render target '{target.Name}'.");
 
             target.Dispose();
+            if (_publishedOwnedRenderTargets.TryGetValue(
+                    id,
+                    out List<RenderTarget>? publishedTargets))
+            {
+                publishedTargets.Remove(target);
+            }
             if (targets.Count == 0)
                 _ownedRenderTargets.Remove(id);
             AdvanceResourceAllocationGeneration();
@@ -425,6 +438,20 @@ namespace Njulf.Rendering.Pipeline
         public bool HasResource(RenderGraphResourceId id)
         {
             return _resources.ContainsKey(id);
+        }
+
+        internal RenderGraphResourceLifetime GetResourceLifetime(
+            RenderGraphResourceId id)
+        {
+            if (!_resources.TryGetValue(
+                    id,
+                    out RenderGraphResourceDescriptor? descriptor))
+            {
+                throw new InvalidOperationException(
+                    $"Render-graph resource '{id}' is not registered.");
+            }
+
+            return descriptor.Lifetime;
         }
 
         public IReadOnlyList<RenderTarget> GetOwnedRenderTargets(RenderGraphResourceId id)
@@ -441,12 +468,83 @@ namespace Njulf.Rendering.Pipeline
         /// </summary>
         internal IReadOnlyList<RenderTarget> GetLayoutTrackedRenderTargets(RenderGraphResourceId id)
         {
+            if (_publishedOwnedRenderTargets.TryGetValue(
+                    id,
+                    out List<RenderTarget>? publishedTargets))
+            {
+                return publishedTargets;
+            }
             if (_ownedRenderTargets.TryGetValue(id, out List<RenderTarget>? ownedTargets))
                 return ownedTargets;
 
             return _importedRenderTargets.TryGetValue(id, out List<RenderTarget>? importedTargets)
                 ? importedTargets
                 : Array.Empty<RenderTarget>();
+        }
+
+        /// <summary>
+        /// Atomically selects the graph-owned image bindings visible to new
+        /// command buffers. Non-published allocations remain graph-owned but
+        /// receive no barriers and therefore acquire no new GPU references.
+        /// </summary>
+        internal void PublishOwnedRenderTargets(
+            RenderGraphResourceId id,
+            IReadOnlyList<RenderTarget> targets)
+        {
+            if (targets == null)
+                throw new ArgumentNullException(nameof(targets));
+            if (!_resources.ContainsKey(id))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot publish targets for undeclared resource '{id}'.");
+            }
+            if (!_ownedRenderTargets.TryGetValue(
+                    id,
+                    out List<RenderTarget>? ownedTargets))
+            {
+                if (targets.Count != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Resource '{id}' owns no render targets to publish.");
+                }
+            }
+
+            var published = new List<RenderTarget>(targets.Count);
+            for (int index = 0; index < targets.Count; index++)
+            {
+                RenderTarget target = targets[index] ??
+                    throw new ArgumentException(
+                        "A published graph target cannot be null.",
+                        nameof(targets));
+                if (ownedTargets is null || !ownedTargets.Contains(target))
+                {
+                    throw new InvalidOperationException(
+                        $"Resource '{id}' does not own published target '{target.Name}'.");
+                }
+                if (published.Contains(target))
+                {
+                    throw new ArgumentException(
+                        "A target cannot be published twice for one graph resource.",
+                        nameof(targets));
+                }
+                published.Add(target);
+            }
+
+            if (_publishedOwnedRenderTargets.TryGetValue(
+                    id,
+                    out List<RenderTarget>? current) &&
+                current.Count == published.Count)
+            {
+                bool unchanged = true;
+                for (int index = 0; index < current.Count; index++)
+                    unchanged &= ReferenceEquals(current[index], published[index]);
+                if (unchanged)
+                    return;
+            }
+
+            _publishedOwnedRenderTargets[id] = published;
+            _concreteResourceBindings.Invalidate();
+            AdvanceResourceAllocationGeneration();
         }
 
         internal IReadOnlyList<IRenderGraphLayoutTrackedImage> GetImportedImageTargets(RenderGraphResourceId id)
@@ -1458,6 +1556,7 @@ namespace Njulf.Rendering.Pipeline
 
             _importedRenderTargets.Clear();
             _importedImageTargets.Clear();
+            _publishedOwnedRenderTargets.Clear();
         }
         
         public void Dispose()

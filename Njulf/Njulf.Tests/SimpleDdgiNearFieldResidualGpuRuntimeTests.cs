@@ -18,13 +18,13 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualHitMetadata>(),
-                Is.EqualTo(40));
+                Is.EqualTo(48));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTraceFrameConstants>(),
-                Is.EqualTo(160));
+                Is.EqualTo(288));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTelemetryHeader>(),
-                Is.EqualTo(64));
+                Is.EqualTo(96));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTileRecord>(),
-                Is.EqualTo(64));
+                Is.EqualTo(80));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualResetPushConstants>(),
                 Is.EqualTo(32));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualTracePushConstants>(),
@@ -35,13 +35,17 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                 Is.EqualTo(48));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualCompositePushConstants>(),
                 Is.EqualTo(48));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualPreparePushConstants>(),
+                Is.EqualTo(48));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiNearFieldResidualFrequencyPushConstants>(),
+                Is.EqualTo(48));
             Assert.That(SimpleDdgiNearFieldResidualGpuAbi.HasOnlyAllowedTraceSources(
                 SimpleDdgiNearFieldResidualGpuAbi.AllowedTraceSourceTerms), Is.True);
             Assert.That(SimpleDdgiNearFieldResidualGpuAbi.HasOnlyAllowedTraceSources(
                 SimpleDdgiNearFieldResidualGpuAbi.AllowedTraceSourceTerms |
                 (uint)SimpleDdgiNearFieldTraceSourceTerm.DdgiIndirect), Is.False);
             Assert.That(SimpleDdgiNearFieldResidualGpuAllocation.ExpectedDescriptorCount(
-                CreateLayout()), Is.EqualTo(19u));
+                CreateLayout()), Is.EqualTo(24u));
         });
     }
 
@@ -79,6 +83,14 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         Assert.That(
             RenderTarget.CalculateByteSize(320, 180, Format.R32Uint),
             Is.EqualTo(320UL * 180UL * 4UL));
+    }
+
+    [Test]
+    public void PreparedDepthFootprintUsesTheEightByteR32G32AccountingContract()
+    {
+        Assert.That(
+            RenderTarget.CalculateByteSize(320, 180, Format.R32G32Sfloat),
+            Is.EqualTo(320UL * 180UL * 8UL));
     }
 
     [Test]
@@ -151,7 +163,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             EffectiveModeRevision: 4u,
             ExposureDomainRevision: 5u,
             CameraCut: false,
-            ProjectionJitterRevision: 6u,
+            StructuralProjectionRevision: 6u,
             OriginRebaseRevision: 7u,
             SceneGeneration: 8u,
             TraceSourceContentRevision: 9u,
@@ -162,7 +174,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(baseline.Matches(baseline), Is.True);
-            Assert.That(baseline.Matches(baseline with { ProjectionJitterRevision = 12u }), Is.False);
+            Assert.That(baseline.Matches(baseline with { StructuralProjectionRevision = 12u }), Is.False);
             Assert.That(baseline.Matches(baseline with { OriginRebaseRevision = 12u }), Is.False);
             Assert.That(baseline.Matches(baseline with { SceneGeneration = 12u }), Is.False);
             Assert.That(baseline.Matches(baseline with { TraceSourceContentRevision = 12u }), Is.False);
@@ -219,6 +231,12 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                 QueueOrderedCommandsRecorded: true,
                 EdgeAwareValidityChecked: true,
                 ExecutedIterationCount: 2u)).Accepted, Is.True);
+        Assert.That(manager.CompleteFrequencySeparation(begin.Token,
+            new SimpleDdgiNearFieldResidualGpuFrequencySeparationCompletion(
+                QueueOrderedCommandsRecorded: true,
+                B3FootprintSupportValidated: true,
+                PerIdentityConfidenceWeightedMeanRemoved: true,
+                InvalidResidualPayloadWasZero: true)).Accepted, Is.True);
         Assert.That(manager.CompleteComposite(begin.Token,
             new SimpleDdgiNearFieldResidualGpuCompositeCompletion(
                 QueueOrderedCommandsRecorded: true,
@@ -390,7 +408,8 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(formatSnapshot.Reason,
-                Is.EqualTo("near-field-trace-source-format-layout-mismatch"));
+                Is.EqualTo(
+                    "near-field-trace-source-r16g16b16a16-sfloat-required"));
             Assert.That(extentSnapshot.Reason,
                 Is.EqualTo("near-field-trace-source-scaled-extent-layout-mismatch"));
             Assert.That(scaleSnapshot.Reason,
@@ -480,6 +499,8 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             "ddgi_near_field_residual_trace.comp"));
         string filter = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_filter.comp"));
+        string frequency = File.ReadAllText(Path.Combine(shaderDirectory,
+            "ddgi_near_field_residual_frequency.comp"));
         string composite = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_composite.comp"));
         string temporal = File.ReadAllText(Path.Combine(shaderDirectory,
@@ -507,7 +528,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
     }
 
     [Test]
-    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV11Contract()
+    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV12Contract()
     {
         string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
         string shared = File.ReadAllText(Path.Combine(shaderDirectory,
@@ -520,6 +541,8 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             "ddgi_near_field_residual_trace.comp"));
         string filter = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_filter.comp"));
+        string frequency = File.ReadAllText(Path.Combine(shaderDirectory,
+            "ddgi_near_field_residual_frequency.comp"));
         string composite = File.ReadAllText(Path.Combine(shaderDirectory,
             "ddgi_near_field_residual_composite.comp"));
         string passSource = File.ReadAllText(Path.Combine(
@@ -533,16 +556,35 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(shared, Does.Contain("0x4335000bu"));
+            Assert.That(shared, Does.Contain("0x4335000cu"));
             Assert.That(shared, Does.Contain("uvec2 receiverIdentity;"));
             Assert.That(shared, Does.Contain("uvec2 hitIdentity;"));
             Assert.That(shared, Does.Not.Contain("uvec4 identity;"));
+            Assert.That(shared, Does.Contain(
+                "SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_LIGHTING_EPOCH_CHANGED"));
+            Assert.That(
+                SimpleDdgiNearFieldResidualGpuFlags.SourceLightingEpochChanged,
+                Is.EqualTo((SimpleDdgiNearFieldResidualGpuFlags)(1u << 10)));
             Assert.That(trace, Does.Contain("bool validMiss"));
+            Assert.That(trace, Does.Contain("c5SourceLuminanceHierarchy"));
+            Assert.That(trace, Does.Contain("C5SelectGuideHierarchyLeaf"));
+            Assert.That(trace, Does.Contain("C5PerspectiveLineParameter"));
+            Assert.That(trace, Does.Contain("C5NextCellBoundaryParameter"));
             Assert.That(trace, Does.Contain(
-                "persistent salt-and-pepper impulses"));
+                "boundary - currentPixel.x"));
+            Assert.That(trace, Does.Not.Contain(
+                "float cellAdvance = exp2(float(mip)) / screenSpan"));
+            Assert.That(trace, Does.Contain(
+                "direction * startBiasMeters"));
+            Assert.That(trace, Does.Not.Contain(
+                "C5PositiveLinearDepth(rayNdc.z) + startBiasMeters"));
+            Assert.That(trace, Does.Not.Contain(
+                "DirectDiffuseEmissiveLowFrequencyEstimate"));
+            Assert.That(frequency, Does.Contain(
+                "vec3 lowSignal = vec3(0.0)"));
             Assert.That(trace, Does.Contain("c5TileHit"));
             Assert.That(trace, Does.Contain(
-                "metadata.receiverIdentity = receiverIds"));
+                "metadata.receiverIdentity = uvec2("));
             Assert.That(trace, Does.Contain(
                 "failureFlags = C5_TRACE_REASON_NORMAL | C5_TRACE_REASON_MISS"));
             Assert.That(trace, Does.Contain("pc.fullWeightTraceDistance"));
@@ -555,11 +597,15 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(temporal, Does.Contain("TryGetCurrentNeighbourhoodBounds"));
             Assert.That(temporal, Does.Contain(
                 "current.receiverIdentity"));
-            Assert.That(temporal, Does.Not.Contain("previous.hitUv"));
-            Assert.That(temporal, Does.Not.Contain(
-                "current.hitIdentity"));
             Assert.That(temporal, Does.Contain(
-                "SimpleDdgiNearFieldTemporalEvidenceConfidence"));
+                "C5ValidatePreviousHitInCurrentFrame"));
+            Assert.That(temporal, Does.Contain(
+                "SIMPLE_DDGI_NEAR_FIELD_FLAG_SOURCE_LIGHTING_EPOCH_CHANGED"));
+            Assert.That(temporal, Does.Contain("previousHitUv"));
+            Assert.That(temporal, Does.Contain(
+                "currentSurface.stableObjectId"));
+            Assert.That(temporal, Does.Contain(
+                "float confidenceRamp = 0.25"));
             Assert.That(filter, Does.Contain("effectiveSampleCount"));
             Assert.That(filter, Does.Contain("spatialEvidence"));
             Assert.That(composite, Does.Contain("correctionScale"));
@@ -572,8 +618,14 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             Assert.That(reset, Does.Contain("SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION"));
             Assert.That(passSource, Does.Contain(
                 "images[3] = Sampled(validityRead, _bindlessHeap.HiZSampler)"));
+            Assert.That(passSource, Does.Contain(
+                "DescriptorImageInfo* images = stackalloc DescriptorImageInfo[8];"));
             Assert.That(runtimeSource, Does.Contain(
                 "return _frameAdmission && CanExecuteNoLock(sceneData);"));
+            Assert.That(runtimeSource, Does.Contain(
+                "_publishedSourceLightingEpoch !="));
+            Assert.That(passSource, Does.Contain(
+                ".SourceLightingEpochChanged"));
         });
     }
 
@@ -632,7 +684,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(SimpleDdgiNearFieldResidualGpuAbi.Version,
-                Is.EqualTo(0x4335_000Bu));
+                Is.EqualTo(0x4335_000Cu));
             Assert.That(shared, Does.Match(
                 $@"const\s+uint\s+SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION\s*=\s*{Regex.Escape(abiLiteral)}\s*;"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualHitMetadata"));
@@ -673,6 +725,44 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                 "ResetTileRecordsBuffer"));
         AssertShaderStageContract(
             shaderDirectory,
+            "ddgi_near_field_residual_prepare.comp",
+            "NearFieldPreparePushBlock",
+            nameof(GPUSimpleDdgiNearFieldResidualPreparePushConstants),
+            "SimpleDdgiNearFieldResidualPreparePushConstants",
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareFullDepth,
+                "fullDepthInput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareFullSource,
+                "fullSourceInput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareFullPayload,
+                "fullPayloadInput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareFullMotion,
+                "fullMotionInput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareDepthFootprintOutput,
+                "preparedDepthFootprintOutput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PreparePayloadOutput,
+                "preparedPayloadOutput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareMotionOutput,
+                "preparedMotionOutput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareSourceLuminanceOutput,
+                "sourceLuminanceOutput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareActiveTilesAndIndirect,
+                "ActiveTileAndIndirectBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareSurfaceTable,
+                "SurfaceTableBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareSceneObjects,
+                "SceneObjectWordBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareSceneMaterials,
+                "SceneMaterialWordBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareTelemetry,
+                "PrepareTelemetryHeaderBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareFoliagePrototypes,
+                "FoliagePrototypeWordBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareFoliagePatches,
+                "FoliagePatchWordBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.PrepareFoliageClusters,
+                "FoliageClusterWordBuffer"));
+        AssertShaderStageContract(
+            shaderDirectory,
             "ddgi_near_field_residual_trace.comp",
             "NearFieldTracePushBlock",
             nameof(GPUSimpleDdgiNearFieldResidualTracePushConstants),
@@ -680,16 +770,25 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             (SimpleDdgiNearFieldResidualGpuBindings.TraceDirectDiffuseEmissiveSource,
                 "directDiffuseEmissiveSource"),
             (SimpleDdgiNearFieldResidualGpuBindings.TraceHiZ, "depthHierarchy"),
-            (SimpleDdgiNearFieldResidualGpuBindings.TraceReceiverDepth, "receiverDepth"),
-            (SimpleDdgiNearFieldResidualGpuBindings.TraceReceiverPayload,
-                "receiverPayload"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TracePreparedDepthFootprint,
+                "preparedDepthFootprint"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TracePreparedReceiverPayload,
+                "preparedReceiverPayload"),
             (SimpleDdgiNearFieldResidualGpuBindings.TraceRawResidualOutput, "rawResidualOutput"),
             (SimpleDdgiNearFieldResidualGpuBindings.TraceHitMetadataOutput,
                 "TraceHitMetadataBuffer"),
             (SimpleDdgiNearFieldResidualGpuBindings.TraceTileRecords,
                 "TraceTileRecordsBuffer"),
             (SimpleDdgiNearFieldResidualGpuBindings.TraceFrameConstants,
-                "TraceFrameConstantsBuffer"));
+                "TraceFrameConstantsBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TraceSurfaceTable,
+                "TraceSurfaceTableBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TraceActiveTiles,
+                "TraceActiveTileBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TraceFullReceiverPayload,
+                "fullReceiverPayload"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TraceSourceLuminance,
+                "sourceLuminance"));
         AssertShaderStageContract(
             shaderDirectory,
             "ddgi_near_field_residual_temporal.comp",
@@ -723,7 +822,19 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             (SimpleDdgiNearFieldResidualGpuBindings.TemporalHistoryNormalOutput,
                 "temporalHistoryNormalOutput"),
             (SimpleDdgiNearFieldResidualGpuBindings.TemporalTileRecords,
-                "TemporalTileRecordsBuffer"));
+                "TemporalTileRecordsBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TemporalActiveTiles,
+                "TemporalActiveTileBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TemporalCurrentSourceRadiance,
+                "currentSourceRadiance"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TemporalCurrentFullDepth,
+                "currentFullDepth"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TemporalCurrentFullPayload,
+                "currentFullPayload"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TemporalFrameConstants,
+                "TemporalFrameConstantsBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.TemporalSurfaceTable,
+                "TemporalSurfaceTableBuffer"));
         AssertShaderStageContract(
             shaderDirectory,
             "ddgi_near_field_residual_filter.comp",
@@ -734,7 +845,31 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             (SimpleDdgiNearFieldResidualGpuBindings.FilterMetadata, "FilterMetadataBuffer"),
             (SimpleDdgiNearFieldResidualGpuBindings.FilterOutput, "filteredResidualOutput"),
             (SimpleDdgiNearFieldResidualGpuBindings.FilterReceiverPayload,
-                "receiverPayload"));
+                "receiverPayload"),
+            (SimpleDdgiNearFieldResidualGpuBindings.FilterActiveTiles,
+                "FilterActiveTileBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.FilterMoments,
+                "temporalMomentsInput"));
+        AssertShaderStageContract(
+            shaderDirectory,
+            "ddgi_near_field_residual_frequency.comp",
+            "NearFieldFrequencyPushBlock",
+            nameof(GPUSimpleDdgiNearFieldResidualFrequencyPushConstants),
+            "SimpleDdgiNearFieldResidualFrequencyPushConstants",
+            (SimpleDdgiNearFieldResidualGpuBindings.FrequencyNearEstimate,
+                "nearEstimateInput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.FrequencyPreparedDepthFootprint,
+                "preparedDepthFootprintInput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.FrequencyPreparedPayload,
+                "preparedPayloadInput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.FrequencyMetadata,
+                "FrequencyMetadataBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.FrequencyBandResidualOutput,
+                "bandResidualOutput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.FrequencyActiveTiles,
+                "ActiveTileBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.FrequencyFrameConstants,
+                "FrequencyFrameConstantsBuffer"));
         AssertShaderStageContract(
             shaderDirectory,
             "ddgi_near_field_residual_composite.comp",
@@ -748,7 +883,55 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             (SimpleDdgiNearFieldResidualGpuBindings.CompositeMetadata,
                 "CompositeMetadataBuffer"),
             (SimpleDdgiNearFieldResidualGpuBindings.CompositeSceneColorOutput,
-                "canonicalSceneColorOutput"));
+                "canonicalSceneColorOutput"),
+            (SimpleDdgiNearFieldResidualGpuBindings.CompositeActiveTiles,
+                "CompositeActiveTileBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.CompositeFullReceiverPayload,
+                "fullReceiverPayload"),
+            (SimpleDdgiNearFieldResidualGpuBindings.CompositeFullReceiverDepth,
+                "fullReceiverDepth"),
+            (SimpleDdgiNearFieldResidualGpuBindings.CompositeSurfaceTable,
+                "CompositeSurfaceTableBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.CompositePreparedReceiverPayload,
+                "preparedReceiverPayload"),
+            (SimpleDdgiNearFieldResidualGpuBindings.CompositeFrameConstants,
+                "CompositeFrameConstantsBuffer"),
+            (SimpleDdgiNearFieldResidualGpuBindings.CompositeFullDirectSource,
+                "fullDirectSource"),
+            (SimpleDdgiNearFieldResidualGpuBindings.CompositeHistoryValidity,
+                "compositeHistoryValidity"));
+    }
+
+    [Test]
+    public void ResetContract_TransferClearsTransientAndCurrentHistoryImages()
+    {
+        string renderingDirectory = FindRepoDirectory("Njulf.Rendering");
+        string recorder = File.ReadAllText(Path.Combine(
+            renderingDirectory,
+            "Pipeline",
+            "SimpleDdgiNearFieldResidualPasses.cs"));
+        string targets = File.ReadAllText(Path.Combine(
+            renderingDirectory,
+            "Resources",
+            "RenderTargetManager.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorder, Does.Contain("CmdClearColorImage"));
+            Assert.That(recorder, Does.Contain(
+                "HistoryRadiance(token.HistoryWriteIndex)"));
+            Assert.That(recorder, Does.Contain(
+                "HistoryMoments(token.HistoryWriteIndex)"));
+            Assert.That(recorder, Does.Contain(
+                "HistoryValidity(token.HistoryWriteIndex)"));
+            Assert.That(recorder, Does.Contain(
+                "HistoryNormals(token.HistoryWriteIndex)"));
+            Assert.That(recorder, Does.Contain(
+                "NearFieldResidualFilterScratch0"));
+            Assert.That(targets, Does.Contain(
+                "NearFieldStorageSampledDescriptor"));
+            Assert.That(targets, Does.Contain("transferDestination: true"));
+        });
     }
 
     private static void AssertShaderStageContract(
@@ -850,7 +1033,13 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
             TemporalVarianceClippingAndBoundedHistoryAvailable: true,
             B3FootprintFrequencySeparationValidated: true,
             MeasuredQualificationEvidenceVerified: true,
-            DeviceLimitsAndActualAllocationRequirementsValidated: true);
+            DeviceLimitsAndActualAllocationRequirementsValidated: true)
+        {
+            PreparePassRegistered = true,
+            FrequencySeparationPassRegistered = true,
+            IndirectDispatchContractValidated = true,
+            SurfaceTableAvailable = true
+        };
 
     private static string FindRepoDirectory(string name)
     {
@@ -932,7 +1121,30 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                     SimpleDdgiNearFieldResidualGpuResourceKind.TelemetryReadback0),
                 Resource(layout.TelemetryReadbackBytes / 2UL,
                     SimpleDdgiNearFieldResidualGpuResourceKind.TelemetryReadback1),
-                SimpleDdgiNearFieldResidualGpuAllocation.ExpectedDescriptorCount(layout));
+                SimpleDdgiNearFieldResidualGpuAllocation.ExpectedDescriptorCount(layout))
+            {
+                PreparedDepthFootprint = Resource(
+                    layout.PreparedDepthFootprintBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind
+                        .PreparedDepthFootprint),
+                PreparedReceiverPayload = Resource(
+                    layout.PreparedReceiverPayloadBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind
+                        .PreparedReceiverPayload),
+                PreparedMotion = Resource(
+                    layout.PreparedMotionBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.PreparedMotion),
+                SourceLuminance = Resource(
+                    layout.SourceLuminanceBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.SourceLuminance),
+                SurfaceTable = Resource(
+                    layout.SurfaceTableBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.SurfaceTable),
+                ActiveTileAndIndirect = Resource(
+                    layout.ActiveTileAndIndirectBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind
+                        .ActiveTileAndIndirect)
+            };
             return ReturnInvalidAllocation
                 ? allocation with { DescriptorCount = 0u }
                 : allocation;
