@@ -26,6 +26,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _nearFieldDirectSourceConfiguration;
         private ForwardGiCausticReceiverPipelineConfiguration
             _giCausticReceiverConfiguration;
+        private ForwardHybridReflectionReceiverPipelineConfiguration
+            _hybridReflectionConfiguration;
         private Format _colorFormat;
         private Format _depthFormat;
         private string _forwardTaskShaderName = "forward.task.spv";
@@ -66,6 +68,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardSimpleFullInputCombinedAdvancedGiPipeline;
         private VkPipeline _forwardCompactedSimpleCombinedAdvancedGiPipeline;
         private VkPipeline _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline;
+        // [C4/C5 combination 0..3, base pipeline family 0..5].
+        private readonly VkPipeline[,] _hybridReflectionPipelines =
+            new VkPipeline[4, 6];
         private VkPipeline _forwardReceiverCachePipeline;
         private VkPipeline _forwardCompactedReceiverCachePipeline;
         private VkPipeline _forwardSimpleReceiverCachePipeline;
@@ -114,6 +119,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 nearFieldDirectSourceConfiguration = default,
             ForwardGiCausticReceiverPipelineConfiguration
                 giCausticReceiverConfiguration = default,
+            ForwardHybridReflectionReceiverPipelineConfiguration
+                hybridReflectionConfiguration = default,
             bool receiverFeedbackPipelinesEnabled = false,
             RaySceneDescriptorBank? raySceneDescriptors = null,
             GiPipelineCacheService? pipelineCacheService = null,
@@ -129,6 +136,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _runStartupStep = runStartupStep;
             _nearFieldDirectSourceConfiguration = nearFieldDirectSourceConfiguration;
             _giCausticReceiverConfiguration = giCausticReceiverConfiguration;
+            _hybridReflectionConfiguration = hybridReflectionConfiguration;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Math.Max(
@@ -249,6 +257,79 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public bool CombinedAdvancedGiAttachmentEnabled { get; private set; }
         public string CombinedAdvancedGiFailureReason { get; private set; } =
             "combined-advanced-GI-disabled";
+        public bool HybridReflectionAttachmentEnabled { get; private set; }
+        public string HybridReflectionFailureReason { get; private set; } =
+            "hybrid-reflection-receiver-disabled";
+
+        public bool TryResolveHybridReflectionPipeline(
+            VkPipeline exactPipeline,
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled,
+            out VkPipeline hybridPipeline)
+        {
+            hybridPipeline = default;
+            if (!HybridReflectionAttachmentEnabled ||
+                !TryResolveBasePipelineFamily(exactPipeline, out int family))
+            {
+                return false;
+            }
+
+            int combination = (giCausticReceiverEnabled ? 1 : 0) |
+                (nearFieldDirectSourceEnabled ? 2 : 0);
+            if (_hybridReflectionPipelines[combination, family].Handle == 0 &&
+                !TryCreateHybridReflectionPipeline(combination, family))
+            {
+                return false;
+            }
+
+            hybridPipeline = _hybridReflectionPipelines[combination, family];
+            return hybridPipeline.Handle != 0;
+        }
+
+        public bool TryPrepareHybridReflectionPipelines(
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled)
+        {
+            if (!HybridReflectionAttachmentEnabled)
+                return false;
+
+            int combination = (giCausticReceiverEnabled ? 1 : 0) |
+                (nearFieldDirectSourceEnabled ? 2 : 0);
+            for (int family = 0; family < 6; family++)
+            {
+                if (_hybridReflectionPipelines[combination, family].Handle == 0 &&
+                    !TryCreateHybridReflectionPipeline(combination, family))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private bool TryResolveBasePipelineFamily(
+            VkPipeline pipeline,
+            out int family)
+        {
+            if (pipeline.Handle == _forwardPipeline.Handle)
+                family = 0;
+            else if (pipeline.Handle == _forwardCompactedPipeline.Handle)
+                family = 1;
+            else if (pipeline.Handle == _forwardSimplePipeline.Handle)
+                family = 2;
+            else if (pipeline.Handle == _forwardSimpleFullInputPipeline.Handle)
+                family = 3;
+            else if (pipeline.Handle == _forwardCompactedSimplePipeline.Handle)
+                family = 4;
+            else if (pipeline.Handle ==
+                     _forwardCompactedSimpleFullInputPipeline.Handle)
+                family = 5;
+            else
+            {
+                family = -1;
+                return false;
+            }
+            return true;
+        }
 
         /// <summary>
         /// Releases the optional C5 MRT variants during a renderer-controlled
@@ -1121,6 +1202,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             CombinedAdvancedGiAttachmentEnabled = false;
             CombinedAdvancedGiFailureReason =
                 "combined-advanced-GI-disabled";
+            HybridReflectionAttachmentEnabled = false;
+            HybridReflectionFailureReason =
+                "hybrid-reflection-receiver-disabled";
             string provenanceSuffix =
                 materialTransportProvenanceEnabled ? "_provenance" : string.Empty;
             string forwardOpaqueFragmentShaderName =
@@ -1301,6 +1385,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     forwardTaskShaderName,
                     materialTransportProvenanceEnabled);
             }
+            CreateHybridReflectionPipelines(materialTransportProvenanceEnabled);
 
 #if !DEBUG && !NJULF_DETAILED_INVESTIGATION
             if (!materialTransportProvenanceEnabled &&
@@ -1674,6 +1759,114 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _rayWeightedOitReceiverFeedbackPipeline.Handle,
                 ObjectType.Pipeline,
                 "Ray Query B1 Exact Weighted OIT Transparent Mesh Pipeline");
+        }
+
+        private void CreateHybridReflectionPipelines(
+            bool materialTransportProvenanceEnabled)
+        {
+            if (!_hybridReflectionConfiguration.Enabled ||
+                _hybridReflectionConfiguration.ShaderSemanticVersion !=
+                    ForwardHybridReflectionReceiverContract.ShaderSemanticVersion)
+            {
+                HybridReflectionFailureReason =
+                    "hybrid-reflection-receiver-configuration-invalid";
+                return;
+            }
+            if (materialTransportProvenanceEnabled)
+            {
+                HybridReflectionFailureReason =
+                    "hybrid-reflection-receiver-material-provenance-conflict";
+                return;
+            }
+
+            // The 24 possible opaque combinations are materialized lazily on
+            // first use. This keeps static-probe and SSR-only startup bounded.
+            HybridReflectionAttachmentEnabled = true;
+            HybridReflectionFailureReason = "valid; variants created on first use";
+        }
+
+        private bool TryCreateHybridReflectionPipeline(
+            int combination,
+            int family)
+        {
+            bool giCaustic = (combination & 1) != 0;
+            bool nearField = (combination & 2) != 0;
+            bool simple = family is 2 or 3 or 4 or 5;
+            bool simpleFullInput = family is 3 or 5;
+            bool compacted = family is 1 or 4 or 5;
+            string fragmentShader =
+                ForwardHybridReflectionReceiverContract.ResolveFragmentShader(
+                    simple,
+                    simpleFullInput,
+                    giCaustic,
+                    nearField);
+            string meshShader = simple && !simpleFullInput
+                ? compacted
+                    ? "forward_simple_compacted.mesh.spv"
+                    : "forward_simple.mesh.spv"
+                : compacted
+                    ? "forward_compacted.mesh.spv"
+                    : "forward.mesh.spv";
+            string? taskShader = compacted ? null : _forwardTaskShaderName;
+
+            Format? secondary = combination switch
+            {
+                0 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
+                1 => ForwardGiCausticReceiverContract.ReceiverPayloadFormat,
+                2 => ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
+                3 => ForwardGiCausticReceiverContract.ReceiverPayloadFormat,
+                _ => null
+            };
+            Format? tertiary = combination switch
+            {
+                1 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
+                2 => ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat,
+                3 => ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
+                _ => null
+            };
+            Format? quaternary = combination switch
+            {
+                2 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
+                3 => ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat,
+                _ => null
+            };
+            Format? quinary = combination == 3
+                ? ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat
+                : null;
+
+            try
+            {
+                VkPipeline pipeline = CreateGraphicsPipeline(
+                    taskShader,
+                    meshShader,
+                    fragmentShader,
+                    _colorFormat,
+                    _depthFormat,
+                    hasColorAttachment: true,
+                    depthWriteEnable: false,
+                    blendEnable: false,
+                    cullMode: CullModeFlags.None,
+                    depthBiasEnable: false,
+                    secondaryColorFormat: secondary,
+                    tertiaryColorFormat: tertiary,
+                    quaternaryColorFormat: quaternary,
+                    quinaryColorFormat: quinary,
+                    hybridReflectionReceiverEnabled: true);
+                _context.SetDebugName(
+                    pipeline.Handle,
+                    ObjectType.Pipeline,
+                    $"Hybrid Reflection Forward Pipeline C{combination} F{family}");
+                _hybridReflectionPipelines[combination, family] = pipeline;
+                HybridReflectionFailureReason = "valid";
+                return true;
+            }
+            catch (Exception exception)
+            {
+                HybridReflectionFailureReason =
+                    "hybrid-reflection-pipeline-creation-failed:" +
+                    exception.GetType().Name + ":" + exception.Message;
+                return false;
+            }
         }
 
         private void CreateNearFieldDirectSourcePipelines(
@@ -2125,8 +2318,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? secondaryColorFormat = null,
             Format? tertiaryColorFormat = null,
             Format? quaternaryColorFormat = null,
+            Format? quinaryColorFormat = null,
             Format? materialTransportProvenanceFormat = null,
-            PipelineLayout pipelineLayout = default)
+            PipelineLayout pipelineLayout = default,
+            bool hybridReflectionReceiverEnabled = false)
         {
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
@@ -2163,9 +2358,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         secondaryColorFormat: secondaryColorFormat,
                         tertiaryColorFormat: tertiaryColorFormat,
                         quaternaryColorFormat: quaternaryColorFormat,
+                        quinaryColorFormat: quinaryColorFormat,
                         materialTransportProvenanceFormat:
                             materialTransportProvenanceFormat,
-                        pipelineLayout: pipelineLayout));
+                        pipelineLayout: pipelineLayout,
+                        hybridReflectionReceiverEnabled:
+                            hybridReflectionReceiverEnabled));
             }
             catch (Exception exception)
             {
@@ -2301,8 +2499,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? secondaryColorFormat = null,
             Format? tertiaryColorFormat = null,
             Format? quaternaryColorFormat = null,
+            Format? quinaryColorFormat = null,
             Format? materialTransportProvenanceFormat = null,
-            PipelineLayout pipelineLayout = default)
+            PipelineLayout pipelineLayout = default,
+            bool hybridReflectionReceiverEnabled = false)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             int stageCount = 0;
@@ -2377,7 +2577,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                                  ColorComponentFlags.ABit
             };
             if ((secondaryColorFormat.HasValue || tertiaryColorFormat.HasValue ||
-                    quaternaryColorFormat.HasValue) &&
+                    quaternaryColorFormat.HasValue || quinaryColorFormat.HasValue) &&
                 materialTransportProvenanceFormat.HasValue)
             {
                 throw new InvalidOperationException(
@@ -2394,9 +2594,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 throw new InvalidOperationException(
                     "A quaternary forward attachment requires contiguous secondary and tertiary attachments.");
             }
+            if (quinaryColorFormat.HasValue &&
+                (!secondaryColorFormat.HasValue || !tertiaryColorFormat.HasValue ||
+                 !quaternaryColorFormat.HasValue))
+            {
+                throw new InvalidOperationException(
+                    "A fifth forward attachment requires four contiguous preceding attachments.");
+            }
 
-            uint colorAttachmentCount =
-                ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
+            uint colorAttachmentCount = hybridReflectionReceiverEnabled
+                ? quinaryColorFormat.HasValue ? 5u
+                : quaternaryColorFormat.HasValue ? 4u
+                : tertiaryColorFormat.HasValue ? 3u
+                : secondaryColorFormat.HasValue ? 2u
+                : throw new InvalidOperationException(
+                    "A hybrid reflection pipeline requires its receiver attachment.")
+                : ForwardDynamicRenderingContract.ResolveColorAttachmentCount(
                     hasColorAttachment,
                     materialTransportProvenanceFormat.HasValue,
                     nearFieldDirectSourceEnabled: tertiaryColorFormat.HasValue,
@@ -2404,11 +2617,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         secondaryColorFormat.HasValue &&
                         (!tertiaryColorFormat.HasValue ||
                          quaternaryColorFormat.HasValue));
-            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[
-                (int)ForwardAdvancedGiCombinedContract.ColorAttachmentCount];
+            var colorBlendAttachments = stackalloc PipelineColorBlendAttachmentState[5];
             for (int attachmentIndex = 0;
                  attachmentIndex <
-                    (int)ForwardAdvancedGiCombinedContract.ColorAttachmentCount;
+                    5;
                  attachmentIndex++)
             {
                 colorBlendAttachments[attachmentIndex] = colorBlendAttachment;
@@ -2434,8 +2646,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 PDynamicStates = dynamicStates
             };
 
-            var renderingColorFormats = stackalloc Format[
-                (int)ForwardAdvancedGiCombinedContract.ColorAttachmentCount];
+            var renderingColorFormats = stackalloc Format[5];
             renderingColorFormats[0] = colorFormat;
             renderingColorFormats[1] =
                 secondaryColorFormat ??
@@ -2445,6 +2656,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 tertiaryColorFormat ?? colorFormat;
             renderingColorFormats[3] =
                 quaternaryColorFormat ?? colorFormat;
+            renderingColorFormats[4] =
+                quinaryColorFormat ?? colorFormat;
             var renderingInfo = new PipelineRenderingCreateInfo
             {
                 SType = StructureType.PipelineRenderingCreateInfo,
@@ -2698,9 +2911,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             NearFieldDirectSourceAttachmentEnabled = false;
             GiCausticReceiverAttachmentEnabled = false;
             CombinedAdvancedGiAttachmentEnabled = false;
+            HybridReflectionAttachmentEnabled = false;
             DestroyNearFieldDirectSourcePipelines();
             DestroyGiCausticReceiverPipelines();
             DestroyCombinedAdvancedGiPipelines();
+            DestroyHybridReflectionPipelines();
             DestroyAlphaMaskReceiverFeedbackPipelines();
             DestroyTransparentReceiverFeedbackPipelines();
 
@@ -2946,6 +3161,23 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 ref _forwardCompactedSimpleCombinedAdvancedGiPipeline);
             DestroyOptionalPipeline(
                 ref _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline);
+        }
+
+        private void DestroyHybridReflectionPipelines()
+        {
+            HybridReflectionAttachmentEnabled = false;
+            for (int combination = 0; combination < 4; combination++)
+            {
+                for (int family = 0; family < 6; family++)
+                {
+                    VkPipeline pipeline =
+                        _hybridReflectionPipelines[combination, family];
+                    if (pipeline.Handle == 0)
+                        continue;
+                    _context.Api.DestroyPipeline(_context.Device, pipeline, null);
+                    _hybridReflectionPipelines[combination, family] = default;
+                }
+            }
         }
 
         private void DestroyAlphaMaskReceiverFeedbackPipelines()

@@ -77,6 +77,15 @@ namespace Njulf.Rendering.Resources
             GiCausticScreenGpuAbi.RadianceFormat;
         public const Format GiCausticMomentsFormat =
             GiCausticScreenGpuAbi.MomentsFormat;
+        public const Format HybridReflectionReceiverPayloadFormat =
+            Format.R32G32B32A32Uint;
+        public const Format HybridReflectionRadianceFormat =
+            Format.R16G16B16A16Sfloat;
+        public const Format HybridReflectionMomentsFormat = Format.R16G16Sfloat;
+        public const Format HybridReflectionRawMetadataFormat =
+            Format.R32G32Uint;
+        public const Format HybridReflectionHistoryMetadataFormat =
+            Format.R32G32B32A32Uint;
 
         private readonly VulkanContext _context;
         private readonly RenderGraph? _renderGraph;
@@ -177,7 +186,8 @@ namespace Njulf.Rendering.Resources
             bool nearFieldResidualEnabled = false,
             SimpleDdgiNearFieldResidualLayout nearFieldResidualLayout = default,
             bool giCausticEnabled = false,
-            GiCausticScreenResolveLayout giCausticScreenLayout = default)
+            GiCausticScreenResolveLayout giCausticScreenLayout = default,
+            bool hybridReflectionsEnabled = false)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _renderGraph = renderGraph;
@@ -186,9 +196,7 @@ namespace Njulf.Rendering.Resources
                 "HDR Scene Color",
                 SceneColorFormat,
                 extent,
-                nearFieldResidualEnabled || giCausticEnabled
-                    ? HdrSceneColorStorageDescriptor
-                    : HdrSceneColorDescriptor);
+                HdrSceneColorStorageDescriptor);
             SceneDepth = new RenderTarget(_context, "Scene Depth", depthFormat, extent, SceneDepthDescriptor);
             _renderGraph?.RegisterImportedRenderTarget(RenderGraphResourceId.SceneColor, SceneColor);
             _renderGraph?.RegisterImportedRenderTarget(RenderGraphResourceId.SceneDepth, SceneDepth);
@@ -349,6 +357,8 @@ namespace Njulf.Rendering.Resources
                     extent,
                     StorageSampledDescriptor);
             }
+            CreateHybridReflectionTargets(
+                hybridReflectionsEnabled ? extent : PlaceholderExtent);
             LdrSceneColor = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.LdrSceneColor,
                 "LDR Scene Color",
@@ -430,6 +440,16 @@ namespace Njulf.Rendering.Resources
         public RenderTarget? GiCausticReceiverPayload { get; private set; }
         public RenderTarget? GiCausticRadiance { get; private set; }
         public RenderTarget? GiCausticMoments { get; private set; }
+        public RenderTarget? HybridReflectionReceiverPayload { get; private set; }
+        public RenderTarget? HybridReflectionRawRadiance { get; private set; }
+        public RenderTarget? HybridReflectionRawMetadata { get; private set; }
+        public RenderTarget? HybridReflectionHistory0 { get; private set; }
+        public RenderTarget? HybridReflectionHistory1 { get; private set; }
+        public RenderTarget? HybridReflectionMoments0 { get; private set; }
+        public RenderTarget? HybridReflectionMoments1 { get; private set; }
+        public RenderTarget? HybridReflectionHistoryMetadata0 { get; private set; }
+        public RenderTarget? HybridReflectionHistoryMetadata1 { get; private set; }
+        public RenderTarget? HybridReflectionFilterScratch { get; private set; }
         public RenderTarget LdrSceneColor { get; }
         public RenderTarget SmaaEdges { get; }
         public RenderTarget SmaaBlendWeights { get; }
@@ -446,7 +466,8 @@ namespace Njulf.Rendering.Resources
             (NearFieldDirectSource is null ? 0 :
                 14 + (NearFieldSourceLuminance is null ? 0 : 1) +
                 (NearFieldResidualFilterScratch0 is null ? 0 : 2)) +
-            (GiCausticReceiverPayload is null ? 0 : 3);
+            (GiCausticReceiverPayload is null ? 0 : 3) +
+            (HybridReflectionReceiverPayload is null ? 0 : 10);
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
             SceneDepth.EstimatedByteSize +
@@ -454,6 +475,7 @@ namespace Njulf.Rendering.Resources
             AmbientOcclusionRenderTargetBytes +
             MaterialTransportProvenanceRenderTargetBytes +
             GiCausticRenderTargetBytes +
+            HybridReflectionRenderTargetBytes +
             NearFieldResidualRenderTargetBytes +
             AntiAliasingRenderTargetBytes +
             WeightedOitRenderTargetBytes +
@@ -895,6 +917,17 @@ namespace Njulf.Rendering.Resources
             GiCausticReceiverPayload,
             GiCausticRadiance,
             GiCausticMoments);
+        public ulong HybridReflectionRenderTargetBytes => SumEnabledBytes(
+            HybridReflectionReceiverPayload,
+            HybridReflectionRawRadiance,
+            HybridReflectionRawMetadata,
+            HybridReflectionHistory0,
+            HybridReflectionHistory1,
+            HybridReflectionMoments0,
+            HybridReflectionMoments1,
+            HybridReflectionHistoryMetadata0,
+            HybridReflectionHistoryMetadata1,
+            HybridReflectionFilterScratch);
         public ulong AntiAliasingRenderTargetBytes => SumEnabledBytes(LdrSceneColor, SmaaEdges, SmaaBlendWeights, MotionVectors, TaaHistoryA, TaaHistoryB);
         public ulong WeightedOitRenderTargetBytes => SumEnabledBytes(WeightedOitAccumulation, WeightedOitRevealage);
         public ulong BloomRenderTargetBytes => SumTargetBytes(_bloomMipChain);
@@ -913,7 +946,8 @@ namespace Njulf.Rendering.Resources
             bool motionVectorsEnabled = false,
             bool fogEnabled = true,
             bool weightedOitEnabled = false,
-            bool materialTransportProvenanceEnabled = false)
+            bool materialTransportProvenanceEnabled = false,
+            bool hybridReflectionsEnabled = false)
         {
             ulong before = TotalEstimatedBytes;
             RecreateIfDifferent(SceneColor, extent);
@@ -925,6 +959,7 @@ namespace Njulf.Rendering.Resources
                 MaterialTransportProvenance,
                 materialTransportProvenanceEnabled ? extent : PlaceholderExtent);
             RecreateGiCausticTargets(extent);
+            RecreateHybridReflectionTargets(extent, hybridReflectionsEnabled);
             RecreateAntiAliasingTargets(extent, outputExtent, antiAliasingMode, motionVectorsEnabled);
             RecreateWeightedOitTargets(extent, weightedOitEnabled);
             RecreateBloomTargets(extent, bloomMipCount);
@@ -955,6 +990,100 @@ namespace Njulf.Rendering.Resources
             RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionRaw, AmbientOcclusionRaw, extent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionBlurred, AmbientOcclusionBlurred, extent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionScratch, AmbientOcclusionScratch, extent);
+        }
+
+        private void CreateHybridReflectionTargets(Extent2D extent)
+        {
+            HybridReflectionReceiverPayload = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionReceiverPayload,
+                "Hybrid Reflection Receiver Payload",
+                HybridReflectionReceiverPayloadFormat,
+                extent,
+                ColorSampledDescriptor);
+            HybridReflectionRawRadiance = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionRawRadiance,
+                "Hybrid Reflection Raw Radiance and Confidence",
+                HybridReflectionRadianceFormat,
+                extent,
+                NearFieldStorageSampledDescriptor);
+            HybridReflectionRawMetadata = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionRawMetadata,
+                "Hybrid Reflection Raw Source Metadata",
+                HybridReflectionRawMetadataFormat,
+                extent,
+                NearFieldStorageSampledDescriptor);
+            HybridReflectionHistory0 = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionHistory,
+                "Hybrid Reflection Radiance History 0",
+                HybridReflectionRadianceFormat,
+                extent,
+                NearFieldStorageSampledDescriptor);
+            HybridReflectionHistory1 = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionHistory,
+                "Hybrid Reflection Radiance History 1",
+                HybridReflectionRadianceFormat,
+                extent,
+                NearFieldStorageSampledDescriptor);
+            HybridReflectionMoments0 = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionMoments,
+                "Hybrid Reflection Moments 0",
+                HybridReflectionMomentsFormat,
+                extent,
+                NearFieldStorageSampledDescriptor);
+            HybridReflectionMoments1 = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionMoments,
+                "Hybrid Reflection Moments 1",
+                HybridReflectionMomentsFormat,
+                extent,
+                NearFieldStorageSampledDescriptor);
+            HybridReflectionHistoryMetadata0 = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                "Hybrid Reflection History Metadata 0",
+                HybridReflectionHistoryMetadataFormat,
+                extent,
+                NearFieldStorageSampledDescriptor);
+            HybridReflectionHistoryMetadata1 = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                "Hybrid Reflection History Metadata 1",
+                HybridReflectionHistoryMetadataFormat,
+                extent,
+                NearFieldStorageSampledDescriptor);
+            HybridReflectionFilterScratch = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionFilterScratch,
+                "Hybrid Reflection Filter Scratch",
+                HybridReflectionRadianceFormat,
+                extent,
+                NearFieldStorageSampledDescriptor);
+        }
+
+        private void RecreateHybridReflectionTargets(
+            Extent2D extent,
+            bool enabled)
+        {
+            if (HybridReflectionReceiverPayload is null)
+                return;
+
+            Extent2D targetExtent = enabled ? extent : PlaceholderExtent;
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionReceiverPayload,
+                HybridReflectionReceiverPayload, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionRawRadiance,
+                HybridReflectionRawRadiance!, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionRawMetadata,
+                HybridReflectionRawMetadata!, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionHistory,
+                HybridReflectionHistory0!, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionHistory,
+                HybridReflectionHistory1!, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionMoments,
+                HybridReflectionMoments0!, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionMoments,
+                HybridReflectionMoments1!, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                HybridReflectionHistoryMetadata0!, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                HybridReflectionHistoryMetadata1!, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionFilterScratch,
+                HybridReflectionFilterScratch!, targetExtent);
         }
 
         private void RecreateNearFieldResidualSourceTargets(Extent2D extent)
@@ -1357,6 +1486,26 @@ namespace Njulf.Rendering.Resources
                 GiCausticRadiance);
             DisposeIfManagerOwned(RenderGraphResourceId.GiCausticMoments,
                 GiCausticMoments);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionReceiverPayload,
+                HybridReflectionReceiverPayload);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionRawRadiance,
+                HybridReflectionRawRadiance);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionRawMetadata,
+                HybridReflectionRawMetadata);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionHistory,
+                HybridReflectionHistory0);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionHistory,
+                HybridReflectionHistory1);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionMoments,
+                HybridReflectionMoments0);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionMoments,
+                HybridReflectionMoments1);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                HybridReflectionHistoryMetadata0);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                HybridReflectionHistoryMetadata1);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionFilterScratch,
+                HybridReflectionFilterScratch);
             DisposeIfManagerOwned(RenderGraphResourceId.LdrSceneColor, LdrSceneColor);
             DisposeIfManagerOwned(RenderGraphResourceId.SmaaEdges, SmaaEdges);
             DisposeIfManagerOwned(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights);

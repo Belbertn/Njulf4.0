@@ -286,7 +286,6 @@ internal sealed class HelloGame : Game
     private int _drawnFrames;
     private bool _sponzaAtmosphereFrozen;
     private bool _benchmarkDynamicScenarioFrozen;
-    private bool _bistroDdgiReflectionPromotionPending;
     private int _baselineScenarioRenderedFrames;
     private bool _baselineSnapshotExported;
     private float _modelRotation;
@@ -1505,9 +1504,6 @@ internal sealed class HelloGame : Game
         CaptureBaselineSnapshotIfRequested();
         if (Renderer is VulkanRenderer benchmarkRenderer)
         {
-            TryPromoteBistroReflectionsToDdgi(
-                benchmarkRenderer,
-                benchmarkRenderer.LastDiagnostics);
             _benchmarkQualitySequenceRunner?.OnFrameRendered(
                 _drawnFrames,
                 benchmarkRenderer.LastDiagnostics);
@@ -1542,71 +1538,6 @@ internal sealed class HelloGame : Game
         _smokeRunner?.OnFrameRendered(_drawnFrames);
         _drawnFrames++;
     }
-
-    private void TryPromoteBistroReflectionsToDdgi(
-        VulkanRenderer renderer,
-        RendererDiagnostics diagnostics)
-    {
-        if (!_bistroDdgiReflectionPromotionPending ||
-            _sceneKind != SampleSceneKind.Bistro ||
-            _smokeOptions.BistroQualityCaptureVariant ==
-                SampleBistroQualityCaptureVariant.ReflectionSourceAb)
-        {
-            return;
-        }
-
-        // Retain a useful direct-lit capture until all of the renderer-owned
-        // generation gates agree. Promotion is monotonic and versioned, so the
-        // probe manager coalesces this into one later DDGI-fed recapture.
-        if (diagnostics.ReflectionProbeCount <= 0 ||
-            diagnostics.ReflectionProbePublishedCount <
-                diagnostics.ReflectionProbeCount)
-        {
-            return;
-        }
-
-        uint sourceGeneration =
-            diagnostics.SimpleDdgiSourceLightingGeneration;
-        bool currentDdgi = IsBistroDdgiReflectionPromotionReady(
-            sourceGeneration,
-            diagnostics.SimpleDdgiLivePropagationSourceGeneration,
-            diagnostics.SimpleDdgiTransportGeneration,
-            diagnostics.SimpleDdgiPublishedPropagationGeneration,
-            diagnostics.SimpleDdgiTransportSourceStaleProbeCount,
-            diagnostics.SimpleDdgiTransportPendingSolverProbeCount);
-        if (!currentDdgi)
-            return;
-
-        renderer.Settings.Reflections.CaptureIncludesDdgi = true;
-        _bistroDdgiReflectionPromotionPending = false;
-        Console.WriteLine(
-            $"Bistro reflection probes promoted to DDGI-fed recapture: " +
-            $"sourceGeneration={sourceGeneration}, " +
-            $"propagationGeneration=" +
-            $"{diagnostics.SimpleDdgiPublishedPropagationGeneration}.");
-    }
-
-    /// <summary>
-    /// A reflection capture needs one complete, current live propagation
-    /// boundary; it does not need the optional frozen whole-field tail audit.
-    /// Resident feedback publishes these generations only when the source
-    /// cohort is current and the solver-pending set is empty. This is the same
-    /// live-GI boundary used by renderer-owned reflection recapture scheduling
-    /// and remains usable while camera scrolling defers an exact audit.
-    /// </summary>
-    internal static bool IsBistroDdgiReflectionPromotionReady(
-        uint sourceGeneration,
-        uint livePropagationSourceGeneration,
-        uint propagationGeneration,
-        uint publishedPropagationGeneration,
-        int staleSourceProbeCount,
-        int pendingSolverProbeCount) =>
-        sourceGeneration != 0u &&
-        livePropagationSourceGeneration == sourceGeneration &&
-        propagationGeneration != 0u &&
-        publishedPropagationGeneration == propagationGeneration &&
-        staleSourceProbeCount == 0 &&
-        pendingSolverProbeCount == 0;
 
     private bool CaptureDiagnosticScreenshot(string path)
     {
@@ -1890,6 +1821,12 @@ internal sealed class HelloGame : Game
     {
         _sampleVfxEffects = Array.Empty<ParticleEffectInstance>();
 
+        Model Finish(Model model)
+        {
+            SampleReflectionPolicy.EnsureProbeFree(Scene);
+            return model;
+        }
+
         if (_sceneKind == SampleSceneKind.MaterialShowcase)
         {
             _sceneLoader = null;
@@ -1914,7 +1851,7 @@ internal sealed class HelloGame : Game
                         $"objects={_khronosMaterialGiRenderedScene.RenderObjectCount}, " +
                         $"unlitObjects={_khronosMaterialGiRenderedScene.RuntimeUnlitRenderObjectCount}, " +
                         $"packageSha256={_khronosMaterialGiRenderedScene.PackageSha256}.");
-                    return new Model { Name = "Official Khronos Material/GI Conformance" };
+                    return Finish(new Model { Name = "Official Khronos Material/GI Conformance" });
                 }
                 catch (Exception exception)
                 {
@@ -1945,12 +1882,12 @@ internal sealed class HelloGame : Game
                     $"Material/GI conformance scene: fixtures={summary.FixtureCount}, " +
                     $"oracleCases={summary.CatalogCaseFixtureCount}, skinned={summary.SkinnedFixtureCount}, " +
                     $"liveEdits={summary.LiveEditTargetCount}, sceneSha256={summary.SceneFingerprint}.");
-                return new Model { Name = "Material-GI Conformance" };
+                return Finish(new Model { Name = "Material-GI Conformance" });
             }
 
             SampleMaterialShowcaseScene.Configure(Scene, meshManager, materialManager);
             meshManager.CompactStaticBuffers();
-            return new Model { Name = "Material Showcase" };
+            return Finish(new Model { Name = "Material Showcase" });
         }
 
         if (_sceneKind == SampleSceneKind.FoliageShowcase)
@@ -1965,7 +1902,7 @@ internal sealed class HelloGame : Game
                 SampleLightingMode.DirectionalKey);
             builder.Apply(SamplePerformanceScenario.ForestFoliage);
             meshManager.CompactStaticBuffers();
-            return new Model { Name = "Foliage Showcase" };
+            return Finish(new Model { Name = "Foliage Showcase" });
         }
 
         if (_sceneKind == SampleSceneKind.GlobalIlluminationTest)
@@ -1980,7 +1917,7 @@ internal sealed class HelloGame : Game
                 LightingMode);
             builder.Apply(SamplePerformanceScenario.GiCornellRoom);
             meshManager.CompactStaticBuffers();
-            return new Model { Name = "GI Test Scene" };
+            return Finish(new Model { Name = "GI Test Scene" });
         }
 
         if (_sceneKind == SampleSceneKind.VfxShowcase)
@@ -1988,7 +1925,7 @@ internal sealed class HelloGame : Game
             _sceneLoader = null;
             _sampleVfxEffects = SampleVfxShowcaseScene.Configure(Scene, meshManager, materialManager);
             meshManager.CompactStaticBuffers();
-            return new Model { Name = "VFX Showcase" };
+            return Finish(new Model { Name = "VFX Showcase" });
         }
 
         SampleAssetManifest assetManifest = GetModelSceneManifest(_sceneKind)
@@ -2002,16 +1939,10 @@ internal sealed class HelloGame : Game
             assetManifest,
             loadSceneDocument: _sceneKind == SampleSceneKind.SponzaPlaza);
         Model model = _sceneLoader.Load(Scene);
-        if (_sceneKind == SampleSceneKind.Bistro)
-        {
-            SampleBistroReflectionProbes.Configure(Scene);
-            _bistroDdgiReflectionPromotionPending = true;
-        }
         if (_sceneKind == SampleSceneKind.SponzaPlaza &&
             !_sceneLoader.LoadedFromDocument)
         {
             SamplePlazaGlobalIllumination.ConfigureSceneLighting(Scene);
-            SampleReflectionProbes.Configure(Scene);
             SampleAnimatedCharacter.Configure(Scene, Content!);
         }
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
@@ -2026,7 +1957,7 @@ internal sealed class HelloGame : Game
                 sponzaTextureManager);
         }
         meshManager.CompactStaticBuffers();
-        return model;
+        return Finish(model);
     }
 
     private void ConfigureSceneRenderSettings(VulkanRenderer renderer)
@@ -2108,6 +2039,8 @@ internal sealed class HelloGame : Game
             SampleSponzaGlobalIlluminationProfile
                 .ConfigurePostAdvancedGiRollout(settings);
         }
+
+        SampleReflectionPolicy.Apply(settings);
     }
 
     private void RestoreSceneRenderSettings(VulkanRenderer renderer)

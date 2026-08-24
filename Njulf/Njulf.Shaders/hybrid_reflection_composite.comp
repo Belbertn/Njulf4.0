@@ -1,0 +1,62 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "hybrid_reflection_compute.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform HybridReflectionCompositePushBlock
+{
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint SpatialPassCount;
+    uint DebugView;
+} pc;
+
+void main()
+{
+    uvec2 invocation = gl_GlobalInvocationID.xy;
+    if (invocation.x >= pc.ScreenWidth || invocation.y >= pc.ScreenHeight)
+        return;
+    ivec2 pixel = ivec2(invocation);
+    uvec2 metadata = imageLoad(HybridMetadataCurrent, pixel).xy;
+    bool valid = HybridMetadataValid(metadata.x);
+    vec4 reflection = pc.SpatialPassCount == 0u
+        ? imageLoad(HybridHistoryCurrent, pixel)
+        : (pc.SpatialPassCount & 1u) != 0u
+            ? imageLoad(HybridFilterScratch, pixel)
+            : imageLoad(HybridRawRadiance, pixel);
+    vec4 scene = imageLoad(HybridSceneColor, pixel);
+
+    if (pc.DebugView == 13u)
+    {
+        float confidence = valid
+            ? HybridMetadataConfidence(metadata.x)
+            : 0.0;
+        imageStore(HybridSceneColor, pixel,
+            vec4(vec3(confidence), scene.a));
+        return;
+    }
+    if (pc.DebugView == 14u)
+    {
+        imageStore(HybridSceneColor, pixel, vec4(
+            valid ? HybridSourceDebugColor(
+                HybridMetadataSource(metadata.x)) : vec3(0.0),
+            scene.a));
+        return;
+    }
+    if (pc.DebugView == 7u)
+    {
+        bool ssr = valid && HybridMetadataSource(metadata.x) ==
+            HYBRID_REFLECTION_SOURCE_SSR;
+        imageStore(HybridSceneColor, pixel,
+            vec4(ssr ? vec3(0.0, 1.0, 1.0) : vec3(0.0), scene.a));
+        return;
+    }
+
+    if (valid && HybridFinite(reflection))
+        scene.rgb += max(reflection.rgb, vec3(0.0));
+    imageStore(HybridSceneColor, pixel, scene);
+}

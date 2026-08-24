@@ -75,11 +75,14 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
             Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.03125f));
             Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(4.0f));
             Assert.That(settings.Shadows.MaxShadowDistance, Is.EqualTo(120.0f));
+            Assert.That(
+                settings.Reflections.Mode,
+                Is.EqualTo(ReflectionMode.HybridRayQuery));
             Assert.That(settings.Reflections.Intensity, Is.EqualTo(1.0f));
             Assert.That(settings.Reflections.GlobalFallbackIntensity, Is.EqualTo(1.0f));
-            Assert.That(settings.Reflections.CaptureOnLoad, Is.True);
+            Assert.That(settings.Reflections.CaptureOnLoad, Is.False);
             Assert.That(settings.Reflections.CaptureIncludesDdgi, Is.False);
-            Assert.That(settings.Reflections.MaxProbeCapturesPerFrame, Is.EqualTo(1));
+            Assert.That(settings.Reflections.MaxProbeCapturesPerFrame, Is.Zero);
             Assert.That(
                 settings.GlobalIllumination.SimpleDdgiUrgentRelightProbeBudget,
                 Is.EqualTo(SimpleDdgiUrgentRelightPolicy.MaximumProbeBudget));

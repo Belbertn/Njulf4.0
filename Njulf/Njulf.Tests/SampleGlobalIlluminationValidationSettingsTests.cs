@@ -1,5 +1,4 @@
 using Njulf.Core.Math;
-using Njulf.Core.Scene;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
@@ -101,33 +100,6 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
     }
 
     [Test]
-    public void SponzaReflectionFallback_MainInfluenceContainsTheCompleteSceneAtFullAuthority()
-    {
-        var scene = new Scene();
-        SampleReflectionProbes.Configure(scene);
-
-        ReflectionProbe main = scene.ReflectionProbes.Single(static probe =>
-            probe.Name == "SampleRoomCenter");
-        var sceneMin = new Vector3(-17.0f, -1.0f, -10.0f);
-        var sceneMax = new Vector3(21.0f, 20.0f, 15.0f);
-        Vector3 fullAuthorityMin = main.Position - main.BoxExtents + new Vector3(main.BlendDistance);
-        Vector3 fullAuthorityMax = main.Position + main.BoxExtents - new Vector3(main.BlendDistance);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(main.Position, Is.EqualTo(new Vector3(0.0f, 2.0f, 0.0f)));
-            Assert.That(main.BoxExtents, Is.EqualTo(new Vector3(24.0f, 21.0f, 18.0f)));
-            Assert.That(main.BlendDistance, Is.EqualTo(3.0f));
-            Assert.That(fullAuthorityMin.X, Is.LessThanOrEqualTo(sceneMin.X));
-            Assert.That(fullAuthorityMin.Y, Is.LessThanOrEqualTo(sceneMin.Y));
-            Assert.That(fullAuthorityMin.Z, Is.LessThanOrEqualTo(sceneMin.Z));
-            Assert.That(fullAuthorityMax.X, Is.GreaterThanOrEqualTo(sceneMax.X));
-            Assert.That(fullAuthorityMax.Y, Is.GreaterThanOrEqualTo(sceneMax.Y));
-            Assert.That(fullAuthorityMax.Z, Is.GreaterThanOrEqualTo(sceneMax.Z));
-        });
-    }
-
-    [Test]
     public void SponzaCaptureSettings_ExplicitlyOwnDeterministicPresentationOverrides()
     {
         var settings = new RenderSettings();
@@ -214,14 +186,12 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.AutoExposure.DarkToLightAdaptationSpeed, Is.EqualTo(3.0f));
             Assert.That(settings.AutoExposure.LightToDarkAdaptationSpeed, Is.EqualTo(1.0f));
             Assert.That(settings.Reflections.Enabled, Is.True);
-            Assert.That(settings.Reflections.Mode, Is.EqualTo(ReflectionMode.StaticProbes));
-            Assert.That(settings.Reflections.Intensity, Is.EqualTo(0.45f));
-            Assert.That(settings.Reflections.GlobalFallbackIntensity, Is.EqualTo(0.65f));
-            Assert.That(settings.Reflections.CaptureOnLoad, Is.True);
+            Assert.That(settings.Reflections.Mode, Is.EqualTo(ReflectionMode.HybridRayQuery));
+            Assert.That(settings.Reflections.Intensity, Is.EqualTo(1.0f));
+            Assert.That(settings.Reflections.GlobalFallbackIntensity, Is.EqualTo(1.0f));
+            Assert.That(settings.Reflections.CaptureOnLoad, Is.False);
             Assert.That(settings.Reflections.CaptureIncludesDdgi, Is.False);
-            Assert.That(settings.Reflections.MaxProbeCapturesPerFrame, Is.EqualTo(1));
-            Assert.That(settings.Reflections.MaxProbeCaptureFacesPerFrame, Is.EqualTo(2));
-            Assert.That(settings.Reflections.MaxProbePrefilterMipsPerFrame, Is.EqualTo(2));
+            Assert.That(settings.Reflections.MaxProbeCapturesPerFrame, Is.Zero);
             Assert.That(settings.GlobalIllumination.DdgiAlphaMaskedTransportEnabled, Is.True);
             Assert.That(settings.Shadows.DirectionalCascadeCount, Is.EqualTo(3));
             Assert.That(settings.Shadows.MaxShadowDistance, Is.EqualTo(48.0f));

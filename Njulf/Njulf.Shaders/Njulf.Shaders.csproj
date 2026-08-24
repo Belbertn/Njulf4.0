@@ -456,6 +456,72 @@
         <Source>forward.frag</Source>
         <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4</Defines>
       </NearFieldDirectSourceShaderVariant>
+      <!-- Deferred hybrid-reflection receiver variants append their payload
+           after any independently admitted C4/C5 attachments. -->
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_c4_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_c4_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_c4_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_c5_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_c5_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_c5_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_ddgi_c4_c5_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_ddgi_c4_c5_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="forward_opaque_simple_full_input_ddgi_c4_c5_hybrid_reflection.frag">
+        <Source>forward.frag</Source>
+        <Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C4_RECEIVER_SEMANTICS_VERSION=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="foliage_forward_ddgi_hybrid_reflection.frag">
+        <Source>foliage_forward.frag</Source>
+        <Defines>-DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="foliage_forward_ddgi_c4_hybrid_reflection.frag">
+        <Source>foliage_forward.frag</Source>
+        <Defines>-DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="foliage_forward_ddgi_c5_hybrid_reflection.frag">
+        <Source>foliage_forward.frag</Source>
+        <Defines>-DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
+      <NearFieldDirectSourceShaderVariant Include="foliage_forward_ddgi_c4_c5_hybrid_reflection.frag">
+        <Source>foliage_forward.frag</Source>
+        <Defines>-DNJULF_C4_RECEIVER_OUTPUT=1 -DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1 -DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4 -DNJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT=1 -DNJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION=1</Defines>
+      </NearFieldDirectSourceShaderVariant>
       <ReceiverFeedbackShaderVariant Include="ddgi_simple_receiver_cache_b1.comp">
         <Source>ddgi_simple_receiver_cache.comp</Source>
         <Defines>-DNJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION=1</Defines>

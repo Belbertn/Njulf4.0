@@ -176,11 +176,11 @@ public sealed class SampleBenchmarkQualitySequenceTests
                 "--benchmark-quality-sequence-budget-profile=stress",
                 "--benchmark-quality-sequence-variant=baseline",
                 "--benchmark-quality-sequence-trajectory=bistro-loop",
-                "--bistro-quality-variant=reflection-source-ab",
+                "--bistro-quality-variant=hybrid-ray-query-ab",
                 "--performance-scenario=BistroQualityMotionRelight"
             ]),
             Throws.ArgumentException.With.Message.Contains(
-                "does not admit the ReflectionSourceAb"));
+                "does not admit the HybridRayQueryAb"));
     }
 
     [Test]

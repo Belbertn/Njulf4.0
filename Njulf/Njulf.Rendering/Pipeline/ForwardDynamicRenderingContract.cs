@@ -16,12 +16,14 @@ internal static class ForwardDynamicRenderingContract
         ForwardGiCausticReceiverContract.ColorAttachmentCount;
     public const uint CombinedAdvancedGiColorAttachmentCount =
         ForwardAdvancedGiCombinedContract.ColorAttachmentCount;
+    public const uint HybridReflectionReceiverColorAttachmentCount = 2;
 
     public static uint ResolveColorAttachmentCount(
         bool hasColorAttachment,
         bool materialTransportProvenanceEnabled = false,
         bool nearFieldDirectSourceEnabled = false,
-        bool giCausticReceiverEnabled = false)
+        bool giCausticReceiverEnabled = false,
+        bool hybridReflectionReceiverEnabled = false)
     {
         if (!hasColorAttachment)
             return 0;
@@ -30,10 +32,24 @@ internal static class ForwardDynamicRenderingContract
         // and C5 do have an explicitly compiled four-attachment ABI and may be
         // enabled together without re-rendering opaque geometry.
         if (materialTransportProvenanceEnabled &&
-            (nearFieldDirectSourceEnabled || giCausticReceiverEnabled))
+            (nearFieldDirectSourceEnabled || giCausticReceiverEnabled ||
+             hybridReflectionReceiverEnabled))
         {
             throw new InvalidOperationException(
-                "Material provenance cannot share a forward MRT variant with C4 or C5 experimental outputs.");
+                "Material provenance cannot share a forward MRT variant with C4, C5, or deferred reflection outputs.");
+        }
+
+        if (hybridReflectionReceiverEnabled)
+        {
+            uint producerCount = nearFieldDirectSourceEnabled &&
+                                 giCausticReceiverEnabled
+                ? CombinedAdvancedGiColorAttachmentCount
+                : nearFieldDirectSourceEnabled
+                    ? NearFieldDirectSourceColorAttachmentCount
+                    : giCausticReceiverEnabled
+                        ? GiCausticReceiverColorAttachmentCount
+                        : SceneColorAttachmentCount;
+            return producerCount + 1u;
         }
 
         if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)

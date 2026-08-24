@@ -603,6 +603,39 @@ namespace Njulf.Rendering.Data
         long GpuReflectionProbePrefilterMicroseconds,
         long GpuReflectionProbePublishMicroseconds)
     {
+        public ReflectionMode RequestedReflectionMode { get; init; } =
+            ReflectionMode.Disabled;
+        public ReflectionMode EffectiveReflectionMode { get; init; } =
+            ReflectionMode.Disabled;
+        public ReflectionFallbackReason ReflectionFallbackReason { get; init; }
+        public string ReflectionFallbackDetail { get; init; } = string.Empty;
+        public int HybridReflectionPassEnabled { get; init; }
+        public uint HybridReflectionWidth { get; init; }
+        public uint HybridReflectionHeight { get; init; }
+        public uint HybridReflectionRayQueryCapacity { get; init; }
+        public int HybridReflectionHistoryValid { get; init; }
+        public ReflectionHistoryResetReason HybridReflectionHistoryResetReason
+        {
+            get;
+            init;
+        }
+        public ulong HybridReflectionEstimatedBytes { get; init; }
+        public int HybridReflectionCountersReadbackValid { get; init; }
+        public uint HybridReflectionSsrHitCount { get; init; }
+        public uint HybridReflectionRayQueryRequestCount { get; init; }
+        public uint HybridReflectionRayQueryCount { get; init; }
+        public uint HybridReflectionRayQueryOverflowCount { get; init; }
+        public uint HybridReflectionRayQueryHitCount { get; init; }
+        public uint HybridReflectionRayQueryMissCount { get; init; }
+        public uint HybridReflectionProbeFallbackCount { get; init; }
+        public uint HybridReflectionEnvironmentFallbackCount { get; init; }
+        public long GpuHybridReflectionSsrMicroseconds { get; init; }
+        public long GpuHybridReflectionRayQueryMicroseconds { get; init; }
+        public long GpuHybridReflectionResolveMicroseconds { get; init; }
+        public long GpuHybridReflectionTemporalMicroseconds { get; init; }
+        public long GpuHybridReflectionSpatialMicroseconds { get; init; }
+        public long GpuHybridReflectionCompositeMicroseconds { get; init; }
+
         [Obsolete("This value is addressable receiver capacity, not emitted work. Use ForwardShadowReceiverMeshletCapacity.")]
         public int ForwardShadowReceiverMeshletCount => ForwardShadowReceiverMeshletCapacity;
 

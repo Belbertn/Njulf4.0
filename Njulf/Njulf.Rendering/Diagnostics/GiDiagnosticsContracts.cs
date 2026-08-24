@@ -2448,6 +2448,26 @@ namespace Njulf.Rendering.Diagnostics
             AddSetting(settings, "lighting.ambientOcclusionIntensity", diagnostics.AmbientOcclusionIntensity);
             AddSetting(settings, "lighting.reflections", diagnostics.ReflectionsEnabled);
             AddSetting(settings, "lighting.reflectionMode", diagnostics.ReflectionMode.ToString());
+            AddSetting(settings, "lighting.reflection.requestedMode",
+                diagnostics.RequestedReflectionMode.ToString());
+            AddSetting(settings, "lighting.reflection.effectiveMode",
+                diagnostics.EffectiveReflectionMode.ToString());
+            AddSetting(settings, "lighting.reflection.fallbackReason",
+                diagnostics.ReflectionFallbackReason.ToString());
+            AddSetting(settings, "lighting.reflection.fallbackDetail",
+                diagnostics.ReflectionFallbackDetail);
+            AddSetting(settings, "lighting.reflection.rayCapacity",
+                diagnostics.HybridReflectionRayQueryCapacity);
+            AddSetting(settings, "lighting.reflection.ssrHits",
+                diagnostics.HybridReflectionSsrHitCount);
+            AddSetting(settings, "lighting.reflection.rayQueries",
+                diagnostics.HybridReflectionRayQueryCount);
+            AddSetting(settings, "lighting.reflection.rayOverflows",
+                diagnostics.HybridReflectionRayQueryOverflowCount);
+            AddSetting(settings, "lighting.reflection.probeFallbacks",
+                diagnostics.HybridReflectionProbeFallbackCount);
+            AddSetting(settings, "lighting.reflection.environmentFallbacks",
+                diagnostics.HybridReflectionEnvironmentFallbackCount);
         }
 
         private static void AddLayoutSettings(List<string> settings, SimpleDdgiLayoutTelemetry layout)

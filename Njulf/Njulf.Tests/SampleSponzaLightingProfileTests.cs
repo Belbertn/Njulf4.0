@@ -69,34 +69,15 @@ public sealed class SampleSponzaLightingProfileTests
     }
 
     [Test]
-    public void SampleSceneMainReflectionField_ContainsTheCompletePlazaAtFullAuthority()
+    public void SampleScene_DoesNotAuthorManualReflectionProbes()
     {
         string path = Path.Combine(
             TestContext.CurrentContext.TestDirectory,
             "Scenes",
             "SampleScene.njscene.json");
         SceneDocument document = SceneDocumentJson.Read(path);
-        SceneReflectionProbeDocument main = document.ReflectionProbes.Single(static probe =>
-            probe.Name == "SampleRoomCenter");
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(main.Position, Is.EqualTo(new SceneVector3(0.0f, 2.0f, 0.0f)));
-            Assert.That(main.BoxExtents, Is.EqualTo(new SceneVector3(24.0f, 21.0f, 18.0f)));
-            Assert.That(main.BlendDistance, Is.EqualTo(3.0f));
-            Assert.That(main.Position.X - main.BoxExtents.X + main.BlendDistance,
-                Is.LessThanOrEqualTo(-17.0f));
-            Assert.That(main.Position.Y - main.BoxExtents.Y + main.BlendDistance,
-                Is.LessThanOrEqualTo(-1.0f));
-            Assert.That(main.Position.Z - main.BoxExtents.Z + main.BlendDistance,
-                Is.LessThanOrEqualTo(-10.0f));
-            Assert.That(main.Position.X + main.BoxExtents.X - main.BlendDistance,
-                Is.GreaterThanOrEqualTo(21.0f));
-            Assert.That(main.Position.Y + main.BoxExtents.Y - main.BlendDistance,
-                Is.GreaterThanOrEqualTo(20.0f));
-            Assert.That(main.Position.Z + main.BoxExtents.Z - main.BlendDistance,
-                Is.GreaterThanOrEqualTo(15.0f));
-        });
+        Assert.That(document.ReflectionProbes, Is.Empty);
     }
 
     private static SourceSun ReadSourceSun()

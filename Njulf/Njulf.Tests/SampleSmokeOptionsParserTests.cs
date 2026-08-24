@@ -1330,6 +1330,19 @@ public sealed class SampleSmokeOptionsParserTests
     }
 
     [Test]
+    public void RejectsRetiredManualReflectionProbeScenario()
+    {
+        Assert.That(
+            () => SampleSmokeOptionsParser.Parse(
+            [
+                "--performance-scenario",
+                "gi-sponza-reflection-probe-lifecycle"
+            ]),
+            Throws.ArgumentException.With.Message.Contains(
+                "manual reflection-probe lifecycle scenario is retired"));
+    }
+
+    [Test]
     public void ParsesSponzaTemporalCaptureAsLockedDeterministicSequence()
     {
         string directory = Path.Combine(

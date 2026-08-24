@@ -85,6 +85,21 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_ddgi_c4_c5.frag.spv' = 14
     'forward_opaque_simple_ddgi_c4_c5.frag.spv' = 14
     'forward_opaque_simple_full_input_ddgi_c4_c5.frag.spv' = 14
+    # Hybrid-reflection receiver variants only append the deferred specular
+    # payload MRT. Their DDGI receiver synchronization remains identical to
+    # the matching canonical/C4/C5 variants.
+    'forward_opaque_ddgi_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c4_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_c4_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_c4_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c5_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_c5_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_c5_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
+    'forward_opaque_simple_full_input_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_weighted_oit.frag.spv' = 14
     # Ray-query transparent receivers change only directional visibility. They
     # retain the exact bounded DDGI receiver-demand/gather synchronization of

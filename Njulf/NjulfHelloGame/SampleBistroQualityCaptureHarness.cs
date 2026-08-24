@@ -22,7 +22,7 @@ public enum SampleBistroQualityCaptureVariant : byte
     SteadyMotion,
     SunScaleStep,
     SunDirectionStep,
-    ReflectionSourceAb
+    HybridRayQueryAb
 }
 
 public sealed record SampleBistroQualityCameraBookmark(
@@ -40,7 +40,7 @@ public sealed record SampleBistroQualityFrameState(
     SampleBistroQualityCameraBookmark Camera,
     float DirectionalLightScale,
     float DirectionalLightYawOffsetRadians,
-    bool ReflectionCaptureIncludesDdgi,
+    bool HybridRayQueryEnabled,
     bool LightingEventActive);
 
 /// <summary>
@@ -51,7 +51,7 @@ public sealed record SampleBistroQualityFrameState(
 /// </summary>
 public sealed class SampleBistroQualityCaptureContract
 {
-    public const string Schema = "bistro-quality-run/v6";
+    public const string Schema = "bistro-quality-run/v7";
     public const int Width = 1920;
     public const int Height = 1080;
     public const int FramesPerSecond = 60;
@@ -180,8 +180,8 @@ public sealed class SampleBistroQualityCaptureContract
             eventActive
                 ? DegreesToRadians(SteppedDirectionDegrees)
                 : 0.0f;
-        bool reflectionCaptureIncludesDdgi =
-            Variant == SampleBistroQualityCaptureVariant.ReflectionSourceAb &&
+        bool hybridRayQueryEnabled =
+            Variant == SampleBistroQualityCaptureVariant.HybridRayQueryAb &&
             eventActive;
 
         return new SampleBistroQualityFrameState(
@@ -190,7 +190,7 @@ public sealed class SampleBistroQualityCaptureContract
             ResolveCamera(loopFrameIndex),
             lightScale,
             directionOffset,
-            reflectionCaptureIncludesDdgi,
+            hybridRayQueryEnabled,
             eventActive);
     }
 
@@ -261,7 +261,7 @@ public sealed record SampleBistroQualityFrameTelemetry(
     bool LightingEventActive,
     float DirectionalLightScale,
     float DirectionalLightYawOffsetRadians,
-    bool ReflectionCaptureIncludesDdgi,
+    bool HybridRayQueryEnabled,
     PerformanceCaptureCameraMetadata Camera,
     float Exposure,
     long CpuFrameMicroseconds,
@@ -439,7 +439,7 @@ internal sealed class SampleBistroQualityRuntimeController
     private readonly LightManager _lightManager;
     private readonly LightHandle _directionalLightHandle;
     private readonly Light _baseDirectionalLight;
-    private readonly bool _baseReflectionCaptureIncludesDdgi;
+    private readonly ReflectionMode _baseReflectionMode;
     private readonly bool _baseAutoExposureEnabled;
     private readonly float _baseExposure;
     private SampleBistroQualityFrameState? _lastAppliedState;
@@ -467,8 +467,7 @@ internal sealed class SampleBistroQualityRuntimeController
 
         _directionalLightHandle = directional.Handle;
         _baseDirectionalLight = directional.Light;
-        _baseReflectionCaptureIncludesDdgi =
-            renderer.Settings.Reflections.CaptureIncludesDdgi;
+        _baseReflectionMode = renderer.Settings.Reflections.Mode;
         _baseAutoExposureEnabled = renderer.Settings.AutoExposure.Enabled;
         _baseExposure = renderer.Settings.Exposure;
     }
@@ -491,8 +490,7 @@ internal sealed class SampleBistroQualityRuntimeController
         _lightManager.UpdateLight(
             _directionalLightHandle,
             _baseDirectionalLight);
-        _renderer.Settings.Reflections.CaptureIncludesDdgi =
-            _baseReflectionCaptureIncludesDdgi;
+        _renderer.Settings.Reflections.Mode = _baseReflectionMode;
         _renderer.Settings.Exposure = _baseExposure;
         _renderer.Settings.AutoExposure.Enabled = _baseAutoExposureEnabled;
     }
@@ -540,10 +538,11 @@ internal sealed class SampleBistroQualityRuntimeController
         }
 
         if (Contract.Variant ==
-            SampleBistroQualityCaptureVariant.ReflectionSourceAb)
+            SampleBistroQualityCaptureVariant.HybridRayQueryAb)
         {
-            _renderer.Settings.Reflections.CaptureIncludesDdgi =
-                state.ReflectionCaptureIncludesDdgi;
+            _renderer.Settings.Reflections.Mode = state.HybridRayQueryEnabled
+                ? ReflectionMode.HybridRayQuery
+                : ReflectionMode.StaticProbesAndSsr;
         }
     }
 
@@ -693,7 +692,7 @@ internal sealed class SampleBistroQualityCaptureRunner
                 state.LightingEventActive,
                 state.DirectionalLightScale,
                 state.DirectionalLightYawOffsetRadians,
-                state.ReflectionCaptureIncludesDdgi,
+                state.HybridRayQueryEnabled,
                 diagnostics.CaptureCamera,
                 diagnostics.Exposure,
                 diagnostics.CpuTotalDrawSceneMicroseconds,
@@ -1230,18 +1229,21 @@ internal sealed class SampleBistroQualityCaptureRunner
         int reflectionProbeCount = _frames.Count == 0
             ? 0
             : _frames.Max(static frame => frame.ReflectionProbeCount);
-        if (reflectionProbeCount < 2)
+        if (reflectionProbeCount != 0)
         {
             failures.Add(
-                $"Expected at least two Bistro reflection probes, observed " +
-                $"{reflectionProbeCount}.");
+                $"Bistro must remain probe-free; observed " +
+                $"{reflectionProbeCount} manual reflection probe(s).");
         }
-        if (_frames.Count > 0 &&
-            _frames[^1].ReflectionProbePublishedCount < reflectionProbeCount)
+        if (_frames.Any(static frame =>
+                frame.ReflectionProbeCapturesQueued != 0 ||
+                frame.ReflectionProbeCapturesCompleted != 0 ||
+                frame.ReflectionProbePublishedCount != 0 ||
+                frame.GpuReflectionProbeCaptureMicroseconds != 0 ||
+                frame.GpuReflectionProbePrefilterMicroseconds != 0))
         {
             failures.Add(
-                "The authored Bistro reflection probes did not finish their " +
-                "bounded startup captures.");
+                "Bistro recorded reflection-probe capture or publication work.");
         }
 
         return new SampleBistroQualityGateResult(

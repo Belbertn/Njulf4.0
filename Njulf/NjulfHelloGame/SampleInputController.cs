@@ -935,10 +935,13 @@ internal sealed class SampleInputController
                 ReflectionDebugView.ProbeBlendWeights => ReflectionDebugView.ProbeCubemapFace,
                 ReflectionDebugView.ProbeCubemapFace => ReflectionDebugView.ProbePrefilterMip,
                 ReflectionDebugView.ProbePrefilterMip => ReflectionDebugView.BoxProjectionDirection,
-                ReflectionDebugView.BoxProjectionDirection => ReflectionDebugView.LocalReflectionOnly,
+                ReflectionDebugView.BoxProjectionDirection => ReflectionDebugView.SsrMask,
+                ReflectionDebugView.SsrMask => ReflectionDebugView.LocalReflectionOnly,
                 ReflectionDebugView.LocalReflectionOnly => ReflectionDebugView.GlobalFallbackOnly,
                 ReflectionDebugView.GlobalFallbackOnly => ReflectionDebugView.DdgiDirectionalRadianceLobe,
                 ReflectionDebugView.DdgiDirectionalRadianceLobe => ReflectionDebugView.SourceOwnership,
+                ReflectionDebugView.SourceOwnership => ReflectionDebugView.Confidence,
+                ReflectionDebugView.Confidence => ReflectionDebugView.SourceSelection,
                 _ => ReflectionDebugView.None
             };
             PrintReflectionSettings("Reflection debug");
@@ -949,7 +952,9 @@ internal sealed class SampleInputController
             _renderer.Settings.Reflections.Mode = _renderer.Settings.Reflections.Mode switch
             {
                 ReflectionMode.GlobalEnvironmentOnly => ReflectionMode.StaticProbes,
-                ReflectionMode.StaticProbes => ReflectionMode.GlobalEnvironmentOnly,
+                ReflectionMode.StaticProbes => ReflectionMode.StaticProbesAndSsr,
+                ReflectionMode.StaticProbesAndSsr => ReflectionMode.HybridRayQuery,
+                ReflectionMode.HybridRayQuery => ReflectionMode.GlobalEnvironmentOnly,
                 _ => ReflectionMode.StaticProbes
             };
             PrintReflectionSettings("Reflection mode");

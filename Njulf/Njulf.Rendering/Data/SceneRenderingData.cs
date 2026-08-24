@@ -717,6 +717,10 @@ namespace Njulf.Rendering.Data
         public long GpuVolumetricFogCompositeMicroseconds { get; set; }
         public bool ReflectionsEnabled { get; set; }
         public ReflectionMode ReflectionMode { get; set; } = ReflectionMode.Disabled;
+        public ReflectionMode RequestedReflectionMode { get; set; } = ReflectionMode.Disabled;
+        public ReflectionMode EffectiveReflectionMode { get; set; } = ReflectionMode.Disabled;
+        public ReflectionFallbackReason ReflectionFallbackReason { get; set; }
+        public string ReflectionFallbackDetail { get; set; } = string.Empty;
         public ReflectionDebugView ReflectionDebugView { get; set; } = ReflectionDebugView.None;
         public int ReflectionProbeCount { get; set; }
         public int ReflectionProbeCapacity { get; set; }
@@ -737,6 +741,30 @@ namespace Njulf.Rendering.Data
         public long GpuReflectionProbeCaptureMicroseconds { get; set; }
         public long GpuReflectionProbePrefilterMicroseconds { get; set; }
         public long GpuReflectionProbePublishMicroseconds { get; set; }
+        public ulong HybridReflectionEstimatedBytes { get; set; }
+        public bool HybridReflectionPassEnabled { get; set; }
+        public uint HybridReflectionWidth { get; set; }
+        public uint HybridReflectionHeight { get; set; }
+        public uint HybridReflectionRayQueryCapacity { get; set; }
+        public int HybridReflectionHistoryValid { get; set; }
+        public ReflectionHistoryResetReason HybridReflectionHistoryResetReason { get; set; }
+        public ulong ReflectionProbeContentRevision { get; set; }
+        public uint ReflectionEnvironmentGeneration { get; set; }
+        public uint HybridReflectionSsrHitCount { get; set; }
+        public int HybridReflectionCountersReadbackValid { get; set; }
+        public uint HybridReflectionRayQueryRequestCount { get; set; }
+        public uint HybridReflectionRayQueryCount { get; set; }
+        public uint HybridReflectionRayQueryOverflowCount { get; set; }
+        public uint HybridReflectionRayQueryHitCount { get; set; }
+        public uint HybridReflectionRayQueryMissCount { get; set; }
+        public uint HybridReflectionProbeFallbackCount { get; set; }
+        public uint HybridReflectionEnvironmentFallbackCount { get; set; }
+        public long GpuHybridReflectionSsrMicroseconds { get; set; }
+        public long GpuHybridReflectionRayQueryMicroseconds { get; set; }
+        public long GpuHybridReflectionResolveMicroseconds { get; set; }
+        public long GpuHybridReflectionTemporalMicroseconds { get; set; }
+        public long GpuHybridReflectionSpatialMicroseconds { get; set; }
+        public long GpuHybridReflectionCompositeMicroseconds { get; set; }
         public bool AmbientOcclusionEnabled { get; set; }
         public AmbientOcclusionMode AmbientOcclusionMode { get; set; } = AmbientOcclusionMode.Disabled;
         public AmbientOcclusionDebugView AmbientOcclusionDebugView { get; set; } = AmbientOcclusionDebugView.None;
@@ -2221,6 +2249,10 @@ namespace Njulf.Rendering.Data
             GpuVolumetricFogCompositeMicroseconds = 0;
             ReflectionsEnabled = false;
             ReflectionMode = ReflectionMode.Disabled;
+            RequestedReflectionMode = ReflectionMode.Disabled;
+            EffectiveReflectionMode = ReflectionMode.Disabled;
+            ReflectionFallbackReason = ReflectionFallbackReason.None;
+            ReflectionFallbackDetail = string.Empty;
             ReflectionDebugView = ReflectionDebugView.None;
             ReflectionProbeCount = 0;
             ReflectionProbeCapacity = 0;
@@ -2241,6 +2273,31 @@ namespace Njulf.Rendering.Data
             GpuReflectionProbeCaptureMicroseconds = 0;
             GpuReflectionProbePrefilterMicroseconds = 0;
             GpuReflectionProbePublishMicroseconds = 0;
+            HybridReflectionEstimatedBytes = 0;
+            HybridReflectionPassEnabled = false;
+            HybridReflectionWidth = 0;
+            HybridReflectionHeight = 0;
+            HybridReflectionRayQueryCapacity = 0;
+            HybridReflectionHistoryValid = 0;
+            HybridReflectionHistoryResetReason =
+                ReflectionHistoryResetReason.None;
+            ReflectionProbeContentRevision = 0;
+            ReflectionEnvironmentGeneration = 0;
+            HybridReflectionSsrHitCount = 0;
+            HybridReflectionCountersReadbackValid = 0;
+            HybridReflectionRayQueryRequestCount = 0;
+            HybridReflectionRayQueryCount = 0;
+            HybridReflectionRayQueryOverflowCount = 0;
+            HybridReflectionRayQueryHitCount = 0;
+            HybridReflectionRayQueryMissCount = 0;
+            HybridReflectionProbeFallbackCount = 0;
+            HybridReflectionEnvironmentFallbackCount = 0;
+            GpuHybridReflectionSsrMicroseconds = 0;
+            GpuHybridReflectionRayQueryMicroseconds = 0;
+            GpuHybridReflectionResolveMicroseconds = 0;
+            GpuHybridReflectionTemporalMicroseconds = 0;
+            GpuHybridReflectionSpatialMicroseconds = 0;
+            GpuHybridReflectionCompositeMicroseconds = 0;
             AmbientOcclusionEnabled = false;
             AmbientOcclusionMode = AmbientOcclusionMode.Disabled;
             AmbientOcclusionDebugView = AmbientOcclusionDebugView.None;

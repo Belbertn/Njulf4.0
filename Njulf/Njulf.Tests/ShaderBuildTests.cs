@@ -11,6 +11,12 @@ public sealed class ShaderBuildTests
     private static readonly string[] RequiredShaders =
     [
         "ambient_occlusion.comp",
+        "hybrid_reflection_ssr.comp",
+        "hybrid_reflection_ray_query.comp",
+        "hybrid_reflection_resolve.comp",
+        "hybrid_reflection_temporal.comp",
+        "hybrid_reflection_spatial.comp",
+        "hybrid_reflection_composite.comp",
         "forward.frag",
         "ddgi_simple_trace.comp",
         "ddgi_simple_transport.comp",
@@ -57,7 +63,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(273));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(295));
 
         foreach (string shaderName in RequiredShaders)
         {

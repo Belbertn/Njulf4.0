@@ -1307,11 +1307,11 @@ public static class SampleSmokeOptionsParser
             if (SampleBenchmarkTrajectory.RequiresBistro(
                     benchmarkQualitySequenceTrajectory) &&
                 bistroQualityCaptureVariant ==
-                    SampleBistroQualityCaptureVariant.ReflectionSourceAb)
+                    SampleBistroQualityCaptureVariant.HybridRayQueryAb)
             {
                 throw new ArgumentException(
                     "Benchmark quality-sequence mode does not admit the " +
-                    "ReflectionSourceAb Bistro variant because it intentionally " +
+                    "HybridRayQueryAb Bistro variant because it intentionally " +
                     "changes the render-settings identity inside the route.");
             }
             benchmarkQualitySequenceVariant =
@@ -2208,10 +2208,10 @@ public static class SampleSmokeOptionsParser
                 SampleBistroQualityCaptureVariant.SunScaleStep,
             "sundirectionstep" or "directionstep" =>
                 SampleBistroQualityCaptureVariant.SunDirectionStep,
-            "reflectionsourceab" or "reflection" =>
-                SampleBistroQualityCaptureVariant.ReflectionSourceAb,
+            "hybridrayqueryab" or "hybridreflection" =>
+                SampleBistroQualityCaptureVariant.HybridRayQueryAb,
             _ => throw new ArgumentException(
-                $"Invalid Bistro quality variant '{value}'. Valid values: presentation, steady-motion, sun-scale-step, sun-direction-step, reflection-source-ab.")
+                $"Invalid Bistro quality variant '{value}'. Valid values: presentation, steady-motion, sun-scale-step, sun-direction-step, hybrid-ray-query-ab.")
         };
     }
 
@@ -2472,10 +2472,24 @@ public static class SampleSmokeOptionsParser
         {
             string scenarioName = scenario.ToString().Replace("-", string.Empty).Replace("_", string.Empty);
             if (scenarioName.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                if (scenario == SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle)
+                {
+                    throw new ArgumentException(
+                        "The GI Sponza manual reflection-probe lifecycle scenario is retired; " +
+                        "use ReflectionHeavy or the Bistro hybrid-ray-query A/B capture.");
+                }
                 return scenario;
+            }
         }
 
-        throw new ArgumentException($"Invalid performance scenario '{value}'. Valid values: {string.Join(", ", Enum.GetNames<SamplePerformanceScenario>())}.");
+        string validScenarios = string.Join(
+            ", ",
+            Enum.GetValues<SamplePerformanceScenario>()
+                .Where(static scenario =>
+                    scenario != SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle));
+        throw new ArgumentException(
+            $"Invalid performance scenario '{value}'. Valid values: {validScenarios}.");
     }
 
 

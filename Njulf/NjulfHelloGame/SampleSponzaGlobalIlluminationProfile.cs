@@ -218,28 +218,7 @@ public static class SampleSponzaGlobalIlluminationProfile
         settings.Bloom.MipCount = 6;
         settings.Fog.Enabled = false;
         settings.Reflections.Enabled = true;
-        settings.Reflections.Mode = ReflectionMode.StaticProbes;
-        settings.Reflections.MaxProbesPerPixel = 2;
-        // The authored cubemaps are necessarily sky-heavy in the open atrium.
-        // At unity they veil rough stone with a nearly uniform blue lobe and
-        // visually mask the structured diffuse field. This is a display balance,
-        // not a reduction of DDGI transport or environment source radiance.
-        settings.Reflections.Intensity = 0.45f;
-        settings.Reflections.GlobalFallbackIntensity = 0.65f;
-        // Sponza already authors two local reflection volumes, but the generic
-        // renderer default deliberately gives probe capture a zero-frame
-        // budget. Enabling reflections without admitting their producer left
-        // both probes permanently unpublished and made every rough receiver
-        // fall back to the unobstructed procedural sky. Capture the authored
-        // reflection probes so the scene supplies the local specular field;
-        // generic-ring DDGI continues to own diffuse bounce at the receiver.
-        // Keeping the probe transaction independent from DDGI convergence also
-        // avoids deadlocking first publication on a moving-atmosphere cohort.
-        settings.Reflections.CaptureOnLoad = true;
-        settings.Reflections.CaptureIncludesDdgi = false;
-        settings.Reflections.MaxProbeCapturesPerFrame = 1;
-        settings.Reflections.MaxConcurrentProbeCaptures = 1;
-        settings.Reflections.MaxProbeCaptureFacesPerFrame = 2;
-        settings.Reflections.MaxProbePrefilterMipsPerFrame = 2;
+        settings.Reflections.Intensity = 1.0f;
+        settings.Reflections.GlobalFallbackIntensity = 1.0f;
     }
 }

@@ -1812,10 +1812,10 @@ public sealed class SampleBenchmarkQualitySequenceRunner
         }
         if (SampleBenchmarkTrajectory.RequiresBistro(options.Trajectory) &&
             options.TrajectoryBistroVariant ==
-                SampleBistroQualityCaptureVariant.ReflectionSourceAb)
+                SampleBistroQualityCaptureVariant.HybridRayQueryAb)
         {
             throw new ArgumentException(
-                "Quality sequence does not admit the ReflectionSourceAb Bistro " +
+                "Quality sequence does not admit the HybridRayQueryAb Bistro " +
                 "variant because it intentionally changes settings inside the route.");
         }
     }

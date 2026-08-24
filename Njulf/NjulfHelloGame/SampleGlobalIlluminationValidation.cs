@@ -327,7 +327,6 @@ public static class SampleGlobalIlluminationValidation
         return scenario is SamplePerformanceScenario.GiSponzaRightWallStationary
             or SamplePerformanceScenario.GiSponzaAnimatedAtmosphere
             or SamplePerformanceScenario.GiSponzaFreezeAfterAtmosphereStep
-            or SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle
             or SamplePerformanceScenario.GiSimpleDdgiFurnace
             or SamplePerformanceScenario.GiCornellRoom
             or SamplePerformanceScenario.GiQualityInterior
@@ -355,7 +354,7 @@ public static class SampleGlobalIlluminationValidation
         {
             // The stationary camera is useful for both interactive review and
             // deterministic evidence. Selecting it must not silently disable
-            // Sponza's auto exposure, authored reflection probes, or bloom;
+            // Sponza's auto exposure, hybrid reflections, or bloom;
             // the capture harness opts into those overrides explicitly through
             // ConfigureSponzaCaptureSettings below.
             SampleSponzaGlobalIlluminationProfile.Configure(settings);
@@ -435,9 +434,6 @@ public static class SampleGlobalIlluminationValidation
             settings.Particles.Enabled = true;
             settings.Particles.SimulationMode = ParticleSimulationMode.Cpu;
             settings.Reflections.Enabled = true;
-            settings.Reflections.Mode = ReflectionMode.StaticProbes;
-            settings.Reflections.CaptureOnLoad = true;
-            settings.Reflections.MaxProbeCapturesPerFrame = 2;
             gi.FarFieldClipmapEnabled = true;
             gi.FarFieldSkyVisibilityEnabled = true;
             gi.FarFieldSunShadowEnabled = true;

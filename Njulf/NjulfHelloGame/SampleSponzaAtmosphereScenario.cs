@@ -5,8 +5,7 @@ namespace NjulfHelloGame;
 public enum SampleSponzaAtmosphereStage : byte
 {
     Animated,
-    FreezeAfterOneQuantizedStep,
-    ReflectionLifecycle
+    FreezeAfterOneQuantizedStep
 }
 
 public readonly record struct SampleSponzaAtmosphereScenarioSpec(
@@ -15,10 +14,6 @@ public readonly record struct SampleSponzaAtmosphereScenarioSpec(
     bool AnimateTimeOfDay,
     bool FreezeAfterFirstStep,
     bool EnableReflections,
-    bool CaptureIncludesDdgi,
-    int MaximumCapturesPerFrame,
-    int MaximumCaptureFacesPerFrame,
-    int MaximumPrefilterMipsPerFrame,
     float GiSunStepDegrees,
     float GiTargetSourceSweepSeconds);
 
@@ -38,10 +33,6 @@ public static class SampleSponzaAtmosphereScenario
                 AnimateTimeOfDay: true,
                 FreezeAfterFirstStep: false,
                 EnableReflections: true,
-                CaptureIncludesDdgi: true,
-                MaximumCapturesPerFrame: 1,
-                MaximumCaptureFacesPerFrame: 2,
-                MaximumPrefilterMipsPerFrame: 1,
                 GiSunStepDegrees: 0.25f,
                 GiTargetSourceSweepSeconds: 8.0f),
             SamplePerformanceScenario.GiSponzaFreezeAfterAtmosphereStep => new(
@@ -50,22 +41,6 @@ public static class SampleSponzaAtmosphereScenario
                 AnimateTimeOfDay: true,
                 FreezeAfterFirstStep: true,
                 EnableReflections: true,
-                CaptureIncludesDdgi: true,
-                MaximumCapturesPerFrame: 1,
-                MaximumCaptureFacesPerFrame: 2,
-                MaximumPrefilterMipsPerFrame: 1,
-                GiSunStepDegrees: 0.25f,
-                GiTargetSourceSweepSeconds: 8.0f),
-            SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle => new(
-                scenario,
-                SampleSponzaAtmosphereStage.ReflectionLifecycle,
-                AnimateTimeOfDay: false,
-                FreezeAfterFirstStep: false,
-                EnableReflections: true,
-                CaptureIncludesDdgi: true,
-                MaximumCapturesPerFrame: 1,
-                MaximumCaptureFacesPerFrame: 2,
-                MaximumPrefilterMipsPerFrame: 1,
                 GiSunStepDegrees: 0.25f,
                 GiTargetSourceSweepSeconds: 8.0f),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, "Not a Sponza atmosphere scenario.")
@@ -73,8 +48,7 @@ public static class SampleSponzaAtmosphereScenario
 
     public static bool IsScenario(SamplePerformanceScenario scenario) =>
         scenario is SamplePerformanceScenario.GiSponzaAnimatedAtmosphere
-            or SamplePerformanceScenario.GiSponzaFreezeAfterAtmosphereStep
-            or SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle;
+            or SamplePerformanceScenario.GiSponzaFreezeAfterAtmosphereStep;
 
     public static void Configure(RenderSettings settings, SamplePerformanceScenario scenario)
     {
@@ -94,13 +68,5 @@ public static class SampleSponzaAtmosphereScenario
         settings.Environment.AnimateTimeOfDay = spec.AnimateTimeOfDay;
         settings.Environment.SunDriver = ProceduralSkySunDriver.AstronomicalTime;
         settings.Reflections.Enabled = spec.EnableReflections;
-        settings.Reflections.Mode = ReflectionMode.StaticProbes;
-        settings.Reflections.CaptureOnLoad = true;
-        settings.Reflections.CaptureIncludesDdgi = spec.CaptureIncludesDdgi;
-        settings.Reflections.MaxProbeCapturesPerFrame = spec.MaximumCapturesPerFrame;
-        settings.Reflections.MaxProbeCaptureFacesPerFrame = spec.MaximumCaptureFacesPerFrame;
-        settings.Reflections.MaxProbePrefilterMipsPerFrame = spec.MaximumPrefilterMipsPerFrame;
-        settings.Reflections.MinimumEnvironmentRecaptureIntervalSeconds = 0.25f;
-        settings.Reflections.MaximumEnvironmentCaptureAgeSeconds = 30.0f;
     }
 }

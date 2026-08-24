@@ -422,7 +422,7 @@ internal static class SampleBenchmarkQualityRouteSequenceHasher
             .Append(state.LoopFrameIndex.ToString(CultureInfo.InvariantCulture)).Append('|')
             .Append(state.DirectionalLightScale.ToString("R", CultureInfo.InvariantCulture)).Append('|')
             .Append(state.DirectionalLightYawOffsetRadians.ToString("R", CultureInfo.InvariantCulture)).Append('|')
-            .Append(state.ReflectionCaptureIncludesDdgi ? '1' : '0').Append('|')
+            .Append(state.HybridRayQueryEnabled ? '1' : '0').Append('|')
             .Append(state.LightingEventActive ? '1' : '0').Append('|');
     }
 

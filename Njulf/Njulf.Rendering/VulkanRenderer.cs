@@ -251,6 +251,7 @@ namespace Njulf.Rendering
         private BoundingBox? _lastDdgiFoliageProxyInfluenceBounds;
         private AutoExposureManager? _autoExposureManager;
         private GiPipelineCacheService? _giPipelineCacheService;
+        private HybridReflectionVulkanRuntime? _hybridReflectionRuntime;
         private SmaaResources? _smaaResources;
         private SkinningManager _skinningManager = null!;
         private GpuParticleRuntimeManager _gpuParticleRuntimeManager = null!;
@@ -440,6 +441,8 @@ namespace Njulf.Rendering
             DirectionalShadowCasterDiagnostics.Empty;
         private DirectionalShadowRayCounters _completedDirectionalShadowRayCounters =
             DirectionalShadowRayCounters.Empty;
+        private HybridReflectionCounterSnapshot _completedHybridReflectionCounters =
+            HybridReflectionCounterSnapshot.Empty;
         private readonly DirectionalShadowCasterFrameCapture[] _directionalShadowCasterFrameCaptures =
             new DirectionalShadowCasterFrameCapture[FramesInFlight];
         private FarFieldMaterialV2Counters _completedFarFieldMaterialV2Counters;
@@ -541,6 +544,8 @@ namespace Njulf.Rendering
         private int _lastBloomTargetMipCount = 6;
         private bool _lastFogTargetEnabled = true;
         private bool _lastMaterialTransportProvenanceTargetEnabled;
+        private bool _lastHybridReflectionTargetEnabled;
+        private float _lastHybridReflectionRayBudgetFraction;
         private Extent2D _lastSceneRenderExtent;
         private float _lastEffectiveResolutionScale = 1.0f;
         private readonly DynamicResolutionScaleController _dynamicResolutionScaleController = new();
@@ -1512,7 +1517,9 @@ namespace Njulf.Rendering
                 giCausticEnabled:
                     _advancedGiGraphModes.UsesCausticWorldCache,
                 giCausticScreenLayout:
-                    _giCausticPlan.GpuLayout.ScreenResolve);
+                    _giCausticPlan.GpuLayout.ScreenResolve,
+                hybridReflectionsEnabled:
+                    IsHybridReflectionTargetEnabled(Settings));
             _lastAmbientOcclusionTargetEnabled = Settings.AmbientOcclusion.Enabled;
             _lastAmbientOcclusionResolutionScale = Settings.AmbientOcclusion.ResolutionScale;
             _lastAntiAliasingTargetMode = Settings.AntiAliasing.EffectiveMode;
@@ -1522,6 +1529,10 @@ namespace Njulf.Rendering
             _lastFogTargetEnabled = fogTargetEnabled;
             _lastMaterialTransportProvenanceTargetEnabled =
                 materialTransportProvenanceTargetEnabled;
+            _lastHybridReflectionTargetEnabled =
+                IsHybridReflectionTargetEnabled(Settings);
+            _lastHybridReflectionRayBudgetFraction =
+                Settings.Reflections.RayQueryPixelBudgetFraction;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
             _lastRenderTargetRecreateReason = "Initial render targets";
@@ -1611,6 +1622,15 @@ namespace Njulf.Rendering
             _giPipelineCacheService = new GiPipelineCacheService(
                 _context,
                 _captureShaderBundleHash);
+            _hybridReflectionRuntime = new HybridReflectionVulkanRuntime(
+                _context,
+                _bindlessHeap,
+                _bufferManager,
+                _renderTargets,
+                Settings,
+                _accelerationStructureManager,
+                _raySceneDescriptorBank,
+                _giPipelineCacheService);
 
             if (_advancedGiGraphModes.UsesCausticWorldCache)
             {
@@ -1854,6 +1874,8 @@ namespace Njulf.Rendering
                     Settings,
                     _nearFieldDirectSourcePipelineConfiguration,
                     _giCausticReceiverPipelineConfiguration,
+                    ForwardHybridReflectionReceiverPipelineConfiguration
+                        .Production,
                     _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested,
                     _raySceneDescriptorBank,
                     _giPipelineCacheService,
@@ -1870,7 +1892,9 @@ namespace Njulf.Rendering
                     Settings,
                     _simpleDdgiReceiverFeedbackGraphicsPipelinesRequested,
                     _nearFieldDirectSourcePipelineConfiguration,
-                    _giCausticReceiverPipelineConfiguration);
+                    _giCausticReceiverPipelineConfiguration,
+                    ForwardHybridReflectionReceiverPipelineConfiguration
+                        .Production);
             });
 
             // Create compute pipeline for light culling
@@ -2100,6 +2124,11 @@ namespace Njulf.Rendering
                             _renderTargets!.GiCausticReceiverPayload!,
                             _giCausticReceiverPipelineConfiguration)
                         : null;
+            var hybridReflectionReceiverBinding =
+                new ForwardHybridReflectionReceiverAttachmentBinding(
+                    _renderTargets!.HybridReflectionReceiverPayload!,
+                    ForwardHybridReflectionReceiverPipelineConfiguration
+                        .Production);
             var forwardPass = new ForwardPlusPass(
                 _context,
                 _swapchain,
@@ -2118,6 +2147,8 @@ namespace Njulf.Rendering
                 giCausticReceiverBinding: giCausticReceiverBinding,
                 giCausticRuntimeAvailable: () =>
                     _giCausticFrameAvailable,
+                hybridReflectionReceiverBinding:
+                    hybridReflectionReceiverBinding,
                 simpleDdgiReceiverFeedbackRuntime:
                     _simpleDdgiReceiverFeedbackRuntime);
             _forwardPlusPass = forwardPass;
@@ -2406,6 +2437,28 @@ namespace Njulf.Rendering
             var skyboxPass = new SkyboxPass(
                 _context, _swapchain, _bindlessHeap, _skyboxPipeline, _renderTargets!, Settings);
             AddPassInstance(skyboxPass);
+
+            HybridReflectionVulkanRuntime hybridReflectionRuntime =
+                _hybridReflectionRuntime ?? throw new InvalidOperationException(
+                    "The hybrid reflection graph requires its shared runtime.");
+            AddPassInstance(new HybridReflectionSsrPass(
+                _context, _swapchain, _bindlessHeap,
+                hybridReflectionRuntime));
+            AddPassInstance(new HybridReflectionRayQueryPass(
+                _context, _swapchain, _bindlessHeap,
+                hybridReflectionRuntime));
+            AddPassInstance(new HybridReflectionResolvePass(
+                _context, _swapchain, _bindlessHeap,
+                hybridReflectionRuntime));
+            AddPassInstance(new HybridReflectionTemporalPass(
+                _context, _swapchain, _bindlessHeap,
+                hybridReflectionRuntime));
+            AddPassInstance(new HybridReflectionSpatialPass(
+                _context, _swapchain, _bindlessHeap,
+                hybridReflectionRuntime));
+            AddPassInstance(new HybridReflectionCompositePass(
+                _context, _swapchain, _bindlessHeap,
+                hybridReflectionRuntime));
 
             var transparentForwardPass = new TransparentForwardPass(
                 _context,
@@ -3536,6 +3589,7 @@ namespace Njulf.Rendering
             _linearHdrReadbackManager.CompleteFrameAfterFence(_currentFrame);
             _diagnosticsBuffer.ReadCompletedFrame(_currentFrame);
             _directionalShadowHistoryResources?.ReadCompletedFrame(_currentFrame);
+            _hybridReflectionRuntime?.ReadCompletedFrame(_currentFrame);
             _simpleDdgiLightTreeResources?.ReadCompletedFrame(_currentFrame);
             if (_ddgiFrameSerial < ulong.MaxValue)
             {
@@ -3583,6 +3637,9 @@ namespace Njulf.Rendering
             _completedDirectionalShadowRayCounters =
                 _directionalShadowHistoryResources?.GetLastCompletedCounters(
                     _currentFrame) ?? DirectionalShadowRayCounters.Empty;
+            _completedHybridReflectionCounters =
+                _hybridReflectionRuntime?.GetLastCompletedCounters(
+                    _currentFrame) ?? HybridReflectionCounterSnapshot.Empty;
             _completedFarFieldMaterialV2Counters = _diagnosticsBuffer.GetLastCompletedFarFieldMaterialV2Counters(_currentFrame);
             _completedMaterialGiCounters = _diagnosticsBuffer.GetLastCompletedMaterialGiCounters(_currentFrame);
             _completedThinSurfaceTransportCounters = _diagnosticsBuffer.GetLastCompletedThinSurfaceTransportCounters(_currentFrame);
@@ -4052,6 +4109,8 @@ namespace Njulf.Rendering
             bool reflectionsAllowed = !isolateSkinnedAnimationDebug && RenderFeatureIsolationPolicy.AllowsReflections(isolationMode);
             bool animationAllowed = RenderFeatureIsolationPolicy.AllowsAnimation(isolationMode);
             bool particlesAllowed = !isolateSkinnedAnimationDebug && RenderFeatureIsolationPolicy.AllowsParticles(isolationMode);
+            if (!reflectionsAllowed)
+                _hybridReflectionRuntime?.InvalidateHistory();
             // Apply the independently persisted material-transport rollout switch before
             // SceneDataBuilder snapshots revisions or uploads the material buffer. The
             // manager makes an unchanged value a cheap no-op and publishes a transition
@@ -4372,11 +4431,22 @@ namespace Njulf.Rendering
             sceneData.DepthPrePassFrameSerial = 0;
             sceneData.TiledLightCullingCompleted = false;
             sceneData.TiledLightCullingFrameSerial = 0;
-            HiZVisibilityPolicyDecision hiZDecision = PlanHiZVisibility(scene, camera, sceneData.DepthPrePassEnabled, isolateSkinnedAnimationDebug);
+            bool hybridReflectionHiZRequired =
+                HybridReflectionHiZPolicy.RequiresPyramid(
+                    Settings.Reflections,
+                    reflectionsAllowed);
+            HiZVisibilityPolicyDecision hiZDecision = PlanHiZVisibility(
+                scene,
+                camera,
+                sceneData.DepthPrePassEnabled,
+                isolateSkinnedAnimationDebug,
+                hybridReflectionHiZRequired);
             if (hiZDecision.CameraCut)
                 _captureCameraCutSerial++;
             sceneData.CaptureCameraCutSerial = _captureCameraCutSerial;
-            HiZConsumerDecision hiZConsumers = ResolveHiZConsumers(sceneData, hiZDecision);
+            HiZConsumerDecision hiZConsumers = ResolveHiZConsumers(
+                sceneData,
+                hybridReflection: hybridReflectionHiZRequired);
             bool hiZSkippedBecauseNoConsumer = hiZDecision.BuildHiZ && hiZConsumers.Count == 0;
             if (hiZSkippedBecauseNoConsumer)
             {
@@ -4510,8 +4580,6 @@ namespace Njulf.Rendering
                 PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
             }
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
-            if (reflectionsAllowed)
-                PrepareReflectionProbes(scene, sceneData);
             PrepareDdgiFoliageProxies(scene, sceneData);
             PrepareAccelerationStructures(scene, sceneData);
             ApplyCompletedSceneSubmissionCounters(sceneData, _completedSceneSubmissionCounters);
@@ -4588,6 +4656,8 @@ namespace Njulf.Rendering
             // Publish the new TLAS/metadata transaction before DDGI chooses a
             // trace backend or records any ray-query consumer.
             RecordAccelerationStructures(sceneData);
+            if (reflectionsAllowed)
+                PrepareReflectionProbes(scene, sceneData);
             ResolveDirectionalShadowFramePlan(
                 sceneData,
                 lightSnapshot,
@@ -4695,6 +4765,9 @@ namespace Njulf.Rendering
             sceneData.DirectionalShadowCasterDiagnosticReadback = _completedDirectionalShadowCasterDiagnostics;
             sceneData.DirectionalShadowRayCountersReadback =
                 _completedDirectionalShadowRayCounters;
+            ApplyCompletedHybridReflectionCounters(
+                sceneData,
+                _completedHybridReflectionCounters);
             if (particlesAllowed)
                 ApplyCompletedGpuParticleCounters(sceneData, _completedGpuParticleCounters);
             if (!isolateSkinnedAnimationDebug)
@@ -5716,7 +5789,8 @@ namespace Njulf.Rendering
             Scene scene,
             ICamera camera,
             bool depthPrePassEnabled,
-            bool featureIsolationDisablesHiZ)
+            bool featureIsolationDisablesHiZ,
+            bool hybridReflectionRequired)
         {
             bool sceneChanged = _lastHiZScene == null || !ReferenceEquals(_lastHiZScene, scene);
             bool cameraCut = DetectHiZCameraCut(camera);
@@ -5752,7 +5826,18 @@ namespace Njulf.Rendering
             Settings.HiZVisibilityPolicy.ForceAdaptiveProbe = previousForceProbe || Settings.HiZOcclusion.ForceProbe;
             try
             {
-                return HiZVisibilityPolicy.Plan(input, Settings.HiZVisibilityPolicy, _hizVisibilityPolicyState);
+                HiZVisibilityPolicyDecision decision = HiZVisibilityPolicy.Plan(
+                    input,
+                    Settings.HiZVisibilityPolicy,
+                    _hizVisibilityPolicyState);
+                // The occlusion policy intentionally drops scene/camera
+                // invalidation when it is disabled. Reflection history still
+                // needs those signals when it independently retains Hi-Z.
+                return HybridReflectionHiZPolicy.RetainPyramid(
+                    decision,
+                    hybridReflectionRequired,
+                    sceneChanged,
+                    cameraCut);
             }
             finally
             {
@@ -5809,7 +5894,7 @@ namespace Njulf.Rendering
 
         private HiZConsumerDecision ResolveHiZConsumers(
             SceneRenderingData sceneData,
-            HiZVisibilityPolicyDecision hiZDecision)
+            bool hybridReflection)
         {
             bool sceneSubmissionPreviousHiZ = Settings.SceneSubmission.GpuCompactionEnabled &&
                 Settings.HiZOcclusion.Enabled &&
@@ -5835,29 +5920,40 @@ namespace Njulf.Rendering
                 count++;
             if (foliage)
                 count++;
+            if (hybridReflection)
+                count++;
             if (count == 0)
                 return HiZConsumerDecision.None;
 
             return new HiZConsumerDecision(
                 count,
-                BuildHiZConsumerSummary(forwardVisibilityCurrentHiZ, sceneSubmissionPreviousHiZ, legacyForwardTask, foliage),
+                BuildHiZConsumerSummary(
+                    forwardVisibilityCurrentHiZ,
+                    sceneSubmissionPreviousHiZ,
+                    legacyForwardTask,
+                    foliage,
+                    hybridReflection),
                 forwardVisibilityCurrentHiZ,
                 sceneSubmissionPreviousHiZ,
                 legacyForwardTask,
-                foliage);
+                foliage,
+                hybridReflection);
         }
 
         private static string BuildHiZConsumerSummary(
             bool forwardVisibilityCurrentHiZ,
             bool sceneSubmissionPreviousHiZ,
             bool legacyForwardTask,
-            bool foliage)
+            bool foliage,
+            bool hybridReflection)
         {
             string summary = string.Empty;
             AppendHiZConsumer(ref summary, forwardVisibilityCurrentHiZ, "ForwardVisibilityCurrentHiZ");
             AppendHiZConsumer(ref summary, sceneSubmissionPreviousHiZ, "SceneSubmissionPreviousHiZ");
             AppendHiZConsumer(ref summary, legacyForwardTask, "LegacyForwardTask");
             AppendHiZConsumer(ref summary, foliage, "Foliage");
+            AppendHiZConsumer(ref summary, hybridReflection,
+                "HybridReflectionSsr");
             return summary.Length == 0 ? "None" : summary;
         }
 
@@ -5962,7 +6058,8 @@ namespace Njulf.Rendering
             bool ForwardVisibilityCurrentHiZ,
             bool SceneSubmissionPreviousHiZ,
             bool LegacyForwardTask,
-            bool Foliage)
+            bool Foliage,
+            bool HybridReflection)
         {
             public static HiZConsumerDecision None { get; } = new(
                 0,
@@ -5970,7 +6067,8 @@ namespace Njulf.Rendering
                 ForwardVisibilityCurrentHiZ: false,
                 SceneSubmissionPreviousHiZ: false,
                 LegacyForwardTask: false,
-                Foliage: false);
+                Foliage: false,
+                HybridReflection: false);
         }
 
         private CompletedHiZCounterResolution ResolveCompletedHiZCounters()
@@ -7530,6 +7628,52 @@ namespace Njulf.Rendering
                 GpuReflectionProbePrefilterMicroseconds: sceneData.GpuReflectionProbePrefilterMicroseconds,
                 GpuReflectionProbePublishMicroseconds: sceneData.GpuReflectionProbePublishMicroseconds)
             {
+                RequestedReflectionMode = sceneData.RequestedReflectionMode,
+                EffectiveReflectionMode = sceneData.EffectiveReflectionMode,
+                ReflectionFallbackReason = sceneData.ReflectionFallbackReason,
+                ReflectionFallbackDetail = sceneData.ReflectionFallbackDetail,
+                HybridReflectionPassEnabled =
+                    sceneData.HybridReflectionPassEnabled ? 1 : 0,
+                HybridReflectionWidth = sceneData.HybridReflectionWidth,
+                HybridReflectionHeight = sceneData.HybridReflectionHeight,
+                HybridReflectionRayQueryCapacity =
+                    sceneData.HybridReflectionRayQueryCapacity,
+                HybridReflectionHistoryValid =
+                    sceneData.HybridReflectionHistoryValid,
+                HybridReflectionHistoryResetReason =
+                    sceneData.HybridReflectionHistoryResetReason,
+                HybridReflectionEstimatedBytes =
+                    sceneData.HybridReflectionEstimatedBytes,
+                HybridReflectionCountersReadbackValid =
+                    sceneData.HybridReflectionCountersReadbackValid,
+                HybridReflectionSsrHitCount =
+                    sceneData.HybridReflectionSsrHitCount,
+                HybridReflectionRayQueryRequestCount =
+                    sceneData.HybridReflectionRayQueryRequestCount,
+                HybridReflectionRayQueryCount =
+                    sceneData.HybridReflectionRayQueryCount,
+                HybridReflectionRayQueryOverflowCount =
+                    sceneData.HybridReflectionRayQueryOverflowCount,
+                HybridReflectionRayQueryHitCount =
+                    sceneData.HybridReflectionRayQueryHitCount,
+                HybridReflectionRayQueryMissCount =
+                    sceneData.HybridReflectionRayQueryMissCount,
+                HybridReflectionProbeFallbackCount =
+                    sceneData.HybridReflectionProbeFallbackCount,
+                HybridReflectionEnvironmentFallbackCount =
+                    sceneData.HybridReflectionEnvironmentFallbackCount,
+                GpuHybridReflectionSsrMicroseconds =
+                    sceneData.GpuHybridReflectionSsrMicroseconds,
+                GpuHybridReflectionRayQueryMicroseconds =
+                    sceneData.GpuHybridReflectionRayQueryMicroseconds,
+                GpuHybridReflectionResolveMicroseconds =
+                    sceneData.GpuHybridReflectionResolveMicroseconds,
+                GpuHybridReflectionTemporalMicroseconds =
+                    sceneData.GpuHybridReflectionTemporalMicroseconds,
+                GpuHybridReflectionSpatialMicroseconds =
+                    sceneData.GpuHybridReflectionSpatialMicroseconds,
+                GpuHybridReflectionCompositeMicroseconds =
+                    sceneData.GpuHybridReflectionCompositeMicroseconds,
                 StableSceneInputUploadBytes = sceneData.StableSceneInputUploadBytes,
                 CpuCandidateListUploadBytes = sceneData.CpuCandidateListUploadBytes,
                 CameraDrivenCpuDrawListRebuilt = sceneData.CameraDrivenCpuDrawListRebuilt,
@@ -11577,7 +11721,20 @@ namespace Njulf.Rendering
                     nearFieldBuffers.ActiveTileAndIndirect,
                     nearFieldBuffers.TileRecords,
                     nearFieldBuffers.TraceFrameConstants0,
-                    nearFieldBuffers.TraceFrameConstants1));
+                    nearFieldBuffers.TraceFrameConstants1),
+                new HybridReflectionAsyncBufferIdentity(
+                    _hybridReflectionRuntime?.GetTaskBuffer(0) ??
+                        BufferHandle.Invalid,
+                    _hybridReflectionRuntime?.GetTaskBuffer(1) ??
+                        BufferHandle.Invalid,
+                    _hybridReflectionRuntime?.GetCounterBuffer(0) ??
+                        BufferHandle.Invalid,
+                    _hybridReflectionRuntime?.GetCounterBuffer(1) ??
+                        BufferHandle.Invalid,
+                    _hybridReflectionRuntime?.GetIndirectBuffer(0) ??
+                        BufferHandle.Invalid,
+                    _hybridReflectionRuntime?.GetIndirectBuffer(1) ??
+                        BufferHandle.Invalid));
         }
 
         /// <summary>
@@ -11749,6 +11906,33 @@ namespace Njulf.Rendering
                     RenderGraphResourceId.DirectionalShadowCounters,
                     $"Directional shadow counters frame {frameIndex}",
                     _directionalShadowHistoryResources?.GetCounters(frameIndex) ??
+                        BufferHandle.Invalid,
+                    queueFamilies,
+                    graphicsFamily,
+                    frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.HybridReflectionRayTasks,
+                    $"Hybrid reflection ray tasks frame {frameIndex}",
+                    _hybridReflectionRuntime?.GetTaskBuffer(frameIndex) ??
+                        BufferHandle.Invalid,
+                    queueFamilies,
+                    graphicsFamily,
+                    frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.HybridReflectionCounters,
+                    $"Hybrid reflection counters frame {frameIndex}",
+                    _hybridReflectionRuntime?.GetCounterBuffer(frameIndex) ??
+                        BufferHandle.Invalid,
+                    queueFamilies,
+                    graphicsFamily,
+                    frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.HybridReflectionIndirectArguments,
+                    $"Hybrid reflection indirect arguments frame {frameIndex}",
+                    _hybridReflectionRuntime?.GetIndirectBuffer(frameIndex) ??
                         BufferHandle.Invalid,
                     queueFamilies,
                     graphicsFamily,
@@ -12588,7 +12772,16 @@ namespace Njulf.Rendering
             DirectionalRayShadowAsyncBufferIdentity DirectionalRayShadowBuffers,
             CausticAsyncBufferIdentity CausticBuffers,
             GuidingAsyncBufferIdentity GuidingBuffers,
-            NearFieldResidualAsyncBufferIdentity NearFieldResidualBuffers);
+            NearFieldResidualAsyncBufferIdentity NearFieldResidualBuffers,
+            HybridReflectionAsyncBufferIdentity HybridReflectionBuffers);
+
+        private readonly record struct HybridReflectionAsyncBufferIdentity(
+            BufferHandle Tasks0,
+            BufferHandle Tasks1,
+            BufferHandle Counters0,
+            BufferHandle Counters1,
+            BufferHandle Indirect0,
+            BufferHandle Indirect1);
 
         private readonly record struct DirectionalRayShadowAsyncBufferIdentity(
             BufferHandle Frame0,
@@ -12899,7 +13092,13 @@ namespace Njulf.Rendering
                 sceneData.GpuSkinningMicroseconds +
                 sceneData.GpuReflectionProbeCaptureMicroseconds +
                 sceneData.GpuReflectionProbePrefilterMicroseconds +
-                sceneData.GpuReflectionProbePublishMicroseconds;
+                sceneData.GpuReflectionProbePublishMicroseconds +
+                sceneData.GpuHybridReflectionSsrMicroseconds +
+                sceneData.GpuHybridReflectionRayQueryMicroseconds +
+                sceneData.GpuHybridReflectionResolveMicroseconds +
+                sceneData.GpuHybridReflectionTemporalMicroseconds +
+                sceneData.GpuHybridReflectionSpatialMicroseconds +
+                sceneData.GpuHybridReflectionCompositeMicroseconds;
         }
 
         internal static GlobalIlluminationMode ResolveEffectiveGlobalIlluminationMode(
@@ -12994,6 +13193,20 @@ namespace Njulf.Rendering
                 reflectionTimingsMatchCompletedLifecycle
                     ? timings.GetGpuMicrosecondsOrZero("ReflectionProbePublishPass")
                     : 0;
+            sceneData.GpuHybridReflectionSsrMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("HybridReflectionSsrPass");
+            sceneData.GpuHybridReflectionRayQueryMicroseconds =
+                timings.GetGpuMicrosecondsOrZero(
+                    "HybridReflectionRayQueryPass");
+            sceneData.GpuHybridReflectionResolveMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("HybridReflectionResolvePass");
+            sceneData.GpuHybridReflectionTemporalMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("HybridReflectionTemporalPass");
+            sceneData.GpuHybridReflectionSpatialMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("HybridReflectionSpatialPass");
+            sceneData.GpuHybridReflectionCompositeMicroseconds =
+                timings.GetGpuMicrosecondsOrZero(
+                    "HybridReflectionCompositePass");
             sceneData.GpuDepthPrePassMicroseconds = timings.GetGpuMicrosecondsOrZero("DepthPrePass");
             sceneData.GpuMotionVectorMicroseconds = timings.GetGpuMicrosecondsOrZero("MotionVectorPass");
             sceneData.GpuHiZBuildMicroseconds = timings.GetGpuMicrosecondsOrZero("HiZBuildPass");
@@ -13300,8 +13513,47 @@ namespace Njulf.Rendering
             _reflectionProbeManager.Register(_bindlessHeap);
 
             ReflectionSettings settings = Settings.Reflections;
-            sceneData.ReflectionsEnabled = settings.Enabled && settings.Mode != ReflectionMode.Disabled;
-            sceneData.ReflectionMode = settings.Mode;
+            RaySceneRequirement reflectionRequirement =
+                RaySceneRequirement.ForReflections(settings);
+            bool receiverPayloadAvailable =
+                _renderTargets?.HybridReflectionReceiverPayload is { } receiver &&
+                receiver.Extent.Width == sceneData.ScreenWidth &&
+                receiver.Extent.Height == sceneData.ScreenHeight &&
+                _meshPipeline?.HybridReflectionAttachmentEnabled == true &&
+                _hybridReflectionRuntime?.ScreenPipelinesAvailable == true;
+            bool raySceneReady = !reflectionRequirement.Enabled ||
+                sceneData.RaySceneReadiness.IsReady(
+                    RaySceneConsumer.Reflection,
+                    reflectionRequirement.RequiredCategories);
+            ReflectionModeResolution reflectionResolution =
+                ReflectionModeResolver.Resolve(
+                    settings,
+                    new ReflectionModeCapabilities(
+                        receiverPayloadAvailable,
+                        sceneData.HiZMipCount != 0u &&
+                            _hizDepthPyramid != null,
+                        _context.RayQuerySupported &&
+                            _hybridReflectionRuntime?.RayPipelineAvailable == true,
+                        _accelerationStructureManager?.Supported == true,
+                        raySceneReady));
+            if (!string.IsNullOrWhiteSpace(
+                    _hybridReflectionRuntime?.FailureDetail) &&
+                reflectionResolution.Reason is
+                    ReflectionFallbackReason.ReceiverPayloadUnavailable or
+                    ReflectionFallbackReason.RayQueryUnsupported)
+            {
+                reflectionResolution = reflectionResolution with
+                {
+                    Detail = _hybridReflectionRuntime.FailureDetail
+                };
+            }
+            sceneData.ReflectionsEnabled =
+                reflectionResolution.Effective != ReflectionMode.Disabled;
+            sceneData.RequestedReflectionMode = reflectionResolution.Requested;
+            sceneData.EffectiveReflectionMode = reflectionResolution.Effective;
+            sceneData.ReflectionMode = reflectionResolution.Effective;
+            sceneData.ReflectionFallbackReason = reflectionResolution.Reason;
+            sceneData.ReflectionFallbackDetail = reflectionResolution.Detail;
             sceneData.ReflectionDebugView = settings.DebugView;
             sceneData.ReflectionProbeCount = _reflectionProbeManager.ActiveProbeCount;
             sceneData.ReflectionProbeCapacity = _reflectionProbeManager.ProbeCapacity;
@@ -13309,6 +13561,16 @@ namespace Njulf.Rendering
             sceneData.ReflectionProbeResolution = _reflectionProbeManager.ProbeResolution;
             sceneData.ReflectionProbeMipCount = _reflectionProbeManager.ProbeMipCount;
             sceneData.ReflectionProbeEstimatedBytes = _reflectionProbeManager.EstimatedBytes;
+            sceneData.ReflectionProbeContentRevision =
+                (((ulong)_reflectionProbeManager.CubemapArrayResourceGeneration << 32) |
+                 scene.ReflectionProbeRevision) ^
+                (_reflectionProbeManager.CapturesCompletedTotal *
+                 0x9e3779b97f4a7c15UL);
+            sceneData.ReflectionEnvironmentGeneration =
+                _environmentManager?.PublishedSpecularEnvironmentGeneration ?? 0u;
+            sceneData.HybridReflectionEstimatedBytes =
+                (_renderTargets?.HybridReflectionRenderTargetBytes ?? 0UL) +
+                (_hybridReflectionRuntime?.BufferBytes ?? 0UL);
             UpdateReflectionProbeTelemetry(sceneData);
             sceneData.CpuReflectionProbeUploadMicroseconds = _reflectionProbeManager.LastUploadMicroseconds;
         }
@@ -19071,8 +19333,12 @@ namespace Njulf.Rendering
                     ? RaySceneRequirement.ForDirectionalShadows(Settings.Shadows)
                     : RaySceneRequirement.None;
             requirement = requirement.Union(directionalRequirement);
+            RaySceneRequirement reflectionRequirement =
+                RaySceneRequirement.ForReflections(Settings.Reflections);
+            requirement = requirement.Union(reflectionRequirement);
             bool enabled = requirement.Enabled;
             bool directionalRaySceneRequested = directionalRequirement.Enabled;
+            bool reflectionRaySceneRequested = reflectionRequirement.Enabled;
             bool qualityAllowsStaticStreaming = gi.DdgiQualityTier is
                 DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
             bool farFieldCoverageReady = qualityAllowsStaticStreaming &&
@@ -19093,15 +19359,21 @@ namespace Njulf.Rendering
                         : int.MaxValue,
                     gi.GiAccelerationStructureEvictionGraceFrames,
                     AllowStaticMemoryCulling:
-                        farFieldCoverageReady && !directionalRaySceneRequested),
+                        farFieldCoverageReady &&
+                        !directionalRaySceneRequested &&
+                        !reflectionRaySceneRequested),
                 new DdgiDynamicRayScenePolicy(
-                    directionalRaySceneRequested
+                    directionalRaySceneRequested || reflectionRaySceneRequested
                         ? DdgiSkinnedGeometryMode.CurrentPose
                         : gi.EffectiveDdgiSkinnedGeometryMode,
+                    // The shared scene must satisfy the union of its consumers.
+                    // Reflection rays apply their binary alpha-hit policy while
+                    // tracing, so they must not remove transparent geometry
+                    // that DDGI requires from the shared TLAS.
                     ddgiRaySceneEnabled
                         ? gi.EffectiveDdgiTransparentGeometryMode
                         : DdgiTransparentGeometryMode.MaskOnly,
-                    directionalRaySceneRequested
+                    directionalRaySceneRequested || reflectionRaySceneRequested
                         ? DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
                         : gi.EffectiveDdgiFoliageGeometryMode,
                     GeometryDecalsEnabled:
@@ -19109,7 +19381,7 @@ namespace Njulf.Rendering
                         (gi.ActiveContentDependentFeatures &
                             DdgiContentFeature.TransparentGeometry) != 0,
                     AlphaMaskedTransportEnabled:
-                        directionalRaySceneRequested ||
+                        directionalRaySceneRequested || reflectionRaySceneRequested ||
                         gi.DdgiAlphaMaskedTransportEnabled,
                     DynamicStorageBudgetBytes: gi.DdgiDynamicBlasMemoryBudgetBytes,
                     DynamicScratchBudgetBytes: gi.DdgiDynamicBlasScratchBudgetBytes,
@@ -19148,7 +19420,10 @@ namespace Njulf.Rendering
             GlobalIlluminationSettings gi = Settings.GlobalIllumination;
             DdgiFoliageGeometryMode mode =
                 Settings.Foliage.Enabled && _context.RayQuerySupported
-                    ? sceneData.DirectionalShadowPassEnabled &&
+                    ? Settings.Reflections.Enabled &&
+                      Settings.Reflections.Mode == ReflectionMode.HybridRayQuery
+                        ? DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
+                        : sceneData.DirectionalShadowPassEnabled &&
                       Settings.Shadows.RequestedDirectionalShadowMode is
                           DirectionalShadowMode.HybridContact or
                           DirectionalShadowMode.RayQueryHard or
@@ -19317,6 +19592,8 @@ namespace Njulf.Rendering
             sceneData.CpuAccelerationStructureTlasBuildMicroseconds = stats.TlasBuildMicroseconds;
             sceneData.CpuAccelerationStructureInstanceUploadMicroseconds = stats.InstanceUploadMicroseconds;
             sceneData.AccelerationStructureFallbackReason = stats.FallbackReason;
+            sceneData.RaySceneReadiness =
+                _accelerationStructureManager.ReadinessSnapshot;
         }
 
         private static ulong CreateDdgiLightSignature(LightFrameSnapshot lightSnapshot)
@@ -19915,6 +20192,28 @@ namespace Njulf.Rendering
         private static BoundingBox EstimateSceneProbeBounds(Scene scene)
         {
             return SimpleDdgiSceneBounds.Estimate(scene);
+        }
+
+        private static void ApplyCompletedHybridReflectionCounters(
+            SceneRenderingData sceneData,
+            in HybridReflectionCounterSnapshot counters)
+        {
+            if (counters.ReadbackValid == 0)
+                return;
+
+            sceneData.HybridReflectionCountersReadbackValid = 1;
+            sceneData.HybridReflectionSsrHitCount = counters.SsrHits;
+            sceneData.HybridReflectionRayQueryRequestCount =
+                counters.RayRequests;
+            sceneData.HybridReflectionRayQueryCount = counters.RayQueries;
+            sceneData.HybridReflectionRayQueryOverflowCount =
+                counters.RayOverflows;
+            sceneData.HybridReflectionRayQueryHitCount = counters.RayHits;
+            sceneData.HybridReflectionRayQueryMissCount = counters.RayMisses;
+            sceneData.HybridReflectionProbeFallbackCount =
+                counters.ProbeFallbacks;
+            sceneData.HybridReflectionEnvironmentFallbackCount =
+                counters.EnvironmentFallbacks;
         }
 
         private static void ApplyCompletedGpuCounters(SceneRenderingData sceneData, GpuMeshletCounters counters)
@@ -21533,9 +21832,13 @@ namespace Njulf.Rendering
             bool weightedOitTargetEnabled = IsWeightedOitTargetEnabled(Settings);
             bool materialTransportProvenanceTargetEnabled =
                 IsMaterialTransportProvenanceTargetEnabled(Settings);
+            bool hybridReflectionTargetEnabled =
+                IsHybridReflectionTargetEnabled(Settings);
             bool forwardAttachmentProfileChanged =
                 _lastMaterialTransportProvenanceTargetEnabled !=
-                materialTransportProvenanceTargetEnabled;
+                    materialTransportProvenanceTargetEnabled ||
+                _lastHybridReflectionTargetEnabled !=
+                    hybridReflectionTargetEnabled;
             DynamicResolutionScaleDecision scaleDecision = ResolveSceneResolutionScaleDecision();
             float effectiveResolutionScale = scaleDecision.CommittedScale;
             Extent2D sceneRenderExtent = CreateSceneRenderExtent(_swapchain.Extent, effectiveResolutionScale);
@@ -21550,7 +21853,12 @@ namespace Njulf.Rendering
                 _lastBloomTargetMipCount != bloomMipCount ||
                 _lastFogTargetEnabled != fogTargetEnabled ||
                 _lastMaterialTransportProvenanceTargetEnabled !=
-                    materialTransportProvenanceTargetEnabled;
+                    materialTransportProvenanceTargetEnabled ||
+                _lastHybridReflectionTargetEnabled !=
+                    hybridReflectionTargetEnabled ||
+                hybridReflectionTargetEnabled && MathF.Abs(
+                    _lastHybridReflectionRayBudgetFraction -
+                    Settings.Reflections.RayQueryPixelBudgetFraction) > 0.000001f;
             bool sceneExtentChanged =
                 _lastSceneRenderExtent.Width != sceneRenderExtent.Width ||
                 _lastSceneRenderExtent.Height != sceneRenderExtent.Height ||
@@ -21586,7 +21894,8 @@ namespace Njulf.Rendering
                 motionVectorTargetEnabled,
                 fogTargetEnabled,
                 weightedOitTargetEnabled,
-                materialTransportProvenanceTargetEnabled);
+                materialTransportProvenanceTargetEnabled,
+                hybridReflectionTargetEnabled);
             if (forwardAttachmentProfileChanged)
             {
                 _meshPipeline?.Recreate(
@@ -21618,6 +21927,10 @@ namespace Njulf.Rendering
             _lastFogTargetEnabled = fogTargetEnabled;
             _lastMaterialTransportProvenanceTargetEnabled =
                 materialTransportProvenanceTargetEnabled;
+            _lastHybridReflectionTargetEnabled =
+                hybridReflectionTargetEnabled;
+            _lastHybridReflectionRayBudgetFraction =
+                Settings.Reflections.RayQueryPixelBudgetFraction;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = effectiveResolutionScale;
             _lastRenderTargetRecreateReason = recreateReason;
@@ -21800,7 +22113,8 @@ namespace Njulf.Rendering
                 ResolveSurfaceHistoryConsumers().RequiresMotionVectors(),
                 IsFogTargetEnabled(Settings),
                 IsWeightedOitTargetEnabled(Settings),
-                IsMaterialTransportProvenanceTargetEnabled(Settings));
+                IsMaterialTransportProvenanceTargetEnabled(Settings),
+                IsHybridReflectionTargetEnabled(Settings));
             CompleteNearFieldResidualGenerationAfterTargetRecreate();
             _bindlessHeap.RegisterTexture(
                 BindlessIndex.DepthTexture,
@@ -21823,6 +22137,10 @@ namespace Njulf.Rendering
             _lastFogTargetEnabled = IsFogTargetEnabled(Settings);
             _lastMaterialTransportProvenanceTargetEnabled =
                 IsMaterialTransportProvenanceTargetEnabled(Settings);
+            _lastHybridReflectionTargetEnabled =
+                IsHybridReflectionTargetEnabled(Settings);
+            _lastHybridReflectionRayBudgetFraction =
+                Settings.Reflections.RayQueryPixelBudgetFraction;
             _lastSceneRenderExtent = sceneRenderExtent;
             _lastEffectiveResolutionScale = sceneResolutionScale;
             _lastRenderTargetRecreateReason = "Swapchain resize";
@@ -21985,6 +22303,15 @@ namespace Njulf.Rendering
                    GlobalIlluminationDebugView.MaterialTransportHitProvenance;
         }
 
+        internal static bool IsHybridReflectionTargetEnabled(
+            RenderSettings settings)
+        {
+            ArgumentNullException.ThrowIfNull(settings);
+            return settings.Reflections.Enabled && settings.Reflections.Mode is
+                ReflectionMode.StaticProbesAndSsr or
+                ReflectionMode.HybridRayQuery;
+        }
+
         private SurfaceHistoryConsumer ResolveSurfaceHistoryConsumers() =>
             SurfaceHistoryPolicy.Resolve(
                 Settings,
@@ -21993,7 +22320,8 @@ namespace Njulf.Rendering
                     Settings.Shadows.EffectiveDirectionalCsmTemporalEnabled,
                 directionalRaySoftActive:
                     Settings.Shadows.RequestedDirectionalShadowMode ==
-                    DirectionalShadowMode.RayQuerySoft);
+                    DirectionalShadowMode.RayQuerySoft,
+                reflectionActive: IsHybridReflectionTargetEnabled(Settings));
 
         private void RegisterBloomTextures()
         {
@@ -22306,9 +22634,17 @@ namespace Njulf.Rendering
                 });
 
             AddResourceStage(
+                "hybrid-reflection-runtime",
+                () =>
+                {
+                    _hybridReflectionRuntime?.Dispose();
+                    _hybridReflectionRuntime = null;
+                });
+            AddResourceStage(
                 "render-graph",
                 _renderGraph.Cleanup,
-                "simple-ddgi-near-field-residual-runtime");
+                "simple-ddgi-near-field-residual-runtime",
+                "hybrid-reflection-runtime");
             AddResourceStage(
                 "gi-pipeline-cache",
                 () =>
@@ -22426,7 +22762,8 @@ namespace Njulf.Rendering
                 () => _hizDepthPyramid?.Dispose());
             AddResourceStage(
                 "render-targets",
-                () => _renderTargets?.Dispose());
+                () => _renderTargets?.Dispose(),
+                "render-graph");
 
             AddResourceStage(
                 "mesh-pipeline",

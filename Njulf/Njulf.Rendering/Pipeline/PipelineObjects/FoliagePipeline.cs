@@ -38,6 +38,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _authoredForwardReceiverFeedbackNearFieldDirectSourcePipeline;
         private VkPipeline _authoredForwardCombinedAdvancedGiPipeline;
         private VkPipeline _authoredForwardReceiverFeedbackCombinedAdvancedGiPipeline;
+        private readonly VkPipeline[,] _hybridReflectionPipelines =
+            new VkPipeline[4, 2];
+        private readonly ForwardHybridReflectionReceiverPipelineConfiguration
+            _hybridReflectionConfiguration;
+        private Format _colorFormat;
+        private Format _depthFormat;
         private VkPipeline _shadowPipeline;
         private VkPipeline _authoredShadowPipeline;
         private VkPipeline _authoredMotionVectorPipeline;
@@ -54,7 +60,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ForwardNearFieldDirectSourcePipelineConfiguration
                 nearFieldDirectSourceConfiguration = default,
             ForwardGiCausticReceiverPipelineConfiguration
-                giCausticReceiverConfiguration = default)
+                giCausticReceiverConfiguration = default,
+            ForwardHybridReflectionReceiverPipelineConfiguration
+                hybridReflectionConfiguration = default)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
@@ -73,6 +81,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         giCausticReceiverConfiguration,
                         nearFieldDirectSourceConfiguration,
                         out _);
+            _hybridReflectionConfiguration = hybridReflectionConfiguration;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Math.Max(
@@ -128,6 +137,51 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         /// </summary>
         public bool GpuMeshletCountersEnabled { get; private set; }
         public bool MaterialTransportProvenanceAttachmentEnabled { get; private set; }
+        public bool HybridReflectionPipelinesAvailable { get; private set; }
+        public string HybridReflectionPipelineFailureReason { get; private set; } =
+            "hybrid-reflection-foliage-pipelines-not-requested";
+
+        public bool TryResolveHybridReflectionPipeline(
+            bool authored,
+            bool nearFieldDirectSource,
+            bool giCausticReceiver,
+            out VkPipeline pipeline)
+        {
+            pipeline = default;
+            if (!HybridReflectionPipelinesAvailable)
+                return false;
+
+            int combination = (giCausticReceiver ? 1 : 0) |
+                (nearFieldDirectSource ? 2 : 0);
+            int family = authored ? 1 : 0;
+            if (_hybridReflectionPipelines[combination, family].Handle == 0 &&
+                !TryCreateHybridReflectionPipeline(combination, family))
+            {
+                return false;
+            }
+            pipeline = _hybridReflectionPipelines[combination, family];
+            return pipeline.Handle != 0;
+        }
+
+        public bool TryPrepareHybridReflectionPipelines(
+            bool nearFieldDirectSource,
+            bool giCausticReceiver)
+        {
+            if (!HybridReflectionPipelinesAvailable)
+                return false;
+
+            int combination = (giCausticReceiver ? 1 : 0) |
+                (nearFieldDirectSource ? 2 : 0);
+            for (int family = 0; family < 2; family++)
+            {
+                if (_hybridReflectionPipelines[combination, family].Handle == 0 &&
+                    !TryCreateHybridReflectionPipeline(combination, family))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
 
         public bool TryResolveForwardPipeline(
             bool authored,
@@ -245,6 +299,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipelines(Format colorFormat, Format motionVectorFormat, Format depthFormat)
         {
+            _colorFormat = colorFormat;
+            _depthFormat = depthFormat;
             GpuMeshletCountersEnabled = Settings.Diagnostics.GpuMeshletCountersEnabled;
             string foliageGrassShadowMeshShader = GpuMeshletCountersEnabled
                 ? "foliage_grass_diagnostics.mesh.spv"
@@ -257,6 +313,17 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 GlobalIlluminationDebugView.MaterialTransportHitProvenance;
             MaterialTransportProvenanceAttachmentEnabled =
                 materialTransportProvenanceEnabled;
+            HybridReflectionPipelinesAvailable =
+                !materialTransportProvenanceEnabled &&
+                _hybridReflectionConfiguration.Enabled &&
+                _hybridReflectionConfiguration.ShaderSemanticVersion ==
+                    ForwardHybridReflectionReceiverContract.ShaderSemanticVersion;
+            HybridReflectionPipelineFailureReason =
+                HybridReflectionPipelinesAvailable
+                    ? "valid; variants created on first use"
+                    : materialTransportProvenanceEnabled
+                        ? "hybrid-reflection-foliage-provenance-conflict"
+                        : "hybrid-reflection-foliage-configuration-invalid";
             string provenanceSuffix =
                 materialTransportProvenanceEnabled ? "_provenance" : string.Empty;
             string foliageForwardFragmentShaderName =
@@ -567,6 +634,83 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             }
         }
 
+        private bool TryCreateHybridReflectionPipeline(
+            int combination,
+            int family)
+        {
+            bool giCaustic = (combination & 1) != 0;
+            bool nearField = (combination & 2) != 0;
+            string producer = (giCaustic, nearField) switch
+            {
+                (true, true) => "c4_c5_",
+                (true, false) => "c4_",
+                (false, true) => "c5_",
+                _ => string.Empty
+            };
+            string fragmentShader =
+                $"foliage_forward_ddgi_{producer}hybrid_reflection.frag.spv";
+            bool authored = family == 1;
+            string taskShader = authored
+                ? "foliage_mesh.task.spv"
+                : "foliage_grass.task.spv";
+            string meshShader = authored
+                ? "foliage_mesh.mesh.spv"
+                : "foliage_grass.mesh.spv";
+
+            Format? secondary = combination switch
+            {
+                0 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
+                1 => ForwardGiCausticReceiverContract.ReceiverPayloadFormat,
+                2 => ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
+                3 => ForwardGiCausticReceiverContract.ReceiverPayloadFormat,
+                _ => null
+            };
+            Format? tertiary = combination switch
+            {
+                1 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
+                2 => ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat,
+                3 => ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
+                _ => null
+            };
+            Format? quaternary = combination switch
+            {
+                2 => ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat,
+                3 => ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat,
+                _ => null
+            };
+            Format? quinary = combination == 3
+                ? ForwardHybridReflectionReceiverContract.ReceiverPayloadFormat
+                : null;
+
+            try
+            {
+                VkPipeline created = CreateGraphicsPipeline(
+                    taskShader,
+                    meshShader,
+                    fragmentShader,
+                    _colorFormat,
+                    _depthFormat,
+                    hasColorAttachment: true,
+                    depthWriteEnable: false,
+                    secondaryColorFormat: secondary,
+                    tertiaryColorFormat: tertiary,
+                    quaternaryColorFormat: quaternary,
+                    quinaryColorFormat: quinary);
+                _hybridReflectionPipelines[combination, family] = created;
+                _context.SetDebugName(created.Handle, ObjectType.Pipeline,
+                    $"Hybrid Reflection Foliage Pipeline C{combination} F{family}");
+                HybridReflectionPipelineFailureReason = "valid";
+                return true;
+            }
+            catch (Exception exception)
+            {
+                HybridReflectionPipelineFailureReason =
+                    "hybrid-reflection-foliage-pipeline-creation-failed:" +
+                    exception.GetType().Name + ":" + exception.Message;
+                return false;
+            }
+        }
+
         private VkPipeline CreateComputePipeline(string shaderName)
         {
             ShaderModule shaderModule = default;
@@ -621,7 +765,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? secondaryColorFormat = null,
             Format? materialTransportProvenanceFormat = null,
             Format? tertiaryColorFormat = null,
-            Format? quaternaryColorFormat = null)
+            Format? quaternaryColorFormat = null,
+            Format? quinaryColorFormat = null)
         {
             ShaderModule taskModule = default;
             ShaderModule meshModule = default;
@@ -699,7 +844,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 if (materialTransportProvenanceFormat.HasValue &&
                     (secondaryColorFormat.HasValue ||
                      tertiaryColorFormat.HasValue ||
-                     quaternaryColorFormat.HasValue))
+                     quaternaryColorFormat.HasValue ||
+                     quinaryColorFormat.HasValue))
                 {
                     throw new InvalidOperationException(
                         "Foliage provenance and advanced-GI MRT formats are mutually exclusive.");
@@ -707,7 +853,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 if (tertiaryColorFormat.HasValue &&
                     !secondaryColorFormat.HasValue ||
                     quaternaryColorFormat.HasValue &&
-                    !tertiaryColorFormat.HasValue)
+                    !tertiaryColorFormat.HasValue ||
+                    quinaryColorFormat.HasValue &&
+                    !quaternaryColorFormat.HasValue)
                 {
                     throw new InvalidOperationException(
                         "Foliage MRT formats must be contiguous.");
@@ -716,12 +864,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     ? 1u +
                       (secondaryColorFormat.HasValue ||
                        materialTransportProvenanceFormat.HasValue ? 1u : 0u) +
-                      (tertiaryColorFormat.HasValue ? 1u : 0u) +
-                      (quaternaryColorFormat.HasValue ? 1u : 0u)
+                       (tertiaryColorFormat.HasValue ? 1u : 0u) +
+                       (quaternaryColorFormat.HasValue ? 1u : 0u) +
+                       (quinaryColorFormat.HasValue ? 1u : 0u)
                     : 0u;
                 var colorBlendAttachments =
-                    stackalloc PipelineColorBlendAttachmentState[4];
-                for (int attachment = 0; attachment < 4; attachment++)
+                    stackalloc PipelineColorBlendAttachmentState[5];
+                for (int attachment = 0; attachment < 5; attachment++)
                     colorBlendAttachments[attachment] = colorBlendAttachment;
                 var colorBlendInfo = new PipelineColorBlendStateCreateInfo
                 {
@@ -740,7 +889,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     DynamicStateCount = depthBiasEnable ? 3u : 2u,
                     PDynamicStates = dynamicStates
                 };
-                var renderingColorFormats = stackalloc Format[4];
+                var renderingColorFormats = stackalloc Format[5];
                 renderingColorFormats[0] = colorFormat;
                 renderingColorFormats[1] =
                     secondaryColorFormat ??
@@ -750,6 +899,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     tertiaryColorFormat ?? colorFormat;
                 renderingColorFormats[3] =
                     quaternaryColorFormat ?? colorFormat;
+                renderingColorFormats[4] =
+                    quinaryColorFormat ?? colorFormat;
                 var renderingInfo = new PipelineRenderingCreateInfo
                 {
                     SType = StructureType.PipelineRenderingCreateInfo,
@@ -829,6 +980,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline(ref _forwardPipeline);
             DestroyPipeline(ref _forwardReceiverFeedbackPipeline);
             DestroyNearFieldDirectSourcePipelines(includeCombined: true);
+            DestroyHybridReflectionPipelines();
             DestroyPipeline(ref _authoredDepthPipeline);
             DestroyPipeline(ref _authoredForwardPipeline);
             DestroyPipeline(ref _authoredForwardReceiverFeedbackPipeline);
@@ -857,6 +1009,23 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline(ref _authoredForwardCombinedAdvancedGiPipeline);
             DestroyPipeline(
                 ref _authoredForwardReceiverFeedbackCombinedAdvancedGiPipeline);
+        }
+
+        private void DestroyHybridReflectionPipelines()
+        {
+            HybridReflectionPipelinesAvailable = false;
+            for (int combination = 0; combination < 4; combination++)
+            {
+                for (int family = 0; family < 2; family++)
+                {
+                    VkPipeline pipeline =
+                        _hybridReflectionPipelines[combination, family];
+                    if (pipeline.Handle == 0)
+                        continue;
+                    _context.Api.DestroyPipeline(_context.Device, pipeline, null);
+                    _hybridReflectionPipelines[combination, family] = default;
+                }
+            }
         }
 
         private void DestroyPipeline(ref VkPipeline pipeline)

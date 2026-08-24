@@ -845,7 +845,12 @@ namespace Njulf.Rendering.Data
         GlobalEnvironmentOnly = 1,
         StaticProbes = 2,
         StaticProbesAndSsr = 3,
-        StaticProbesAndPlanar = 4
+        StaticProbesAndPlanar = 4,
+        /// <summary>
+        /// Screen-space reflections first, bounded ray-query recovery second,
+        /// then local probes and the global environment.
+        /// </summary>
+        HybridRayQuery = 5
     }
 
     public enum ReflectionDebugView : uint
@@ -870,7 +875,11 @@ namespace Njulf.Rendering.Data
         /// Normalized indirect-specular ownership: red is local geometric
         /// reflection, green is directional DDGI, and blue is environment.
         /// </summary>
-        SourceOwnership = 12
+        SourceOwnership = 12,
+        /// <summary>Final reflection confidence after temporal validation.</summary>
+        Confidence = 13,
+        /// <summary>Final source: SSR cyan, ray query magenta, probe yellow, environment blue.</summary>
+        SourceSelection = 14
     }
 
     public enum TransparencyMode : uint
@@ -1845,6 +1854,7 @@ namespace Njulf.Rendering.Data
     public sealed class ReflectionSettings
     {
         public const int ShaderMaxProbesPerPixel = 4;
+        public const uint ReceiverPayloadAbiVersion = 2;
 
         private int _maxProbes = 8;
         private int _maxProbesPerPixel = 2;
@@ -1862,6 +1872,16 @@ namespace Njulf.Rendering.Data
         private int _debugProbeIndex;
         private int _debugCubemapFace;
         private int _debugMipLevel;
+        private float _ssrFullResolutionRoughness = 0.2f;
+        private float _ssrHalfResolutionRoughness = 0.5f;
+        private float _ssrQuarterResolutionRoughness = 0.8f;
+        private int _ssrMaxSteps = 64;
+        private float _ssrMaxDistance = 75.0f;
+        private float _ssrConfidenceThreshold = 0.75f;
+        private float _rayQueryPixelBudgetFraction = 0.0078125f;
+        private int _rayQueryHitLightLimit = 2;
+        private int _temporalHistoryLength = 16;
+        private int _spatialFilterPassCount = 2;
 
         public bool Enabled { get; set; } = true;
         public ReflectionMode Mode { get; set; } = ReflectionMode.StaticProbes;
@@ -1915,6 +1935,114 @@ namespace Njulf.Rendering.Data
         public bool CaptureIncludesDdgi { get; set; }
         public int ReflectionCaptureRetryLimit { get => _reflectionCaptureRetryLimit; set => _reflectionCaptureRetryLimit = Math.Clamp(value, 0, 16); }
         public int ReflectionCaptureRetryBackoffFrames { get; set; } = 30;
+
+        public float SsrFullResolutionRoughness
+        {
+            get => _ssrFullResolutionRoughness;
+            set => _ssrFullResolutionRoughness = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float SsrHalfResolutionRoughness
+        {
+            get => _ssrHalfResolutionRoughness;
+            set => _ssrHalfResolutionRoughness = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public float SsrQuarterResolutionRoughness
+        {
+            get => _ssrQuarterResolutionRoughness;
+            set => _ssrQuarterResolutionRoughness = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public int SsrMaxSteps
+        {
+            get => _ssrMaxSteps;
+            set => _ssrMaxSteps = Math.Clamp(value, 8, 256);
+        }
+
+        public float SsrMaxDistance
+        {
+            get => _ssrMaxDistance;
+            set => _ssrMaxDistance = Clamp(value, 1.0f, 1000.0f);
+        }
+
+        public float SsrConfidenceThreshold
+        {
+            get => _ssrConfidenceThreshold;
+            set => _ssrConfidenceThreshold = Clamp(value, 0.0f, 1.0f);
+        }
+
+        /// <summary>Maximum fraction of render-resolution pixels traced by ray query each frame.</summary>
+        public float RayQueryPixelBudgetFraction
+        {
+            get => _rayQueryPixelBudgetFraction;
+            set => _rayQueryPixelBudgetFraction = Clamp(value, 0.0f, 1.0f);
+        }
+
+        public int RayQueryHitLightLimit
+        {
+            get => _rayQueryHitLightLimit;
+            set => _rayQueryHitLightLimit = Math.Clamp(value, 0, 16);
+        }
+
+        public int TemporalHistoryLength
+        {
+            get => _temporalHistoryLength;
+            set => _temporalHistoryLength = Math.Clamp(value, 1, 64);
+        }
+
+        public int SpatialFilterPassCount
+        {
+            get => _spatialFilterPassCount;
+            set => _spatialFilterPassCount = Math.Clamp(value, 0, 8);
+        }
+
+        public void ApplyHybridQualityBudget(RenderQualityPreset preset)
+        {
+            switch (preset)
+            {
+                case RenderQualityPreset.Medium:
+                    Mode = ReflectionMode.StaticProbesAndSsr;
+                    SsrFullResolutionRoughness = 0.15f;
+                    SsrHalfResolutionRoughness = 0.45f;
+                    SsrQuarterResolutionRoughness = 0.70f;
+                    SsrMaxSteps = 48;
+                    SsrMaxDistance = 50.0f;
+                    RayQueryPixelBudgetFraction = 0.0f;
+                    RayQueryHitLightLimit = 0;
+                    TemporalHistoryLength = 8;
+                    SpatialFilterPassCount = 2;
+                    break;
+                case RenderQualityPreset.Ultra:
+                    Mode = ReflectionMode.HybridRayQuery;
+                    SsrFullResolutionRoughness = 0.30f;
+                    SsrHalfResolutionRoughness = 0.65f;
+                    SsrQuarterResolutionRoughness = 0.90f;
+                    SsrMaxSteps = 96;
+                    SsrMaxDistance = 150.0f;
+                    // Ray-query recovery shades the hit and may trace shadow
+                    // visibility. Keep the budget bounded enough for dense
+                    // production scenes; temporal accumulation fills the
+                    // rotating sparse sample set over subsequent frames.
+                    RayQueryPixelBudgetFraction = 0.015625f;
+                    RayQueryHitLightLimit = 4;
+                    TemporalHistoryLength = 32;
+                    SpatialFilterPassCount = 4;
+                    break;
+                default:
+                    Mode = ReflectionMode.HybridRayQuery;
+                    SsrFullResolutionRoughness = 0.20f;
+                    SsrHalfResolutionRoughness = 0.50f;
+                    SsrQuarterResolutionRoughness = 0.80f;
+                    SsrMaxSteps = 64;
+                    SsrMaxDistance = 75.0f;
+                    RayQueryPixelBudgetFraction = 0.0078125f;
+                    RayQueryHitLightLimit = 2;
+                    TemporalHistoryLength = 16;
+                    SpatialFilterPassCount = 2;
+                    break;
+            }
+        }
 
         public ReflectionDebugView DebugView { get; set; } = ReflectionDebugView.None;
 
@@ -5005,7 +5133,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 16;
+        public const int SerializationVersion = 17;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5152,7 +5280,8 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.DdgiProbeUpdatePrimaryRayBudget = GlobalIlluminationSettings.DefaultDdgiProbeUpdatePrimaryRayBudget;
                     GlobalIllumination.ResolutionScale = 0.5f;
                     GlobalIllumination.MaxBounceDistance = 3.0f;
-                    Reflections.Enabled = false;
+                    Reflections.Enabled = true;
+                    Reflections.Mode = ReflectionMode.StaticProbes;
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
                     Foliage.GpuDrivenEnabled = true;
@@ -5215,6 +5344,7 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.DenoiserEnabled = true;
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = 1;
+                    Reflections.ApplyHybridQualityBudget(RenderQualityPreset.Medium);
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
                     Foliage.GpuDrivenEnabled = true;
@@ -5276,6 +5406,7 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.DenoiserEnabled = false;
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = 2;
+                    Reflections.ApplyHybridQualityBudget(RenderQualityPreset.DdgiHigh);
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
                     Foliage.GpuDrivenEnabled = true;
@@ -5335,6 +5466,7 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.DenoiserEnabled = true;
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = ReflectionSettings.ShaderMaxProbesPerPixel;
+                    Reflections.ApplyHybridQualityBudget(RenderQualityPreset.Ultra);
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
                     Foliage.GpuDrivenEnabled = true;
@@ -5399,6 +5531,7 @@ namespace Njulf.Rendering.Data
                     GlobalIllumination.DenoiserEnabled = true;
                     Reflections.Enabled = true;
                     Reflections.MaxProbesPerPixel = 2;
+                    Reflections.ApplyHybridQualityBudget(RenderQualityPreset.High);
                     Particles.Enabled = true;
                     Foliage.Enabled = true;
                     Foliage.GpuDrivenEnabled = true;
@@ -5625,7 +5758,8 @@ namespace Njulf.Rendering.Data
             // invalidates every older C5 qualification ID. Version 15 makes
             // explicit adaptive C5 the default and upgrades older
             // AutoQualified requests while preserving explicit opt-outs.
-            // Version 16 persists the froxel volumetric-fog contract.
+            // Version 16 persists the froxel volumetric-fog contract. Version 17
+            // persists the hybrid-reflection mode, quality budgets, and filters.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -5641,6 +5775,7 @@ namespace Njulf.Rendering.Data
             public bool FogEnabled { get; init; }
             public FogFile? Fog { get; init; }
             public bool ReflectionsEnabled { get; init; } = true;
+            public ReflectionSettingsFile? Reflections { get; init; }
             public ShadowSettingsFile? Shadows { get; init; }
             [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
             public bool? ShadowsEnabled { get; init; }
@@ -5674,6 +5809,7 @@ namespace Njulf.Rendering.Data
                     FogEnabled = settings.Fog.Enabled,
                     Fog = FogFile.FromSettings(settings.Fog),
                     ReflectionsEnabled = settings.Reflections.Enabled,
+                    Reflections = ReflectionSettingsFile.FromSettings(settings.Reflections),
                     Shadows = ShadowSettingsFile.FromSettings(settings.Shadows),
                     ParticlesEnabled = settings.Particles.Enabled,
                     TransparentReceiveGlobalIllumination =
@@ -5714,7 +5850,16 @@ namespace Njulf.Rendering.Data
                     Fog.ApplyTo(settings.Fog);
                 else
                     settings.Fog.Enabled = FogEnabled;
-                settings.Reflections.Enabled = ReflectionsEnabled;
+                if (Version.GetValueOrDefault() >= 17 && Reflections != null)
+                {
+                    Reflections.ApplyTo(settings.Reflections);
+                }
+                else
+                {
+                    // Legacy files persisted only the master switch. Preserve the
+                    // selected preset's reflection mode and apply the old opt-in.
+                    settings.Reflections.Enabled = ReflectionsEnabled;
+                }
                 if (Shadows != null)
                 {
                     Shadows.ApplyTo(settings.Shadows);
@@ -5912,6 +6057,75 @@ namespace Njulf.Rendering.Data
                 settings.DebugProjection = Enum.IsDefined(DebugProjection)
                     ? DebugProjection
                     : FogDebugProjection.MaxAlongRay;
+            }
+        }
+
+        private sealed record ReflectionSettingsFile
+        {
+            public bool Enabled { get; init; } = true;
+            public ReflectionMode Mode { get; init; } = ReflectionMode.StaticProbes;
+            public int MaxProbes { get; init; } = 8;
+            public int MaxProbesPerPixel { get; init; } = 2;
+            public uint ProbeResolution { get; init; } = 128;
+            public float Intensity { get; init; } = 1.0f;
+            public float GlobalFallbackIntensity { get; init; } = 1.0f;
+            public bool BoxProjectionEnabled { get; init; } = true;
+            public bool ProbeBlendingEnabled { get; init; } = true;
+            public float SsrFullResolutionRoughness { get; init; } = 0.2f;
+            public float SsrHalfResolutionRoughness { get; init; } = 0.5f;
+            public float SsrQuarterResolutionRoughness { get; init; } = 0.8f;
+            public int SsrMaxSteps { get; init; } = 64;
+            public float SsrMaxDistance { get; init; } = 75.0f;
+            public float SsrConfidenceThreshold { get; init; } = 0.75f;
+            public float RayQueryPixelBudgetFraction { get; init; } = 0.0078125f;
+            public int RayQueryHitLightLimit { get; init; } = 2;
+            public int TemporalHistoryLength { get; init; } = 16;
+            public int SpatialFilterPassCount { get; init; } = 2;
+
+            public static ReflectionSettingsFile FromSettings(ReflectionSettings settings) => new()
+            {
+                Enabled = settings.Enabled,
+                Mode = settings.Mode,
+                MaxProbes = settings.MaxProbes,
+                MaxProbesPerPixel = settings.MaxProbesPerPixel,
+                ProbeResolution = settings.ProbeResolution,
+                Intensity = settings.Intensity,
+                GlobalFallbackIntensity = settings.GlobalFallbackIntensity,
+                BoxProjectionEnabled = settings.BoxProjectionEnabled,
+                ProbeBlendingEnabled = settings.ProbeBlendingEnabled,
+                SsrFullResolutionRoughness = settings.SsrFullResolutionRoughness,
+                SsrHalfResolutionRoughness = settings.SsrHalfResolutionRoughness,
+                SsrQuarterResolutionRoughness = settings.SsrQuarterResolutionRoughness,
+                SsrMaxSteps = settings.SsrMaxSteps,
+                SsrMaxDistance = settings.SsrMaxDistance,
+                SsrConfidenceThreshold = settings.SsrConfidenceThreshold,
+                RayQueryPixelBudgetFraction = settings.RayQueryPixelBudgetFraction,
+                RayQueryHitLightLimit = settings.RayQueryHitLightLimit,
+                TemporalHistoryLength = settings.TemporalHistoryLength,
+                SpatialFilterPassCount = settings.SpatialFilterPassCount
+            };
+
+            public void ApplyTo(ReflectionSettings settings)
+            {
+                settings.Enabled = Enabled;
+                settings.Mode = Enum.IsDefined(Mode) ? Mode : ReflectionMode.StaticProbes;
+                settings.MaxProbes = MaxProbes;
+                settings.MaxProbesPerPixel = MaxProbesPerPixel;
+                settings.ProbeResolution = ProbeResolution;
+                settings.Intensity = Intensity;
+                settings.GlobalFallbackIntensity = GlobalFallbackIntensity;
+                settings.BoxProjectionEnabled = BoxProjectionEnabled;
+                settings.ProbeBlendingEnabled = ProbeBlendingEnabled;
+                settings.SsrFullResolutionRoughness = SsrFullResolutionRoughness;
+                settings.SsrHalfResolutionRoughness = SsrHalfResolutionRoughness;
+                settings.SsrQuarterResolutionRoughness = SsrQuarterResolutionRoughness;
+                settings.SsrMaxSteps = SsrMaxSteps;
+                settings.SsrMaxDistance = SsrMaxDistance;
+                settings.SsrConfidenceThreshold = SsrConfidenceThreshold;
+                settings.RayQueryPixelBudgetFraction = RayQueryPixelBudgetFraction;
+                settings.RayQueryHitLightLimit = RayQueryHitLightLimit;
+                settings.TemporalHistoryLength = TemporalHistoryLength;
+                settings.SpatialFilterPassCount = SpatialFilterPassCount;
             }
         }
 

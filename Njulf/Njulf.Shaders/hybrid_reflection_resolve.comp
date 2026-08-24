@@ -1,0 +1,301 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+#include "hybrid_reflection_compute.glsl"
+
+const uint REFLECTION_BOX_PROJECTION_ENABLED_FLAG = 1u << 1u;
+const uint REFLECTION_PROBE_BLENDING_ENABLED_FLAG = 1u << 2u;
+const int REFLECTION_PROBE_BOX_PROJECTION_FLAG = 1;
+const int REFLECTION_PROBE_CAPTURED_RADIANCE_AVAILABLE_FLAG = 1 << 1;
+const int REFLECTION_PROBE_SHAPE_SPHERE = 1;
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform HybridReflectionResolvePushBlock
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndIntensity;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint MaximumProbesPerPixel;
+    uint ReflectionDebugView;
+    float SsrConfidenceThreshold;
+    float Padding0;
+    float Padding1;
+    float Padding2;
+} pc;
+
+vec3 HybridTransformProbePoint(GPUReflectionProbe probe, vec3 position)
+{
+    return MulRowMajor(vec4(position, 1.0), probe.WorldToProbe).xyz;
+}
+
+vec3 HybridTransformProbeVector(GPUReflectionProbe probe, vec3 direction)
+{
+    return normalize(MulRowMajor(vec4(direction, 0.0),
+        probe.WorldToProbe).xyz);
+}
+
+float HybridProbeWeight(GPUReflectionProbe probe, vec3 worldPosition)
+{
+    float blendDistance = max(probe.BlendParams.x, 0.0);
+    if (probe.Shape == REFLECTION_PROBE_SHAPE_SPHERE)
+    {
+        float radius = max(probe.PositionAndRadius.w, 0.0001);
+        float distanceToProbe = length(worldPosition -
+            probe.PositionAndRadius.xyz);
+        if (distanceToProbe >= radius)
+            return 0.0;
+        if (blendDistance <= 0.0)
+            return 1.0;
+        return 1.0 - smoothstep(max(radius - blendDistance, 0.0),
+            radius, distanceToProbe);
+    }
+    vec3 localPosition = HybridTransformProbePoint(probe, worldPosition);
+    vec3 extents = max(abs(probe.BoxMax.xyz), vec3(0.0001));
+    if (any(greaterThan(abs(localPosition), extents)))
+        return 0.0;
+    if (blendDistance <= 0.0)
+        return 1.0;
+    float boundary = min(extents.x - abs(localPosition.x),
+        min(extents.y - abs(localPosition.y),
+            extents.z - abs(localPosition.z)));
+    return smoothstep(0.0, blendDistance, boundary);
+}
+
+float HybridBoxAxisDistance(float position, float direction, float extent)
+{
+    if (abs(direction) <= 0.00001)
+        return 3.402823e38;
+    return ((direction > 0.0 ? extent : -extent) - position) / direction;
+}
+
+vec3 HybridProbeDirection(
+    GPUReflectionProbeHeader header,
+    GPUReflectionProbe probe,
+    vec3 worldPosition,
+    vec3 reflectionDirection)
+{
+    vec3 localDirection = HybridTransformProbeVector(
+        probe, reflectionDirection);
+    if ((header.Flags & REFLECTION_BOX_PROJECTION_ENABLED_FLAG) == 0u ||
+        (probe.Flags & REFLECTION_PROBE_BOX_PROJECTION_FLAG) == 0 ||
+        probe.Shape == REFLECTION_PROBE_SHAPE_SPHERE)
+    {
+        return localDirection;
+    }
+    vec3 localPosition = HybridTransformProbePoint(probe, worldPosition);
+    vec3 extents = max(abs(probe.BoxMax.xyz), vec3(0.0001));
+    if (any(greaterThan(abs(localPosition), extents)))
+        return localDirection;
+    float distance = min(
+        HybridBoxAxisDistance(localPosition.x, localDirection.x, extents.x),
+        min(HybridBoxAxisDistance(localPosition.y, localDirection.y, extents.y),
+            HybridBoxAxisDistance(localPosition.z, localDirection.z, extents.z)));
+    return distance > 0.0 && distance < 3.402823e37
+        ? normalize(localPosition + localDirection * distance)
+        : localDirection;
+}
+
+bool HybridSampleLocalProbe(
+    vec3 worldPosition,
+    vec3 reflectionDirection,
+    float roughness,
+    out vec3 radiance,
+    out float confidence)
+{
+    radiance = vec3(0.0);
+    confidence = 0.0;
+    GPUReflectionProbeHeader header = ReadReflectionProbeHeader();
+    if (header.ProbeCount <= 0 ||
+        header.ProbeCubemapArrayTextureIndex < 0)
+    {
+        return false;
+    }
+    float totalWeight = 0.0;
+    uint accepted = 0u;
+    uint maximum = max(pc.MaximumProbesPerPixel, 1u);
+    bool blendingEnabled =
+        (header.Flags & REFLECTION_PROBE_BLENDING_ENABLED_FLAG) != 0u;
+    float maximumLod = max(float(header.ProbeMipCount) - 1.0, 0.0);
+    float lod = maximumLod > 0.0
+        ? mix(1.0, maximumLod, roughness)
+        : 0.0;
+    for (int probeIndex = 0;
+         probeIndex < header.ProbeCount && accepted < maximum;
+         probeIndex++)
+    {
+        GPUReflectionProbe probe = ReadReflectionProbe(uint(probeIndex));
+        if (probe.CubemapArrayIndex < 0 ||
+            (probe.Flags & REFLECTION_PROBE_CAPTURED_RADIANCE_AVAILABLE_FLAG) == 0)
+        {
+            continue;
+        }
+        float weight = HybridProbeWeight(probe, worldPosition);
+        if (weight <= 0.0001)
+            continue;
+        if (!blendingEnabled)
+            weight = 1.0;
+        vec3 direction = HybridProbeDirection(header, probe,
+            worldPosition, reflectionDirection);
+        vec3 sampleValue = textureLod(
+            BindlessCubeArrayTextures[nonuniformEXT(
+                header.ProbeCubemapArrayTextureIndex)],
+            vec4(direction, float(probe.CubemapArrayIndex)), lod).rgb;
+        radiance += max(sampleValue, vec3(0.0)) *
+            max(probe.BlendParams.y, 0.0) * weight;
+        totalWeight += weight;
+        accepted++;
+        if (!blendingEnabled)
+            break;
+    }
+    if (totalWeight <= 0.0001)
+        return false;
+    // The resolve epilogue applies the common reflection intensity exactly
+    // once for SSR, ray-query, probe, and environment sources.
+    radiance /= totalWeight;
+    confidence = mix(0.55, 0.9, clamp(totalWeight, 0.0, 1.0));
+    return true;
+}
+
+void HybridSampleAnalyticFallback(
+    vec3 worldPosition,
+    vec3 reflectionDirection,
+    float roughness,
+    GPUEnvironmentData environment,
+    GPUReflectionProbeHeader probeHeader,
+    out vec3 radiance,
+    out float confidence,
+    out uint source)
+{
+    if (HybridSampleLocalProbe(worldPosition, reflectionDirection,
+            roughness, radiance, confidence))
+    {
+        source = HYBRID_REFLECTION_SOURCE_LOCAL_PROBE;
+        return;
+    }
+
+    float maximumLod = max(
+        float(environment.PrefilteredMipCount) - 1.0, 0.0);
+    radiance = SampleEnvironmentPrefilteredRadiance(
+        environment, reflectionDirection, roughness * maximumLod) *
+        max(probeHeader.GlobalFallbackIntensity, 0.0);
+    confidence = environment.Enabled != 0u ? 0.45 : 0.0;
+    source = HYBRID_REFLECTION_SOURCE_ENVIRONMENT;
+}
+
+void main()
+{
+    uvec2 invocation = gl_GlobalInvocationID.xy;
+    if (invocation.x >= pc.ScreenWidth || invocation.y >= pc.ScreenHeight)
+        return;
+    ivec2 pixel = ivec2(invocation);
+    uvec4 payload = texelFetch(HybridReceiverPayload, pixel, 0);
+    if (!HybridReflectionPayloadValid(payload))
+    {
+        imageStore(HybridRawRadiance, pixel, vec4(0.0));
+        imageStore(HybridRawMetadata, pixel, uvec4(0u));
+        return;
+    }
+
+    vec3 worldPosition;
+    float depth;
+    if (!HybridReconstructWorldPosition(pixel,
+            uvec2(pc.ScreenWidth, pc.ScreenHeight),
+            pc.InverseViewProjectionMatrix,
+            worldPosition, depth))
+    {
+        imageStore(HybridRawRadiance, pixel, vec4(0.0));
+        imageStore(HybridRawMetadata, pixel, uvec4(0u));
+        return;
+    }
+
+    uvec2 metadata = imageLoad(HybridRawMetadata, pixel).xy;
+    vec4 raw = imageLoad(HybridRawRadiance, pixel);
+    uint source = HybridMetadataSource(metadata.x);
+    float confidence = HybridMetadataConfidence(metadata.x);
+    vec3 incidentRadiance = max(raw.rgb, vec3(0.0));
+    float roughness = HybridReflectionPayloadRoughness(payload);
+    vec3 normal = HybridReflectionPayloadShadingNormal(payload);
+    vec3 viewDirection = normalize(
+        pc.CameraPositionAndIntensity.xyz - worldPosition);
+    vec3 reflectionDirection = normalize(reflect(-viewDirection, normal));
+    GPUEnvironmentData environment = ReadEnvironmentData();
+    GPUReflectionProbeHeader probeHeader = ReadReflectionProbeHeader();
+    float incidentRadianceScale =
+        source == HYBRID_REFLECTION_SOURCE_ENVIRONMENT
+            ? max(environment.SpecularIntensity, 0.0)
+            : 1.0;
+
+    if (!HybridMetadataValid(metadata.x))
+    {
+        HybridSampleAnalyticFallback(worldPosition, reflectionDirection,
+            roughness, environment, probeHeader, incidentRadiance,
+            confidence, source);
+        incidentRadianceScale =
+            source == HYBRID_REFLECTION_SOURCE_ENVIRONMENT
+                ? max(environment.SpecularIntensity, 0.0)
+                : 1.0;
+        if (source == HYBRID_REFLECTION_SOURCE_LOCAL_PROBE)
+        {
+            atomicAdd(HybridCounters[
+                HYBRID_REFLECTION_COUNTER_PROBE_FALLBACKS], 1u);
+        }
+        else
+        {
+            atomicAdd(HybridCounters[
+                HYBRID_REFLECTION_COUNTER_ENVIRONMENT_FALLBACKS], 1u);
+        }
+    }
+    else if (source == HYBRID_REFLECTION_SOURCE_SSR)
+    {
+        // An accepted SSR hit near the confidence threshold is not reliable
+        // enough to replace analytic IBL abruptly. Fade it into the normal
+        // probe/environment fallback so depth edges and grazing hits cannot
+        // punch dark, temporally unstable holes into reflective surfaces.
+        vec3 fallbackRadiance;
+        float fallbackConfidence;
+        uint fallbackSource;
+        HybridSampleAnalyticFallback(worldPosition, reflectionDirection,
+            roughness, environment, probeHeader, fallbackRadiance,
+            fallbackConfidence, fallbackSource);
+        float fallbackRadianceScale =
+            fallbackSource == HYBRID_REFLECTION_SOURCE_ENVIRONMENT
+                ? max(environment.SpecularIntensity, 0.0)
+                : 1.0;
+        float threshold = clamp(pc.SsrConfidenceThreshold, 0.0, 0.999);
+        float ssrTrust = smoothstep(threshold, 1.0, confidence);
+        incidentRadiance = mix(
+            fallbackRadiance * fallbackRadianceScale,
+            incidentRadiance, ssrTrust);
+        confidence = mix(fallbackConfidence, confidence, ssrTrust);
+        incidentRadianceScale = 1.0;
+    }
+
+    float nDotV = max(dot(normal, viewDirection), 0.0);
+    vec3 f0 = HybridReflectionPayloadF0(payload);
+    vec3 fresnel = HybridFresnelSchlickRoughness(
+        nDotV, f0, roughness);
+    vec2 brdf = environment.BrdfLutTextureIndex >= 0
+        ? texture(BindlessTextures[nonuniformEXT(
+            environment.BrdfLutTextureIndex)], vec2(nDotV, roughness)).rg
+        : vec2(1.0, 0.0);
+    float specularOcclusion = HybridReflectionPayloadSpecularOcclusion(payload);
+    // Environment.SpecularIntensity controls environment IBL only. SSR,
+    // ray-query hits, and local probes already contain scene radiance and must
+    // remain visible when environment lighting is disabled.
+    vec3 contribution = incidentRadiance *
+        (fresnel * brdf.x + brdf.y) *
+        incidentRadianceScale *
+        specularOcclusion * max(pc.CameraPositionAndIntensity.w, 0.0);
+    contribution = HybridLimitReflectionRadiance(contribution,
+        HybridMaximumComponent(incidentRadiance));
+    imageStore(HybridRawRadiance, pixel,
+        vec4(contribution, confidence));
+    imageStore(HybridRawMetadata, pixel, uvec4(
+        HybridPackMetadata(source, confidence,
+            HybridMetadataReason(metadata.x), 0u, true),
+        HybridReceiverIdentity(payload), metadata.y, 0u));
+}

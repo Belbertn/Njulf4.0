@@ -45,6 +45,14 @@ layout(early_fragment_tests) in;
 #define NJULF_C4_RECEIVER_OUTPUT 0
 #endif
 
+#ifndef NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#define NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT 0
+#endif
+
+#ifndef NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION
+#define NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION 0
+#endif
+
 #ifndef NJULF_C4_RECEIVER_SEMANTICS_VERSION
 #define NJULF_C4_RECEIVER_SEMANTICS_VERSION 0
 #endif
@@ -79,6 +87,21 @@ layout(early_fragment_tests) in;
 #error "C4 receiver semantics version requires the dedicated output variant."
 #endif
 
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#if defined(FORWARD_WEIGHTED_OIT) || \
+    (!defined(FORWARD_OPAQUE) && !defined(FORWARD_SIMPLE_OPAQUE))
+#error "Hybrid reflection receivers are valid only for opaque and alpha-mask variants."
+#endif
+#if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
+#error "Hybrid reflection receivers cannot share material-provenance MRT ownership."
+#endif
+#if NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION != 1
+#error "Hybrid reflection receiver shader semantics version mismatch."
+#endif
+#elif NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION != 0
+#error "Hybrid reflection semantics version requires the dedicated output variant."
+#endif
+
 #include "common.glsl"
 #include "directional_csm_sampling.glsl"
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
@@ -86,6 +109,9 @@ layout(early_fragment_tests) in;
 #endif
 #if NJULF_C4_RECEIVER_OUTPUT
 #include "c4_receiver_payload.glsl"
+#endif
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#include "hybrid_reflection_payload.glsl"
 #endif
 #if FORWARD_DDGI_RECEIVER_CACHE
 #include "forward_ddgi_receiver_cache.glsl"
@@ -188,6 +214,17 @@ layout(location = 2) out uvec4 outNearFieldReceiverPayload;
 layout(location = 1) out uvec4 outGiCausticReceiverPayload;
 #elif NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 layout(location = 1) out float outMaterialTransportProvenance;
+#endif
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#if NJULF_C4_RECEIVER_OUTPUT && NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+layout(location = 4) out uvec4 outHybridReflectionReceiverPayload;
+#elif NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+layout(location = 3) out uvec4 outHybridReflectionReceiverPayload;
+#elif NJULF_C4_RECEIVER_OUTPUT
+layout(location = 2) out uvec4 outHybridReflectionReceiverPayload;
+#else
+layout(location = 1) out uvec4 outHybridReflectionReceiverPayload;
+#endif
 #endif
 #endif
 
@@ -3488,6 +3525,9 @@ void main()
 #if NJULF_C4_RECEIVER_OUTPUT
     outGiCausticReceiverPayload = uvec4(0u);
 #endif
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+    outHybridReflectionReceiverPayload = uvec4(0u);
+#endif
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     WriteMaterialTransportProvenance(MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN);
@@ -4324,11 +4364,13 @@ void main()
         reflectionDebugActive,
         reflectionDebugColor);
 
+#if !NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
     if (reflectionDebugActive)
     {
         WriteForwardColor(vec4(reflectionDebugColor, forwardDebugOutputAlpha));
         return;
     }
+#endif
 
     if (environment.DebugView == ENVIRONMENT_DEBUG_DIFFUSE_IBL_ONLY)
     {
@@ -5212,7 +5254,30 @@ void main()
         outGiCausticReceiverPayload);
 #endif
 
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+    // The deferred reflection pass owns only base indirect specular. Direct
+    // light, diffuse GI, emissive, and material extensions remain in SceneColor.
+    float hybridSpecularOcclusion = clamp(
+        pow(ambientOcclusion, 1.0 + roughness) * indirectSpecularVisibility,
+        0.0,
+        1.0);
+    NjulfHybridReflectionCreatePayload(
+        geometricNormal,
+        normal,
+        mix(dielectricF0, albedo, metallic),
+        roughness,
+        hybridSpecularOcclusion,
+        // Meshlet IDs are rasterization details and change across otherwise
+        // continuous surfaces. History identity must remain stable across them.
+        uvec3(fragObjectIndex, fragMaterialIndex, 0u),
+        outHybridReflectionReceiverPayload);
+#endif
+
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+    vec3 color = finalDiffuseIndirect + directLighting + emissive;
+#else
     vec3 color = finalDiffuseIndirect + specularIbl + directLighting + emissive;
+#endif
 
     if (hasMaterialExtension)
     {

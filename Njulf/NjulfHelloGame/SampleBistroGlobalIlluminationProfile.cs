@@ -8,7 +8,7 @@ namespace NjulfHelloGame;
 /// <summary>
 /// Restores scene-neutral outdoor lighting and camera-relative DDGI for Bistro.
 /// Bistro is intentionally not tuned with Sponza's plaza lattice, exposure,
-/// or Dubrovnik atmosphere. It owns a small pair of local reflection probes.
+/// or Dubrovnik atmosphere. Sharp specular uses the probe-free hybrid path.
 /// </summary>
 internal static class SampleBistroGlobalIlluminationProfile
 {
@@ -153,26 +153,7 @@ internal static class SampleBistroGlobalIlluminationProfile
         settings.Bloom.MipCount = 6;
         settings.Fog.Enabled = false;
         settings.Reflections.Enabled = true;
-        settings.Reflections.Mode = ReflectionMode.StaticProbes;
-        // Bistro's higher-priority cafe probe covers the presentation view.
-        // Selecting a single local source avoids paying for two cubemap reads
-        // per shaded pixel while the broad courtyard probe remains available
-        // as the spatial fallback outside that volume.
-        settings.Reflections.MaxProbesPerPixel = 1;
         settings.Reflections.Intensity = 1.0f;
         settings.Reflections.GlobalFallbackIntensity = 1.0f;
-        settings.Reflections.CaptureOnLoad = true;
-        // Publish a useful direct-lit local source first. HelloGame promotes
-        // these probes to DDGI-fed recaptures only after the field reports a
-        // current admitted source and propagation generation; a missing GI
-        // certificate must never leave every local probe permanently queued.
-        settings.Reflections.CaptureIncludesDdgi = false;
-        settings.Reflections.MaxProbeCapturesPerFrame = 1;
-        settings.Reflections.MaxConcurrentProbeCaptures = 1;
-        settings.Reflections.MaxProbeCaptureFacesPerFrame = 1;
-        settings.Reflections.MaxProbePrefilterMipsPerFrame = 1;
-        settings.Reflections.ReflectionCaptureGpuBudgetMicroseconds = 500;
-        settings.Reflections.MinimumEnvironmentRecaptureIntervalSeconds = 0.5f;
-
     }
 }

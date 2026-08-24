@@ -49,18 +49,6 @@ internal static class SampleMaterialShowcaseScene
             SampleUvSphereMesh.CreateVertices(),
             SampleUvSphereMesh.CreateIndices());
 
-        scene.Add(new ReflectionProbe
-        {
-            Name = "MaterialShowcase.CenterProbe",
-            Position = new CoreVector3(0f, 1.35f, 1.35f),
-            Shape = ReflectionProbeShape.Box,
-            BoxExtents = new CoreVector3(8.5f, 3.5f, 6.5f),
-            BlendDistance = 1.0f,
-            Intensity = 1.0f,
-            Priority = 0,
-            BoxProjection = true
-        });
-
         AddObject(
             scene,
             floorMesh,

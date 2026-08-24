@@ -54,6 +54,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly ForwardGiCausticReceiverAttachmentBinding?
             _giCausticReceiverBinding;
         private readonly Func<bool>? _giCausticRuntimeAvailable;
+        private readonly ForwardHybridReflectionReceiverAttachmentBinding?
+            _hybridReflectionReceiverBinding;
         private bool _recordingReflectionCapture;
         private bool _reflectionCaptureIncludesDdgi;
         private readonly BufferHandle[] _simpleDdgiReceiverCacheBuffers =
@@ -85,6 +87,7 @@ namespace Njulf.Rendering.Pipeline
         private bool _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView;
         private bool _simpleDdgiFoliageFeedbackRequiredForCurrentView;
         private bool _simpleDdgiReflectionFeedbackRequiredForCurrentView;
+        private bool _hybridReflectionReceiverEnabledForCurrentView;
         private int _reflectionFeedbackCubemapArrayLayer;
         private int _reflectionFeedbackBatchFrameIndex = -1;
         private int _reflectionFeedbackFacesRecordedForCurrentBatch;
@@ -149,6 +152,8 @@ namespace Njulf.Rendering.Pipeline
             ForwardGiCausticReceiverAttachmentBinding?
                 giCausticReceiverBinding = null,
             Func<bool>? giCausticRuntimeAvailable = null,
+            ForwardHybridReflectionReceiverAttachmentBinding?
+                hybridReflectionReceiverBinding = null,
             SimpleDdgiReceiverFeedbackVulkanRuntime?
                 simpleDdgiReceiverFeedbackRuntime = null)
             : base("ForwardPlusPass", context, swapchain, bindlessHeap)
@@ -166,6 +171,7 @@ namespace Njulf.Rendering.Pipeline
                 nearFieldDirectSourceRuntimeAvailable;
             _giCausticReceiverBinding = giCausticReceiverBinding;
             _giCausticRuntimeAvailable = giCausticRuntimeAvailable;
+            _hybridReflectionReceiverBinding = hybridReflectionReceiverBinding;
             _simpleDdgiReceiverFeedbackRuntime =
                 simpleDdgiReceiverFeedbackRuntime;
             for (int i = 0; i < FramesInFlight; i++)
@@ -184,6 +190,8 @@ namespace Njulf.Rendering.Pipeline
             "near-field-direct-source-disabled";
         public string GiCausticReceiverFailureReason { get; private set; } =
             "caustic-forward-receiver-disabled";
+        public string HybridReflectionReceiverFailureReason { get; private set; } =
+            "hybrid-reflection-receiver-disabled";
 
         /// <summary>
         /// Publishes the source attachments and extent-bound V12 contract for
@@ -679,6 +687,7 @@ namespace Njulf.Rendering.Pipeline
             Data.SceneRenderingData sceneData,
             GpuTimestampRecorder? timestamps)
         {
+            _hybridReflectionReceiverEnabledForCurrentView = false;
             sceneData.GiCausticReceiverPayloadCompleted = false;
             sceneData.GiCausticReceiverPayloadFrameSerial = 0UL;
             if (!sceneData.HasCurrentDepthPrePass)
@@ -723,6 +732,32 @@ namespace Njulf.Rendering.Pipeline
                     renderExtent,
                     materialTransportProvenanceEnabled,
                     out giCausticReceiverBinding);
+            bool hybridReflectionReceiverEnabled =
+                TryGetHybridReflectionReceiverBinding(
+                    sceneData,
+                    renderExtent,
+                    materialTransportProvenanceEnabled,
+                    out ForwardHybridReflectionReceiverAttachmentBinding?
+                        hybridReflectionReceiverBinding);
+            if (!hybridReflectionReceiverEnabled &&
+                sceneData.EffectiveReflectionMode is
+                    (ReflectionMode.StaticProbesAndSsr or
+                     ReflectionMode.HybridRayQuery))
+            {
+                // Fail closed before selecting the opaque pipeline: the
+                // ordinary forward variants retain local-probe/environment
+                // specular, while the deferred chain observes the demotion
+                // and does not consume an unwritten payload.
+                sceneData.EffectiveReflectionMode = ReflectionMode.StaticProbes;
+                sceneData.ReflectionMode = ReflectionMode.StaticProbes;
+                sceneData.ReflectionFallbackReason =
+                    ReflectionFallbackReason.ReceiverPayloadUnavailable;
+                sceneData.ReflectionFallbackDetail =
+                    HybridReflectionReceiverFailureReason;
+                sceneData.HybridReflectionPassEnabled = false;
+            }
+            _hybridReflectionReceiverEnabledForCurrentView =
+                hybridReflectionReceiverEnabled;
             if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled &&
                 !_meshPipeline.CombinedAdvancedGiAttachmentEnabled)
             {
@@ -735,6 +770,36 @@ namespace Njulf.Rendering.Pipeline
                 giCausticReceiverBinding = null;
                 GiCausticReceiverFailureReason =
                     _meshPipeline.CombinedAdvancedGiFailureReason;
+            }
+            if (hybridReflectionReceiverEnabled)
+            {
+                bool meshVariantsReady =
+                    _meshPipeline.TryPrepareHybridReflectionPipelines(
+                        nearFieldDirectSourceEnabled,
+                        giCausticReceiverEnabled);
+                bool foliageVariantsReady =
+                    _foliagePipeline is null ||
+                    sceneData.FoliageClusterCount <= 0 ||
+                    sceneData.FoliageDrawBufferBytes == 0 ||
+                    _foliagePipeline.TryPrepareHybridReflectionPipelines(
+                        nearFieldDirectSourceEnabled,
+                        giCausticReceiverEnabled);
+                if (!meshVariantsReady || !foliageVariantsReady)
+                {
+                    hybridReflectionReceiverEnabled = false;
+                    hybridReflectionReceiverBinding = null;
+                    _hybridReflectionReceiverEnabledForCurrentView = false;
+                    sceneData.EffectiveReflectionMode = ReflectionMode.StaticProbes;
+                    sceneData.ReflectionMode = ReflectionMode.StaticProbes;
+                    sceneData.ReflectionFallbackReason =
+                        ReflectionFallbackReason.ReceiverPayloadUnavailable;
+                    HybridReflectionReceiverFailureReason = meshVariantsReady
+                        ? _foliagePipeline!.HybridReflectionPipelineFailureReason
+                        : _meshPipeline.HybridReflectionFailureReason;
+                    sceneData.ReflectionFallbackDetail =
+                        HybridReflectionReceiverFailureReason;
+                    sceneData.HybridReflectionPassEnabled = false;
+                }
             }
             bool receiverGatherDispatchable =
                 ShouldDispatchSimpleDdgiReceiverCache(
@@ -877,6 +942,11 @@ namespace Njulf.Rendering.Pipeline
                 giCausticReceiverBinding!.ReceiverPayload
                     .TransitionToColorAttachment(cmd);
             }
+            if (hybridReflectionReceiverEnabled)
+            {
+                hybridReflectionReceiverBinding!.ReceiverPayload
+                    .TransitionToColorAttachment(cmd);
+            }
             var colorAttachment = ColorAttachment(
                 _renderTargets.SceneColor.View,
                 ImageLayout.ColorAttachmentOptimal,
@@ -887,8 +957,7 @@ namespace Njulf.Rendering.Pipeline
                     sceneData.ClearColor.Y,
                     sceneData.ClearColor.Z,
                     sceneData.ClearColor.W)));
-            var colorAttachments = stackalloc RenderingAttachmentInfo[
-                (int)ForwardAdvancedGiCombinedContract.ColorAttachmentCount];
+            var colorAttachments = stackalloc RenderingAttachmentInfo[5];
             colorAttachments[0] = colorAttachment;
             if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
             {
@@ -955,6 +1024,21 @@ namespace Njulf.Rendering.Pipeline
                     AttachmentStoreOp.Store,
                     new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
             }
+            if (hybridReflectionReceiverEnabled)
+            {
+                int hybridAttachmentIndex = nearFieldDirectSourceEnabled &&
+                                            giCausticReceiverEnabled
+                    ? 4
+                    : nearFieldDirectSourceEnabled
+                        ? 3
+                        : giCausticReceiverEnabled ? 2 : 1;
+                colorAttachments[hybridAttachmentIndex] = ColorAttachment(
+                    hybridReflectionReceiverBinding!.ReceiverPayload.View,
+                    ImageLayout.ColorAttachmentOptimal,
+                    AttachmentLoadOp.Clear,
+                    AttachmentStoreOp.Store,
+                    new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+            }
             var depthAttachment = DepthAttachment(
                 _renderTargets.SceneDepth.View,
                 ImageLayout.DepthStencilReadOnlyOptimal,
@@ -972,7 +1056,8 @@ namespace Njulf.Rendering.Pipeline
                         hasColorAttachment: true,
                         materialTransportProvenanceEnabled,
                         nearFieldDirectSourceEnabled,
-                        giCausticReceiverEnabled),
+                        giCausticReceiverEnabled,
+                        hybridReflectionReceiverEnabled),
                 PColorAttachments = colorAttachments,
                 PDepthAttachment = &depthAttachment,
                 PStencilAttachment = null
@@ -1118,18 +1203,33 @@ namespace Njulf.Rendering.Pipeline
             }
             else if (giCausticReceiverEnabled)
             {
-                // C4 has no foliage transport contract. Preserve SceneColor
-                // and leave its cleared payload invalid for foliage pixels.
+                bool foliageReceiverWritten =
+                    _hybridReflectionReceiverEnabledForCurrentView &&
+                    DrawFoliageForward(
+                        cmd,
+                        sceneData,
+                        combinedAdvancedGi: true);
                 _context.KhrDynamicRendering.CmdEndRendering(cmd);
-                DrawFoliageWithoutNearFieldDirectSource(
-                    cmd,
-                    sceneData,
-                    renderExtent);
+                if (!foliageReceiverWritten)
+                {
+                    // C4 alone has no foliage transport contract. Preserve
+                    // SceneColor and leave its cleared receiver payload
+                    // invalid when a hybrid foliage variant is unavailable.
+                    DrawFoliageWithoutNearFieldDirectSource(
+                        cmd,
+                        sceneData,
+                        renderExtent);
+                }
             }
             else
             {
                 DrawFoliageForward(cmd, sceneData);
                 _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            }
+            if (hybridReflectionReceiverEnabled)
+            {
+                hybridReflectionReceiverBinding!.ReceiverPayload
+                    .TransitionToShaderRead(cmd);
             }
             if (giCausticReceiverEnabled)
             {
@@ -1215,8 +1315,12 @@ namespace Njulf.Rendering.Pipeline
             int simpleMeshlets = Math.Max(0, sceneData.SimpleOpaqueMeshletCount);
             int simpleNormalMeshlets = Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount);
             int fullMeshlets = Math.Max(0, sceneData.FullOpaqueMeshletCount);
+            bool deferredReflection = sceneData.EffectiveReflectionMode is
+                ReflectionMode.StaticProbesAndSsr or
+                ReflectionMode.HybridRayQuery;
             bool requiresLocalProbeEvaluation = RequiresLocalReflectionProbeEvaluation(sceneData);
-            bool forceFullForDebug = sceneData.ReflectionDebugView != ReflectionDebugView.None;
+            bool forceFullForDebug = !deferredReflection &&
+                sceneData.ReflectionDebugView != ReflectionDebugView.None;
             bool useSimpleGlobalIblPipeline = !forceFullForDebug && !requiresLocalProbeEvaluation;
             int simpleVariantMeshlets = simpleMeshlets + simpleNormalMeshlets;
 
@@ -1231,6 +1335,13 @@ namespace Njulf.Rendering.Pipeline
         {
             if (!sceneData.ReflectionsEnabled)
                 return false;
+
+            if (sceneData.EffectiveReflectionMode is
+                ReflectionMode.StaticProbesAndSsr or
+                ReflectionMode.HybridRayQuery)
+            {
+                return false;
+            }
 
             if (sceneData.ReflectionMode is ReflectionMode.Disabled or ReflectionMode.GlobalEnvironmentOnly)
                 return false;
@@ -1312,12 +1423,28 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             bool receiverCacheEnabled = !giCausticReceiverEnabled &&
+                !_hybridReflectionReceiverEnabledForCurrentView &&
                 !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                 !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                 ShouldUseSimpleDdgiReceiverCacheForDraw();
             bool disabledBenchmarkPipeline =
                 ShouldUseForwardGiDisabledBenchmarkPipeline();
-            if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
+            if (_hybridReflectionReceiverEnabledForCurrentView &&
+                !_recordingReflectionCapture)
+            {
+                if (!_meshPipeline.TryResolveHybridReflectionPipeline(
+                        pipeline,
+                        nearFieldDirectSourceEnabled,
+                        giCausticReceiverEnabled,
+                        out Silk.NET.Vulkan.Pipeline hybridPipeline))
+                {
+                    throw new InvalidOperationException(
+                        "The hybrid reflection pass selected an opaque pipeline without a matching receiver MRT variant.");
+                }
+
+                pipeline = hybridPipeline;
+            }
+            else if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
             {
                 if (!_meshPipeline.TryResolveCombinedAdvancedGiPipeline(
                         pipeline,
@@ -1570,12 +1697,28 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             bool receiverCacheEnabled = !giCausticReceiverEnabled &&
+                !_hybridReflectionReceiverEnabledForCurrentView &&
                 !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                 !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                 ShouldUseSimpleDdgiReceiverCacheForDraw();
             bool disabledBenchmarkPipeline =
                 ShouldUseForwardGiDisabledBenchmarkPipeline();
-            if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
+            if (_hybridReflectionReceiverEnabledForCurrentView &&
+                !_recordingReflectionCapture)
+            {
+                if (!_meshPipeline.TryResolveHybridReflectionPipeline(
+                        pipeline,
+                        nearFieldDirectSourceEnabled,
+                        giCausticReceiverEnabled,
+                        out Silk.NET.Vulkan.Pipeline hybridPipeline))
+                {
+                    throw new InvalidOperationException(
+                        "The hybrid reflection pass selected an indirect opaque pipeline without a matching receiver MRT variant.");
+                }
+
+                pipeline = hybridPipeline;
+            }
+            else if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
             {
                 if (!_meshPipeline.TryResolveCombinedAdvancedGiPipeline(
                         pipeline,
@@ -2431,6 +2574,66 @@ namespace Njulf.Rendering.Pipeline
             return true;
         }
 
+        private bool TryGetHybridReflectionReceiverBinding(
+            Data.SceneRenderingData sceneData,
+            Extent2D renderExtent,
+            bool materialTransportProvenanceEnabled,
+            out ForwardHybridReflectionReceiverAttachmentBinding? binding)
+        {
+            binding = null;
+            if (sceneData.EffectiveReflectionMode is not
+                (ReflectionMode.StaticProbesAndSsr or
+                 ReflectionMode.HybridRayQuery))
+            {
+                HybridReflectionReceiverFailureReason =
+                    "hybrid-reflection-mode-not-effective";
+                return false;
+            }
+            if (_recordingReflectionCapture || materialTransportProvenanceEnabled)
+            {
+                HybridReflectionReceiverFailureReason = _recordingReflectionCapture
+                    ? "hybrid-reflection-probe-capture-unsupported"
+                    : "hybrid-reflection-material-provenance-conflict";
+                return false;
+            }
+            if (_hybridReflectionReceiverBinding is null ||
+                !_meshPipeline.HybridReflectionAttachmentEnabled)
+            {
+                HybridReflectionReceiverFailureReason =
+                    _meshPipeline.HybridReflectionFailureReason;
+                return false;
+            }
+            bool supportedReflectionDebug = sceneData.ReflectionDebugView is
+                ReflectionDebugView.None or ReflectionDebugView.SsrMask or
+                ReflectionDebugView.Confidence or
+                ReflectionDebugView.SourceSelection;
+            if (!supportedReflectionDebug || sceneData.DebugViewMode != 0u ||
+                sceneData.AmbientOcclusionDebugView != AmbientOcclusionDebugView.None ||
+                sceneData.TransparencyDebugView != TransparencyDebugView.None ||
+                sceneData.AnimationDebugView != AnimationDebugView.None ||
+                _settings.GlobalIllumination.DebugView !=
+                    GlobalIlluminationDebugView.None ||
+                _settings.Environment.DebugView != EnvironmentDebugView.None)
+            {
+                HybridReflectionReceiverFailureReason =
+                    "hybrid-reflection-incompatible-debug-view-active";
+                return false;
+            }
+            if (!ForwardHybridReflectionReceiverContract.TryValidateAttachmentBinding(
+                    _hybridReflectionReceiverBinding,
+                    _renderTargets.SceneColor,
+                    renderExtent,
+                    out string failure))
+            {
+                HybridReflectionReceiverFailureReason = failure;
+                return false;
+            }
+
+            binding = _hybridReflectionReceiverBinding;
+            HybridReflectionReceiverFailureReason = "valid";
+            return true;
+        }
+
         internal static bool ShouldApplyDdgi(
             Data.SceneRenderingData sceneData,
             GlobalIlluminationSettings gi)
@@ -2452,18 +2655,34 @@ namespace Njulf.Rendering.Pipeline
             bool receiverFeedback =
                 _simpleDdgiFoliageFeedbackRequiredForCurrentView ||
                 _simpleDdgiReflectionFeedbackRequiredForCurrentView;
-            if (!_foliagePipeline.TryResolveForwardPipeline(
+            VkPipeline foliagePipeline = default;
+            VkPipeline authoredFoliagePipeline = default;
+            bool pipelinesResolved =
+                _hybridReflectionReceiverEnabledForCurrentView &&
+                !_recordingReflectionCapture
+                    ? _foliagePipeline.TryResolveHybridReflectionPipeline(
+                          authored: false,
+                          nearFieldDirectSource,
+                          combinedAdvancedGi,
+                          out foliagePipeline) &&
+                      _foliagePipeline.TryResolveHybridReflectionPipeline(
+                          authored: true,
+                          nearFieldDirectSource,
+                          combinedAdvancedGi,
+                          out authoredFoliagePipeline)
+                    : _foliagePipeline.TryResolveForwardPipeline(
                     authored: false,
                     receiverFeedback,
                     nearFieldDirectSource,
                     combinedAdvancedGi,
-                    out VkPipeline foliagePipeline) ||
-                !_foliagePipeline.TryResolveForwardPipeline(
-                    authored: true,
-                    receiverFeedback,
-                    nearFieldDirectSource,
-                    combinedAdvancedGi,
-                    out VkPipeline authoredFoliagePipeline))
+                    out foliagePipeline) &&
+                      _foliagePipeline.TryResolveForwardPipeline(
+                          authored: true,
+                          receiverFeedback,
+                          nearFieldDirectSource,
+                          combinedAdvancedGi,
+                          out authoredFoliagePipeline);
+            if (!pipelinesResolved)
             {
                 return false;
             }
@@ -2551,12 +2770,17 @@ namespace Njulf.Rendering.Pipeline
             };
 
             _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
+            bool hybridReceiverWasEnabled =
+                _hybridReflectionReceiverEnabledForCurrentView;
+            _hybridReflectionReceiverEnabledForCurrentView = false;
             try
             {
                 DrawFoliageForward(cmd, sceneData);
             }
             finally
             {
+                _hybridReflectionReceiverEnabledForCurrentView =
+                    hybridReceiverWasEnabled;
                 _context.KhrDynamicRendering.CmdEndRendering(cmd);
             }
         }

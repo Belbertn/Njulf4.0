@@ -17,6 +17,14 @@
 #define NJULF_C4_RECEIVER_OUTPUT 0
 #endif
 
+#ifndef NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#define NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT 0
+#endif
+
+#ifndef NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION
+#define NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION 0
+#endif
+
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT && \
     NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 4
 #error "C5 foliage source requires semantic version 4."
@@ -33,6 +41,12 @@
 #include "foliage_coverage.glsl"
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 #include "c5_receiver_payload.glsl"
+#endif
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#if NJULF_HYBRID_REFLECTION_RECEIVER_SEMANTICS_VERSION != 1
+#error "Hybrid reflection foliage receiver shader semantics version mismatch."
+#endif
+#include "hybrid_reflection_payload.glsl"
 #endif
 
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION || \
@@ -96,6 +110,17 @@ layout(location = 3) out uvec4 outC5ReceiverPayload;
 #else
 layout(location = 1) out vec4 outC5DirectDiffuseEmissive;
 layout(location = 2) out uvec4 outC5ReceiverPayload;
+#endif
+#endif
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+#if NJULF_C4_RECEIVER_OUTPUT && NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+layout(location = 4) out uvec4 outHybridReflectionReceiverPayload;
+#elif NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
+layout(location = 3) out uvec4 outHybridReflectionReceiverPayload;
+#elif NJULF_C4_RECEIVER_OUTPUT
+layout(location = 2) out uvec4 outHybridReflectionReceiverPayload;
+#else
+layout(location = 1) out uvec4 outHybridReflectionReceiverPayload;
 #endif
 #endif
 
@@ -239,6 +264,9 @@ void main()
     outC5DirectDiffuseEmissive = vec4(0.0);
     outC5ReceiverPayload = uvec4(0u);
 #endif
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+    outHybridReflectionReceiverPayload = uvec4(0u);
+#endif
     WriteFoliageMaterialTransportProvenance(255u);
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
     vec4 sampledAlbedo;
@@ -320,6 +348,17 @@ void main()
         (baseColor / 3.14159265359) * ddgiIrradianceCoverage.a;
     vec3 foliageLighting = clamp(foliageDirectLighting + ddgiIndirect, vec3(0.0), vec3(64.0));
     WriteFoliageForwardColor(vec4(foliageLighting, 1.0));
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+    float foliageMetallic = clamp(material.MetallicRoughnessAO.x, 0.0, 1.0);
+    NjulfHybridReflectionCreatePayload(
+        fragNormal,
+        normal,
+        mix(vec3(0.04), baseColor, foliageMetallic),
+        clamp(material.MetallicRoughnessAO.y, 0.04, 1.0),
+        clamp(material.MetallicRoughnessAO.z, 0.0, 1.0),
+        uvec3(fragClusterIndex, fragMaterialIndex, 0u),
+        outHybridReflectionReceiverPayload);
+#endif
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
     float c5Footprint = C5FoliageB3FootprintRadius();
     uvec4 c5Payload;

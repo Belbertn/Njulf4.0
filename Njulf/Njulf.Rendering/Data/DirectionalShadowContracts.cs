@@ -62,7 +62,8 @@ public enum RaySceneConsumer : uint
     Ddgi = 1u << 0,
     DirectionalContact = 1u << 1,
     DirectionalFull = 1u << 2,
-    GiCaustics = 1u << 3
+    GiCaustics = 1u << 3,
+    Reflection = 1u << 4
 }
 
 [Flags]
@@ -90,7 +91,8 @@ public enum SurfaceHistoryConsumer : uint
     TemporalAntiAliasing = 1u << 0,
     DirectionalCsmTemporal = 1u << 1,
     DirectionalRaySoft = 1u << 2,
-    NearFieldResidual = 1u << 3
+    NearFieldResidual = 1u << 3,
+    Reflection = 1u << 4
 }
 
 public static class SurfaceHistoryPolicy
@@ -99,7 +101,8 @@ public static class SurfaceHistoryPolicy
         RenderSettings settings,
         bool nearFieldResidualActive,
         bool directionalCsmTemporalActive = false,
-        bool directionalRaySoftActive = false)
+        bool directionalRaySoftActive = false,
+        bool reflectionActive = false)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -117,6 +120,8 @@ public static class SurfaceHistoryPolicy
         {
             consumers |= SurfaceHistoryConsumer.DirectionalRaySoft;
         }
+        if (reflectionActive)
+            consumers |= SurfaceHistoryConsumer.Reflection;
 
         return consumers;
     }
@@ -222,6 +227,22 @@ public readonly record struct RaySceneRequirement(
                     RequiresCurrentPose: true),
             _ => None
         };
+    }
+
+    public static RaySceneRequirement ForReflections(ReflectionSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (!settings.Enabled || settings.Mode != ReflectionMode.HybridRayQuery)
+            return None;
+
+        return new RaySceneRequirement(
+            RaySceneConsumer.Reflection,
+            // Reflection hits share the DDGI alpha-mask composition. Ordinary
+            // alpha blend and thin transmission remain non-binary and are
+            // shaded by the forward transparent receiver path.
+            RaySceneGeometryCategory.DirectionalShadowDefault,
+            settings.SsrMaxDistance,
+            RequiresCurrentPose: true);
     }
 }
 

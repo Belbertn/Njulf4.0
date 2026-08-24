@@ -11741,60 +11741,7 @@
       "shadowPriority": 10
     }
   ],
-  "reflectionProbes": [
-    {
-      "id": "dddddddd-0000-4000-8000-000000000001",
-      "name": "SampleRoomCenter",
-      "position": {
-        "x": 0,
-        "y": 2,
-        "z": 0
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0,
-        "w": 1
-      },
-      "shape": "Box",
-      "boxExtents": {
-        "x": 24,
-        "y": 21,
-        "z": 18
-      },
-      "radius": 5,
-      "blendDistance": 3,
-      "intensity": 1,
-      "priority": 0,
-      "boxProjection": true
-    },
-    {
-      "id": "dddddddd-0000-4000-8000-000000000002",
-      "name": "SampleEntranceOverlap",
-      "position": {
-        "x": 0,
-        "y": 1.75,
-        "z": 7
-      },
-      "rotation": {
-        "x": 0,
-        "y": 0,
-        "z": 0,
-        "w": 1
-      },
-      "shape": "Box",
-      "boxExtents": {
-        "x": 5,
-        "y": 3,
-        "z": 4
-      },
-      "radius": 5,
-      "blendDistance": 1,
-      "intensity": 0.9,
-      "priority": 1,
-      "boxProjection": true
-    }
-  ],
+  "reflectionProbes": [],
   "giProbeVolumes": [],
   "instanceBatches": [],
   "foliagePrototypes": [],

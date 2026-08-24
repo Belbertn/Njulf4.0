@@ -47,6 +47,12 @@ internal sealed class ProductionRenderPipelineDeclaration
         "SimpleDdgiSchedulerCommitPass",
         "SimpleDdgiPageFeedbackPass",
         "SkyboxPass",
+        "HybridReflectionSsrPass",
+        "HybridReflectionRayQueryPass",
+        "HybridReflectionResolvePass",
+        "HybridReflectionTemporalPass",
+        "HybridReflectionSpatialPass",
+        "HybridReflectionCompositePass",
         "TransparentForwardPass",
         "WeightedTransparentPass",
         "WeightedOitCompositePass",
@@ -374,7 +380,9 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadGraphicsStorage(RenderGraphResourceId.SimpleDdgiProbeState),
 #endif
                 ReadWriteGraphicsStorage(RenderGraphResourceId.RendererDiagnosticsBuffer),
-                WriteColorAttachment(RenderGraphResourceId.SceneColor)));
+                WriteColorAttachment(RenderGraphResourceId.SceneColor),
+                WriteColorAttachment(
+                    RenderGraphResourceId.HybridReflectionReceiverPayload)));
 
         // The bounded cache-only urgent lane above can publish radiometric edits
         // for this forward draw. The complete DDGI update remains after
@@ -535,6 +543,106 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadFragmentSampled(RenderGraphResourceId.EnvironmentMaps),
                 ReadGraphicsStorage(RenderGraphResourceId.EnvironmentData),
                 ReadWriteColorAttachment(RenderGraphResourceId.SceneColor)),
+            Pass("HybridReflectionSsrPass",
+            ReadComputeSampled(RenderGraphResourceId.SceneColor),
+            ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+            ReadComputeSampled(RenderGraphResourceId.HiZPyramid),
+            ReadComputeSampled(
+                RenderGraphResourceId.HybridReflectionReceiverPayload),
+            ReadComputeSampled(RenderGraphResourceId.MotionVectors),
+            ReadComputeBuffer(RenderGraphResourceId.SceneSubmissionBuffers),
+            ReadComputeStorage(
+                RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                RenderGraphHistoryBindingSelection.Previous),
+            WriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionRawRadiance),
+            WriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionRawMetadata),
+            ReadWriteComputeBuffer(
+                RenderGraphResourceId.HybridReflectionRayTasks),
+            ReadWriteComputeBuffer(
+                RenderGraphResourceId.HybridReflectionCounters),
+            ReadWriteComputeBuffer(
+                RenderGraphResourceId.HybridReflectionIndirectArguments)),
+            Pass("HybridReflectionRayQueryPass",
+            ReadComputeAccelerationStructure(RenderGraphResourceId.TlasStorage),
+            ReadComputeBuffer(RenderGraphResourceId.RayQueryInstanceMetadata),
+            ReadComputeBuffer(RenderGraphResourceId.MeshGeometryBuffers),
+            ReadComputeBuffer(RenderGraphResourceId.MaterialBuffers),
+            ReadComputeSampled(RenderGraphResourceId.MaterialTextures),
+            ReadComputeBuffer(RenderGraphResourceId.LightBuffers),
+            ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
+            ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+            ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+            ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiReceiverProbes),
+            ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
+            ReadComputeSampled(
+                RenderGraphResourceId.HybridReflectionReceiverPayload),
+            ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+            ReadComputeBuffer(RenderGraphResourceId.HybridReflectionRayTasks),
+            ReadComputeIndirectBuffer(
+                RenderGraphResourceId.HybridReflectionIndirectArguments),
+            ReadWriteComputeBuffer(RenderGraphResourceId.HybridReflectionCounters),
+            ReadWriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionRawRadiance),
+            ReadWriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionRawMetadata)),
+            Pass("HybridReflectionResolvePass",
+            ReadComputeSampled(
+                RenderGraphResourceId.HybridReflectionReceiverPayload),
+            ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+            ReadComputeBuffer(RenderGraphResourceId.EnvironmentData),
+            ReadComputeSampled(RenderGraphResourceId.EnvironmentMaps),
+            ReadComputeSampled(RenderGraphResourceId.ReflectionProbeCubemaps),
+            ReadWriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionRawRadiance),
+            ReadWriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionRawMetadata),
+            ReadWriteComputeBuffer(RenderGraphResourceId.HybridReflectionCounters)),
+            Pass("HybridReflectionTemporalPass",
+            ReadComputeSampled(
+                RenderGraphResourceId.HybridReflectionReceiverPayload),
+            ReadComputeSampled(RenderGraphResourceId.MotionVectors),
+            ReadComputeBuffer(RenderGraphResourceId.SceneSubmissionBuffers),
+            ReadComputeStorage(RenderGraphResourceId.HybridReflectionRawRadiance),
+            ReadComputeStorage(RenderGraphResourceId.HybridReflectionRawMetadata),
+            ReadComputeStorage(RenderGraphResourceId.HybridReflectionHistory,
+                RenderGraphHistoryBindingSelection.Previous),
+            WriteComputeStorage(RenderGraphResourceId.HybridReflectionHistory,
+                historyBinding: RenderGraphHistoryBindingSelection.Current),
+            ReadComputeStorage(RenderGraphResourceId.HybridReflectionMoments,
+                RenderGraphHistoryBindingSelection.Previous),
+            WriteComputeStorage(RenderGraphResourceId.HybridReflectionMoments,
+                historyBinding: RenderGraphHistoryBindingSelection.Current),
+            ReadComputeStorage(
+                RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                RenderGraphHistoryBindingSelection.Previous),
+            WriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                historyBinding: RenderGraphHistoryBindingSelection.Current)),
+            Pass("HybridReflectionSpatialPass",
+            ReadComputeSampled(
+                RenderGraphResourceId.HybridReflectionReceiverPayload),
+            ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+            ReadComputeStorage(RenderGraphResourceId.HybridReflectionHistory,
+                historyBinding: RenderGraphHistoryBindingSelection.Current),
+            ReadComputeStorage(
+                RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                RenderGraphHistoryBindingSelection.Current),
+            ReadWriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionRawRadiance),
+            ReadWriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionFilterScratch)),
+            Pass("HybridReflectionCompositePass",
+            ReadComputeStorage(RenderGraphResourceId.HybridReflectionHistory,
+                RenderGraphHistoryBindingSelection.Current),
+            ReadComputeStorage(
+                RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                RenderGraphHistoryBindingSelection.Current),
+            ReadComputeStorage(
+                RenderGraphResourceId.HybridReflectionFilterScratch),
+            ReadWriteComputeStorage(RenderGraphResourceId.SceneColor,
+                ImageLayout.ColorAttachmentOptimal)),
             Pass("TransparentForwardPass",
             ReadDepth(RenderGraphResourceId.SceneDepth),
             ReadFragmentAccelerationStructure(RenderGraphResourceId.TlasStorage),
@@ -1110,6 +1218,48 @@ internal sealed class ProductionRenderPipelineDeclaration
             OwnedImageChainResource(RenderGraphResourceId.TaaHistory, "TAA history", RenderTargetManager.LdrSceneColorFormat, RenderGraphResourceSizePolicy.Swapchain),
             OwnedImageResource(RenderGraphResourceId.WeightedOitAccumulation, "Weighted OIT accumulation", RenderTargetManager.WeightedOitAccumulationFormat, RenderGraphResourceSizePolicy.Swapchain),
             OwnedImageResource(RenderGraphResourceId.WeightedOitRevealage, "Weighted OIT revealage", RenderTargetManager.WeightedOitRevealageFormat, RenderGraphResourceSizePolicy.Swapchain),
+            TransientImageResource(
+                RenderGraphResourceId.HybridReflectionReceiverPayload,
+                "Hybrid reflection receiver payload",
+                RenderTargetManager.HybridReflectionReceiverPayloadFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
+            TransientImageResource(
+                RenderGraphResourceId.HybridReflectionRawRadiance,
+                "Hybrid reflection raw radiance and confidence",
+                RenderTargetManager.HybridReflectionRadianceFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
+            TransientImageResource(
+                RenderGraphResourceId.HybridReflectionRawMetadata,
+                "Hybrid reflection raw source metadata",
+                RenderTargetManager.HybridReflectionRawMetadataFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
+            OwnedImageChainResource(
+                RenderGraphResourceId.HybridReflectionHistory,
+                "Hybrid reflection double-buffered radiance history",
+                RenderTargetManager.HybridReflectionRadianceFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
+            OwnedImageChainResource(
+                RenderGraphResourceId.HybridReflectionMoments,
+                "Hybrid reflection double-buffered luminance moments",
+                RenderTargetManager.HybridReflectionMomentsFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
+            OwnedImageChainResource(
+                RenderGraphResourceId.HybridReflectionHistoryMetadata,
+                "Hybrid reflection double-buffered history metadata",
+                RenderTargetManager.HybridReflectionHistoryMetadataFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
+            TransientImageResource(
+                RenderGraphResourceId.HybridReflectionFilterScratch,
+                "Hybrid reflection spatial-filter scratch",
+                RenderTargetManager.HybridReflectionRadianceFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
+            BufferSetResource(RenderGraphResourceId.HybridReflectionRayTasks,
+                "Hybrid reflection bounded ray-query tasks"),
+            BufferSetResource(RenderGraphResourceId.HybridReflectionCounters,
+                "Hybrid reflection source and budget counters"),
+            BufferSetResource(
+                RenderGraphResourceId.HybridReflectionIndirectArguments,
+                "Hybrid reflection indirect dispatch arguments"),
             ImageChainResource(RenderGraphResourceId.ReflectionProbeCubemaps, "Reflection probe cubemaps", Format.R16G16B16A16Sfloat, RenderGraphResourceSizePolicy.Fixed),
             ImageChainResource(RenderGraphResourceId.EnvironmentMaps, "Environment maps", Format.R16G16B16A16Sfloat, RenderGraphResourceSizePolicy.Fixed),
             new RenderGraphResourceDescriptor(
@@ -1998,7 +2148,9 @@ internal sealed class ProductionRenderPipelineDeclaration
 
     private static RenderGraphResourceUsage ReadWriteComputeStorage(
         RenderGraphResourceId resource,
-        ImageLayout finalImageLayout = ImageLayout.Undefined)
+        ImageLayout finalImageLayout = ImageLayout.Undefined,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
     {
         return new RenderGraphResourceUsage(
             resource,
@@ -2007,7 +2159,23 @@ internal sealed class ProductionRenderPipelineDeclaration
             AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
             ImageLayout.General,
             RenderGraphQueueIntent.Compute,
-            finalImageLayout);
+            finalImageLayout,
+            historyBinding);
+    }
+
+    private static RenderGraphResourceUsage ReadComputeStorage(
+        RenderGraphResourceId resource,
+        RenderGraphHistoryBindingSelection historyBinding =
+            RenderGraphHistoryBindingSelection.All)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit,
+            ImageLayout.General,
+            RenderGraphQueueIntent.Compute,
+            HistoryBinding: historyBinding);
     }
 }
 

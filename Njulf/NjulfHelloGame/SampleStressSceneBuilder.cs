@@ -26,7 +26,6 @@ internal sealed class SampleStressSceneBuilder
     private readonly LightManager _lightManager;
     private readonly SampleLightingMode _normalLightingMode;
     private readonly List<RenderObject> _objects = new();
-    private readonly List<ReflectionProbe> _probes = new();
     private readonly List<StaticInstanceBatch> _staticBatches = new();
     private readonly List<FoliagePatch> _foliagePatches = new();
     private readonly List<FoliagePrototype> _foliagePrototypes = new();
@@ -64,7 +63,7 @@ internal sealed class SampleStressSceneBuilder
         if (scenario != SamplePerformanceScenario.BistroQualityMotionRelight)
             SampleLighting.Configure(_lightManager, _normalLightingMode);
 
-        return scenario switch
+        SamplePerformanceScenarioSummary summary = scenario switch
         {
             SamplePerformanceScenario.ManyLights => BuildManyLights(),
             SamplePerformanceScenario.ManyMaterials => BuildManyMaterials(128),
@@ -91,9 +90,10 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.GiSponzaFreezeAfterAtmosphereStep => ExistingSceneValidationSummary(
                 SamplePerformanceScenario.GiSponzaFreezeAfterAtmosphereStep,
                 "Sponza atmosphere advances one quantized sun step, then freezes for convergence"),
-            SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle => ExistingSceneValidationSummary(
-                SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle,
-                "Sponza authored local-probe capture, recapture, deletion/re-add lifecycle"),
+            SamplePerformanceScenario.GiSponzaReflectionProbeLifecycle =>
+                throw new InvalidOperationException(
+                    "The manual reflection-probe lifecycle scenario is retired; " +
+                    "use ReflectionHeavy or Bistro HybridRayQueryAb coverage."),
             SamplePerformanceScenario.GiSimpleDdgiFurnace => BuildGiSimpleDdgiFurnace(),
             SamplePerformanceScenario.GiCornellRoom => BuildGiCornellRoom(),
             SamplePerformanceScenario.GiQualityInterior => BuildGiQualityInterior(),
@@ -111,6 +111,9 @@ internal sealed class SampleStressSceneBuilder
             SamplePerformanceScenario.CombinedWorstCase => BuildCombinedWorstCase(),
             _ => new SamplePerformanceScenarioSummary(SamplePerformanceScenario.Normal, 0, _lightManager.LightCount, 0, 0, 0, "Normal sample scene")
         };
+
+        SampleReflectionPolicy.EnsureProbeFree(_scene);
+        return summary;
     }
 
     private SamplePerformanceScenarioSummary BuildManyLights()
@@ -629,30 +632,12 @@ internal sealed class SampleStressSceneBuilder
 
     private SamplePerformanceScenarioSummary BuildReflectionHeavy()
     {
-        const int probeCount = 24;
-        for (int i = 0; i < probeCount; i++)
-        {
-            int x = i % 6;
-            int z = i / 6;
-            var probe = new ReflectionProbe
-            {
-                Name = $"Perf.ReflectionProbe.{i}",
-                Position = new CoreVector3((x - 2.5f) * 4.0f, 2.0f, z * 5.0f - 8.0f),
-                BoxExtents = new CoreVector3(3.5f, 2.5f, 3.5f),
-                BlendDistance = 1.0f,
-                Intensity = 1.0f,
-                Priority = i
-            };
-            _scene.Add(probe);
-            _probes.Add(probe);
-        }
-
         SamplePerformanceScenarioSummary materials = BuildManyMaterials(32);
         return materials with
         {
             Scenario = SamplePerformanceScenario.ReflectionHeavy,
-            ReflectionProbeCount = probeCount,
-            Notes = "24 probes plus reflective material fixture pressure"
+            ReflectionProbeCount = 0,
+            Notes = "Reflective material pressure through SSR, ray-query recovery, and environment fallback"
         };
     }
 
@@ -787,26 +772,14 @@ internal sealed class SampleStressSceneBuilder
             _particleEffects.Add(effect);
         }
 
-        var probe = new ReflectionProbe
-        {
-            Name = "GI.QualityInterior.ReflectionProbe",
-            Position = new CoreVector3(0.0f, 1.65f, -5.4f),
-            BoxExtents = new CoreVector3(3.3f, 2.2f, 3.2f),
-            BlendDistance = 0.65f,
-            Intensity = 1.0f,
-            Priority = 20
-        };
-        _scene.Add(probe);
-        _probes.Add(probe);
-
         return new SamplePerformanceScenarioSummary(
             SamplePerformanceScenario.GiQualityInterior,
             _objects.Count,
             _lightManager.LightCount,
             0,
             2,
-            _probes.Count,
-            "Interior GI quality fixture with transparent panes, fog/particles, rough-specular fallback, and reflection probe recapture coverage");
+            0,
+            "Interior GI quality fixture with transparent panes, fog/particles, and hybrid rough-specular fallback coverage");
     }
 
     private SamplePerformanceScenarioSummary BuildGiThinWallLeakTest()
@@ -1209,7 +1182,7 @@ internal sealed class SampleStressSceneBuilder
             Scenario = SamplePerformanceScenario.GiFastTraversalTeleport,
             ObjectCount = _objects.Count,
             LightCount = _lightManager.LightCount,
-            ReflectionProbeCount = _probes.Count,
+            ReflectionProbeCount = 0,
             Notes = "Long traversal corridor with distant arrival volume for fast-scroll and teleport validation"
         };
     }
@@ -1241,7 +1214,7 @@ internal sealed class SampleStressSceneBuilder
             _lightManager.LightCount,
             129,
             256,
-            _probes.Count,
+            0,
             "Combined deterministic stress set");
     }
 
@@ -1539,7 +1512,7 @@ internal sealed class SampleStressSceneBuilder
             _lightManager.LightCount,
             0,
             0,
-            _probes.Count,
+            0,
             notes);
 
     private SamplePerformanceScenarioSummary ExistingSceneValidationSummary(
@@ -1559,8 +1532,6 @@ internal sealed class SampleStressSceneBuilder
         _foliageManager.ClearDebugFallback(_scene);
         foreach (RenderObject renderObject in _objects)
             _scene.Remove(renderObject);
-        foreach (ReflectionProbe probe in _probes)
-            _scene.Remove(probe);
         foreach (StaticInstanceBatch batch in _staticBatches)
             _scene.Remove(batch);
         foreach (FoliagePatch patch in _foliagePatches)
@@ -1573,7 +1544,6 @@ internal sealed class SampleStressSceneBuilder
             _scene.Remove(updateable);
 
         _objects.Clear();
-        _probes.Clear();
         _staticBatches.Clear();
         _foliagePatches.Clear();
         _foliagePrototypes.Clear();

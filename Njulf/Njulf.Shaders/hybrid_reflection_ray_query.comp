@@ -1,0 +1,315 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : require
+
+#include "common.glsl"
+
+#define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE false
+#define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE false
+#include "ddgi_simple_shared.glsl"
+
+layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
+
+bool GiCausticFinite(float value)
+{
+    return !isnan(value) && !isinf(value);
+}
+
+bool GiCausticFinite(vec2 value)
+{
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+bool GiCausticFinite(vec3 value)
+{
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+#include "directional_ray_visibility.glsl"
+#include "gi_caustic_ray_query.glsl"
+#include "hybrid_reflection_compute.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform HybridReflectionRayPushBlock
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndMaximumDistance;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint TaskCapacity;
+    uint LightCount;
+    uint DirectionalLightCount;
+    uint LocalLightCount;
+    uint MaximumShadedLights;
+    uint DdgiEnabled;
+    uint CurrentFrameIndex;
+    uint TemporalSampleIndex;
+} pc;
+
+bool HybridReflectionCandidatePasses(rayQueryEXT query)
+{
+    bool sampledAlpha;
+    return RaySceneCandidateBlocksDirectionalShadow(
+        rayQueryGetIntersectionInstanceCustomIndexEXT(query, false),
+        rayQueryGetIntersectionPrimitiveIndexEXT(query, false),
+        rayQueryGetIntersectionBarycentricsEXT(query, false),
+        rayQueryGetIntersectionFrontFaceEXT(query, false),
+        rayQueryGetIntersectionObjectToWorldEXT(query, false),
+        0.01,
+        sampledAlpha);
+}
+
+bool HybridTraceNearest(
+    vec3 origin,
+    vec3 direction,
+    float maximumDistance,
+    out GiCausticRayHit hit)
+{
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, SceneTlas, gl_RayFlagsNoneEXT, 0xff,
+        origin, 0.002, direction, maximumDistance);
+    uint candidates = 0u;
+    while (rayQueryProceedEXT(query))
+    {
+        if (rayQueryGetIntersectionTypeEXT(query, false) !=
+            gl_RayQueryCandidateIntersectionTriangleEXT)
+        {
+            continue;
+        }
+        candidates++;
+        if (candidates > 64u ||
+            HybridReflectionCandidatePasses(query))
+        {
+            rayQueryConfirmIntersectionEXT(query);
+            if (candidates > 64u)
+                rayQueryTerminateEXT(query);
+        }
+    }
+    if (rayQueryGetIntersectionTypeEXT(query, true) ==
+        gl_RayQueryCommittedIntersectionNoneEXT)
+    {
+        return false;
+    }
+    return GiCausticResolveCommittedHit(query, origin, direction, hit);
+}
+
+bool HybridVisible(vec3 origin, vec3 direction, float maximumDistance)
+{
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, SceneTlas,
+        gl_RayFlagsTerminateOnFirstHitEXT, 0xff,
+        origin, 0.002, direction, maximumDistance);
+    uint candidates = 0u;
+    while (rayQueryProceedEXT(query))
+    {
+        if (rayQueryGetIntersectionTypeEXT(query, false) !=
+            gl_RayQueryCandidateIntersectionTriangleEXT)
+        {
+            continue;
+        }
+        candidates++;
+        if (candidates > 64u ||
+            HybridReflectionCandidatePasses(query))
+        {
+            rayQueryConfirmIntersectionEXT(query);
+            rayQueryTerminateEXT(query);
+        }
+    }
+    return rayQueryGetIntersectionTypeEXT(query, true) ==
+        gl_RayQueryCommittedIntersectionNoneEXT;
+}
+
+vec3 HybridSampleEmissive(GiCausticRayHit hit)
+{
+    vec3 sampleValue = vec3(1.0);
+    if (GiMaterialHasFlag(hit.Material.TransportFlags,
+            GI_MATERIAL_HAS_EMISSIVE_TEXTURE) &&
+        hit.Material.EmissiveTextureIndex >= FIRST_TEXTURE_INDEX &&
+        hit.Material.EmissiveTextureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES)
+    {
+        sampleValue = textureLod(
+            BindlessTextures[nonuniformEXT(hit.Material.EmissiveTextureIndex)],
+            GiCausticMaterialUv(hit,
+                hit.Material.TextureTexCoordSets.w,
+                hit.Material.EmissiveOffsetScale,
+                hit.Material.TextureRotations.w),
+            max(hit.Material.DdgiMaterialPolicy.y, 0.0)).rgb;
+    }
+    return max(hit.Material.Emissive.rgb * sampleValue, vec3(0.0));
+}
+
+vec3 HybridEvaluatePbrLight(
+    vec3 albedo,
+    float metallic,
+    float roughness,
+    vec3 normal,
+    vec3 viewDirection,
+    vec3 lightDirection,
+    vec3 incidentRadiance)
+{
+    float nDotL = max(dot(normal, lightDirection), 0.0);
+    float nDotV = max(dot(normal, viewDirection), 0.0);
+    if (nDotL <= 0.0 || nDotV <= 0.0)
+        return vec3(0.0);
+    vec3 halfVector = normalize(viewDirection + lightDirection);
+    float nDotH = max(dot(normal, halfVector), 0.0);
+    float hDotV = max(dot(halfVector, viewDirection), 0.0);
+    vec3 f0 = mix(vec3(0.04), albedo, metallic);
+    vec3 fresnel = HybridFresnelSchlick(hDotV, f0);
+    float distribution = HybridDistributionGgx(nDotH, roughness);
+    float geometry = HybridGeometrySmith(nDotV, nDotL, roughness);
+    vec3 specular = distribution * geometry * fresnel /
+        max(4.0 * nDotV * nDotL, 1.0e-6);
+    vec3 diffuse = (vec3(1.0) - fresnel) *
+        (1.0 - metallic) * albedo / HYBRID_REFLECTION_PI;
+    return (diffuse + specular) * incidentRadiance * nDotL;
+}
+
+vec3 HybridShadeHit(GiCausticRayHit hit, vec3 incomingDirection)
+{
+    vec3 normal = GiCausticOrientedNormal(hit);
+    vec3 viewDirection = normalize(-incomingDirection);
+    vec4 baseColor = GiCausticSampleBaseColor(hit);
+    vec2 metallicRoughness = GiCausticSampleMetallicRoughness(hit);
+    vec3 albedo = max(baseColor.rgb, vec3(0.0));
+    float metallic = metallicRoughness.x;
+    float roughness = clamp(metallicRoughness.y, 0.04, 1.0);
+    vec3 radiance = HybridSampleEmissive(hit);
+
+    uint shadedLocalLights = 0u;
+    for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)
+    {
+        GPULight light = ReadLight(lightIndex);
+        vec3 lightDirection;
+        float attenuation = 1.0;
+        float maximumDistance = pc.CameraPositionAndMaximumDistance.w;
+        bool local = light.Type != 1;
+        if (local)
+        {
+            if (shadedLocalLights >= pc.MaximumShadedLights)
+                continue;
+            vec3 toLight = light.Position - hit.Position;
+            maximumDistance = length(toLight);
+            if (!HybridFinite(maximumDistance) || maximumDistance <= 0.002 ||
+                maximumDistance >= light.Range || light.Range <= 0.0)
+            {
+                continue;
+            }
+            lightDirection = toLight / maximumDistance;
+            attenuation = EvaluateNjulfLightDistanceAttenuation(
+                light, maximumDistance);
+            if (light.Type == 2)
+                attenuation *= EvaluateNjulfSpotAttenuation(
+                    light, lightDirection);
+            if (attenuation <= 0.0)
+                continue;
+        }
+        else
+        {
+            lightDirection = normalize(-light.Direction);
+        }
+        if (dot(normal, lightDirection) <= 0.0 || attenuation <= 0.0)
+            continue;
+        if (local)
+            shadedLocalLights++;
+        vec3 shadowOrigin = hit.Position + normal * 0.004;
+        if (!HybridVisible(shadowOrigin, lightDirection,
+                max(maximumDistance - 0.004, 0.002)))
+        {
+            continue;
+        }
+        vec3 incident = max(light.Color, vec3(0.0)) *
+            max(light.Intensity, 0.0) * attenuation;
+        radiance += HybridEvaluatePbrLight(albedo, metallic, roughness,
+            normal, viewDirection, lightDirection, incident);
+    }
+
+    if (pc.DdgiEnabled != 0u)
+    {
+        vec3 irradiance = SampleSimpleDdgiIrradiance(
+            hit.Position, normal, viewDirection);
+        radiance += max(irradiance, vec3(0.0)) *
+            albedo * (1.0 - metallic) / HYBRID_REFLECTION_PI;
+    }
+    return clamp(radiance, vec3(0.0), vec3(65504.0));
+}
+
+void main()
+{
+    uint taskIndex = gl_GlobalInvocationID.x;
+    uint taskCount = min(HybridTaskCount,
+        min(HybridTaskCapacity, pc.TaskCapacity));
+    if (taskIndex >= taskCount)
+        return;
+    atomicAdd(HybridCounters[
+        HYBRID_REFLECTION_COUNTER_RAY_QUERIES], 1u);
+
+    uvec4 task = HybridTasks[taskIndex];
+    uvec2 pixel = task.xy;
+    if (pixel.x >= pc.ScreenWidth || pixel.y >= pc.ScreenHeight)
+    {
+        atomicAdd(HybridCounters[
+            HYBRID_REFLECTION_COUNTER_RAY_MISSES], 1u);
+        return;
+    }
+    ivec2 coordinate = ivec2(pixel);
+    uvec4 payload = texelFetch(HybridReceiverPayload, coordinate, 0);
+    uint identity = task.w & 0x00ffffffu;
+    if (!HybridReflectionPayloadValid(payload) ||
+        HybridReceiverIdentity(payload) != identity)
+    {
+        atomicAdd(HybridCounters[
+            HYBRID_REFLECTION_COUNTER_RAY_MISSES], 1u);
+        return;
+    }
+
+    vec3 worldPosition;
+    float depth;
+    if (!HybridReconstructWorldPosition(coordinate,
+            uvec2(pc.ScreenWidth, pc.ScreenHeight),
+            pc.InverseViewProjectionMatrix,
+            worldPosition, depth))
+    {
+        atomicAdd(HybridCounters[
+            HYBRID_REFLECTION_COUNTER_RAY_MISSES], 1u);
+        return;
+    }
+    vec3 geometricNormal = HybridReflectionPayloadGeometricNormal(payload);
+    vec3 shadingNormal = HybridReflectionPayloadShadingNormal(payload);
+    vec3 incident = normalize(
+        worldPosition - pc.CameraPositionAndMaximumDistance.xyz);
+    vec3 reflectionDirection = normalize(reflect(incident, shadingNormal));
+    if (!HybridFinite(reflectionDirection) ||
+        dot(reflectionDirection, geometricNormal) <= 0.001)
+    {
+        atomicAdd(HybridCounters[
+            HYBRID_REFLECTION_COUNTER_RAY_MISSES], 1u);
+        return;
+    }
+
+    GiCausticRayHit hit;
+    if (HybridTraceNearest(
+            worldPosition + geometricNormal * 0.004,
+            reflectionDirection,
+            pc.CameraPositionAndMaximumDistance.w,
+            hit))
+    {
+        vec3 radiance = HybridShadeHit(hit, reflectionDirection);
+        float confidence = clamp(1.0 - hit.Distance /
+            max(pc.CameraPositionAndMaximumDistance.w, 0.001), 0.65, 1.0);
+        imageStore(HybridRawRadiance, coordinate,
+            vec4(radiance, confidence));
+        imageStore(HybridRawMetadata, coordinate, uvec4(
+            HybridPackMetadata(HYBRID_REFLECTION_SOURCE_RAY_QUERY,
+                confidence, HYBRID_REFLECTION_REASON_NONE, 0u, true),
+            identity, floatBitsToUint(hit.Distance), 0u));
+        atomicAdd(HybridCounters[HYBRID_REFLECTION_COUNTER_RAY_HITS], 1u);
+    }
+    else
+    {
+        atomicAdd(HybridCounters[HYBRID_REFLECTION_COUNTER_RAY_MISSES], 1u);
+    }
+}

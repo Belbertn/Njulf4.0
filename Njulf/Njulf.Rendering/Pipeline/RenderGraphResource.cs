@@ -164,7 +164,19 @@ namespace Njulf.Rendering.Pipeline
         NearFieldPreparedMotion,
         NearFieldSourceLuminance,
         NearFieldSurfaceTable,
-        NearFieldActiveTilesAndIndirectArguments
+        NearFieldActiveTilesAndIndirectArguments,
+        // P0 hybrid-reflection resources are append-only for capture compatibility.
+        HybridReflectionReceiverPayload,
+        HybridReflectionRawRadiance,
+        HybridReflectionHistory,
+        HybridReflectionMoments,
+        HybridReflectionHistoryMetadata,
+        HybridReflectionFilterScratch,
+        HybridReflectionRayTasks,
+        HybridReflectionCounters,
+        HybridReflectionIndirectArguments,
+        // Appended after the original P0 range to preserve capture IDs.
+        HybridReflectionRawMetadata
     }
 
     public enum RenderGraphResourceKind

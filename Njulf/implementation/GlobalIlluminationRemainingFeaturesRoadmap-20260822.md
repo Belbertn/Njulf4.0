@@ -53,24 +53,24 @@ consumer.
 - [x] Add debug views for density, extinction, direct radiance, indirect radiance,
       history confidence, and final transmittance.
 
-### P0: Hybrid ray-query reflections
+### P0: Hybrid ray-query reflections //DONE
 
 The current reflection system supports the environment, static probes, SSR, and
 planar reflections. Directional DDGI provides rough low-frequency specular energy,
 but it is not a replacement for sharp scene reflections.
 
-- [ ] Use SSR as the first reflection source.
-- [ ] Trace ray queries only for invalid, off-screen, disoccluded, or low-confidence
+- [x] Use SSR as the first reflection source.
+- [x] Trace ray queries only for invalid, off-screen, disoccluded, or low-confidence
       SSR samples.
-- [ ] Shade reflection hits using direct lights, emissives, and DDGI.
-- [ ] Add roughness-dependent resolution and ray budgets.
-- [ ] Add temporal accumulation, spatial filtering, and disocclusion handling.
-- [ ] Implement the fallback chain: SSR, ray query, local reflection probe,
+- [x] Shade reflection hits using direct lights, emissives, and DDGI.
+- [x] Add roughness-dependent resolution and ray budgets.
+- [x] Add temporal accumulation, spatial filtering, and disocclusion handling.
+- [x] Implement the fallback chain: SSR, ray query, local reflection probe,
       global environment.
-- [ ] Handle transparent and alpha-tested hit policies consistently with DDGI.
-- [ ] Add reflection confidence and source-selection debug views.
+- [x] Handle transparent and alpha-tested hit policies consistently with DDGI.
+- [x] Add reflection confidence and source-selection debug views.
 
-### P1: Thick transmission, refraction, and generalized caustics
+### P1: Thick transmission, refraction, and generalized caustics //DONE
 
 The current transparent GI contract supports masked geometry, thin transmission,
 and stochastic blend. It does not provide physical thick refraction, nested media,

@@ -112,10 +112,10 @@ public sealed class SampleBistroQualityCaptureHarnessTests
     }
 
     [Test]
-    public void ReflectionSourceAb_DisablesDdgiOnlyInsideEventWindow()
+    public void HybridRayQueryAb_EnablesRayQueriesOnlyInsideEventWindow()
     {
         var contract = new SampleBistroQualityCaptureContract(
-            SampleBistroQualityCaptureVariant.ReflectionSourceAb);
+            SampleBistroQualityCaptureVariant.HybridRayQueryAb);
         int measuredStart =
             SampleBistroQualityCaptureContract.FirstMeasuredFrame;
 
@@ -123,22 +123,22 @@ public sealed class SampleBistroQualityCaptureHarnessTests
         {
             Assert.That(
                 contract.ResolveFrame(measuredStart + 59)
-                    .ReflectionCaptureIncludesDdgi,
+                    .HybridRayQueryEnabled,
                 Is.False);
             Assert.That(
                 contract.ResolveFrame(measuredStart + 60)
-                    .ReflectionCaptureIncludesDdgi,
+                    .HybridRayQueryEnabled,
                 Is.True);
             Assert.That(
                 contract.ResolveFrame(measuredStart + 179)
-                    .ReflectionCaptureIncludesDdgi,
+                    .HybridRayQueryEnabled,
                 Is.True);
             Assert.That(
                 contract.ResolveFrame(measuredStart + 180)
-                    .ReflectionCaptureIncludesDdgi,
+                    .HybridRayQueryEnabled,
                 Is.False);
             Assert.That(
-                contract.ResolveFrame(60).ReflectionCaptureIncludesDdgi,
+                contract.ResolveFrame(60).HybridRayQueryEnabled,
                 Is.False);
         });
     }
@@ -168,43 +168,6 @@ public sealed class SampleBistroQualityCaptureHarnessTests
     }
 
     [Test]
-    public void ReflectionPromotion_UsesLivePublicationWithoutRequiringTailAudit()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(
-                HelloGame.IsBistroDdgiReflectionPromotionReady(
-                    sourceGeneration: 7,
-                    livePropagationSourceGeneration: 7,
-                    propagationGeneration: 91,
-                    publishedPropagationGeneration: 91,
-                    staleSourceProbeCount: 0,
-                    pendingSolverProbeCount: 0),
-                Is.True,
-                "an exact audit may remain pending while moving live GI is coherent");
-            Assert.That(
-                HelloGame.IsBistroDdgiReflectionPromotionReady(
-                    sourceGeneration: 7,
-                    livePropagationSourceGeneration: 7,
-                    propagationGeneration: 92,
-                    publishedPropagationGeneration: 91,
-                    staleSourceProbeCount: 0,
-                    pendingSolverProbeCount: 0),
-                Is.False,
-                "a stale publication must not feed a new reflection capture");
-            Assert.That(
-                HelloGame.IsBistroDdgiReflectionPromotionReady(
-                    sourceGeneration: 7,
-                    livePropagationSourceGeneration: 7,
-                    propagationGeneration: 91,
-                    publishedPropagationGeneration: 91,
-                    staleSourceProbeCount: 0,
-                    pendingSolverProbeCount: 1),
-                Is.False);
-        });
-    }
-
-    [Test]
     public void PresentationVariant_LocksCameraAndDoesNotRelight()
     {
         var contract = new SampleBistroQualityCaptureContract(
@@ -226,7 +189,7 @@ public sealed class SampleBistroQualityCaptureHarnessTests
     }
 
     [Test]
-    public void SchemaV6_SerializesSeparateCurrentAndCompletedReflectionEvidence()
+    public void SchemaV7_SerializesSeparateCurrentAndCompletedReflectionEvidence()
     {
         ReflectionProbeLifecycleFrameSnapshot current =
             CreateReflectionLifecycleFrame(
@@ -271,7 +234,7 @@ public sealed class SampleBistroQualityCaptureHarnessTests
                 diagnostics.GpuReflectionProbePublishMicroseconds
         };
         var contract = new SampleBistroQualityCaptureContract(
-            SampleBistroQualityCaptureVariant.ReflectionSourceAb);
+            SampleBistroQualityCaptureVariant.HybridRayQueryAb);
         var report = new SampleBistroQualityRunReport(
             "njulf-bistro-quality-capture",
             SampleBistroQualityCaptureContract.Schema,
@@ -295,9 +258,9 @@ public sealed class SampleBistroQualityCaptureHarnessTests
         Assert.Multiple(() =>
         {
             Assert.That(SampleBistroQualityCaptureContract.Schema,
-                Is.EqualTo("bistro-quality-run/v6"));
+                Is.EqualTo("bistro-quality-run/v7"));
             Assert.That(document.RootElement.GetProperty("Schema").GetString(),
-                Is.EqualTo("bistro-quality-run/v6"));
+                Is.EqualTo("bistro-quality-run/v7"));
             Assert.That(frame.ReflectionProbeCurrentLifecycle, Is.EqualTo(current));
             Assert.That(frame.ReflectionProbeCompletedLifecycle, Is.EqualTo(completed));
             Assert.That(frame.ReflectionProbeCurrentCaptureBudget, Is.EqualTo(budget));
