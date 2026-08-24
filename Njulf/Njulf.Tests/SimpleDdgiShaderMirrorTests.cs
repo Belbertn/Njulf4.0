@@ -893,6 +893,10 @@ namespace Njulf.Tests
                     "for (uint sampleX = 0u; sampleX < scale; sampleX++)"));
                 Assert.That(forward, Does.Contain(
                     "ForwardDdgiReceiverCacheDdgiIrradiance(cachedGather) *"));
+                Assert.That(forward, Does.Contain(
+                    "float ddgiIndirectAo = mix(1.0, screenSpaceAo, 0.5);"));
+                Assert.That(forward, Does.Contain(
+                    "ambientOcclusion * ddgiIndirectAo"));
                 Assert.That(cacheSampling, Does.Contain(
                     "uvec4 Packed;"));
                 Assert.That(cacheSampling, Does.Contain(

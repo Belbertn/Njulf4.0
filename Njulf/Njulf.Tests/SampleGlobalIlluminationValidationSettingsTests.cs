@@ -180,7 +180,7 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.AutoExposure.Enabled, Is.True);
             Assert.That(settings.AutoExposure.TargetLuminance, Is.EqualTo(0.125f));
             Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.25f));
-            Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(3.0f));
+            Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(2.0f));
             Assert.That(settings.AutoExposure.LowPercentile, Is.EqualTo(70.0f));
             Assert.That(settings.AutoExposure.HighPercentile, Is.EqualTo(95.0f));
             Assert.That(settings.AutoExposure.DarkToLightAdaptationSpeed, Is.EqualTo(3.0f));
@@ -269,10 +269,10 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
         Assert.Multiple(() =>
         {
             Assert.That(settings.Environment.DayOfYear, Is.InRange(152, 243));
-            Assert.That(settings.Environment.Turbidity, Is.InRange(4.0f, 6.0f));
-            Assert.That(zenith.Z, Is.InRange(zenith.X * 1.75f, zenith.X * 2.5f));
-            Assert.That(frame.SunRadiance.Z, Is.GreaterThan(frame.SunRadiance.X * 0.65f));
-            Assert.That(dynamicDiffuseToDirect, Is.InRange(0.15f, 0.19f));
+            Assert.That(settings.Environment.Turbidity, Is.InRange(8.0f, 10.0f));
+            Assert.That(zenith.Z, Is.InRange(zenith.X * 1.15f, zenith.X * 1.35f));
+            Assert.That(frame.SunRadiance.Z, Is.GreaterThan(frame.SunRadiance.X * 0.55f));
+            Assert.That(dynamicDiffuseToDirect, Is.InRange(0.10f, 0.12f));
         });
     }
 

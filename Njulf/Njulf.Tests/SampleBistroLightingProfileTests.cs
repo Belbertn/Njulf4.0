@@ -31,7 +31,7 @@ public sealed class SampleBistroLightingProfileTests
             Assert.That(
                 reconstructedRadiance.Length() /
                 SampleBistroLightingProfile.SourceRadiance.Length(),
-                Is.EqualTo(1.5f).Within(0.0001f));
+                Is.EqualTo(1.0f).Within(0.0001f));
             Assert.That(light.CastsShadows, Is.True);
             Assert.That(light.ShadowStrength, Is.EqualTo(1.0f));
             Assert.That(light.ShadowPriority, Is.EqualTo(10));

@@ -19,9 +19,9 @@ internal static class SampleBistroLightingProfile
 
     // The FBX key points straight along the street and produces a nearly
     // front-lit courtyard from the locked beauty camera. Rotate it toward the
-    // supplied reference's diagonal street shadow, then increase the direct
-    // key-to-environment ratio by half. Auto exposure compensates the average
-    // level, so this restores highlight/shadow separation without extra work.
+    // supplied reference's diagonal street shadow, but retain its authored
+    // radiance. Boosting the key by half clipped plaster and forced the meter
+    // to crush shaded storefronts.
     internal static Vector3 DirectionalKeyDirection { get; } =
         Vector3.Normalize(new Vector3(
             0.340573f,
@@ -29,7 +29,7 @@ internal static class SampleBistroLightingProfile
             -0.340573f));
 
     internal static Vector3 DirectionalKeyRadiance { get; } =
-        SourceRadiance * 1.5f;
+        SourceRadiance;
 
     internal const float DirectionalKeyIntensity = 165.150009f;
 

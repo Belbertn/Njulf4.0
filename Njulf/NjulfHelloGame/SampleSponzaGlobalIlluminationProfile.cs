@@ -25,11 +25,11 @@ public static class SampleSponzaGlobalIlluminationProfile
     public const int DefaultDayOfYear = 172;
     public const float DefaultNorthOffsetDegrees = -115.0f;
     public const float DefaultTimeScale = 60.0f;
-    public const float DefaultTurbidity = 5.0f;
+    public const float DefaultTurbidity = 9.0f;
     public const float DefaultGroundAlbedo = 0.16f;
-    public const float DefaultAtmosphereIntensity = 0.10f;
+    public const float DefaultAtmosphereIntensity = 0.03f;
     public const float DefaultSolarIrradianceScale = 34.0f;
-    public const float DefaultIndirectIntensity = 1.15f;
+    public const float DefaultIndirectIntensity = 1.0f;
 
     /// <summary>
     /// Restores the bounded DdgiHigh camera-relative plaza layout. Reapplying
@@ -58,10 +58,8 @@ public static class SampleSponzaGlobalIlluminationProfile
         gi.SimpleDdgiNearRingGridSizeY = 15;
         gi.SimpleDdgiNearRingGridSizeZ = 23;
         ConfigurePostAdvancedGiRollout(settings);
-        // Once the coarse-ring leak is removed, shaded galleries expose the
-        // real fine-field transport instead of the previous artificial lift.
-        // A small physical receiver multiplier restores readable stone and
-        // curtain bounce while preserving the direct-only shadow structure.
+        // Keep receiver energy at physical unity so covered galleries retain
+        // the contrast carried by the probe visibility solution.
         gi.IndirectIntensity = DefaultIndirectIntensity;
         gi.SimpleDdgiAuthoredVolumes.Clear();
 
@@ -140,11 +138,11 @@ public static class SampleSponzaGlobalIlluminationProfile
         environment.NorthOffsetDegrees = DefaultNorthOffsetDegrees;
         environment.TimeScale = DefaultTimeScale;
 
-        // Mild coastal haze keeps the open-sky fill from becoming an artificial
-        // saturated-blue wash in the covered galleries. Hosek-Wilkie's RGB sky
-        // radiance and directional solar irradiance remain independent physical
-        // inputs. Keep diffuse daylight below one fifth of the horizontal sun
-        // so shadowed stone is readable without flattening contact shadows.
+        // Coastal haze neutralizes the open-sky fill instead of washing covered
+        // galleries in saturated blue. Hosek-Wilkie's RGB sky radiance and
+        // directional solar irradiance remain independent physical inputs. The
+        // lower atmosphere scale keeps diffuse daylight near one tenth of the
+        // horizontal sun without flattening contact shadows.
         environment.Turbidity = DefaultTurbidity;
         environment.GroundAlbedo = new Vector3(DefaultGroundAlbedo);
         environment.SunAngularDiameterDegrees = 0.53f;
@@ -204,12 +202,12 @@ public static class SampleSponzaGlobalIlluminationProfile
         // Meter the upper-middle of the histogram so deep shade remains shade
         // instead of being lifted toward gray. The 12.5% key follows reflected
         // light-meter calibration. The lower bookmark reaches the former 2x
-        // daylight ceiling at only 2.9% average luminance, so admit another
-        // 50% of headroom without allowing the full generic 4x interior lift.
+        // daylight ceiling at only 2.9% average luminance. Preserve that 2x
+        // ceiling so covered galleries remain shaded instead of metering gray.
         settings.AutoExposure.Enabled = true;
         settings.AutoExposure.TargetLuminance = 0.125f;
         settings.AutoExposure.MinExposure = 0.25f;
-        settings.AutoExposure.MaxExposure = 3.0f;
+        settings.AutoExposure.MaxExposure = 2.0f;
         settings.AutoExposure.LowPercentile = 70.0f;
         settings.AutoExposure.HighPercentile = 95.0f;
         settings.AutoExposure.DarkToLightAdaptationSpeed = 3.0f;

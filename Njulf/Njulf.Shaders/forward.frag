@@ -3684,9 +3684,10 @@ void main()
         sampledOcclusion);
     float screenSpaceAo = SampleScreenSpaceAo();
     float indirectAo = clamp(ambientOcclusion * screenSpaceAo, 0.0, 1.0);
-    // Material AO is receiver energy, not probe visibility/leak metadata. It is
-    // applied once after the DDGI irradiance gather below.
-    float ddgiIndirectAo = 1.0;
+    // Probe visibility owns broad transport occlusion, but cannot represent
+    // sub-probe contacts. Retain half of screen-space AO for that missing local
+    // band instead of either double-darkening DDGI or leaving it uniformly flat.
+    float ddgiIndirectAo = mix(1.0, screenSpaceAo, 0.5);
     vec3 albedo = max(material.Albedo.rgb * albedoSample.rgb * fragVertexColor.rgb, vec3(0.0));
     vec3 emissive = max(material.Emissive.rgb * emissiveSample.rgb, vec3(0.0));
 
@@ -4402,7 +4403,7 @@ void main()
     // the Lambert factor.
     finalDiffuseIndirect =
         (ForwardDdgiReceiverCacheDdgiIrradiance(cachedGather) *
-             ambientOcclusion +
+             ambientOcclusion * ddgiIndirectAo +
          ForwardDdgiReceiverCacheEnvironmentIrradiance(cachedGather) *
              indirectAo) *
         diffuseReflectance;
@@ -4595,7 +4596,7 @@ void main()
             EvaluateGiDiffuseFromIrradiance(
                 simpleIrradiance * simpleDdgiParams.indirectIntensity,
                 diffuseReflectance),
-            ambientOcclusion);
+            ambientOcclusion * ddgiIndirectAo);
         finalDdgiDiffuse = ddgiDiffuse * simpleOwnership;
         vec3 simpleEnvironmentFallback = diffuseIbl;
         bool evaluateFarFieldFallback =
@@ -5258,7 +5259,7 @@ void main()
     // The deferred reflection pass owns only base indirect specular. Direct
     // light, diffuse GI, emissive, and material extensions remain in SceneColor.
     float hybridSpecularOcclusion = clamp(
-        pow(ambientOcclusion, 1.0 + roughness) * indirectSpecularVisibility,
+        pow(indirectAo, 1.0 + roughness) * indirectSpecularVisibility,
         0.0,
         1.0);
     NjulfHybridReflectionCreatePayload(

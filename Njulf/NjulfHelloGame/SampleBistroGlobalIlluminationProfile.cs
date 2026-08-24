@@ -24,9 +24,9 @@ internal static class SampleBistroGlobalIlluminationProfile
         gi.SimpleDdgiVerticalRingPolicy =
             SimpleDdgiVerticalRingPolicy.CameraRelativeWithHysteresis;
         gi.DdgiCameraRelativeEnabled = true;
-        // Lift shaded storefronts with bounced light instead of increasing
-        // exposure and clipping the sunlit plaster and scooter highlights.
-        gi.IndirectIntensity = 1.65f;
+        // Preserve physical contrast between open sunlight and covered
+        // storefronts. Scene-local DDGI is already calibrated at unity.
+        gi.IndirectIntensity = 1.0f;
         gi.EnvironmentFallbackIntensity = 1.0f;
         // Bistro is an open outdoor courtyard. Its DDGI moments already own
         // broad transport visibility, while the far-field three-cone mask is
@@ -85,9 +85,10 @@ internal static class SampleBistroGlobalIlluminationProfile
     private static void ConfigureEnvironment(EnvironmentSettings environment)
     {
         environment.Enabled = true;
-        // Match Bistro's authored Falcor scene instead of replacing its warm,
-        // location-specific image lighting with the generic procedural sky.
-        // The source scene specifies this bundled map at intensity 10.
+        // Retain Bistro's warm, location-specific image lighting. Falcor's
+        // single intensity cannot be copied into this split-lighting pipeline:
+        // the sky, diffuse IBL, DDGI fallback, and specular path would each
+        // multiply the same source energy.
         environment.SourceKind = EnvironmentSourceKind.HdrEquirectangular;
         environment.SourcePath =
             "Assets/Bistro_v5_2/san_giuseppe_bridge_4k.hdr";
@@ -115,13 +116,9 @@ internal static class SampleBistroGlobalIlluminationProfile
         environment.SpecularPrefilterMipsPerFrame = 1;
         environment.SpecularPrefilterTransitionFrames = 8;
         environment.RotationRadians = 0.0f;
-        environment.SkyIntensity = 10.0f;
-        environment.DiffuseIntensity = 10.0f;
-        // Falcor's single environment multiplier cannot be copied directly to
-        // this split-lighting pipeline: multiplying the already-prefiltered
-        // specular lobe by ten clips painted metal and exposes coarse mip
-        // footprints. Keep authored sky/diffuse energy but normalize specular.
-        environment.SpecularIntensity = 1.5f;
+        environment.SkyIntensity = 1.0f;
+        environment.DiffuseIntensity = 1.0f;
+        environment.SpecularIntensity = 1.0f;
         environment.DebugView = EnvironmentDebugView.None;
     }
 
@@ -146,7 +143,7 @@ internal static class SampleBistroGlobalIlluminationProfile
 
         settings.AmbientOcclusion.Enabled = true;
         settings.AmbientOcclusion.Radius = 0.65f;
-        settings.AmbientOcclusion.Intensity = 0.55f;
+        settings.AmbientOcclusion.Intensity = 0.70f;
         settings.AmbientOcclusion.Power = 1.0f;
 
         settings.Bloom.Enabled = true;

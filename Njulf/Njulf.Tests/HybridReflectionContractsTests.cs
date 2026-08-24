@@ -582,6 +582,12 @@ public sealed class HybridReflectionContractsTests
             Assert.That(ssr, Does.Contain("HybridAppendRayTask"));
             Assert.That(ssr, Does.Contain("RayAdmissionThreshold"));
             Assert.That(ssr, Does.Contain(
+                "HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE = 0.12"));
+            Assert.That(ssr, Does.Contain(
+                "HybridReflectionPayloadF0(payload)"));
+            Assert.That(ssr, Does.Contain(
+                "rayImportance < HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE"));
+            Assert.That(ssr, Does.Contain(
                 "HYBRID_REFLECTION_REASON_RAY_BUDGET"));
             Assert.That(ssr, Does.Contain("hitConfidence >= pc.ConfidenceThreshold"));
             Assert.That(ssr, Does.Not.Contain(
@@ -599,12 +605,9 @@ public sealed class HybridReflectionContractsTests
             Assert.That(environmentFallback, Is.GreaterThan(probeFallback));
             Assert.That(resolveMain, Does.Contain(
                 "if (!HybridMetadataValid(metadata.x))"));
-            Assert.That(resolveMain, Does.Contain(
-                "source == HYBRID_REFLECTION_SOURCE_SSR"));
-            Assert.That(resolveMain, Does.Contain(
-                "float ssrTrust = smoothstep"));
-            Assert.That(resolveMain, Does.Contain(
-                "fallbackRadiance * fallbackRadianceScale"));
+            Assert.That(resolveMain, Does.Not.Contain(
+                "else if (source == HYBRID_REFLECTION_SOURCE_SSR)"));
+            Assert.That(resolveMain, Does.Not.Contain("ssrTrust"));
             Assert.That(resolveMain, Does.Not.Contain(
                 "if (resolutionSkip)"));
             Assert.That(resolveMain, Does.Contain(
@@ -629,6 +632,12 @@ public sealed class HybridReflectionContractsTests
             Assert.That(temporal, Does.Contain(
                 "HybridLimitReflectionRadiance"));
             Assert.That(temporal, Does.Contain(
+                "previousSparseAge < pc.MaximumHistoryLength"));
+            Assert.That(temporal, Does.Contain(
+                "? clippedHistory"));
+            Assert.That(temporal, Does.Contain(
+                "previous.a * 0.97"));
+            Assert.That(temporal, Does.Not.Contain(
                 "historyWeight = min(pc.MaximumHistoryWeight, 0.85)"));
             Assert.That(temporal, Does.Contain(
                 "neighborhoodMaximum * 1.5 + vec3(0.05)"));
@@ -649,6 +658,10 @@ public sealed class HybridReflectionContractsTests
                 "    if (reflectionDebugActive)"));
             Assert.That(forward, Does.Contain(
                 "uvec3(fragObjectIndex, fragMaterialIndex, 0u)"));
+            Assert.That(forward, Does.Contain(
+                "pow(indirectAo, 1.0 + roughness)"));
+            Assert.That(resolve, Does.Contain(
+                "vec3 fresnel = HybridFresnelSchlickRoughness"));
             Assert.That(payload, Does.Contain(
                 "NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 2u"));
             Assert.That(ReflectionSettings.ReceiverPayloadAbiVersion,

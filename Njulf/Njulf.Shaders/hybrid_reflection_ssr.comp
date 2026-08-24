@@ -25,6 +25,8 @@ layout(push_constant) uniform HybridReflectionSsrPushBlock
     uint RayAdmissionThreshold;
 } pc;
 
+const float HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE = 0.12;
+
 uint ResolveTier(float roughness)
 {
     float fullResolutionRoughness = pc.FullResolutionRoughness;
@@ -155,6 +157,13 @@ void main()
     float roughness = HybridReflectionPayloadRoughness(payload);
     uint tier = ResolveTier(roughness);
     uint identity = HybridReceiverIdentity(payload);
+    float maximumF0 = HybridMaximumComponent(
+        HybridReflectionPayloadF0(payload));
+    float remainingGloss = 1.0 - clamp(roughness, 0.0, 1.0);
+    float rayImportance = maximumF0 + (1.0 - maximumF0) *
+        remainingGloss * remainingGloss * remainingGloss * remainingGloss;
+    if (rayImportance < HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE)
+        tier = 0u;
     if (tier == 0u)
     {
         RejectToRecovery(pixel,

@@ -201,7 +201,22 @@ vec3 HybridFresnelSchlickRoughness(
     vec3 f0,
     float roughness)
 {
-    return f0 + (max(vec3(1.0 - roughness), f0) - f0) *
+    float perceptualRoughness = clamp(roughness, 0.0, 1.0);
+    vec3 standardGrazing = max(
+        vec3(1.0 - perceptualRoughness),
+        f0);
+    float remainingGloss = 1.0 - perceptualRoughness;
+    vec3 broadDielectricGrazing = f0 +
+        (vec3(1.0) - f0) * remainingGloss * remainingGloss;
+    float broadLobeWeight = smoothstep(
+        0.35,
+        0.70,
+        perceptualRoughness);
+    vec3 grazing = mix(
+        standardGrazing,
+        min(standardGrazing, broadDielectricGrazing),
+        broadLobeWeight);
+    return f0 + (grazing - f0) *
         pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0);
 }
 

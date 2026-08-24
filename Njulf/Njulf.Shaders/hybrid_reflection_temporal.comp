@@ -103,6 +103,10 @@ void main()
         HybridFinite(current);
     if (!currentValid)
         current = vec4(0.0);
+    uint currentReason = HybridMetadataReason(currentMetadata.x);
+    bool sparseCurrent =
+        currentReason == HYBRID_REFLECTION_REASON_RESOLUTION_SKIP ||
+        currentReason == HYBRID_REFLECTION_REASON_RAY_BUDGET;
 
     // Gather four bilinear history taps. Each tap is validated independently;
     // rejected geometry edges cannot drag a point-sampled trail across motion.
@@ -137,8 +141,13 @@ void main()
                     HybridHistoryPrevious, previousPixel);
                 vec2 tapMoments = imageLoad(
                     HybridMomentsPrevious, previousPixel).rg;
+                uint tapSource = HybridMetadataSource(tapMetadata.x);
+                bool tapGeometricSource =
+                    tapSource == HYBRID_REFLECTION_SOURCE_SSR ||
+                    tapSource == HYBRID_REFLECTION_SOURCE_RAY_QUERY;
                 if (!HybridMetadataValid(tapMetadata.x) ||
                     tapMetadata.y != currentIdentity ||
+                    (sparseCurrent && !tapGeometricSource) ||
                     !HybridFinite(tapHistory) ||
                     !HybridFinite(tapMoments) ||
                     tapMoments.y < tapMoments.x * tapMoments.x ||
@@ -164,7 +173,6 @@ void main()
         previous /= acceptedHistoryWeight;
         previousMoments /= acceptedHistoryWeight;
     }
-    uint currentReason = HybridMetadataReason(currentMetadata.x);
     if (!currentValid &&
         currentReason != HYBRID_REFLECTION_REASON_RESOLUTION_SKIP &&
         currentReason != HYBRID_REFLECTION_REASON_RAY_BUDGET)
@@ -173,20 +181,31 @@ void main()
     }
     uint currentSource = HybridMetadataSource(currentMetadata.x);
     uint previousSource = HybridMetadataSource(previousMetadata.x);
+    uint previousReason = HybridMetadataReason(previousMetadata.x);
+    uint previousAge = HybridMetadataAge(previousMetadata.x);
     bool previousGeometricSource =
         previousSource == HYBRID_REFLECTION_SOURCE_SSR ||
         previousSource == HYBRID_REFLECTION_SOURCE_RAY_QUERY;
+    bool previousSparse =
+        previousReason == HYBRID_REFLECTION_REASON_RESOLUTION_SKIP ||
+        previousReason == HYBRID_REFLECTION_REASON_RAY_BUDGET;
+    uint previousSparseAge = previousSparse ? previousAge : 0u;
     bool reuseSparseHistory = historyValid && previousGeometricSource &&
-        (currentReason == HYBRID_REFLECTION_REASON_RESOLUTION_SKIP ||
-         currentReason == HYBRID_REFLECTION_REASON_RAY_BUDGET);
+        sparseCurrent && previousSparseAge < pc.MaximumHistoryLength;
+    // A cadence or budget skip is not a measured reflection. Once geometric
+    // history expires, use the current analytic fallback directly instead of
+    // retaining a stale geometric source through the generic accumulator.
+    if (sparseCurrent && !reuseSparseHistory)
+        historyValid = false;
 
-    vec3 neighborhoodMinimum = currentValid
+    bool currentBoundsHistory = currentValid && !sparseCurrent;
+    vec3 neighborhoodMinimum = currentBoundsHistory
         ? current.rgb
         : vec3(3.402823e38);
-    vec3 neighborhoodMaximum = currentValid
+    vec3 neighborhoodMaximum = currentBoundsHistory
         ? current.rgb
         : vec3(-3.402823e38);
-    uint validNeighbors = currentValid ? 1u : 0u;
+    uint validNeighbors = currentBoundsHistory ? 1u : 0u;
     for (int y = -1; y <= 1; y++)
     {
         for (int x = -1; x <= 1; x++)
@@ -195,8 +214,13 @@ void main()
                 ivec2(pc.ScreenWidth, pc.ScreenHeight) - ivec2(1));
             uvec2 neighborMetadata = imageLoad(
                 HybridRawMetadata, neighbor).xy;
+            uint neighborSource = HybridMetadataSource(neighborMetadata.x);
+            bool neighborGeometricSource =
+                neighborSource == HYBRID_REFLECTION_SOURCE_SSR ||
+                neighborSource == HYBRID_REFLECTION_SOURCE_RAY_QUERY;
             if (!HybridMetadataValid(neighborMetadata.x) ||
-                neighborMetadata.y != currentIdentity)
+                neighborMetadata.y != currentIdentity ||
+                (sparseCurrent && !neighborGeometricSource))
                 continue;
             vec3 sampleValue = imageLoad(HybridRawRadiance, neighbor).rgb;
             if (!HybridFinite(sampleValue))
@@ -212,7 +236,6 @@ void main()
         neighborhoodMaximum = vec3(65504.0);
     }
 
-    uint previousAge = HybridMetadataAge(previousMetadata.x);
     float ageWeight = float(previousAge) / float(previousAge + 1u);
     float lengthWeight = pc.MaximumHistoryLength <= 1u
         ? 0.0
@@ -222,11 +245,10 @@ void main()
         : 0.0;
     if (reuseSparseHistory)
     {
-        // Sparse cadence still needs temporal retention, but an exact carry
-        // turns a single bright, view-dependent hit into a persistent trail.
-        // A bounded decay keeps quarter-resolution sampling stable while
-        // guaranteeing that stale geometric energy is retired.
-        historyWeight = min(pc.MaximumHistoryWeight, 0.85);
+        // Do not blend the analytic environment fallback produced for this
+        // unmeasured frame into validated scene geometry. Surface validation,
+        // confidence decay, and the finite sparse age bound retire stale hits.
+        historyWeight = 0.0;
     }
     else if (currentSource != previousSource && currentValid)
         historyWeight *= pc.SourceTransitionWeightScale;
@@ -259,18 +281,28 @@ void main()
         abs(historyLuminance - currentLuminance) > luminanceLimit)
         historyWeight *= 0.5;
 
-    vec3 accumulated = mix(current.rgb, clippedHistory, historyWeight);
-    float confidence = mix(HybridMetadataConfidence(currentMetadata.x),
-        previous.a, historyWeight);
+    vec3 accumulated = reuseSparseHistory
+        ? clippedHistory
+        : mix(current.rgb, clippedHistory, historyWeight);
+    float confidence = reuseSparseHistory
+        ? clamp(previous.a * 0.97, 0.0, 1.0)
+        : mix(HybridMetadataConfidence(currentMetadata.x),
+            previous.a, historyWeight);
     float luminance = HybridLuminance(accumulated);
     vec2 boundedPreviousMoments = reuseSparseHistory
         ? vec2(historyLuminance, historyLuminance * historyLuminance)
         : previousMoments;
-    vec2 moments = mix(vec2(luminance, luminance * luminance),
-        boundedPreviousMoments, historyWeight);
-    uint age = historyWeight > 0.0
-        ? min(previousAge + 1u, pc.MaximumHistoryLength)
-        : 0u;
+    vec2 moments = reuseSparseHistory
+        ? boundedPreviousMoments
+        : mix(vec2(luminance, luminance * luminance),
+            boundedPreviousMoments, historyWeight);
+    uint age = reuseSparseHistory
+        ? min(previousSparseAge + 1u, pc.MaximumHistoryLength)
+        : (historyWeight > 0.0
+            ? (previousSparse
+                ? 1u
+                : min(previousAge + 1u, pc.MaximumHistoryLength))
+            : 0u);
     bool outputValid = currentValid || historyValid;
     uint outputSource = reuseSparseHistory
         ? previousSource

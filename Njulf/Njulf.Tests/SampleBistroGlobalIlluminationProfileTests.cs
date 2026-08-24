@@ -34,7 +34,7 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
             Assert.That(gi.SimpleDdgiNearRingGridSizeY, Is.EqualTo(14));
             Assert.That(gi.SimpleDdgiNearRingGridSizeZ, Is.EqualTo(28));
             Assert.That(gi.SimpleDdgiAutomaticProbeDensityScale, Is.EqualTo(0.70f));
-            Assert.That(gi.IndirectIntensity, Is.EqualTo(1.65f));
+            Assert.That(gi.IndirectIntensity, Is.EqualTo(1.0f));
             Assert.That(gi.FarFieldSkyVisibilityEnabled, Is.False);
             Assert.That(gi.SimpleDdgiRoughSpecularMinimumRoughness, Is.EqualTo(1.0f));
             Assert.That(gi.SimpleDdgiRoughSpecularFullWeightRoughness, Is.EqualTo(1.0f));
@@ -69,9 +69,9 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
                 Is.EqualTo("Assets/Bistro_v5_2/san_giuseppe_bridge_4k.hdr"));
             Assert.That(settings.Environment.AtmosphereIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.Environment.SolarIrradianceScale, Is.EqualTo(14.0f));
-            Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(10.0f));
-            Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(10.0f));
-            Assert.That(settings.Environment.SpecularIntensity, Is.EqualTo(1.5f));
+            Assert.That(settings.Environment.SkyIntensity, Is.EqualTo(1.0f));
+            Assert.That(settings.Environment.DiffuseIntensity, Is.EqualTo(1.0f));
+            Assert.That(settings.Environment.SpecularIntensity, Is.EqualTo(1.0f));
             Assert.That(settings.AutoExposure.MinExposure, Is.EqualTo(0.03125f));
             Assert.That(settings.AutoExposure.MaxExposure, Is.EqualTo(4.0f));
             Assert.That(settings.Shadows.MaxShadowDistance, Is.EqualTo(120.0f));
@@ -83,6 +83,7 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
             Assert.That(settings.Reflections.CaptureOnLoad, Is.False);
             Assert.That(settings.Reflections.CaptureIncludesDdgi, Is.False);
             Assert.That(settings.Reflections.MaxProbeCapturesPerFrame, Is.Zero);
+            Assert.That(settings.AmbientOcclusion.Intensity, Is.EqualTo(0.70f));
             Assert.That(
                 settings.GlobalIllumination.SimpleDdgiUrgentRelightProbeBudget,
                 Is.EqualTo(SimpleDdgiUrgentRelightPolicy.MaximumProbeBudget));
