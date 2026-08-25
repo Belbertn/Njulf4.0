@@ -869,6 +869,11 @@ namespace Njulf.Rendering.Resources
                 flags |= GiMaterialTransportFlags.ThinSurfaceTransmission |
                          GiMaterialTransportFlags.TransmissionProfileValid;
             }
+            if (profile.GiTransmissionPolicy == ModelGiTransmissionPolicy.Volume)
+            {
+                flags |= GiMaterialTransportFlags.VolumeTransmission |
+                         GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse;
+            }
             if (profile.Validity.HasFlag(GiPrimitiveTransportProfileValidity.Emission))
                 flags |= GiMaterialTransportFlags.EmissionProfileValid;
             if (profile.Validity.HasFlag(GiPrimitiveTransportProfileValidity.AlphaCoverage))
@@ -1902,6 +1907,32 @@ namespace Njulf.Rendering.Resources
                         // classify a zero-thickness cloth sheet.
                         _ => GiTransmissionPolicy.Unsupported
                     },
+                OpticalBoundary = material.OpticalBoundaryKind switch
+                {
+                    ModelOpticalBoundaryKind.WaterSurface =>
+                        OpticalBoundaryKind.WaterSurface,
+                    _ => OpticalBoundaryKind.ClosedVolume
+                },
+                CausticCasterPolicy = material.GiCausticCasterPolicy switch
+                {
+                    ModelGiCausticCasterPolicy.Disabled =>
+                        GiCausticCasterPolicy.Disabled,
+                    ModelGiCausticCasterPolicy.Mirror =>
+                        GiCausticCasterPolicy.Mirror,
+                    ModelGiCausticCasterPolicy.RoughSpecular =>
+                        GiCausticCasterPolicy.RoughSpecular,
+                    ModelGiCausticCasterPolicy.DielectricPriority =>
+                        GiCausticCasterPolicy.DielectricPriority,
+                    _ => GiCausticCasterPolicy.Default
+                },
+                WaterNormalVelocity0 = new CoreVector2(
+                    material.WaterNormalVelocity0.X,
+                    material.WaterNormalVelocity0.Y),
+                WaterNormalVelocity1 = new CoreVector2(
+                    material.WaterNormalVelocity1.X,
+                    material.WaterNormalVelocity1.Y),
+                WaterNormalUvScale0 = material.WaterNormalUvScale0,
+                WaterNormalUvScale1 = material.WaterNormalUvScale1,
                 CausticParticipation = material.GiCausticParticipation switch
                 {
                     ModelGiCausticParticipationMode.MirrorHero =>
@@ -2315,10 +2346,35 @@ namespace Njulf.Rendering.Resources
                 SpecularColorTextureIndex = textureIndices.SpecularColorTextureIndex,
                 IridescenceTextureIndex = textureIndices.IridescenceTextureIndex,
                 IridescenceThicknessTextureIndex = textureIndices.IridescenceThicknessTextureIndex,
-                Padding0 = 0,
-                Padding1 = 0,
-                Padding2 = 0,
-                Padding3 = 0
+                Padding0 = OpticalMaterialGpuContract.PackFlags(
+                    material.OpticalBoundaryKind ==
+                        ModelOpticalBoundaryKind.WaterSurface
+                        ? OpticalBoundaryKind.WaterSurface
+                        : OpticalBoundaryKind.ClosedVolume,
+                    material.GiCausticCasterPolicy switch
+                    {
+                        ModelGiCausticCasterPolicy.Disabled =>
+                            GiCausticCasterPolicy.Disabled,
+                        ModelGiCausticCasterPolicy.Mirror =>
+                            GiCausticCasterPolicy.Mirror,
+                        ModelGiCausticCasterPolicy.RoughSpecular =>
+                            GiCausticCasterPolicy.RoughSpecular,
+                        ModelGiCausticCasterPolicy.DielectricPriority =>
+                            GiCausticCasterPolicy.DielectricPriority,
+                        _ => GiCausticCasterPolicy.Default
+                    },
+                    material.GiTransmissionPolicy ==
+                        ModelGiTransmissionPolicy.Volume &&
+                    material.TransmissionFactor > 0f),
+                Padding1 = OpticalMaterialGpuContract.PackHalf2(
+                    new CoreVector2(material.WaterNormalVelocity0.X,
+                        material.WaterNormalVelocity0.Y)),
+                Padding2 = OpticalMaterialGpuContract.PackHalf2(
+                    new CoreVector2(material.WaterNormalVelocity1.X,
+                        material.WaterNormalVelocity1.Y)),
+                Padding3 = OpticalMaterialGpuContract.PackHalf2(
+                    new CoreVector2(material.WaterNormalUvScale0,
+                        material.WaterNormalUvScale1))
             };
         }
 

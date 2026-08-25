@@ -2737,6 +2737,7 @@ namespace Njulf.Rendering
                     "guiding-frame-integration-available");
 
             ResolveInitialGiCausticMode(sceneRenderExtent);
+            EnforceHybridReflectionGiCausticPreflight();
 
             bool nearFieldCandidateAuthorized =
                 (gi.SimpleDdgiNearFieldResidualMode is
@@ -2993,6 +2994,38 @@ namespace Njulf.Rendering
             _simpleDdgiNearFieldResidualGpuConfiguration = default;
             _nearFieldDirectSourcePipelineConfiguration =
                 ForwardNearFieldDirectSourcePipelineConfiguration.Disabled;
+        }
+
+        private void EnforceHybridReflectionGiCausticPreflight()
+        {
+            bool c4Effective = _giCausticMode.EffectiveMode is
+                GiCausticMode.WorldCacheExperiment or
+                GiCausticMode.AutoQualified;
+            if (!c4Effective || !IsHybridReflectionTargetEnabled(Settings))
+                return;
+
+            // On the production NVIDIA path, binding both 128-bit integer
+            // receiver MRTs in the same opaque draw causes a device TDR even
+            // when the reflection compute chain is suppressed. C4 is an
+            // optional experiment; preserve the P0 reflection path and C5,
+            // and fail C4 closed before any graph resources are registered.
+            const string reason =
+                "C4-and-hybrid-reflection-forward-receivers-are-mutually-exclusive";
+            _giCausticPlan =
+                GiTaggedCausticCacheExperiment.InvalidateRuntimePlan(
+                    _giCausticPlan,
+                    reason,
+                    GiExperimentFallbackReason.InvalidConfiguration);
+            _giCausticMode = _giCausticMode with
+            {
+                AdmittedMode = GiCausticMode.Off,
+                EffectiveMode = GiCausticMode.Off,
+                FallbackReason =
+                    GiExperimentFallbackReason.InvalidConfiguration,
+                FallbackDetail = reason
+            };
+            _giCausticReceiverPipelineConfiguration =
+                ForwardGiCausticReceiverPipelineConfiguration.Disabled;
         }
 
         private void ResolveInitialGiCausticMode(Extent2D sceneRenderExtent)
@@ -4656,6 +4689,7 @@ namespace Njulf.Rendering
             // Publish the new TLAS/metadata transaction before DDGI chooses a
             // trace backend or records any ray-query consumer.
             RecordAccelerationStructures(sceneData);
+            PrepareThickTransmissionFrame(sceneData);
             if (reflectionsAllowed)
                 PrepareReflectionProbes(scene, sceneData);
             ResolveDirectionalShadowFramePlan(
@@ -13490,6 +13524,34 @@ namespace Njulf.Rendering
             return "Forward occlusion counters do not reconcile; inspect shader diagnostics and frame latency.";
         }
 
+        private void PrepareThickTransmissionFrame(
+            SceneRenderingData sceneData)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+            RaySceneRequirement requirement =
+                RaySceneRequirement.ForThickTransmission(
+                    Settings.Transparency);
+            bool raySceneReady = !requirement.Enabled ||
+                sceneData.RaySceneReadiness.IsReady(
+                    RaySceneConsumer.ThickTransmission,
+                    requirement.RequiredCategories);
+            ThickTransmissionModeResolution resolution =
+                ThickTransmissionModeResolver.Resolve(
+                    Settings.Transparency,
+                    new ThickTransmissionModeCapabilities(
+                        _context.RayQuerySupported,
+                        _accelerationStructureManager?.Supported == true,
+                        raySceneReady,
+                        _meshPipeline?.RayTransparentPipelinesAvailable == true));
+            sceneData.RequestedThickTransmissionMode = resolution.Requested;
+            sceneData.EffectiveThickTransmissionMode = resolution.Effective;
+            sceneData.ThickTransmissionFallbackReason = resolution.Reason;
+            sceneData.ThickTransmissionFallbackDetail = resolution.Detail;
+            sceneData.ThickTransmissionDispersionEnabled =
+                resolution.Effective != ThickTransmissionMode.Off &&
+                Settings.Transparency.DispersionMode == DispersionMode.RgbTriplet;
+        }
+
         private void PrepareReflectionProbes(Scene scene, SceneRenderingData sceneData)
         {
             if (_reflectionProbeManager == null)
@@ -19336,9 +19398,15 @@ namespace Njulf.Rendering
             RaySceneRequirement reflectionRequirement =
                 RaySceneRequirement.ForReflections(Settings.Reflections);
             requirement = requirement.Union(reflectionRequirement);
+            RaySceneRequirement thickTransmissionRequirement =
+                RaySceneRequirement.ForThickTransmission(
+                    Settings.Transparency);
+            requirement = requirement.Union(thickTransmissionRequirement);
             bool enabled = requirement.Enabled;
             bool directionalRaySceneRequested = directionalRequirement.Enabled;
             bool reflectionRaySceneRequested = reflectionRequirement.Enabled;
+            bool thickTransmissionRaySceneRequested =
+                thickTransmissionRequirement.Enabled;
             bool qualityAllowsStaticStreaming = gi.DdgiQualityTier is
                 DdgiQualityTier.DdgiLow or DdgiQualityTier.DdgiMedium;
             bool farFieldCoverageReady = qualityAllowsStaticStreaming &&
@@ -19361,9 +19429,11 @@ namespace Njulf.Rendering
                     AllowStaticMemoryCulling:
                         farFieldCoverageReady &&
                         !directionalRaySceneRequested &&
-                        !reflectionRaySceneRequested),
+                        !reflectionRaySceneRequested &&
+                        !thickTransmissionRaySceneRequested),
                 new DdgiDynamicRayScenePolicy(
-                    directionalRaySceneRequested || reflectionRaySceneRequested
+                    directionalRaySceneRequested || reflectionRaySceneRequested ||
+                    thickTransmissionRaySceneRequested
                         ? DdgiSkinnedGeometryMode.CurrentPose
                         : gi.EffectiveDdgiSkinnedGeometryMode,
                     // The shared scene must satisfy the union of its consumers.
@@ -19373,7 +19443,8 @@ namespace Njulf.Rendering
                     ddgiRaySceneEnabled
                         ? gi.EffectiveDdgiTransparentGeometryMode
                         : DdgiTransparentGeometryMode.MaskOnly,
-                    directionalRaySceneRequested || reflectionRaySceneRequested
+                    directionalRaySceneRequested || reflectionRaySceneRequested ||
+                    thickTransmissionRaySceneRequested
                         ? DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
                         : gi.EffectiveDdgiFoliageGeometryMode,
                     GeometryDecalsEnabled:
@@ -19382,6 +19453,7 @@ namespace Njulf.Rendering
                             DdgiContentFeature.TransparentGeometry) != 0,
                     AlphaMaskedTransportEnabled:
                         directionalRaySceneRequested || reflectionRaySceneRequested ||
+                        thickTransmissionRaySceneRequested ||
                         gi.DdgiAlphaMaskedTransportEnabled,
                     DynamicStorageBudgetBytes: gi.DdgiDynamicBlasMemoryBudgetBytes,
                     DynamicScratchBudgetBytes: gi.DdgiDynamicBlasScratchBudgetBytes,

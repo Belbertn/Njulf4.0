@@ -2606,7 +2606,8 @@ namespace Njulf.Rendering.Pipeline
             bool supportedReflectionDebug = sceneData.ReflectionDebugView is
                 ReflectionDebugView.None or ReflectionDebugView.SsrMask or
                 ReflectionDebugView.Confidence or
-                ReflectionDebugView.SourceSelection;
+                ReflectionDebugView.SourceSelection or
+                ReflectionDebugView.DetailBudget;
             if (!supportedReflectionDebug || sceneData.DebugViewMode != 0u ||
                 sceneData.AmbientOcclusionDebugView != AmbientOcclusionDebugView.None ||
                 sceneData.TransparencyDebugView != TransparencyDebugView.None ||

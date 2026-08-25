@@ -1059,9 +1059,17 @@ bool DdgiCandidatePassesOpacityPolicy(
         return false;
 
     GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
+    bool opticalBoundary =
+        DdgiRayGeometryHasFlag(
+            instance, DDGI_RAY_GEOMETRY_FLAG_VOLUME_TRANSMISSION) ||
+        DdgiRayGeometryHasFlag(
+            instance, DDGI_RAY_GEOMETRY_FLAG_WATER_SURFACE);
     bool doubleSided = GiMaterialHasFlag(material.TransportFlags, GI_MATERIAL_DOUBLE_SIDED);
-    if (enforceMaterialSidedness && !EvaluateGiSidedness(doubleSided, frontFacing))
+    if (enforceMaterialSidedness && !opticalBoundary &&
+        !EvaluateGiSidedness(doubleSided, frontFacing))
         return false;
+    if (opticalBoundary)
+        return true;
 
     bool alphaMask = DdgiRayGeometryHasFlag(
         instance,

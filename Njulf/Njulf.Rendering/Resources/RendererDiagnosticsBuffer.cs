@@ -173,8 +173,15 @@ namespace Njulf.Rendering.Resources
             DebugDdgiOverlayCounterBase + 8;
         public const int DebugDdgiOverlayReasonCounterCount = 16;
         public const int DebugDdgiOverlayCounterCount = 27;
-        public const int CounterCount =
+        // Runtime control rather than optional telemetry: every visible thick
+        // transmission path reserves one task from this frame-local word.
+        public const int ThickTransmissionCounterBase =
             DebugDdgiOverlayCounterBase + DebugDdgiOverlayCounterCount;
+        public const int ThickTransmissionTaskCounter =
+            ThickTransmissionCounterBase;
+        public const int ThickTransmissionCounterCount = 1;
+        public const int CounterCount =
+            ThickTransmissionCounterBase + ThickTransmissionCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;

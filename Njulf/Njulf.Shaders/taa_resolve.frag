@@ -2,41 +2,31 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "common.glsl"
+#include "anti_aliasing_push.glsl"
 
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec4 outHistory;
 
-layout(push_constant) uniform AntiAliasingPushBlock
-{
-    vec2 SourceDimensions;
-    vec2 InvSourceDimensions;
-    uint InputTextureIndex;
-    uint SmaaEdgesTextureIndex;
-    uint SmaaBlendWeightsTextureIndex;
-    uint SmaaAreaTextureIndex;
-    uint SmaaSearchTextureIndex;
-    float FxaaContrastThreshold;
-    float FxaaRelativeThreshold;
-    float FxaaSubpixelBlending;
-    float SmaaThreshold;
-    uint SmaaMaxSearchSteps;
-    uint SmaaMaxSearchStepsDiagonal;
-    float SmaaCornerRounding;
-    uint DebugView;
-    uint OutputToSrgb;
-    uint SmaaQuality;
-    uint SmaaDiagonalEnabled;
-    uint SmaaCornerEnabled;
-    float TaaFeedbackMin;
-    float TaaFeedbackMax;
-    float TaaVelocityRejectionScale;
-    uint TaaHistoryValid;
-} pc;
-
 float Luma(vec3 color)
 {
     return dot(color, vec3(0.299, 0.587, 0.114));
+}
+
+vec3 RgbToYCoCg(vec3 color)
+{
+    return vec3(
+        dot(color, vec3(0.25, 0.5, 0.25)),
+        color.r * 0.5 - color.b * 0.5,
+        -color.r * 0.25 + color.g * 0.5 - color.b * 0.25);
+}
+
+vec3 YCoCgToRgb(vec3 color)
+{
+    return vec3(
+        color.x + color.y - color.z,
+        color.x + color.z,
+        color.x - color.y - color.z);
 }
 
 vec3 EncodeOutput(vec3 color)
@@ -52,71 +42,125 @@ vec3 EncodeOutput(vec3 color)
     return color;
 }
 
+vec3 SampleCurrent(vec2 uv)
+{
+    return textureLod(
+        BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))],
+        uv,
+        0.0).rgb;
+}
+
 void main()
 {
     vec2 px = pc.InvSourceDimensions;
-    vec3 current = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv).rgb;
-    vec2 velocity = texture(BindlessTextures[nonuniformEXT(MOTION_VECTOR_TEXTURE_INDEX)], inUv).rg;
-    vec2 historyUv = inUv - velocity;
+    vec3 current = SampleCurrent(inUv);
+    vec2 rawVelocity = textureLod(
+        BindlessTextures[nonuniformEXT(MOTION_VECTOR_TEXTURE_INDEX)],
+        inUv,
+        0.0).rg;
+    bool velocityFinite = !any(isnan(rawVelocity)) && !any(isinf(rawVelocity));
+    if (!velocityFinite)
+        rawVelocity = vec2(0.0);
+
+    vec2 jitterVelocity = pc.TaaCurrentJitterUv - pc.TaaPreviousJitterUv;
+    vec2 physicalVelocity = rawVelocity - jitterVelocity;
+    vec2 historyUv = inUv - rawVelocity;
     bool historyUvValid = all(greaterThanEqual(historyUv, vec2(0.0))) &&
         all(lessThanEqual(historyUv, vec2(1.0)));
-    vec3 history = texture(BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)], clamp(historyUv, vec2(0.0), vec2(1.0))).rgb;
+    vec4 historySample = textureLod(
+        BindlessTextures[nonuniformEXT(TAA_HISTORY_TEXTURE_INDEX)],
+        clamp(historyUv, vec2(0.0), vec2(1.0)),
+        0.0);
 
-    vec3 minColor = current;
-    vec3 maxColor = current;
-    vec3 localSum = vec3(0.0);
+    vec3 neighborhoodMinimum = vec3(65504.0);
+    vec3 neighborhoodMaximum = vec3(-65504.0);
+    vec3 firstMoment = vec3(0.0);
+    vec3 secondMoment = vec3(0.0);
     for (int y = -1; y <= 1; y++)
     {
         for (int x = -1; x <= 1; x++)
         {
-            vec3 sampleColor = texture(
-                BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))],
-                inUv + vec2(float(x), float(y)) * px).rgb;
-            minColor = min(minColor, sampleColor);
-            maxColor = max(maxColor, sampleColor);
-            localSum += sampleColor;
+            vec3 sampleYCoCg = RgbToYCoCg(
+                SampleCurrent(inUv + vec2(float(x), float(y)) * px));
+            neighborhoodMinimum = min(neighborhoodMinimum, sampleYCoCg);
+            neighborhoodMaximum = max(neighborhoodMaximum, sampleYCoCg);
+            firstMoment += sampleYCoCg;
+            secondMoment += sampleYCoCg * sampleYCoCg;
         }
     }
 
-    history = clamp(history, minColor, maxColor);
-    float contrast = max(maxColor.r - minColor.r, max(maxColor.g - minColor.g, maxColor.b - minColor.b));
-    float feedback = mix(pc.TaaFeedbackMax, pc.TaaFeedbackMin, smoothstep(0.02, 0.25, contrast));
-    float historyDelta = abs(Luma(history) - Luma(current));
-    feedback = mix(feedback, pc.TaaFeedbackMin, smoothstep(0.02, 0.16, historyDelta));
-    float velocityMagnitudePixels = length(velocity * pc.SourceDimensions);
-    feedback = mix(feedback, pc.TaaFeedbackMin, smoothstep(0.5, max(0.5, pc.TaaVelocityRejectionScale), velocityMagnitudePixels));
-    vec3 resolved = pc.TaaHistoryValid != 0u
-        && historyUvValid
-        ? mix(current, history, clamp(feedback, 0.0, 0.99))
+    firstMoment *= 1.0 / 9.0;
+    secondMoment *= 1.0 / 9.0;
+    vec3 standardDeviation = sqrt(max(
+        secondMoment - firstMoment * firstMoment,
+        vec3(0.0)));
+    vec3 varianceMinimum = max(
+        neighborhoodMinimum,
+        firstMoment - standardDeviation * 1.25);
+    vec3 varianceMaximum = min(
+        neighborhoodMaximum,
+        firstMoment + standardDeviation * 1.25);
+    vec3 clippedHistoryYCoCg = clamp(
+        RgbToYCoCg(historySample.rgb),
+        varianceMinimum,
+        varianceMaximum);
+    vec3 clippedHistory = YCoCgToRgb(clippedHistoryYCoCg);
+
+    float currentDepth = textureLod(
+        BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
+        inUv,
+        0.0).r;
+    float previousDepth = historySample.a;
+    float depthGradient = abs(dFdx(currentDepth)) + abs(dFdy(currentDepth));
+    float depthTolerance = max(
+        0.00002,
+        max(abs(currentDepth), abs(previousDepth)) * 0.002 + depthGradient * 2.0);
+    bool depthConsistent = abs(currentDepth - previousDepth) <= depthTolerance;
+
+    float velocityPixels = length(physicalVelocity * pc.SourceDimensions);
+    float rejectionEnd = max(0.5, pc.TaaVelocityRejectionScale);
+    float motionRejection = smoothstep(0.25, rejectionEnd, velocityPixels);
+    float feedback = mix(pc.TaaFeedbackMax, pc.TaaFeedbackMin, motionRejection);
+    float historyDelta = abs(Luma(clippedHistory) - Luma(current));
+    feedback = mix(
+        feedback,
+        pc.TaaFeedbackMin,
+        smoothstep(0.04, 0.24, historyDelta));
+
+    bool historyValid = pc.TaaHistoryValid != 0u &&
+        historyUvValid &&
+        velocityFinite &&
+        depthConsistent;
+    vec3 resolved = historyValid
+        ? mix(current, clippedHistory, clamp(feedback, 0.0, 0.99))
         : current;
-    vec3 localAverage = localSum * (1.0 / 9.0);
-    resolved = clamp(resolved + (current - localAverage) * 0.16, minColor, maxColor);
+
+    outHistory = vec4(resolved, currentDepth);
 
     if (pc.DebugView == 5u)
     {
-        vec2 encodedVelocity = clamp(velocity * 8.0 + vec2(0.5), vec2(0.0), vec2(1.0));
-        outColor = vec4(encodedVelocity, 0.0, 1.0);
-        outHistory = vec4(current, 1.0);
+        vec2 encodedVelocity = clamp(
+            physicalVelocity * pc.SourceDimensions * 0.125 + vec2(0.5),
+            vec2(0.0),
+            vec2(1.0));
+        outColor = vec4(encodedVelocity, historyValid ? 1.0 : 0.0, 1.0);
         return;
     }
 
     if (pc.DebugView == 7u)
     {
-        vec3 debugHistory = pc.TaaHistoryValid != 0u ? history : current;
+        vec3 debugHistory = historyValid ? clippedHistory : current;
         outColor = vec4(EncodeOutput(debugHistory), 1.0);
-        outHistory = vec4(current, 1.0);
         return;
     }
 
     if (pc.DebugView == 6u)
     {
-        bool checker = (fract(gl_FragCoord.x * 0.125) < 0.5) == (fract(gl_FragCoord.y * 0.125) < 0.5);
-        float pattern = checker ? 0.35 : 0.75;
-        outColor = vec4(vec3(pattern), 1.0);
-        outHistory = vec4(resolved, 1.0);
+        vec2 jitterPixels = pc.TaaCurrentJitterUv * pc.SourceDimensions;
+        vec2 encodedJitter = clamp(jitterPixels + vec2(0.5), vec2(0.0), vec2(1.0));
+        outColor = vec4(encodedJitter, 0.0, 1.0);
         return;
     }
 
     outColor = vec4(EncodeOutput(resolved), 1.0);
-    outHistory = vec4(resolved, 1.0);
 }

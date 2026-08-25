@@ -27,6 +27,8 @@ namespace Njulf.Rendering.Pipeline
         private Matrix4x4 _previousViewProjectionMatrix = Matrix4x4.Identity;
         private float _previousTime;
         private bool _hasPreviousViewProjectionMatrix;
+        private ulong _previousSceneContentRevision = ulong.MaxValue;
+        private ulong _previousCameraCutSerial = ulong.MaxValue;
 
         public MotionVectorPass(
             VulkanContext context,
@@ -72,7 +74,12 @@ namespace Njulf.Rendering.Pipeline
             }
 
             long start = Stopwatch.GetTimestamp();
-            bool previousFrameValid = _hasPreviousViewProjectionMatrix;
+            bool previousFrameValid =
+                _hasPreviousViewProjectionMatrix &&
+                sceneData.HiZPolicyCameraCut == 0 &&
+                sceneData.HiZPolicySceneChanged == 0 &&
+                _previousSceneContentRevision == sceneData.SceneContentRevision &&
+                _previousCameraCutSerial == sceneData.CaptureCameraCutSerial;
             if (previousFrameValid && IsCameraCut(sceneData.ViewProjectionMatrix, _previousViewProjectionMatrix))
                 previousFrameValid = false;
             Matrix4x4 previousViewProjection = previousFrameValid
@@ -101,8 +108,6 @@ namespace Njulf.Rendering.Pipeline
 
             _context.Api.CmdSetViewport(cmd, 0, 1, &viewport);
             _context.Api.CmdSetScissor(cmd, 0, 1, &scissor);
-            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, _meshPipeline.MotionVectorPipeline);
-
             var storageSet = _bindlessHeap.StorageBufferSet;
             var textureSet = _bindlessHeap.TextureSamplerSet;
 
@@ -164,30 +169,26 @@ namespace Njulf.Rendering.Pipeline
                 previousViewProjection,
                 previousTime,
                 previousFrameValid,
-                sceneData.SimpleOpaqueMeshletCount,
-                BindlessIndex.MeshletDrawBufferBase);
+                _meshPipeline.MotionVectorPipeline,
+                sceneData.SolidMeshletCount,
+                BindlessIndex.SolidDepthMeshletDrawBufferBase);
             DrawMotionVectorBucket(
                 cmd,
                 sceneData,
                 previousViewProjection,
                 previousTime,
                 previousFrameValid,
-                sceneData.SimpleNormalOpaqueMeshletCount,
-                BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase);
-            DrawMotionVectorBucket(
-                cmd,
-                sceneData,
-                previousViewProjection,
-                previousTime,
-                previousFrameValid,
-                sceneData.FullOpaqueMeshletCount,
-                BindlessIndex.FullOpaqueMeshletDrawBufferBase);
+                _meshPipeline.MaskedMotionVectorPipeline,
+                sceneData.MaskedMeshletCount,
+                BindlessIndex.MaskedDepthMeshletDrawBufferBase);
             DrawFoliageMotionVectors(cmd, sceneData, previousViewProjection, previousTime, previousFrameValid);
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
 
             _renderTargets.MotionVectors.TransitionToShaderRead(cmd);
             _previousViewProjectionMatrix = sceneData.ViewProjectionMatrix;
             _previousTime = sceneData.Time;
+            _previousSceneContentRevision = sceneData.SceneContentRevision;
+            _previousCameraCutSerial = sceneData.CaptureCameraCutSerial;
             _hasPreviousViewProjectionMatrix = true;
             sceneData.MotionVectorsEnabled = previousFrameValid ? 1 : 0;
             sceneData.CpuMotionVectorRecordMicroseconds = ElapsedMicroseconds(start);
@@ -199,11 +200,14 @@ namespace Njulf.Rendering.Pipeline
             Matrix4x4 previousViewProjection,
             float previousTime,
             bool previousFrameValid,
+            Silk.NET.Vulkan.Pipeline pipeline,
             int meshletCount,
             int meshletDrawBufferBaseIndex)
         {
             if (meshletCount <= 0)
                 return;
+
+            _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
 
             var pushConstants = new GPUMotionVectorPushConstants
             {
@@ -322,6 +326,8 @@ namespace Njulf.Rendering.Pipeline
         public override void OnSwapchainRecreated()
         {
             _hasPreviousViewProjectionMatrix = false;
+            _previousSceneContentRevision = ulong.MaxValue;
+            _previousCameraCutSerial = ulong.MaxValue;
         }
 
         public override void Cleanup()

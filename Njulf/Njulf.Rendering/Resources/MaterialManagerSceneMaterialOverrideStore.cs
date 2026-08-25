@@ -71,18 +71,56 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
             source.GiTransmissionPolicy,
             material.Extensions.TransmissionPolicy,
             nameof(source.GiTransmissionPolicy));
+        OpticalBoundaryKind opticalBoundary = ParseEnum(
+            source.OpticalBoundaryKind,
+            material.Extensions.OpticalBoundary,
+            nameof(source.OpticalBoundaryKind));
+        GiCausticCasterPolicy causticCasterPolicy = ParseEnum(
+            source.GiCausticCasterPolicy,
+            material.Extensions.CausticCasterPolicy,
+            nameof(source.GiCausticCasterPolicy));
         EmissivePhotometricUnit emissiveUnit = ParseEnum(
             source.EmissiveUnit,
             material.EmissiveUnit,
             nameof(source.EmissiveUnit));
         SceneColor? transmissionTint = source.ThinTransmissionTint;
+        SceneColor? attenuationColor = source.AttenuationColor;
+        SceneVector2? waterVelocity0 = source.WaterNormalVelocity0;
+        SceneVector2? waterVelocity1 = source.WaterNormalVelocity1;
         MaterialExtensionDefinition extensions = material.Extensions with
         {
             TransmissionPolicy = transmissionPolicy,
-            TransmissionFactor = source.ThinTransmissionFactor ?? material.Extensions.TransmissionFactor,
+            TransmissionFactor = source.TransmissionFactor ??
+                                 source.ThinTransmissionFactor ??
+                                 material.Extensions.TransmissionFactor,
             ThinTransmissionTint = transmissionTint is { } tint
                 ? new Vector3(tint.R, tint.G, tint.B)
-                : material.Extensions.ThinTransmissionTint
+                : material.Extensions.ThinTransmissionTint,
+            Ior = source.Ior ?? material.Extensions.Ior,
+            ThicknessFactor = source.ThicknessFactor ??
+                              material.Extensions.ThicknessFactor,
+            AttenuationDistance = source.AttenuationDistance switch
+            {
+                0f => float.PositiveInfinity,
+                { } distance => distance,
+                null => material.Extensions.AttenuationDistance
+            },
+            AttenuationColor = attenuationColor is { } attenuation
+                ? new Vector3(attenuation.R, attenuation.G, attenuation.B)
+                : material.Extensions.AttenuationColor,
+            OpticalBoundary = opticalBoundary,
+            CausticCasterPolicy = causticCasterPolicy,
+            WaterNormalVelocity0 = waterVelocity0 is { } velocity0
+                ? new Vector2(velocity0.X, velocity0.Y)
+                : material.Extensions.WaterNormalVelocity0,
+            WaterNormalVelocity1 = waterVelocity1 is { } velocity1
+                ? new Vector2(velocity1.X, velocity1.Y)
+                : material.Extensions.WaterNormalVelocity1,
+            WaterNormalUvScale0 = source.WaterNormalUvScale0 ??
+                                  material.Extensions.WaterNormalUvScale0,
+            WaterNormalUvScale1 = source.WaterNormalUvScale1 ??
+                                  material.Extensions.WaterNormalUvScale1,
+            Dispersion = source.Dispersion ?? material.Extensions.Dispersion
         };
         MaterialFeatureFlags featureFlags = material.FeatureFlags;
         if (extensions.TransmissionFactor > 0f ||
@@ -90,6 +128,11 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
         {
             featureFlags |= MaterialFeatureFlags.Transmission;
         }
+        if (extensions.TransmissionPolicy == GiTransmissionPolicy.Volume)
+            featureFlags |= MaterialFeatureFlags.VolumeApproximation |
+                            MaterialFeatureFlags.Ior;
+        if (extensions.Dispersion > 0f)
+            featureFlags |= MaterialFeatureFlags.Dispersion;
 
         return MaterialDefinitionValidator.ValidateAndNormalize(material with
         {
@@ -157,12 +200,35 @@ public sealed class MaterialManagerSceneMaterialOverrideStore : ISceneMaterialOv
             DiffuseGiParticipation = material.DiffuseGiParticipation.ToString(),
             EmissionGiParticipation = material.EmissionGiParticipation.ToString(),
             GiTransmissionPolicy = material.Extensions.TransmissionPolicy.ToString(),
+            TransmissionFactor = material.Extensions.TransmissionFactor,
             ThinTransmissionFactor = material.Extensions.TransmissionFactor,
             ThinTransmissionTint = new SceneColor(
                 material.Extensions.ThinTransmissionTint.X,
                 material.Extensions.ThinTransmissionTint.Y,
                 material.Extensions.ThinTransmissionTint.Z,
-                1f)
+                1f),
+            Ior = material.Extensions.Ior,
+            ThicknessFactor = material.Extensions.ThicknessFactor,
+            AttenuationDistance = float.IsPositiveInfinity(
+                    material.Extensions.AttenuationDistance)
+                ? 0f : material.Extensions.AttenuationDistance,
+            AttenuationColor = new SceneColor(
+                material.Extensions.AttenuationColor.X,
+                material.Extensions.AttenuationColor.Y,
+                material.Extensions.AttenuationColor.Z,
+                1f),
+            OpticalBoundaryKind = material.Extensions.OpticalBoundary.ToString(),
+            GiCausticCasterPolicy =
+                material.Extensions.CausticCasterPolicy.ToString(),
+            WaterNormalVelocity0 = new SceneVector2(
+                material.Extensions.WaterNormalVelocity0.X,
+                material.Extensions.WaterNormalVelocity0.Y),
+            WaterNormalVelocity1 = new SceneVector2(
+                material.Extensions.WaterNormalVelocity1.X,
+                material.Extensions.WaterNormalVelocity1.Y),
+            WaterNormalUvScale0 = material.Extensions.WaterNormalUvScale0,
+            WaterNormalUvScale1 = material.Extensions.WaterNormalUvScale1,
+            Dispersion = material.Extensions.Dispersion
         };
     }
 

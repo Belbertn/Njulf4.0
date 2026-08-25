@@ -975,6 +975,8 @@ namespace Njulf.Rendering.Data
         private const uint DecalGlobalIlluminationEnabledFlag = 1u << 4;
         private const uint DdgiLayeredReceiverCountersEnabledFlag = 1u << 5;
         private const uint DecalReceiveShadowsFlag = 1u << 6;
+        private const uint ThickTransmissionRayQueryEnabledFlag = 1u << 7;
+        private const uint ThickTransmissionDispersionEnabledFlag = 1u << 10;
         // Keep the forward push-constant ABI at 256 bytes. The low diagnostic
         // bits are already part of the shader contract. Bit 30 selects the
         // frame-local opaque DDGI receiver cache. Bit 31 enables reflection
@@ -990,6 +992,10 @@ namespace Njulf.Rendering.Data
             (ReflectionCaptureLayerMask << ReflectionCaptureLayerShift);
         private const int DirectionalShadowPreviewCascadeShift = 8;
         private const uint DirectionalShadowPreviewCascadeMask = 0x03u;
+        private const int ThickTransmissionMediaDepthShift = 3;
+        private const int ThickTransmissionCandidateLimitShift = 5;
+        private const int ThickTransmissionRayTaskBudgetShift = 2;
+        public const int MaximumThickTransmissionRayTaskBudget = 4_194_304;
 
         public Matrix4x4 ViewProjectionMatrix;
         public Matrix4x4 InverseViewMatrix;
@@ -1072,7 +1078,9 @@ namespace Njulf.Rendering.Data
             bool decalGlobalIlluminationEnabled = false,
             bool ddgiLayeredReceiverCountersEnabled = false,
             bool decalReceiveShadows = false,
-            bool ddgiReceiverCacheEnabled = false)
+            bool ddgiReceiverCacheEnabled = false,
+            bool thickTransmissionRayQueryEnabled = false,
+            bool thickTransmissionDispersionEnabled = false)
         {
             return (ddgiForwardEstimateCountersEnabled ? DdgiForwardEstimateCountersEnabledFlag : 0u) |
                    (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u) |
@@ -1081,9 +1089,67 @@ namespace Njulf.Rendering.Data
                    (decalGlobalIlluminationEnabled ? DecalGlobalIlluminationEnabledFlag : 0u) |
                    (ddgiLayeredReceiverCountersEnabled ? DdgiLayeredReceiverCountersEnabledFlag : 0u) |
                    (decalReceiveShadows ? DecalReceiveShadowsFlag : 0u) |
+                   (thickTransmissionRayQueryEnabled
+                       ? ThickTransmissionRayQueryEnabledFlag : 0u) |
+                   (thickTransmissionDispersionEnabled
+                       ? ThickTransmissionDispersionEnabledFlag : 0u) |
                    (ddgiReceiverCacheEnabled ? DdgiReceiverCacheEnabledFlag : 0u) |
                    ((directionalShadowPreviewCascade & DirectionalShadowPreviewCascadeMask) <<
                     DirectionalShadowPreviewCascadeShift);
+        }
+
+        /// <summary>
+        /// Packs the visible optical-path limits into the transparent pass's
+        /// otherwise-unused Hi-Z mip word. The task stage still sees Hi-Z mode
+        /// off, while the fragment stage receives exact bounded limits without
+        /// growing the frozen 256-byte push ABI.
+        /// </summary>
+        public static uint PackThickTransmissionLimits(
+            int maximumInterfaces,
+            int maximumMediaDepth,
+            int maximumCandidatesPerInterface)
+        {
+            if (maximumInterfaces is < 1 or >
+                BoundedDielectricMediaStack.MaximumInterfaces)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(maximumInterfaces));
+            }
+            if (maximumMediaDepth is < 1 or >
+                BoundedDielectricMediaStack.MaximumDepth)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(maximumMediaDepth));
+            }
+            if (maximumCandidatesPerInterface is < 1 or >
+                BoundedDielectricMediaStack.MaximumCandidatesPerInterface)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(maximumCandidatesPerInterface));
+            }
+
+            return (uint)(maximumInterfaces - 1) |
+                   ((uint)(maximumMediaDepth - 1) <<
+                    ThickTransmissionMediaDepthShift) |
+                   ((uint)(maximumCandidatesPerInterface - 1) <<
+                    ThickTransmissionCandidateLimitShift);
+        }
+
+        /// <summary>
+        /// Packs the frame-local optical task budget above the two low Hi-Z
+        /// mode bits. Transparent task culling masks those bits, while the ray
+        /// fragment variants recover the exact budget without growing the
+        /// frozen forward push-constant ABI.
+        /// </summary>
+        public static uint PackThickTransmissionTaskBudget(int rayTaskBudget)
+        {
+            if (rayTaskBudget is < 0 or >
+                MaximumThickTransmissionRayTaskBudget)
+            {
+                throw new ArgumentOutOfRangeException(nameof(rayTaskBudget));
+            }
+
+            return (uint)rayTaskBudget << ThickTransmissionRayTaskBudgetShift;
         }
     }
 
@@ -2842,6 +2908,9 @@ namespace Njulf.Rendering.Data
         public float TaaFeedbackMax;
         public float TaaVelocityRejectionScale;
         public uint TaaHistoryValid;
+        public uint TaaJitterPadding;
+        public Vector2 TaaCurrentJitterUv;
+        public Vector2 TaaPreviousJitterUv;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

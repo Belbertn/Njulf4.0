@@ -2,36 +2,10 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "common.glsl"
+#include "anti_aliasing_push.glsl"
 
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outColor;
-
-layout(push_constant) uniform AntiAliasingPushBlock
-{
-    vec2 SourceDimensions;
-    vec2 InvSourceDimensions;
-    uint InputTextureIndex;
-    uint SmaaEdgesTextureIndex;
-    uint SmaaBlendWeightsTextureIndex;
-    uint SmaaAreaTextureIndex;
-    uint SmaaSearchTextureIndex;
-    float FxaaContrastThreshold;
-    float FxaaRelativeThreshold;
-    float FxaaSubpixelBlending;
-    float SmaaThreshold;
-    uint SmaaMaxSearchSteps;
-    uint SmaaMaxSearchStepsDiagonal;
-    float SmaaCornerRounding;
-    uint DebugView;
-    uint OutputToSrgb;
-    uint SmaaQuality;
-    uint SmaaDiagonalEnabled;
-    uint SmaaCornerEnabled;
-    float TaaFeedbackMin;
-    float TaaFeedbackMax;
-    float TaaVelocityRejectionScale;
-    uint TaaHistoryValid;
-} pc;
 
 float Luma(vec3 color)
 {

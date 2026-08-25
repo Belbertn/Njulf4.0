@@ -24,6 +24,13 @@ layout(push_constant) uniform ForwardPushConstantBlock
     GPUForwardPushConstants Push;
 } pc;
 
+uint ForwardHiZTestMode()
+{
+    // Transparent passes use the upper bits for the thick-transmission task
+    // budget. The low two bits retain the established Hi-Z mode ABI.
+    return pc.Push.OcclusionCullingEnabled & 0x03u;
+}
+
 bool ProjectToUvDepth(vec3 worldPosition, out vec3 uvDepth)
 {
     vec4 clip = MulRowMajor(vec4(worldPosition, 1.0), pc.Push.ViewProjectionMatrix);
@@ -37,7 +44,7 @@ bool ProjectToUvDepth(vec3 worldPosition, out vec3 uvDepth)
 
 bool MeshletOccludedByHiZFull6Point5Tap(vec3 worldCenter, float worldRadius)
 {
-    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_OFF || pc.Push.HiZMipCount == 0u)
+    if (ForwardHiZTestMode() == HIZ_TEST_MODE_OFF || pc.Push.HiZMipCount == 0u)
         return false;
 
     vec3 cameraRight = normalize(vec3(
@@ -99,7 +106,7 @@ bool MeshletOccludedByHiZFull6Point5Tap(vec3 worldCenter, float worldRadius)
 
 bool MeshletOccludedByHiZBounds4Tap(vec3 worldCenter, float worldRadius)
 {
-    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_OFF || pc.Push.HiZMipCount == 0u)
+    if (ForwardHiZTestMode() == HIZ_TEST_MODE_OFF || pc.Push.HiZMipCount == 0u)
         return false;
 
     vec3 cameraRight = normalize(vec3(
@@ -157,9 +164,9 @@ bool MeshletOccludedByHiZBounds4Tap(vec3 worldCenter, float worldRadius)
 
 bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
 {
-    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_FULL_6_POINT_5_TAP)
+    if (ForwardHiZTestMode() == HIZ_TEST_MODE_FULL_6_POINT_5_TAP)
         return MeshletOccludedByHiZFull6Point5Tap(worldCenter, worldRadius);
-    if (pc.Push.OcclusionCullingEnabled == HIZ_TEST_MODE_BOUNDS_4_TAP)
+    if (ForwardHiZTestMode() == HIZ_TEST_MODE_BOUNDS_4_TAP)
         return MeshletOccludedByHiZBounds4Tap(worldCenter, worldRadius);
     return false;
 }
@@ -260,7 +267,7 @@ void main()
     }
 
     bool canHiZTest = (command.Flags & MESHLET_DRAW_FLAG_CAN_HIZ_TEST) != 0u;
-    if (canHiZTest && pc.Push.OcclusionCullingEnabled != HIZ_TEST_MODE_OFF && pc.Push.HiZMipCount != 0u)
+    if (canHiZTest && ForwardHiZTestMode() != HIZ_TEST_MODE_OFF && pc.Push.HiZMipCount != 0u)
         IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_TESTED);
 
     if (canHiZTest && MeshletOccludedByHiZ(worldCenterRadius.xyz, worldCenterRadius.w))

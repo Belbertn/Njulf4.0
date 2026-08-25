@@ -1885,7 +1885,14 @@ internal sealed class HelloGame : Game
                 return Finish(new Model { Name = "Material-GI Conformance" });
             }
 
-            SampleMaterialShowcaseScene.Configure(Scene, meshManager, materialManager);
+            TextureManager showcaseTextureManager = Services?.GetRequiredService<TextureManager>()
+                ?? throw new InvalidOperationException(
+                    "The material showcase requires the renderer TextureManager.");
+            SampleMaterialShowcaseScene.Configure(
+                Scene,
+                meshManager,
+                materialManager,
+                showcaseTextureManager);
             meshManager.CompactStaticBuffers();
             return Finish(new Model { Name = "Material Showcase" });
         }
@@ -2368,7 +2375,7 @@ internal sealed class HelloGame : Game
             SampleSceneKind.GlobalIlluminationTest => (new CoreVector3(0f, 1.7f, 1.15f), 0f, -0.08f, 80f),
             SampleSceneKind.Bistro =>
                 (new CoreVector3(-16.003326f, 2.5132222f, 1.2387409f), 1.6121571f, 0.0660575f, 500f),
-            SampleSceneKind.MaterialShowcase => (new CoreVector3(0f, 1.65f, 7.8f), 0f, -0.11f, 120f),
+            SampleSceneKind.MaterialShowcase => (new CoreVector3(0f, 2.15f, 9.0f), 0f, -0.17f, 120f),
             SampleSceneKind.FoliageShowcase => (new CoreVector3(0f, 1.6f, 5.5f), 0f, -0.14f, 180f),
             SampleSceneKind.VfxShowcase => (new CoreVector3(0f, 1.7f, 7.2f), 0f, -0.12f, 100f),
             // Face across the courtyard on Sponza startup instead of directly

@@ -30,20 +30,17 @@ bool SealCommittedSourceCache(
         1u);
     uint cacheWordsPerProbe = SchedulerVolumeCacheWordsPerProbe(volumeIndex);
     uint cacheLayoutFlags = SchedulerVolumeCacheLayoutFlags(volumeIndex);
-    uint sidecarWordsPerRay =
-        SimpleDdgiStorageUsesRecursiveGlossySidecar(cacheLayoutFlags)
-            ? 1u
-            : 0u;
-    uint encodedWordsPerRay = cacheWordsPerProbe / raysPerProbe;
-    uint cacheStrideWords = encodedWordsPerRay > sidecarWordsPerRay
-        ? encodedWordsPerRay - sidecarWordsPerRay
-        : 0u;
+    uint cacheStrideWords;
+    bool cacheStrideValid =
+        TryResolveSimpleDdgiStorageStrideFromWordsPerProbe(
+            cacheWordsPerProbe,
+            raysPerProbe,
+            cacheLayoutFlags,
+            cacheStrideWords);
     if (sourceCacheBufferIndex == 0u ||
         sourceRayCount == 0u ||
         sourceRayCount > raysPerProbe || cacheProbeBaseWordPlusOne == 0u ||
-        cacheStrideWords == 0u ||
-        (cacheStrideWords + sidecarWordsPerRay) * raysPerProbe !=
-            cacheWordsPerProbe)
+        !cacheStrideValid)
     {
         return false;
     }

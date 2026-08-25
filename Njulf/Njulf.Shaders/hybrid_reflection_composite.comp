@@ -13,6 +13,10 @@ layout(push_constant) uniform HybridReflectionCompositePushBlock
     uint ScreenHeight;
     uint SpatialPassCount;
     uint DebugView;
+    float FullResolutionRoughness;
+    float HalfResolutionRoughness;
+    float QuarterResolutionRoughness;
+    float Padding0;
 } pc;
 
 void main()
@@ -29,6 +33,39 @@ void main()
             ? imageLoad(HybridFilterScratch, pixel)
             : imageLoad(HybridRawRadiance, pixel);
     vec4 scene = imageLoad(HybridSceneColor, pixel);
+
+    if (pc.DebugView == 15u)
+    {
+        uvec4 payload = texelFetch(HybridReceiverPayload, pixel, 0);
+        if (!HybridReflectionPayloadValid(payload))
+        {
+            imageStore(HybridSceneColor, pixel, vec4(vec3(0.0), scene.a));
+            return;
+        }
+        uint lobeFlags = HybridReflectionPayloadLobeFlags(payload);
+        uint tier = HybridResolveAdaptiveReflectionTier(
+            HybridReflectionPayloadRoughness(payload),
+            HybridReflectionPayloadF0(payload),
+            HybridReflectionPayloadSpecularOcclusion(payload),
+            lobeFlags,
+            pc.FullResolutionRoughness,
+            pc.HalfResolutionRoughness,
+            pc.QuarterResolutionRoughness);
+        float updateCost = tier == 1u
+            ? 1.0
+            : tier == 2u
+                ? 0.25
+                : tier == 4u
+                    ? 0.0625
+                    : 0.0;
+        float transmission = (lobeFlags &
+            NJULF_HYBRID_REFLECTION_LOBE_TRANSMISSIVE) != 0u ? 1.0 : 0.0;
+        float broadAnisotropy = (lobeFlags &
+            NJULF_HYBRID_REFLECTION_LOBE_BROAD_ANISOTROPIC) != 0u ? 1.0 : 0.0;
+        imageStore(HybridSceneColor, pixel,
+            vec4(updateCost, transmission, broadAnisotropy, scene.a));
+        return;
+    }
 
     if (pc.DebugView == 13u)
     {

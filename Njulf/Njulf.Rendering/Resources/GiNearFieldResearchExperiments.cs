@@ -22,8 +22,8 @@ public readonly record struct GiTaggedCausticCacheConfiguration(
     int CacheBankCount = 2,
     float TargetLoadFactor = 0.5f,
     int MaximumEmitterCount = 64,
-    int MaximumHeroCount = 16,
-    int MaximumProposalPairCount = 1_024,
+    int MaximumHeroCount = 64,
+    int MaximumProposalPairCount = 4_096,
     ulong MaximumStorageBufferRange = ulong.MaxValue,
     GiCausticScreenResolveProfile ScreenResolveProfile = default,
     float WorldCellSize = 0.5f,
@@ -58,6 +58,42 @@ public readonly record struct GiTaggedCausticCachePlan(
 
 public static class GiTaggedCausticCacheExperiment
 {
+    /// <summary>
+    /// Converts an admitted C4 plan into a zero-byte fallback when another
+    /// renderer feature makes its forward receiver ABI unsafe to execute.
+    /// Requested intent and evidence identity remain visible in diagnostics.
+    /// </summary>
+    public static GiTaggedCausticCachePlan InvalidateRuntimePlan(
+        in GiTaggedCausticCachePlan plan,
+        string reason,
+        GiExperimentFallbackReason fallbackReason =
+            GiExperimentFallbackReason.ResourceIncomplete)
+    {
+        string normalizedReason = string.IsNullOrWhiteSpace(reason)
+            ? "caustic-runtime-plan-invalidated"
+            : reason;
+        GiCausticEvidenceValidation validation =
+            plan.EvidenceValidation with
+            {
+                Accepted = false,
+                FallbackReason = fallbackReason,
+                Reason = normalizedReason
+            };
+        return Empty(
+            plan.Requested,
+            new GiExperimentAdmission(
+                "C4",
+                plan.Requested,
+                true,
+                false,
+                GiExperimentStage.PrerequisiteMissing,
+                0UL,
+                normalizedReason),
+            normalizedReason,
+            fallbackReason,
+            validation);
+    }
+
     public static GiTaggedCausticCachePlan CreatePlan(
         in GiTaggedCausticCacheConfiguration configuration,
         in GiTaggedCausticCacheQualification qualification) =>

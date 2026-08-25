@@ -20,6 +20,7 @@ layout(location = 0) noperspective out vec2 meshCurrentUv[];
 layout(location = 1) noperspective out vec2 meshPreviousUv[];
 layout(location = 2) flat out uint meshReceiverSignature[];
 layout(location = 3) flat out uint meshHistoryFrameAndFlags[];
+layout(location = 4) flat out uint meshMaterialIndex[];
 
 layout(push_constant) uniform MotionVectorPushConstantBlock
 {
@@ -87,6 +88,7 @@ void main()
         meshHistoryFrameAndFlags[vertexSlot] =
             (pc.Push.CurrentFrameIndex & 0xffu) |
             ((pc.Push.PreviousFrameValid & 2u) << 7u);
+        meshMaterialIndex[vertexSlot] = command.MaterialIndex;
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

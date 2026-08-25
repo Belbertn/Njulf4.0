@@ -195,6 +195,7 @@ namespace Njulf.Rendering.Resources
         public ulong TransportSourceCacheCompact28Bytes { get; init; }
         public ulong TransportSourceCacheCompact24Bytes { get; init; }
         public ulong TransportSourceCacheGlossyMaterialSidecarBytes { get; init; }
+        public ulong TransportSourceCacheVolumePathSidecarBytes { get; init; }
         public ulong TransportSourceCacheAlignmentBytes { get; init; }
         public int TransportSourceCacheLegacyRayCount { get; init; }
         public int TransportSourceCacheCompact28RayCount { get; init; }
@@ -685,6 +686,10 @@ namespace Njulf.Rendering.Resources
                 TransportSourceCacheGlossyMaterialSidecarBytes =
                     concreteTransportBuffers
                         ? storageLayout?.GlossyMaterialSidecarBytes ?? 0UL
+                        : 0UL,
+                TransportSourceCacheVolumePathSidecarBytes =
+                    concreteTransportBuffers
+                        ? storageLayout?.VolumePathSidecarBytes ?? 0UL
                         : 0UL,
                 TransportSourceCacheAlignmentBytes = concreteTransportBuffers
                     ? storageLayout?.AlignmentPaddingBytes ?? 0UL
@@ -1519,7 +1524,8 @@ namespace Njulf.Rendering.Resources
                                 SimpleDdgiGlossyTransportMode
                                     .RecursiveCertified &&
                             directionalRadianceMode !=
-                                SimpleDdgiDirectionalRadianceMode.Off
+                                SimpleDdgiDirectionalRadianceMode.Off,
+                        UseVolumePathSidecar = transportV2Enabled
                     });
                     mirrorRequests.Add(new SimpleDdgiSampledAtlasRangeRequest(
                         selectedOrder,

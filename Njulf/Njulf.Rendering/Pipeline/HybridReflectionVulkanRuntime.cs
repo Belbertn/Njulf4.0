@@ -44,6 +44,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         new BufferHandle[RenderingConstants.FramesInFlight];
     private readonly BufferHandle[] _counterBuffers =
         new BufferHandle[RenderingConstants.FramesInFlight];
+    private readonly BufferHandle[] _counterReadbackBuffers =
+        new BufferHandle[RenderingConstants.FramesInFlight];
     private readonly BufferHandle[] _indirectBuffers =
         new BufferHandle[RenderingConstants.FramesInFlight];
     private readonly DescriptorSet[] _descriptorSets =
@@ -103,6 +105,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         _pipelineCacheService = pipelineCacheService;
         Array.Fill(_taskBuffers, BufferHandle.Invalid);
         Array.Fill(_counterBuffers, BufferHandle.Invalid);
+        Array.Fill(_counterReadbackBuffers, BufferHandle.Invalid);
         Array.Fill(_indirectBuffers, BufferHandle.Invalid);
     }
 
@@ -113,7 +116,8 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     public uint RayTaskCapacity => _allocatedTaskCapacity;
     public ulong BufferBytes => checked(
         (TaskHeaderBytes + (ulong)_allocatedTaskCapacity * TaskBytes +
-         CounterBytes + IndirectBytes) * RenderingConstants.FramesInFlight);
+         CounterBytes * 2UL + IndirectBytes) *
+        RenderingConstants.FramesInFlight);
 
     public BufferHandle GetTaskBuffer(int frameIndex) =>
         GetFrameBuffer(_taskBuffers, frameIndex);
@@ -127,16 +131,17 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     public void ReadCompletedFrame(int frameIndex)
     {
         int bank = ValidateFrameIndex(frameIndex);
-        if (!_counterFrameSubmitted[bank] || !_counterBuffers[bank].IsValid)
+        if (!_counterFrameSubmitted[bank] ||
+            !_counterReadbackBuffers[bank].IsValid)
         {
             _completedCounters[bank] = HybridReflectionCounterSnapshot.Empty;
             return;
         }
 
-        _bufferManager.InvalidateBuffer(_counterBuffers[bank], 0UL,
+        _bufferManager.InvalidateBuffer(_counterReadbackBuffers[bank], 0UL,
             CounterBytes);
         uint* values = (uint*)_bufferManager.GetMappedPointer(
-            _counterBuffers[bank]);
+            _counterReadbackBuffers[bank]);
         _completedCounters[bank] = new HybridReflectionCounterSnapshot(
             ReadbackValid: 1,
             SsrHits: values[0],
@@ -396,7 +401,11 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 1, _settings.Reflections.MaxProbesPerPixel)),
             ReflectionDebugView = (uint)sceneData.ReflectionDebugView,
             SsrConfidenceThreshold = _settings.Reflections
-                .SsrConfidenceThreshold
+                .SsrConfidenceThreshold,
+            AnalyticTransitionStartRoughness = _settings.Reflections
+                .SsrHalfResolutionRoughness,
+            AnalyticTransitionEndRoughness = _settings.Reflections
+                .SsrQuarterResolutionRoughness
         };
         Push(commandBuffer, push);
         DispatchScreen(commandBuffer);
@@ -489,11 +498,18 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
             ScreenHeight = _allocatedHeight,
             SpatialPassCount = checked((uint)_settings.Reflections
                 .SpatialFilterPassCount),
-            DebugView = (uint)sceneData.ReflectionDebugView
+            DebugView = (uint)sceneData.ReflectionDebugView,
+            FullResolutionRoughness = _settings.Reflections
+                .SsrFullResolutionRoughness,
+            HalfResolutionRoughness = _settings.Reflections
+                .SsrHalfResolutionRoughness,
+            QuarterResolutionRoughness = _settings.Reflections
+                .SsrQuarterResolutionRoughness
         };
         Push(commandBuffer, push);
         DispatchScreen(commandBuffer);
         PublishComputeWrites(commandBuffer);
+        RecordCounterReadback(commandBuffer, bank);
         _renderTargets.SceneColor.TransitionToColorAttachment(commandBuffer);
         _counterFrameSubmitted[bank] = true;
         _previousRevision = _currentRevision;
@@ -578,10 +594,18 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
                 BufferUsageFlags.StorageBufferBit |
                 BufferUsageFlags.TransferDstBit |
                 BufferUsageFlags.TransferSrcBit,
+                MemoryUsage.AutoPreferDevice,
+                debugName: $"Hybrid Reflection Counters Frame {frameIndex}",
+                category: MemoryBudgetCategory.RenderTargets);
+            _counterReadbackBuffers[frameIndex] =
+                _bufferManager.CreateBuffer(
+                CounterBytes,
+                BufferUsageFlags.TransferDstBit,
                 MemoryUsage.AutoPreferHost,
                 AllocationCreateFlags.MappedBit |
                 AllocationCreateFlags.HostAccessRandomBit,
-                debugName: $"Hybrid Reflection Counters Frame {frameIndex}",
+                debugName:
+                    $"Hybrid Reflection Counter Readback Frame {frameIndex}",
                 category: MemoryBudgetCategory.DiagnosticsAndDebug);
             _indirectBuffers[frameIndex] = _bufferManager.CreateBuffer(
                 IndirectBytes,
@@ -1086,6 +1110,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         {
             if (!_taskBuffers[index].IsValid ||
                 !_counterBuffers[index].IsValid ||
+                !_counterReadbackBuffers[index].IsValid ||
                 !_indirectBuffers[index].IsValid)
             {
                 return false;
@@ -1216,6 +1241,43 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
         ExecuteMemoryBarrier(commandBuffer, barrier);
     }
 
+    private void RecordCounterReadback(
+        CommandBuffer commandBuffer,
+        int bank)
+    {
+        var countersToTransfer = new MemoryBarrier2
+        {
+            SType = StructureType.MemoryBarrier2,
+            SrcStageMask = PipelineStageFlags2.ComputeShaderBit,
+            SrcAccessMask = AccessFlags2.ShaderStorageWriteBit,
+            DstStageMask = PipelineStageFlags2.TransferBit,
+            DstAccessMask = AccessFlags2.TransferReadBit
+        };
+        ExecuteMemoryBarrier(commandBuffer, countersToTransfer);
+
+        VkBuffer source = _bufferManager.GetBuffer(_counterBuffers[bank]);
+        VkBuffer destination = _bufferManager.GetBuffer(
+            _counterReadbackBuffers[bank]);
+        var copy = new BufferCopy
+        {
+            SrcOffset = 0UL,
+            DstOffset = 0UL,
+            Size = CounterBytes
+        };
+        _context.Api.CmdCopyBuffer(commandBuffer, source, destination, 1u,
+            &copy);
+
+        var transferToHost = new MemoryBarrier2
+        {
+            SType = StructureType.MemoryBarrier2,
+            SrcStageMask = PipelineStageFlags2.TransferBit,
+            SrcAccessMask = AccessFlags2.TransferWriteBit,
+            DstStageMask = PipelineStageFlags2.HostBit,
+            DstAccessMask = AccessFlags2.HostReadBit
+        };
+        ExecuteMemoryBarrier(commandBuffer, transferToHost);
+    }
+
     private void ExecuteMemoryBarrier(
         CommandBuffer commandBuffer,
         MemoryBarrier2 barrier)
@@ -1242,6 +1304,7 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     {
         DestroyBufferArray(_taskBuffers);
         DestroyBufferArray(_counterBuffers);
+        DestroyBufferArray(_counterReadbackBuffers);
         DestroyBufferArray(_indirectBuffers);
         Array.Fill(_counterFrameSubmitted, false);
         Array.Fill(_completedCounters, HybridReflectionCounterSnapshot.Empty);

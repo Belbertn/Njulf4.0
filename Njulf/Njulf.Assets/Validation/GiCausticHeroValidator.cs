@@ -17,6 +17,15 @@ public enum ModelGiCausticParticipationMode : byte
     RoughSpecularReference = 3
 }
 
+public enum ModelGiCausticCasterPolicy : byte
+{
+    Default = 0,
+    Disabled = 1,
+    Mirror = 2,
+    RoughSpecular = 3,
+    DielectricPriority = 4
+}
+
 public enum ModelGiCausticHeroValidationReason : byte
 {
     None = 0,
@@ -87,6 +96,67 @@ public readonly record struct ModelGiCausticHeroValidation(
 /// </summary>
 public static class ModelGiCausticHeroValidator
 {
+    public static ModelGiCausticParticipationMode ResolveParticipation(
+        ModelGiCausticCasterPolicy policy,
+        ModelGiCausticParticipationMode legacyParticipation,
+        ModelGiTransmissionPolicy transmissionPolicy)
+    {
+        if (policy == ModelGiCausticCasterPolicy.Default &&
+            legacyParticipation != ModelGiCausticParticipationMode.None)
+        {
+            return legacyParticipation;
+        }
+        return policy switch
+        {
+            ModelGiCausticCasterPolicy.Disabled =>
+                ModelGiCausticParticipationMode.None,
+            ModelGiCausticCasterPolicy.Mirror =>
+                ModelGiCausticParticipationMode.MirrorHero,
+            ModelGiCausticCasterPolicy.RoughSpecular =>
+                ModelGiCausticParticipationMode.RoughSpecularReference,
+            ModelGiCausticCasterPolicy.DielectricPriority =>
+                ModelGiCausticParticipationMode.ClosedDielectricHero,
+            ModelGiCausticCasterPolicy.Default
+                when transmissionPolicy == ModelGiTransmissionPolicy.Volume =>
+                ModelGiCausticParticipationMode.ClosedDielectricHero,
+            _ => ModelGiCausticParticipationMode.None
+        };
+    }
+
+    public static ModelGiCausticHeroValidation Validate(
+        ModelGiCausticCasterPolicy policy,
+        ModelOpticalBoundaryKind boundaryKind,
+        ModelGiCausticParticipationMode legacyParticipation,
+        ModelAlphaMode alphaMode,
+        ModelGiTransmissionPolicy transmissionPolicy,
+        float roughness,
+        float ior,
+        float thicknessFactor,
+        float attenuationDistance,
+        Vector4 attenuationColor,
+        in ModelGiCausticHeroTopologyEvidence evidence)
+    {
+        ModelGiCausticParticipationMode participation = ResolveParticipation(
+            policy, legacyParticipation, transmissionPolicy);
+        if (participation == ModelGiCausticParticipationMode.None)
+            return Reject(ModelGiCausticHeroValidationReason.Disabled);
+        if (!evidence.IsCurrent)
+            return Reject(ModelGiCausticHeroValidationReason.MissingTopologyEvidence);
+        if (!evidence.IsStructurallyValid)
+            return Reject(ModelGiCausticHeroValidationReason.MalformedTopologyEvidence);
+        return ValidateResolved(
+            participation,
+            boundaryKind,
+            alphaMode,
+            transmissionPolicy,
+            roughness,
+            ior,
+            thicknessFactor,
+            attenuationDistance,
+            attenuationColor,
+            evidence.Facts);
+    }
+
     public static ModelGiCausticHeroValidation Validate(
         ModelGiCausticParticipationMode participation,
         ModelAlphaMode alphaMode,
@@ -104,8 +174,9 @@ public static class ModelGiCausticHeroValidator
             return Reject(ModelGiCausticHeroValidationReason.MissingTopologyEvidence);
         if (!evidence.IsStructurallyValid)
             return Reject(ModelGiCausticHeroValidationReason.MalformedTopologyEvidence);
-        return Validate(
+        return ValidateResolved(
             participation,
+            ModelOpticalBoundaryKind.ClosedVolume,
             alphaMode,
             transmissionPolicy,
             roughness,
@@ -118,6 +189,31 @@ public static class ModelGiCausticHeroValidator
 
     public static ModelGiCausticHeroValidation Validate(
         ModelGiCausticParticipationMode participation,
+        ModelAlphaMode alphaMode,
+        ModelGiTransmissionPolicy transmissionPolicy,
+        float roughness,
+        float ior,
+        float thicknessFactor,
+        float attenuationDistance,
+        Vector4 attenuationColor,
+        in ModelGiCausticHeroGeometryFacts geometry)
+    {
+        return ValidateResolved(
+            participation,
+            ModelOpticalBoundaryKind.ClosedVolume,
+            alphaMode,
+            transmissionPolicy,
+            roughness,
+            ior,
+            thicknessFactor,
+            attenuationDistance,
+            attenuationColor,
+            geometry);
+    }
+
+    private static ModelGiCausticHeroValidation ValidateResolved(
+        ModelGiCausticParticipationMode participation,
+        ModelOpticalBoundaryKind boundaryKind,
         ModelAlphaMode alphaMode,
         ModelGiTransmissionPolicy transmissionPolicy,
         float roughness,
@@ -158,19 +254,18 @@ public static class ModelGiCausticHeroValidator
                 : Reject(ModelGiCausticHeroValidationReason.UnsupportedRoughness);
         }
 
-        if (!geometry.IsClosedManifold)
+        bool water = boundaryKind == ModelOpticalBoundaryKind.WaterSurface;
+        if (!water && !geometry.IsClosedManifold)
             return Reject(ModelGiCausticHeroValidationReason.NotClosedManifold);
-        if (!geometry.HasConsistentWinding)
+        if (!water && !geometry.HasConsistentWinding)
             return Reject(ModelGiCausticHeroValidationReason.InconsistentWinding);
         if (!geometry.HasGeometricNormals)
             return Reject(ModelGiCausticHeroValidationReason.MissingNormals);
-        if (geometry.HasUnsupportedNestedMedium)
-            return Reject(ModelGiCausticHeroValidationReason.NestedMedium);
         if (ior is <= 1f or > 4f)
             return Reject(ModelGiCausticHeroValidationReason.InvalidIor);
-        if (thicknessFactor <= 0f || transmissionPolicy != ModelGiTransmissionPolicy.Volume)
+        if (transmissionPolicy != ModelGiTransmissionPolicy.Volume)
             return Reject(ModelGiCausticHeroValidationReason.MissingThickness);
-        return roughness is >= 0f and <= 0.04f
+        return roughness is >= 0f and <= 1f
             ? Accept()
             : Reject(ModelGiCausticHeroValidationReason.UnsupportedRoughness);
     }
@@ -194,8 +289,8 @@ public static class ModelGiCausticHeroValidator
 /// </summary>
 public static class ModelGiCausticHeroTopologyAnalyzer
 {
-    public const uint CurrentSchemaVersion = 1u;
-    public const uint CurrentAlgorithmVersion = 1u;
+    public const uint CurrentSchemaVersion = 2u;
+    public const uint CurrentAlgorithmVersion = 2u;
 
     private const ulong HashOffset = 14695981039346656037UL;
     private const ulong HashPrime = 1099511628211UL;

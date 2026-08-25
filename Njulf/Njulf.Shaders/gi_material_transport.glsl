@@ -28,6 +28,9 @@ const uint GI_MATERIAL_GEOMETRY_DECAL = 1u << 18u;
 const uint GI_MATERIAL_THIN_SURFACE_TRANSMISSION = 1u << 19u;
 const uint GI_MATERIAL_TRANSMISSION_PROFILE_VALID = 1u << 20u;
 const uint GI_MATERIAL_HAS_TRANSMISSION_TEXTURE = 1u << 21u;
+const uint GI_MATERIAL_VOLUME_TRANSMISSION = 1u << 22u;
+const uint GI_MATERIAL_WATER_SURFACE_BOUNDARY = 1u << 23u;
+const uint GI_MATERIAL_OPTICAL_POLICY_PAYLOAD = 1u << 28u;
 
 const float GI_MATERIAL_PI = 3.14159265358979323846;
 // Cosine-weighted hemispherical average of 1 - SchlickFresnel(F0, NdotL).

@@ -51,8 +51,10 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             bool rayVariant =
-                sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
-                    DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery &&
+                (sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
+                    DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
+                 sceneData.EffectiveThickTransmissionMode ==
+                    ThickTransmissionMode.RayQuery) &&
                 _meshPipeline.RayTransparentPipelinesAvailable &&
                 _raySceneDescriptors?.IsAvailable == true;
             if (sceneData.TransparentReceiveGlobalIllumination ||
@@ -129,9 +131,27 @@ namespace Njulf.Rendering.Pipeline
                 MeshletDrawBufferBaseIndex = BindlessIndex.TransparentMeshletDrawBufferBase,
                 LightCount = (uint)sceneData.LightCount,
                 LocalLightCount = (uint)sceneData.LocalLightCount,
-                HiZMipCount = sceneData.HiZMipCount,
-                OcclusionCullingEnabled = 0u,
-                OcclusionBias = sceneData.OcclusionBias,
+                // Hi-Z is disabled for transparent task culling, so this word
+                // carries the exact bounded optical traversal limits to the
+                // fragment stage without changing the push-constant ABI.
+                HiZMipCount = GPUForwardPushConstants.PackThickTransmissionLimits(
+                    _meshPipeline.Settings.Transparency
+                        .ThickTransmissionMaximumInterfaces,
+                    _meshPipeline.Settings.Transparency
+                        .ThickTransmissionMaximumMediaDepth,
+                    _meshPipeline.Settings.Transparency
+                        .ThickTransmissionMaximumCandidatesPerInterface),
+                // Low bits remain Hi-Z off. Higher bits carry the exact
+                // frame-local thick-transmission task budget.
+                OcclusionCullingEnabled =
+                    GPUForwardPushConstants.PackThickTransmissionTaskBudget(
+                        _meshPipeline.Settings.Transparency
+                            .ThickTransmissionRayTaskBudget),
+                // Transparent task culling is disabled; this otherwise-unused
+                // word carries the bounded optical path distance without
+                // growing the frozen 256-byte forward push ABI.
+                OcclusionBias = _meshPipeline.Settings.Transparency
+                    .ThickTransmissionMaximumDistance,
                 DebugAndAoFlags = GPUForwardPushConstants.PackDebugAndAoFlags(
                     sceneData.DebugViewMode,
                     ambientOcclusionEnabled: false,
@@ -148,7 +168,12 @@ namespace Njulf.Rendering.Pipeline
                         sceneData.DecalReceiveGlobalIllumination,
                     ddgiLayeredReceiverCountersEnabled:
                         sceneData.TransparentDdgiReceiverCountersEnabled,
-                    decalReceiveShadows: sceneData.DecalReceiveShadows)
+                    decalReceiveShadows: sceneData.DecalReceiveShadows,
+                    thickTransmissionRayQueryEnabled:
+                        sceneData.EffectiveThickTransmissionMode ==
+                            ThickTransmissionMode.RayQuery,
+                    thickTransmissionDispersionEnabled:
+                        sceneData.ThickTransmissionDispersionEnabled)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();

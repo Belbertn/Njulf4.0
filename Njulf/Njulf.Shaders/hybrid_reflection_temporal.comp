@@ -190,8 +190,15 @@ void main()
         previousReason == HYBRID_REFLECTION_REASON_RESOLUTION_SKIP ||
         previousReason == HYBRID_REFLECTION_REASON_RAY_BUDGET;
     uint previousSparseAge = previousSparse ? previousAge : 0u;
+    float motionPixels = length(motion * dimensions);
+    float sparseMotionWeight = 1.0 - smoothstep(
+        0.25, 1.5, motionPixels);
+    uint sparseHistoryAgeLimit = motionPixels <= 0.25
+        ? pc.MaximumHistoryLength
+        : min(pc.MaximumHistoryLength, 2u);
     bool reuseSparseHistory = historyValid && previousGeometricSource &&
-        sparseCurrent && previousSparseAge < pc.MaximumHistoryLength;
+        sparseCurrent && sparseMotionWeight > 1.0e-3 &&
+        previousSparseAge < sparseHistoryAgeLimit;
     // A cadence or budget skip is not a measured reflection. Once geometric
     // history expires, use the current analytic fallback directly instead of
     // retaining a stale geometric source through the generic accumulator.
@@ -245,9 +252,8 @@ void main()
         : 0.0;
     if (reuseSparseHistory)
     {
-        // Do not blend the analytic environment fallback produced for this
-        // unmeasured frame into validated scene geometry. Surface validation,
-        // confidence decay, and the finite sparse age bound retire stale hits.
+        // Sparse history is handled separately below. Keeping it out of the
+        // generic accumulator avoids applying two independent history weights.
         historyWeight = 0.0;
     }
     else if (currentSource != previousSource && currentValid)
@@ -281,30 +287,43 @@ void main()
         abs(historyLuminance - currentLuminance) > luminanceLimit)
         historyWeight *= 0.5;
 
+    float sparseHistoryWeight = reuseSparseHistory
+        ? sparseMotionWeight
+        : 0.0;
     vec3 accumulated = reuseSparseHistory
-        ? clippedHistory
+        ? mix(current.rgb, clippedHistory, sparseHistoryWeight)
         : mix(current.rgb, clippedHistory, historyWeight);
+    float currentConfidence =
+        HybridMetadataConfidence(currentMetadata.x);
+    float sparsePreviousConfidence =
+        clamp(previous.a * 0.97, 0.0, 1.0);
     float confidence = reuseSparseHistory
-        ? clamp(previous.a * 0.97, 0.0, 1.0)
-        : mix(HybridMetadataConfidence(currentMetadata.x),
+        ? mix(currentConfidence, sparsePreviousConfidence,
+            sparseHistoryWeight)
+        : mix(currentConfidence,
             previous.a, historyWeight);
     float luminance = HybridLuminance(accumulated);
     vec2 boundedPreviousMoments = reuseSparseHistory
         ? vec2(historyLuminance, historyLuminance * historyLuminance)
         : previousMoments;
     vec2 moments = reuseSparseHistory
-        ? boundedPreviousMoments
+        ? mix(vec2(luminance, luminance * luminance),
+            boundedPreviousMoments, sparseHistoryWeight)
         : mix(vec2(luminance, luminance * luminance),
             boundedPreviousMoments, historyWeight);
+    bool sparseHistoryDominant =
+        reuseSparseHistory && sparseHistoryWeight >= 0.5;
     uint age = reuseSparseHistory
-        ? min(previousSparseAge + 1u, pc.MaximumHistoryLength)
+        ? (sparseHistoryDominant
+            ? min(previousSparseAge + 1u, sparseHistoryAgeLimit)
+            : 0u)
         : (historyWeight > 0.0
             ? (previousSparse
                 ? 1u
                 : min(previousAge + 1u, pc.MaximumHistoryLength))
             : 0u);
     bool outputValid = currentValid || historyValid;
-    uint outputSource = reuseSparseHistory
+    uint outputSource = sparseHistoryDominant
         ? previousSource
         : currentSource;
 

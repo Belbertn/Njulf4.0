@@ -37,6 +37,10 @@ public static class GiMaterialReferenceEvaluator
         bool transmissionEnabled = material.FeatureFlags.HasFlag(MaterialFeatureFlags.Transmission);
         bool supportedThinTransmission = transmissionEnabled &&
             material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface;
+        bool supportedVolumeTransmission = transmissionEnabled &&
+            material.Extensions.TransmissionPolicy == GiTransmissionPolicy.Volume;
+        bool supportedPhysicalTransmission = supportedThinTransmission ||
+            supportedVolumeTransmission;
         bool specularEnabled = material.FeatureFlags.HasFlag(MaterialFeatureFlags.Specular);
         bool iorEnabled =
             transmissionEnabled ||
@@ -45,7 +49,7 @@ public static class GiMaterialReferenceEvaluator
             ? EvaluateDirectionalDiffuseBase(
                 new Vector3(baseColor.X, baseColor.Y, baseColor.Z),
                 metallic,
-                supportedThinTransmission ? material.Extensions.TransmissionFactor : 0f,
+                supportedPhysicalTransmission ? material.Extensions.TransmissionFactor : 0f,
                 clearcoatEnabled ? material.Extensions.ClearcoatFactor : 0f,
                 sheenEnabled ? material.Extensions.SheenColorFactor : Vector3.Zero)
             : Vector3.Zero;
@@ -62,7 +66,7 @@ public static class GiMaterialReferenceEvaluator
                 iorEnabled ? material.Extensions.Ior : 1.5f,
                 specularEnabled ? material.Extensions.SpecularFactor : 1f,
                 specularEnabled ? material.Extensions.SpecularColorFactor : Vector3.One,
-                supportedThinTransmission ? material.Extensions.TransmissionFactor : 0f,
+                supportedPhysicalTransmission ? material.Extensions.TransmissionFactor : 0f,
                 clearcoatEnabled ? material.Extensions.ClearcoatFactor : 0f,
                 sheenEnabled ? material.Extensions.SheenColorFactor : Vector3.Zero,
                 inputs.NdotV)
@@ -108,6 +112,17 @@ public static class GiMaterialReferenceEvaluator
         {
             flags |= GiMaterialTransportFlags.ThinSurfaceTransmission |
                      GiMaterialTransportFlags.TransmissionProfileValid;
+        }
+        if (material.Extensions.TransmissionPolicy == GiTransmissionPolicy.Volume &&
+            material.Extensions.TransmissionFactor > 0f)
+        {
+            flags |= GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse |
+                     GiMaterialTransportFlags.VolumeTransmission;
+            if (material.Extensions.OpticalBoundary ==
+                OpticalBoundaryKind.WaterSurface)
+            {
+                flags |= GiMaterialTransportFlags.WaterSurfaceBoundary;
+            }
         }
 
         return new GiSurfaceSample(
@@ -452,16 +467,31 @@ public static class MaterialDefinitionValidator
             TransmissionPolicy = source.Extensions.TransmissionFactor <= 0f
                 ? GiTransmissionPolicy.None
                 : source.Extensions.TransmissionPolicy,
+            OpticalBoundary = Enum.IsDefined(source.Extensions.OpticalBoundary)
+                ? source.Extensions.OpticalBoundary
+                : OpticalBoundaryKind.ClosedVolume,
+            CausticCasterPolicy = Enum.IsDefined(
+                    source.Extensions.CausticCasterPolicy)
+                ? source.Extensions.CausticCasterPolicy
+                : GiCausticCasterPolicy.Default,
             CausticParticipation = Enum.IsDefined(source.Extensions.CausticParticipation)
                 ? source.Extensions.CausticParticipation
                 : GiCausticParticipationMode.None,
             ThinTransmissionTint = Clamp01(source.Extensions.ThinTransmissionTint),
-            Ior = Math.Clamp(source.Extensions.Ior, 1f, 3f),
+            Ior = Math.Clamp(source.Extensions.Ior, 1f, 4f),
             ThicknessFactor = Math.Max(source.Extensions.ThicknessFactor, 0f),
             AttenuationDistance = float.IsPositiveInfinity(source.Extensions.AttenuationDistance)
                 ? float.PositiveInfinity
                 : Math.Max(source.Extensions.AttenuationDistance, 0f),
             AttenuationColor = Clamp01(source.Extensions.AttenuationColor),
+            WaterNormalVelocity0 = Clamp(
+                source.Extensions.WaterNormalVelocity0, -32f, 32f),
+            WaterNormalVelocity1 = Clamp(
+                source.Extensions.WaterNormalVelocity1, -32f, 32f),
+            WaterNormalUvScale0 = Math.Clamp(
+                source.Extensions.WaterNormalUvScale0, 0.001f, 1024f),
+            WaterNormalUvScale1 = Math.Clamp(
+                source.Extensions.WaterNormalUvScale1, 0.001f, 1024f),
             Transmission = ValidateBinding(source.Extensions.Transmission, "Extensions.Transmission"),
             Thickness = ValidateBinding(source.Extensions.Thickness, "Extensions.Thickness"),
             SpecularFactor = Saturate(source.Extensions.SpecularFactor),
@@ -558,6 +588,14 @@ public static class MaterialDefinitionValidator
         if (!float.IsFinite(extension.AttenuationDistance) && !float.IsPositiveInfinity(extension.AttenuationDistance))
             throw new ArgumentOutOfRangeException(nameof(extension.AttenuationDistance), "Attenuation distance must be finite or positive infinity.");
         EnsureFinite(extension.AttenuationColor, nameof(extension.AttenuationColor));
+        EnsureFinite(extension.WaterNormalVelocity0,
+            nameof(extension.WaterNormalVelocity0));
+        EnsureFinite(extension.WaterNormalVelocity1,
+            nameof(extension.WaterNormalVelocity1));
+        EnsureFinite(extension.WaterNormalUvScale0,
+            nameof(extension.WaterNormalUvScale0));
+        EnsureFinite(extension.WaterNormalUvScale1,
+            nameof(extension.WaterNormalUvScale1));
         EnsureFinite(extension.SpecularFactor, nameof(extension.SpecularFactor));
         EnsureFinite(extension.SpecularColorFactor, nameof(extension.SpecularColorFactor));
         EnsureFinite(extension.IridescenceFactor, nameof(extension.IridescenceFactor));
@@ -576,6 +614,9 @@ public static class MaterialDefinitionValidator
         Saturate(value.W));
 
     private static Vector3 Clamp01(Vector3 value) => Vector3.Clamp(value, Vector3.Zero, Vector3.One);
+    private static Vector2 Clamp(Vector2 value, float minimum, float maximum) =>
+        new(Math.Clamp(value.X, minimum, maximum),
+            Math.Clamp(value.Y, minimum, maximum));
     private static float Saturate(float value) => Math.Clamp(value, 0f, 1f);
 
     private static void EnsureFinite(float value, string name)

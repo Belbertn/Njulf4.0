@@ -193,11 +193,15 @@ public sealed class ProcessedMeshAssetBuilder
         ModelGiCausticHeroTopologyEvidence topologyEvidence = default;
         string topologyDetail = "participation-disabled";
         ModelGiCausticHeroValidation causticValidation;
-        if (material.GiCausticParticipation ==
-            ModelGiCausticParticipationMode.None)
+        ModelGiCausticParticipationMode effectiveParticipation =
+            ModelGiCausticHeroValidator.ResolveParticipation(
+                material.GiCausticCasterPolicy,
+                material.GiCausticParticipation,
+                material.GiTransmissionPolicy);
+        if (effectiveParticipation == ModelGiCausticParticipationMode.None)
         {
             causticValidation = ModelGiCausticHeroValidator.Validate(
-                material.GiCausticParticipation,
+                effectiveParticipation,
                 material.AlphaMode,
                 material.GiTransmissionPolicy,
                 material.Roughness,
@@ -223,6 +227,8 @@ public sealed class ProcessedMeshAssetBuilder
         {
             topologyDetail = "topology-evidence-authenticated";
             causticValidation = ModelGiCausticHeroValidator.Validate(
+                material.GiCausticCasterPolicy,
+                material.OpticalBoundaryKind,
                 material.GiCausticParticipation,
                 material.AlphaMode,
                 material.GiTransmissionPolicy,

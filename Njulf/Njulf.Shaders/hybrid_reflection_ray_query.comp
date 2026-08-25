@@ -28,7 +28,7 @@ bool GiCausticFinite(vec3 value)
 }
 
 #include "directional_ray_visibility.glsl"
-#include "gi_caustic_ray_query.glsl"
+#include "ray_query_surface.glsl"
 #include "hybrid_reflection_compute.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
@@ -66,7 +66,7 @@ bool HybridTraceNearest(
     vec3 origin,
     vec3 direction,
     float maximumDistance,
-    out GiCausticRayHit hit)
+    out RayQuerySurfaceHit hit)
 {
     rayQueryEXT query;
     rayQueryInitializeEXT(query, SceneTlas, gl_RayFlagsNoneEXT, 0xff,
@@ -93,7 +93,7 @@ bool HybridTraceNearest(
     {
         return false;
     }
-    return GiCausticResolveCommittedHit(query, origin, direction, hit);
+    return RayQuerySurfaceResolveCommittedHit(query, origin, direction, hit);
 }
 
 bool HybridVisible(vec3 origin, vec3 direction, float maximumDistance)
@@ -122,7 +122,7 @@ bool HybridVisible(vec3 origin, vec3 direction, float maximumDistance)
         gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
-vec3 HybridSampleEmissive(GiCausticRayHit hit)
+vec3 HybridSampleEmissive(RayQuerySurfaceHit hit)
 {
     vec3 sampleValue = vec3(1.0);
     if (GiMaterialHasFlag(hit.Material.TransportFlags,
@@ -132,7 +132,7 @@ vec3 HybridSampleEmissive(GiCausticRayHit hit)
     {
         sampleValue = textureLod(
             BindlessTextures[nonuniformEXT(hit.Material.EmissiveTextureIndex)],
-            GiCausticMaterialUv(hit,
+            RayQuerySurfaceMaterialUv(hit,
                 hit.Material.TextureTexCoordSets.w,
                 hit.Material.EmissiveOffsetScale,
                 hit.Material.TextureRotations.w),
@@ -168,12 +168,12 @@ vec3 HybridEvaluatePbrLight(
     return (diffuse + specular) * incidentRadiance * nDotL;
 }
 
-vec3 HybridShadeHit(GiCausticRayHit hit, vec3 incomingDirection)
+vec3 HybridShadeHit(RayQuerySurfaceHit hit, vec3 incomingDirection)
 {
-    vec3 normal = GiCausticOrientedNormal(hit);
+    vec3 normal = RayQuerySurfaceOrientedNormal(hit);
     vec3 viewDirection = normalize(-incomingDirection);
-    vec4 baseColor = GiCausticSampleBaseColor(hit);
-    vec2 metallicRoughness = GiCausticSampleMetallicRoughness(hit);
+    vec4 baseColor = RayQuerySurfaceSampleBaseColor(hit);
+    vec2 metallicRoughness = RayQuerySurfaceSampleMetallicRoughness(hit);
     vec3 albedo = max(baseColor.rgb, vec3(0.0));
     float metallic = metallicRoughness.x;
     float roughness = clamp(metallicRoughness.y, 0.04, 1.0);
@@ -278,7 +278,7 @@ void main()
         return;
     }
     vec3 geometricNormal = HybridReflectionPayloadGeometricNormal(payload);
-    vec3 shadingNormal = HybridReflectionPayloadShadingNormal(payload);
+    vec3 shadingNormal = HybridReflectionTraceNormal(payload);
     vec3 incident = normalize(
         worldPosition - pc.CameraPositionAndMaximumDistance.xyz);
     vec3 reflectionDirection = normalize(reflect(incident, shadingNormal));
@@ -290,7 +290,7 @@ void main()
         return;
     }
 
-    GiCausticRayHit hit;
+    RayQuerySurfaceHit hit;
     if (HybridTraceNearest(
             worldPosition + geometricNormal * 0.004,
             reflectionDirection,

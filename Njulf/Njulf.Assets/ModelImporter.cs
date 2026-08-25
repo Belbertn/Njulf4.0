@@ -1673,10 +1673,22 @@ namespace Njulf.Assets
             target.TransmissionFactor = material.TransmissionFactor ?? target.TransmissionFactor;
             target.GiTransmissionPolicy = material.GiTransmissionPolicy ?? target.GiTransmissionPolicy;
             target.GiCausticParticipation = material.GiCausticParticipation ?? target.GiCausticParticipation;
+            target.GiCausticCasterPolicy = material.GiCausticCasterPolicy ??
+                                             target.GiCausticCasterPolicy;
+            target.OpticalBoundaryKind = material.OpticalBoundaryKind ??
+                                         target.OpticalBoundaryKind;
             target.ThinTransmissionTint = material.ThinTransmissionTint ?? target.ThinTransmissionTint;
             target.Ior = material.Ior ?? target.Ior;
             target.ThicknessFactor = material.ThicknessFactor ?? target.ThicknessFactor;
             target.AttenuationDistance = material.AttenuationDistance ?? target.AttenuationDistance;
+            target.WaterNormalVelocity0 = material.WaterNormalVelocity0 ??
+                                          target.WaterNormalVelocity0;
+            target.WaterNormalVelocity1 = material.WaterNormalVelocity1 ??
+                                          target.WaterNormalVelocity1;
+            target.WaterNormalUvScale0 = material.WaterNormalUvScale0 ??
+                                         target.WaterNormalUvScale0;
+            target.WaterNormalUvScale1 = material.WaterNormalUvScale1 ??
+                                         target.WaterNormalUvScale1;
             target.AttenuationColor = material.AttenuationColor ?? target.AttenuationColor;
             target.TransmissionTexturePath = material.TransmissionTexturePath ?? target.TransmissionTexturePath;
             target.ThicknessTexturePath = material.ThicknessTexturePath ?? target.ThicknessTexturePath;
@@ -3002,6 +3014,10 @@ namespace Njulf.Assets
         /// </summary>
         public ModelGiCausticParticipationMode GiCausticParticipation { get; set; } =
             ModelGiCausticParticipationMode.None;
+        public ModelGiCausticCasterPolicy GiCausticCasterPolicy { get; set; } =
+            ModelGiCausticCasterPolicy.Default;
+        public ModelOpticalBoundaryKind OpticalBoundaryKind { get; set; } =
+            ModelOpticalBoundaryKind.ClosedVolume;
         public Vector4 ThinTransmissionTint { get; set; } = Vector4.One;
         public float Ior { get; set; } = 1.5f;
         public float ThicknessFactor { get; set; }
@@ -3014,6 +3030,10 @@ namespace Njulf.Assets
         [JsonConverter(typeof(PositiveInfinityAsNullJsonConverter))]
         public float AttenuationDistance { get; set; } = float.PositiveInfinity;
         public Vector4 AttenuationColor { get; set; } = new Vector4(1f, 1f, 1f, 1f);
+        public Vector2 WaterNormalVelocity0 { get; set; } = new(0.035f, 0.012f);
+        public Vector2 WaterNormalVelocity1 { get; set; } = new(-0.018f, 0.027f);
+        public float WaterNormalUvScale0 { get; set; } = 1f;
+        public float WaterNormalUvScale1 { get; set; } = 1.73f;
         public string? TransmissionTexturePath { get; set; }
         public string? ThicknessTexturePath { get; set; }
         public ModelTextureSlot? TransmissionTexture { get; set; }
@@ -3146,6 +3166,12 @@ namespace Njulf.Assets
         Unsupported
     }
 
+    public enum ModelOpticalBoundaryKind
+    {
+        ClosedVolume = 0,
+        WaterSurface = 1
+    }
+
     public sealed class ModelAnimationImportDiagnostics
     {
         internal static ModelAnimationImportDiagnostics Empty { get; } = new(
@@ -3272,11 +3298,17 @@ namespace Njulf.Assets
         public float? TransmissionFactor { get; set; }
         public ModelGiTransmissionPolicy? GiTransmissionPolicy { get; set; }
         public ModelGiCausticParticipationMode? GiCausticParticipation { get; set; }
+        public ModelGiCausticCasterPolicy? GiCausticCasterPolicy { get; set; }
+        public ModelOpticalBoundaryKind? OpticalBoundaryKind { get; set; }
         public Vector4? ThinTransmissionTint { get; set; }
         public float? Ior { get; set; }
         public float? ThicknessFactor { get; set; }
         public float? AttenuationDistance { get; set; }
         public Vector4? AttenuationColor { get; set; }
+        public Vector2? WaterNormalVelocity0 { get; set; }
+        public Vector2? WaterNormalVelocity1 { get; set; }
+        public float? WaterNormalUvScale0 { get; set; }
+        public float? WaterNormalUvScale1 { get; set; }
         public string? TransmissionTexturePath { get; set; }
         public string? ThicknessTexturePath { get; set; }
         public ModelTextureSlot? TransmissionTexture { get; set; }

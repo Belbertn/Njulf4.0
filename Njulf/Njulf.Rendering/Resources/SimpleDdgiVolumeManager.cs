@@ -1932,9 +1932,13 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                         regionRayCount,
                         hotColdAdmission.ColdExitFraction,
                         region.UsesHotColdLayout,
-                        region.UsesRecursiveGlossySidecar
+                        (region.UsesRecursiveGlossySidecar
                             ? sizeof(uint)
-                            : 0));
+                            : 0) +
+                        (region.UsesVolumePathSidecar
+                            ? SimpleDdgiStorageLayoutCompiler
+                                .VolumePathSidecarWords * sizeof(uint)
+                            : 0)));
             }
 
             string mirrorFallback = !string.IsNullOrEmpty(_sampledAtlasFallbackReason)
@@ -2018,7 +2022,9 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 SourceCacheAdmissionSampleFrameSerial =
                     hotColdAdmission.LastCompletedSampleFrameSerial,
                 SourceCacheGlossyMaterialSidecarBytes =
-                    _capacityPlan.TransportSourceCacheGlossyMaterialSidecarBytes
+                    _capacityPlan.TransportSourceCacheGlossyMaterialSidecarBytes,
+                SourceCacheVolumePathSidecarBytes =
+                    _capacityPlan.TransportSourceCacheVolumePathSidecarBytes
             };
         }
 
@@ -12866,7 +12872,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                     _storageLayout.DirectionCodebookVersion,
                     hotColdLayout: region.UsesHotColdLayout,
                     recursiveGlossySidecar:
-                        region.UsesRecursiveGlossySidecar);
+                        region.UsesRecursiveGlossySidecar,
+                    volumePathSidecar: region.UsesVolumePathSidecar);
                 GPUSimpleDdgiVolume volume = _volumeScratch[volumeIndex];
                 volume.CacheLayout = new Vector4(
                     PackHeaderWord(checked((uint)region.BaseWord)),

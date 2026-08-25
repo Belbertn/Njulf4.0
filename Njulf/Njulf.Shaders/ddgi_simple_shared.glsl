@@ -230,7 +230,6 @@ const uint SIMPLE_DDGI_VISIBILITY_TEXELS = 16u;
 const uint SIMPLE_DDGI_MAX_RAYS_PER_PROBE = 256u;
 const uint SIMPLE_DDGI_LEGACY_RAY_RESULT_STRIDE_WORDS = 8u;
 const uint SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS = 5u;
-const uint SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION = 7u;
 const uint SIMPLE_DDGI_HEADER_WORDS = 64u;
 const uint SIMPLE_DDGI_FLAGS_WORD = 14u;
 const uint SIMPLE_DDGI_VOLUME_STRIDE_WORDS = 28u;
@@ -2321,6 +2320,11 @@ const uint SIMPLE_DDGI_TRANSPORT_CACHE_DIRECTION_EPOCH_MASK =
 // Forward debug ABI value. Kept here because this include is parsed before the
 // forward shader declares its public debug-view constants.
 const uint SIMPLE_DDGI_DEBUG_SOURCE_CACHE_RADIANCE = 125u;
+const uint SIMPLE_DDGI_VOLUME_PATH_VALID_BIT = 1u << 0u;
+const uint SIMPLE_DDGI_VOLUME_PATH_KNOWN_FLAG_MASK =
+    SIMPLE_DDGI_VOLUME_PATH_VALID_BIT;
+
+vec3 UnpackSimpleDdgiTransportOctDirection(uint packed);
 
 struct SimpleDdgiTransportRayCache
 {
@@ -2333,6 +2337,9 @@ struct SimpleDdgiTransportRayCache
     float materialOcclusion;
     vec3 specularF0;
     float roughness;
+    vec3 endpointOffset;
+    vec3 pathThroughput;
+    uint volumePathFlags;
     // The high byte of the packed transmission word carries the complete
     // source sequence cardinality.  The RGB transmission payload remains
     // unchanged; retaining this per-probe value in every cache entry lets the
@@ -2385,6 +2392,77 @@ bool ReadSimpleDdgiRecursiveGlossyMaterialSidecar(
     specularF0 = material.rgb;
     roughness = material.a;
     return !any(isnan(material)) && !any(isinf(material));
+}
+
+bool ReadSimpleDdgiVolumePathSidecar(
+    uint bufferIndex,
+    uint cacheProbeBaseWordPlusOne,
+    uint directionRayIndex,
+    uint raysPerProbe,
+    uint cacheStrideWords,
+    uint cacheLayoutFlags,
+    float defaultDistance,
+    out vec3 endpointOffset,
+    inout vec3 terminalDirection,
+    out vec3 pathThroughput,
+    out uint pathFlags)
+{
+    vec3 defaultDirection = terminalDirection;
+    endpointOffset = defaultDirection * defaultDistance;
+    terminalDirection = defaultDirection;
+    pathThroughput = vec3(1.0);
+    pathFlags = 0u;
+    if (!SimpleDdgiStorageUsesVolumePathSidecar(cacheLayoutFlags))
+        return true;
+
+    uint sidecarWord;
+    if (bufferIndex == 0u ||
+        !TryResolveSimpleDdgiVolumePathSidecarAddressFromProbeBase(
+            cacheProbeBaseWordPlusOne,
+            directionRayIndex,
+            raysPerProbe,
+            cacheStrideWords,
+            cacheLayoutFlags,
+            sidecarWord))
+    {
+        return false;
+    }
+
+    uint throughputBAndFlags = ReadStorageWordUniform(
+        bufferIndex, sidecarWord + 4u);
+    pathFlags = throughputBAndFlags >> 16u;
+    if (pathFlags == 0u)
+        return true;
+    if ((pathFlags & ~SIMPLE_DDGI_VOLUME_PATH_KNOWN_FLAG_MASK) != 0u ||
+        (pathFlags & SIMPLE_DDGI_VOLUME_PATH_VALID_BIT) == 0u)
+    {
+        return false;
+    }
+
+    vec3 endpointDirection = UnpackSimpleDdgiTransportOctDirection(
+        ReadStorageWordUniform(bufferIndex, sidecarWord + 0u));
+    float endpointDistance = uintBitsToFloat(
+        ReadStorageWordUniform(bufferIndex, sidecarWord + 1u));
+    terminalDirection = UnpackSimpleDdgiTransportOctDirection(
+        ReadStorageWordUniform(bufferIndex, sidecarWord + 2u));
+    pathThroughput = vec3(
+        unpackHalf2x16(ReadStorageWordUniform(
+            bufferIndex, sidecarWord + 3u)),
+        unpackHalf2x16(throughputBAndFlags & 0xffffu).x);
+    if (any(isnan(endpointDirection)) || any(isinf(endpointDirection)) ||
+        dot(endpointDirection, endpointDirection) <= 1.0e-12 ||
+        isnan(endpointDistance) || isinf(endpointDistance) ||
+        endpointDistance < 0.0 ||
+        any(isnan(terminalDirection)) || any(isinf(terminalDirection)) ||
+        dot(terminalDirection, terminalDirection) <= 1.0e-12 ||
+        any(isnan(pathThroughput)) || any(isinf(pathThroughput)) ||
+        any(lessThan(pathThroughput, vec3(0.0))))
+    {
+        return false;
+    }
+
+    endpointOffset = endpointDirection * endpointDistance;
+    return true;
 }
 
 uint PackSimpleDdgiTransportCacheHitKind(float hitKind)
@@ -2471,7 +2549,7 @@ uint SimpleDdgiRayResultStrideWords(SimpleDdgiVolume volume)
 #else
     uint abi = (volume.cacheLayoutFlags & SIMPLE_DDGI_CACHE_ABI_MASK) >>
         SIMPLE_DDGI_CACHE_ABI_SHIFT;
-    return abi == SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION
+    return abi == SIMPLE_DDGI_STORAGE_ABI_PACKED
         ? SIMPLE_DDGI_RAY_RESULT_STRIDE_WORDS
         : SIMPLE_DDGI_LEGACY_RAY_RESULT_STRIDE_WORDS;
 #endif
@@ -2753,6 +2831,10 @@ void WriteSimpleDdgiTransportRayCache(
     float materialOcclusion,
     vec3 specularF0,
     float roughness,
+    vec3 pathEndpointOffset,
+    vec3 pathTerminalDirection,
+    vec3 pathThroughput,
+    uint volumePathFlags,
     float hitKind,
     uint probeGeneration,
     uint sourceLightingGeneration,
@@ -2789,6 +2871,19 @@ void WriteSimpleDdgiTransportRayCache(
             glossySidecarWord);
     if (!glossySidecarAddressValid)
         return;
+    uint volumePathSidecarWord = 0u;
+    bool volumePathSidecarEnabled =
+        SimpleDdgiStorageUsesVolumePathSidecar(volume.cacheLayoutFlags);
+    bool volumePathSidecarAddressValid = !volumePathSidecarEnabled ||
+        TryResolveSimpleDdgiVolumePathSidecarAddressFromProbeBase(
+            cacheProbeBaseWordPlusOne,
+            directionRayIndex,
+            p.raysPerProbe,
+            volume.cacheStrideWords,
+            volume.cacheLayoutFlags,
+            volumePathSidecarWord);
+    if (!volumePathSidecarAddressValid)
+        return;
     bool invalidSourceEpoch = sourceEpoch == 0u;
     bool invalidHitKind = isnan(hitKind) || isinf(hitKind) ||
         hitKind < SIMPLE_DDGI_RAY_HIT_KIND_MISS ||
@@ -2814,6 +2909,16 @@ void WriteSimpleDdgiTransportRayCache(
              !any(lessThan(specularF0, vec3(0.0))) &&
              !isnan(roughness) && !isinf(roughness) &&
              roughness >= 0.0)) &&
+        (!volumePathSidecarEnabled || volumePathFlags == 0u ||
+            ((volumePathFlags & ~SIMPLE_DDGI_VOLUME_PATH_KNOWN_FLAG_MASK) == 0u &&
+             (volumePathFlags & SIMPLE_DDGI_VOLUME_PATH_VALID_BIT) != 0u &&
+             !any(isnan(pathEndpointOffset)) &&
+             !any(isinf(pathEndpointOffset)) &&
+             !any(isnan(pathTerminalDirection)) &&
+             !any(isinf(pathTerminalDirection)) &&
+             dot(pathTerminalDirection, pathTerminalDirection) > 1.0e-12 &&
+             !any(isnan(pathThroughput)) && !any(isinf(pathThroughput)) &&
+             !any(lessThan(pathThroughput, vec3(0.0))))) &&
         !invalidHitKind &&
         (probeGeneration & SIMPLE_DDGI_UPDATE_GENERATION_MASK) != 0u &&
         sourceLightingGeneration != 0u && !invalidSourceEpoch &&
@@ -2832,6 +2937,16 @@ void WriteSimpleDdgiTransportRayCache(
         WriteStorageWordUniform(bufferIndex, generationWord, 0u);
         if (glossySidecarEnabled)
             WriteStorageWordUniform(bufferIndex, glossySidecarWord, 0u);
+        if (volumePathSidecarEnabled)
+        {
+            for (uint word = 0u;
+                 word < SIMPLE_DDGI_STORAGE_VOLUME_PATH_SIDECAR_WORDS;
+                 ++word)
+            {
+                WriteStorageWordUniform(
+                    bufferIndex, volumePathSidecarWord + word, 0u);
+            }
+        }
         RecordSimpleDdgiInvalidRayMetadata(
             p, invalidSourceEpoch, invalidHitKind);
         return;
@@ -2998,6 +3113,52 @@ void WriteSimpleDdgiTransportRayCache(
                     clamp(specularF0, vec3(0.0), vec3(1.0)),
                     clamp(roughness, 0.0, 1.0)))
                 : 0u);
+    }
+    if (volumePathSidecarEnabled)
+    {
+        if ((volumePathFlags & SIMPLE_DDGI_VOLUME_PATH_VALID_BIT) != 0u &&
+            requiresSurfacePayload)
+        {
+            float endpointDistance = length(pathEndpointOffset);
+            vec3 endpointDirection = endpointDistance > 1.0e-8
+                ? pathEndpointOffset / endpointDistance
+                : normalize(pathTerminalDirection);
+            vec3 packedThroughput = clamp(
+                pathThroughput, vec3(0.0), vec3(65504.0));
+            WriteStorageWordUniform(
+                bufferIndex,
+                volumePathSidecarWord + 0u,
+                PackSimpleDdgiTransportOctDirection(endpointDirection));
+            WriteStorageWordUniform(
+                bufferIndex,
+                volumePathSidecarWord + 1u,
+                floatBitsToUint(endpointDistance));
+            WriteStorageWordUniform(
+                bufferIndex,
+                volumePathSidecarWord + 2u,
+                PackSimpleDdgiTransportOctDirection(
+                    normalize(pathTerminalDirection)));
+            WriteStorageWordUniform(
+                bufferIndex,
+                volumePathSidecarWord + 3u,
+                packHalf2x16(packedThroughput.xy));
+            uint packedB = packHalf2x16(vec2(
+                packedThroughput.z, 0.0)) & 0xffffu;
+            WriteStorageWordUniform(
+                bufferIndex,
+                volumePathSidecarWord + 4u,
+                packedB | ((volumePathFlags & 0xffffu) << 16u));
+        }
+        else
+        {
+            for (uint word = 0u;
+                 word < SIMPLE_DDGI_STORAGE_VOLUME_PATH_SIDECAR_WORDS;
+                 ++word)
+            {
+                WriteStorageWordUniform(
+                    bufferIndex, volumePathSidecarWord + word, 0u);
+            }
+        }
     }
     uint flags = PackSimpleDdgiTransportCacheHitKind(hitKind) |
         (SimpleDdgiDirectionEpoch(sourceEpoch) <<
@@ -3363,6 +3524,9 @@ bool ReadSimpleDdgiLegacyTransportRayCacheForSolve(
     cache.materialOcclusion = 1.0;
     cache.specularF0 = vec3(0.0);
     cache.roughness = 1.0;
+    cache.endpointOffset = vec3(0.0);
+    cache.pathThroughput = vec3(1.0);
+    cache.volumePathFlags = 0u;
     cache.sourceRayCount = 0u;
     cache.generationAndFlags = 0u;
     cache.sourceLightingGeneration = 0u;
@@ -3456,16 +3620,31 @@ bool ReadSimpleDdgiLegacyTransportRayCacheForSolve(
     bool requiresSurfacePayload =
         hitKind != uint(SIMPLE_DDGI_RAY_HIT_KIND_MISS) &&
         hitKind != uint(SIMPLE_DDGI_RAY_HIT_KIND_ONE_SIDED_BACK_FACE);
-    return ReadSimpleDdgiRecursiveGlossyMaterialSidecar(
+    if (!ReadSimpleDdgiRecursiveGlossyMaterialSidecar(
+            bufferIndex,
+            cacheProbeBaseWordPlusOne,
+            directionRayIndex,
+            volume.cacheStrideWords,
+            volume.cacheLayoutFlags,
+            p,
+            requiresSurfacePayload,
+            cache.specularF0,
+            cache.roughness))
+    {
+        return false;
+    }
+    return ReadSimpleDdgiVolumePathSidecar(
         bufferIndex,
         cacheProbeBaseWordPlusOne,
         directionRayIndex,
+        p.raysPerProbe,
         volume.cacheStrideWords,
         volume.cacheLayoutFlags,
-        p,
-        requiresSurfacePayload,
-        cache.specularF0,
-        cache.roughness);
+        cache.distance,
+        cache.endpointOffset,
+        cache.direction,
+        cache.pathThroughput,
+        cache.volumePathFlags);
 }
 
 // Packed transport already receives a producer-validated, one-based cache
@@ -3495,6 +3674,9 @@ bool ReadSimpleDdgiPackedTransportRayCacheForSolve(
     cache.materialOcclusion = 1.0;
     cache.specularF0 = vec3(0.0);
     cache.roughness = 1.0;
+    cache.endpointOffset = vec3(0.0);
+    cache.pathThroughput = vec3(1.0);
+    cache.volumePathFlags = 0u;
     cache.sourceRayCount = 0u;
     cache.generationAndFlags = 0u;
     cache.sourceLightingGeneration = 0u;
@@ -3602,16 +3784,31 @@ bool ReadSimpleDdgiPackedTransportRayCacheForSolve(
             unpackUnorm4x8(packedTransmission).rgb;
         cache.materialOcclusion = surface.a;
     }
-    return ReadSimpleDdgiRecursiveGlossyMaterialSidecar(
+    if (!ReadSimpleDdgiRecursiveGlossyMaterialSidecar(
+            bufferIndex,
+            cacheProbeBaseWordPlusOne,
+            directionRayIndex,
+            volume.cacheStrideWords,
+            volume.cacheLayoutFlags,
+            p,
+            requiresSurfacePayload,
+            cache.specularF0,
+            cache.roughness))
+    {
+        return false;
+    }
+    return ReadSimpleDdgiVolumePathSidecar(
         bufferIndex,
         cacheProbeBaseWordPlusOne,
         directionRayIndex,
+        p.raysPerProbe,
         volume.cacheStrideWords,
         volume.cacheLayoutFlags,
-        p,
-        requiresSurfacePayload,
-        cache.specularF0,
-        cache.roughness);
+        cache.distance,
+        cache.endpointOffset,
+        cache.direction,
+        cache.pathThroughput,
+        cache.volumePathFlags);
 }
 
 // Decode failures are rare and already reject the resident transaction. Keep
@@ -3748,6 +3945,9 @@ bool ReadSimpleDdgiTransportRayCache(
     cache.materialOcclusion = 1.0;
     cache.specularF0 = vec3(0.0);
     cache.roughness = 1.0;
+    cache.endpointOffset = vec3(0.0);
+    cache.pathThroughput = vec3(1.0);
+    cache.volumePathFlags = 0u;
     cache.sourceRayCount = 0u;
     cache.generationAndFlags = 0u;
     cache.sourceLightingGeneration = 0u;
@@ -3998,6 +4198,21 @@ bool ReadSimpleDdgiTransportRayCache(
             requiresSurfacePayload,
             cache.specularF0,
             cache.roughness))
+    {
+        return false;
+    }
+    if (!ReadSimpleDdgiVolumePathSidecar(
+            bufferIndex,
+            cacheProbeBaseWord + 1u,
+            directionRayIndex,
+            p.raysPerProbe,
+            SimpleDdgiStorageExpectedStride(format),
+            layoutFlags,
+            cache.distance,
+            cache.endpointOffset,
+            cache.direction,
+            cache.pathThroughput,
+            cache.volumePathFlags))
     {
         return false;
     }

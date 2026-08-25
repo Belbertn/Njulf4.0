@@ -217,8 +217,10 @@ public static class MaterialTransportCompiler
             ? material.Extensions.SheenColorFactor * ToVector3(
                 sheenEnergy.MeanValid ? sheenEnergy.LinearMean : Vector4.One)
             : Vector3.Zero;
-        float meanTransmission = transmissionEnabled &&
-            material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface
+        bool supportedPhysicalTransmission = transmissionEnabled &&
+            material.Extensions.TransmissionPolicy is
+                GiTransmissionPolicy.ThinSurface or GiTransmissionPolicy.Volume;
+        float meanTransmission = supportedPhysicalTransmission
             ? material.Extensions.TransmissionFactor * (transmissionEnergy.MeanValid ? transmissionEnergy.LinearMean.X : 1f)
             : 0f;
         float meanSpecularFactor = specularEnabled
@@ -427,7 +429,16 @@ public static class MaterialTransportCompiler
                 normal.NormalVarianceValid ? Math.Max(normal.NormalVariance, 0f) : 0f)
         };
 
-        GPUMaterialExtensionData? extensionData = material.FeatureFlags.RequiresExtensionData()
+        bool requiresOpticalPolicyPayload =
+            material.Extensions.CausticCasterPolicy !=
+                GiCausticCasterPolicy.Default ||
+            material.Extensions.CausticParticipation !=
+                GiCausticParticipationMode.None ||
+            material.Extensions.OpticalBoundary ==
+                OpticalBoundaryKind.WaterSurface;
+        GPUMaterialExtensionData? extensionData =
+            material.FeatureFlags.RequiresExtensionData() ||
+            requiresOpticalPolicyPayload
             ? CompileExtensions(material, context, effectiveEmissiveScale)
             : null;
         MaterialRenderMetadata metadata = CompileMetadata(material);
@@ -518,6 +529,8 @@ public static class MaterialTransportCompiler
         if (before.EmissionGiParticipation != after.EmissionGiParticipation)
             mask |= MaterialChangeMask.Emission;
         if (before.Extensions.TransmissionPolicy != after.Extensions.TransmissionPolicy)
+            mask |= MaterialChangeMask.AccelerationStructure;
+        if (before.Extensions.OpticalBoundary != after.Extensions.OpticalBoundary)
             mask |= MaterialChangeMask.AccelerationStructure;
 
         MaterialFeatureFlags changedFeatures = before.FeatureFlags ^ after.FeatureFlags;
@@ -714,10 +727,20 @@ public static class MaterialTransportCompiler
             SpecularColorTextureIndex = ResolveExtensionIndex(extension.SpecularColor, MaterialTextureSemantic.SrgbColor, context, BindlessIndex.DefaultWhiteTexture),
             IridescenceTextureIndex = ResolveExtensionIndex(extension.Iridescence, MaterialTextureSemantic.LinearScalar, context, BindlessIndex.DefaultWhiteTexture),
             IridescenceThicknessTextureIndex = ResolveExtensionIndex(extension.IridescenceThickness, MaterialTextureSemantic.LinearScalar, context, BindlessIndex.DefaultWhiteTexture),
-            Padding0 = 0,
-            Padding1 = 0,
-            Padding2 = 0,
-            Padding3 = 0
+            Padding0 = OpticalMaterialGpuContract.PackFlags(
+                extension.OpticalBoundary,
+                OpticalMaterialGpuContract.ResolveCasterPolicy(
+                    extension.CausticCasterPolicy,
+                    extension.CausticParticipation),
+                extension.TransmissionPolicy == GiTransmissionPolicy.Volume &&
+                extension.TransmissionFactor > 0f),
+            Padding1 = OpticalMaterialGpuContract.PackHalf2(
+                extension.WaterNormalVelocity0),
+            Padding2 = OpticalMaterialGpuContract.PackHalf2(
+                extension.WaterNormalVelocity1),
+            Padding3 = OpticalMaterialGpuContract.PackHalf2(new Vector2(
+                extension.WaterNormalUvScale0,
+                extension.WaterNormalUvScale1))
         };
     }
 
@@ -758,6 +781,10 @@ public static class MaterialTransportCompiler
             DiffuseGiParticipation = material.DiffuseGiParticipation,
             EmissionGiParticipation = material.EmissionGiParticipation,
             TransmissionPolicy = material.Extensions.TransmissionPolicy,
+            OpticalBoundary = material.Extensions.OpticalBoundary,
+            CausticCasterPolicy = OpticalMaterialGpuContract.ResolveCasterPolicy(
+                material.Extensions.CausticCasterPolicy,
+                material.Extensions.CausticParticipation),
             DecalLayer = material.DecalLayer,
             DecalDepthBias = material.DecalDepthBias
         };
@@ -811,16 +838,38 @@ public static class MaterialTransportCompiler
             material.Extensions.TransmissionFactor > 0f &&
             material.Extensions.TransmissionPolicy == GiTransmissionPolicy.ThinSurface)
         {
-            // Only remove reflected opaque diffuse when the compiler can also
-            // provide the supported transmitted lobe. Unsupported/volume
-            // policies deliberately retain the opaque GI fallback instead of
-            // becoming black on both sides.
+            // Thin sheets carry their compact transmitted-diffuse lobe here.
+            // Thick volumes are classified separately below and continue
+            // through the bounded interface tracer.
             flags |= GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse |
                 GiMaterialTransportFlags.ThinSurfaceTransmission;
             if (diffuseValid)
                 flags |= GiMaterialTransportFlags.TransmissionProfileValid;
             if (material.Extensions.Transmission.IsBound)
                 flags |= GiMaterialTransportFlags.HasTransmissionTexture;
+        }
+        if (material.FeatureFlags.HasFlag(MaterialFeatureFlags.Transmission) &&
+            material.Extensions.TransmissionFactor > 0f &&
+            material.Extensions.TransmissionPolicy == GiTransmissionPolicy.Volume)
+        {
+            flags |= GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse |
+                     GiMaterialTransportFlags.VolumeTransmission;
+            if (material.Extensions.OpticalBoundary ==
+                OpticalBoundaryKind.WaterSurface)
+            {
+                flags |= GiMaterialTransportFlags.WaterSurfaceBoundary;
+            }
+            if (material.Extensions.Transmission.IsBound)
+                flags |= GiMaterialTransportFlags.HasTransmissionTexture;
+        }
+        if (material.Extensions.CausticCasterPolicy !=
+                GiCausticCasterPolicy.Default ||
+            material.Extensions.CausticParticipation !=
+                GiCausticParticipationMode.None ||
+            material.Extensions.OpticalBoundary ==
+                OpticalBoundaryKind.WaterSurface)
+        {
+            flags |= GiMaterialTransportFlags.OpticalPolicyPayload;
         }
         if (material.EmitsIntoGi)
             flags |= GiMaterialTransportFlags.EmitsIntoGi;
@@ -922,6 +971,16 @@ public static class MaterialTransportCompiler
         x.Ior != y.Ior ||
         x.Transmission != y.Transmission ||
         x.TransmissionPolicy != y.TransmissionPolicy ||
+        x.OpticalBoundary != y.OpticalBoundary ||
+        x.ThicknessFactor != y.ThicknessFactor ||
+        x.Thickness != y.Thickness ||
+        x.AttenuationDistance != y.AttenuationDistance ||
+        x.AttenuationColor != y.AttenuationColor ||
+        !x.WaterNormalVelocity0.Equals(y.WaterNormalVelocity0) ||
+        !x.WaterNormalVelocity1.Equals(y.WaterNormalVelocity1) ||
+        x.WaterNormalUvScale0 != y.WaterNormalUvScale0 ||
+        x.WaterNormalUvScale1 != y.WaterNormalUvScale1 ||
+        x.Dispersion != y.Dispersion ||
         x.ThinTransmissionTint != y.ThinTransmissionTint ||
         x.SpecularFactor != y.SpecularFactor ||
         x.SpecularColorFactor != y.SpecularColorFactor ||

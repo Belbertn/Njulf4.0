@@ -4014,7 +4014,12 @@ namespace Njulf.Rendering.Resources
             ValidateTextureIndex(material.EmissiveTextureIndex, nameof(GPUMaterialData.EmissiveTextureIndex));
             if (material.ExtensionDataIndex < -1)
                 throw new InvalidOperationException($"{nameof(GPUMaterialData.ExtensionDataIndex)} must be -1 or a non-negative extension payload index.");
-            if (material.FeatureFlags == 0u && material.ExtensionDataIndex != -1)
+            bool opticalPolicyPayload =
+                ((GiMaterialTransportFlags)material.TransportFlags).HasFlag(
+                    GiMaterialTransportFlags.OpticalPolicyPayload);
+            if (material.FeatureFlags == 0u &&
+                material.ExtensionDataIndex != -1 &&
+                !opticalPolicyPayload)
                 throw new InvalidOperationException("ExtensionDataIndex must be -1 when FeatureFlags is zero.");
         }
 

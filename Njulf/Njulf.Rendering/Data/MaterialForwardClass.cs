@@ -10,7 +10,8 @@ namespace Njulf.Rendering.Data
         SimpleOpaqueNormal = 1,
         FullOpaque = 2,
         Masked = 3,
-        Transparent = 4
+        Transparent = 4,
+        ThickTransmission = 5
     }
 
     public static class MaterialForwardClassifier
@@ -22,6 +23,8 @@ namespace Njulf.Rendering.Data
             if (metadata == null)
                 throw new ArgumentNullException(nameof(metadata));
 
+            if (metadata.TransmissionPolicy == GiTransmissionPolicy.Volume)
+                return MaterialForwardClass.ThickTransmission;
             if (metadata.IsGeometryDecal || metadata.RenderMode == MaterialRenderMode.Blend)
                 return MaterialForwardClass.Transparent;
             if (metadata.RenderMode == MaterialRenderMode.Mask)

@@ -16,7 +16,7 @@ namespace Njulf.Rendering.Resources;
 /// </summary>
 public static class GiCausticGpuAbi
 {
-    public const uint Version = 0xC401_0004u;
+    public const uint Version = 0xC401_0005u;
     public const int TaskDispatchHeaderBytes = 64;
     public const int TaskRecordBytes = 128;
     public const int EmitterRecordBytes = 128;
@@ -79,6 +79,7 @@ public static class GiCausticGpuAbi
             (nameof(GPUCausticPhotonCandidateV1.PackedIncidentDirection), 32),
             (nameof(GPUCausticPhotonCandidateV1.TangentPlaneFootprint), 48),
             (nameof(GPUCausticPhotonCandidateV1.SourceId), 64),
+            (nameof(GPUCausticPhotonCandidateV1.PathSignature), 68),
             (nameof(GPUCausticPhotonCandidateV1.CacheGeneration), 76));
         Verify<GPUCausticCellEntryV1>(CellEntryBytes,
             (nameof(GPUCausticCellEntryV1.CellX), 0),
@@ -717,7 +718,8 @@ public struct GPUCausticPhotonCandidateV1
     /// <summary>axis U, axis V, cosine, sine in the receiver tangent plane.</summary>
     public Vector4 TangentPlaneFootprint;
     public uint SourceId;
-    public uint HeroInstanceId;
+    /// <summary>Nonzero hash of every admitted specular/interface boundary.</summary>
+    public uint PathSignature;
     public uint TransportRevision;
     public uint CacheGeneration;
 
@@ -727,7 +729,7 @@ public struct GPUCausticPhotonCandidateV1
             (PathTagAndDepth & GiCausticGpuPhotonFlags.Valid) != 0 &&
             (PathTagAndDepth & GiCausticGpuPhotonFlags.FirstDiffuseEndpoint) != 0 &&
             (PathTagAndDepth & GiCausticGpuPhotonFlags.Invalid) == 0 &&
-            StablePhotonId != 0u && SourceId != 0u && HeroInstanceId != 0u &&
+            StablePhotonId != 0u && SourceId != 0u && PathSignature != 0u &&
             IsFinite(WorldPosition) && IsFinite(IncidentFlux) &&
             float.IsFinite(SupportRadius) && SupportRadius > 0.0f &&
             SupportRadius <= maximumSupportRadius &&

@@ -225,7 +225,7 @@ public sealed class GiCausticVulkanRuntimeContractTests
             Assert.That(trace, Does.Contain("GiCausticTraceNearest"));
             Assert.That(trace, Does.Contain("GiCausticHeroHitMatchesTask"));
             Assert.That(trace, Does.Contain("GiCausticDielectricReflectance"));
-            Assert.That(trace, Does.Contain("exp(-absorption"));
+            Assert.That(trace, Does.Contain("DielectricBeerLambert("));
             Assert.That(trace,
                 Does.Not.Contain("GI_CAUSTIC_RAY_QUERY_TRANSPORT_BACKEND_INTEGRATED"));
             Assert.That(cacheBuild,

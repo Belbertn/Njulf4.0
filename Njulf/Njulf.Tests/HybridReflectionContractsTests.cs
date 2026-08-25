@@ -134,6 +134,56 @@ public sealed class HybridReflectionContractsTests
     }
 
     [Test]
+    public void BudgetPlanner_ReservesFullRateForSharpGlassAndMirrors()
+    {
+        var settings = new ReflectionSettings
+        {
+            SsrFullResolutionRoughness = 0.2f,
+            SsrHalfResolutionRoughness = 0.5f,
+            SsrQuarterResolutionRoughness = 0.8f
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(HybridReflectionBudgetPlanner
+                    .ResolveAdaptiveResolutionTier(settings, 0.05f, 0.04f,
+                        1.0f, ReflectionLobeFlags.Transmissive),
+                Is.EqualTo(ReflectionResolutionTier.Full),
+                "A smooth transmitted window keeps full-rate scene detail.");
+            Assert.That(HybridReflectionBudgetPlanner
+                    .ResolveAdaptiveResolutionTier(settings, 0.05f, 0.90f,
+                        1.0f, ReflectionLobeFlags.None),
+                Is.EqualTo(ReflectionResolutionTier.Full),
+                "A smooth high-F0 mirror keeps full-rate scene detail.");
+            Assert.That(HybridReflectionBudgetPlanner
+                    .ResolveAdaptiveResolutionTier(settings, 0.15f, 0.04f,
+                        1.0f, ReflectionLobeFlags.None),
+                Is.EqualTo(ReflectionResolutionTier.Half),
+                "Ordinary glossy dielectrics retain geometry at lower rate.");
+            Assert.That(HybridReflectionBudgetPlanner
+                    .ResolveAdaptiveResolutionTier(settings, 0.20f, 0.90f,
+                        1.0f, ReflectionLobeFlags.BroadAnisotropic),
+                Is.EqualTo(ReflectionResolutionTier.Half),
+                "A still-sharp anisotropic conductor is demoted exactly once.");
+            Assert.That(HybridReflectionBudgetPlanner
+                    .ResolveAdaptiveResolutionTier(settings, 0.40f, 0.90f,
+                        1.0f, ReflectionLobeFlags.BroadAnisotropic),
+                Is.EqualTo(ReflectionResolutionTier.Quarter),
+                "Brushed metal keeps sparse scene grounding without detailed rays.");
+            Assert.That(HybridReflectionBudgetPlanner
+                    .ResolveAdaptiveResolutionTier(settings, 0.60f, 0.04f,
+                        1.0f, ReflectionLobeFlags.None),
+                Is.EqualTo(ReflectionResolutionTier.Quarter),
+                "Low-importance in-band surfaces retain sparse scene context.");
+            Assert.That(HybridReflectionBudgetPlanner
+                    .ResolveAdaptiveResolutionTier(settings, 0.85f, 0.90f,
+                        1.0f, ReflectionLobeFlags.None),
+                Is.EqualTo(ReflectionResolutionTier.AnalyticFallback),
+                "Only the configured roughness cutoff selects analytic fallback.");
+        });
+    }
+
+    [Test]
     public void BudgetPlanner_UsesConservativeThenFeedbackDrivenSpatialAdmission()
     {
         const uint width = 1920u;
@@ -450,6 +500,10 @@ public sealed class HybridReflectionContractsTests
             Assert.That(declarations["HybridReflectionCompositePass"].Usages.Any(
                 usage => usage.Resource == RenderGraphResourceId.SceneColor &&
                     usage.Access == RenderGraphResourceAccess.ReadWrite), Is.True);
+            Assert.That(declarations["HybridReflectionCompositePass"].Usages.Any(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.HybridReflectionReceiverPayload &&
+                    usage.Access == RenderGraphResourceAccess.Read), Is.True);
         });
     }
 
@@ -562,6 +616,8 @@ public sealed class HybridReflectionContractsTests
             "hybrid_reflection_spatial.comp");
         string composite = ReadRepoText("Njulf.Shaders",
             "hybrid_reflection_composite.comp");
+        string compute = ReadRepoText("Njulf.Shaders",
+            "hybrid_reflection_compute.glsl");
         string payload = ReadRepoText("Njulf.Shaders",
             "hybrid_reflection_payload.glsl");
         string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
@@ -581,12 +637,17 @@ public sealed class HybridReflectionContractsTests
         {
             Assert.That(ssr, Does.Contain("HybridAppendRayTask"));
             Assert.That(ssr, Does.Contain("RayAdmissionThreshold"));
-            Assert.That(ssr, Does.Contain(
+            Assert.That(compute, Does.Contain(
                 "HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE = 0.12"));
             Assert.That(ssr, Does.Contain(
                 "HybridReflectionPayloadF0(payload)"));
-            Assert.That(ssr, Does.Contain(
+            Assert.That(compute, Does.Contain(
                 "rayImportance < HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE"));
+            Assert.That(compute, Does.Contain(
+                "HybridAccumulateScreenCounter"));
+            Assert.That(ssr, Does.Contain(
+                "HybridResolveAdaptiveReflectionTier"));
+            Assert.That(ssr, Does.Contain("if (lane != phase)"));
             Assert.That(ssr, Does.Contain(
                 "HYBRID_REFLECTION_REASON_RAY_BUDGET"));
             Assert.That(ssr, Does.Contain("hitConfidence >= pc.ConfidenceThreshold"));
@@ -615,9 +676,15 @@ public sealed class HybridReflectionContractsTests
             Assert.That(resolveMain, Does.Contain(
                 "? max(environment.SpecularIntensity, 0.0)"));
             Assert.That(resolveMain, Does.Contain(
-                "incidentRadianceScale *"));
+                "incidentRadiance * incidentRadianceScale"));
             Assert.That(resolveMain, Does.Contain(
                 "HybridLimitReflectionRadiance(contribution"));
+            Assert.That(compute, Does.Contain(
+                "vec3 HybridLimitBroadReflectionRadiance("));
+            Assert.That(resolveMain, Does.Contain(
+                "geometricSource && !sharpImportant && analyticReferenceAvailable"));
+            Assert.That(resolveMain, Does.Contain(
+                "HybridLimitBroadReflectionRadiance("));
             Assert.That(temporal, Does.Contain("HybridMotionVectors"));
             Assert.That(temporal, Does.Contain(
                 "HYBRID_REFLECTION_REASON_RESOLUTION_SKIP"));
@@ -632,9 +699,15 @@ public sealed class HybridReflectionContractsTests
             Assert.That(temporal, Does.Contain(
                 "HybridLimitReflectionRadiance"));
             Assert.That(temporal, Does.Contain(
-                "previousSparseAge < pc.MaximumHistoryLength"));
+                "float motionPixels = length(motion * dimensions)"));
             Assert.That(temporal, Does.Contain(
-                "? clippedHistory"));
+                "float sparseMotionWeight = 1.0 - smoothstep("));
+            Assert.That(temporal, Does.Contain(
+                "previousSparseAge < sparseHistoryAgeLimit"));
+            Assert.That(temporal, Does.Contain(
+                "mix(current.rgb, clippedHistory, sparseHistoryWeight)"));
+            Assert.That(temporal, Does.Contain(
+                "reuseSparseHistory && sparseHistoryWeight >= 0.5"));
             Assert.That(temporal, Does.Contain(
                 "previous.a * 0.97"));
             Assert.That(temporal, Does.Not.Contain(
@@ -653,6 +726,9 @@ public sealed class HybridReflectionContractsTests
                 "imageLoad(HybridRawRadiance, pixel)"));
             Assert.That(composite, Does.Contain("pc.DebugView == 13u"));
             Assert.That(composite, Does.Contain("pc.DebugView == 14u"));
+            Assert.That(composite, Does.Contain("pc.DebugView == 15u"));
+            Assert.That(composite, Does.Contain(
+                "HybridResolveAdaptiveReflectionTier"));
             Assert.That(normalizedForward, Does.Contain(
                 "#if !NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT\n" +
                 "    if (reflectionDebugActive)"));
@@ -660,14 +736,24 @@ public sealed class HybridReflectionContractsTests
                 "uvec3(fragObjectIndex, fragMaterialIndex, 0u)"));
             Assert.That(forward, Does.Contain(
                 "pow(indirectAo, 1.0 + roughness)"));
+            Assert.That(forward, Does.Contain(
+                "transmissionFactor >= 0.05"));
+            Assert.That(forward, Does.Contain(
+                "anisotropyStrength >= 0.35"));
             Assert.That(resolve, Does.Contain(
                 "vec3 fresnel = HybridFresnelSchlickRoughness"));
             Assert.That(payload, Does.Contain(
-                "NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 2u"));
+                "NJULF_HYBRID_REFLECTION_PAYLOAD_ABI_VERSION = 3u"));
+            Assert.That(payload, Does.Contain(
+                "NJULF_HYBRID_REFLECTION_SPECULAR_OCCLUSION_MASK = 0x3fu"));
             Assert.That(ReflectionSettings.ReceiverPayloadAbiVersion,
-                Is.EqualTo(2u));
+                Is.EqualTo(3u));
             Assert.That(runtime, Does.Contain(
                 "SynchronizePreviousHybridFrame(commandBuffer)"));
+            Assert.That(runtime, Does.Contain(
+                "Hybrid Reflection Counter Readback"));
+            Assert.That(runtime, Does.Contain(
+                "RecordCounterReadback(commandBuffer, bank)"));
             Assert.That(runtime, Does.Contain(
                 "private void SynchronizePreviousHybridFrame"));
             Assert.That(runtime, Does.Contain(

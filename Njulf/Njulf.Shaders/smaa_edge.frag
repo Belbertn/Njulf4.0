@@ -2,58 +2,52 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "common.glsl"
+#include "anti_aliasing_push.glsl"
 
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec2 outEdges;
 
-layout(push_constant) uniform AntiAliasingPushBlock
-{
-    vec2 SourceDimensions;
-    vec2 InvSourceDimensions;
-    uint InputTextureIndex;
-    uint SmaaEdgesTextureIndex;
-    uint SmaaBlendWeightsTextureIndex;
-    uint SmaaAreaTextureIndex;
-    uint SmaaSearchTextureIndex;
-    float FxaaContrastThreshold;
-    float FxaaRelativeThreshold;
-    float FxaaSubpixelBlending;
-    float SmaaThreshold;
-    uint SmaaMaxSearchSteps;
-    uint SmaaMaxSearchStepsDiagonal;
-    float SmaaCornerRounding;
-    uint DebugView;
-    uint OutputToSrgb;
-    uint SmaaQuality;
-    uint SmaaDiagonalEnabled;
-    uint SmaaCornerEnabled;
-    float TaaFeedbackMin;
-    float TaaFeedbackMax;
-    float TaaVelocityRejectionScale;
-    uint TaaHistoryValid;
-} pc;
-
-float Luma(vec3 color)
-{
-    return dot(color, vec3(0.299, 0.587, 0.114));
-}
-
 float ColorDelta(vec3 a, vec3 b)
 {
     vec3 delta = abs(a - b);
-    return max(Luma(delta), max(delta.r, max(delta.g, delta.b)) * 0.5);
+    return max(delta.r, max(delta.g, delta.b));
+}
+
+vec3 SampleColor(vec2 uv)
+{
+    return textureLod(
+        BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))],
+        uv,
+        0.0).rgb;
 }
 
 void main()
 {
     vec2 px = pc.InvSourceDimensions;
-    vec3 center = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv).rgb;
-    vec3 left = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv - vec2(px.x, 0.0)).rgb;
-    vec3 right = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(px.x, 0.0)).rgb;
-    vec3 top = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv - vec2(0.0, px.y)).rgb;
-    vec3 bottom = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(0.0, px.y)).rgb;
-    float threshold = max(pc.SmaaThreshold, 0.0001);
-    float horizontal = max(ColorDelta(center, left), ColorDelta(center, right));
-    float vertical = max(ColorDelta(center, top), ColorDelta(center, bottom));
-    outEdges = vec2(smoothstep(threshold, threshold * 1.55, horizontal), smoothstep(threshold, threshold * 1.55, vertical));
+    vec3 center = SampleColor(inUv);
+    vec3 left = SampleColor(inUv - vec2(px.x, 0.0));
+    vec3 top = SampleColor(inUv - vec2(0.0, px.y));
+
+    vec2 delta = vec2(
+        ColorDelta(center, left),
+        ColorDelta(center, top));
+    vec2 edges = step(vec2(max(pc.SmaaThreshold, 0.0001)), delta);
+    if (dot(edges, vec2(1.0)) == 0.0)
+        discard;
+
+    vec3 right = SampleColor(inUv + vec2(px.x, 0.0));
+    vec3 bottom = SampleColor(inUv + vec2(0.0, px.y));
+    vec2 maxDelta = max(delta, vec2(
+        ColorDelta(center, right),
+        ColorDelta(center, bottom)));
+
+    vec3 leftLeft = SampleColor(inUv - vec2(2.0 * px.x, 0.0));
+    vec3 topTop = SampleColor(inUv - vec2(0.0, 2.0 * px.y));
+    maxDelta = max(maxDelta, vec2(
+        ColorDelta(left, leftLeft),
+        ColorDelta(top, topTop)));
+
+    float finalDelta = max(maxDelta.x, maxDelta.y);
+    edges *= step(vec2(finalDelta), 2.0 * delta);
+    outEdges = edges;
 }

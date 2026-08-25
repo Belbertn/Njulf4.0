@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
@@ -1755,6 +1756,48 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void PackedStorageAbi_IsSingleSourcedAcrossCpuAndShaderScratchDispatch()
+        {
+            string storageAbi = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_storage_abi.glsl");
+            string shared = ReadRepoText(
+                "Njulf.Shaders",
+                "ddgi_simple_shared.glsl");
+            int strideSelectorStart = shared.IndexOf(
+                "uint SimpleDdgiRayResultStrideWords(SimpleDdgiVolume volume)",
+                StringComparison.Ordinal);
+            int strideSelectorEnd = shared.IndexOf(
+                "void ClearSimpleDdgiRayResultStorage(",
+                strideSelectorStart,
+                StringComparison.Ordinal);
+            string strideSelector = strideSelectorStart >= 0 &&
+                strideSelectorEnd > strideSelectorStart
+                    ? shared[strideSelectorStart..strideSelectorEnd]
+                    : string.Empty;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    storageAbi,
+                    Does.Contain(
+                        $"const uint SIMPLE_DDGI_STORAGE_ABI_PACKED = " +
+                        $"{(uint)SimpleDdgiStorageAbiVersion.Packed}u;"),
+                    "The CPU and shader packed-storage ABI declarations must agree.");
+                Assert.That(strideSelectorStart, Is.GreaterThanOrEqualTo(0));
+                Assert.That(strideSelectorEnd, Is.GreaterThan(strideSelectorStart));
+                Assert.That(
+                    strideSelector,
+                    Does.Contain("abi == SIMPLE_DDGI_STORAGE_ABI_PACKED"),
+                    "Dynamic scratch dispatch must use the canonical storage ABI.");
+                Assert.That(
+                    shared,
+                    Does.Not.Contain("SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION"),
+                    "A second ray-cache ABI constant can drift from the storage ABI.");
+            });
+        }
+
+        [Test]
         public void SimpleDdgiShaderContracts_ArePresentAndAvoidLegacyConfidenceChain()
         {
             string shared = ReadRepoText("Njulf.Shaders", "ddgi_simple_shared.glsl");
@@ -1958,7 +2001,8 @@ namespace Njulf.Tests
                 Assert.That(transport, Does.Contain("uint globalRay = queueOffset * params.raysPerProbe + rayIndex;"));
                 Assert.That(transport, Does.Contain("EvaluateSimpleDdgiCachedRecursiveBounce("));
                 Assert.That(transportOperator, Does.Contain(
-                    "enforcedThroughput = reflected + transmitted + glossy;"));
+                    "enforcedThroughput = (reflected + transmitted + glossy) *\n" +
+                    "        source.pathThroughput;"));
                 Assert.That(shared, Does.Contain(
                     "bool TryEvaluateSimpleDdgiExactCachedHitRelight("));
                 Assert.That(trace, Does.Contain(
@@ -1978,8 +2022,8 @@ namespace Njulf.Tests
                 Assert.That(storageAbi, Does.Contain("if (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_28)\n        return 7u;"));
                 Assert.That(storageAbi, Does.Contain("if (format == SIMPLE_DDGI_STORAGE_FORMAT_COMPACT_24)\n        return 6u;"));
                 Assert.That(storageAbi, Does.Contain(
-                    "const uint SIMPLE_DDGI_STORAGE_ABI_PACKED = 7u;"));
-                Assert.That(shared, Does.Contain("SIMPLE_DDGI_TRANSPORT_RAY_CACHE_ABI_VERSION = 7u"));
+                    "const uint SIMPLE_DDGI_STORAGE_ABI_PACKED = 8u;"));
+                Assert.That(shared, Does.Contain("abi == SIMPLE_DDGI_STORAGE_ABI_PACKED"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_TRANSPORT_CACHE_GENERATION_MASK =\n    SIMPLE_DDGI_UPDATE_GENERATION_MASK"));
                 Assert.That(shared, Does.Contain("SIMPLE_DDGI_TRANSPORT_CACHE_CLASSIFICATION_SHIFT = 24u"));
                 Assert.That(shared, Does.Contain("uint PackSimpleDdgiTransportCacheHitKind(float hitKind)"));
@@ -2040,7 +2084,12 @@ namespace Njulf.Tests
                 Assert.That(trace, Does.Contain("UpdateSimpleDdgiTransportRayCacheHitKind("));
                 Assert.That(trace, Does.Contain(
                     "cacheMaterialOcclusion,\n                cacheSpecularF0,\n" +
-                    "                cacheRoughness,\n                visibilityHitKind,"));
+                    "                cacheRoughness,\n" +
+                    "                cacheVolumePathEndpointOffset,\n" +
+                    "                cacheVolumePathTerminalDirection,\n" +
+                    "                cacheVolumePathThroughput,\n" +
+                    "                cacheVolumePathFlags,\n" +
+                    "                visibilityHitKind,"));
                 Assert.That(trace, Does.Contain("visibilityHitKind);"));
                 Assert.That(trace, Does.Contain("WriteSimpleDdgiRayResultStorage("));
                 Assert.That(hitShading, Does.Contain("bool DdgiCandidatePassesTwoSidedOpacity("));
@@ -2166,11 +2215,15 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain("else if (simpleDdgiActive)"));
                 Assert.That(forward, Does.Contain("finalDiffuseIndirect = diffuseIbl * simpleDisabledFallbackWeight * indirectAo;"));
                 Assert.That(forward, Does.Contain("precomputedSimpleDdgiGather = SampleSimpleDdgiGather("));
+                Assert.That(forward, Does.Contain(
+                    "ForwardTerminalDdgiSample ForwardSampleSimpleDdgiTerminalReadOnly("));
+                Assert.That(forward, Does.Contain(
+                    "no residency demand, diagnostic, or contribution feedback is emitted"));
                 Assert.That(forward, Does.Contain("simpleGather = precomputedSimpleDdgiGather;"));
                 Assert.That(
                     forward.Split("SampleSimpleDdgiGather(", StringSplitOptions.None),
                     Has.Length.EqualTo(2),
-                    "Each non-cache forward program must retain one structured gather site.");
+                    "Each forward program retains one feedback-producing receiver gather.");
                 Assert.That(forward, Does.Contain("simpleDdgiParams,"));
                 Assert.That(forward, Does.Contain("simpleDdgiSecondaryContributionWeight"));
                 Assert.That(forward, Does.Contain("simpleDdgiSecondVolumeUsed"));

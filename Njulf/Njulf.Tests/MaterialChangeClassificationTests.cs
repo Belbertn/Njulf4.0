@@ -210,14 +210,12 @@ public sealed class MaterialChangeClassificationTests
     }
 
     [Test]
-    public void DirectionalOnlyExtensions_RemainRasterOnly()
+    public void NonTransportDirectionalExtensions_RemainRasterOnly()
     {
         var before = new MaterialDefinition
         {
             FeatureFlags = MaterialFeatureFlags.Anisotropy |
                            MaterialFeatureFlags.Iridescence |
-                           MaterialFeatureFlags.Dispersion |
-                           MaterialFeatureFlags.VolumeApproximation |
                            MaterialFeatureFlags.Subsurface
         };
         MaterialDefinition after = before with
@@ -226,8 +224,6 @@ public sealed class MaterialChangeClassificationTests
             {
                 AnisotropyStrength = 0.5f,
                 IridescenceFactor = 0.5f,
-                Dispersion = 0.5f,
-                ThicknessFactor = 0.5f,
                 SubsurfaceStrength = 0.5f
             }
         };
@@ -466,17 +462,17 @@ public sealed class MaterialChangeClassificationTests
             nameof(MaterialExtensionDefinition.ThicknessFactor),
             MaterialFeatureFlags.Transmission | MaterialFeatureFlags.VolumeApproximation,
             extension => extension with { ThicknessFactor = 0.5f },
-            RasterOnly);
+            DiffuseChange);
         yield return ExtensionChange(
             nameof(MaterialExtensionDefinition.AttenuationDistance),
             MaterialFeatureFlags.Transmission | MaterialFeatureFlags.VolumeApproximation,
             extension => extension with { AttenuationDistance = 2f },
-            RasterOnly);
+            DiffuseChange);
         yield return ExtensionChange(
             nameof(MaterialExtensionDefinition.AttenuationColor),
             MaterialFeatureFlags.Transmission | MaterialFeatureFlags.VolumeApproximation,
             extension => extension with { AttenuationColor = new Vector3(0.5f, 0.75f, 1f) },
-            RasterOnly);
+            DiffuseChange);
         yield return ExtensionBindingChange(
             nameof(MaterialExtensionDefinition.Transmission),
             MaterialFeatureFlags.Transmission | MaterialFeatureFlags.TransmissionTexture,
@@ -486,12 +482,29 @@ public sealed class MaterialChangeClassificationTests
             nameof(MaterialExtensionDefinition.Thickness),
             MaterialFeatureFlags.Transmission | MaterialFeatureFlags.VolumeApproximation,
             (extension, binding) => extension with { Thickness = binding },
-            RasterOnly);
+            DiffuseChange);
         yield return ExtensionChange(
             nameof(MaterialExtensionDefinition.TransmissionPolicy),
             MaterialFeatureFlags.Transmission,
             extension => extension with { TransmissionPolicy = GiTransmissionPolicy.ThinSurface },
             DiffuseChange | MaterialChangeMask.AccelerationStructure);
+        yield return ExtensionChange(
+            nameof(MaterialExtensionDefinition.OpticalBoundary),
+            MaterialFeatureFlags.Transmission |
+            MaterialFeatureFlags.VolumeApproximation,
+            extension => extension with
+            {
+                OpticalBoundary = OpticalBoundaryKind.WaterSurface
+            },
+            DiffuseChange | MaterialChangeMask.AccelerationStructure);
+        yield return ExtensionChange(
+            nameof(MaterialExtensionDefinition.CausticCasterPolicy),
+            MaterialFeatureFlags.None,
+            extension => extension with
+            {
+                CausticCasterPolicy = GiCausticCasterPolicy.RoughSpecular
+            },
+            RasterOnly);
         // C4 consumes the monotonically advancing material revision directly.
         // Its opt-in hero tag must not invalidate canonical DDGI or ordinary AS
         // aspects, keeping the experimental caustic path ownership isolated.
@@ -507,6 +520,36 @@ public sealed class MaterialChangeClassificationTests
             nameof(MaterialExtensionDefinition.ThinTransmissionTint),
             MaterialFeatureFlags.Transmission,
             extension => extension with { ThinTransmissionTint = new Vector3(0.5f, 0.75f, 1f) },
+            DiffuseChange);
+        yield return ExtensionChange(
+            nameof(MaterialExtensionDefinition.WaterNormalVelocity0),
+            MaterialFeatureFlags.Transmission |
+            MaterialFeatureFlags.VolumeApproximation,
+            extension => extension with
+            {
+                WaterNormalVelocity0 = new Vector2(0.1f, -0.2f)
+            },
+            DiffuseChange);
+        yield return ExtensionChange(
+            nameof(MaterialExtensionDefinition.WaterNormalVelocity1),
+            MaterialFeatureFlags.Transmission |
+            MaterialFeatureFlags.VolumeApproximation,
+            extension => extension with
+            {
+                WaterNormalVelocity1 = new Vector2(-0.3f, 0.4f)
+            },
+            DiffuseChange);
+        yield return ExtensionChange(
+            nameof(MaterialExtensionDefinition.WaterNormalUvScale0),
+            MaterialFeatureFlags.Transmission |
+            MaterialFeatureFlags.VolumeApproximation,
+            extension => extension with { WaterNormalUvScale0 = 2.5f },
+            DiffuseChange);
+        yield return ExtensionChange(
+            nameof(MaterialExtensionDefinition.WaterNormalUvScale1),
+            MaterialFeatureFlags.Transmission |
+            MaterialFeatureFlags.VolumeApproximation,
+            extension => extension with { WaterNormalUvScale1 = 3.5f },
             DiffuseChange);
 
         yield return ExtensionChange(
@@ -569,7 +612,7 @@ public sealed class MaterialChangeClassificationTests
             nameof(MaterialExtensionDefinition.Dispersion),
             MaterialFeatureFlags.Dispersion,
             extension => extension with { Dispersion = 0.5f },
-            RasterOnly);
+            DiffuseChange);
         yield return ExtensionChange(
             nameof(MaterialExtensionDefinition.SubsurfaceColor),
             MaterialFeatureFlags.Subsurface,
@@ -654,7 +697,7 @@ public sealed class MaterialChangeClassificationTests
             nameof(MaterialExtensionDefinition.Thickness),
             MaterialFeatureFlags.Transmission | MaterialFeatureFlags.VolumeApproximation,
             (extension, binding) => extension with { Thickness = binding },
-            RasterOnly);
+            DiffuseChange);
         yield return ExtensionBindingSlot(
             nameof(MaterialExtensionDefinition.Specular),
             MaterialFeatureFlags.Specular | MaterialFeatureFlags.SpecularTexture,

@@ -21,6 +21,9 @@ layout(location = 2) out vec2 meshTexCoord[];
 layout(location = 3) flat out uint meshMaterialIndex[];
 layout(location = 4) flat out uint meshReceiverSignature[];
 layout(location = 5) flat out uint meshHistoryFrameAndFlags[];
+layout(location = 6) flat out uint meshClusterIndex[];
+layout(location = 7) flat out uint meshLodBand[];
+layout(location = 8) flat out uint meshGeometryMode[];
 
 layout(push_constant) uniform MotionVectorPushConstantBlock
 {
@@ -115,6 +118,9 @@ void main()
         meshHistoryFrameAndFlags[vertexSlot] =
             (pc.Push.CurrentFrameIndex & 0xffu) |
             ((pc.Push.PreviousFrameValid & 2u) << 7u);
+        meshClusterIndex[vertexSlot] = command.ClusterIndex;
+        meshLodBand[vertexSlot] = command.LodLevel;
+        meshGeometryMode[vertexSlot] = 1u;
     }
 
     for (uint triangleSlot = gl_LocalInvocationIndex;

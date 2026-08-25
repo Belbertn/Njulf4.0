@@ -942,6 +942,7 @@ internal sealed class SampleInputController
                 ReflectionDebugView.DdgiDirectionalRadianceLobe => ReflectionDebugView.SourceOwnership,
                 ReflectionDebugView.SourceOwnership => ReflectionDebugView.Confidence,
                 ReflectionDebugView.Confidence => ReflectionDebugView.SourceSelection,
+                ReflectionDebugView.SourceSelection => ReflectionDebugView.DetailBudget,
                 _ => ReflectionDebugView.None
             };
             PrintReflectionSettings("Reflection debug");
@@ -3278,7 +3279,7 @@ internal sealed class SampleInputController
         Console.WriteLine(
             $"{prefix}: mode={aa.Mode}, effective={aa.EffectiveMode}, debug={aa.DebugView}, " +
             $"fxaaSubpixel={aa.FxaaSubpixelBlending:F2}, smaaQuality={aa.EffectiveSmaaQuality}, " +
-            $"smaaSpatialSamples={aa.EffectiveSmaaSpatialSampleCount}, smaaThreshold={aa.EffectiveSmaaThreshold:F3}, " +
+            $"smaaScale={aa.EffectiveSmaaResolutionScale:F2}, smaaThreshold={aa.EffectiveSmaaThreshold:F3}, " +
             $"smaaSearch={aa.EffectiveSmaaMaxSearchSteps}/{aa.EffectiveSmaaMaxSearchStepsDiagonal}, " +
             $"smaaCorner={aa.EffectiveSmaaCornerRounding:F0}, " +
             $"jitter={(aa.JitterEnabled ? "on" : "off")}");

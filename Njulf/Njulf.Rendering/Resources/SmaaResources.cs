@@ -1,4 +1,5 @@
 using System;
+using Njulf.Assets;
 using Njulf.Rendering.Descriptors;
 using Silk.NET.Vulkan;
 
@@ -17,23 +18,61 @@ namespace Njulf.Rendering.Resources
             if (bindlessHeap == null)
                 throw new ArgumentNullException(nameof(bindlessHeap));
 
-            _areaTexture = _textureManager.CreateTexture(
-                1,
-                1,
-                Format.R8G8B8A8Unorm,
-                bindlessIndex: BindlessIndex.SmaaAreaTexture,
-                bindlessHeap: bindlessHeap,
-                debugName: "SMAA Area Texture");
-            _textureManager.UploadTextureData(_areaTexture, stackalloc byte[] { 255, 255, 255, 255 }, 1, 1, Format.R8G8B8A8Unorm);
+            var linearClamp = new TextureSamplerDescription(
+                TextureWrapMode.ClampToEdge,
+                TextureWrapMode.ClampToEdge,
+                TextureFilterMode.Linear,
+                TextureFilterMode.Linear,
+                TextureMipFilterMode.Nearest,
+                1.0f);
+            var pointClamp = linearClamp with
+            {
+                MinFilter = TextureFilterMode.Nearest,
+                MagFilter = TextureFilterMode.Nearest
+            };
 
-            _searchTexture = _textureManager.CreateTexture(
-                1,
-                1,
-                Format.R8G8B8A8Unorm,
-                bindlessIndex: BindlessIndex.SmaaSearchTexture,
-                bindlessHeap: bindlessHeap,
-                debugName: "SMAA Search Texture");
-            _textureManager.UploadTextureData(_searchTexture, stackalloc byte[] { 255, 255, 255, 255 }, 1, 1, Format.R8G8B8A8Unorm);
+            try
+            {
+                _areaTexture = _textureManager.CreateTexture(
+                    SmaaLookupData.AreaWidth,
+                    SmaaLookupData.AreaHeight,
+                    Format.R8G8Unorm,
+                    bindlessIndex: BindlessIndex.SmaaAreaTexture,
+                    bindlessHeap: bindlessHeap,
+                    samplerDescription: linearClamp,
+                    debugName: "SMAA Canonical Area Texture");
+                _textureManager.UploadTextureData(
+                    _areaTexture,
+                    SmaaLookupData.DecodeArea(),
+                    SmaaLookupData.AreaWidth,
+                    SmaaLookupData.AreaHeight,
+                    Format.R8G8Unorm);
+
+                _searchTexture = _textureManager.CreateTexture(
+                    SmaaLookupData.SearchWidth,
+                    SmaaLookupData.SearchHeight,
+                    Format.R8Unorm,
+                    bindlessIndex: BindlessIndex.SmaaSearchTexture,
+                    bindlessHeap: bindlessHeap,
+                    samplerDescription: pointClamp,
+                    debugName: "SMAA Canonical Search Texture");
+                _textureManager.UploadTextureData(
+                    _searchTexture,
+                    SmaaLookupData.DecodeSearch(),
+                    SmaaLookupData.SearchWidth,
+                    SmaaLookupData.SearchHeight,
+                    Format.R8Unorm);
+            }
+            catch
+            {
+                if (_areaTexture.IsValid)
+                    _textureManager.DestroyTexture(_areaTexture);
+                if (_searchTexture.IsValid)
+                    _textureManager.DestroyTexture(_searchTexture);
+                _areaTexture = TextureHandle.Invalid;
+                _searchTexture = TextureHandle.Invalid;
+                throw;
+            }
         }
 
         public bool IsReady => _areaTexture.IsValid && _searchTexture.IsValid;

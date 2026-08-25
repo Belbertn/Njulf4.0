@@ -71,6 +71,14 @@ const uint HYBRID_REFLECTION_COUNTER_ENVIRONMENT_FALLBACKS = 7u;
 const float HYBRID_REFLECTION_PI = 3.14159265359;
 const float HYBRID_REFLECTION_MINIMUM_RADIANCE_LIMIT = 32.0;
 const float HYBRID_REFLECTION_RADIANCE_LIMIT_SCALE = 4.0;
+const float HYBRID_REFLECTION_ALWAYS_FULL_ROUGHNESS = 0.08;
+const float HYBRID_REFLECTION_MIRROR_F0_THRESHOLD = 0.35;
+const float HYBRID_REFLECTION_TRANSMISSION_IMPORTANCE_FLOOR = 0.40;
+const float HYBRID_REFLECTION_GLOSSY_IMPORTANCE_FLOOR = 0.30;
+const float HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE = 0.12;
+const float HYBRID_REFLECTION_BROAD_IMPORTANCE_SCALE = 0.50;
+const uint HYBRID_REFLECTION_SCREEN_COUNTER_SAMPLE_MASK = 63u;
+const uint HYBRID_REFLECTION_SCREEN_COUNTER_SAMPLE_WEIGHT = 64u;
 
 bool HybridFinite(float value)
 {
@@ -97,6 +105,112 @@ float HybridMaximumComponent(vec3 value)
     return max(value.x, max(value.y, value.z));
 }
 
+bool HybridReflectionRequiresSharpDetail(uvec4 payload)
+{
+    float roughness = HybridReflectionPayloadRoughness(payload);
+    uint lobeFlags = HybridReflectionPayloadLobeFlags(payload);
+    bool transmissive = (lobeFlags &
+        NJULF_HYBRID_REFLECTION_LOBE_TRANSMISSIVE) != 0u;
+    bool broadAnisotropic = (lobeFlags &
+        NJULF_HYBRID_REFLECTION_LOBE_BROAD_ANISOTROPIC) != 0u;
+    float maximumF0 = HybridMaximumComponent(
+        HybridReflectionPayloadF0(payload));
+    return transmissive || roughness <= 0.08 ||
+        (!broadAnisotropic && maximumF0 >= 0.35 && roughness <= 0.25);
+}
+
+vec3 HybridReflectionTraceNormal(uvec4 payload)
+{
+    vec3 shadingNormal = HybridReflectionPayloadShadingNormal(payload);
+    if (HybridReflectionRequiresSharpDetail(payload))
+        return shadingNormal;
+    vec3 geometricNormal = HybridReflectionPayloadGeometricNormal(payload);
+    float roughness = HybridReflectionPayloadRoughness(payload);
+    float geometricWeight = smoothstep(0.15, 0.70, roughness);
+    return normalize(mix(shadingNormal, geometricNormal, geometricWeight));
+}
+
+uint HybridResolveBaseReflectionTier(
+    float roughness,
+    float fullResolutionRoughness,
+    float halfResolutionRoughness,
+    float quarterResolutionRoughness)
+{
+    float fullThreshold = clamp(fullResolutionRoughness, 0.0, 1.0);
+    float halfThreshold = max(fullThreshold,
+        clamp(halfResolutionRoughness, 0.0, 1.0));
+    float quarterThreshold = max(halfThreshold,
+        clamp(quarterResolutionRoughness, 0.0, 1.0));
+    float perceptualRoughness = clamp(roughness, 0.0, 1.0);
+    if (perceptualRoughness <= fullThreshold)
+        return 1u;
+    if (perceptualRoughness <= halfThreshold)
+        return 2u;
+    if (perceptualRoughness <= quarterThreshold)
+        return 4u;
+    return 0u;
+}
+
+uint HybridDemoteReflectionTier(uint tier)
+{
+    if (tier == 1u)
+        return 2u;
+    if (tier == 2u)
+        return 4u;
+    // The base roughness bands alone own the analytic cutoff. Material
+    // importance may reduce update frequency, but it must not replace an
+    // otherwise useful scene reflection with the global environment.
+    return tier;
+}
+
+uint HybridResolveAdaptiveReflectionTier(
+    float roughness,
+    vec3 f0,
+    float specularOcclusion,
+    uint lobeFlags,
+    float fullResolutionRoughness,
+    float halfResolutionRoughness,
+    float quarterResolutionRoughness)
+{
+    float perceptualRoughness = clamp(roughness, 0.0, 1.0);
+    float maximumF0 = clamp(HybridMaximumComponent(f0), 0.0, 1.0);
+    uint tier = HybridResolveBaseReflectionTier(
+        perceptualRoughness,
+        fullResolutionRoughness,
+        halfResolutionRoughness,
+        quarterResolutionRoughness);
+    if (tier == 0u)
+        return 0u;
+
+    bool startsInFullBand = tier == 1u;
+    bool transmissive = (lobeFlags &
+        NJULF_HYBRID_REFLECTION_LOBE_TRANSMISSIVE) != 0u;
+    bool broadAnisotropic = (lobeFlags &
+        NJULF_HYBRID_REFLECTION_LOBE_BROAD_ANISOTROPIC) != 0u;
+    bool requiresFullQuality = perceptualRoughness <=
+            HYBRID_REFLECTION_ALWAYS_FULL_ROUGHNESS ||
+        transmissive ||
+        maximumF0 >= HYBRID_REFLECTION_MIRROR_F0_THRESHOLD;
+    if (tier == 1u && !requiresFullQuality)
+        tier = HybridDemoteReflectionTier(tier);
+    if (broadAnisotropic)
+        tier = HybridDemoteReflectionTier(tier);
+    float importanceFloor = transmissive
+        ? HYBRID_REFLECTION_TRANSMISSION_IMPORTANCE_FLOOR
+        : startsInFullBand
+            ? HYBRID_REFLECTION_GLOSSY_IMPORTANCE_FLOOR
+            : 0.0;
+    float remainingGloss = 1.0 - perceptualRoughness;
+    float rayImportance = max(maximumF0, importanceFloor) *
+        remainingGloss * remainingGloss * remainingGloss * remainingGloss *
+        clamp(specularOcclusion, 0.0, 1.0);
+    if (broadAnisotropic)
+        rayImportance *= HYBRID_REFLECTION_BROAD_IMPORTANCE_SCALE;
+    if (rayImportance < HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE)
+        tier = HybridDemoteReflectionTier(tier);
+    return tier;
+}
+
 vec3 HybridLimitReflectionRadiance(vec3 radiance, float referenceMaximum)
 {
     if (!HybridFinite(radiance))
@@ -108,6 +222,28 @@ vec3 HybridLimitReflectionRadiance(vec3 radiance, float referenceMaximum)
     float maximum = max(HYBRID_REFLECTION_MINIMUM_RADIANCE_LIMIT,
         safeReference *
             HYBRID_REFLECTION_RADIANCE_LIMIT_SCALE + 1.0);
+    float peak = HybridMaximumComponent(nonnegative);
+    return peak > maximum
+        ? nonnegative * (maximum / peak)
+        : nonnegative;
+}
+
+vec3 HybridLimitBroadReflectionRadiance(
+    vec3 radiance,
+    float analyticReferenceMaximum)
+{
+    if (!HybridFinite(radiance))
+        return vec3(0.0);
+    vec3 nonnegative = max(radiance, vec3(0.0));
+    float safeReference = HybridFinite(analyticReferenceMaximum)
+        ? max(analyticReferenceMaximum, 0.0)
+        : 0.0;
+    // A single SSR/ray-query sample is not an integration of a broad lobe.
+    // Bound it to the prefiltered analytic lobe so an HDR sky texel cannot
+    // become a long-lived firefly, while retaining several stops of local
+    // scene contrast. Sharp/high-value materials bypass this helper.
+    float maximum = max(4.0,
+        safeReference * HYBRID_REFLECTION_RADIANCE_LIMIT_SCALE + 1.0);
     float peak = HybridMaximumComponent(nonnegative);
     return peak > maximum
         ? nonnegative * (maximum / peak)
@@ -190,6 +326,18 @@ uint HybridHash(uint value)
     return value ^ (value >> 16u);
 }
 
+void HybridAccumulateScreenCounter(uint counterIndex, uvec2 pixel)
+{
+    uint sampleKey = pixel.x * 0x9e3779b9u ^
+        pixel.y * 0x85ebca6bu ^ counterIndex * 0xc2b2ae35u;
+    if ((HybridHash(sampleKey) &
+            HYBRID_REFLECTION_SCREEN_COUNTER_SAMPLE_MASK) == 0u)
+    {
+        atomicAdd(HybridCounters[counterIndex],
+            HYBRID_REFLECTION_SCREEN_COUNTER_SAMPLE_WEIGHT);
+    }
+}
+
 vec3 HybridFresnelSchlick(float cosine, vec3 f0)
 {
     return f0 + (vec3(1.0) - f0) *
@@ -251,17 +399,14 @@ bool HybridAppendRayTask(
     uint temporalSampleIndex,
     uint admissionThreshold)
 {
-    atomicAdd(HybridCounters[HYBRID_REFLECTION_COUNTER_RAY_REQUESTS], 1u);
+    HybridAccumulateScreenCounter(
+        HYBRID_REFLECTION_COUNTER_RAY_REQUESTS, pixel);
     uint admissionKey = pixel.x * 0x9e3779b9u ^
         pixel.y * 0x85ebca6bu ^
         temporalSampleIndex * 0xc2b2ae35u ^
         reason * 0x27d4eb2fu;
     if (HybridHash(admissionKey) > admissionThreshold)
-    {
-        atomicAdd(HybridTaskOverflow, 1u);
-        atomicAdd(HybridCounters[HYBRID_REFLECTION_COUNTER_RAY_OVERFLOW], 1u);
         return false;
-    }
 
     uint taskIndex = atomicAdd(HybridTaskCount, 1u);
     if (taskIndex < HybridTaskCapacity)

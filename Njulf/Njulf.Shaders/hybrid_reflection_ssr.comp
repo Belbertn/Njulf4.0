@@ -25,24 +25,6 @@ layout(push_constant) uniform HybridReflectionSsrPushBlock
     uint RayAdmissionThreshold;
 } pc;
 
-const float HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE = 0.12;
-
-uint ResolveTier(float roughness)
-{
-    float fullResolutionRoughness = pc.FullResolutionRoughness;
-    float halfResolutionRoughness = max(
-        fullResolutionRoughness, pc.HalfResolutionRoughness);
-    float quarterResolutionRoughness = max(
-        halfResolutionRoughness, pc.QuarterResolutionRoughness);
-    if (roughness <= fullResolutionRoughness)
-        return 1u;
-    if (roughness <= halfResolutionRoughness)
-        return 2u;
-    if (roughness <= quarterResolutionRoughness)
-        return 4u;
-    return 0u;
-}
-
 bool IsDisoccluded(
     ivec2 pixel,
     uint identity,
@@ -155,15 +137,16 @@ void main()
     }
 
     float roughness = HybridReflectionPayloadRoughness(payload);
-    uint tier = ResolveTier(roughness);
+    vec3 f0 = HybridReflectionPayloadF0(payload);
+    uint tier = HybridResolveAdaptiveReflectionTier(
+        roughness,
+        f0,
+        HybridReflectionPayloadSpecularOcclusion(payload),
+        HybridReflectionPayloadLobeFlags(payload),
+        pc.FullResolutionRoughness,
+        pc.HalfResolutionRoughness,
+        pc.QuarterResolutionRoughness);
     uint identity = HybridReceiverIdentity(payload);
-    float maximumF0 = HybridMaximumComponent(
-        HybridReflectionPayloadF0(payload));
-    float remainingGloss = 1.0 - clamp(roughness, 0.0, 1.0);
-    float rayImportance = maximumF0 + (1.0 - maximumF0) *
-        remainingGloss * remainingGloss * remainingGloss * remainingGloss;
-    if (rayImportance < HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE)
-        tier = 0u;
     if (tier == 0u)
     {
         RejectToRecovery(pixel,
@@ -184,17 +167,18 @@ void main()
             identity, tier);
         return;
     }
-    vec3 normal = HybridReflectionPayloadShadingNormal(payload);
+    vec3 normal = HybridReflectionTraceNormal(payload);
     bool disoccluded = IsDisoccluded(
-        pixel, identity, worldPosition, normal);
+        pixel, identity, worldPosition,
+        HybridReflectionPayloadShadingNormal(payload));
 
     // Lower-resolution bands rotate one representative through each 2x2 or
-    // 4x4 footprint. A camera cut forces every pixel through once so history
-    // never starts with sparse holes.
+    // 4x4 footprint. Keep that bound during camera cuts and disocclusion too;
+    // analytic fallback fills new pixels until their sparse scene sample is
+    // admitted instead of launching an unbounded full-screen trace.
     uint phase = HybridHash(pc.TemporalSampleIndex) % (tier * tier);
     uint lane = (invocation.y % tier) * tier + (invocation.x % tier);
-    if ((pc.HistoryValidAndCurrentFrameIndex & 1u) != 0u &&
-        lane != phase && !disoccluded)
+    if (lane != phase)
     {
         imageStore(HybridRawRadiance, pixel, vec4(0.0));
         imageStore(HybridRawMetadata, pixel, uvec4(
@@ -305,7 +289,8 @@ void main()
             HybridPackMetadata(HYBRID_REFLECTION_SOURCE_SSR,
                 hitConfidence, HYBRID_REFLECTION_REASON_NONE, 0u, true),
             identity, 0u, 0u));
-        atomicAdd(HybridCounters[HYBRID_REFLECTION_COUNTER_SSR_HITS], 1u);
+        HybridAccumulateScreenCounter(
+            HYBRID_REFLECTION_COUNTER_SSR_HITS, invocation);
         return;
     }
 

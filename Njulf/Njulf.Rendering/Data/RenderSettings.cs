@@ -879,7 +879,12 @@ namespace Njulf.Rendering.Data
         /// <summary>Final reflection confidence after temporal validation.</summary>
         Confidence = 13,
         /// <summary>Final source: SSR cyan, ray query magenta, probe yellow, environment blue.</summary>
-        SourceSelection = 14
+        SourceSelection = 14,
+        /// <summary>
+        /// Adaptive update cost in red, transmission in green, and broad
+        /// anisotropy in blue.
+        /// </summary>
+        DetailBudget = 15
     }
 
     public enum TransparencyMode : uint
@@ -898,6 +903,19 @@ namespace Njulf.Rendering.Data
         Overdraw = 5,
         WeightedOitAccumulation = 6,
         WeightedOitRevealage = 7
+    }
+
+    public enum ThickTransmissionMode : uint
+    {
+        Off = 0,
+        Approximation = 1,
+        RayQuery = 2
+    }
+
+    public enum DispersionMode : uint
+    {
+        Off = 0,
+        RgbTriplet = 1
     }
 
     public enum DecalDebugView : uint
@@ -1421,6 +1439,16 @@ namespace Njulf.Rendering.Data
     {
         private int _maxTransparentMeshlets = 262144;
         private float _alphaDiscardThreshold = 0.001f;
+        private int _thickTransmissionRayTaskBudget = 262_144;
+        private int _thickTransmissionMaximumInterfaces =
+            BoundedDielectricMediaStack.MaximumInterfaces;
+        private int _thickTransmissionMaximumMediaDepth =
+            BoundedDielectricMediaStack.MaximumDepth;
+        private int _thickTransmissionMaximumCandidatesPerInterface =
+            BoundedDielectricMediaStack.MaximumCandidatesPerInterface;
+        private float _thickTransmissionMaximumDistance = 100f;
+        private ulong _thickTransmissionMemoryBudgetBytes =
+            128UL * 1024UL * 1024UL;
 
         public bool Enabled { get; set; } = true;
         public TransparencyMode Mode { get; set; } = TransparencyMode.SortedAlphaBlend;
@@ -1429,6 +1457,55 @@ namespace Njulf.Rendering.Data
         public bool ReceiveGlobalIllumination { get; set; } = true;
         public bool SampleReflections { get; set; } = true;
         public bool SortPerMeshlet { get; set; } = true;
+        public ThickTransmissionMode ThickTransmissionMode { get; set; } =
+            ThickTransmissionMode.RayQuery;
+        public DispersionMode DispersionMode { get; set; } = DispersionMode.Off;
+
+        public int ThickTransmissionRayTaskBudget
+        {
+            get => _thickTransmissionRayTaskBudget;
+            set => _thickTransmissionRayTaskBudget =
+                Math.Clamp(
+                    value,
+                    0,
+                    GPUForwardPushConstants.MaximumThickTransmissionRayTaskBudget);
+        }
+
+        public int ThickTransmissionMaximumInterfaces
+        {
+            get => _thickTransmissionMaximumInterfaces;
+            set => _thickTransmissionMaximumInterfaces = Math.Clamp(
+                value, 1, BoundedDielectricMediaStack.MaximumInterfaces);
+        }
+
+        public int ThickTransmissionMaximumMediaDepth
+        {
+            get => _thickTransmissionMaximumMediaDepth;
+            set => _thickTransmissionMaximumMediaDepth = Math.Clamp(
+                value, 1, BoundedDielectricMediaStack.MaximumDepth);
+        }
+
+        public int ThickTransmissionMaximumCandidatesPerInterface
+        {
+            get => _thickTransmissionMaximumCandidatesPerInterface;
+            set => _thickTransmissionMaximumCandidatesPerInterface = Math.Clamp(
+                value, 1,
+                BoundedDielectricMediaStack.MaximumCandidatesPerInterface);
+        }
+
+        public float ThickTransmissionMaximumDistance
+        {
+            get => _thickTransmissionMaximumDistance;
+            set => _thickTransmissionMaximumDistance = Clamp(value, 0.1f, 10_000f);
+        }
+
+        public ulong ThickTransmissionMemoryBudgetBytes
+        {
+            get => _thickTransmissionMemoryBudgetBytes;
+            set => _thickTransmissionMemoryBudgetBytes = Math.Clamp(
+                value, 16UL * 1024UL * 1024UL,
+                2UL * 1024UL * 1024UL * 1024UL);
+        }
 
         public int MaxTransparentMeshlets
         {
@@ -1854,7 +1931,7 @@ namespace Njulf.Rendering.Data
     public sealed class ReflectionSettings
     {
         public const int ShaderMaxProbesPerPixel = 4;
-        public const uint ReceiverPayloadAbiVersion = 2;
+        public const uint ReceiverPayloadAbiVersion = 3;
 
         private int _maxProbes = 8;
         private int _maxProbesPerPixel = 2;
@@ -4690,8 +4767,8 @@ namespace Njulf.Rendering.Data
         private float _fxaaRelativeThreshold = 0.166f;
         private float _fxaaSubpixelBlending = 0.75f;
         private int _jitterSampleCount = 8;
-        private float _taaFeedbackMin = 0.32f;
-        private float _taaFeedbackMax = 0.64f;
+        private float _taaFeedbackMin = 0.85f;
+        private float _taaFeedbackMax = 0.95f;
         private float _taaVelocityRejectionScale = 1.0f;
 
         public AntiAliasingMode Mode { get; set; } = AntiAliasingMode.SmaaMedium;
@@ -4729,7 +4806,7 @@ namespace Njulf.Rendering.Data
             get => _taaFeedbackMin;
             set
             {
-                _taaFeedbackMin = Clamp(value, 0.2f, 0.98f);
+                _taaFeedbackMin = Clamp(value, 0.5f, 0.98f);
                 if (_taaFeedbackMax < _taaFeedbackMin)
                     _taaFeedbackMax = _taaFeedbackMin;
             }
@@ -4744,12 +4821,15 @@ namespace Njulf.Rendering.Data
         public float TaaVelocityRejectionScale
         {
             get => _taaVelocityRejectionScale;
-            set => _taaVelocityRejectionScale = value < 0.0f ? 0.0f : value;
+            set => _taaVelocityRejectionScale = !float.IsFinite(value)
+                ? 1.0f
+                : Clamp(value, 0.0f, 64.0f);
         }
 
         public AntiAliasingMode EffectiveMode => Mode;
-        public int EffectiveSmaaSpatialSampleCount => GetSmaaPreset(EffectiveMode).SpatialSampleCount;
-        public bool EffectiveSmaaUsesSpatialMultisampling => GetSmaaPreset(EffectiveMode).SpatialSampleCount > 1;
+        public int EffectiveSmaaSpatialSampleCount => IsSmaaMode(EffectiveMode) ? 1 : 0;
+        public bool EffectiveSmaaUsesSpatialMultisampling => false;
+        public float EffectiveSmaaResolutionScale => GetSmaaPreset(EffectiveMode).ResolutionScale;
         public float EffectiveSmaaThreshold => GetSmaaPreset(EffectiveMode).Threshold;
         public int EffectiveSmaaMaxSearchSteps => GetSmaaPreset(EffectiveMode).MaxSearchSteps;
         public int EffectiveSmaaMaxSearchStepsDiagonal => GetSmaaPreset(EffectiveMode).MaxSearchStepsDiagonal;
@@ -4765,14 +4845,17 @@ namespace Njulf.Rendering.Data
                 AntiAliasingMode.SmaaHigh;
         }
 
+        public static float GetSmaaResolutionScale(AntiAliasingMode mode) =>
+            GetSmaaPreset(mode).ResolutionScale;
+
         private static SmaaPreset GetSmaaPreset(AntiAliasingMode mode)
         {
             return mode switch
             {
-                AntiAliasingMode.SmaaLow => new SmaaPreset(0, 1, 0.10f, 16, 8, 25.0f),
-                AntiAliasingMode.SmaaHigh => new SmaaPreset(2, 4, 0.10f, 16, 8, 25.0f),
-                AntiAliasingMode.SmaaMedium => new SmaaPreset(1, 2, 0.10f, 16, 8, 25.0f),
-                _ => new SmaaPreset(0, 0, 0.0f, 0, 0, 0.0f)
+                AntiAliasingMode.SmaaLow => new SmaaPreset(0, 0.50f, 0.15f, 4, 0, 0.0f),
+                AntiAliasingMode.SmaaMedium => new SmaaPreset(1, 0.75f, 0.10f, 8, 0, 0.0f),
+                AntiAliasingMode.SmaaHigh => new SmaaPreset(2, 1.00f, 0.10f, 16, 8, 25.0f),
+                _ => new SmaaPreset(0, 1.00f, 0.0f, 0, 0, 0.0f)
             };
         }
 
@@ -4780,14 +4863,14 @@ namespace Njulf.Rendering.Data
         {
             public SmaaPreset(
                 int quality,
-                int spatialSampleCount,
+                float resolutionScale,
                 float threshold,
                 int maxSearchSteps,
                 int maxSearchStepsDiagonal,
                 float cornerRounding)
             {
                 Quality = quality;
-                SpatialSampleCount = spatialSampleCount;
+                ResolutionScale = resolutionScale;
                 Threshold = threshold;
                 MaxSearchSteps = maxSearchSteps;
                 MaxSearchStepsDiagonal = maxSearchStepsDiagonal;
@@ -4795,7 +4878,7 @@ namespace Njulf.Rendering.Data
             }
 
             public int Quality { get; }
-            public int SpatialSampleCount { get; }
+            public float ResolutionScale { get; }
             public float Threshold { get; }
             public int MaxSearchSteps { get; }
             public int MaxSearchStepsDiagonal { get; }
@@ -5133,7 +5216,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 17;
+        public const int SerializationVersion = 18;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5760,6 +5843,8 @@ namespace Njulf.Rendering.Data
             // AutoQualified requests while preserving explicit opt-outs.
             // Version 16 persists the froxel volumetric-fog contract. Version 17
             // persists the hybrid-reflection mode, quality budgets, and filters.
+            // Version 18 persists bounded thick-transmission, nested-media,
+            // water-boundary, and optional RGB-dispersion budgets.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -5780,6 +5865,7 @@ namespace Njulf.Rendering.Data
             [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
             public bool? ShadowsEnabled { get; init; }
             public bool ParticlesEnabled { get; init; } = true;
+            public TransparencySettingsFile? Transparency { get; init; }
             public bool? TransparentReceiveGlobalIllumination { get; init; }
             public bool? DecalReceiveGlobalIllumination { get; init; }
             public bool? DecalReceiveShadows { get; init; }
@@ -5812,6 +5898,8 @@ namespace Njulf.Rendering.Data
                     Reflections = ReflectionSettingsFile.FromSettings(settings.Reflections),
                     Shadows = ShadowSettingsFile.FromSettings(settings.Shadows),
                     ParticlesEnabled = settings.Particles.Enabled,
+                    Transparency = TransparencySettingsFile.FromSettings(
+                        settings.Transparency),
                     TransparentReceiveGlobalIllumination =
                         settings.Transparency.ReceiveGlobalIllumination,
                     DecalReceiveGlobalIllumination =
@@ -5881,7 +5969,11 @@ namespace Njulf.Rendering.Data
                     settings.Shadows.DirectionalSoftAngularDiameterScale = 1f;
                 }
                 settings.Particles.Enabled = ParticlesEnabled;
-                if (TransparentReceiveGlobalIllumination.HasValue)
+                if (Version.GetValueOrDefault() >= 18 && Transparency != null)
+                {
+                    Transparency.ApplyTo(settings.Transparency);
+                }
+                else if (TransparentReceiveGlobalIllumination.HasValue)
                 {
                     settings.Transparency.ReceiveGlobalIllumination =
                         TransparentReceiveGlobalIllumination.Value;
@@ -6126,6 +6218,98 @@ namespace Njulf.Rendering.Data
                 settings.RayQueryHitLightLimit = RayQueryHitLightLimit;
                 settings.TemporalHistoryLength = TemporalHistoryLength;
                 settings.SpatialFilterPassCount = SpatialFilterPassCount;
+            }
+        }
+
+        private sealed record TransparencySettingsFile
+        {
+            public bool Enabled { get; init; } = true;
+            public TransparencyMode Mode { get; init; } =
+                TransparencyMode.SortedAlphaBlend;
+            public TransparencyDebugView DebugView { get; init; }
+            public bool ReceiveShadows { get; init; } = true;
+            public bool ReceiveGlobalIllumination { get; init; } = true;
+            public bool SampleReflections { get; init; } = true;
+            public bool SortPerMeshlet { get; init; } = true;
+            public int MaxTransparentMeshlets { get; init; } = 262_144;
+            public float AlphaDiscardThreshold { get; init; } = 0.001f;
+            public ThickTransmissionMode ThickTransmissionMode { get; init; } =
+                ThickTransmissionMode.RayQuery;
+            public DispersionMode DispersionMode { get; init; } =
+                DispersionMode.Off;
+            public int ThickTransmissionRayTaskBudget { get; init; } = 262_144;
+            public int ThickTransmissionMaximumInterfaces { get; init; } =
+                BoundedDielectricMediaStack.MaximumInterfaces;
+            public int ThickTransmissionMaximumMediaDepth { get; init; } =
+                BoundedDielectricMediaStack.MaximumDepth;
+            public int ThickTransmissionMaximumCandidatesPerInterface
+            {
+                get;
+                init;
+            } = BoundedDielectricMediaStack.MaximumCandidatesPerInterface;
+            public float ThickTransmissionMaximumDistance { get; init; } = 100f;
+            public ulong ThickTransmissionMemoryBudgetBytes { get; init; } =
+                128UL * 1024UL * 1024UL;
+
+            public static TransparencySettingsFile FromSettings(
+                TransparencySettings settings) => new()
+            {
+                Enabled = settings.Enabled,
+                Mode = settings.Mode,
+                DebugView = settings.DebugView,
+                ReceiveShadows = settings.ReceiveShadows,
+                ReceiveGlobalIllumination = settings.ReceiveGlobalIllumination,
+                SampleReflections = settings.SampleReflections,
+                SortPerMeshlet = settings.SortPerMeshlet,
+                MaxTransparentMeshlets = settings.MaxTransparentMeshlets,
+                AlphaDiscardThreshold = settings.AlphaDiscardThreshold,
+                ThickTransmissionMode = settings.ThickTransmissionMode,
+                DispersionMode = settings.DispersionMode,
+                ThickTransmissionRayTaskBudget =
+                    settings.ThickTransmissionRayTaskBudget,
+                ThickTransmissionMaximumInterfaces =
+                    settings.ThickTransmissionMaximumInterfaces,
+                ThickTransmissionMaximumMediaDepth =
+                    settings.ThickTransmissionMaximumMediaDepth,
+                ThickTransmissionMaximumCandidatesPerInterface =
+                    settings.ThickTransmissionMaximumCandidatesPerInterface,
+                ThickTransmissionMaximumDistance =
+                    settings.ThickTransmissionMaximumDistance,
+                ThickTransmissionMemoryBudgetBytes =
+                    settings.ThickTransmissionMemoryBudgetBytes
+            };
+
+            public void ApplyTo(TransparencySettings settings)
+            {
+                settings.Enabled = Enabled;
+                settings.Mode = Enum.IsDefined(Mode)
+                    ? Mode : TransparencyMode.SortedAlphaBlend;
+                settings.DebugView = Enum.IsDefined(DebugView)
+                    ? DebugView : TransparencyDebugView.None;
+                settings.ReceiveShadows = ReceiveShadows;
+                settings.ReceiveGlobalIllumination = ReceiveGlobalIllumination;
+                settings.SampleReflections = SampleReflections;
+                settings.SortPerMeshlet = SortPerMeshlet;
+                settings.MaxTransparentMeshlets = MaxTransparentMeshlets;
+                settings.AlphaDiscardThreshold = AlphaDiscardThreshold;
+                settings.ThickTransmissionMode =
+                    Enum.IsDefined(ThickTransmissionMode)
+                        ? ThickTransmissionMode
+                        : ThickTransmissionMode.Approximation;
+                settings.DispersionMode = Enum.IsDefined(DispersionMode)
+                    ? DispersionMode : DispersionMode.Off;
+                settings.ThickTransmissionRayTaskBudget =
+                    ThickTransmissionRayTaskBudget;
+                settings.ThickTransmissionMaximumInterfaces =
+                    ThickTransmissionMaximumInterfaces;
+                settings.ThickTransmissionMaximumMediaDepth =
+                    ThickTransmissionMaximumMediaDepth;
+                settings.ThickTransmissionMaximumCandidatesPerInterface =
+                    ThickTransmissionMaximumCandidatesPerInterface;
+                settings.ThickTransmissionMaximumDistance =
+                    ThickTransmissionMaximumDistance;
+                settings.ThickTransmissionMemoryBudgetBytes =
+                    ThickTransmissionMemoryBudgetBytes;
             }
         }
 

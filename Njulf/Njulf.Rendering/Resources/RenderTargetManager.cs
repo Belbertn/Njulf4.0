@@ -363,19 +363,25 @@ namespace Njulf.Rendering.Resources
                 RenderGraphResourceId.LdrSceneColor,
                 "LDR Scene Color",
                 LdrSceneColorFormat,
-                RequiresAntiAliasingTarget(antiAliasingMode) ? extent : PlaceholderExtent,
+                RequiresAntiAliasingTarget(antiAliasingMode)
+                    ? CalculateAntiAliasingExtent(extent, antiAliasingMode)
+                    : PlaceholderExtent,
                 LdrSceneColorDescriptor);
             SmaaEdges = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.SmaaEdges,
                 "SMAA Edges",
                 SmaaEdgesFormat,
-                AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent,
+                AntiAliasingSettings.IsSmaaMode(antiAliasingMode)
+                    ? CalculateAntiAliasingExtent(extent, antiAliasingMode)
+                    : PlaceholderExtent,
                 ColorSampledDescriptor);
             SmaaBlendWeights = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.SmaaBlendWeights,
                 "SMAA Blend Weights",
                 SmaaBlendWeightsFormat,
-                AntiAliasingSettings.IsSmaaMode(antiAliasingMode) ? extent : PlaceholderExtent,
+                AntiAliasingSettings.IsSmaaMode(antiAliasingMode)
+                    ? CalculateAntiAliasingExtent(extent, antiAliasingMode)
+                    : PlaceholderExtent,
                 ColorSampledDescriptor);
             MotionVectors = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.MotionVectors,
@@ -969,12 +975,34 @@ namespace Njulf.Rendering.Resources
 
         public void RecreateAntiAliasingTargets(Extent2D extent, Extent2D outputExtent, AntiAliasingMode mode, bool motionVectorsEnabled)
         {
-            RecreateGraphOwnedTarget(RenderGraphResourceId.LdrSceneColor, LdrSceneColor, RequiresAntiAliasingTarget(mode) ? extent : PlaceholderExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaEdges, SmaaEdges, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights, AntiAliasingSettings.IsSmaaMode(mode) ? extent : PlaceholderExtent);
+            Extent2D antiAliasingExtent = CalculateAntiAliasingExtent(extent, mode);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.LdrSceneColor, LdrSceneColor, RequiresAntiAliasingTarget(mode) ? antiAliasingExtent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaEdges, SmaaEdges, AntiAliasingSettings.IsSmaaMode(mode) ? antiAliasingExtent : PlaceholderExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights, AntiAliasingSettings.IsSmaaMode(mode) ? antiAliasingExtent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.MotionVectors, MotionVectors, motionVectorsEnabled ? extent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryA, mode == AntiAliasingMode.Taa ? outputExtent : PlaceholderExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.TaaHistory, TaaHistoryB, mode == AntiAliasingMode.Taa ? outputExtent : PlaceholderExtent);
+        }
+
+        public static Extent2D CalculateAntiAliasingExtent(
+            Extent2D sourceExtent,
+            AntiAliasingMode mode) =>
+            CalculateAntiAliasingExtent(
+                sourceExtent,
+                AntiAliasingSettings.GetSmaaResolutionScale(mode));
+
+        public static Extent2D CalculateAntiAliasingExtent(
+            Extent2D sourceExtent,
+            float resolutionScale)
+        {
+            float scale = float.IsFinite(resolutionScale)
+                ? Math.Clamp(resolutionScale, 0.5f, 1.0f)
+                : 1.0f;
+            return new Extent2D
+            {
+                Width = Math.Max(1u, (uint)MathF.Ceiling(sourceExtent.Width * scale)),
+                Height = Math.Max(1u, (uint)MathF.Ceiling(sourceExtent.Height * scale))
+            };
         }
 
         public void RecreateWeightedOitTargets(Extent2D extent, bool enabled)

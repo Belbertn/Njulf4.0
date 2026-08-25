@@ -444,6 +444,26 @@ public sealed class EditorImGuiPanels
             material.Extensions.ThinTransmissionTint.X,
             material.Extensions.ThinTransmissionTint.Y,
             material.Extensions.ThinTransmissionTint.Z);
+        float ior = material.Extensions.Ior;
+        float thickness = material.Extensions.ThicknessFactor;
+        float attenuationDistance = float.IsPositiveInfinity(
+                material.Extensions.AttenuationDistance)
+            ? 0f : material.Extensions.AttenuationDistance;
+        NumericsVector3 attenuationColor = new(
+            material.Extensions.AttenuationColor.X,
+            material.Extensions.AttenuationColor.Y,
+            material.Extensions.AttenuationColor.Z);
+        OpticalBoundaryKind opticalBoundary =
+            material.Extensions.OpticalBoundary;
+        GiCausticCasterPolicy causticCasterPolicy =
+            material.Extensions.CausticCasterPolicy;
+        float waterVelocity0X = material.Extensions.WaterNormalVelocity0.X;
+        float waterVelocity0Y = material.Extensions.WaterNormalVelocity0.Y;
+        float waterVelocity1X = material.Extensions.WaterNormalVelocity1.X;
+        float waterVelocity1Y = material.Extensions.WaterNormalVelocity1.Y;
+        float waterUvScale0 = material.Extensions.WaterNormalUvScale0;
+        float waterUvScale1 = material.Extensions.WaterNormalUvScale1;
+        float dispersion = material.Extensions.Dispersion;
 
         bool changed = ImGui.InputText("Name##material", ref name, (nuint)256);
         changed |= ImGui.ColorEdit3("Base color", ref baseColor);
@@ -496,14 +516,53 @@ public sealed class EditorImGuiPanels
         changed |= RenderEnumCombo("Diffuse GI", ref diffuseGi);
         changed |= RenderEnumCombo("Emission GI", ref emissionGi);
         changed |= RenderEnumCombo("GI transmission", ref transmissionPolicy);
-        changed |= ImGui.DragFloat("Thin transmission", ref transmissionFactor, 0.01f, 0f, 1f);
+        changed |= ImGui.DragFloat("Transmission", ref transmissionFactor, 0.01f, 0f, 1f);
         changed |= ImGui.ColorEdit3("Transmission tint", ref transmissionTint);
+        changed |= ImGui.DragFloat("IOR", ref ior, 0.01f, 1f, 4f);
+        changed |= ImGui.DragFloat("Thickness fallback (m)", ref thickness,
+            0.01f, 0f, 10_000f);
+        changed |= ImGui.DragFloat("Attenuation distance (0 = infinite)",
+            ref attenuationDistance, 0.01f, 0f, 10_000f);
+        changed |= ImGui.ColorEdit3("Attenuation color", ref attenuationColor);
+        changed |= RenderEnumCombo("Optical boundary", ref opticalBoundary);
+        changed |= RenderEnumCombo("Caustic caster", ref causticCasterPolicy);
+        if (opticalBoundary == OpticalBoundaryKind.WaterSurface)
+        {
+            changed |= ImGui.DragFloat("Water flow 0 X", ref waterVelocity0X,
+                0.001f, -32f, 32f);
+            changed |= ImGui.DragFloat("Water flow 0 Y", ref waterVelocity0Y,
+                0.001f, -32f, 32f);
+            changed |= ImGui.DragFloat("Water flow 1 X", ref waterVelocity1X,
+                0.001f, -32f, 32f);
+            changed |= ImGui.DragFloat("Water flow 1 Y", ref waterVelocity1Y,
+                0.001f, -32f, 32f);
+            changed |= ImGui.DragFloat("Water normal UV scale 0", ref waterUvScale0,
+                0.01f, 0.001f, 1024f);
+            changed |= ImGui.DragFloat("Water normal UV scale 1", ref waterUvScale1,
+                0.01f, 0.001f, 1024f);
+        }
+        changed |= ImGui.DragFloat("Dispersion (20 / Vd)", ref dispersion,
+            0.01f, 0f, 4f);
 
         RenderMaterialTextureBindings(material);
         RenderMaterialTransportState(inspection);
 
         if (!changed)
             return;
+
+        MaterialFeatureFlags editedFeatureFlags = material.FeatureFlags;
+        if (transmissionFactor > 0f ||
+            transmissionPolicy != GiTransmissionPolicy.None)
+        {
+            editedFeatureFlags |= MaterialFeatureFlags.Transmission;
+        }
+        if (transmissionPolicy == GiTransmissionPolicy.Volume)
+        {
+            editedFeatureFlags |= MaterialFeatureFlags.VolumeApproximation |
+                                  MaterialFeatureFlags.Ior;
+        }
+        if (dispersion > 0f)
+            editedFeatureFlags |= MaterialFeatureFlags.Dispersion;
 
         var updated = material with
         {
@@ -532,13 +591,28 @@ public sealed class EditorImGuiPanels
             ShadingModel = shadingModel,
             DiffuseGiParticipation = diffuseGi,
             EmissionGiParticipation = emissionGi,
-            FeatureFlags = transmissionFactor > 0f || transmissionPolicy != GiTransmissionPolicy.None
-                ? material.FeatureFlags | MaterialFeatureFlags.Transmission
-                : material.FeatureFlags,
+            FeatureFlags = editedFeatureFlags,
             Extensions = material.Extensions with
             {
                 TransmissionPolicy = transmissionPolicy,
                 TransmissionFactor = transmissionFactor,
+                Ior = ior,
+                ThicknessFactor = thickness,
+                AttenuationDistance = attenuationDistance <= 0f
+                    ? float.PositiveInfinity : attenuationDistance,
+                AttenuationColor = new CoreVector3(
+                    attenuationColor.X,
+                    attenuationColor.Y,
+                    attenuationColor.Z),
+                OpticalBoundary = opticalBoundary,
+                CausticCasterPolicy = causticCasterPolicy,
+                WaterNormalVelocity0 = new Njulf.Core.Math.Vector2(
+                    waterVelocity0X, waterVelocity0Y),
+                WaterNormalVelocity1 = new Njulf.Core.Math.Vector2(
+                    waterVelocity1X, waterVelocity1Y),
+                WaterNormalUvScale0 = waterUvScale0,
+                WaterNormalUvScale1 = waterUvScale1,
+                Dispersion = dispersion,
                 ThinTransmissionTint = new CoreVector3(
                     transmissionTint.X,
                     transmissionTint.Y,

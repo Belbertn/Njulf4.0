@@ -30,6 +30,8 @@ internal sealed unsafe class RenderingSettingsEditorPanel
     private static readonly SettingEditor[] AmbientOcclusionEditors = BuildEditors<AmbientOcclusionSettings>();
     private static readonly SettingEditor[] AntiAliasingEditors = BuildEditors<AntiAliasingSettings>();
     private static readonly SettingEditor[] FogEditors = BuildEditors<FogSettings>();
+    private static readonly SettingEditor[] TransparencyEditors =
+        BuildEditors<TransparencySettings>();
 
     private static readonly PropertyInfo[] AllEditableProperties =
     [
@@ -42,7 +44,8 @@ internal sealed unsafe class RenderingSettingsEditorPanel
         .. ReflectionEditors.Select(static editor => editor.Property),
         .. AmbientOcclusionEditors.Select(static editor => editor.Property),
         .. AntiAliasingEditors.Select(static editor => editor.Property),
-        .. FogEditors.Select(static editor => editor.Property)
+        .. FogEditors.Select(static editor => editor.Property),
+        .. TransparencyEditors.Select(static editor => editor.Property)
     ];
 
     private string _filter = string.Empty;
@@ -54,6 +57,7 @@ internal sealed unsafe class RenderingSettingsEditorPanel
         type == typeof(string) ||
         type == typeof(int) ||
         type == typeof(uint) ||
+        type == typeof(ulong) ||
         type == typeof(float) ||
         type == typeof(CoreVector3) ||
         type.IsEnum;
@@ -90,6 +94,8 @@ internal sealed unsafe class RenderingSettingsEditorPanel
         RenderSection("Ambient occlusion", settings.AmbientOcclusion, AmbientOcclusionEditors);
         RenderSection("Anti-aliasing", settings.AntiAliasing, AntiAliasingEditors);
         RenderSection("Fog", settings.Fog, FogEditors);
+        RenderSection("Transparency and refraction", settings.Transparency,
+            TransparencyEditors);
 
         ImGui.End();
     }
@@ -199,6 +205,12 @@ internal sealed unsafe class RenderingSettingsEditorPanel
         {
             uint value = (uint)(current ?? 0u);
             changed = ImGui.InputScalar(controlLabel, ImGuiDataType.U32, &value);
+            next = value;
+        }
+        else if (property.PropertyType == typeof(ulong))
+        {
+            ulong value = (ulong)(current ?? 0UL);
+            changed = ImGui.InputScalar(controlLabel, ImGuiDataType.U64, &value);
             next = value;
         }
         else if (property.PropertyType == typeof(float))

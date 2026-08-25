@@ -114,7 +114,6 @@ public sealed class MaterialTransportV2Tests
     }
 
     [TestCase(GiTransmissionPolicy.Unsupported)]
-    [TestCase(GiTransmissionPolicy.Volume)]
     public void UnsupportedTransmission_RetainsOpaqueGiDiffuseFallback(
         GiTransmissionPolicy policy)
     {
@@ -144,6 +143,50 @@ public sealed class MaterialTransportV2Tests
             Assert.That(surface.TransmittedDiffuseReflectance, Is.EqualTo(Vector3.Zero));
             Assert.That(compiled.TransportProfile.MeanDiffuseReflectance.X, Is.GreaterThan(0.5f));
             Assert.That(compiled.TransportProfile.MeanTransmittedDiffuseReflectance, Is.EqualTo(Vector3.Zero));
+        });
+    }
+
+    [Test]
+    public void VolumeTransmission_RemovesOpaqueDiffuseAndUsesDirectionalTransport()
+    {
+        MaterialDefinition definition = new()
+        {
+            BaseColorFactor = new Vector4(0.7f, 0.4f, 0.2f, 1.0f),
+            FeatureFlags = MaterialFeatureFlags.Transmission |
+                           MaterialFeatureFlags.VolumeApproximation |
+                           MaterialFeatureFlags.Ior,
+            Extensions = MaterialExtensionDefinition.None with
+            {
+                TransmissionPolicy = GiTransmissionPolicy.Volume,
+                TransmissionFactor = 1.0f,
+                Ior = 1.5f,
+                ThicknessFactor = 0.75f,
+                AttenuationDistance = 2.0f,
+                AttenuationColor = new Vector3(0.8f, 0.5f, 0.25f)
+            }
+        };
+
+        CompiledMaterialTransport compiled =
+            MaterialTransportCompiler.Compile(definition);
+        GiSurfaceSample surface = GiMaterialReferenceEvaluator.EvaluateSurface(
+            definition,
+            GiMaterialSampleInputs.Defaults);
+        GiMaterialTransportFlags flags =
+            (GiMaterialTransportFlags)compiled.GpuMaterial.TransportFlags;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                flags.HasFlag(
+                    GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse),
+                Is.True);
+            Assert.That(
+                flags.HasFlag(GiMaterialTransportFlags.VolumeTransmission),
+                Is.True);
+            Assert.That(surface.DiffuseReflectance, Is.EqualTo(Vector3.Zero));
+            Assert.That(
+                compiled.TransportProfile.MeanDiffuseReflectance,
+                Is.EqualTo(Vector3.Zero));
         });
     }
 

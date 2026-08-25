@@ -117,10 +117,14 @@ layout(early_fragment_tests) in;
 #include "forward_ddgi_receiver_cache.glsl"
 #endif
 #include "gi_material_transport.glsl"
+#include "dielectric_transport.glsl"
 #include "material_coverage.glsl"
 #if DIRECTIONAL_TRANSPARENT_RAY_QUERY
 layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #include "directional_ray_visibility.glsl"
+#if !NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+#include "thick_transmission_transport.glsl"
+#endif
 #endif
 // Detailed captures need representative gather counts, not one globally
 // contended atomic per shaded fragment.  Preserve an estimated full-resolution
@@ -519,6 +523,54 @@ bool ForwardDecalReceiveShadows()
 {
     return (pc.Push.DiagnosticFlags & 64u) != 0u;
 }
+
+bool ForwardThickTransmissionRayQueryEnabled()
+{
+    return (pc.Push.DiagnosticFlags & (1u << 7u)) != 0u;
+}
+
+bool ForwardThickTransmissionDispersionEnabled()
+{
+    return (pc.Push.DiagnosticFlags & (1u << 10u)) != 0u;
+}
+
+uint ForwardThickTransmissionMaximumInterfaces()
+{
+    return (pc.Push.HiZMipCount & 0x07u) + 1u;
+}
+
+uint ForwardThickTransmissionMaximumMediaDepth()
+{
+    return ((pc.Push.HiZMipCount >> 3u) & 0x03u) + 1u;
+}
+
+uint ForwardThickTransmissionMaximumCandidatesPerInterface()
+{
+    return ((pc.Push.HiZMipCount >> 5u) & 0x3fu) + 1u;
+}
+
+#if DIRECTIONAL_TRANSPARENT_RAY_QUERY && \
+    !NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+uint ForwardThickTransmissionTaskBudget()
+{
+    return pc.Push.OcclusionCullingEnabled >> 2u;
+}
+
+bool ForwardTryReserveThickTransmissionTask()
+{
+    uint taskBudget = ForwardThickTransmissionTaskBudget();
+    if (taskBudget == 0u)
+        return false;
+
+    uint bufferIndex = uint(RENDERER_DIAGNOSTICS_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+    uint taskIndex = atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(bufferIndex)].Words[
+            THICK_TRANSMISSION_TASK_COUNTER],
+        1u);
+    return taskIndex < taskBudget;
+}
+#endif
 
 bool ForwardLayeredReceiverAcceptsShadows(bool geometryDecal)
 {
@@ -3099,6 +3151,392 @@ void AccumulateLight(
     directDiffuseSource += diffuseContribution * shadowFactor;
 }
 
+#if DIRECTIONAL_TRANSPARENT_RAY_QUERY && \
+    !NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+uint ForwardThickTransmissionSeed(
+    uint stableObjectIdentity,
+    uint materialRevision)
+{
+    uvec2 pixel = uvec2(max(floor(gl_FragCoord.xy), vec2(0.0)));
+    return ThickTransmissionHash(
+        stableObjectIdentity ^ materialRevision ^
+        pixel.x * 0x9e3779b9u ^ pixel.y * 0x85ebca6bu);
+}
+
+vec3 ForwardInitialWaterScatterNormal(
+    GPUMaterialData material,
+    GPUMaterialExtensionData extensionData,
+    vec3 orientedNormal)
+{
+    if (OpticalMaterialBoundaryKind(extensionData) !=
+            OPTICAL_BOUNDARY_WATER_SURFACE ||
+        material.NormalTextureIndex < FIRST_TEXTURE_INDEX ||
+        material.NormalTextureIndex >= FIRST_TEXTURE_INDEX + MAX_TEXTURES)
+    {
+        return orientedNormal;
+    }
+    vec3 tangent = normalize(fragWorldTangent.xyz);
+    tangent = normalize(tangent - orientedNormal *
+        dot(tangent, orientedNormal));
+    vec3 bitangent = normalize(cross(orientedNormal, tangent) *
+        fragWorldTangent.w);
+    vec2 baseUv = int(round(material.TextureTexCoordSets.y)) == 1
+        ? fragTexCoord2 : fragTexCoord;
+    baseUv = GiCausticTextureTransform(
+        baseUv, material.NormalOffsetScale, material.TextureRotations.y);
+    vec2 scales = max(
+        OpticalMaterialWaterUvScales(extensionData), vec2(0.001));
+    vec2 uv0 = baseUv * scales.x +
+        OpticalMaterialWaterVelocity0(extensionData) * pc.Push.Time;
+    vec2 uv1 = baseUv * scales.y +
+        OpticalMaterialWaterVelocity1(extensionData) * pc.Push.Time;
+    vec2 wave0 = textureLod(
+        BindlessTextures[nonuniformEXT(material.NormalTextureIndex)],
+        uv0, 0.0).xy * 2.0 - 1.0;
+    vec2 wave1 = textureLod(
+        BindlessTextures[nonuniformEXT(material.NormalTextureIndex)],
+        uv1, 0.0).xy * 2.0 - 1.0;
+    vec2 wave = 0.5 * (wave0 + wave1) *
+        max(material.NormalScaleBias.x, 0.0);
+    vec3 waterNormal = normalize(orientedNormal +
+        tangent * wave.x + bitangent * wave.y);
+    return dot(waterNormal, orientedNormal) > 0.0
+        ? waterNormal : orientedNormal;
+}
+
+#if !NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+struct ForwardTerminalDdgiSample
+{
+    vec3 Irradiance;
+    float Ownership;
+    float TransportVisibility;
+};
+
+ForwardTerminalDdgiSample ForwardSampleSimpleDdgiTerminalReadOnly(
+    SimpleDdgiParams p,
+    vec3 worldPosition,
+    vec3 surfaceNormal,
+    vec3 viewDirection)
+{
+    ForwardTerminalDdgiSample result;
+    result.Irradiance = vec3(0.0);
+    result.Ownership = 0.0;
+    result.TransportVisibility = 0.0;
+    if ((p.flags &
+            (SIMPLE_DDGI_FLAG_ENABLED |
+             SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) !=
+            (SIMPLE_DDGI_FLAG_ENABLED |
+             SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) ||
+        p.probeCount == 0u || p.volumeCount == 0u)
+    {
+        return result;
+    }
+
+    vec3 safeNormal = length(surfaceNormal) > 0.00001
+        ? normalize(surfaceNormal)
+        : vec3(0.0, 1.0, 0.0);
+    uint volumeIndex;
+    SimpleDdgiVolume volume;
+    float edgeWeight;
+    bool ignoredRefinementFallback;
+    if (!SelectSimpleDdgiVolume(
+            p,
+            worldPosition,
+            true,
+            volumeIndex,
+            volume,
+            edgeWeight,
+            ignoredRefinementFallback))
+    {
+        return result;
+    }
+
+    bool ignoredBiasOutsideDomain;
+    vec3 samplePosition = SimpleDdgiResolveInterpolationPosition(
+        volume,
+        worldPosition,
+        safeNormal,
+        viewDirection,
+        p,
+        ignoredBiasOutsideDomain);
+    vec3 grid = (samplePosition - volume.origin) / volume.spacing;
+    vec3 baseF = floor(grid);
+    vec3 fraction = clamp(grid - baseF, vec3(0.0), vec3(1.0));
+    ivec3 base = ivec3(baseF);
+    SimpleDdgiVolumePaging paging = ReadSimpleDdgiVolumePaging(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
+        volumeIndex);
+    vec3 accumulated = vec3(0.0);
+    float availableMass = 0.0;
+    float directionalMass = 0.0;
+    float visibleMass = 0.0;
+
+    // Secondary refracted terminals consume the already-published field but
+    // are not independent screen receivers. Keep this loop side-effect free:
+    // no residency demand, diagnostic, or contribution feedback is emitted.
+    for (uint z = 0u; z < 2u; ++z)
+    for (uint y = 0u; y < 2u; ++y)
+    for (uint x = 0u; x < 2u; ++x)
+    {
+        ivec3 coordinate = base + ivec3(int(x), int(y), int(z));
+        if (any(lessThan(coordinate, ivec3(0))) ||
+            any(greaterThanEqual(coordinate, ivec3(volume.gridCount))))
+        {
+            continue;
+        }
+
+        vec3 cornerWeight = mix(
+            1.0 - fraction,
+            fraction,
+            vec3(x, y, z));
+        float trilinear =
+            cornerWeight.x * cornerWeight.y * cornerWeight.z;
+        SimpleDdgiProbeAddress address = ResolveSimpleDdgiReceiverProbeAddress(
+            p,
+            volume,
+            paging,
+            uvec3(coordinate));
+        if (!address.resident || !address.published)
+            continue;
+
+        SimpleDdgiReceiverProbe probe = ReadSimpleDdgiReceiverProbe(
+            uint(SIMPLE_DDGI_RECEIVER_PROBE_BUFFER_INDEX),
+            address.virtualProbeIndex,
+            volume.spacing);
+        if (!SimpleDdgiReceiverProbeSupportsGather(probe) ||
+            probe.atlasProbeAddress ==
+                SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS ||
+            probe.atlasProbeAddress >= p.physicalProbeCapacity)
+        {
+            continue;
+        }
+
+        SimpleDdgiAtlasAddress atlasAddress;
+        if (!TryBuildSimpleDdgiAtlasAddress(
+                p,
+                volume,
+                paging,
+                probe.atlasProbeAddress,
+                atlasAddress))
+        {
+            continue;
+        }
+
+        vec3 probePosition = volume.origin +
+            vec3(coordinate) * volume.spacing + probe.relocation;
+        vec3 toSurface = samplePosition - probePosition;
+        float distanceToProbe = length(toSurface);
+        vec3 probeToSurface = distanceToProbe > 0.00001
+            ? toSurface / distanceToProbe
+            : safeNormal;
+        vec4 irradiance = SampleSimpleDdgiIrradianceBilinearAtAddress(
+            p.publishedIrradianceAtlasBufferIndex,
+            atlasAddress,
+            safeNormal,
+            p.irradianceTexels,
+            p);
+        if (!SimpleDdgiAtlasSupportsGather(irradiance))
+            continue;
+
+        vec2 moments = SampleSimpleDdgiVisibilityBilinearAtAddress(
+            uint(SIMPLE_DDGI_VISIBILITY_ATLAS_BUFFER_INDEX),
+            atlasAddress,
+            probeToSurface,
+            p.visibilityTexels,
+            p);
+        float halfLambert = clamp(
+            dot(safeNormal, -probeToSurface) * 0.5 + 0.5,
+            0.0,
+            1.0);
+        float directionalWeight =
+            (halfLambert * halfLambert + SIMPLE_DDGI_WRAP_SHADING_OFFSET) /
+            (1.0 + SIMPLE_DDGI_WRAP_SHADING_OFFSET);
+        float dataWeight = trilinear * clamp(probe.activeWeight, 0.0, 1.0);
+        float visibilityBias = clamp(
+            0.03 * p.selfShadowBiasScale * volume.spacing,
+            0.002,
+            volume.spacing * 0.10);
+        float biasedDistance = max(distanceToProbe - visibilityBias, 0.0);
+        float transportVisibility = SimpleDdgiChebyshev(
+            moments.x,
+            moments.y,
+            biasedDistance,
+            volume.spacing);
+        transportVisibility = SimpleDdgiApplyNearVisibilitySidecar(
+            p,
+            volume,
+            atlasAddress,
+            probeToSurface,
+            biasedDistance,
+            transportVisibility);
+        float selectedWeight = dataWeight * directionalWeight *
+            SimpleDdgiVisibilitySelectionWeight(transportVisibility);
+        accumulated += max(irradiance.rgb, vec3(0.0)) * selectedWeight;
+        availableMass += dataWeight;
+        directionalMass += selectedWeight;
+        visibleMass += selectedWeight * transportVisibility;
+    }
+
+    result.Irradiance = directionalMass > 0.000001
+        ? clamp(accumulated / directionalMass, vec3(0.0), vec3(64.0))
+        : vec3(0.0);
+    result.Ownership = clamp(availableMass * edgeWeight, 0.0, 1.0);
+    result.TransportVisibility = directionalMass > 0.000001
+        ? clamp(visibleMass / directionalMass, 0.0, 1.0)
+        : 0.0;
+    return result;
+}
+#endif
+
+vec3 ForwardEvaluateThickTerminalRadiance(
+    ThickTransmissionPathResult path,
+    GPUEnvironmentData environment)
+{
+    if (path.Miss != 0u)
+    {
+        return SampleEnvironmentPrefilteredRadiance(
+            environment,
+            path.Direction,
+            0.0);
+    }
+
+    RayQuerySurfaceHit hit = path.TerminalHit;
+    vec4 baseColor = RayQuerySurfaceSampleBaseColor(hit);
+    vec2 metallicRoughness =
+        RayQuerySurfaceSampleMetallicRoughness(hit);
+    float metallic = metallicRoughness.x;
+    float roughness = max(metallicRoughness.y, 0.04);
+    vec3 normal = RayQuerySurfaceOrientedNormal(hit);
+    vec3 viewDirection = normalize(-path.Direction);
+    vec3 diffuseBase = baseColor.rgb * (1.0 - metallic);
+    float terminalIor = 1.5;
+    if (hit.Material.ExtensionDataIndex >= 0)
+    {
+        GPUMaterialExtensionData terminalExtension =
+            ReadMaterialExtension(uint(hit.Material.ExtensionDataIndex));
+        if (DielectricFinite(terminalExtension.Transmission.y) &&
+            terminalExtension.Transmission.y >= 1.0 &&
+            terminalExtension.Transmission.y <= 4.0)
+        {
+            terminalIor = terminalExtension.Transmission.y;
+        }
+    }
+    vec3 dielectricF0 = EvaluateGiMaterialDielectricF0(
+        terminalIor, 1.0, vec3(1.0));
+    vec3 direct = vec3(0.0);
+    vec3 ignoredDiffuse = vec3(0.0);
+    float ignoredShadow;
+    uint ignoredCascade;
+    for (uint lightIndex = 0u;
+         lightIndex < pc.Push.LightCount;
+         ++lightIndex)
+    {
+        AccumulateLight(
+            lightIndex,
+            baseColor.rgb,
+            metallic,
+            diffuseBase,
+            roughness,
+            dielectricF0,
+            normal,
+            normal,
+            viewDirection,
+            hit.Position,
+            false,
+            ignoredShadow,
+            ignoredCascade,
+            direct,
+            ignoredDiffuse);
+    }
+
+    vec3 environmentDiffuse = EvaluateEnvironmentDiffuseIrradiance(
+        environment, normal) * diffuseBase / GI_MATERIAL_PI;
+    vec3 indirect = environmentDiffuse;
+#if !NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+    if (ForwardGlobalIlluminationEnabled() != 0u)
+    {
+        SimpleDdgiParams params = ReadSimpleDdgiParams(
+            uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+        ForwardTerminalDdgiSample terminalDdgi =
+            ForwardSampleSimpleDdgiTerminalReadOnly(
+            params, hit.Position, normal, viewDirection);
+        float visibilityConfidence = smoothstep(
+            SIMPLE_DDGI_VISIBILITY_SELECTION_LOW,
+            SIMPLE_DDGI_VISIBILITY_SELECTION_HIGH,
+            terminalDdgi.TransportVisibility);
+        float leak = clamp(
+            mix(
+                1.0,
+                visibilityConfidence,
+                params.thinWallLeakClampStrength),
+            0.05,
+            1.0);
+        vec3 ddgi = EvaluateGiDiffuseFromIrradiance(
+            terminalDdgi.Irradiance *
+                max(params.indirectIntensity, 0.0),
+            diffuseBase);
+        indirect = ddgi * terminalDdgi.Ownership * leak +
+            environmentDiffuse * (1.0 - terminalDdgi.Ownership);
+    }
+#endif
+    vec3 emissive = RayQuerySurfaceSampleEmissive(hit);
+    return max(direct + indirect + emissive, vec3(0.0));
+}
+
+bool ForwardTraceThickTransmissionChannel(
+    GPUMaterialData material,
+    GPUMaterialExtensionData extensionData,
+    uint stableObjectIdentity,
+    vec3 incidentDirection,
+    vec3 scatterNormal,
+    float roughness,
+    uint randomSeed,
+    uint spectralChannel,
+    GPUEnvironmentData environment,
+    out vec3 radiance,
+    out ThickTransmissionPathResult path)
+{
+    DielectricBoundary boundary;
+    GPUMaterialExtensionData resolvedExtension;
+    float ignoredRoughness;
+    bool dispersionEnabled =
+        ForwardThickTransmissionDispersionEnabled() &&
+        extensionData.Dispersion.x > 0.0;
+    if (!ThickTransmissionResolveBoundary(
+            stableObjectIdentity,
+            material,
+            dispersionEnabled,
+            spectralChannel,
+            boundary,
+            resolvedExtension,
+            ignoredRoughness) ||
+        !ThickTransmissionTracePath(
+            fragWorldPosition,
+            incidentDirection,
+            scatterNormal,
+            boundary,
+            gl_FrontFacing,
+            roughness,
+            ForwardThickTransmissionMaximumInterfaces(),
+            ForwardThickTransmissionMaximumMediaDepth(),
+            ForwardThickTransmissionMaximumCandidatesPerInterface(),
+            max(pc.Push.OcclusionBias, GI_CAUSTIC_RAY_EPSILON * 4.0),
+            randomSeed,
+            pc.Push.Time,
+            dispersionEnabled,
+            spectralChannel,
+            path))
+    {
+        radiance = vec3(0.0);
+        return false;
+    }
+    radiance = ForwardEvaluateThickTerminalRadiance(path, environment) *
+        path.Throughput;
+    return DielectricFinite(radiance) &&
+        all(greaterThanEqual(radiance, vec3(0.0)));
+}
+#endif
+
 void WriteForwardColor(vec4 color)
 {
 #if FORWARD_WEIGHTED_OIT
@@ -3671,6 +4109,10 @@ void main()
     float roughness = clamp(material.MetallicRoughnessAO.y * armSample.g, 0.04, 1.0);
     float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);
     roughness = FilterSpecularRoughness(roughness, normal);
+    // Preserve the isotropic lobe width for reflection scheduling. The
+    // anisotropic BRDF adjustment below sharpens one axis, but a brushed lobe
+    // remains broad overall and does not warrant isotropic full-rate tracing.
+    float reflectionSchedulingRoughness = roughness;
     float sampledOcclusion = material.OcclusionTextureIndex == DEFAULT_WHITE_TEXTURE
         ? 1.0
         : SampleMaterialTexture(
@@ -3718,6 +4160,9 @@ void main()
     bool thinGiTransport = GiMaterialHasFlag(
         material.TransportFlags,
         GI_MATERIAL_THIN_SURFACE_TRANSMISSION);
+    bool volumeGiTransport = GiMaterialHasFlag(
+        material.TransportFlags,
+        GI_MATERIAL_VOLUME_TRANSMISSION);
     bool rasterTransmissionEnabled =
         (material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION) != 0u &&
         !thinGiTransport;
@@ -5262,12 +5707,25 @@ void main()
         pow(indirectAo, 1.0 + roughness) * indirectSpecularVisibility,
         0.0,
         1.0);
+    uint hybridReflectionLobeFlags = 0u;
+    if (transmissionFactor >= 0.05)
+    {
+        hybridReflectionLobeFlags |=
+            NJULF_HYBRID_REFLECTION_LOBE_TRANSMISSIVE;
+    }
+    if (anisotropyStrength >= 0.35 &&
+        reflectionSchedulingRoughness >= 0.20)
+    {
+        hybridReflectionLobeFlags |=
+            NJULF_HYBRID_REFLECTION_LOBE_BROAD_ANISOTROPIC;
+    }
     NjulfHybridReflectionCreatePayload(
         geometricNormal,
         normal,
         mix(dielectricF0, albedo, metallic),
         roughness,
         hybridSpecularOcclusion,
+        hybridReflectionLobeFlags,
         // Meshlet IDs are rasterization details and change across otherwise
         // continuous surfaces. History identity must remain stable across them.
         uvec3(fragObjectIndex, fragMaterialIndex, 0u),
@@ -5320,36 +5778,142 @@ void main()
 
         if (transmissionFactor > 0.0 && extensionEnvironment.Enabled != 0u)
         {
-            vec3 transmittedDirection = -normal;
-            float lod = roughness * max(float(extensionEnvironment.PrefilteredMipCount) - 1.0, 0.0);
-            vec3 transmittedSample = SampleEnvironmentPrefilteredRadiance(
-                extensionEnvironment,
-                transmittedDirection,
-                lod);
-            if (dispersion > 0.0)
+            vec3 incidentDirection = normalize(-viewDirection);
+            vec3 orientedNormal = normalize(normal);
+            vec3 transmitted = vec3(0.0);
+            bool resolvedPhysicalPath = false;
+#if DIRECTIONAL_TRANSPARENT_RAY_QUERY && \
+    !NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+            if (volumeGiTransport &&
+                ForwardThickTransmissionRayQueryEnabled() &&
+                ForwardTryReserveThickTransmissionTask())
             {
-                vec3 tangent = normalize(fragWorldTangent.xyz);
-                vec3 redDirection = normalize(transmittedDirection + tangent * dispersion * 0.012);
-                vec3 blueDirection = normalize(transmittedDirection - tangent * dispersion * 0.012);
-                transmittedSample.r = SampleEnvironmentPrefilteredRadiance(
-                    extensionEnvironment,
-                    redDirection,
-                    lod).r;
-                transmittedSample.b = SampleEnvironmentPrefilteredRadiance(
-                    extensionEnvironment,
-                    blueDirection,
-                    lod).b;
+                GPUObjectData objectData = ReadInstanceData(
+                    pc.Push.CurrentFrameIndex,
+                    fragObjectIndex);
+                uint stableObjectIdentity =
+                    objectData.NearFieldStableObjectId;
+                vec3 scatterNormal =
+                    ForwardInitialWaterScatterNormal(
+                        material,
+                        materialExtension,
+                        orientedNormal);
+                uint randomSeed = ForwardThickTransmissionSeed(
+                    stableObjectIdentity,
+                    material.MaterialRevision);
+                ThickTransmissionPathResult centralPath;
+                vec3 centralRadiance;
+                resolvedPhysicalPath =
+                    ForwardTraceThickTransmissionChannel(
+                        material,
+                        materialExtension,
+                        stableObjectIdentity,
+                        incidentDirection,
+                        scatterNormal,
+                        roughness,
+                        randomSeed,
+                        THICK_TRANSMISSION_SPECTRAL_CENTRAL,
+                        extensionEnvironment,
+                        centralRadiance,
+                        centralPath);
+                transmitted = centralRadiance;
+                if (resolvedPhysicalPath &&
+                    ForwardThickTransmissionDispersionEnabled() &&
+                    dispersion > 0.0)
+                {
+                    ThickTransmissionPathResult redPath;
+                    ThickTransmissionPathResult bluePath;
+                    vec3 redRadiance;
+                    vec3 blueRadiance;
+                    bool redValid = ForwardTraceThickTransmissionChannel(
+                        material, materialExtension, stableObjectIdentity,
+                        incidentDirection, scatterNormal, roughness,
+                        randomSeed, THICK_TRANSMISSION_SPECTRAL_RED,
+                        extensionEnvironment, redRadiance, redPath);
+                    bool blueValid = ForwardTraceThickTransmissionChannel(
+                        material, materialExtension, stableObjectIdentity,
+                        incidentDirection, scatterNormal, roughness,
+                        randomSeed, THICK_TRANSMISSION_SPECTRAL_BLUE,
+                        extensionEnvironment, blueRadiance, bluePath);
+                    // The central IOR is exactly the green-channel IOR in the
+                    // Khronos RGB approximation, so the already-traced central
+                    // path is the deterministic green sample.
+                    if (redValid && blueValid)
+                    {
+                        transmitted = vec3(
+                            redRadiance.r,
+                            centralRadiance.g,
+                            blueRadiance.b);
+                    }
+                }
+            }
+#endif
+            if (!resolvedPhysicalPath)
+            {
+                float centralReflectance;
+                vec3 transmittedDirection;
+                bool refracted = DielectricTryRefract(
+                    incidentDirection,
+                    orientedNormal,
+                    1.0,
+                    ior,
+                    transmittedDirection,
+                    centralReflectance);
+                if (!refracted)
+                    transmittedDirection = normalize(reflect(
+                        incidentDirection, orientedNormal));
+                float lod = roughness * max(
+                    float(extensionEnvironment.PrefilteredMipCount) - 1.0,
+                    0.0);
+                vec3 transmittedSample =
+                    SampleEnvironmentPrefilteredRadiance(
+                        extensionEnvironment,
+                        transmittedDirection,
+                        lod);
+                if (ForwardThickTransmissionDispersionEnabled() &&
+                    dispersion > 0.0)
+                {
+                    vec3 rgbIors = DielectricRgbIors(ior, dispersion);
+                    vec3 redDirection;
+                    vec3 blueDirection;
+                    float ignoredReflectance;
+                    bool redRefracted = DielectricTryRefract(
+                        incidentDirection, orientedNormal, 1.0,
+                        rgbIors.r, redDirection, ignoredReflectance);
+                    bool blueRefracted = DielectricTryRefract(
+                        incidentDirection, orientedNormal, 1.0,
+                        rgbIors.b, blueDirection, ignoredReflectance);
+                    if (redRefracted)
+                    {
+                        transmittedSample.r =
+                            SampleEnvironmentPrefilteredRadiance(
+                                extensionEnvironment,
+                                redDirection,
+                                lod).r;
+                    }
+                    if (blueRefracted)
+                    {
+                        transmittedSample.b =
+                            SampleEnvironmentPrefilteredRadiance(
+                                extensionEnvironment,
+                                blueDirection,
+                                lod).b;
+                    }
+                }
+                transmitted = transmittedSample;
+                if (attenuationDistance > 0.0 &&
+                    transmissionThickness > 0.0)
+                {
+                    transmitted *= DielectricBeerLambert(
+                        DielectricAbsorptionCoefficient(
+                            attenuationColor,
+                            attenuationDistance),
+                        transmissionThickness);
+                }
             }
 
-            vec3 transmitted = transmittedSample * albedo;
-            if (attenuationDistance > 0.0 && transmissionThickness > 0.0)
-            {
-                float attenuationAmount = clamp(transmissionThickness / attenuationDistance, 0.0, 32.0);
-                transmitted *= pow(max(attenuationColor, vec3(0.0001)), vec3(attenuationAmount));
-            }
-
-            float fresnelKeep = FresnelSchlick(nDotV, dielectricF0).x;
-            color = mix(color, transmitted + specularIbl * fresnelKeep, transmissionFactor * (1.0 - fresnelKeep));
+            transmitted *= albedo;
+            color = mix(color, transmitted, transmissionFactor);
             outputAlpha = min(outputAlpha, mix(1.0, 0.35, transmissionFactor));
         }
     }

@@ -6,7 +6,7 @@
 // DDGI atlas/source cache.
 #include "common.glsl"
 
-const uint GI_CAUSTIC_ABI_VERSION = 0xC4010004u;
+const uint GI_CAUSTIC_ABI_VERSION = 0xC4010005u;
 const uint GI_CAUSTIC_TASK_HEADER_WORDS = 16u;
 const uint GI_CAUSTIC_TASK_WORDS = 32u;
 const uint GI_CAUSTIC_EMITTER_WORDS = 32u;

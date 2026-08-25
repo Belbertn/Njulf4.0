@@ -50,6 +50,38 @@ public readonly record struct GiCausticMaterialContract(
     bool UsesThinTransmission,
     bool HasExplicitThicknessSemantics)
 {
+    public GiCausticCasterPolicy CasterPolicy { get; init; } =
+        GiCausticCasterPolicy.Default;
+    public OpticalBoundaryKind BoundaryKind { get; init; } =
+        OpticalBoundaryKind.ClosedVolume;
+    public bool UsesVolumeTransmission { get; init; }
+
+    public bool EffectiveUsesVolumeTransmission =>
+        UsesVolumeTransmission ||
+        Participation == GiCausticParticipationMode.ClosedDielectricHero;
+
+    public GiCausticCasterPolicy EffectiveCasterPolicy
+    {
+        get
+        {
+            GiCausticCasterPolicy resolved =
+                OpticalMaterialGpuContract.ResolveCasterPolicy(
+                    CasterPolicy, Participation);
+            if (resolved != GiCausticCasterPolicy.Default)
+                return resolved;
+            return EffectiveUsesVolumeTransmission ||
+                   BoundaryKind == OpticalBoundaryKind.WaterSurface
+                ? GiCausticCasterPolicy.DielectricPriority
+                : GiCausticCasterPolicy.Disabled;
+        }
+    }
+
+    public GiCausticParticipationMode EffectiveLegacyParticipation =>
+        OpticalMaterialGpuContract.ToLegacyParticipation(
+            EffectiveCasterPolicy,
+            EffectiveUsesVolumeTransmission
+                ? GiTransmissionPolicy.Volume : GiTransmissionPolicy.None);
+
     public bool IsFinite =>
         float.IsFinite(Roughness) &&
         float.IsFinite(Ior) &&
@@ -58,7 +90,7 @@ public readonly record struct GiCausticMaterialContract(
         float.IsFinite(AbsorptionCoefficient.Z);
 
     public bool IsEnergyConservingMirror =>
-        Participation == GiCausticParticipationMode.MirrorHero &&
+        EffectiveCasterPolicy == GiCausticCasterPolicy.Mirror &&
         IsFinite &&
         Roughness >= 0.0f && Roughness <= 1.0f &&
         Ior > 0.0f &&
@@ -103,7 +135,8 @@ public static class GiCausticHeroContractValidator
         in GiCausticMaterialContract material,
         in GiCausticHeroGeometryFacts geometry)
     {
-        if (material.Participation == GiCausticParticipationMode.None)
+        GiCausticCasterPolicy casterPolicy = material.EffectiveCasterPolicy;
+        if (casterPolicy == GiCausticCasterPolicy.Disabled)
             return Reject(GiCausticHeroRejectionReason.ParticipationDisabled);
         if (!material.IsFinite || material.AbsorptionCoefficient.X < 0.0f ||
             material.AbsorptionCoefficient.Y < 0.0f ||
@@ -125,9 +158,9 @@ public static class GiCausticHeroContractValidator
         if (!geometry.HasStableRevisions)
             return Reject(GiCausticHeroRejectionReason.RevisionUnavailable);
 
-        switch (material.Participation)
+        switch (casterPolicy)
         {
-            case GiCausticParticipationMode.MirrorHero:
+            case GiCausticCasterPolicy.Mirror:
                 if (material.Roughness < 0.0f || material.Roughness > 0.04f ||
                     material.Ior <= 0.0f)
                 {
@@ -136,29 +169,32 @@ public static class GiCausticHeroContractValidator
 
                 return GiCausticHeroValidation.Accepted;
 
-            case GiCausticParticipationMode.ClosedDielectricHero:
-                if (!geometry.IsClosedManifold)
+            case GiCausticCasterPolicy.DielectricPriority:
+                bool water = material.BoundaryKind ==
+                    OpticalBoundaryKind.WaterSurface;
+                if (!water && !geometry.IsClosedManifold)
                     return Reject(GiCausticHeroRejectionReason.NotClosedManifold);
-                if (!geometry.HasConsistentWinding)
+                if (!water && !geometry.HasConsistentWinding)
                     return Reject(GiCausticHeroRejectionReason.InconsistentWinding);
                 if (!geometry.HasValidGeometricNormals)
                     return Reject(GiCausticHeroRejectionReason.MissingGeometricNormals);
-                if (geometry.HasUnsupportedNestedMedia)
-                    return Reject(GiCausticHeroRejectionReason.UnsupportedNestedMedium);
-                if (!material.HasExplicitThicknessSemantics)
+                if (!material.EffectiveUsesVolumeTransmission ||
+                    !material.HasExplicitThicknessSemantics)
                 {
                     return Reject(
                         GiCausticHeroRejectionReason.MissingThicknessSemantics);
                 }
                 if (material.Ior <= 1.0f || material.Ior > 4.0f)
                     return Reject(GiCausticHeroRejectionReason.InvalidIor);
-                if (material.Roughness < 0.0f || material.Roughness > 0.04f)
+                if (material.Roughness < 0.0f || material.Roughness > 1.0f)
                     return Reject(GiCausticHeroRejectionReason.UnsupportedRoughness);
 
                 return GiCausticHeroValidation.Accepted;
 
-            case GiCausticParticipationMode.RoughSpecularReference:
-                if (material.Roughness <= 0.04f || material.Roughness > 1.0f)
+            case GiCausticCasterPolicy.RoughSpecular:
+                if (material.Roughness <=
+                        DielectricTransportMath.DeltaRoughnessThreshold ||
+                    material.Roughness > 1.0f)
                     return Reject(GiCausticHeroRejectionReason.UnsupportedRoughness);
 
                 return GiCausticHeroValidation.Accepted;

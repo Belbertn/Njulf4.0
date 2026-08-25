@@ -2,36 +2,10 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "common.glsl"
+#include "anti_aliasing_push.glsl"
 
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outColor;
-
-layout(push_constant) uniform AntiAliasingPushBlock
-{
-    vec2 SourceDimensions;
-    vec2 InvSourceDimensions;
-    uint InputTextureIndex;
-    uint SmaaEdgesTextureIndex;
-    uint SmaaBlendWeightsTextureIndex;
-    uint SmaaAreaTextureIndex;
-    uint SmaaSearchTextureIndex;
-    float FxaaContrastThreshold;
-    float FxaaRelativeThreshold;
-    float FxaaSubpixelBlending;
-    float SmaaThreshold;
-    uint SmaaMaxSearchSteps;
-    uint SmaaMaxSearchStepsDiagonal;
-    float SmaaCornerRounding;
-    uint DebugView;
-    uint OutputToSrgb;
-    uint SmaaQuality;
-    uint SmaaDiagonalEnabled;
-    uint SmaaCornerEnabled;
-    float TaaFeedbackMin;
-    float TaaFeedbackMax;
-    float TaaVelocityRejectionScale;
-    uint TaaHistoryValid;
-} pc;
 
 vec3 EncodeOutput(vec3 color)
 {
@@ -46,30 +20,51 @@ vec3 EncodeOutput(vec3 color)
     return color;
 }
 
+vec4 SampleBlend(vec2 uv)
+{
+    return textureLod(
+        BindlessTextures[nonuniformEXT(int(pc.SmaaBlendWeightsTextureIndex))],
+        uv,
+        0.0);
+}
+
+vec3 SampleColor(vec2 uv)
+{
+    return textureLod(
+        BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))],
+        uv,
+        0.0).rgb;
+}
+
 void main()
 {
     vec2 px = pc.InvSourceDimensions;
-    vec3 center = texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv).rgb;
-    vec4 weights = texture(BindlessTextures[nonuniformEXT(int(pc.SmaaBlendWeightsTextureIndex))], inUv);
-
+    vec3 center = SampleColor(inUv);
     if (pc.DebugView == 1u)
     {
         outColor = vec4(EncodeOutput(center), 1.0);
         return;
     }
 
-    vec3 horizontal = mix(
-        texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv - vec2(px.x, 0.0)).rgb,
-        texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(px.x, 0.0)).rgb,
-        0.5);
-    vec3 vertical = mix(
-        texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv - vec2(0.0, px.y)).rgb,
-        texture(BindlessTextures[nonuniformEXT(int(pc.InputTextureIndex))], inUv + vec2(0.0, px.y)).rgb,
-        0.5);
+    vec4 weights;
+    weights.x = SampleBlend(inUv + vec2(px.x, 0.0)).a;
+    weights.y = SampleBlend(inUv + vec2(0.0, px.y)).g;
+    weights.wz = SampleBlend(inUv).xz;
 
-    float horizontalWeight = clamp(max(weights.r, weights.g), 0.0, 1.0);
-    float verticalWeight = clamp(max(weights.b, weights.a), 0.0, 1.0);
-    vec3 result = mix(center, horizontal, horizontalWeight);
-    result = mix(result, vertical, verticalWeight);
+    vec3 result = center;
+    if (dot(weights, vec4(1.0)) >= 0.00001)
+    {
+        bool horizontal = max(weights.x, weights.z) > max(weights.y, weights.w);
+        vec4 blendingOffset = horizontal
+            ? vec4(weights.x, 0.0, weights.z, 0.0)
+            : vec4(0.0, weights.y, 0.0, weights.w);
+        vec2 blendingWeight = horizontal ? weights.xz : weights.yw;
+        blendingWeight /= max(dot(blendingWeight, vec2(1.0)), 0.00001);
+        vec4 blendingCoordinate = inUv.xyxy +
+            blendingOffset * vec4(px, -px);
+        result = blendingWeight.x * SampleColor(blendingCoordinate.xy) +
+            blendingWeight.y * SampleColor(blendingCoordinate.zw);
+    }
+
     outColor = vec4(EncodeOutput(result), 1.0);
 }

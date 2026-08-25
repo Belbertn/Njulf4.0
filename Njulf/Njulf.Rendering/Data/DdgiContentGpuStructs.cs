@@ -177,6 +177,24 @@ public struct GPUSimpleDdgiRadianceShL2
 }
 
 /// <summary>
+/// Optional 20-byte source-cache sidecar for nonlinear dielectric paths.
+/// Endpoint direction and terminal direction use signed octahedral 16-bit
+/// pairs; endpoint distance is FP32; throughput is RGB binary16; the upper
+/// half of <see cref="ThroughputBAndFlags"/> contains the validity flags.
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 4, Size = 20)]
+public struct GPUSimpleDdgiVolumePathPayload
+{
+    public const ushort ValidFlag = 1 << 0;
+
+    public uint PackedEndpointDirection;
+    public float EndpointDistance;
+    public uint PackedTerminalDirection;
+    public uint PackedThroughputRg;
+    public uint ThroughputBAndFlags;
+}
+
+/// <summary>
 /// Frozen 80-byte work record for one camera-independent procedural foliage
 /// patch. The GPU expands the admitted card range directly into interleaved
 /// <see cref="GPUVertex"/> and uint32 index streams consumed by a dynamic BLAS.
@@ -226,7 +244,9 @@ public enum DdgiRayGeometryClass : uint
     DecalOverlay = 7,
     AuthoredFoliage = 8,
     ProceduralFoliageProxy = 9,
-    ConservativeProxy = 10
+    ConservativeProxy = 10,
+    VolumeTransmission = 11,
+    WaterSurface = 12
 }
 
 public enum DdgiRayVertexFormat : uint
@@ -250,7 +270,9 @@ public enum DdgiRayGeometryFlags : uint
     DynamicVertexSource = 1u << 6,
     ConservativeProxy = 1u << 7,
     PremultipliedAlpha = 1u << 8,
-    UnsupportedMaterialProxy = 1u << 9
+    UnsupportedMaterialProxy = 1u << 9,
+    VolumeTransmission = 1u << 10,
+    WaterSurface = 1u << 11
 }
 
 /// <summary>

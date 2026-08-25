@@ -16,8 +16,8 @@ public readonly record struct GiCausticGpuResourceLayoutRequest(
     ulong IndependentMemoryBudgetBytes,
     ulong MaximumStorageBufferRange = ulong.MaxValue,
     int MaximumEmitterCount = 64,
-    int MaximumHeroCount = 16,
-    int MaximumProposalPairCount = 1_024,
+    int MaximumHeroCount = 64,
+    int MaximumProposalPairCount = 4_096,
     GiCausticScreenResolveProfile ScreenResolveProfile = default);
 
 /// <summary>

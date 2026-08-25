@@ -31,6 +31,10 @@ namespace Njulf.Rendering.Data
         public GiParticipationOverride DiffuseGiParticipation { get; init; } = GiParticipationOverride.Default;
         public GiParticipationOverride EmissionGiParticipation { get; init; } = GiParticipationOverride.Default;
         public GiTransmissionPolicy TransmissionPolicy { get; init; } = GiTransmissionPolicy.None;
+        public OpticalBoundaryKind OpticalBoundary { get; init; } =
+            OpticalBoundaryKind.ClosedVolume;
+        public GiCausticCasterPolicy CausticCasterPolicy { get; init; } =
+            GiCausticCasterPolicy.Default;
         public int DecalLayer { get; init; }
         public float DecalDepthBias { get; init; }
 
@@ -60,12 +64,19 @@ namespace Njulf.Rendering.Data
                 SurfaceFlags = flags,
                 AlphaCutoff = material.NormalScaleBias.Z,
                 TransmissionPolicy = (material.TransportFlags &
-                                      (uint)GiMaterialTransportFlags.ThinSurfaceTransmission) != 0u
-                    ? GiTransmissionPolicy.ThinSurface
+                                      (uint)GiMaterialTransportFlags.VolumeTransmission) != 0u
+                    ? GiTransmissionPolicy.Volume
+                    : (material.TransportFlags &
+                       (uint)GiMaterialTransportFlags.ThinSurfaceTransmission) != 0u
+                        ? GiTransmissionPolicy.ThinSurface
                     : (material.TransportFlags &
                        (uint)GiMaterialTransportFlags.TransmissionRemovesOpaqueDiffuse) != 0u
                         ? GiTransmissionPolicy.Unsupported
-                        : GiTransmissionPolicy.None
+                        : GiTransmissionPolicy.None,
+                OpticalBoundary = (material.TransportFlags &
+                                   (uint)GiMaterialTransportFlags.WaterSurfaceBoundary) != 0u
+                    ? OpticalBoundaryKind.WaterSurface
+                    : OpticalBoundaryKind.ClosedVolume
             };
         }
 
@@ -83,6 +94,8 @@ namespace Njulf.Rendering.Data
         public bool ReceivesShadows => SurfaceFlags.HasFlag(MaterialSurfaceFlags.ReceivesShadows);
         public bool DoubleSided => SurfaceFlags.HasFlag(MaterialSurfaceFlags.DoubleSided);
         public bool IsUnlit => ShadingModel == MaterialShadingModel.Unlit;
+        public bool IsVolumeTransmission =>
+            TransmissionPolicy == GiTransmissionPolicy.Volume;
         public bool ReceivesIndirectDiffuse =>
             DiffuseGiParticipation != GiParticipationOverride.Disabled &&
             ShadingModel is not MaterialShadingModel.Unlit and not MaterialShadingModel.Decal;

@@ -63,7 +63,8 @@ public enum RaySceneConsumer : uint
     DirectionalContact = 1u << 1,
     DirectionalFull = 1u << 2,
     GiCaustics = 1u << 3,
-    Reflection = 1u << 4
+    Reflection = 1u << 4,
+    ThickTransmission = 1u << 5
 }
 
 [Flags]
@@ -79,6 +80,8 @@ public enum RaySceneGeometryCategory : uint
     DoubleSided = 1u << 6,
     ThinTransmission = 1u << 7,
     AlphaBlend = 1u << 8,
+    VolumeTransmission = 1u << 9,
+    WaterSurface = 1u << 10,
 
     DirectionalShadowDefault = StaticOpaque | DynamicOpaque | AlphaTested |
         SkinnedCurrentPose | FoliageOpaque | FoliageAlphaTested | DoubleSided
@@ -242,6 +245,25 @@ public readonly record struct RaySceneRequirement(
             // shaded by the forward transparent receiver path.
             RaySceneGeometryCategory.DirectionalShadowDefault,
             settings.SsrMaxDistance,
+            RequiresCurrentPose: true);
+    }
+
+    public static RaySceneRequirement ForThickTransmission(
+        TransparencySettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (!settings.Enabled ||
+            settings.ThickTransmissionMode != ThickTransmissionMode.RayQuery)
+        {
+            return None;
+        }
+
+        return new RaySceneRequirement(
+            RaySceneConsumer.ThickTransmission,
+            RaySceneGeometryCategory.DirectionalShadowDefault |
+            RaySceneGeometryCategory.VolumeTransmission |
+            RaySceneGeometryCategory.WaterSurface,
+            settings.ThickTransmissionMaximumDistance,
             RequiresCurrentPose: true);
     }
 }

@@ -95,6 +95,11 @@ vec3 EvaluateSimpleDdgiCachedRecursiveBounce(
         any(lessThan(source.sourceRadiance, vec3(0.0))) ||
         !SimpleDdgiTransportFinite(source.direction) ||
         !SimpleDdgiTransportFinite(source.normal) ||
+        !SimpleDdgiTransportFinite(source.endpointOffset) ||
+        !SimpleDdgiTransportFinite(source.pathThroughput) ||
+        any(lessThan(source.pathThroughput, vec3(0.0))) ||
+        (source.volumePathFlags &
+            ~SIMPLE_DDGI_VOLUME_PATH_KNOWN_FLAG_MASK) != 0u ||
         isnan(source.distance) || isinf(source.distance) ||
         source.distance < 0.0 ||
         dot(source.direction, source.direction) <= 0.0000001)
@@ -183,11 +188,12 @@ vec3 EvaluateSimpleDdgiCachedRecursiveBounce(
     // Preserve the full diagonal RGB gain. The legacy scalar contraction is
     // its maximum component, but audit certification can now pair each
     // channel's fixed-point defect with the gain that actually affects it.
-    enforcedThroughput = reflected + transmitted + glossy;
+    enforcedThroughput = (reflected + transmitted + glossy) *
+        source.pathThroughput;
 
     vec3 probePosition = SimpleDdgiProbeLogicalPosition(volume, localProbeIndex) +
         probeState.relocation;
-    vec3 hitPosition = probePosition + source.direction * source.distance;
+    vec3 hitPosition = probePosition + source.endpointOffset;
     float surfaceOffset = max(0.03, volume.spacing * 0.02);
     if (recursiveGlossy &&
         max(glossy.r, max(glossy.g, glossy.b)) > 0.0)
@@ -260,6 +266,8 @@ vec3 EvaluateSimpleDdgiCachedRecursiveBounce(
             transmitted);
     }
 
+    reflectedBounceRadiance *= source.pathThroughput;
+    transmittedBounceRadiance *= source.pathThroughput;
     vec3 totalBounce = reflectedBounceRadiance + transmittedBounceRadiance;
     if (!SimpleDdgiTransportFinite(totalBounce) ||
         any(lessThan(totalBounce, vec3(0.0))))

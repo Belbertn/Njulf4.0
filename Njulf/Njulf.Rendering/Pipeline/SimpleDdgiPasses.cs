@@ -1613,6 +1613,8 @@ namespace Njulf.Rendering.Pipeline
         private const int TransparencyCandidateLimitShift = 4;
         private const int TransparencyLayerLimitShift = 12;
         private const int DecalCandidateLimitShift = 18;
+        private const uint ThickTransmissionRayQueryFlag = 1u << 22;
+        private const uint ThickTransmissionDispersionFlag = 1u << 23;
 
         private readonly string _shaderName;
         private readonly RenderSettings _settings;
@@ -1972,6 +1974,16 @@ namespace Njulf.Rendering.Pipeline
                 ResolveLocalLightSamplingMode(gi),
                 gi.SimpleDdgiExactLocalLightThreshold,
                 gi.SimpleDdgiLightTreeUniformMixtureProbability);
+            uint materialAndGeometryLimits =
+                PackTraceMaterialAndGeometryLimits(gi);
+            if (sceneData.EffectiveThickTransmissionMode ==
+                ThickTransmissionMode.RayQuery)
+            {
+                materialAndGeometryLimits |= ThickTransmissionRayQueryFlag;
+                if (sceneData.ThickTransmissionDispersionEnabled)
+                    materialAndGeometryLimits |=
+                        ThickTransmissionDispersionFlag;
+            }
 
             return new GPUSimpleDdgiPushConstants
             {
@@ -1989,7 +2001,7 @@ namespace Njulf.Rendering.Pipeline
                 FarFieldVoxelBufferIndex = BindlessIndex.FarFieldClipmapVoxelBuffer,
                 FarFieldInstanceBufferIndex = BindlessIndex.FarFieldClipmapInstanceBuffer,
                 Flags = flags,
-                MaterialTextureMaxCascade = PackTraceMaterialAndGeometryLimits(gi),
+                MaterialTextureMaxCascade = materialAndGeometryLimits,
                 ProbeStateBufferIndex = BindlessIndex.SimpleDdgiProbeStateBuffer,
                 ProbeUpdateQueueBufferIndex = BindlessIndex.SimpleDdgiProbeUpdateQueueBuffer,
                 RelocationClassificationBufferIndex = BindlessIndex.SimpleDdgiRelocationClassificationBuffer,

@@ -162,7 +162,7 @@ public sealed class SimpleDdgiHotColdSourceCacheTests
 
         Assert.Multiple(() =>
         {
-            Assert.That((uint)hotColdLayout.AbiVersion, Is.EqualTo(7u));
+            Assert.That((uint)hotColdLayout.AbiVersion, Is.EqualTo(8u));
             Assert.That(region.UsesHotColdLayout, Is.True);
             Assert.That(hotColdLayout.SourceCacheBytes,
                 Is.EqualTo(fixedLayout.SourceCacheBytes));

@@ -20,12 +20,12 @@ const uint SIMPLE_DDGI_STORAGE_FORMAT_INVALID = 3u;
 const uint SIMPLE_DDGI_STORAGE_ABI_SHIFT = 4u;
 const uint SIMPLE_DDGI_STORAGE_ABI_MASK = 0xfu << SIMPLE_DDGI_STORAGE_ABI_SHIFT;
 const uint SIMPLE_DDGI_STORAGE_ABI_LEGACY = 4u;
-const uint SIMPLE_DDGI_STORAGE_ABI_PACKED = 7u;
+const uint SIMPLE_DDGI_STORAGE_ABI_PACKED = 8u;
 const uint SIMPLE_DDGI_STORAGE_CODEBOOK_SHIFT = 8u;
 const uint SIMPLE_DDGI_STORAGE_CODEBOOK_MASK = 0xffu <<
     SIMPLE_DDGI_STORAGE_CODEBOOK_SHIFT;
 const uint SIMPLE_DDGI_STORAGE_CODEBOOK_VERSION = 3u;
-// Version 7 optionally transposes each packed probe page into a dense hot
+// Version 8 optionally transposes each packed probe page into a dense hot
 // header array followed by a three-word surface-response sidecar. Capacity is
 // unchanged, but misses and authored one-sided backfaces never fetch sidecar
 // words during solve/audit.
@@ -34,7 +34,12 @@ const uint SIMPLE_DDGI_STORAGE_HOT_COLD_LAYOUT_BIT = 1u << 16u;
 // each probe-local ordinary ray block. The ordinary record ABI and stride are
 // unchanged, and non-recursive variants never address this sidecar.
 const uint SIMPLE_DDGI_STORAGE_RECURSIVE_GLOSSY_SIDECAR_BIT = 1u << 17u;
-const uint SIMPLE_DDGI_STORAGE_RESERVED_MASK = 0xfffc0000u;
+// A five-word optional sidecar preserves the nonlinear endpoint, terminal ray
+// direction, and Beer/Fresnel throughput of a refracted source path without
+// changing any ordinary source-record stride.
+const uint SIMPLE_DDGI_STORAGE_VOLUME_PATH_SIDECAR_BIT = 1u << 18u;
+const uint SIMPLE_DDGI_STORAGE_VOLUME_PATH_SIDECAR_WORDS = 5u;
+const uint SIMPLE_DDGI_STORAGE_RESERVED_MASK = 0xfff80000u;
 
 uint SimpleDdgiStorageExpectedStride(uint format)
 {
@@ -58,13 +63,56 @@ bool SimpleDdgiStorageUsesRecursiveGlossySidecar(uint layoutFlags)
         SIMPLE_DDGI_STORAGE_RECURSIVE_GLOSSY_SIDECAR_BIT) != 0u;
 }
 
+bool SimpleDdgiStorageUsesVolumePathSidecar(uint layoutFlags)
+{
+    return (layoutFlags &
+        SIMPLE_DDGI_STORAGE_VOLUME_PATH_SIDECAR_BIT) != 0u;
+}
+
+uint SimpleDdgiStorageSidecarWordsPerRay(uint layoutFlags)
+{
+    return
+        (SimpleDdgiStorageUsesRecursiveGlossySidecar(layoutFlags) ? 1u : 0u) +
+        (SimpleDdgiStorageUsesVolumePathSidecar(layoutFlags)
+            ? SIMPLE_DDGI_STORAGE_VOLUME_PATH_SIDECAR_WORDS : 0u);
+}
+
+bool TryResolveSimpleDdgiStorageStrideFromWordsPerProbe(
+    uint wordsPerProbe,
+    uint raysPerProbe,
+    uint layoutFlags,
+    out uint cacheStrideWords)
+{
+    cacheStrideWords = 0u;
+    if (wordsPerProbe == 0u || raysPerProbe == 0u ||
+        wordsPerProbe % raysPerProbe != 0u)
+    {
+        return false;
+    }
+
+    uint encodedWordsPerRay = wordsPerProbe / raysPerProbe;
+    uint sidecarWordsPerRay =
+        SimpleDdgiStorageSidecarWordsPerRay(layoutFlags);
+    if (encodedWordsPerRay <= sidecarWordsPerRay)
+        return false;
+
+    uint resolvedStride = encodedWordsPerRay - sidecarWordsPerRay;
+    uint format = layoutFlags & SIMPLE_DDGI_STORAGE_FORMAT_MASK;
+    uint expectedStride = SimpleDdgiStorageExpectedStride(format);
+    if (expectedStride == 0u || resolvedStride != expectedStride)
+        return false;
+
+    cacheStrideWords = resolvedStride;
+    return true;
+}
+
 uint SimpleDdgiStorageWordsPerProbe(
     uint raysPerProbe,
     uint cacheStrideWords,
     uint layoutFlags)
 {
     uint wordsPerRay = cacheStrideWords +
-        (SimpleDdgiStorageUsesRecursiveGlossySidecar(layoutFlags) ? 1u : 0u);
+        SimpleDdgiStorageSidecarWordsPerRay(layoutFlags);
     return raysPerProbe * wordsPerRay;
 }
 
@@ -100,6 +148,46 @@ bool TryResolveSimpleDdgiRecursiveGlossySidecarAddressFromProbeBase(
     }
     sidecarWord = probeBase + ordinaryWords + directionRayIndex;
     return true;
+}
+
+bool TryResolveSimpleDdgiVolumePathSidecarAddressFromProbeBase(
+    uint cacheProbeBaseWordPlusOne,
+    uint directionRayIndex,
+    uint raysPerProbe,
+    uint cacheStrideWords,
+    uint layoutFlags,
+    out uint sidecarWord)
+{
+    sidecarWord = 0u;
+    if (!SimpleDdgiStorageUsesVolumePathSidecar(layoutFlags) ||
+        cacheProbeBaseWordPlusOne == 0u || raysPerProbe == 0u ||
+        directionRayIndex >= raysPerProbe || cacheStrideWords == 0u)
+    {
+        return false;
+    }
+
+    uint probeBase = cacheProbeBaseWordPlusOne - 1u;
+    uint prefixWordsHigh;
+    uint prefixWords;
+    uint prefixStride = cacheStrideWords +
+        (SimpleDdgiStorageUsesRecursiveGlossySidecar(layoutFlags) ? 1u : 0u);
+    umulExtended(raysPerProbe, prefixStride, prefixWordsHigh, prefixWords);
+    uint rayOffsetHigh;
+    uint rayOffset;
+    umulExtended(
+        directionRayIndex,
+        SIMPLE_DDGI_STORAGE_VOLUME_PATH_SIDECAR_WORDS,
+        rayOffsetHigh,
+        rayOffset);
+    if (prefixWordsHigh != 0u || rayOffsetHigh != 0u ||
+        prefixWords > 0xffffffffu - probeBase ||
+        rayOffset > 0xffffffffu - probeBase - prefixWords)
+    {
+        return false;
+    }
+    sidecarWord = probeBase + prefixWords + rayOffset;
+    return sidecarWord <=
+        0xffffffffu - (SIMPLE_DDGI_STORAGE_VOLUME_PATH_SIDECAR_WORDS - 1u);
 }
 
 uint SimpleDdgiStorageHotHeaderStride(uint format)
@@ -349,7 +437,7 @@ bool TryResolveSimpleDdgiTransportCacheAddress(
     uint wordsPerProbeHigh;
     uint wordsPerProbe;
     uint wordsPerRay = cacheStrideWords +
-        (SimpleDdgiStorageUsesRecursiveGlossySidecar(layoutFlags) ? 1u : 0u);
+        SimpleDdgiStorageSidecarWordsPerRay(layoutFlags);
     umulExtended(raysPerProbe, wordsPerRay, wordsPerProbeHigh, wordsPerProbe);
     if (wordsPerProbeHigh != 0u || wordsPerProbe == 0u)
         return false;

@@ -180,6 +180,12 @@ namespace Njulf.Rendering.Data
         public bool TransparentReceiveShadows { get; set; } = true;
         public bool TransparentReceiveGlobalIllumination { get; set; } = true;
         public bool TransparentDdgiReceiverCountersEnabled { get; set; }
+        public ThickTransmissionMode RequestedThickTransmissionMode { get; set; }
+        public ThickTransmissionMode EffectiveThickTransmissionMode { get; set; }
+        public ThickTransmissionFallbackReason ThickTransmissionFallbackReason
+            { get; set; }
+        public string ThickTransmissionFallbackDetail { get; set; } = string.Empty;
+        public bool ThickTransmissionDispersionEnabled { get; set; }
         public DecalDebugView DecalDebugView { get; set; } = DecalDebugView.None;
         public bool GeometryDecalsEnabled { get; set; } = true;
         public bool DecalReceiveShadows { get; set; } = true;
@@ -1653,6 +1659,12 @@ namespace Njulf.Rendering.Data
             TransparentReceiveShadows = true;
             TransparentReceiveGlobalIllumination = true;
             TransparentDdgiReceiverCountersEnabled = false;
+            RequestedThickTransmissionMode = ThickTransmissionMode.Off;
+            EffectiveThickTransmissionMode = ThickTransmissionMode.Off;
+            ThickTransmissionFallbackReason =
+                ThickTransmissionFallbackReason.Disabled;
+            ThickTransmissionFallbackDetail = string.Empty;
+            ThickTransmissionDispersionEnabled = false;
             DecalDebugView = DecalDebugView.None;
             GeometryDecalsEnabled = true;
             DecalReceiveShadows = true;

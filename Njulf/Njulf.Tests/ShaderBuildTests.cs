@@ -45,7 +45,9 @@ public sealed class ShaderBuildTests
         "froxel_temporal.comp",
         "froxel_integrate.comp",
         "froxel_resolve.comp",
-        "froxel_composite.comp"
+        "froxel_composite.comp",
+        "motion_vector_alpha.mesh",
+        "motion_vector_alpha.frag"
     ];
 
     [Test]
@@ -63,7 +65,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-        Assert.That(shaderResourceNames, Has.Length.EqualTo(295));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(297));
 
         foreach (string shaderName in RequiredShaders)
         {

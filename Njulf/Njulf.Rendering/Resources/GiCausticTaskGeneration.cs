@@ -28,7 +28,7 @@ public readonly record struct GiCausticHeroExtractionProfile(
         ConeSpread: 0.001f,
         MaximumPathDistance: 1_000.0f,
         ProposalWeight: 1.0f,
-        MaximumHeroCount: 16);
+        MaximumHeroCount: 64);
 
     public bool IsValid =>
         float.IsFinite(InitialConeRadius) && InitialConeRadius > 0.0f &&
@@ -281,13 +281,13 @@ public readonly record struct GiCausticHeroSource(
             reason = "caustic-hero-source-bound-radius-invalid";
             return false;
         }
-        GiCausticGpuTaskFlags mode = Material.Participation switch
+        GiCausticGpuTaskFlags mode = Material.EffectiveCasterPolicy switch
         {
-            GiCausticParticipationMode.MirrorHero =>
+            GiCausticCasterPolicy.Mirror =>
                 GiCausticGpuTaskFlags.MirrorHero,
-            GiCausticParticipationMode.ClosedDielectricHero =>
+            GiCausticCasterPolicy.DielectricPriority =>
                 GiCausticGpuTaskFlags.ClosedDielectricHero,
-            GiCausticParticipationMode.RoughSpecularReference =>
+            GiCausticCasterPolicy.RoughSpecular =>
                 GiCausticGpuTaskFlags.RoughSpecularReference,
             _ => GiCausticGpuTaskFlags.None
         };

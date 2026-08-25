@@ -28,6 +28,20 @@ vec4 HybridReadSpatialInput(ivec2 pixel)
         : imageLoad(HybridRawRadiance, pixel);
 }
 
+vec3 HybridSpatialFilterNormal(uvec4 payload, float roughness)
+{
+    vec3 shadingNormal = HybridReflectionPayloadShadingNormal(payload);
+    vec3 geometricNormal = HybridReflectionPayloadGeometricNormal(payload);
+    // Normal-map detail must steer a sharp reflection, but it is below the
+    // support of a broad specular lobe. Relaxing toward the geometric normal
+    // for rough receivers denoises sparse SSR/ray-query samples without
+    // bleeding across silhouettes (depth and receiver identity remain hard
+    // edge stops).
+    float geometricWeight = smoothstep(0.25, 0.80,
+        clamp(roughness, 0.0, 1.0));
+    return normalize(mix(shadingNormal, geometricNormal, geometricWeight));
+}
+
 void HybridWriteSpatialOutput(ivec2 pixel, vec4 value)
 {
     // Temporal history is an immutable input to the spatial stage. Writing a
@@ -54,8 +68,9 @@ void main()
         return;
     }
 
-    vec3 centerNormal = HybridReflectionPayloadShadingNormal(centerPayload);
     float centerRoughness = HybridReflectionPayloadRoughness(centerPayload);
+    vec3 centerNormal = HybridSpatialFilterNormal(
+        centerPayload, centerRoughness);
     uint centerIdentity = HybridReceiverIdentity(centerPayload);
     float centerDepth = texelFetch(HybridSceneDepth, pixel, 0).r;
     int radius = 1 + int(min(pc.Iteration, 2u));
@@ -78,19 +93,25 @@ void main()
                 sampleMetadata.y != centerIdentity ||
                 !HybridFinite(sampleValue))
                 continue;
-            vec3 sampleNormal =
-                HybridReflectionPayloadShadingNormal(samplePayload);
             float sampleRoughness =
                 HybridReflectionPayloadRoughness(samplePayload);
+            vec3 sampleNormal = HybridSpatialFilterNormal(
+                samplePayload, sampleRoughness);
             float sampleDepth = texelFetch(
                 HybridSceneDepth, samplePixel, 0).r;
-            float normalWeight = pow(max(dot(centerNormal, sampleNormal), 0.0),
-                max(pc.NormalPower, 1.0));
+            float broadLobeWeight = smoothstep(
+                0.20, 0.85, centerRoughness);
+            float normalPower = mix(
+                max(pc.NormalPower, 1.0), 2.0, broadLobeWeight);
+            float normalWeight = pow(
+                max(dot(centerNormal, sampleNormal), 0.0), normalPower);
             float depthWeight = exp(-abs(centerDepth - sampleDepth) /
                 max(pc.DepthSigma, 1.0e-6));
+            float roughnessSigma = mix(
+                max(pc.RoughnessSigma, 1.0e-4), 0.35,
+                broadLobeWeight);
             float roughnessWeight = exp(-abs(
-                centerRoughness - sampleRoughness) /
-                max(pc.RoughnessSigma, 1.0e-4));
+                centerRoughness - sampleRoughness) / roughnessSigma);
             float spatialWeight = 1.0 /
                 (1.0 + float(x * x + y * y));
             float weight = normalWeight * depthWeight *

@@ -55,7 +55,7 @@ public enum SimpleDdgiTransportCacheFormat : uint
 public enum SimpleDdgiStorageAbiVersion : uint
 {
     Legacy = 4,
-    Packed = 7
+    Packed = 8
 }
 
 /// <summary>Opt-in GPU evidence for packed storage and compact mirror qualification.</summary>

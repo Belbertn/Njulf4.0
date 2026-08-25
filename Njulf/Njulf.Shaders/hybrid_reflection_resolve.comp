@@ -22,9 +22,9 @@ layout(push_constant) uniform HybridReflectionResolvePushBlock
     uint MaximumProbesPerPixel;
     uint ReflectionDebugView;
     float SsrConfidenceThreshold;
+    float AnalyticTransitionStartRoughness;
+    float AnalyticTransitionEndRoughness;
     float Padding0;
-    float Padding1;
-    float Padding2;
 } pc;
 
 vec3 HybridTransformProbePoint(GPUReflectionProbe probe, vec3 position)
@@ -219,9 +219,11 @@ void main()
     vec3 incidentRadiance = max(raw.rgb, vec3(0.0));
     float roughness = HybridReflectionPayloadRoughness(payload);
     vec3 normal = HybridReflectionPayloadShadingNormal(payload);
+    vec3 reflectionNormal = HybridReflectionTraceNormal(payload);
     vec3 viewDirection = normalize(
         pc.CameraPositionAndIntensity.xyz - worldPosition);
-    vec3 reflectionDirection = normalize(reflect(-viewDirection, normal));
+    vec3 reflectionDirection = normalize(
+        reflect(-viewDirection, reflectionNormal));
     GPUEnvironmentData environment = ReadEnvironmentData();
     GPUReflectionProbeHeader probeHeader = ReadReflectionProbeHeader();
     float incidentRadianceScale =
@@ -240,14 +242,71 @@ void main()
                 : 1.0;
         if (source == HYBRID_REFLECTION_SOURCE_LOCAL_PROBE)
         {
-            atomicAdd(HybridCounters[
-                HYBRID_REFLECTION_COUNTER_PROBE_FALLBACKS], 1u);
+            HybridAccumulateScreenCounter(
+                HYBRID_REFLECTION_COUNTER_PROBE_FALLBACKS, invocation);
         }
         else
         {
-            atomicAdd(HybridCounters[
-                HYBRID_REFLECTION_COUNTER_ENVIRONMENT_FALLBACKS], 1u);
+            HybridAccumulateScreenCounter(
+                HYBRID_REFLECTION_COUNTER_ENVIRONMENT_FALLBACKS,
+                invocation);
         }
+    }
+
+    // The quarter-resolution/analytic boundary can cross a high-frequency
+    // roughness texture many times within one material. A hard source switch
+    // there alternates dark scene hits with a bright environment at texel
+    // scale. Complete only the unresolved part of a broad lobe analytically;
+    // sharp glass, mirrors, and polished metal remain entirely scene-derived.
+    bool geometricSource =
+        source == HYBRID_REFLECTION_SOURCE_SSR ||
+        source == HYBRID_REFLECTION_SOURCE_RAY_QUERY;
+    float transitionStart = clamp(
+        pc.AnalyticTransitionStartRoughness, 0.0, 1.0);
+    float transitionEnd = max(transitionStart + 1.0e-4,
+        clamp(pc.AnalyticTransitionEndRoughness, 0.0, 1.0));
+    bool sharpImportant = HybridReflectionRequiresSharpDetail(payload);
+    float roughnessBlend = smoothstep(
+        transitionStart, transitionEnd, roughness);
+    // Like a confidence-alpha SSR composite, retain a valid analytic
+    // background under uncertain geometric samples. Sharp/high-value lobes
+    // bypass this blend and keep the exact scene result.
+    float geometricWeight = sharpImportant
+        ? 1.0
+        : clamp(confidence, 0.0, 1.0) * (1.0 - roughnessBlend);
+    float analyticBlend = geometricSource
+        ? 1.0 - geometricWeight
+        : 0.0;
+    vec3 analyticReferenceRadiance = vec3(0.0);
+    bool analyticReferenceAvailable = false;
+    if (!geometricSource)
+    {
+        analyticReferenceRadiance =
+            incidentRadiance * incidentRadianceScale;
+        analyticReferenceAvailable = true;
+    }
+    if (analyticBlend > 0.0)
+    {
+        vec3 analyticRadiance;
+        float analyticConfidence;
+        uint analyticSource;
+        HybridSampleAnalyticFallback(worldPosition, reflectionDirection,
+            roughness, environment, probeHeader, analyticRadiance,
+            analyticConfidence, analyticSource);
+        float analyticScale =
+            analyticSource == HYBRID_REFLECTION_SOURCE_ENVIRONMENT
+                ? max(environment.SpecularIntensity, 0.0)
+                : 1.0;
+        analyticReferenceRadiance = analyticRadiance * analyticScale;
+        analyticReferenceAvailable = true;
+        incidentRadiance = mix(
+            incidentRadiance * incidentRadianceScale,
+            analyticReferenceRadiance,
+            analyticBlend);
+        incidentRadianceScale = 1.0;
+        confidence = mix(confidence, analyticConfidence, analyticBlend);
+        if (analyticBlend >= 0.999)
+            source = analyticSource;
     }
 
     float nDotV = max(dot(normal, viewDirection), 0.0);
@@ -262,12 +321,19 @@ void main()
     // Environment.SpecularIntensity controls environment IBL only. SSR,
     // ray-query hits, and local probes already contain scene radiance and must
     // remain visible when environment lighting is disabled.
-    vec3 contribution = incidentRadiance *
+    vec3 scaledIncidentRadiance =
+        incidentRadiance * incidentRadianceScale;
+    if (geometricSource && !sharpImportant && analyticReferenceAvailable)
+    {
+        scaledIncidentRadiance = HybridLimitBroadReflectionRadiance(
+            scaledIncidentRadiance,
+            HybridMaximumComponent(analyticReferenceRadiance));
+    }
+    vec3 contribution = scaledIncidentRadiance *
         (fresnel * brdf.x + brdf.y) *
-        incidentRadianceScale *
         specularOcclusion * max(pc.CameraPositionAndIntensity.w, 0.0);
     contribution = HybridLimitReflectionRadiance(contribution,
-        HybridMaximumComponent(incidentRadiance));
+        HybridMaximumComponent(scaledIncidentRadiance));
     imageStore(HybridRawRadiance, pixel,
         vec4(contribution, confidence));
     imageStore(HybridRawMetadata, pixel, uvec4(

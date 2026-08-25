@@ -48,6 +48,14 @@ public enum ReflectionResolutionTier : uint
 }
 
 [Flags]
+public enum ReflectionLobeFlags : uint
+{
+    None = 0,
+    Transmissive = 1u << 0,
+    BroadAnisotropic = 1u << 1
+}
+
+[Flags]
 public enum ReflectionHistoryResetReason : uint
 {
     None = 0,
@@ -191,6 +199,12 @@ public static class ReflectionModeResolver
 public static class HybridReflectionBudgetPlanner
 {
     public const double RayQueryTargetUtilization = 0.9;
+    public const float AlwaysFullRoughness = 0.08f;
+    public const float MirrorF0Threshold = 0.35f;
+    public const float TransmissionImportanceFloor = 0.40f;
+    public const float GlossyImportanceFloor = 0.30f;
+    public const float MinimumRayImportance = 0.12f;
+    public const float BroadImportanceScale = 0.50f;
 
     public static ReflectionResolutionTier ResolveResolutionTier(
         ReflectionSettings settings,
@@ -211,6 +225,61 @@ public static class HybridReflectionBudgetPlanner
             return ReflectionResolutionTier.Quarter;
         return ReflectionResolutionTier.AnalyticFallback;
     }
+
+    public static ReflectionResolutionTier ResolveAdaptiveResolutionTier(
+        ReflectionSettings settings,
+        float perceptualRoughness,
+        float maximumF0,
+        float specularOcclusion,
+        ReflectionLobeFlags lobeFlags)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        float roughness = UnitOrDefault(perceptualRoughness, 1.0f);
+        float f0 = UnitOrDefault(maximumF0, 0.0f);
+        float occlusion = UnitOrDefault(specularOcclusion, 0.0f);
+        ReflectionResolutionTier tier = ResolveResolutionTier(
+            settings, roughness);
+        if (tier == ReflectionResolutionTier.AnalyticFallback)
+            return tier;
+
+        bool startsInFullBand = tier == ReflectionResolutionTier.Full;
+        bool transmissive = lobeFlags.HasFlag(
+            ReflectionLobeFlags.Transmissive);
+        bool broadAnisotropic = lobeFlags.HasFlag(
+            ReflectionLobeFlags.BroadAnisotropic);
+        bool requiresFullQuality = roughness <= AlwaysFullRoughness ||
+            transmissive || f0 >= MirrorF0Threshold;
+        if (tier == ReflectionResolutionTier.Full && !requiresFullQuality)
+            tier = Demote(tier);
+        if (broadAnisotropic)
+            tier = Demote(tier);
+
+        float importanceFloor = transmissive
+            ? TransmissionImportanceFloor
+            : startsInFullBand
+                ? GlossyImportanceFloor
+                : 0.0f;
+        float remainingGloss = 1.0f - roughness;
+        float squaredGloss = remainingGloss * remainingGloss;
+        float importance = MathF.Max(f0, importanceFloor) *
+            squaredGloss * squaredGloss * occlusion;
+        if (broadAnisotropic)
+            importance *= BroadImportanceScale;
+        if (importance < MinimumRayImportance)
+            tier = Demote(tier);
+        return tier;
+    }
+
+    private static ReflectionResolutionTier Demote(
+        ReflectionResolutionTier tier) => tier switch
+        {
+            ReflectionResolutionTier.Full => ReflectionResolutionTier.Half,
+            ReflectionResolutionTier.Half => ReflectionResolutionTier.Quarter,
+            _ => tier
+        };
+
+    private static float UnitOrDefault(float value, float fallback) =>
+        float.IsFinite(value) ? Math.Clamp(value, 0.0f, 1.0f) : fallback;
 
     public static uint ResolveRayQueryCapacity(
         ReflectionSettings settings,
@@ -416,9 +485,9 @@ public struct GPUHybridReflectionResolvePushConstants
     public uint MaximumProbesPerPixel;
     public uint ReflectionDebugView;
     public float SsrConfidenceThreshold;
+    public float AnalyticTransitionStartRoughness;
+    public float AnalyticTransitionEndRoughness;
     public float Padding0;
-    public float Padding1;
-    public float Padding2;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -459,4 +528,8 @@ public struct GPUHybridReflectionCompositePushConstants
     public uint ScreenHeight;
     public uint SpatialPassCount;
     public uint DebugView;
+    public float FullResolutionRoughness;
+    public float HalfResolutionRoughness;
+    public float QuarterResolutionRoughness;
+    public float Padding0;
 }

@@ -101,6 +101,21 @@ internal static class SceneDocumentCompatibility
             DiffuseGiParticipation = source.DiffuseGiParticipation,
             EmissionGiParticipation = source.EmissionGiParticipation,
             EmitsIntoGi = source.EmitsIntoGi,
-            ReceivesDiffuseGi = source.ReceivesDiffuseGi
+            ReceivesDiffuseGi = source.ReceivesDiffuseGi,
+            GiTransmissionPolicy = source.GiTransmissionPolicy,
+            TransmissionFactor = source.TransmissionFactor,
+            ThinTransmissionFactor = source.ThinTransmissionFactor,
+            ThinTransmissionTint = source.ThinTransmissionTint,
+            Ior = source.Ior,
+            ThicknessFactor = source.ThicknessFactor,
+            AttenuationDistance = source.AttenuationDistance,
+            AttenuationColor = source.AttenuationColor,
+            OpticalBoundaryKind = source.OpticalBoundaryKind,
+            GiCausticCasterPolicy = source.GiCausticCasterPolicy,
+            WaterNormalVelocity0 = source.WaterNormalVelocity0,
+            WaterNormalVelocity1 = source.WaterNormalVelocity1,
+            WaterNormalUvScale0 = source.WaterNormalUvScale0,
+            WaterNormalUvScale1 = source.WaterNormalUvScale1,
+            Dispersion = source.Dispersion
         };
 }

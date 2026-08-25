@@ -29,7 +29,7 @@ public sealed class GiCausticTaskGenerationTests
                 Is.EqualTo(64));
             Assert.That(Marshal.SizeOf<GPUCausticResolveResultV1>(),
                 Is.EqualTo(48));
-            Assert.That(GiCausticGpuAbi.Version, Is.EqualTo(0xC401_0004u));
+            Assert.That(GiCausticGpuAbi.Version, Is.EqualTo(0xC401_0005u));
         });
     }
 

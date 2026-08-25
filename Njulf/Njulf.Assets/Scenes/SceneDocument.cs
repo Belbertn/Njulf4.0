@@ -6,7 +6,7 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -96,8 +96,24 @@ public sealed class SceneMaterialOverrideDocument
     public bool? ReceivesDiffuseGi { get; init; }
     /// <summary>None, ThinSurface, Volume, or Unsupported.</summary>
     public string? GiTransmissionPolicy { get; init; }
+    /// <summary>Generic transmission factor; supersedes the thin-only name.</summary>
+    public float? TransmissionFactor { get; init; }
     public float? ThinTransmissionFactor { get; init; }
     public SceneColor? ThinTransmissionTint { get; init; }
+    public float? Ior { get; init; }
+    public float? ThicknessFactor { get; init; }
+    /// <summary>Zero represents infinite/no absorption distance.</summary>
+    public float? AttenuationDistance { get; init; }
+    public SceneColor? AttenuationColor { get; init; }
+    /// <summary>ClosedVolume or WaterSurface.</summary>
+    public string? OpticalBoundaryKind { get; init; }
+    /// <summary>Default, Disabled, Mirror, RoughSpecular, or DielectricPriority.</summary>
+    public string? GiCausticCasterPolicy { get; init; }
+    public SceneVector2? WaterNormalVelocity0 { get; init; }
+    public SceneVector2? WaterNormalVelocity1 { get; init; }
+    public float? WaterNormalUvScale0 { get; init; }
+    public float? WaterNormalUvScale1 { get; init; }
+    public float? Dispersion { get; init; }
 }
 
 public sealed class SceneLightDocument
@@ -256,6 +272,7 @@ public sealed class SceneFoliageLightingDocument { public float WrapDiffuse { ge
 
 public sealed record SceneAssetReferenceDocument(string Path, string SubObject = "*", string? ContentHash = null);
 public sealed record SceneAssetDependency(string Path, string? ContentHash = null);
+public readonly record struct SceneVector2(float X, float Y);
 public readonly record struct SceneVector3(float X, float Y, float Z)
 {
     public static SceneVector3 One { get; } = new(1f, 1f, 1f);

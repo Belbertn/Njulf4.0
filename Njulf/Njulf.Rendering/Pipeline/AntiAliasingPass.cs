@@ -32,6 +32,10 @@ namespace Njulf.Rendering.Pipeline
         private VkPipeline _taaPipeline;
         private bool _taaHistoryValid;
         private bool _taaWriteHistoryA = true;
+        private bool _taaPreviousJitterValid;
+        private Vector2 _taaPreviousJitterUv;
+        private ulong _taaPreviousSceneContentRevision = ulong.MaxValue;
+        private ulong _taaPreviousCameraCutSerial = ulong.MaxValue;
 
         public AntiAliasingPass(
             VulkanContext context,
@@ -70,15 +74,16 @@ namespace Njulf.Rendering.Pipeline
             sceneData.AntiAliasingOutputFormat = mode == AntiAliasingMode.None ? _swapchain.SurfaceFormat.ToString() : _swapchain.SurfaceFormat.ToString();
             sceneData.SmaaLookupTexturesReady = _smaaLookupsReady() ? 1 : 0;
 
+            if (mode != AntiAliasingMode.Taa)
+                ResetTaaHistory();
+
             if (mode == AntiAliasingMode.None)
             {
-                _taaHistoryValid = false;
                 return;
             }
 
             if (mode == AntiAliasingMode.Fxaa)
             {
-                _taaHistoryValid = false;
                 long start = Stopwatch.GetTimestamp();
                 RenderFullscreen(cmd, _fxaaPipeline, GetSwapchainView(sceneData, frameIndex), _swapchain.Extent, "FXAA");
                 sceneData.CpuFxaaRecordMicroseconds = ElapsedMicroseconds(start);
@@ -95,7 +100,6 @@ namespace Njulf.Rendering.Pipeline
 
             if (!_smaaLookupsReady())
             {
-                _taaHistoryValid = false;
                 long fallbackStart = Stopwatch.GetTimestamp();
                 RenderFullscreen(cmd, _fxaaPipeline, GetSwapchainView(sceneData, frameIndex), _swapchain.Extent, "FXAA SMAA Fallback");
                 sceneData.CpuFxaaRecordMicroseconds = ElapsedMicroseconds(fallbackStart);
@@ -128,7 +132,6 @@ namespace Njulf.Rendering.Pipeline
             stageStart = Stopwatch.GetTimestamp();
             RenderFullscreen(cmd, _smaaNeighborhoodPipeline, GetSwapchainView(sceneData, frameIndex), _swapchain.Extent, "SMAA Neighborhood Blend");
             sceneData.CpuSmaaNeighborhoodRecordMicroseconds = ElapsedMicroseconds(stageStart);
-            _taaHistoryValid = false;
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)
@@ -144,8 +147,7 @@ namespace Njulf.Rendering.Pipeline
             _fxaaPipeline = CreatePipeline("fxaa.frag.spv", _swapchain.SurfaceFormat, "FXAA Pipeline");
             _smaaNeighborhoodPipeline = CreatePipeline("smaa_neighborhood.frag.spv", _swapchain.SurfaceFormat, "SMAA Neighborhood Pipeline");
             _taaPipeline = CreateTaaPipeline();
-            _taaHistoryValid = false;
-            _taaWriteHistoryA = true;
+            ResetTaaHistory(resetWriteTarget: true);
         }
 
         public override void Cleanup()
@@ -262,6 +264,21 @@ namespace Njulf.Rendering.Pipeline
 
         private void RenderTaa(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
+            Vector2 currentJitterUv = new(
+                sceneData.JitterX * 0.5f,
+                sceneData.JitterY * 0.5f);
+            bool historyInputValid =
+                _taaHistoryValid &&
+                _taaPreviousJitterValid &&
+                sceneData.MotionVectorsEnabled != 0 &&
+                sceneData.HiZPolicyCameraCut == 0 &&
+                sceneData.HiZPolicySceneChanged == 0 &&
+                _taaPreviousSceneContentRevision == sceneData.SceneContentRevision &&
+                _taaPreviousCameraCutSerial == sceneData.CaptureCameraCutSerial;
+            Vector2 previousJitterUv = historyInputValid
+                ? _taaPreviousJitterUv
+                : currentJitterUv;
+
             RenderTarget historyRead = _taaWriteHistoryA ? _renderTargets.TaaHistoryB : _renderTargets.TaaHistoryA;
             RenderTarget historyWrite = _taaWriteHistoryA ? _renderTargets.TaaHistoryA : _renderTargets.TaaHistoryB;
             historyRead.TransitionToShaderRead(cmd);
@@ -306,7 +323,10 @@ namespace Njulf.Rendering.Pipeline
                     0,
                     null);
 
-                var pushConstants = CreatePushConstants(taaHistoryValid: _taaHistoryValid ? 1u : 0u);
+                var pushConstants = CreatePushConstants(
+                    taaHistoryValid: historyInputValid ? 1u : 0u,
+                    currentJitterUv,
+                    previousJitterUv);
                 _context.Api.CmdPushConstants(
                     cmd,
                     _pipelineLayout,
@@ -356,10 +376,17 @@ namespace Njulf.Rendering.Pipeline
             }
 
             _taaHistoryValid = true;
+            _taaPreviousJitterValid = true;
+            _taaPreviousJitterUv = currentJitterUv;
+            _taaPreviousSceneContentRevision = sceneData.SceneContentRevision;
+            _taaPreviousCameraCutSerial = sceneData.CaptureCameraCutSerial;
             _taaWriteHistoryA = !_taaWriteHistoryA;
         }
 
-        private GPUAntiAliasingPushConstants CreatePushConstants(uint taaHistoryValid = 0u)
+        private GPUAntiAliasingPushConstants CreatePushConstants(
+            uint taaHistoryValid = 0u,
+            Vector2 currentJitterUv = default,
+            Vector2 previousJitterUv = default)
         {
             Extent2D sourceExtent = _renderTargets.LdrSceneColor.Extent;
             return new GPUAntiAliasingPushConstants
@@ -386,8 +413,21 @@ namespace Njulf.Rendering.Pipeline
                 TaaFeedbackMin = _settings.AntiAliasing.TaaFeedbackMin,
                 TaaFeedbackMax = _settings.AntiAliasing.TaaFeedbackMax,
                 TaaVelocityRejectionScale = _settings.AntiAliasing.TaaVelocityRejectionScale,
-                TaaHistoryValid = taaHistoryValid
+                TaaHistoryValid = taaHistoryValid,
+                TaaCurrentJitterUv = currentJitterUv,
+                TaaPreviousJitterUv = previousJitterUv
             };
+        }
+
+        private void ResetTaaHistory(bool resetWriteTarget = false)
+        {
+            _taaHistoryValid = false;
+            _taaPreviousJitterValid = false;
+            _taaPreviousJitterUv = Vector2.Zero;
+            _taaPreviousSceneContentRevision = ulong.MaxValue;
+            _taaPreviousCameraCutSerial = ulong.MaxValue;
+            if (resetWriteTarget)
+                _taaWriteHistoryA = true;
         }
 
         private void CreatePipelineCache()

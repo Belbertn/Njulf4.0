@@ -41,6 +41,32 @@ public enum GiTransmissionPolicy : byte
     Unsupported = 255
 }
 
+/// <summary>
+/// Declares how a physical transmission boundary is interpreted. Closed
+/// volumes must be watertight and alternate entry/exit intersections; water
+/// surfaces are open interfaces whose exterior is air and whose interior is
+/// the authored material medium.
+/// </summary>
+public enum OpticalBoundaryKind : byte
+{
+    ClosedVolume = 0,
+    WaterSurface = 1
+}
+
+/// <summary>
+/// General caustic-caster authoring policy. Default automatically admits
+/// validated closed dielectrics and water while mirrors and rough specular
+/// materials remain explicit opt-ins.
+/// </summary>
+public enum GiCausticCasterPolicy : byte
+{
+    Default = 0,
+    Disabled = 1,
+    Mirror = 2,
+    RoughSpecular = 3,
+    DielectricPriority = 4
+}
+
 public enum GiTransportProfileQuality : byte
 {
     Invalid = 0,
@@ -86,8 +112,15 @@ public enum GiMaterialTransportFlags : uint
     ThinSurfaceTransmission = 1u << 19,
     TransmissionProfileValid = 1u << 20,
     HasTransmissionTexture = 1u << 21,
+    VolumeTransmission = 1u << 22,
+    WaterSurfaceBoundary = 1u << 23,
     QualityShift = 24,
-    QualityMask = 0x0f00_0000u
+    QualityMask = 0x0f00_0000u,
+    /// <summary>
+    /// An extension payload is present solely or additionally for optical
+    /// boundary/caustic policy, even when no glTF lighting extension flag is set.
+    /// </summary>
+    OpticalPolicyPayload = 1u << 28
 }
 
 [Flags]
@@ -164,6 +197,10 @@ public sealed record MaterialExtensionDefinition
     public MaterialTextureBinding Transmission { get; init; } = MaterialTextureBinding.Missing;
     public MaterialTextureBinding Thickness { get; init; } = MaterialTextureBinding.Missing;
     public GiTransmissionPolicy TransmissionPolicy { get; init; } = GiTransmissionPolicy.None;
+    public OpticalBoundaryKind OpticalBoundary { get; init; } =
+        OpticalBoundaryKind.ClosedVolume;
+    public GiCausticCasterPolicy CausticCasterPolicy { get; init; } =
+        GiCausticCasterPolicy.Default;
     /// <summary>
     /// Explicit C4 authoring intent. This value is ignored by all canonical
     /// DDGI transport paths; only the separate tagged-caustic system consumes
@@ -176,6 +213,13 @@ public sealed record MaterialExtensionDefinition
     /// This is independent of raster alpha and volume attenuation.
     /// </summary>
     public Vector3 ThinTransmissionTint { get; init; } = Vector3.One;
+
+    /// <summary>Primary and secondary world-space UV flow velocities.</summary>
+    public Vector2 WaterNormalVelocity0 { get; init; } = new(0.035f, 0.012f);
+    public Vector2 WaterNormalVelocity1 { get; init; } = new(-0.018f, 0.027f);
+    /// <summary>UV frequencies used when the normal texture is sampled twice.</summary>
+    public float WaterNormalUvScale0 { get; init; } = 1f;
+    public float WaterNormalUvScale1 { get; init; } = 1.73f;
 
     public float SpecularFactor { get; init; } = 1f;
     public Vector3 SpecularColorFactor { get; init; } = Vector3.One;

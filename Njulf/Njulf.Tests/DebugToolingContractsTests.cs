@@ -69,7 +69,8 @@ namespace Njulf.Tests
                 ("DDGI geometry participation", RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterBase, RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterCount),
                 ("DDGI many-light estimator", RendererDiagnosticsBuffer.DdgiManyLightCounterBase, RendererDiagnosticsBuffer.DdgiManyLightCounterCount),
                 ("simple DDGI near visibility", RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterCount),
-                ("DDGI debug overlay", RendererDiagnosticsBuffer.DebugDdgiOverlayCounterBase, RendererDiagnosticsBuffer.DebugDdgiOverlayCounterCount)
+                ("DDGI debug overlay", RendererDiagnosticsBuffer.DebugDdgiOverlayCounterBase, RendererDiagnosticsBuffer.DebugDdgiOverlayCounterCount),
+                ("thick transmission", RendererDiagnosticsBuffer.ThickTransmissionCounterBase, RendererDiagnosticsBuffer.ThickTransmissionCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -123,8 +124,12 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterCount, Is.EqualTo(10));
                 Assert.That(RendererDiagnosticsBuffer.DebugDdgiOverlayReasonCounterCount, Is.EqualTo(16));
                 Assert.That(RendererDiagnosticsBuffer.DebugDdgiOverlayCounterCount, Is.EqualTo(27));
+                Assert.That(RendererDiagnosticsBuffer.ThickTransmissionTaskCounter,
+                    Is.EqualTo(RendererDiagnosticsBuffer.ThickTransmissionCounterBase));
+                Assert.That(RendererDiagnosticsBuffer.ThickTransmissionCounterCount,
+                    Is.EqualTo(1));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
-                    Is.EqualTo(RendererDiagnosticsBuffer.DebugDdgiOverlayCounterBase + 27));
+                    Is.EqualTo(RendererDiagnosticsBuffer.ThickTransmissionCounterBase + 1));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount * sizeof(uint)));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize % 256ul, Is.Zero);
@@ -156,6 +161,8 @@ namespace Njulf.Tests
                     "SIMPLE_DDGI_NEAR_VISIBILITY_COUNTER_BASE ="));
                 Assert.That(commonShader, Does.Contain(
                     "DEBUG_DDGI_OVERLAY_COUNTER_BASE ="));
+                Assert.That(commonShader, Does.Contain(
+                    "THICK_TRANSMISSION_COUNTER_BASE ="));
                 Assert.That(simpleSharedShader, Does.Contain(
                     "void RecordSimpleDdgiVolumeEnergyEvidence("));
                 Assert.That(simpleSharedShader, Does.Contain(
@@ -734,6 +741,9 @@ namespace Njulf.Tests
                     (uint)ReflectionDebugView.SourceOwnership,
                     Is.EqualTo(12u));
                 Assert.That(
+                    (uint)ReflectionDebugView.DetailBudget,
+                    Is.EqualTo(15u));
+                Assert.That(
                     shader,
                     Does.Contain(
                         "REFLECTION_DEBUG_DDGI_DIRECTIONAL_RADIANCE_LOBE = 11u"));
@@ -756,6 +766,10 @@ namespace Njulf.Tests
                     controller,
                     Does.Contain(
                         "ReflectionDebugView.DdgiDirectionalRadianceLobe => ReflectionDebugView.SourceOwnership"));
+                Assert.That(
+                    controller,
+                    Does.Contain(
+                        "ReflectionDebugView.SourceSelection => ReflectionDebugView.DetailBudget"));
             });
         }
 

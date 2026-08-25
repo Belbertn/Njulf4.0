@@ -82,6 +82,34 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
     }
 
     [Test]
+    public void CommitSourceCacheStride_UsesCanonicalSidecarAccounting()
+    {
+        string storageAbi = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_storage_abi.glsl").ReplaceLineEndings("\n");
+        string commitShader = ReadRepoText(
+            "Njulf.Shaders",
+            "ddgi_simple_schedule_commit_local.comp").ReplaceLineEndings("\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(storageAbi, Does.Contain(
+                "uint SimpleDdgiStorageSidecarWordsPerRay(uint layoutFlags)"));
+            Assert.That(storageAbi, Does.Contain(
+                "SimpleDdgiStorageUsesRecursiveGlossySidecar(layoutFlags) ? 1u : 0u"));
+            Assert.That(storageAbi, Does.Contain(
+                "SimpleDdgiStorageUsesVolumePathSidecar(layoutFlags)\n" +
+                "            ? SIMPLE_DDGI_STORAGE_VOLUME_PATH_SIDECAR_WORDS : 0u"));
+            Assert.That(commitShader, Does.Contain(
+                "TryResolveSimpleDdgiStorageStrideFromWordsPerProbe("));
+            Assert.That(commitShader, Does.Not.Contain(
+                "uint sidecarWordsPerRay ="));
+            Assert.That(commitShader, Does.Not.Contain(
+                "uint encodedWordsPerRay = cacheWordsPerProbe / raysPerProbe;"));
+        });
+    }
+
+    [Test]
     public void SchedulerEligibilityEvidence_UsesBoundedExactCountersAndFeedbackTail()
     {
         string shared = ReadRepoText(

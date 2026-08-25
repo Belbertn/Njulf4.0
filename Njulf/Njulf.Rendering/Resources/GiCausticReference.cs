@@ -25,7 +25,7 @@ public struct GPUCausticPhotonReferenceV1
     /// <summary>AxisU, axisV, cosine, sine in receiver tangent space.</summary>
     public Vector4 TangentPlaneFootprint;
     public uint SourceId;
-    public uint HeroInstanceId;
+    public uint PathSignature;
     public uint TransportRevision;
     public uint CacheGeneration;
 

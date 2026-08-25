@@ -87,7 +87,7 @@ useful specialized path, not a general solution.
 - [ ] Add optional dispersion only after the base transport path is stable.
 - [ ] Define deterministic fallbacks for unsupported or over-budget paths.
 
-### P1: Analytical area lights
+### P1: Analytical area lights //DONE
 
 The analytical light manager currently supports point, directional, and spot
 lights. Emissive meshes cover some area-light use cases but do not replace

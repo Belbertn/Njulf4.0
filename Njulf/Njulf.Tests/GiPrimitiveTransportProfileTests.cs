@@ -166,8 +166,8 @@ public sealed class GiPrimitiveTransportProfileTests
             Assert.That(high.InputHash, Is.Not.EqualTo(low.InputHash));
             Assert.That(highIor.FeatureFlags & (1u << 9), Is.Zero);
             Assert.That(highIor.TransmissionFactor, Is.Zero);
-            Assert.That(GiPrimitiveTransportProfile.CurrentAlgorithmVersion, Is.EqualTo(5u));
-            Assert.That(high.AlgorithmVersion, Is.EqualTo(5u));
+            Assert.That(GiPrimitiveTransportProfile.CurrentAlgorithmVersion, Is.EqualTo(6u));
+            Assert.That(high.AlgorithmVersion, Is.EqualTo(6u));
         });
     }
 
@@ -847,7 +847,7 @@ public sealed class GiPrimitiveTransportProfileTests
         Assert.That(
             () => CookedPackage.WriteMaterials(path, staleTable, 1, 2, 3),
             Throws.TypeOf<InvalidDataException>()
-                .With.Message.Contains("declares primitive algorithm 2, expected 5"));
+                .With.Message.Contains("declares primitive algorithm 2, expected 6"));
         Assert.That(File.Exists(path), Is.False);
     }
 

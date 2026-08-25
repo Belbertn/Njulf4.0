@@ -634,6 +634,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadWriteComputeStorage(
                 RenderGraphResourceId.HybridReflectionFilterScratch)),
             Pass("HybridReflectionCompositePass",
+            ReadComputeSampled(
+                RenderGraphResourceId.HybridReflectionReceiverPayload),
             ReadComputeStorage(RenderGraphResourceId.HybridReflectionHistory,
                 RenderGraphHistoryBindingSelection.Current),
             ReadComputeStorage(

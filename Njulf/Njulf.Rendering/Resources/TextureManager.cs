@@ -4524,6 +4524,7 @@ namespace Njulf.Rendering.Resources
                 Format.R32G32B32A32Sfloat => 16,
                 Format.R16G16B16A16Sfloat => 8,
                 Format.R8Unorm or Format.R8Srgb => 1,
+                Format.R8G8Unorm => 2,
                 Format.R32Sfloat => 4,
                 _ => throw new NotSupportedException($"Texture format {format} does not have a known staging size.")
             };

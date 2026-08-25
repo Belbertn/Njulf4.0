@@ -99,6 +99,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _transparentReceiverFeedbackPipeline;
         private VkPipeline _weightedOitReceiverFeedbackPipeline;
         private VkPipeline _motionVectorPipeline;
+        private VkPipeline _maskedMotionVectorPipeline;
         private VkPipeline _sceneOpaqueCompactionPipeline;
         private VkPipeline _sceneOpaqueCompactionDiagnosticsPipeline;
         private VkPipeline _forwardVisibilityCompactionPipeline;
@@ -225,6 +226,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public string ReceiverFeedbackPipelineFailureReason { get; private set; } =
             "receiver-feedback-pipelines-not-admitted-at-startup";
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
+        public VkPipeline MaskedMotionVectorPipeline => _maskedMotionVectorPipeline;
         public VkPipeline SceneOpaqueCompactionPipeline =>
             GpuMeshletCountersEnabled && _sceneOpaqueCompactionDiagnosticsPipeline.Handle != 0
                 ? _sceneOpaqueCompactionDiagnosticsPipeline
@@ -1495,9 +1497,28 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 hasColorAttachment: true,
                 depthWriteEnable: false,
                 blendEnable: false,
-                cullMode: CullModeFlags.BackBit,
+                cullMode: CullModeFlags.None,
                 depthBiasEnable: false);
-            _context.SetDebugName(_motionVectorPipeline.Handle, ObjectType.Pipeline, "Motion Vector Mesh Pipeline");
+            _context.SetDebugName(
+                _motionVectorPipeline.Handle,
+                ObjectType.Pipeline,
+                "Solid Motion Vector Mesh Pipeline");
+
+            _maskedMotionVectorPipeline = CreateGraphicsPipeline(
+                "motion_vector.task.spv",
+                "motion_vector_alpha.mesh.spv",
+                "motion_vector_alpha.frag.spv",
+                Njulf.Rendering.Resources.RenderTargetManager.MotionVectorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            _context.SetDebugName(
+                _maskedMotionVectorPipeline.Handle,
+                ObjectType.Pipeline,
+                "Masked Motion Vector Mesh Pipeline");
 
         }
 
@@ -3084,6 +3105,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 _context.Api.DestroyPipeline(_context.Device, _motionVectorPipeline, null);
                 _motionVectorPipeline = default;
+            }
+
+            if (_maskedMotionVectorPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(_context.Device, _maskedMotionVectorPipeline, null);
+                _maskedMotionVectorPipeline = default;
             }
 
             if (_sceneOpaqueCompactionPipeline.Handle != 0)

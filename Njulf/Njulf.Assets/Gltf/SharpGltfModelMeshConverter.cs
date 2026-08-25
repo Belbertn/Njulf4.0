@@ -43,8 +43,13 @@ internal static class SharpGltfModelMeshConverter
     internal const string DecalDepthBiasExtra = "NJULF_decal_depth_bias";
     internal const string GiTransmissionPolicyExtra = "NJULF_gi_transmission_policy";
     internal const string GiCausticParticipationExtra = "NJULF_gi_caustic_participation";
+    internal const string GiCausticCasterPolicyExtra = "NJULF_gi_caustic_caster_policy";
+    internal const string OpticalBoundaryKindExtra = "NJULF_optical_boundary_kind";
     internal const string ThinTransmissionFactorExtra = "NJULF_thin_transmission_factor";
     internal const string ThinTransmissionTintExtra = "NJULF_thin_transmission_tint";
+    internal const string WaterNormalVelocity0Extra = "NJULF_water_normal_velocity_0";
+    internal const string WaterNormalVelocity1Extra = "NJULF_water_normal_velocity_1";
+    internal const string WaterNormalUvScalesExtra = "NJULF_water_normal_uv_scales";
 
     public static ModelMesh Import(
         string path,
@@ -452,6 +457,36 @@ internal static class SharpGltfModelMeshConverter
             imported.GiCausticParticipation = participation;
         }
 
+        if (objectExtras.TryGetPropertyValue(GiCausticCasterPolicyExtra,
+                out JsonNode? casterPolicyNode))
+        {
+            if (casterPolicyNode is not JsonValue casterPolicyValue ||
+                !casterPolicyValue.TryGetValue(out string? casterPolicyText) ||
+                !Enum.TryParse(casterPolicyText, ignoreCase: true,
+                    out ModelGiCausticCasterPolicy casterPolicy))
+            {
+                throw InvalidMaterialExtra(materialIndex,
+                    GiCausticCasterPolicyExtra,
+                    "one of Default, Disabled, Mirror, RoughSpecular, or DielectricPriority");
+            }
+            imported.GiCausticCasterPolicy = casterPolicy;
+        }
+
+        if (objectExtras.TryGetPropertyValue(OpticalBoundaryKindExtra,
+                out JsonNode? boundaryNode))
+        {
+            if (boundaryNode is not JsonValue boundaryValue ||
+                !boundaryValue.TryGetValue(out string? boundaryText) ||
+                !Enum.TryParse(boundaryText, ignoreCase: true,
+                    out ModelOpticalBoundaryKind boundaryKind))
+            {
+                throw InvalidMaterialExtra(materialIndex,
+                    OpticalBoundaryKindExtra,
+                    "one of ClosedVolume or WaterSurface");
+            }
+            imported.OpticalBoundaryKind = boundaryKind;
+        }
+
         if (objectExtras.TryGetPropertyValue(ThinTransmissionFactorExtra, out JsonNode? factorNode))
         {
             if (!TryReadFiniteUnit(factorNode, out float factor))
@@ -476,6 +511,52 @@ internal static class SharpGltfModelMeshConverter
             }
             imported.ThinTransmissionTint = new CoreVector4(r, g, b, 1f);
         }
+
+        if (objectExtras.TryGetPropertyValue(WaterNormalVelocity0Extra,
+                out JsonNode? velocity0Node))
+        {
+            imported.WaterNormalVelocity0 = ReadFinitePair(
+                velocity0Node, materialIndex, WaterNormalVelocity0Extra);
+        }
+        if (objectExtras.TryGetPropertyValue(WaterNormalVelocity1Extra,
+                out JsonNode? velocity1Node))
+        {
+            imported.WaterNormalVelocity1 = ReadFinitePair(
+                velocity1Node, materialIndex, WaterNormalVelocity1Extra);
+        }
+        if (objectExtras.TryGetPropertyValue(WaterNormalUvScalesExtra,
+                out JsonNode? scaleNode))
+        {
+            CoreVector2 scales = ReadFinitePair(
+                scaleNode, materialIndex, WaterNormalUvScalesExtra);
+            if (scales.X <= 0f || scales.Y <= 0f)
+            {
+                throw InvalidMaterialExtra(materialIndex,
+                    WaterNormalUvScalesExtra,
+                    "a two-component array of positive finite numbers");
+            }
+            imported.WaterNormalUvScale0 = scales.X;
+            imported.WaterNormalUvScale1 = scales.Y;
+        }
+    }
+
+    private static CoreVector2 ReadFinitePair(
+        JsonNode? node,
+        int materialIndex,
+        string fieldName)
+    {
+        if (node is not JsonArray values || values.Count != 2 ||
+            values[0] is not JsonValue xValue ||
+            values[1] is not JsonValue yValue ||
+            !xValue.TryGetValue(out double x) ||
+            !yValue.TryGetValue(out double y) ||
+            !double.IsFinite(x) || !double.IsFinite(y) ||
+            x is < -32.0 or > 1024.0 || y is < -32.0 or > 1024.0)
+        {
+            throw InvalidMaterialExtra(materialIndex, fieldName,
+                "a two-component array of finite numbers in [-32, 1024]");
+        }
+        return new CoreVector2((float)x, (float)y);
     }
 
     private static bool TryReadFiniteUnit(JsonNode? node, out float value)

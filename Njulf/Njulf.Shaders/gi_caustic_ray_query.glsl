@@ -7,6 +7,16 @@
 const float GI_CAUSTIC_RAY_EPSILON = 0.002;
 const uint GI_CAUSTIC_MAX_PATH_VERTICES = 8u;
 
+bool GiCausticRayFinite(float value)
+{
+    return !isnan(value) && !isinf(value);
+}
+
+bool GiCausticRayFinite(vec3 value)
+{
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
 struct GiCausticRayHit
 {
     uint InstanceIndex;
@@ -128,13 +138,25 @@ bool GiCausticCandidatePassesOpacity(
         return false;
 
     GPUMaterialData material = ReadMaterial(instance.MaterialIndex);
+    bool opticalBoundary =
+        instance.GeometryClass == DDGI_RAY_GEOMETRY_VOLUME_TRANSMISSION ||
+        instance.GeometryClass == DDGI_RAY_GEOMETRY_WATER_SURFACE ||
+        (instance.GeometryFlags &
+            (DDGI_RAY_GEOMETRY_FLAG_VOLUME_TRANSMISSION |
+             DDGI_RAY_GEOMETRY_FLAG_WATER_SURFACE)) != 0u;
     bool doubleSided = GiMaterialHasFlag(
             material.TransportFlags, GI_MATERIAL_DOUBLE_SIDED) ||
         (instance.GeometryFlags & DDGI_RAY_GEOMETRY_FLAG_TWO_SIDED) != 0u;
-    if (!doubleSided && !frontFacing)
+    if (!opticalBoundary && !doubleSided && !frontFacing)
         return false;
 
     int alphaMode = DecodeMaterialAlphaMode(material.NormalScaleBias.y);
+    // Closed-volume and water boundaries remain physical ray-query surfaces
+    // even when their raster blend mode is AlphaBlend.  Treating that mode as
+    // ordinary stochastic transparency drops the exit interface and makes a
+    // bounded media stack impossible to close.
+    if (opticalBoundary)
+        return true;
     if (alphaMode == MATERIAL_ALPHA_MODE_BLEND)
         return false;
     if (alphaMode != MATERIAL_ALPHA_MODE_MASK)
@@ -194,8 +216,8 @@ bool GiCausticResolveCommittedHit(
     hit.Position = rayOrigin + rayDirection * hit.Distance;
     hit.Instance = GiCausticReadRayQueryInstance(hit.InstanceIndex);
     if (!GiCausticRayInstanceValid(hit.Instance) ||
-        !GiCausticFinite(hit.Distance) || hit.Distance <= 0.0 ||
-        !GiCausticFinite(hit.Position))
+        !GiCausticRayFinite(hit.Distance) || hit.Distance <= 0.0 ||
+        !GiCausticRayFinite(hit.Position))
     {
         return false;
     }
@@ -208,14 +230,15 @@ bool GiCausticResolveCommittedHit(
     GPUVertex v2 = GiCausticReadRayVertex(
         hit.Instance, GiCausticReadRayIndex(hit.Instance, triangleBase + 2u));
     vec3 localNormal = cross(v1.Position - v0.Position, v2.Position - v0.Position);
-    if (!GiCausticFinite(localNormal) || dot(localNormal, localNormal) <= 1.0e-12)
+    if (!GiCausticRayFinite(localNormal) ||
+        dot(localNormal, localNormal) <= 1.0e-12)
         return false;
     mat4 worldMatrix = transpose(inverse(hit.Instance.WorldMatrixInverseTranspose));
     float determinantSign = determinant(mat3(worldMatrix)) < 0.0 ? -1.0 : 1.0;
     hit.CanonicalGeometricNormal = normalize(MulRowMajor(
         vec4(normalize(localNormal) * determinantSign, 0.0),
         hit.Instance.WorldMatrixInverseTranspose).xyz);
-    if (!GiCausticFinite(hit.CanonicalGeometricNormal) ||
+    if (!GiCausticRayFinite(hit.CanonicalGeometricNormal) ||
         dot(hit.CanonicalGeometricNormal, hit.CanonicalGeometricNormal) < 0.99)
     {
         return false;
@@ -291,8 +314,9 @@ bool GiCausticTraceNearest(
     float maximumDistance,
     out GiCausticRayHit hit)
 {
-    if (!GiCausticFinite(origin) || !GiCausticFinite(direction) ||
-        !GiCausticFinite(maximumDistance) || maximumDistance <= GI_CAUSTIC_RAY_EPSILON)
+    if (!GiCausticRayFinite(origin) || !GiCausticRayFinite(direction) ||
+        !GiCausticRayFinite(maximumDistance) ||
+        maximumDistance <= GI_CAUSTIC_RAY_EPSILON)
     {
         return false;
     }

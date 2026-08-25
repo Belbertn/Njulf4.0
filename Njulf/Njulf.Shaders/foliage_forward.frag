@@ -356,6 +356,7 @@ void main()
         mix(vec3(0.04), baseColor, foliageMetallic),
         clamp(material.MetallicRoughnessAO.y, 0.04, 1.0),
         clamp(material.MetallicRoughnessAO.z, 0.0, 1.0),
+        0u,
         uvec3(fragClusterIndex, fragMaterialIndex, 0u),
         outHybridReflectionReceiverPayload);
 #endif

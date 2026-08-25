@@ -101,11 +101,11 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_opaque_simple_full_input_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_weighted_oit.frag.spv' = 14
-    # Ray-query transparent receivers change only directional visibility. They
-    # retain the exact bounded DDGI receiver-demand/gather synchronization of
-    # the corresponding sorted and weighted transparent programs.
-    'forward_transparent_ray.frag.spv' = 14
-    'forward_weighted_oit_ray.frag.spv' = 14
+    # Normal ray-query transparent variants add one frame-local atomic task
+    # admission ticket for bounded thick transmission. Exact B1 variants use
+    # the deterministic analytic fallback and retain their established count.
+    'forward_transparent_ray.frag.spv' = 15
+    'forward_weighted_oit_ray.frag.spv' = 15
     'fog.comp.spv' = 14
     'particle.vert.spv' = 14
     'foliage_grass.mesh.spv' = 14

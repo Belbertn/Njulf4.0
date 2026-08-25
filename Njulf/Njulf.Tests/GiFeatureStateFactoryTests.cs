@@ -392,6 +392,11 @@ public sealed class GiFeatureStateFactoryTests
             sampledAtlasRequested: true,
             concreteTransportBuffers: true,
             readbackBufferCount: RenderingConstants.FramesInFlight).LiveBytes;
+        expectedBytes = checked(
+            expectedBytes +
+            16UL * rays *
+            (ulong)SimpleDdgiStorageLayoutCompiler.VolumePathSidecarWords *
+            sizeof(uint));
 
         Assert.Multiple(() =>
         {

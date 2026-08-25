@@ -149,7 +149,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             Assert.That(
                 SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion,
                 Is.EqualTo((uint)SimpleDdgiStorageAbiVersion.Packed));
-            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(7u));
+            Assert.That(SimpleDdgiMemoryPlan.TransportRayCacheAbiVersion, Is.EqualTo(8u));
             Assert.That(
                 SimpleDdgiMemoryPlan.ProbeStateBytesPerProbe,
                 Is.EqualTo((ulong)Marshal.SizeOf<GPUSimpleDdgiProbeState>()));
@@ -408,6 +408,12 @@ public sealed class SimpleDdgiLayoutCompilerTests
             sampledAtlasRequested: false,
             concreteTransportBuffers: true,
             readbackBufferCount: RenderingConstants.FramesInFlight);
+        ulong expectedVolumePathBytes = checked(
+            (ulong)probes * rays *
+            (ulong)SimpleDdgiStorageLayoutCompiler.VolumePathSidecarWords *
+            sizeof(uint));
+        ulong expectedLiveBytes = checked(
+            expected.LiveBytes + expectedVolumePathBytes);
         SimpleDdgiLayoutVolumeRequest[] requests =
         [
             new(
@@ -425,7 +431,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             new SimpleDdgiLayoutBudget(
                 DdgiQualityTier.DdgiHigh,
                 probes,
-                expected.LiveBytes,
+                expectedLiveBytes,
                 1),
             sampledAtlasRequested: false,
             SimpleDdgiLayoutAdmissionMode.Reject,
@@ -439,7 +445,7 @@ public sealed class SimpleDdgiLayoutCompilerTests
             new SimpleDdgiLayoutBudget(
                 DdgiQualityTier.DdgiHigh,
                 probes,
-                expected.LiveBytes - 1UL,
+                expectedLiveBytes - 1UL,
                 1),
             sampledAtlasRequested: false,
             SimpleDdgiLayoutAdmissionMode.Reject,
@@ -452,8 +458,12 @@ public sealed class SimpleDdgiLayoutCompilerTests
         Assert.Multiple(() =>
         {
             Assert.That(accepted.AcceptedProbeCount, Is.EqualTo(probes));
-            Assert.That(accepted.AcceptedPersistentBytes, Is.EqualTo(expected.LiveBytes));
-            Assert.That(accepted.AcceptedMemoryPlan.LiveBytes, Is.EqualTo(expected.LiveBytes));
+            Assert.That(accepted.AcceptedPersistentBytes, Is.EqualTo(expectedLiveBytes));
+            Assert.That(accepted.AcceptedMemoryPlan.LiveBytes, Is.EqualTo(expectedLiveBytes));
+            Assert.That(
+                accepted.AcceptedMemoryPlan
+                    .TransportSourceCacheVolumePathSidecarBytes,
+                Is.EqualTo(expectedVolumePathBytes));
             Assert.That(accepted.AcceptedMemoryPlan.SampledAtlasImageBytes, Is.Zero);
             Assert.That(rejected.AcceptedProbeCount, Is.Zero);
             Assert.That(

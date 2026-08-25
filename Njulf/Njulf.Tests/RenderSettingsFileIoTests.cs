@@ -68,6 +68,14 @@ public sealed class RenderSettingsFileIoTests
         {
             var settings = new RenderSettings();
             settings.Transparency.ReceiveGlobalIllumination = false;
+            settings.Transparency.ThickTransmissionMode =
+                ThickTransmissionMode.Approximation;
+            settings.Transparency.DispersionMode =
+                DispersionMode.RgbTriplet;
+            settings.Transparency.ThickTransmissionMaximumInterfaces = 6;
+            settings.Transparency.ThickTransmissionMaximumMediaDepth = 3;
+            settings.Transparency.ThickTransmissionMaximumCandidatesPerInterface = 24;
+            settings.Transparency.ThickTransmissionMaximumDistance = 175f;
             settings.Decals.ReceiveGlobalIllumination = true;
             settings.Decals.ReceiveShadows = false;
 
@@ -80,10 +88,28 @@ public sealed class RenderSettingsFileIoTests
                     loaded.Transparency.ReceiveGlobalIllumination,
                     Is.False);
                 Assert.That(
+                    loaded.Transparency.ThickTransmissionMode,
+                    Is.EqualTo(ThickTransmissionMode.Approximation));
+                Assert.That(
+                    loaded.Transparency.DispersionMode,
+                    Is.EqualTo(DispersionMode.RgbTriplet));
+                Assert.That(
+                    loaded.Transparency.ThickTransmissionMaximumInterfaces,
+                    Is.EqualTo(6));
+                Assert.That(
+                    loaded.Transparency.ThickTransmissionMaximumMediaDepth,
+                    Is.EqualTo(3));
+                Assert.That(
+                    loaded.Transparency.ThickTransmissionMaximumCandidatesPerInterface,
+                    Is.EqualTo(24));
+                Assert.That(
+                    loaded.Transparency.ThickTransmissionMaximumDistance,
+                    Is.EqualTo(175f));
+                Assert.That(
                     loaded.Decals.ReceiveGlobalIllumination,
                     Is.True);
                 Assert.That(loaded.Decals.ReceiveShadows, Is.False);
-                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(17));
+                Assert.That(RenderSettings.SerializationVersion, Is.EqualTo(18));
                 Assert.That(
                     File.ReadAllText(path),
                     Does.Contain($"\"Version\": {RenderSettings.SerializationVersion}"));

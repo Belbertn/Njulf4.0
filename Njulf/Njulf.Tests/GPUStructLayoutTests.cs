@@ -194,7 +194,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiEmissiveSurface>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUDdgiUpdatePushConstants>(), Is.EqualTo(148));
                 Assert.That(Marshal.SizeOf<GPUFogPushConstants>(), Is.EqualTo(224));
-                Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(100));
+                Assert.That(Marshal.SizeOf<GPUAntiAliasingPushConstants>(), Is.EqualTo(120));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionPushConstants>(), Is.EqualTo(176));
                 Assert.That(Marshal.SizeOf<GPUAmbientOcclusionBlurPushConstants>(), Is.EqualTo(96));
             });

@@ -21,7 +21,7 @@ public sealed class SimpleDdgiStorageLayoutTests
 
         Assert.Multiple(() =>
         {
-            Assert.That((uint)SimpleDdgiStorageAbiVersion.Packed, Is.EqualTo(7u));
+            Assert.That((uint)SimpleDdgiStorageAbiVersion.Packed, Is.EqualTo(8u));
             Assert.That(layout.AbiVersion, Is.EqualTo(SimpleDdgiStorageAbiVersion.Packed));
             Assert.That(layout.Regions[0].Format, Is.EqualTo(SimpleDdgiTransportCacheFormat.Compact24));
             Assert.That(layout.Regions[0].BaseWord, Is.Zero);
@@ -99,6 +99,52 @@ public sealed class SimpleDdgiStorageLayoutTests
                 checked((uint)(region.BaseWord + region.WordsPerProbe + 1UL))));
             Assert.That(flags &
                 SimpleDdgiStorageLayoutCompiler.RecursiveGlossySidecarFlag,
+                Is.Not.Zero);
+        });
+    }
+
+    [Test]
+    public void VolumePathSidecar_PreservesOrdinaryStrideAndChargesTwentyBytesPerRay()
+    {
+        SimpleDdgiTransportCacheRegionRequest request =
+            Request(0, "volume-path", 7, 3, 8, 3, 0.125f, 0.10f) with
+            {
+                UseRecursiveGlossySidecar = true,
+                UseVolumePathSidecar = true
+            };
+        SimpleDdgiStorageLayout layout =
+            SimpleDdgiStorageLayoutCompiler.Compile([request]);
+        SimpleDdgiTransportCacheRegion region = layout.Regions.Single();
+        uint flags = SimpleDdgiStorageLayoutCompiler.PackVolumeFlags(
+            region.Format,
+            irradianceMirrorPresent: false,
+            visibilityMirrorPresent: false,
+            layout.AbiVersion,
+            layout.DirectionCodebookVersion,
+            recursiveGlossySidecar: true,
+            volumePathSidecar: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(region.UsesVolumePathSidecar, Is.True);
+            Assert.That(region.StrideWords,
+                Is.EqualTo(region.Format.WordCount()));
+            Assert.That(region.VolumePathSidecarBytes,
+                Is.EqualTo(3UL * 8UL * 20UL));
+            Assert.That(layout.VolumePathSidecarBytes,
+                Is.EqualTo(region.VolumePathSidecarBytes));
+            Assert.That(region.VolumePathSidecarBaseWord, Is.EqualTo(
+                region.BaseWord +
+                8UL * (ulong)region.StrideWords + 8UL));
+            Assert.That(region.WordsPerProbe, Is.EqualTo(
+                8UL * (ulong)(region.StrideWords + 1 +
+                    SimpleDdgiStorageLayoutCompiler.VolumePathSidecarWords)));
+            Assert.That(region.ByteCount, Is.EqualTo(
+                region.OrdinaryRecordBytes +
+                region.GlossyMaterialSidecarBytes +
+                region.VolumePathSidecarBytes));
+            Assert.That(flags &
+                SimpleDdgiStorageLayoutCompiler.VolumePathSidecarFlag,
                 Is.Not.Zero);
         });
     }
@@ -216,6 +262,8 @@ public sealed class SimpleDdgiStorageLayoutTests
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportRayCache>(), Is.EqualTo(36));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportRayCacheCompact28>(), Is.EqualTo(28));
             Assert.That(Marshal.SizeOf<GPUSimpleDdgiTransportRayCacheCompact24>(), Is.EqualTo(24));
+            Assert.That(Marshal.SizeOf<GPUSimpleDdgiVolumePathPayload>(),
+                Is.EqualTo(20));
         });
     }
 

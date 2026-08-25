@@ -8,6 +8,7 @@
 layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 
 #include "gi_caustic_ray_query.glsl"
+#include "dielectric_transport.glsl"
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -19,7 +20,7 @@ struct GiCausticTraceResult
     vec4 TangentPlaneFootprint;
     uint PackedIncidentDirection;
     uint SourceId;
-    uint HeroInstanceId;
+    uint PathSignature;
     uint PathFlags;
     float PathWeightDebug;
 };
@@ -52,23 +53,9 @@ float GiCausticDielectricReflectance(
     float etaTransmitted,
     out bool totalInternalReflection)
 {
-    float cosI = clamp(abs(cosineIncident), 0.0, 1.0);
-    float eta = etaIncident / etaTransmitted;
-    float sinTransmittedSquared = eta * eta * max(0.0, 1.0 - cosI * cosI);
-    totalInternalReflection = sinTransmittedSquared >= 1.0;
-    if (totalInternalReflection)
-        return 1.0;
-    float cosT = sqrt(max(0.0, 1.0 - sinTransmittedSquared));
-    float rsDenominator = etaTransmitted * cosI + etaIncident * cosT;
-    float rpDenominator = etaIncident * cosI + etaTransmitted * cosT;
-    if (rsDenominator <= 1.0e-12 || rpDenominator <= 1.0e-12)
-    {
-        totalInternalReflection = true;
-        return 1.0;
-    }
-    float rs = (etaTransmitted * cosI - etaIncident * cosT) / rsDenominator;
-    float rp = (etaIncident * cosI - etaTransmitted * cosT) / rpDenominator;
-    return clamp(0.5 * (rs * rs + rp * rp), 0.0, 1.0);
+    return DielectricExactFresnel(
+        cosineIncident, etaIncident, etaTransmitted,
+        totalInternalReflection);
 }
 
 vec3 GiCausticMaterialF0(GiCausticRayHit hit, float ior)
@@ -195,16 +182,29 @@ bool GiCausticHeroHitMatchesTask(
     vec4 heroOptics,
     vec3 taskAbsorption)
 {
-    if (hit.Instance.StableInstanceIdentity != GiCausticTaskWord(taskIndex, 4u) ||
-        hit.Instance.MaterialRevision != GiCausticTaskWord(taskIndex, 5u) ||
+    bool dielectricTask = (heroFlags &
+        GI_CAUSTIC_TASK_CLOSED_DIELECTRIC_HERO) != 0u;
+    bool opticalBoundary =
+        hit.Instance.GeometryClass ==
+            DDGI_RAY_GEOMETRY_VOLUME_TRANSMISSION ||
+        hit.Instance.GeometryClass == DDGI_RAY_GEOMETRY_WATER_SURFACE ||
+        (hit.Instance.GeometryFlags &
+            (DDGI_RAY_GEOMETRY_FLAG_VOLUME_TRANSMISSION |
+             DDGI_RAY_GEOMETRY_FLAG_WATER_SURFACE)) != 0u;
+    bool unsupportedCoverage =
         DecodeMaterialAlphaMode(hit.Material.NormalScaleBias.y) !=
             MATERIAL_ALPHA_MODE_OPAQUE ||
+        (hit.Instance.GeometryFlags &
+            (DDGI_RAY_GEOMETRY_FLAG_ALPHA_MASK |
+             DDGI_RAY_GEOMETRY_FLAG_ALPHA_BLEND)) != 0u;
+    if (hit.Instance.StableInstanceIdentity !=
+            GiCausticTaskWord(taskIndex, 4u) ||
+        hit.Instance.MaterialRevision != GiCausticTaskWord(taskIndex, 5u) ||
         GiMaterialHasFlag(hit.Material.TransportFlags,
             GI_MATERIAL_THIN_SURFACE_TRANSMISSION) ||
         (hit.Instance.GeometryFlags &
-            (DDGI_RAY_GEOMETRY_FLAG_ALPHA_MASK |
-             DDGI_RAY_GEOMETRY_FLAG_ALPHA_BLEND |
-             DDGI_RAY_GEOMETRY_FLAG_THIN_TRANSMISSION)) != 0u)
+            DDGI_RAY_GEOMETRY_FLAG_THIN_TRANSMISSION) != 0u ||
+        (dielectricTask ? !opticalBoundary : unsupportedCoverage))
     {
         return false;
     }
@@ -222,7 +222,6 @@ bool GiCausticHeroHitMatchesTask(
     if (!GiCausticFinite(extensionData.Transmission) ||
         !GiCausticFinite(extensionData.AttenuationColor.rgb) ||
         extensionData.Transmission.x <= 0.0 ||
-        extensionData.Transmission.z <= 0.0 ||
         abs(extensionData.Transmission.y - heroOptics.x) > 1.0e-3)
     {
         return false;
@@ -235,6 +234,167 @@ bool GiCausticHeroHitMatchesTask(
     return all(lessThanEqual(abs(taskAbsorption - expectedAbsorption), tolerance));
 }
 
+const uint GI_CAUSTIC_CASTER_POLICY_DEFAULT = 0u;
+const uint GI_CAUSTIC_CASTER_POLICY_DISABLED = 1u;
+const uint GI_CAUSTIC_CASTER_POLICY_MIRROR = 2u;
+const uint GI_CAUSTIC_CASTER_POLICY_ROUGH_SPECULAR = 3u;
+const uint GI_CAUSTIC_CASTER_POLICY_DIELECTRIC_PRIORITY = 4u;
+
+uint GiCausticPathHash(uint state, uint value)
+{
+    uint result = GiCausticHash(state ^ value ^ 0x9e3779b9u);
+    return result == 0u ? 1u : result;
+}
+
+bool GiCausticResolveAdmittedCaster(
+    uint taskIndex,
+    GiCausticRayHit hit,
+    uint selectedHeroFlags,
+    vec4 selectedHeroOptics,
+    vec3 selectedAbsorption,
+    out uint casterFlags,
+    out float roughness,
+    out DielectricBoundary boundary,
+    out GPUMaterialExtensionData extensionData)
+{
+    casterFlags = 0u;
+    roughness = GiCausticSampleMetallicRoughness(hit).y;
+    boundary.BoundaryIdentity = hit.Instance.StableInstanceIdentity;
+    boundary.MaterialRevision = hit.Instance.MaterialRevision;
+    boundary.Ior = 1.5;
+    boundary.AbsorptionCoefficient = vec3(0.0);
+    boundary.BoundaryKind = OPTICAL_BOUNDARY_CLOSED_VOLUME;
+    extensionData = GPUMaterialExtensionData(
+        vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0),
+        vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0),
+        vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0),
+        vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0),
+        vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0),
+        vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0),
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        0, 0, 0, 0);
+
+    bool selected = hit.Instance.StableInstanceIdentity ==
+        GiCausticTaskWord(taskIndex, 4u);
+    if (selected)
+    {
+        if (!GiCausticHeroHitMatchesTask(
+                taskIndex, hit, selectedHeroFlags, selectedHeroOptics,
+                selectedAbsorption))
+        {
+            return false;
+        }
+        casterFlags = selectedHeroFlags;
+    }
+
+    if (hit.Material.ExtensionDataIndex >= 0)
+    {
+        extensionData = ReadMaterialExtension(
+            uint(hit.Material.ExtensionDataIndex));
+        uint policy = OpticalMaterialCausticPolicy(extensionData);
+        bool volume = GiMaterialHasFlag(
+            hit.Material.TransportFlags, GI_MATERIAL_VOLUME_TRANSMISSION);
+        if (policy == GI_CAUSTIC_CASTER_POLICY_DEFAULT && volume)
+            policy = GI_CAUSTIC_CASTER_POLICY_DIELECTRIC_PRIORITY;
+        if (!selected)
+        {
+            if (policy == GI_CAUSTIC_CASTER_POLICY_MIRROR)
+                casterFlags = GI_CAUSTIC_TASK_MIRROR_HERO;
+            else if (policy == GI_CAUSTIC_CASTER_POLICY_ROUGH_SPECULAR)
+                casterFlags = GI_CAUSTIC_TASK_ROUGH_SPECULAR_REFERENCE;
+            else if (policy == GI_CAUSTIC_CASTER_POLICY_DIELECTRIC_PRIORITY)
+                casterFlags = GI_CAUSTIC_TASK_CLOSED_DIELECTRIC_HERO;
+            else
+                return false;
+        }
+
+        if ((casterFlags & GI_CAUSTIC_TASK_CLOSED_DIELECTRIC_HERO) != 0u)
+        {
+            if (!volume || !DielectricFinite(extensionData.Transmission) ||
+                extensionData.Transmission.x <= 0.0 ||
+                extensionData.Transmission.y <= 1.0 ||
+                extensionData.Transmission.y > 4.0)
+            {
+                return false;
+            }
+            boundary.Ior = extensionData.Transmission.y;
+            boundary.AbsorptionCoefficient = DielectricAbsorptionCoefficient(
+                clamp(extensionData.AttenuationColor.rgb,
+                    vec3(0.0), vec3(1.0)),
+                extensionData.Transmission.w);
+            boundary.BoundaryKind =
+                OpticalMaterialBoundaryKind(extensionData);
+        }
+    }
+    else if (!selected)
+    {
+        return false;
+    }
+
+    if (casterFlags == 0u ||
+        DecodeMaterialAlphaMode(hit.Material.NormalScaleBias.y) !=
+            MATERIAL_ALPHA_MODE_OPAQUE ||
+        GiMaterialHasFlag(hit.Material.TransportFlags,
+            GI_MATERIAL_THIN_SURFACE_TRANSMISSION))
+    {
+        return false;
+    }
+    if ((casterFlags & GI_CAUSTIC_TASK_CLOSED_DIELECTRIC_HERO) != 0u &&
+        !DielectricBoundaryValid(boundary))
+    {
+        return false;
+    }
+    return true;
+}
+
+vec3 GiCausticWaterScatterNormal(
+    GiCausticRayHit hit,
+    GPUMaterialExtensionData extensionData,
+    vec3 orientedGeometricNormal)
+{
+    if (OpticalMaterialBoundaryKind(extensionData) !=
+            OPTICAL_BOUNDARY_WATER_SURFACE ||
+        hit.Material.NormalTextureIndex < FIRST_TEXTURE_INDEX ||
+        hit.Material.NormalTextureIndex >= FIRST_TEXTURE_INDEX + MAX_TEXTURES)
+    {
+        return orientedGeometricNormal;
+    }
+    vec3 reference = abs(orientedGeometricNormal.z) < 0.9
+        ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+    vec3 tangent = normalize(cross(reference, orientedGeometricNormal));
+    vec3 bitangent = cross(orientedGeometricNormal, tangent);
+    vec2 baseUv = int(round(hit.Material.TextureTexCoordSets.y)) == 1
+        ? hit.Uv1 : hit.Uv0;
+    baseUv = GiCausticTextureTransform(
+        baseUv, hit.Material.NormalOffsetScale,
+        hit.Material.TextureRotations.y);
+    float phase = float(giCausticPc.CacheGeneration & 0xffffu) / 60.0;
+    vec2 scales = max(OpticalMaterialWaterUvScales(extensionData), vec2(0.001));
+    vec2 uv0 = baseUv * scales.x +
+        OpticalMaterialWaterVelocity0(extensionData) * phase;
+    vec2 uv1 = baseUv * scales.y +
+        OpticalMaterialWaterVelocity1(extensionData) * phase;
+    vec2 wave0 = textureLod(
+        BindlessTextures[nonuniformEXT(hit.Material.NormalTextureIndex)],
+        uv0, 0.0).xy * 2.0 - 1.0;
+    vec2 wave1 = textureLod(
+        BindlessTextures[nonuniformEXT(hit.Material.NormalTextureIndex)],
+        uv1, 0.0).xy * 2.0 - 1.0;
+    vec2 wave = 0.5 * (wave0 + wave1) *
+        max(hit.Material.NormalScaleBias.x, 0.0);
+    vec3 normal = normalize(orientedGeometricNormal +
+        tangent * wave.x + bitangent * wave.y);
+    return dot(normal, orientedGeometricNormal) > 0.0
+        ? normal : orientedGeometricNormal;
+}
+
+bool GiCausticMediaCanTerminateAtReceiver(DielectricMediaStack stack)
+{
+    return stack.Count == 0u ||
+        (stack.Count == 1u &&
+         stack.BoundaryKinds[0] == OPTICAL_BOUNDARY_WATER_SURFACE);
+}
+
 bool GiCausticTraceTaggedFirstDiffuseEndpoint(
     uint taskIndex,
     out GiCausticTraceResult result)
@@ -245,7 +405,7 @@ bool GiCausticTraceTaggedFirstDiffuseEndpoint(
     result.TangentPlaneFootprint = vec4(0.0);
     result.PackedIncidentDirection = 0u;
     result.SourceId = 0u;
-    result.HeroInstanceId = 0u;
+    result.PathSignature = 0u;
     result.PathFlags = 0u;
     result.PathWeightDebug = 0.0;
 
@@ -279,9 +439,13 @@ bool GiCausticTraceTaggedFirstDiffuseEndpoint(
     vec3 throughput = initialFlux;
     float coneRadius = heroOptics.z;
     float coneSpread = heroOptics.w;
-    bool encounteredHero = false;
-    bool insideDielectric = false;
+    bool encounteredCaster = false;
     bool usedRefraction = false;
+    uint pathSignature = GiCausticPathHash(
+        GiCausticTaskWord(taskIndex, 6u),
+        GiCausticTaskWord(taskIndex, 4u));
+    DielectricMediaStack mediaStack;
+    DielectricInitialize(mediaStack);
 
     for (uint vertexIndex = 0u;
          vertexIndex < GI_CAUSTIC_MAX_PATH_VERTICES;
@@ -297,92 +461,115 @@ bool GiCausticTraceTaggedFirstDiffuseEndpoint(
         {
             return false;
         }
-        if (insideDielectric)
-        {
-            throughput *= exp(-absorption * hit.Distance);
-            if (!GiCausticFinite(throughput))
-                return false;
-        }
-
-        bool selectedHero = hit.Instance.StableInstanceIdentity ==
-            GiCausticTaskWord(taskIndex, 4u);
-        if (!encounteredHero && !selectedHero)
+        throughput *= DielectricBeerLambert(
+            DielectricCurrentAbsorption(mediaStack), hit.Distance);
+        if (!GiCausticFinite(throughput))
             return false;
 
-        if (selectedHero)
+        uint casterFlags;
+        float casterRoughness;
+        DielectricBoundary boundary;
+        GPUMaterialExtensionData extensionData;
+        bool admittedCaster = GiCausticResolveAdmittedCaster(
+            taskIndex, hit, heroFlags, heroOptics, absorption,
+            casterFlags, casterRoughness, boundary, extensionData);
+        bool selectedHero = hit.Instance.StableInstanceIdentity ==
+            GiCausticTaskWord(taskIndex, 4u);
+        if (selectedHero && !admittedCaster)
+            return false;
+
+        if (admittedCaster)
         {
-            if (!GiCausticHeroHitMatchesTask(
-                    taskIndex, hit, heroFlags, heroOptics, absorption))
-            {
-                return false;
-            }
-            encounteredHero = true;
+            encounteredCaster = true;
+            pathSignature = GiCausticPathHash(
+                pathSignature,
+                hit.Instance.StableInstanceIdentity ^
+                hit.Instance.MaterialRevision ^ casterFlags ^
+                (hit.FrontFacing ? 0x51ed270bu : 0x7f4a7c15u));
             vec3 normal = GiCausticOrientedNormal(hit);
             float cosineIncident = max(dot(-direction, normal), 0.0);
             if (cosineIncident <= 1.0e-5)
                 return false;
 
-            if ((heroFlags & GI_CAUSTIC_TASK_MIRROR_HERO) != 0u)
+            if ((casterFlags & GI_CAUSTIC_TASK_MIRROR_HERO) != 0u)
             {
-                vec3 f0 = GiCausticMaterialF0(hit, heroOptics.x);
+                float casterIor = selectedHero
+                    ? heroOptics.x : max(boundary.Ior, 1.5);
+                vec3 f0 = GiCausticMaterialF0(hit, casterIor);
                 float oneMinus = 1.0 - cosineIncident;
                 float factor = oneMinus * oneMinus;
                 factor *= factor * oneMinus;
                 throughput *= f0 + (vec3(1.0) - f0) * factor;
                 direction = normalize(reflect(direction, normal));
-                coneSpread += heroOptics.y;
+                coneSpread += casterRoughness;
             }
-            else if ((heroFlags & GI_CAUSTIC_TASK_ROUGH_SPECULAR_REFERENCE) != 0u)
+            else if ((casterFlags &
+                      GI_CAUSTIC_TASK_ROUGH_SPECULAR_REFERENCE) != 0u)
             {
                 vec3 outgoing;
                 if (!GiCausticSampleRoughSpecular(
                         taskIndex, vertexIndex, hit, direction,
-                        heroOptics.y, heroOptics.x, throughput, outgoing))
+                        casterRoughness,
+                        selectedHero ? heroOptics.x : max(boundary.Ior, 1.5),
+                        throughput, outgoing))
                 {
                     return false;
                 }
                 direction = outgoing;
-                coneSpread += heroOptics.y;
+                coneSpread += casterRoughness;
             }
             else
             {
-                // A closed manifold must alternate front/back intersections
-                // whenever the sampled branch transmits through its boundary.
-                if (hit.FrontFacing == insideDielectric)
+                DielectricInterface interfaceData;
+                if (!DielectricPrepareInterface(
+                        mediaStack,
+                        boundary,
+                        hit.FrontFacing,
+                        DIELECTRIC_MAX_INTERFACES,
+                        DIELECTRIC_MAX_MEDIA_DEPTH,
+                        interfaceData))
                     return false;
-                float etaIncident = insideDielectric ? heroOptics.x : 1.0;
-                float etaTransmitted = insideDielectric ? 1.0 : heroOptics.x;
+                vec3 scatterNormal = boundary.BoundaryKind ==
+                        OPTICAL_BOUNDARY_WATER_SURFACE
+                    ? GiCausticWaterScatterNormal(
+                        hit, extensionData, normal)
+                    : normal;
+                vec3 outgoing;
+                float interfaceWeight;
+                bool transmitted;
                 bool totalInternalReflection;
-                float fresnel = GiCausticDielectricReflectance(
-                    cosineIncident, etaIncident, etaTransmitted,
-                    totalInternalReflection);
-                float branchSample = GiCausticStableRandom(
-                    taskIndex, vertexIndex, 2u);
-                bool reflectBranch = totalInternalReflection ||
-                    branchSample < fresnel;
-                if (reflectBranch)
+                if (!DielectricSampleInterface(
+                        direction,
+                        scatterNormal,
+                        casterRoughness,
+                        interfaceData.IncidentIor,
+                        interfaceData.TransmittedIor,
+                        GiCausticStableRandom(taskIndex, vertexIndex, 0u),
+                        GiCausticStableRandom(taskIndex, vertexIndex, 1u),
+                        GiCausticStableRandom(taskIndex, vertexIndex, 2u),
+                        outgoing,
+                        interfaceWeight,
+                        transmitted,
+                        totalInternalReflection))
                 {
-                    float probability = totalInternalReflection ? 1.0 : fresnel;
-                    throughput *= fresnel / max(probability, 1.0e-6);
-                    direction = normalize(reflect(direction, normal));
+                    return false;
                 }
-                else
+                throughput *= interfaceWeight;
+                direction = outgoing;
+                if (transmitted)
                 {
-                    float probability = max(1.0 - fresnel, 1.0e-6);
-                    vec3 refracted = refract(
-                        direction, normal, etaIncident / etaTransmitted);
-                    if (dot(refracted, refracted) <= 1.0e-12)
+                    if (!DielectricCommitTransmission(
+                            mediaStack, boundary, interfaceData,
+                            GiCausticTaskFloat(taskIndex, 31u) -
+                            remainingDistance))
+                    {
                         return false;
-                    // Radiance eta scaling cancels across a complete entry/exit
-                    // pair but remains explicit for internal reflections.
-                    float etaScale = (etaIncident * etaIncident) /
-                        (etaTransmitted * etaTransmitted);
-                    throughput *= ((1.0 - fresnel) / probability) * etaScale;
-                    direction = normalize(refracted);
-                    insideDielectric = !insideDielectric;
+                    }
                     usedRefraction = true;
-                    coneSpread *= etaIncident / etaTransmitted;
+                    coneSpread *= interfaceData.IncidentIor /
+                        interfaceData.TransmittedIor;
                 }
+                coneSpread += casterRoughness;
             }
             if (!GiCausticFinite(direction) || !GiCausticFinite(throughput) ||
                 all(lessThanEqual(throughput, vec3(0.0))))
@@ -393,7 +580,8 @@ bool GiCausticTraceTaggedFirstDiffuseEndpoint(
             continue;
         }
 
-        if (!encounteredHero || insideDielectric ||
+        if (!encounteredCaster ||
+            !GiCausticMediaCanTerminateAtReceiver(mediaStack) ||
             !GiCausticHitIsDiffuseReceiver(hit))
         {
             return false;
@@ -413,7 +601,7 @@ bool GiCausticTraceTaggedFirstDiffuseEndpoint(
         result.TangentPlaneFootprint = vec4(axisU, axisV, 1.0, 0.0);
         result.PackedIncidentDirection = GiCausticPackOctahedral(-direction);
         result.SourceId = GiCausticTaskWord(taskIndex, 6u);
-        result.HeroInstanceId = GiCausticTaskWord(taskIndex, 4u);
+        result.PathSignature = pathSignature;
         result.PathFlags = GI_CAUSTIC_PHOTON_VALID |
             GI_CAUSTIC_PHOTON_FIRST_DIFFUSE_ENDPOINT |
             (usedRefraction
@@ -492,7 +680,7 @@ void main()
     WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 16u,
         result.SourceId);
     WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 17u,
-        result.HeroInstanceId);
+        result.PathSignature);
     WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 18u,
         giCausticPc.TransportAbiVersion);
     WriteStorageWordUniform(giCausticPc.PhotonBufferIndex, photonBase + 19u,

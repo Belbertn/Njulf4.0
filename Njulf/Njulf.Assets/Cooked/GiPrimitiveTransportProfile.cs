@@ -85,8 +85,8 @@ public sealed record GiPrimitiveTextureBindingSnapshot
 /// </summary>
 public sealed record GiPrimitiveTransportProfile
 {
-    public const int CurrentSchemaVersion = 4;
-    public const uint CurrentAlgorithmVersion = 5;
+    public const int CurrentSchemaVersion = 5;
+    public const uint CurrentAlgorithmVersion = 6;
     // For Schlick Fresnel, the cosine-weighted hemispherical average of
     // 1 - F(NdotL) is (20 / 21) * (1 - F0).
     public const double SchlickCosineWeightedTransmission = 20.0 / 21.0;
@@ -1331,10 +1331,24 @@ public static class GiPrimitiveTransportProfileGenerator
         hash.Add(material.SheenColor.W);
         hash.Add(material.TransmissionFactor);
         hash.Add((uint)material.GiTransmissionPolicy);
+        hash.Add((uint)material.GiCausticCasterPolicy);
+        hash.Add((uint)material.OpticalBoundaryKind);
         hash.Add(material.ThinTransmissionTint.X);
         hash.Add(material.ThinTransmissionTint.Y);
         hash.Add(material.ThinTransmissionTint.Z);
         hash.Add(material.Ior);
+        hash.Add(material.ThicknessFactor);
+        hash.Add(material.AttenuationDistance);
+        hash.Add(material.AttenuationColor.X);
+        hash.Add(material.AttenuationColor.Y);
+        hash.Add(material.AttenuationColor.Z);
+        hash.Add(material.WaterNormalVelocity0.X);
+        hash.Add(material.WaterNormalVelocity0.Y);
+        hash.Add(material.WaterNormalVelocity1.X);
+        hash.Add(material.WaterNormalVelocity1.Y);
+        hash.Add(material.WaterNormalUvScale0);
+        hash.Add(material.WaterNormalUvScale1);
+        hash.Add(material.Dispersion);
         hash.Add(material.SpecularFactor);
         hash.Add(material.SpecularColor.X);
         hash.Add(material.SpecularColor.Y);

@@ -12,9 +12,24 @@ namespace Njulf.Rendering.Data
 
             int count = sampleCount <= 3 ? 2 : sampleCount <= 6 ? 4 : sampleCount <= 12 ? 8 : 16;
             int index = Math.Abs(sampleIndex) % count + 1;
-            float x = Halton(index, 2) - 0.5f;
-            float y = Halton(index, 3) - 0.5f;
+            Vector2 sequenceMean = CalculateSequenceMean(count);
+            float x = Halton(index, 2) - sequenceMean.X;
+            float y = Halton(index, 3) - sequenceMean.Y;
             return new Vector2((x * 2.0f) / width, (y * 2.0f) / height);
+        }
+
+        private static Vector2 CalculateSequenceMean(int sampleCount)
+        {
+            float x = 0.0f;
+            float y = 0.0f;
+            for (int index = 1; index <= sampleCount; index++)
+            {
+                x += Halton(index, 2);
+                y += Halton(index, 3);
+            }
+
+            float inverseCount = 1.0f / sampleCount;
+            return new Vector2(x * inverseCount, y * inverseCount);
         }
 
         private static float Halton(int index, int radix)

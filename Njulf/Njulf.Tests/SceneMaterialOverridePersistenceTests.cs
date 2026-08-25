@@ -308,12 +308,25 @@ public sealed class SceneMaterialOverridePersistenceTests
                     ShadingModel = MaterialShadingModel.Foliage,
                     DiffuseGiParticipation = GiParticipationOverride.Default,
                     EmissionGiParticipation = GiParticipationOverride.Disabled,
-                    FeatureFlags = MaterialFeatureFlags.Transmission,
+                    FeatureFlags = MaterialFeatureFlags.Transmission |
+                                   MaterialFeatureFlags.Ior |
+                                   MaterialFeatureFlags.Dispersion,
                     Extensions = MaterialExtensionDefinition.None with
                     {
                         TransmissionPolicy = GiTransmissionPolicy.ThinSurface,
                         TransmissionFactor = 0.42f,
-                        ThinTransmissionTint = new Vector3(0.8f, 0.45f, 0.2f)
+                        ThinTransmissionTint = new Vector3(0.8f, 0.45f, 0.2f),
+                        Ior = 1.8f,
+                        ThicknessFactor = 0.75f,
+                        AttenuationDistance = 2.5f,
+                        AttenuationColor = new Vector3(0.7f, 0.8f, 0.9f),
+                        OpticalBoundary = OpticalBoundaryKind.WaterSurface,
+                        CausticCasterPolicy = GiCausticCasterPolicy.RoughSpecular,
+                        WaterNormalVelocity0 = new Vector2(0.1f, -0.2f),
+                        WaterNormalVelocity1 = new Vector2(-0.3f, 0.4f),
+                        WaterNormalUvScale0 = 3.5f,
+                        WaterNormalUvScale1 = 7.25f,
+                        Dispersion = 0.035f
                     }
                 });
             var sourceObject = new RenderObject
@@ -349,7 +362,7 @@ public sealed class SceneMaterialOverridePersistenceTests
                     DecalLayer = 7,
                     DecalDepthBias = 0.002f,
                     FeatureFlags = MaterialFeatureFlags.Ior,
-                    Extensions = new MaterialExtensionDefinition { Ior = 1.8f }
+                    Extensions = new MaterialExtensionDefinition { Ior = 1.2f }
                 });
             var model = new Model();
             model.Add(new RenderObject { Name = "Mesh", Material = targetHandle });
@@ -380,6 +393,16 @@ public sealed class SceneMaterialOverridePersistenceTests
                 Assert.That(persisted.ReceivesDiffuseGi, Is.Null);
                 Assert.That(persisted.GiTransmissionPolicy, Is.EqualTo(nameof(GiTransmissionPolicy.ThinSurface)));
                 Assert.That(persisted.ThinTransmissionFactor, Is.EqualTo(0.42f));
+                Assert.That(persisted.Ior, Is.EqualTo(1.8f));
+                Assert.That(persisted.ThicknessFactor, Is.EqualTo(0.75f));
+                Assert.That(persisted.AttenuationDistance, Is.EqualTo(2.5f));
+                Assert.That(
+                    persisted.OpticalBoundaryKind,
+                    Is.EqualTo(nameof(OpticalBoundaryKind.WaterSurface)));
+                Assert.That(
+                    persisted.GiCausticCasterPolicy,
+                    Is.EqualTo(nameof(GiCausticCasterPolicy.RoughSpecular)));
+                Assert.That(persisted.Dispersion, Is.EqualTo(0.035f));
                 Assert.That(persisted.EmissiveUnit,
                     Is.EqualTo(nameof(EmissivePhotometricUnit.LuminanceNits)));
                 Assert.That(persisted.EmissiveArtisticMultiplier, Is.EqualTo(1.5f));
@@ -420,6 +443,26 @@ public sealed class SceneMaterialOverridePersistenceTests
                 Assert.That(actual.DecalLayer, Is.EqualTo(7));
                 Assert.That(actual.DecalDepthBias, Is.EqualTo(0.002f));
                 Assert.That(actual.Extensions.Ior, Is.EqualTo(1.8f));
+                Assert.That(actual.Extensions.ThicknessFactor, Is.EqualTo(0.75f));
+                Assert.That(actual.Extensions.AttenuationDistance, Is.EqualTo(2.5f));
+                Assert.That(
+                    actual.Extensions.AttenuationColor,
+                    Is.EqualTo(new Vector3(0.7f, 0.8f, 0.9f)));
+                Assert.That(
+                    actual.Extensions.OpticalBoundary,
+                    Is.EqualTo(OpticalBoundaryKind.WaterSurface));
+                Assert.That(
+                    actual.Extensions.CausticCasterPolicy,
+                    Is.EqualTo(GiCausticCasterPolicy.RoughSpecular));
+                Assert.That(
+                    actual.Extensions.WaterNormalVelocity0,
+                    Is.EqualTo(new Vector2(0.1f, -0.2f)));
+                Assert.That(
+                    actual.Extensions.WaterNormalVelocity1,
+                    Is.EqualTo(new Vector2(-0.3f, 0.4f)));
+                Assert.That(actual.Extensions.WaterNormalUvScale0, Is.EqualTo(3.5f));
+                Assert.That(actual.Extensions.WaterNormalUvScale1, Is.EqualTo(7.25f));
+                Assert.That(actual.Extensions.Dispersion, Is.EqualTo(0.035f));
             });
         }
         finally

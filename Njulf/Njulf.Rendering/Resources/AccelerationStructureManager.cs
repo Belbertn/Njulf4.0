@@ -401,10 +401,27 @@ namespace Njulf.Rendering.Resources
                 MaterialDefinition definition = materials[instance.MaterialIndex];
                 MaterialExtensionDefinition extensions =
                     definition.Extensions ?? MaterialExtensionDefinition.None;
-                GiCausticParticipationMode participation =
-                    extensions.CausticParticipation;
-                if (participation == GiCausticParticipationMode.None)
+                GiCausticCasterPolicy casterPolicy =
+                    OpticalMaterialGpuContract.ResolveCasterPolicy(
+                        extensions.CausticCasterPolicy,
+                        extensions.CausticParticipation);
+                bool volumeTransmission =
+                    extensions.TransmissionFactor > 0.0f &&
+                    extensions.TransmissionPolicy == GiTransmissionPolicy.Volume;
+                if (casterPolicy == GiCausticCasterPolicy.Default)
+                {
+                    casterPolicy = volumeTransmission ||
+                                   extensions.OpticalBoundary ==
+                                       OpticalBoundaryKind.WaterSurface
+                        ? GiCausticCasterPolicy.DielectricPriority
+                        : GiCausticCasterPolicy.Disabled;
+                }
+                if (casterPolicy == GiCausticCasterPolicy.Disabled)
                     continue;
+                GiCausticParticipationMode participation =
+                    OpticalMaterialGpuContract.ToLegacyParticipation(
+                        casterPolicy,
+                        extensions.TransmissionPolicy);
 
                 ModelGiCausticHeroTopologyEvidence topology =
                     instance.MeshInfo.CausticTopologyEvidence;
@@ -435,7 +452,12 @@ namespace Njulf.Rendering.Resources
                             (GiTransmissionPolicy.None or GiTransmissionPolicy.Volume),
                     extensions.TransmissionFactor > 0.0f &&
                         extensions.TransmissionPolicy == GiTransmissionPolicy.Volume &&
-                        extensions.ThicknessFactor > 0.0f);
+                        extensions.ThicknessFactor > 0.0f)
+                {
+                    CasterPolicy = casterPolicy,
+                    BoundaryKind = extensions.OpticalBoundary,
+                    UsesVolumeTransmission = volumeTransmission
+                };
                 var geometry = new GiCausticHeroGeometryFacts(
                     IsRigidOrQualifiedCurrentPose:
                         topology.Facts.IsStaticOrCurrentPoseQualified ||
@@ -520,7 +542,14 @@ namespace Njulf.Rendering.Resources
             }
 
             candidates.Sort(static (left, right) =>
-                left.StableHeroId.CompareTo(right.StableHeroId));
+            {
+                int priority = CasterPriority(right.Material.EffectiveCasterPolicy)
+                    .CompareTo(CasterPriority(
+                        left.Material.EffectiveCasterPolicy));
+                return priority != 0
+                    ? priority
+                    : left.StableHeroId.CompareTo(right.StableHeroId);
+            });
             if (candidates.Count > profile.MaximumHeroCount)
             {
                 for (int index = profile.MaximumHeroCount;
@@ -547,6 +576,15 @@ namespace Njulf.Rendering.Resources
                 _publishedTlasInstanceSignature);
             reason = string.Empty;
             return true;
+
+            static int CasterPriority(GiCausticCasterPolicy policy) =>
+                policy switch
+                {
+                    GiCausticCasterPolicy.DielectricPriority => 3,
+                    GiCausticCasterPolicy.Mirror => 2,
+                    GiCausticCasterPolicy.RoughSpecular => 1,
+                    _ => 0
+                };
         }
 
         /// <summary>
@@ -718,7 +756,8 @@ namespace Njulf.Rendering.Resources
                 if (instance.GeometryClass == DdgiRayGeometryClass.DecalOverlay)
                     decalCount++;
                 if ((instance.GeometryFlags & (DdgiRayGeometryFlags.AlphaBlend |
-                    DdgiRayGeometryFlags.ThinTransmission)) != 0)
+                    DdgiRayGeometryFlags.ThinTransmission |
+                    DdgiRayGeometryFlags.VolumeTransmission)) != 0)
                     transparentCount++;
             }
 
@@ -3859,6 +3898,16 @@ namespace Njulf.Rendering.Resources
             }
 
             bool thinSurface = transmissionPolicy == GiTransmissionPolicy.ThinSurface;
+            bool volumeSurface = transmissionPolicy == GiTransmissionPolicy.Volume;
+            if (volumeSurface)
+            {
+                return new DdgiAccelerationStructureGeometryPolicy(
+                    true,
+                    StaticOpaqueInstanceMask,
+                    sidednessFlags,
+                    DdgiAccelerationStructureVisibilityPolicy.VolumeBoundaryCandidateTested,
+                    "closed-volume and water boundaries remain candidate-tested for bounded dielectric transport");
+            }
             if (renderMode == MaterialRenderMode.Blend && !thinSurface)
             {
                 if (transparentGeometryMode == DdgiTransparentGeometryMode.StochasticBlend)
@@ -4144,6 +4193,8 @@ namespace Njulf.Rendering.Resources
                 (instance.GeometryFlags &
                     (DdgiRayGeometryFlags.AlphaBlend |
                      DdgiRayGeometryFlags.ThinTransmission |
+                     DdgiRayGeometryFlags.VolumeTransmission |
+                     DdgiRayGeometryFlags.WaterSurface |
                      DdgiRayGeometryFlags.DecalOverlay)) == 0;
             return directionalBlocker
                 ? SharedLightingInstanceMask
@@ -4394,7 +4445,9 @@ namespace Njulf.Rendering.Resources
                 RaySceneGeometryCategory.StaticOpaque |
                 RaySceneGeometryCategory.DynamicOpaque |
                 RaySceneGeometryCategory.AlphaTested |
-                RaySceneGeometryCategory.DoubleSided;
+                RaySceneGeometryCategory.DoubleSided |
+                RaySceneGeometryCategory.VolumeTransmission |
+                RaySceneGeometryCategory.WaterSurface;
             if (policy.SkinnedGeometryMode == DdgiSkinnedGeometryMode.CurrentPose)
                 categories |= RaySceneGeometryCategory.SkinnedCurrentPose;
             if (policy.FoliageGeometryMode != DdgiFoliageGeometryMode.Excluded)
@@ -4913,6 +4966,10 @@ namespace Njulf.Rendering.Resources
                     flags |= DdgiRayGeometryFlags.PremultipliedAlpha;
                 if (metadata.TransmissionPolicy == GiTransmissionPolicy.ThinSurface)
                     flags |= DdgiRayGeometryFlags.ThinTransmission;
+                if (metadata.TransmissionPolicy == GiTransmissionPolicy.Volume)
+                    flags |= DdgiRayGeometryFlags.VolumeTransmission;
+                if (metadata.OpticalBoundary == OpticalBoundaryKind.WaterSurface)
+                    flags |= DdgiRayGeometryFlags.WaterSurface;
                 if (metadata.DoubleSided)
                     flags |= DdgiRayGeometryFlags.TwoSided;
                 if (metadata.IsGeometryDecal)
@@ -4941,6 +4998,10 @@ namespace Njulf.Rendering.Resources
                     return DdgiRayGeometryClass.DecalOverlay;
                 if ((GeometryFlags & DdgiRayGeometryFlags.ThinTransmission) != 0)
                     return DdgiRayGeometryClass.ThinTransmission;
+                if ((GeometryFlags & DdgiRayGeometryFlags.WaterSurface) != 0)
+                    return DdgiRayGeometryClass.WaterSurface;
+                if ((GeometryFlags & DdgiRayGeometryFlags.VolumeTransmission) != 0)
+                    return DdgiRayGeometryClass.VolumeTransmission;
                 if ((GeometryFlags & DdgiRayGeometryFlags.AlphaBlend) != 0)
                     return DdgiRayGeometryClass.AlphaBlend;
                 if ((GeometryFlags & DdgiRayGeometryFlags.AlphaMask) != 0)
@@ -5097,7 +5158,8 @@ namespace Njulf.Rendering.Resources
         StochasticAlphaBlend = 8,
         DecalOverlayCandidate = 9,
         CurrentPoseSkinned = 10,
-        ExcludedSkinned = 11
+        ExcludedSkinned = 11,
+        VolumeBoundaryCandidateTested = 12
     }
 
     internal enum TopLevelAccelerationStructureBuildAction
