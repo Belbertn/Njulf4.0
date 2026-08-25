@@ -29,7 +29,7 @@ public static class SampleSponzaGlobalIlluminationProfile
     public const float DefaultGroundAlbedo = 0.16f;
     public const float DefaultAtmosphereIntensity = 0.03f;
     public const float DefaultSolarIrradianceScale = 34.0f;
-    public const float DefaultIndirectIntensity = 1.0f;
+    public const float DefaultIndirectIntensity = 1.25f;
 
     /// <summary>
     /// Restores the bounded DdgiHigh camera-relative plaza layout. Reapplying
@@ -58,8 +58,9 @@ public static class SampleSponzaGlobalIlluminationProfile
         gi.SimpleDdgiNearRingGridSizeY = 15;
         gi.SimpleDdgiNearRingGridSizeZ = 23;
         ConfigurePostAdvancedGiRollout(settings);
-        // Keep receiver energy at physical unity so covered galleries retain
-        // the contrast carried by the probe visibility solution.
+        // Sponza's diffuse materials and deep galleries need a modest display-
+        // referred lift after tone mapping. This retains probe visibility
+        // contrast while making the first DDGI bounce clearly readable.
         gi.IndirectIntensity = DefaultIndirectIntensity;
         gi.SimpleDdgiAuthoredVolumes.Clear();
 
@@ -67,14 +68,20 @@ public static class SampleSponzaGlobalIlluminationProfile
     }
 
     /// <summary>
-    /// Reasserts the adaptive C5 SSGI residual after global rollout changes.
-    /// Explicit experiment/CLI overrides are applied after this hook.
+    /// Keeps the unqualified C5 residual out of normal presentation. Runtime
+    /// evidence reports its history as invalid and its resource completion as
+    /// mismatched, so allocating it adds no bounce while reserving 87 MB. The
+    /// explicit C5 fixture/CLI path is applied after this hook.
     /// </summary>
-    public static void ConfigurePostAdvancedGiRollout(RenderSettings settings)
+    public static void ConfigurePostAdvancedGiRollout(
+        RenderSettings settings,
+        bool residualValidationEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(settings);
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            SimpleDdgiNearFieldResidualMode.HiZAdaptive;
+            residualValidationEnabled
+                ? SimpleDdgiNearFieldResidualMode.HiZAdaptive
+                : SimpleDdgiNearFieldResidualMode.Off;
     }
 
     /// <summary>
@@ -184,6 +191,8 @@ public static class SampleSponzaGlobalIlluminationProfile
         settings.Shadows.PointShadowsEnabled = false;
         settings.Shadows.MaxShadowedPointLights = 0;
         settings.AmbientOcclusion.Enabled = true;
+        settings.AmbientOcclusion.ResolutionScale = 0.5f;
+        settings.AmbientOcclusion.SampleCount = 16;
         settings.AmbientOcclusion.Radius = 0.45f;
         settings.AmbientOcclusion.Intensity = 0.55f;
         settings.AmbientOcclusion.Power = 1.0f;

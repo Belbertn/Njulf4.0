@@ -15,7 +15,7 @@ public sealed class GlobalIlluminationDefaultsTests
     [TestCase(RenderQualityPreset.High, false)]
     [TestCase(RenderQualityPreset.Ultra, false)]
     [TestCase(RenderQualityPreset.DdgiHigh, false)]
-    public void HighQualityPresets_UseExactPerFragmentDdgiReceivers(
+    public void QualityPresets_SelectReceiverCacheOnlyWithValidOwnership(
         RenderQualityPreset preset,
         bool expectedCacheConsumption)
     {
@@ -31,6 +31,12 @@ public sealed class GlobalIlluminationDefaultsTests
                     preset,
                     forceForBenchmark: true),
                 Is.True);
+            Assert.That(
+                ForwardPlusPass.ShouldConsumeSimpleDdgiReceiverCache(
+                    preset,
+                    forceForBenchmark: false,
+                    hybridReflectionOwnsDirectionalRadiance: true),
+                Is.EqualTo(expectedCacheConsumption || preset == RenderQualityPreset.DdgiHigh));
         });
     }
 

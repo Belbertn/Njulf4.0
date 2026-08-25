@@ -173,8 +173,18 @@ public sealed class HybridReflectionContractsTests
             Assert.That(HybridReflectionBudgetPlanner
                     .ResolveAdaptiveResolutionTier(settings, 0.60f, 0.04f,
                         1.0f, ReflectionLobeFlags.None),
+                Is.EqualTo(ReflectionResolutionTier.AnalyticFallback),
+                "Broad low-F0 surfaces stay on the DDGI analytic base instead of tracing scene detail.");
+            Assert.That(HybridReflectionBudgetPlanner
+                    .ResolveAdaptiveResolutionTier(settings, 0.60f, 0.90f,
+                        1.0f, ReflectionLobeFlags.None),
                 Is.EqualTo(ReflectionResolutionTier.Quarter),
-                "Low-importance in-band surfaces retain sparse scene context.");
+                "High-F0 surfaces retain sparse geometric detail in the quarter band.");
+            Assert.That(HybridReflectionBudgetPlanner
+                    .ResolveAdaptiveResolutionTier(settings, 0.60f, 0.04f,
+                        1.0f, ReflectionLobeFlags.Transmissive),
+                Is.EqualTo(ReflectionResolutionTier.Quarter),
+                "Windows retain sparse geometric detail in the quarter band.");
             Assert.That(HybridReflectionBudgetPlanner
                     .ResolveAdaptiveResolutionTier(settings, 0.85f, 0.90f,
                         1.0f, ReflectionLobeFlags.None),
@@ -370,6 +380,8 @@ public sealed class HybridReflectionContractsTests
             ReceiverPayloadAbiVersion = previous.ReceiverPayloadAbiVersion + 1u,
             FullResolutionRoughness = 0.3f,
             RaySceneGeneration = previous.RaySceneGeneration + 1u,
+            DdgiTopologyGeneration = previous.DdgiTopologyGeneration + 1u,
+            MaterialRevision = previous.MaterialRevision + 1u,
             ReflectionProbeRevision = previous.ReflectionProbeRevision + 1UL,
             EnvironmentGeneration = previous.EnvironmentGeneration + 1u,
             CameraCutSerial = previous.CameraCutSerial + 1UL
@@ -391,6 +403,10 @@ public sealed class HybridReflectionContractsTests
             Assert.That(reasons.HasFlag(
                 ReflectionHistoryResetReason.RaySceneChanged), Is.True);
             Assert.That(reasons.HasFlag(
+                ReflectionHistoryResetReason.DdgiTopologyChanged), Is.True);
+            Assert.That(reasons.HasFlag(
+                ReflectionHistoryResetReason.MaterialRevisionChanged), Is.True);
+            Assert.That(reasons.HasFlag(
                 ReflectionHistoryResetReason.ProbeGenerationChanged), Is.True);
             Assert.That(reasons.HasFlag(
                 ReflectionHistoryResetReason.EnvironmentGenerationChanged), Is.True);
@@ -411,7 +427,8 @@ public sealed class HybridReflectionContractsTests
             Marshal.SizeOf<GPUHybridReflectionResolvePushConstants>(),
             Marshal.SizeOf<GPUHybridReflectionTemporalPushConstants>(),
             Marshal.SizeOf<GPUHybridReflectionSpatialPushConstants>(),
-            Marshal.SizeOf<GPUHybridReflectionCompositePushConstants>()
+            Marshal.SizeOf<GPUHybridReflectionCompositePushConstants>(),
+            Marshal.SizeOf<GPUHybridReflectionDdgiPushConstants>()
         ];
 
         Assert.Multiple(() =>
@@ -421,7 +438,8 @@ public sealed class HybridReflectionContractsTests
             Assert.That(sizes[2], Is.EqualTo(112));
             Assert.That(sizes, Has.All.LessThanOrEqualTo(
                 HybridReflectionGpuContract.MaximumPushConstantBytes));
-            Assert.That(HybridReflectionGpuContract.CounterWords, Is.EqualTo(8u));
+            Assert.That(sizes[6], Is.EqualTo(120));
+            Assert.That(HybridReflectionGpuContract.CounterWords, Is.EqualTo(9u));
             Assert.That(HybridReflectionGpuContract.HistoryMetadataWords,
                 Is.EqualTo(4u));
         });
@@ -435,6 +453,7 @@ public sealed class HybridReflectionContractsTests
             "SkyboxPass",
             "HybridReflectionSsrPass",
             "HybridReflectionRayQueryPass",
+            "HybridReflectionDdgiBasePass",
             "HybridReflectionResolvePass",
             "HybridReflectionTemporalPass",
             "HybridReflectionSpatialPass",
@@ -497,6 +516,10 @@ public sealed class HybridReflectionContractsTests
             Assert.That(declarations["HybridReflectionResolvePass"].Usages.Any(
                 usage => usage.Resource ==
                     RenderGraphResourceId.ReflectionProbeCubemaps), Is.True);
+            Assert.That(declarations["HybridReflectionDdgiBasePass"].Usages.Any(
+                usage => usage.Resource ==
+                    RenderGraphResourceId.HybridReflectionDdgiCohorts &&
+                    usage.Access == RenderGraphResourceAccess.Write), Is.True);
             Assert.That(declarations["HybridReflectionCompositePass"].Usages.Any(
                 usage => usage.Resource == RenderGraphResourceId.SceneColor &&
                     usage.Access == RenderGraphResourceAccess.ReadWrite), Is.True);
@@ -602,12 +625,53 @@ public sealed class HybridReflectionContractsTests
     }
 
     [Test]
+    public void VulkanRuntime_ResetHeadersUseSingleOrderedTransferWrites()
+    {
+        string runtime = ReadRepoText("Njulf.Rendering", "Pipeline",
+            "HybridReflectionVulkanRuntime.cs");
+        int resetStart = runtime.IndexOf(
+            "private void ResetTaskAndCounterBuffers",
+            StringComparison.Ordinal);
+        int resetEnd = runtime.IndexOf(
+            "private void BindPipelineAndDescriptors",
+            resetStart,
+            StringComparison.Ordinal);
+
+        Assert.That(resetStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(resetEnd, Is.GreaterThan(resetStart));
+        string reset = runtime[resetStart..resetEnd];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reset.Split("CmdUpdateBuffer",
+                    StringSplitOptions.None).Length - 1,
+                Is.EqualTo(2),
+                "Task and indirect headers must each be stamped atomically.");
+            Assert.That(reset.Split("CmdFillBuffer",
+                    StringSplitOptions.None).Length - 1,
+                Is.EqualTo(1),
+                "Only the homogeneous counter range is fill-cleared.");
+            Assert.That(reset, Does.Not.Contain(
+                "CmdFillBuffer(commandBuffer, task"));
+            Assert.That(reset, Does.Not.Contain(
+                "CmdFillBuffer(commandBuffer, indirect"));
+            Assert.That(reset, Does.Contain("PipelineStageFlags2.CopyBit"));
+            Assert.That(reset, Does.Contain("PipelineStageFlags2.ClearBit"));
+            Assert.That(reset, Does.Contain("TaskHeaderBytes"));
+            Assert.That(reset, Does.Contain("IndirectBytes"));
+            Assert.That(reset, Does.Contain("ExecuteBufferBarriers"));
+        });
+    }
+
+    [Test]
     public void ShaderSources_ContainStrictFallbackShadingAndDebugContracts()
     {
         string ssr = ReadRepoText("Njulf.Shaders",
             "hybrid_reflection_ssr.comp");
         string ray = ReadRepoText("Njulf.Shaders",
             "hybrid_reflection_ray_query.comp");
+        string ddgiBase = ReadRepoText("Njulf.Shaders",
+            "hybrid_reflection_ddgi_base.comp");
         string resolve = ReadRepoText("Njulf.Shaders",
             "hybrid_reflection_resolve.comp");
         string temporal = ReadRepoText("Njulf.Shaders",
@@ -662,6 +726,42 @@ public sealed class HybridReflectionContractsTests
             Assert.That(ray, Does.Contain("HybridSampleEmissive"));
             Assert.That(ray, Does.Contain("HybridEvaluatePbrLight"));
             Assert.That(ray, Does.Contain("SampleSimpleDdgiIrradiance"));
+            Assert.That(ddgiBase, Does.Contain(
+                "SetSimpleDdgiDirectionalRadianceQuery"));
+            Assert.That(resolve, Does.Contain(
+                "HYBRID_REFLECTION_SOURCE_DDGI"));
+            Assert.That(ddgiBase, Does.Contain(
+                "HybridDdgiSameSurface"));
+            Assert.That(ddgiBase, Does.Contain(
+                "params, worldPosition, traceNormal, viewDirection"));
+            Assert.That(ddgiBase, Does.Contain(
+                "vec3 referenceNormal = HybridReflectionTraceNormal"));
+            Assert.That(ddgiBase, Does.Contain(
+                "abs(candidateDistance - receiverDistance) <= tolerance"));
+            Assert.That(ddgiBase, Does.Not.Contain(
+                "distance(referenceWorldPosition, candidateWorldPosition)"));
+            Assert.That(ddgiBase, Does.Contain(
+                "HybridFilterScratch"));
+            Assert.That(ddgiBase, Does.Contain(
+                "HybridDdgiCohorts"));
+            Assert.That(ddgiBase, Does.Contain(
+                "ReconstructionPass"));
+            Assert.That(ddgiBase, Does.Contain(
+                "HybridFindDdgiCohort"));
+            Assert.That(ddgiBase, Does.Contain(
+                "if (!valid)"));
+            Assert.That(ddgiBase, Does.Contain(
+                "valid = HybridEvaluateDdgiReflection("));
+            Assert.That(ddgiBase, Does.Contain(
+                "never a sampling hole"));
+            Assert.That(ddgiBase, Does.Contain(
+                "HybridReflectionRequiresSharpDetail(payload)"));
+            Assert.That(ddgiBase, Does.Contain(
+                "HYBRID_REFLECTION_REASON_DISOCCLUDED"));
+            Assert.That(ddgiBase, Does.Contain(
+                "ReceiverScale"));
+            Assert.That(ddgiBase, Does.Contain(
+                "SetSimpleDdgiDirectionalRadianceQueryEligibilityWeight(1.0)"));
             Assert.That(probeFallback, Is.GreaterThanOrEqualTo(0));
             Assert.That(environmentFallback, Is.GreaterThan(probeFallback));
             Assert.That(resolveMain, Does.Contain(
@@ -685,6 +785,14 @@ public sealed class HybridReflectionContractsTests
                 "geometricSource && !sharpImportant && analyticReferenceAvailable"));
             Assert.That(resolveMain, Does.Contain(
                 "HybridLimitBroadReflectionRadiance("));
+            Assert.That(resolveMain, Does.Contain(
+                "source = HYBRID_REFLECTION_SOURCE_DDGI"));
+            Assert.That(resolveMain, Does.Not.Contain(
+                "roughDielectricAnalyticWeight"));
+            Assert.That(resolveMain, Does.Contain(
+                "Do not replace a valid broad DDGI lobe with the global sky"));
+            Assert.That(resolveMain, Does.Contain(
+                "dot(reflectionNormal, viewDirection)"));
             Assert.That(temporal, Does.Contain("HybridMotionVectors"));
             Assert.That(temporal, Does.Contain(
                 "HYBRID_REFLECTION_REASON_RESOLUTION_SKIP"));
@@ -727,6 +835,10 @@ public sealed class HybridReflectionContractsTests
             Assert.That(composite, Does.Contain("pc.DebugView == 13u"));
             Assert.That(composite, Does.Contain("pc.DebugView == 14u"));
             Assert.That(composite, Does.Contain("pc.DebugView == 15u"));
+            Assert.That(composite, Does.Contain("pc.DebugView == 16u"));
+            Assert.That(composite, Does.Contain("pc.DebugView == 11u"));
+            Assert.That(resolveMain, Does.Contain(
+                "pc.ReflectionDebugView == 11u"));
             Assert.That(composite, Does.Contain(
                 "HybridResolveAdaptiveReflectionTier"));
             Assert.That(normalizedForward, Does.Contain(
@@ -736,6 +848,20 @@ public sealed class HybridReflectionContractsTests
                 "uvec3(fragObjectIndex, fragMaterialIndex, 0u)"));
             Assert.That(forward, Does.Contain(
                 "pow(indirectAo, 1.0 + roughness)"));
+            Assert.That(forward, Does.Contain(
+                "float roughnessFootprintVariance"));
+            Assert.That(forward, Does.Contain(
+                "roughnessDx = dFdx(roughness)"));
+            Assert.That(forward, Does.Contain(
+                "roughnessDy = dFdy(roughness)"));
+            Assert.That(forward, Does.Contain(
+                "alphaSquared + normalVariance + roughnessFootprintVariance"));
+            Assert.That(forward, Does.Contain(
+                "SampleMaterialTextureFootprint("));
+            Assert.That(forward, Does.Contain(
+                "authoredRoughness = max(authoredRoughness, footprintRoughness)"));
+            Assert.That(forward, Does.Contain(
+                "representableFrequencyShare = mix(0.55, 0.85, roughness)"));
             Assert.That(forward, Does.Contain(
                 "transmissionFactor >= 0.05"));
             Assert.That(forward, Does.Contain(
@@ -774,9 +900,11 @@ public sealed class HybridReflectionContractsTests
         HalfResolutionRoughness: 0.5f,
         QuarterResolutionRoughness: 0.8f,
         RaySceneGeneration: 3u,
-        ReflectionProbeRevision: 4UL,
-        EnvironmentGeneration: 5u,
-        CameraCutSerial: 6UL);
+        DdgiTopologyGeneration: 4u,
+        MaterialRevision: 5u,
+        ReflectionProbeRevision: 6UL,
+        EnvironmentGeneration: 7u,
+        CameraCutSerial: 8UL);
 
     private static string ReadRepoText(params string[] segments)
     {

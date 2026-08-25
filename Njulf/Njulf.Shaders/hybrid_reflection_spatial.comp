@@ -37,7 +37,7 @@ vec3 HybridSpatialFilterNormal(uvec4 payload, float roughness)
     // for rough receivers denoises sparse SSR/ray-query samples without
     // bleeding across silhouettes (depth and receiver identity remain hard
     // edge stops).
-    float geometricWeight = smoothstep(0.25, 0.80,
+    float geometricWeight = smoothstep(0.15, 0.55,
         clamp(roughness, 0.0, 1.0));
     return normalize(mix(shadingNormal, geometricNormal, geometricWeight));
 }
@@ -74,6 +74,13 @@ void main()
     uint centerIdentity = HybridReceiverIdentity(centerPayload);
     float centerDepth = texelFetch(HybridSceneDepth, pixel, 0).r;
     int radius = 1 + int(min(pc.Iteration, 2u));
+    float broadLobeWeight = smoothstep(
+        0.20, 0.85, centerRoughness);
+    float normalPower = mix(
+        max(pc.NormalPower, 1.0), 2.0, broadLobeWeight);
+    float roughnessSigma = mix(
+        max(pc.RoughnessSigma, 1.0e-4), 0.35,
+        broadLobeWeight);
     vec4 accumulated = vec4(0.0);
     float totalWeight = 0.0;
     for (int y = -radius; y <= radius; y++)
@@ -99,17 +106,10 @@ void main()
                 samplePayload, sampleRoughness);
             float sampleDepth = texelFetch(
                 HybridSceneDepth, samplePixel, 0).r;
-            float broadLobeWeight = smoothstep(
-                0.20, 0.85, centerRoughness);
-            float normalPower = mix(
-                max(pc.NormalPower, 1.0), 2.0, broadLobeWeight);
             float normalWeight = pow(
                 max(dot(centerNormal, sampleNormal), 0.0), normalPower);
             float depthWeight = exp(-abs(centerDepth - sampleDepth) /
                 max(pc.DepthSigma, 1.0e-6));
-            float roughnessSigma = mix(
-                max(pc.RoughnessSigma, 1.0e-4), 0.35,
-                broadLobeWeight);
             float roughnessWeight = exp(-abs(
                 centerRoughness - sampleRoughness) / roughnessSigma);
             float spatialWeight = 1.0 /

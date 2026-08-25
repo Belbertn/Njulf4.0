@@ -231,11 +231,20 @@ internal static class SampleAnimatedCharacter
 
         int playingAnimators = StartFirstAnimationClip(character);
         CoreMatrix4x4 world = CreateCharacterWorld(character);
+        if (character.RenderObjects.Count != 2)
+        {
+            throw new InvalidDataException(
+                $"The authored Sponza animation fixture requires exactly two " +
+                $"Strut render objects; loaded {character.RenderObjects.Count}.");
+        }
         for (int i = 0; i < character.RenderObjects.Count; i++)
         {
             RenderObject renderObject = character.RenderObjects[i];
             renderObject.Name = $"AnimatedCharacter.Strut.{renderObject.Name}";
             renderObject.AssetReference = new SceneAssetReference { Path = CharacterPath, SubObject = i.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            renderObject.Id = i == 0
+                ? SampleBenchmarkSponzaSceneAnimationContract.JointObjectId
+                : SampleBenchmarkSponzaSceneAnimationContract.SurfaceObjectId;
             renderObject.WorldMatrix = world;
             renderObject.Visible = true;
             scene.Add(renderObject);

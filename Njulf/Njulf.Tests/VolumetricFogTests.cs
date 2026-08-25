@@ -463,7 +463,7 @@ public sealed class VolumetricFogTests
     }
 
     [Test]
-    public void HighDdgiTier_ProvisionsL2WithoutEnablingGlossyReceivers()
+    public void HighDdgiTier_ProvisionsL2ForFogAndGlossyReceivers()
     {
         var settings = new GlobalIlluminationSettings();
         settings.ApplyDdgiQualityTier(DdgiQualityTier.DdgiHigh);
@@ -476,7 +476,7 @@ public sealed class VolumetricFogTests
             Assert.That(settings.EffectiveSimpleDdgiDirectionalRadianceMode,
                 Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
             Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,
-                Is.EqualTo(SimpleDdgiGlossyTransportMode.Off));
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.ReceiverOnly));
         });
     }
 

@@ -39,6 +39,14 @@ public sealed record SampleBenchmarkOptions(
     /// <summary>Stable contract fingerprint for the selected camera/state program.</summary>
     public string TrajectoryFingerprint { get; init; } = string.Empty;
     /// <summary>
+    /// Exact Sponza content fixture used by the measured workload. Architecture
+    /// is the shipping/default scene; animation evidence is applicable only to
+    /// the explicit AnimationDemo fixture.
+    /// </summary>
+    [JsonRequired]
+    public SampleSponzaFixtureMode SponzaFixtureMode { get; init; } =
+        SampleSponzaFixtureMode.Architecture;
+    /// <summary>
     /// Bistro lighting script paired with Bistro presentation/loop trajectories.
     /// It is retained in benchmark options so every measured pose can be
     /// validated without depending on mutable host state.
@@ -62,6 +70,11 @@ public sealed record SampleBenchmarkOptions(
     /// <summary>Validated njulf-nsight-shader-profile-v1 JSON artifact.</summary>
     public string ShaderProfileArtifactPath { get; init; } = string.Empty;
     public bool RequireShaderProfileEvidence { get; init; }
+    /// <summary>
+    /// Enforces the shipping 1920x1080/60 Hz frame-time and two-GiB memory
+    /// contract in addition to the renderer's component budget metrics.
+    /// </summary>
+    public bool RequireRealtime1080p60Target { get; init; }
     /// <summary>
     /// Maximum post-warmup frames available to convergence/readback settling.
     /// Production captures must retain at least the full tail-opportunity window.

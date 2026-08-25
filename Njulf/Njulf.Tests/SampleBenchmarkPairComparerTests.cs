@@ -626,6 +626,18 @@ public sealed class SampleBenchmarkPairComparerTests
         Assert.That(settings.Decals.ReceiveShadows, Is.False);
 
         settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.TransparentGiDisabled);
+        Assert.That(settings.Transparency.ReceiveGlobalIllumination, Is.False);
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.TransparentShadowsDisabled);
+        Assert.That(settings.Transparency.ReceiveShadows, Is.False);
+
+        settings = new RenderSettings();
         Assert.That(
             SampleBenchmarkCaptureVariant.Apply(settings, "decal-material:17"),
             Is.EqualTo("decal-material:17"));
@@ -681,6 +693,117 @@ public sealed class SampleBenchmarkPairComparerTests
         Assert.That(
             settings.Diagnostics.ForceForwardGiReceiverCacheForBenchmark,
             Is.True);
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.AmbientOcclusionDisabled);
+        Assert.That(settings.AmbientOcclusion.Enabled, Is.False);
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.AmbientOcclusionRaw);
+        Assert.That(
+            settings.AmbientOcclusion.DebugView,
+            Is.EqualTo(AmbientOcclusionDebugView.RawAo));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.AmbientOcclusionBlurred);
+        Assert.That(
+            settings.AmbientOcclusion.DebugView,
+            Is.EqualTo(AmbientOcclusionDebugView.BlurredAo));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.AmbientOcclusionFinal);
+        Assert.That(
+            settings.AmbientOcclusion.DebugView,
+            Is.EqualTo(AmbientOcclusionDebugView.FinalAo));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.AmbientOcclusionUnblurred);
+        Assert.That(settings.AmbientOcclusion.BlurRadius, Is.Zero);
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.MaterialOcclusion);
+        Assert.That(
+            settings.Materials.DebugView,
+            Is.EqualTo(MaterialDebugView.MaterialOcclusion));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ReflectionsDisabled);
+        Assert.That(settings.Reflections.Enabled, Is.False);
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.DdgiDiffuseOnly);
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Reflections.Enabled, Is.False);
+            Assert.That(
+                settings.GlobalIllumination.SimpleDdgiGlossyTransportMode,
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.Off));
+        });
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.DdgiDirectionalReceiverOff);
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Reflections.Enabled, Is.False);
+            Assert.That(
+                settings.GlobalIllumination
+                    .SimpleDdgiRoughSpecularMinimumRoughness,
+                Is.EqualTo(1.0f));
+            Assert.That(
+                settings.GlobalIllumination
+                    .SimpleDdgiRoughSpecularFullWeightRoughness,
+                Is.EqualTo(1.0f));
+        });
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ReflectionSourceSelection);
+        Assert.That(
+            settings.Reflections.DebugView,
+            Is.EqualTo(ReflectionDebugView.SourceSelection));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ReflectionDetailBudget);
+        Assert.That(
+            settings.Reflections.DebugView,
+            Is.EqualTo(ReflectionDebugView.DetailBudget));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ReflectionDdgiLobe);
+        Assert.That(
+            settings.Reflections.DebugView,
+            Is.EqualTo(ReflectionDebugView.DdgiDirectionalRadianceLobe));
+
+        settings = new RenderSettings();
+        SampleBenchmarkCaptureVariant.Apply(
+            settings,
+            SampleBenchmarkCaptureVariant.ReflectionReceiverMaterial);
+        Assert.That(
+            settings.Reflections.DebugView,
+            Is.EqualTo(ReflectionDebugView.ReceiverMaterial));
     }
 
     private static SampleBenchmarkReport CreateReport(

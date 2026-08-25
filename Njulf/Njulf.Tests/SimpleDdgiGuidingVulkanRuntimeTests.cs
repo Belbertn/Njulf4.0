@@ -221,6 +221,45 @@ public sealed class SimpleDdgiGuidingVulkanRuntimeTests
     }
 
     [Test]
+    public void GpuPass_ReclaimsAliasedArenaRangesBeforeTransferClears()
+    {
+        string pass = ReadRepoText(
+            "Njulf.Rendering",
+            "Pipeline",
+            "SimpleDdgiGuidingGpuPass.cs");
+        int barrierStart = pass.IndexOf(
+            "private void RecordAliasedArenaReuseToClearBarrier",
+            StringComparison.Ordinal);
+        int barrierEnd = pass.IndexOf(
+            "private void RecordClearToComputeBarrier",
+            barrierStart,
+            StringComparison.Ordinal);
+
+        Assert.That(barrierStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(barrierEnd, Is.GreaterThan(barrierStart));
+        string barrier = pass[barrierStart..barrierEnd];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pass.Split(
+                    "RecordAliasedArenaReuseToClearBarrier(",
+                    StringSplitOptions.None).Length - 1,
+                Is.GreaterThanOrEqualTo(3),
+                "The helper and both aliased clear sites must remain present.");
+            Assert.That(barrier, Does.Contain("PipelineStageFlags2.CopyBit"));
+            Assert.That(barrier, Does.Contain(
+                "PipelineStageFlags2.ComputeShaderBit"));
+            Assert.That(barrier, Does.Contain("AccessFlags2.TransferReadBit"));
+            Assert.That(barrier, Does.Contain("AccessFlags2.ShaderStorageReadBit"));
+            Assert.That(barrier, Does.Contain("AccessFlags2.ShaderStorageWriteBit"));
+            Assert.That(barrier, Does.Contain("PipelineStageFlags2.ClearBit"));
+            Assert.That(barrier, Does.Contain("AccessFlags2.TransferWriteBit"));
+            Assert.That(barrier, Does.Contain("range.OffsetBytes"));
+            Assert.That(barrier, Does.Contain("range.RangeBytes"));
+        });
+    }
+
+    [Test]
     public void C3NativeInterfaces_UseFrozenWordAddressingAndDivisionFreeOverflowChecks()
     {
         string pass = ReadRepoText(

@@ -137,17 +137,17 @@ public static class SampleSponzaGiFloorReceiverGate
     public const float MinimumReceiverLuminance = 0.001f;
     public const float MinimumAlignedMeanLuminance = 0.005f;
     public const string ReceiverLayoutFingerprint =
-        "aligned-floor-left=620,820|aligned-floor-center=720,820|" +
-        "aligned-floor-right=800,820|base-floor-mid=960,820|" +
-        "base-floor-far=1200,820";
+        "aligned-floor-left=744,984|aligned-floor-center=864,984|" +
+        "aligned-floor-right=960,984|base-floor-mid=1152,984|" +
+        "base-floor-far=1440,984";
 
     private static readonly (string Name, int X, int Y)[] RequiredReceivers =
     [
-        ("aligned-floor-left", 620, 820),
-        ("aligned-floor-center", 720, 820),
-        ("aligned-floor-right", 800, 820),
-        ("base-floor-mid", 960, 820),
-        ("base-floor-far", 1200, 820)
+        ("aligned-floor-left", 744, 984),
+        ("aligned-floor-center", 864, 984),
+        ("aligned-floor-right", 960, 984),
+        ("base-floor-mid", 1152, 984),
+        ("base-floor-far", 1440, 984)
     ];
 
     public static SampleSponzaGiFloorReceiverEvidence Evaluate(
@@ -337,17 +337,17 @@ public sealed record SampleSponzaGiVisualMetricGate(
     IReadOnlyList<SampleSponzaGiVisualMetricRoi> ReceiverRois);
 
 /// <summary>
-/// Locked capture data for the 2026-07-16 Sponza GI transport/support closure. This
+/// Locked 1080p capture data for the Sponza GI/reflection quality closure. This
 /// type is intentionally renderer-independent: it can be validated in CI and
 /// serialized before a Vulkan device is created.
 /// </summary>
 public sealed class SampleSponzaGiCaptureContract
 {
-    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v20";
+    public const string CurrentSchemaVersion = "realtime-gi-closure-sponza-capture/v22";
     public const string VisualMetricGateSchemaVersion = "realtime-gi-closure-sponza-visual-metrics/v1";
     public const string CoverageOracleSchemaVersion = "realtime-gi-closure-sponza-coverage-oracle/v1";
-    public const int LockedWidth = 1600;
-    public const int LockedHeight = 900;
+    public const int LockedWidth = 1920;
+    public const int LockedHeight = 1080;
     public const int FixedFramesPerSecond = 60;
     // DdgiHigh currently refreshes roughly eight of 15k probes per frame. Hold
     // each endpoint for a complete bounded sweep so per-frame trace ratios are
@@ -694,12 +694,20 @@ public sealed class SampleSponzaGiCaptureContract
         }
         if (!settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled)
             violations.Add("Thin-surface transmission must be enabled for the curtain qualification capture.");
+        if (!settings.Reflections.Enabled ||
+            settings.Reflections.Mode != ReflectionMode.HybridRayQuery ||
+            !NearlyEqual(settings.Reflections.Intensity, 1.0f) ||
+            !NearlyEqual(settings.Reflections.GlobalFallbackIntensity, 1.0f))
+        {
+            violations.Add(
+                "The locked Sponza capture must use the unity-intensity DDGI-first hybrid reflection path.");
+        }
         if (!NearlyEqual(
                 settings.GlobalIllumination.IndirectIntensity,
                 SampleSponzaGlobalIlluminationProfile.DefaultIndirectIntensity))
         {
             violations.Add(
-                $"Sponza physical indirect intensity must be " +
+                $"Sponza canonical indirect intensity must be " +
                 $"{SampleSponzaGlobalIlluminationProfile.DefaultIndirectIntensity:0.00}.");
         }
         if (!NearlyEqual(settings.GlobalIllumination.EnvironmentFallbackIntensity, 1.0f))
@@ -1665,7 +1673,7 @@ public sealed class SampleSponzaGiCaptureContract
                     "beauty-no-indirect-specular",
                     GlobalIlluminationDebugView.None,
                     false,
-                    "Presentation beauty with local-probe, directional-DDGI, and global indirect specular disabled.",
+                    "Presentation beauty with DDGI, SSR/ray-query, and environment indirect specular disabled.",
                     DisableIndirectSpecularLighting: true),
                 new SampleSponzaGiCaptureOutput("final-indirect", "final-indirect", GlobalIlluminationDebugView.FinalIndirect, false, "Final indirect debug output."),
                 new SampleSponzaGiCaptureOutput("irradiance-log", "irradiance-log", GlobalIlluminationDebugView.DdgiIrradiance, false, "Log-normalized structured-gather irradiance; exact zero remains black while low nonzero energy stays visible."),
@@ -1850,6 +1858,8 @@ public sealed class SampleSponzaGiCaptureContract
             new("roi-p05-luminance", "cd/m²", "Measure low-tail luminance to expose under-lit transport failures.", true),
             new("roi-p95-luminance", "cd/m²", "Measure high-tail luminance to expose leaks or hot spots.", true),
             new("indirect-delta-vs-direct", "cd/m²", "Compare beauty and direct-only captures to isolate indirect transport.", true),
+            new("roi-linear-rgb-mean", "linear RGB", "Preserve colored-bounce balance instead of accepting a luminance-only gray match.", true),
+            new("baseline-oklab-delta-e", "ΔE", "Measure perceptual color error against the approved linear-reference endpoint.", true),
             new("baseline-structural-similarity", "ratio", "Compare against the approved matching endpoint baseline only.", true),
             new("invalid-pixel-ratio", "ratio", "Reject NaN, Inf, or invalid diagnostic pixels.", false)
         ];
@@ -2052,12 +2062,13 @@ public sealed class SampleSponzaGiCaptureContract
 /// <summary>
 /// Compact per-frame evidence retained entirely in a fixed 960-entry ring.
 /// Recording reads only already-materialized diagnostics. Current recorded
-/// reflection work and fence-complete reflection work remain explicitly
-/// separate; recording never scans probe/page arrays or allocates per frame.
+/// reflection work, DDGI-first source ownership, and fence-complete legacy
+/// probe work remain explicitly separate; recording never scans probe/page
+/// arrays or allocates per frame.
 /// </summary>
 public sealed class SampleSponzaGiTemporalTrace
 {
-    public const string SchemaVersion = "simple-ddgi-sponza-temporal-trace/v5";
+    public const string SchemaVersion = "simple-ddgi-sponza-temporal-trace/v6";
     public const int Capacity = 960;
 
     private static readonly JsonSerializerOptions TraceJsonOptions = new()
@@ -2223,7 +2234,18 @@ public sealed class SampleSponzaGiTemporalTrace
             GpuReflectionProbePrefilterMicroseconds =
                 diagnostics.GpuReflectionProbePrefilterMicroseconds,
             GpuReflectionProbePublishMicroseconds =
-                diagnostics.GpuReflectionProbePublishMicroseconds
+                diagnostics.GpuReflectionProbePublishMicroseconds,
+            ReflectionProbeCount = diagnostics.ReflectionProbeCount,
+            HybridReflectionCountersReadbackValid =
+                diagnostics.HybridReflectionCountersReadbackValid,
+            HybridReflectionDdgiFallbackCount =
+                diagnostics.HybridReflectionDdgiFallbackCount,
+            HybridReflectionProbeFallbackCount =
+                diagnostics.HybridReflectionProbeFallbackCount,
+            HybridReflectionEnvironmentFallbackCount =
+                diagnostics.HybridReflectionEnvironmentFallbackCount,
+            GpuHybridReflectionDdgiBaseMicroseconds =
+                diagnostics.GpuHybridReflectionDdgiBaseMicroseconds
         };
         _nextIndex = (_nextIndex + 1) % Capacity;
         _count = Math.Min(Capacity, _count + 1);
@@ -2249,6 +2271,7 @@ public sealed class SampleSponzaGiTemporalTrace
             throw new ArgumentException("A trace name is required.", nameof(traceName));
 
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        IReadOnlyList<SampleSponzaGiTemporalTraceEntry> entries = Snapshot();
         var payload = new
         {
             schemaVersion = SchemaVersion,
@@ -2256,7 +2279,8 @@ public sealed class SampleSponzaGiTemporalTrace
             traceName,
             capacity = Capacity,
             totalSampleCount = _totalSampleCount,
-            entries = Snapshot()
+            reflectionGate = SampleSponzaGiReflectionGate.Evaluate(entries),
+            entries
         };
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(payload, TraceJsonOptions);
         SampleEvidenceFileIo.WriteAtomic(
@@ -2366,6 +2390,84 @@ public readonly record struct SampleSponzaGiTemporalTraceEntry
     public long GpuReflectionProbeCaptureMicroseconds { get; init; }
     public long GpuReflectionProbePrefilterMicroseconds { get; init; }
     public long GpuReflectionProbePublishMicroseconds { get; init; }
+    public int ReflectionProbeCount { get; init; }
+    public int HybridReflectionCountersReadbackValid { get; init; }
+    public uint HybridReflectionDdgiFallbackCount { get; init; }
+    public uint HybridReflectionProbeFallbackCount { get; init; }
+    public uint HybridReflectionEnvironmentFallbackCount { get; init; }
+    public long GpuHybridReflectionDdgiBaseMicroseconds { get; init; }
+}
+
+public sealed record SampleSponzaGiReflectionGateResult(
+    bool Passed,
+    int ValidTelemetryFrameCount,
+    ulong DdgiReceiverCount,
+    ulong ManualProbeReceiverCount,
+    ulong EnvironmentReceiverCount,
+    int MaximumManualProbeCount,
+    IReadOnlyList<string> Failures);
+
+/// <summary>
+/// Fail-closed proof that the locked Sponza route actually exercised the
+/// probe-free DDGI reflection base. SSR/ray-query receivers do not need a DDGI
+/// fallback every frame, but a complete route must publish DDGI ownership and
+/// may never publish a manually authored probe source.
+/// </summary>
+public static class SampleSponzaGiReflectionGate
+{
+    public static SampleSponzaGiReflectionGateResult Evaluate(
+        IReadOnlyList<SampleSponzaGiTemporalTraceEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        var failures = new List<string>();
+        SampleSponzaGiTemporalTraceEntry[] valid = entries
+            .Where(static entry =>
+                entry.HybridReflectionCountersReadbackValid != 0)
+            .ToArray();
+        ulong ddgi = Sum(valid, static entry =>
+            entry.HybridReflectionDdgiFallbackCount);
+        ulong probes = Sum(valid, static entry =>
+            entry.HybridReflectionProbeFallbackCount);
+        ulong environment = Sum(valid, static entry =>
+            entry.HybridReflectionEnvironmentFallbackCount);
+        int maximumProbeCount = entries.Count == 0
+            ? 0
+            : entries.Max(static entry => entry.ReflectionProbeCount);
+
+        if (valid.Length == 0)
+            failures.Add("Sponza published no hybrid-reflection counter telemetry.");
+        if (ddgi == 0UL)
+            failures.Add("Sponza published no DDGI-owned reflection receivers.");
+        if (maximumProbeCount != 0)
+        {
+            failures.Add(
+                $"Sponza authored {maximumProbeCount} manual reflection probe(s).");
+        }
+        if (probes != 0UL)
+        {
+            failures.Add(
+                $"Sponza resolved {probes} receivers from manual reflection probes.");
+        }
+
+        return new SampleSponzaGiReflectionGateResult(
+            failures.Count == 0,
+            valid.Length,
+            ddgi,
+            probes,
+            environment,
+            maximumProbeCount,
+            failures.AsReadOnly());
+    }
+
+    private static ulong Sum(
+        IEnumerable<SampleSponzaGiTemporalTraceEntry> entries,
+        Func<SampleSponzaGiTemporalTraceEntry, uint> selector)
+    {
+        ulong total = 0UL;
+        foreach (SampleSponzaGiTemporalTraceEntry entry in entries)
+            total += selector(entry);
+        return total;
+    }
 }
 
 /// <summary>

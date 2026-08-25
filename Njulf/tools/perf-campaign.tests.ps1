@@ -63,6 +63,8 @@ function Invoke-SyntheticHealthReportCase {
     }
     $requiredFunctions = @(
         "Get-PropertyValue",
+        "Test-WorkloadUsesSponzaAnimation",
+        "Get-WorkloadSponzaFixtureValue",
         "Get-Sha256",
         "Get-RuntimeExecutableBundleHash",
         "Test-CanonicalIdentityText",
@@ -246,6 +248,8 @@ function Invoke-SyntheticQualityHealthBudgetCase {
     }
     foreach ($functionName in @(
             "Get-PropertyValue",
+            "Test-WorkloadUsesSponzaAnimation",
+            "Get-WorkloadSponzaFixtureValue",
             "Get-ExpectedQualityTier",
             "Test-Sha256Identity",
             "Test-CanonicalIdentityText",
@@ -319,6 +323,7 @@ function Invoke-SyntheticQualityHealthBudgetCase {
         HdrQualityContractPath = ""
         BudgetProfileOverride = "StressUnlimited"
         CaptureVariant = [string]$workload.captureVariant
+        SponzaFixtureMode = 0
         Activation = [string]$workload.activation
         ActivationFingerprint = $activationFingerprint
         SceneKind = "Bistro"
@@ -840,6 +845,8 @@ function Invoke-SyntheticQualityAnimationContractCase {
         throw "Campaign driver did not parse for quality animation tests."
     }
     foreach ($functionName in @(
+            "Get-PropertyValue",
+            "Test-WorkloadUsesSponzaAnimation",
             "Get-Sha256",
             "Test-Sha256Identity",
             "Assert-PathIdentity",
@@ -910,6 +917,7 @@ function Invoke-SyntheticQualityAnimationContractCase {
             DriverVersion = "1.2.3"
             QualityTier = "StressUnlimited"
         }
+        SponzaFixtureMode = 0
         Activation = "none"
         ActivationFingerprint = "sha256:" + ("5" * 64)
         ActivationEvidence = [pscustomobject]@{
@@ -965,6 +973,7 @@ function Invoke-SyntheticQualityAnimationContractCase {
     $activationExecution = "sha256:" + ("f" * 64)
     $sponzaWorkload = [pscustomobject]@{
         scene = "Sponza"
+        sponzaFixtureMode = "animation"
         activation = "sponza-forward-gi"
     }
     $sponzaReport = [pscustomobject]@{
@@ -2024,7 +2033,7 @@ function Invoke-SyntheticCookedAssetStagingCase {
         $script:RunRoot = $testRoot
         $bundle = Resolve-CookedAssetBundle `
             $manifest $sourceRoot "Synthetic"
-        if ([int]$bundle.Identity.fileCount -ne 9 -or
+        if ([int]$bundle.Identity.fileCount -ne 11 -or
             [string]$bundle.Identity.identityHash -cnotmatch
                 '^sha256:[0-9a-f]{64}$') {
             throw "Synthetic cooked asset identity is not canonical."
@@ -2156,6 +2165,8 @@ function Invoke-SyntheticNonReflectionC3VerifierCase {
         throw "Campaign driver did not parse for the non-reflection C3 test."
     }
     foreach ($functionName in @(
+            "Get-PropertyValue",
+            "Test-WorkloadUsesSponzaAnimation",
             "Test-Sha256Identity",
             "Assert-PathIdentity",
             "Assert-ResultReportIdentity",

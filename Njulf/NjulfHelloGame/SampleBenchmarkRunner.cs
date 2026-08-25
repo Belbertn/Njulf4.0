@@ -77,7 +77,9 @@ public sealed class SampleBenchmarkRunner
             _options.Trajectory,
             _options.CaptureVariant,
             _options.MeasureFrameCount);
-        if (SampleBenchmarkTrajectory.RequiresSponza(_options.Trajectory))
+        if (SampleBenchmarkTrajectory.RequiresSponza(_options.Trajectory) &&
+            _options.SponzaFixtureMode ==
+                SampleSponzaFixtureMode.AnimationDemo)
         {
             _sponzaSceneAnimationObserver =
                 new SampleBenchmarkSponzaSceneAnimationObserver(
@@ -548,6 +550,11 @@ public sealed class SampleBenchmarkRunner
                 Report.SponzaSceneAnimationEvidence,
                 activationAnimationFrames)
         };
+        Report = Report with
+        {
+            RealtimePerformanceTarget =
+                SampleRealtimePerformanceTarget.Evaluate(Report)
+        };
         if (SampleDdgiBenchmarkSuite.RequiredProductionGateScenes.Any(scene => scene.Scenario == _scenario))
         {
             SampleDdgiProductionGateReport gate = SampleDdgiProductionGate.Evaluate(Report);
@@ -764,7 +771,9 @@ public sealed class SampleBenchmarkRunner
         }
         bool sponza = SampleBenchmarkTrajectory.RequiresSponza(
             options.Trajectory);
-        if (sponza)
+        bool sponzaAnimation = sponza &&
+            options.SponzaFixtureMode == SampleSponzaFixtureMode.AnimationDemo;
+        if (sponzaAnimation)
         {
             SampleBenchmarkSponzaSceneAnimationMode expectedMode =
                 SampleBenchmarkSponzaSceneAnimationContract.ResolveMode(
@@ -788,7 +797,8 @@ public sealed class SampleBenchmarkRunner
                      .IsCanonicalUnavailable(sceneAnimationEvidence))
         {
             mismatches.Add(
-                "A non-Sponza workload does not contain the exact canonical " +
+                "A workload without the explicit Sponza animation fixture " +
+                "does not contain the exact canonical " +
                 "unavailable Sponza scene-animation evidence shape.");
         }
 
@@ -797,19 +807,20 @@ public sealed class SampleBenchmarkRunner
         {
             Comparable = contract.Comparable && distinct.Length == 0,
             Mismatches = Array.AsReadOnly(distinct),
-            SponzaSceneAnimationFingerprint = sponza
+            SponzaFixtureMode = options.SponzaFixtureMode,
+            SponzaSceneAnimationFingerprint = sponzaAnimation
                 ? sceneAnimationEvidence.Fingerprint
                 : "unavailable",
-            SponzaSceneAnimationMode = sponza
+            SponzaSceneAnimationMode = sponzaAnimation
                 ? sceneAnimationEvidence.Mode
                 : SampleBenchmarkSponzaSceneAnimationMode.Unavailable,
-            SponzaSceneAnimationConfigurationFingerprint = sponza
+            SponzaSceneAnimationConfigurationFingerprint = sponzaAnimation
                 ? sceneAnimationEvidence.ConfigurationFingerprint
                 : "unavailable",
-            SponzaSceneAnimationSequenceHash = sponza
+            SponzaSceneAnimationSequenceHash = sponzaAnimation
                 ? sceneAnimationEvidence.SequenceHash
                 : "unavailable",
-            SponzaSceneAnimationSidecarSha256 = sponza
+            SponzaSceneAnimationSidecarSha256 = sponzaAnimation
                 ? sceneAnimationEvidence.SidecarSha256
                 : "unavailable"
         };
@@ -921,6 +932,13 @@ public sealed class SampleBenchmarkAnalyzer
         new("ReflectionProbeCapture", d => d.GpuReflectionProbeCaptureMicroseconds),
         new("ReflectionProbePrefilter", d => d.GpuReflectionProbePrefilterMicroseconds),
         new("ReflectionProbePublish", d => d.GpuReflectionProbePublishMicroseconds),
+        new("HybridReflectionSsrPass", d => d.GpuHybridReflectionSsrMicroseconds),
+        new("HybridReflectionRayQueryPass", d => d.GpuHybridReflectionRayQueryMicroseconds),
+        new("HybridReflectionDdgiBasePass", d => d.GpuHybridReflectionDdgiBaseMicroseconds),
+        new("HybridReflectionResolvePass", d => d.GpuHybridReflectionResolveMicroseconds),
+        new("HybridReflectionTemporalPass", d => d.GpuHybridReflectionTemporalMicroseconds),
+        new("HybridReflectionSpatialPass", d => d.GpuHybridReflectionSpatialMicroseconds),
+        new("HybridReflectionCompositePass", d => d.GpuHybridReflectionCompositeMicroseconds),
         new("FoliageCullPass", d => d.GpuFoliageCullMicroseconds),
         new("FoliageDepth", d => d.GpuFoliageDepthMicroseconds),
         new("FoliageForward", d => d.GpuFoliageForwardMicroseconds),
@@ -3806,6 +3824,7 @@ public sealed class SampleBenchmarkAnalyzer
             TrajectoryFrameCount = trajectoryFrameCount,
             TrajectoryRouteHash = trajectoryRouteHash,
             TrajectorySequenceHash = trajectorySequenceHash,
+            SponzaFixtureMode = options.SponzaFixtureMode,
             Activation = expectedActivation,
             ActivationFingerprint = expectedActivationFingerprint,
             ControlledIsolationIdentityHash =

@@ -851,7 +851,7 @@ function Assert-CampaignManifest {
     Assert-ExactPropertyNames $Manifest @(
         "schema", "campaignId", "projectPath",
         "iterationConfiguration", "finalConfigurations",
-        "advisoryBeautyTargetManifest", "cookedAssets", "protectedPaths", "capture",
+        "advisoryBeautyTargetManifest", "cookedAssets", "performanceTarget", "protectedPaths", "capture",
         "quality", "qualitySequence", "acceptance", "discoveryPolicy",
         "candidates", "targetHypotheses", "workloads") `
         "Campaign manifest"
@@ -887,6 +887,7 @@ function Assert-CampaignManifest {
     if (($requiredCookedModels -join "`n") -cne
         (@(
             "BistroExterior",
+            "BistroInterior",
             "NewSponza_Main_glTF_003",
             "NewSponza_Curtains_glTF",
             "Strut") -join "`n")) {
@@ -895,8 +896,24 @@ function Assert-CampaignManifest {
     if ((Assert-JsonInteger $Manifest.cookedAssets.maximumFiles `
             "cookedAssets.maximumFiles" 1) -ne 1024 -or
         (Assert-JsonInteger $Manifest.cookedAssets.maximumBytes `
-            "cookedAssets.maximumBytes" 1) -ne 3221225472) {
+            "cookedAssets.maximumBytes" 1) -ne 1717986918) {
         throw "The cooked asset package bounds differ from the approved contract."
+    }
+    $target = $Manifest.performanceTarget
+    $null = Assert-JsonObject $target "performanceTarget"
+    Assert-ExactPropertyNames $target @(
+        "width", "height", "framesPerSecond", "cpuP95Milliseconds",
+        "gpuP95Milliseconds", "frameP99Milliseconds", "gpuMemoryBytes",
+        "minimumMemoryHeadroomFraction") "performanceTarget"
+    if ((Assert-JsonInteger $target.width "performanceTarget.width" 1) -ne 1920 -or
+        (Assert-JsonInteger $target.height "performanceTarget.height" 1) -ne 1080 -or
+        (Assert-JsonInteger $target.framesPerSecond "performanceTarget.framesPerSecond" 1) -ne 60 -or
+        (Assert-FiniteNumber $target.cpuP95Milliseconds "performanceTarget.cpuP95Milliseconds") -ne 6.0 -or
+        (Assert-FiniteNumber $target.gpuP95Milliseconds "performanceTarget.gpuP95Milliseconds") -ne 10.0 -or
+        [Math]::Abs((Assert-FiniteNumber $target.frameP99Milliseconds "performanceTarget.frameP99Milliseconds") - (1000.0 / 60.0)) -gt 1.0e-12 -or
+        (Assert-JsonInteger $target.gpuMemoryBytes "performanceTarget.gpuMemoryBytes" 1) -ne 2147483648 -or
+        (Assert-FiniteNumber $target.minimumMemoryHeadroomFraction "performanceTarget.minimumMemoryHeadroomFraction") -ne 0.2) {
+        throw "The absolute 1080p60 performance target differs from the approved contract."
     }
     $finalConfigurations = @($Manifest.finalConfigurations)
     if ($finalConfigurations.Count -ne 2 -or
@@ -981,7 +998,13 @@ function Assert-CampaignManifest {
         "NjulfHelloGame/SampleRenderSettingsFingerprint.cs",
         "NjulfHelloGame/SampleSmokeOptions.cs",
         "NjulfHelloGame/SampleSmokeOptionsParser.cs",
+        "NjulfHelloGame/SampleRealtimePerformanceTarget.cs",
+        "NjulfHelloGame/SampleSponzaFixtureMode.cs",
         "NjulfHelloGame/SampleInputController.cs",
+        "NjulfHelloGame/SampleReflectionPolicy.cs",
+        "NjulfHelloGame/SampleGlobalIlluminationValidation.cs",
+        "NjulfHelloGame/SampleBistroGlobalIlluminationProfile.cs",
+        "NjulfHelloGame/SampleSponzaGlobalIlluminationProfile.cs",
         "NjulfHelloGame/SampleAssetManifest.cs",
         "NjulfHelloGame/SampleAssetValidationGate.cs",
         "NjulfHelloGame/SampleBenchmarkGateEvaluation.cs",
@@ -1013,10 +1036,16 @@ function Assert-CampaignManifest {
         "NjulfHelloGame/Strut.glb",
         "Njulf.Assets/Scenes/SceneDocumentLoader.cs",
         "Njulf.Assets/ContentManager.cs",
+        "Njulf.Assets/ModelImporter.cs",
+        "Njulf.Assets/Cooked/ModelAssetCooker.cs",
+        "Njulf.Assets/AmazonBistroMaterialProfile.cs",
         "Njulf.Assets/Cooked",
         "Njulf.Core/Animation/Animator.cs",
         "Njulf.Core/Scene/Model.cs",
         "Njulf.Rendering/Data/RenderSettings.cs",
+        "Njulf.Rendering/Data/HybridReflectionContracts.cs",
+        "Njulf.Rendering/Data/MaterialForwardClass.cs",
+        "Njulf.Rendering/Data/MaterialTransportContracts.cs",
         "Njulf.Rendering/Data/DirectionalShadowRuntimeDiagnostics.cs",
         "Njulf.Rendering/Data/RendererDiagnostics.cs",
         "Njulf.Rendering/Data/SceneRenderingData.cs",
@@ -1026,15 +1055,28 @@ function Assert-CampaignManifest {
         "Njulf.Rendering/Pipeline/DirectionalShadowPass.cs",
         "Njulf.Rendering/Pipeline/ForwardPlusPass.cs",
         "Njulf.Rendering/Pipeline/SimpleDdgiPasses.cs",
+        "Njulf.Rendering/Pipeline/AsyncComputePassCatalog.cs",
+        "Njulf.Rendering/Pipeline/HybridReflectionGraphPasses.cs",
+        "Njulf.Rendering/Pipeline/HybridReflectionVulkanRuntime.cs",
+        "Njulf.Rendering/Pipeline/ProductionRenderPipelineDeclaration.cs",
+        "Njulf.Rendering/Pipeline/RenderFeatureIsolationPolicy.cs",
         "Njulf.Rendering/Resources/ReflectionProbeCaptureScheduler.cs",
         "Njulf.Rendering/Resources/ReflectionProbeFrameTelemetry.cs",
         "Njulf.Rendering/Resources/ReflectionProbeGpuBudgetPlanner.cs",
         "Njulf.Rendering/Resources/ReflectionProbeManager.cs",
+        "Njulf.Rendering/Resources/MaterialTransportCompiler.cs",
+        "Njulf.Rendering/Resources/ModelRenderUploadService.cs",
         "Njulf.Rendering/Resources/SkinningManager.cs",
         "Njulf.Rendering/Resources/SimpleDdgiGpuScheduler.cs",
         "Njulf.Rendering/Resources/SimpleDdgiVolumeManager.cs",
         "Njulf.Rendering/Debugging/GpuTimestampRecorder.cs",
         "Njulf.Rendering/VulkanRenderer.cs",
+        "Njulf.Shaders/ddgi_simple_shared.glsl",
+        "Njulf.Shaders/forward.frag",
+        "Njulf.Shaders/gi_material_transport.glsl",
+        "Njulf.Shaders/hybrid_reflection_compute.glsl",
+        "Njulf.Shaders/hybrid_reflection_ddgi_base.comp",
+        "Njulf.Shaders/hybrid_reflection_resolve.comp",
         "Njulf.Tests/SampleAnimatedCharacterTests.cs",
         "Njulf.Tests/SampleBenchmarkSponzaSceneAnimationTests.cs",
         "Njulf.Tests/SampleBenchmarkControlledIsolationTests.cs",
@@ -1055,6 +1097,15 @@ function Assert-CampaignManifest {
         "Njulf.Tests/ReflectionProbeRecapturePolicyTests.cs",
         "Njulf.Tests/SampleBistroQualityCaptureHarnessTests.cs",
         "Njulf.Tests/SampleSponzaGiCaptureHarnessTests.cs",
+        "Njulf.Tests/AmazonBistroMaterialProfileTests.cs",
+        "Njulf.Tests/HybridReflectionContractsTests.cs",
+        "Njulf.Tests/MaterialForwardClassifierTests.cs",
+        "Njulf.Tests/MaterialTransportV2Tests.cs",
+        "Njulf.Tests/SampleBistroGlobalIlluminationProfileTests.cs",
+        "Njulf.Tests/SampleBistroReflectionProbesTests.cs",
+        "Njulf.Tests/SampleGlobalIlluminationValidationSettingsTests.cs",
+        "Njulf.Tests/SampleSmokeOptionsParserTests.cs",
+        "Njulf.Tests/ShaderBuildTests.cs",
         "Njulf.Tests/DebugToolingContractsTests.cs",
         "Njulf.Tests/MaterialGiRolloutPolicyTests.cs",
         ".perf-loop-runs/campaign/beauty-target/manifest.json",
@@ -1085,16 +1136,16 @@ function Assert-CampaignManifest {
     $expectedTopology = [ordered]@{
         # scene, scenario, timing trajectory, quality trajectory, variant,
         # warmup, timing frames, qualification, Bistro variant, activation,
-        # observed pass, isolation group, isolation role
-        "bistro-stationary" = @("Bistro", "Normal", "bistro-presentation", "bistro-presentation", "baseline", 480, 240, $true, "presentation", "none", "", "", "")
-        "bistro-motion" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "bistro-loop", "baseline", 480, 240, $true, "steady-motion", "none", "", "", "")
-        "bistro-motion-relight" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "bistro-loop", "baseline", 480, 240, $true, "sun-scale-step", "none", "", "", "")
-        "sponza-low-stationary" = @("Sponza", "GiSponzaRightWallStationary", "sponza-low", "sponza-low", "baseline", 2048, 240, $true, "", "none", "", "", "")
-        "sponza-high-stationary" = @("Sponza", "GiSponzaRightWallStationary", "sponza-high", "sponza-high", "baseline", 2688, 240, $true, "", "none", "", "", "")
-        "sponza-horizontal-motion" = @("Sponza", "GiSponzaRightWallStationary", "sponza-horizontal", "sponza-horizontal", "baseline", 2688, 300, $true, "", "none", "", "", "")
-        "sponza-vertical-motion" = @("Sponza", "GiSponzaRightWallStationary", "sponza-vertical", "sponza-vertical", "baseline", 2688, 960, $true, "", "none", "", "", "")
-        "bistro-forward-gi-enabled" = @("Bistro", "Normal", "bistro-presentation", "bistro-presentation", "forward-gi-enabled", 480, 240, $false, "presentation", "none", "ForwardPlusPass", "bistro-forward-gi", "enabled")
-        "sponza-forward-gi-enabled" = @("Sponza", "GiSponzaRightWallStationary", "sponza-horizontal", "sponza-horizontal", "forward-gi-enabled", 2688, 300, $false, "", "sponza-forward-gi", "ForwardPlusPass", "sponza-forward-gi", "enabled")
+        # observed pass, isolation group, isolation role, Sponza fixture
+        "bistro-stationary" = @("Bistro", "Normal", "bistro-presentation", "bistro-presentation", "baseline", 480, 240, $true, "presentation", "none", "", "", "", "")
+        "bistro-motion" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "bistro-loop", "baseline", 480, 240, $true, "steady-motion", "none", "", "", "", "")
+        "bistro-motion-relight" = @("Bistro", "BistroQualityMotionRelight", "bistro-loop", "bistro-loop", "baseline", 480, 240, $true, "sun-scale-step", "none", "", "", "", "")
+        "sponza-low-stationary" = @("Sponza", "GiSponzaRightWallStationary", "sponza-low", "sponza-low", "baseline", 2048, 240, $true, "", "none", "", "", "", "architecture")
+        "sponza-high-stationary" = @("Sponza", "GiSponzaRightWallStationary", "sponza-high", "sponza-high", "baseline", 2688, 240, $true, "", "none", "", "", "", "architecture")
+        "sponza-horizontal-motion" = @("Sponza", "GiSponzaRightWallStationary", "sponza-horizontal", "sponza-horizontal", "baseline", 2688, 300, $true, "", "none", "", "", "", "architecture")
+        "sponza-vertical-motion" = @("Sponza", "GiSponzaRightWallStationary", "sponza-vertical", "sponza-vertical", "baseline", 2688, 960, $true, "", "none", "", "", "", "architecture")
+        "bistro-forward-gi-enabled" = @("Bistro", "Normal", "bistro-presentation", "bistro-presentation", "forward-gi-enabled", 480, 240, $false, "presentation", "none", "ForwardPlusPass", "bistro-forward-gi", "enabled", "")
+        "sponza-forward-gi-enabled" = @("Sponza", "GiSponzaRightWallStationary", "sponza-horizontal", "sponza-horizontal", "forward-gi-enabled", 2688, 300, $false, "", "sponza-forward-gi", "ForwardPlusPass", "sponza-forward-gi", "enabled", "architecture")
     }
     $workloads = @($Manifest.workloads)
     if ($workloads.Count -ne $expectedTopology.Count) {
@@ -1135,7 +1186,7 @@ function Assert-CampaignManifest {
                     "sponza-horizontal-motion", "sponza-vertical-motion") } {
                 @(
                     "id", "scene", "scenario", "trajectory",
-                    "qualityTrajectory", "captureVariant", "activation",
+                    "qualityTrajectory", "captureVariant", "sponzaFixtureMode", "activation",
                     "warmupFrames", "measureFrames", "qualification",
                     "qualityRois")
                 break
@@ -1154,7 +1205,7 @@ function Assert-CampaignManifest {
                     "sponza-forward-gi-enabled") } {
                 @(
                     "id", "scene", "scenario", "trajectory",
-                    "qualityTrajectory", "captureVariant", "activation",
+                    "qualityTrajectory", "captureVariant", "sponzaFixtureMode", "activation",
                     "warmupFrames", "measureFrames", "qualification",
                     "targetPass", "isolationGroup", "isolationRole",
                     "qualityRois")
@@ -1212,7 +1263,8 @@ function Assert-CampaignManifest {
             [string]$workload.activation,
             [string](Get-PropertyValue $workload "targetPass" ""),
             [string](Get-PropertyValue $workload "isolationGroup" ""),
-            [string](Get-PropertyValue $workload "isolationRole" ""))
+            [string](Get-PropertyValue $workload "isolationRole" ""),
+            [string](Get-PropertyValue $workload "sponzaFixtureMode" ""))
         for ($topologyIndex = 0; $topologyIndex -lt $expected.Count; $topologyIndex++) {
             if (-not [string]::Equals(
                     [string]$actual[$topologyIndex],
@@ -1223,6 +1275,15 @@ function Assert-CampaignManifest {
         }
         if ([string]$workload.scene -notin @("Bistro", "Sponza")) {
             throw "Workload '$id' must use Bistro or Sponza."
+        }
+        $sponzaFixtureMode = [string](Get-PropertyValue `
+            $workload "sponzaFixtureMode" "")
+        if ([string]$workload.scene -ceq "Sponza") {
+            if ($sponzaFixtureMode -notin @("architecture", "animation")) {
+                throw "Workload '$id' has unsupported Sponza fixture '$sponzaFixtureMode'."
+            }
+        } elseif (-not [string]::IsNullOrEmpty($sponzaFixtureMode)) {
+            throw "Non-Sponza workload '$id' cannot select a Sponza fixture."
         }
         Assert-Text ([string]$workload.scenario) "Workload '$id' scenario"
         $trajectory = [string]$workload.trajectory
@@ -1258,7 +1319,8 @@ function Assert-CampaignManifest {
         $reservedArguments = @(
             "--scene", "--performance-scenario", "--quality-preset",
             "--validation", "--gpu-timing", "--health-report",
-            "--bistro-quality-variant", "--benchmark-activation",
+            "--bistro-quality-variant", "--sponza-fixture-mode",
+            "--benchmark-activation",
             "--verify-benchmark-activation-report",
             "--verify-benchmark-ddgi-transient-report",
             "--verify-benchmark-quality-activation-report",
@@ -2045,6 +2107,19 @@ function Test-WorkloadDdgiTransientApplicable {
             $Workload "bistroQualityVariant" "") -ceq "sun-scale-step"
 }
 
+function Test-WorkloadUsesSponzaAnimation {
+    param($Workload)
+    return [string]$Workload.scene -ceq "Sponza" -and
+        [string](Get-PropertyValue `
+            $Workload "sponzaFixtureMode" "architecture") -ceq "animation"
+}
+
+function Get-WorkloadSponzaFixtureValue {
+    param($Workload)
+    if (Test-WorkloadUsesSponzaAnimation $Workload) { return 2 }
+    return 0
+}
+
 function Assert-ResultReportIdentity {
     param($Result, [string]$ReportPath, [string]$ReportSha256, [string]$Label)
     Assert-PathIdentity ([string]$Result.reportPath) $ReportPath `
@@ -2056,7 +2131,7 @@ function Assert-ResultReportIdentity {
 
 function Assert-SponzaAnimationVerifierIdentity {
     param($Workload, $ReportAnimation, $Result, [string]$Label)
-    if ([string]$Workload.scene -ceq "Sponza") {
+    if (Test-WorkloadUsesSponzaAnimation $Workload) {
         if ([string]$Result.sponzaSceneAnimationFingerprint -cne
                 [string]$ReportAnimation.Fingerprint -or
             [int]$Result.sponzaSceneAnimationMode -ne
@@ -2105,7 +2180,7 @@ function Assert-SponzaAnimationVerifierIdentity {
             [string]$Result.sponzaSceneAnimationSidecarPath) -or
         -not [string]::IsNullOrEmpty(
             [string]$Result.sponzaSceneAnimationSidecarSha256)) {
-        throw "$Label non-Sponza animation evidence is not canonical unavailable."
+        throw "$Label animation-inapplicable evidence is not canonical unavailable."
     }
     return [ordered]@{ path = ""; sha256 = "" }
 }
@@ -2144,7 +2219,7 @@ function Assert-TimingActivationVerifierResult {
     }
     $sidecar = Assert-SponzaAnimationVerifierIdentity `
         $Workload $Report.SponzaSceneAnimationEvidence $Result $Label
-    if ([string]$Workload.scene -ceq "Sponza") {
+    if (Test-WorkloadUsesSponzaAnimation $Workload) {
         Assert-PathIdentity ([string]$sidecar.path) `
             (([System.IO.Path]::GetFullPath($ReportPath)) +
                 ".sponza-animation.bin") `
@@ -2201,7 +2276,7 @@ function New-TimingFrozenVerifierEvidence {
         ".activation-verification.json")
     $activationInputPaths = @($reportPath)
     $activationInputSha256 = @($reportSha256)
-    if ([string]$Workload.scene -ceq "Sponza") {
+    if (Test-WorkloadUsesSponzaAnimation $Workload) {
         $activationInputPaths += [string]$Report.SponzaSceneAnimationEvidence.SidecarPath
         $activationInputSha256 +=
             [string]$Report.SponzaSceneAnimationEvidence.SidecarSha256
@@ -2255,7 +2330,7 @@ function Assert-TimingFrozenVerifierEvidence {
         ".activation-verification.json")
     $activationInputPaths = @($reportPath)
     $activationInputSha256 = @($reportSha256)
-    if ([string]$Workload.scene -ceq "Sponza") {
+    if (Test-WorkloadUsesSponzaAnimation $Workload) {
         $activationInputPaths += [string]$Report.SponzaSceneAnimationEvidence.SidecarPath
         $activationInputSha256 +=
             [string]$Report.SponzaSceneAnimationEvidence.SidecarSha256
@@ -2317,7 +2392,7 @@ function Assert-QualityActivationVerifierResult {
     }
     $sidecar = Assert-SponzaAnimationVerifierIdentity `
         $Workload $Report.SponzaSceneAnimationEvidence $Result $Label
-    if ([string]$Workload.scene -ceq "Sponza") {
+    if (Test-WorkloadUsesSponzaAnimation $Workload) {
         Assert-PathIdentity ([string]$sidecar.path) `
             (([System.IO.Path]::GetFullPath($ReportPath)) +
                 ".sponza-animation.bin") `
@@ -2342,7 +2417,7 @@ function New-QualityFrozenVerifierEvidence {
         ".activation-verification.json")
     $inputPaths = @($reportPath)
     $inputSha256 = @($reportSha256)
-    if ([string]$Workload.scene -ceq "Sponza") {
+    if (Test-WorkloadUsesSponzaAnimation $Workload) {
         $inputPaths += [string]$Report.SponzaSceneAnimationEvidence.SidecarPath
         $inputSha256 +=
             [string]$Report.SponzaSceneAnimationEvidence.SidecarSha256
@@ -2384,7 +2459,7 @@ function Assert-QualityFrozenVerifierEvidence {
         ".activation-verification.json")
     $inputPaths = @($reportPath)
     $inputSha256 = @($reportSha256)
-    if ([string]$Workload.scene -ceq "Sponza") {
+    if (Test-WorkloadUsesSponzaAnimation $Workload) {
         $inputPaths += [string]$Report.SponzaSceneAnimationEvidence.SidecarPath
         $inputSha256 +=
             [string]$Report.SponzaSceneAnimationEvidence.SidecarSha256
@@ -3327,6 +3402,11 @@ function Get-QualitySequenceArguments {
     if (-not [string]::IsNullOrWhiteSpace($bistroVariant)) {
         $arguments += @("--bistro-quality-variant", $bistroVariant)
     }
+    $sponzaFixture = [string](Get-PropertyValue `
+        $Workload "sponzaFixtureMode" "")
+    if (-not [string]::IsNullOrWhiteSpace($sponzaFixture)) {
+        $arguments += @("--sponza-fixture-mode", $sponzaFixture)
+    }
     foreach ($argument in @((Get-PropertyValue $Workload "arguments" @()))) {
         $arguments += [string]$argument
     }
@@ -3552,6 +3632,8 @@ function Assert-QualitySequenceReport {
         [string]$Report.SceneKind -cne [string]$Workload.scene -or
         [string]$Report.Scenario -cne [string]$Workload.scenario -or
         [string]$Report.CaptureVariant -cne [string]$Workload.captureVariant -or
+        [int]$Report.SponzaFixtureMode -ne
+            (Get-WorkloadSponzaFixtureValue $Workload) -or
         [string]$Report.Activation -cne [string]$Workload.activation -or
         [string]$Report.ActivationEvidence.Activation -cne
             [string]$Workload.activation -or
@@ -3635,6 +3717,8 @@ function Assert-QualitySequenceReport {
                 [string]$ReferenceContract.activation -or
             [string]$Report.ActivationFingerprint -cne
                 [string]$ReferenceContract.activationFingerprint -or
+            [int]$Report.SponzaFixtureMode -ne
+                [int]$ReferenceContract.sponzaFixtureMode -or
             [string]$Report.ActivationEvidence.AnimationConfigurationFingerprint -cne
                 [string]$ReferenceContract.activationAnimationConfigurationFingerprint -or
             [string]$Report.ActivationEvidence.AnimationSequenceHash -cne
@@ -3645,7 +3729,7 @@ function Assert-QualitySequenceReport {
                 [string]$ReferenceContract.activationExecutionSequenceHash) {
             throw "$Label differs from its immutable quality reference."
         }
-        if ([string]$Workload.scene -ceq "Sponza") {
+        if (Test-WorkloadUsesSponzaAnimation $Workload) {
             if ([string]$Report.SponzaSceneAnimationEvidence.Fingerprint -cne
                     [string]$ReferenceContract.sponzaSceneAnimationFingerprint -or
                 [int]$Report.SponzaSceneAnimationEvidence.Mode -ne
@@ -4000,6 +4084,8 @@ function Assert-QualitySequenceHealthReport {
         [string]$options.HdrQualityContractPath -cne $expectedRoiPath -or
         [string]$options.BudgetProfileOverride -cne $expectedBudgetProfile -or
         [string]$options.CaptureVariant -cne [string]$Workload.captureVariant -or
+        [int]$options.SponzaFixtureMode -ne
+            (Get-WorkloadSponzaFixtureValue $Workload) -or
         [string]$options.Activation -cne [string]$Workload.activation -or
         [string]$options.ActivationFingerprint -cne
             [string]$Report.ActivationFingerprint -or
@@ -4096,7 +4182,7 @@ function Assert-QualitySequenceInputHashes {
         }
         $contract = Get-Content -LiteralPath $ReferenceContractPath -Raw |
             ConvertFrom-Json -DateKind String
-        if ([string]$contract.sceneKind -ceq "Sponza") {
+        if ([int]$contract.sponzaFixtureMode -eq 2) {
             $sidecarPath = [string]$contract.sponzaSceneAnimationSidecarPath
             $sidecarSha256 = [string]$contract.sponzaSceneAnimationSidecarSha256
             if ([string]::IsNullOrWhiteSpace($sidecarPath) -or
@@ -4197,7 +4283,7 @@ function Invoke-QualitySequenceCapture {
     $reservedOutputs = @(
         $ReportPath, $healthPath, $OutputDirectory, $activationArtifactPath)
     if ($Role -ne "canonical") { $reservedOutputs += $metricArtifactPath }
-    if ([string]$Workload.scene -ceq "Sponza") {
+    if (Test-WorkloadUsesSponzaAnimation $Workload) {
         $reservedOutputs += $animationSidecarPath
     }
     foreach ($path in $reservedOutputs) {
@@ -4271,7 +4357,7 @@ function Invoke-QualitySequenceCapture {
     }
     if ((Get-Sha256 ([string]$frozenVerifierEvidence.activation.artifactPath)) -cne
             [string]$frozenVerifierEvidence.activation.artifactSha256 -or
-        ([string]$Workload.scene -ceq "Sponza" -and
+        ((Test-WorkloadUsesSponzaAnimation $Workload) -and
          (Get-Sha256 ([string]$frozenVerifierEvidence.sponzaAnimationSidecar.path)) -cne
             [string]$frozenVerifierEvidence.sponzaAnimationSidecar.sha256) -or
         ($Role -ne "canonical" -and
@@ -4409,7 +4495,7 @@ function New-QualitySequenceReferenceContract {
             activationFrameState = $_.ActivationFrameState
         }
     })
-    $sponzaAnimation = if ([string]$Workload.scene -ceq "Sponza") {
+    $sponzaAnimation = if (Test-WorkloadUsesSponzaAnimation $Workload) {
         [ordered]@{
             fingerprint =
                 [string]$CanonicalReport.SponzaSceneAnimationEvidence.Fingerprint
@@ -4463,6 +4549,7 @@ function New-QualitySequenceReferenceContract {
         captureRun = ConvertTo-QualityCaptureRunContract $CanonicalReport.CaptureRun
         producerIdentity = ConvertTo-QualityProducerContract $CanonicalReport.ProducerIdentity
         activation = [string]$CanonicalReport.Activation
+        sponzaFixtureMode = [int]$CanonicalReport.SponzaFixtureMode
         activationFingerprint = [string]$CanonicalReport.ActivationFingerprint
         activationAnimationConfigurationFingerprint =
             [string]$CanonicalReport.ActivationEvidence.AnimationConfigurationFingerprint
@@ -5212,6 +5299,7 @@ function Get-BenchmarkArguments {
         "--benchmark-trajectory", ([string]$Workload.trajectory),
         "--benchmark-activation", ([string]$Workload.activation),
         "--benchmark-budget-profile", ([string]$Manifest.capture.budgetProfile),
+        "--benchmark-require-1080p60",
         "--scene", ([string]$Workload.scene),
         "--performance-scenario", ([string]$Workload.scenario),
         "--validation", "off",
@@ -5219,6 +5307,11 @@ function Get-BenchmarkArguments {
     $bistroVariant = [string](Get-PropertyValue $Workload "bistroQualityVariant" "")
     if (-not [string]::IsNullOrWhiteSpace($bistroVariant)) {
         $arguments += @("--bistro-quality-variant", $bistroVariant)
+    }
+    $sponzaFixture = [string](Get-PropertyValue `
+        $Workload "sponzaFixtureMode" "")
+    if (-not [string]::IsNullOrWhiteSpace($sponzaFixture)) {
+        $arguments += @("--sponza-fixture-mode", $sponzaFixture)
     }
     foreach ($argument in @((Get-PropertyValue $Workload "arguments" @()))) {
         $arguments += [string]$argument
@@ -5353,6 +5446,8 @@ function Assert-BenchmarkReport {
     if ([int]$Report.WarmupFrameCount -ne $warmupFrameCount -or
         [int]$Report.Options.WarmupFrameCount -ne $warmupFrameCount -or
         [int]$Report.Options.MeasureFrameCount -ne [int]$Workload.measureFrames -or
+        [int]$Report.Options.SponzaFixtureMode -ne
+            (Get-WorkloadSponzaFixtureValue $Workload) -or
         $firstMeasurementFrame -lt $warmupFrameCount -or
         $lastMeasurementFrame -ne
             ($firstMeasurementFrame + [int]$Workload.measureFrames - 1) -or
@@ -5396,6 +5491,8 @@ function Assert-BenchmarkReport {
         default { 1 }
     }
     if ([string]$Report.CaptureContract.Trajectory -ne [string]$Workload.trajectory -or
+        [int]$Report.CaptureContract.SponzaFixtureMode -ne
+            (Get-WorkloadSponzaFixtureValue $Workload) -or
         [int]$Report.CaptureContract.TrajectoryFrameCount -ne $expectedTrajectoryFrameCount -or
         -not (Test-Sha256Identity ([string]$Report.CaptureContract.TrajectoryFingerprint)) -or
         -not (Test-Sha256Identity ([string]$Report.CaptureContract.TrajectoryRouteHash)) -or
@@ -5748,7 +5845,7 @@ function Invoke-BenchmarkCapture {
     } else {
         $reservedOutputs += $candidatePath
     }
-    if ([string]$Workload.scene -ceq "Sponza") {
+    if (Test-WorkloadUsesSponzaAnimation $Workload) {
         $reservedOutputs +=
             ([System.IO.Path]::GetFullPath($ReportPath) +
                 ".sponza-animation.bin")
@@ -5803,7 +5900,7 @@ function Invoke-BenchmarkCapture {
         $admittedOutputs[[System.IO.Path]::GetFullPath($candidatePath)] =
             Get-Sha256 $candidatePath
     }
-    if ([string]$Workload.scene -ceq "Sponza") {
+    if (Test-WorkloadUsesSponzaAnimation $Workload) {
         $sidecarPath = [System.IO.Path]::GetFullPath($ReportPath) +
             ".sponza-animation.bin"
         $admittedOutputs[$sidecarPath] = Get-Sha256 $sidecarPath
@@ -9124,6 +9221,8 @@ function Assert-QualitySequenceReferenceContract {
         [string]$Contract.sceneKind -cne [string]$Workload.scene -or
         [string]$Contract.scenario -cne [string]$Workload.scenario -or
         [string]$Contract.captureVariant -cne [string]$Workload.captureVariant -or
+        [int]$Contract.sponzaFixtureMode -ne
+            (Get-WorkloadSponzaFixtureValue $Workload) -or
         [string]$Contract.trajectory -cne [string]$Workload.qualityTrajectory -or
         [int]$Contract.trajectoryFrameCount -ne
             (Get-QualitySequenceTrajectoryFrameCount ([string]$Workload.qualityTrajectory)) -or

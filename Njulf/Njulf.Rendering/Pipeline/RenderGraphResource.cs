@@ -178,7 +178,9 @@ namespace Njulf.Rendering.Pipeline
         // Appended after the original P0 range to preserve capture IDs.
         HybridReflectionRawMetadata,
         // Full-resolution packed visibility for up to four scheduled area lights.
-        AreaRayShadowMask
+        AreaRayShadowMask,
+        // Sparse per-tile DDGI cohort records. Appended to preserve capture IDs.
+        HybridReflectionDdgiCohorts
     }
 
     public enum RenderGraphResourceKind

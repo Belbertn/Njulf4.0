@@ -602,6 +602,7 @@ public sealed class SampleBenchmarkControlledIsolationTests
             ActivationFingerprint =
                 SampleBenchmarkActivation.CreateFingerprint(activation),
             Trajectory = SampleBenchmarkTrajectoryKind.SponzaLow,
+            SponzaFixtureMode = SampleSponzaFixtureMode.AnimationDemo,
             TrajectoryFingerprint = trajectoryFingerprint,
             RequireProductionTiming = true
         };
@@ -619,6 +620,7 @@ public sealed class SampleBenchmarkControlledIsolationTests
             TrajectoryFrameCount = 1,
             TrajectoryRouteHash = routeHash,
             TrajectorySequenceHash = Identity(forced ? '4' : '3'),
+            SponzaFixtureMode = SampleSponzaFixtureMode.AnimationDemo,
             Activation = activation,
             ActivationFingerprint =
                 SampleBenchmarkActivation.CreateFingerprint(activation),
@@ -746,6 +748,7 @@ public sealed class SampleBenchmarkControlledIsolationTests
             BuildConfiguration = run.BuildConfiguration,
             CaptureRun = run,
             ProducerIdentity = producer,
+            SponzaFixtureMode = SampleSponzaFixtureMode.AnimationDemo,
             Activation =
                 SampleBenchmarkActivation.DirectionalShadowMovingCaster,
             ActivationFingerprint = SampleBenchmarkActivation.CreateFingerprint(

@@ -21,6 +21,7 @@ internal sealed class SampleSceneLoader
     private readonly SampleAssetManifest _manifest;
     private readonly LightManager _lightManager;
     private readonly bool _loadSceneDocument;
+    private readonly SampleSponzaFixtureMode _sponzaFixtureMode;
     private readonly List<RenderObject> _modelObjects = new();
     private readonly List<RenderObject> _stressObjects = new();
     private readonly List<StaticInstanceBatch> _stressBatches = new();
@@ -33,7 +34,9 @@ internal sealed class SampleSceneLoader
         MeshManager meshManager,
         LightManager lightManager,
         SampleAssetManifest manifest,
-        bool loadSceneDocument = false)
+        bool loadSceneDocument = false,
+        SampleSponzaFixtureMode sponzaFixtureMode =
+            SampleSponzaFixtureMode.Architecture)
     {
         _content = content ?? throw new ArgumentNullException(nameof(content));
         _materialManager = materialManager ?? throw new ArgumentNullException(nameof(materialManager));
@@ -41,6 +44,10 @@ internal sealed class SampleSceneLoader
         _lightManager = lightManager ?? throw new ArgumentNullException(nameof(lightManager));
         _manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
         _loadSceneDocument = loadSceneDocument;
+        _sponzaFixtureMode = sponzaFixtureMode;
+
+        if (!Enum.IsDefined(_sponzaFixtureMode))
+            throw new ArgumentOutOfRangeException(nameof(sponzaFixtureMode));
 
         if (string.IsNullOrWhiteSpace(_manifest.ModelPath))
             throw new ArgumentException("The sample asset manifest must specify a model path.", nameof(manifest));
@@ -79,6 +86,7 @@ internal sealed class SampleSceneLoader
             RemoveLoadedObjects(scene);
             _loadedModelBounds = null;
             SceneDocument document = SceneDocumentJson.Read(ScenePath);
+            ApplySponzaFixtureMode(document, _sponzaFixtureMode);
             new SceneDocumentLoader(_content).Populate(
                 document,
                 scene,
@@ -130,6 +138,28 @@ internal sealed class SampleSceneLoader
         }
 
         return model;
+    }
+
+    internal static void ApplySponzaFixtureMode(
+        SceneDocument document,
+        SampleSponzaFixtureMode fixtureMode)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (!Enum.IsDefined(fixtureMode))
+            throw new ArgumentOutOfRangeException(nameof(fixtureMode));
+        if (fixtureMode == SampleSponzaFixtureMode.AnimationDemo)
+            return;
+
+        document.Objects.RemoveAll(static item =>
+            string.Equals(
+                item.Model.Path,
+                SampleBenchmarkSponzaSceneAnimationContract.AssetPath,
+                StringComparison.Ordinal));
+        document.Dependencies.RemoveAll(static item =>
+            string.Equals(
+                item.Path,
+                SampleBenchmarkSponzaSceneAnimationContract.AssetPath,
+                StringComparison.Ordinal));
     }
 
     public void EnableImportedModelLights()

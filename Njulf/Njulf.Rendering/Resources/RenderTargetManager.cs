@@ -456,6 +456,7 @@ namespace Njulf.Rendering.Resources
         public RenderTarget? HybridReflectionHistoryMetadata0 { get; private set; }
         public RenderTarget? HybridReflectionHistoryMetadata1 { get; private set; }
         public RenderTarget? HybridReflectionFilterScratch { get; private set; }
+        public RenderTarget? HybridReflectionDdgiCohorts { get; private set; }
         public RenderTarget LdrSceneColor { get; }
         public RenderTarget SmaaEdges { get; }
         public RenderTarget SmaaBlendWeights { get; }
@@ -473,7 +474,7 @@ namespace Njulf.Rendering.Resources
                 14 + (NearFieldSourceLuminance is null ? 0 : 1) +
                 (NearFieldResidualFilterScratch0 is null ? 0 : 2)) +
             (GiCausticReceiverPayload is null ? 0 : 3) +
-            (HybridReflectionReceiverPayload is null ? 0 : 10);
+            (HybridReflectionReceiverPayload is null ? 0 : 11);
         public ulong TotalEstimatedBytes =>
             SceneColor.EstimatedByteSize +
             SceneDepth.EstimatedByteSize +
@@ -933,7 +934,8 @@ namespace Njulf.Rendering.Resources
             HybridReflectionMoments1,
             HybridReflectionHistoryMetadata0,
             HybridReflectionHistoryMetadata1,
-            HybridReflectionFilterScratch);
+            HybridReflectionFilterScratch,
+            HybridReflectionDdgiCohorts);
         public ulong AntiAliasingRenderTargetBytes => SumEnabledBytes(LdrSceneColor, SmaaEdges, SmaaBlendWeights, MotionVectors, TaaHistoryA, TaaHistoryB);
         public ulong WeightedOitRenderTargetBytes => SumEnabledBytes(WeightedOitAccumulation, WeightedOitRevealage);
         public ulong BloomRenderTargetBytes => SumTargetBytes(_bloomMipChain);
@@ -1082,6 +1084,12 @@ namespace Njulf.Rendering.Resources
                 HybridReflectionRadianceFormat,
                 extent,
                 NearFieldStorageSampledDescriptor);
+            HybridReflectionDdgiCohorts = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.HybridReflectionDdgiCohorts,
+                "Hybrid Reflection DDGI Cohort Records",
+                HybridReflectionRadianceFormat,
+                extent,
+                NearFieldStorageSampledDescriptor);
         }
 
         private void RecreateHybridReflectionTargets(
@@ -1112,6 +1120,8 @@ namespace Njulf.Rendering.Resources
                 HybridReflectionHistoryMetadata1!, targetExtent);
             RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionFilterScratch,
                 HybridReflectionFilterScratch!, targetExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.HybridReflectionDdgiCohorts,
+                HybridReflectionDdgiCohorts!, targetExtent);
         }
 
         private void RecreateNearFieldResidualSourceTargets(Extent2D extent)
@@ -1534,6 +1544,8 @@ namespace Njulf.Rendering.Resources
                 HybridReflectionHistoryMetadata1);
             DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionFilterScratch,
                 HybridReflectionFilterScratch);
+            DisposeIfManagerOwned(RenderGraphResourceId.HybridReflectionDdgiCohorts,
+                HybridReflectionDdgiCohorts);
             DisposeIfManagerOwned(RenderGraphResourceId.LdrSceneColor, LdrSceneColor);
             DisposeIfManagerOwned(RenderGraphResourceId.SmaaEdges, SmaaEdges);
             DisposeIfManagerOwned(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights);

@@ -866,7 +866,8 @@ namespace Njulf.Rendering.Data
         StaticProbesAndPlanar = 4,
         /// <summary>
         /// Screen-space reflections first, bounded ray-query recovery second,
-        /// then local probes and the global environment.
+        /// directional DDGI as the stable off-screen base, then local probes
+        /// and the global environment as compatibility fallbacks.
         /// </summary>
         HybridRayQuery = 5
     }
@@ -902,7 +903,12 @@ namespace Njulf.Rendering.Data
         /// Adaptive update cost in red, transmission in green, and broad
         /// anisotropy in blue.
         /// </summary>
-        DetailBudget = 15
+        DetailBudget = 15,
+        /// <summary>
+        /// Receiver material inputs: roughness in red, maximum F0 in green,
+        /// and indirect-specular visibility in blue.
+        /// </summary>
+        ReceiverMaterial = 16
     }
 
     public enum TransparencyMode : uint
@@ -2092,8 +2098,17 @@ namespace Njulf.Rendering.Data
             set => _spatialFilterPassCount = Math.Clamp(value, 0, 8);
         }
 
+        /// <summary>
+        /// Runs the material-aware DDGI reflection base at one gather per
+        /// receiver pixel. This is an exact diagnostic oracle; production uses
+        /// edge-aware grouped gathers while SSR and ray queries retain their
+        /// independently budgeted sharp detail.
+        /// </summary>
+        public bool DdgiReflectionFullResolutionOracle { get; set; }
+
         public void ApplyHybridQualityBudget(RenderQualityPreset preset)
         {
+            DdgiReflectionFullResolutionOracle = false;
             switch (preset)
             {
                 case RenderQualityPreset.Medium:
@@ -4385,9 +4400,17 @@ namespace Njulf.Rendering.Data
             SimpleDdgiDirectionalRadianceMode = highTier
                 ? SimpleDdgiDirectionalRadianceMode.L2
                 : SimpleDdgiDirectionalRadianceMode.Off;
-            SimpleDdgiGlossyTransportMode = tier == DdgiQualityTier.DdgiUltra
-                ? SimpleDdgiGlossyTransportMode.OneBounce
-                : SimpleDdgiGlossyTransportMode.Off;
+            // Directional L2 is the probe-free glossy base for both shipping
+            // DDGI tiers. High evaluates it at the receiver only; Ultra also
+            // feeds one bounded glossy bounce back into transport.
+            SimpleDdgiGlossyTransportMode = tier switch
+            {
+                DdgiQualityTier.DdgiUltra =>
+                    SimpleDdgiGlossyTransportMode.OneBounce,
+                DdgiQualityTier.DdgiHigh =>
+                    SimpleDdgiGlossyTransportMode.ReceiverOnly,
+                _ => SimpleDdgiGlossyTransportMode.Off
+            };
             SimpleDdgiDirectionalFogEnabled = highTier;
             // Certified transport must use a time-invariant skinned
             // representation. Live current-pose transport is available only

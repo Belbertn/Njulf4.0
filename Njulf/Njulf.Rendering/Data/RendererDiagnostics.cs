@@ -657,10 +657,12 @@ namespace Njulf.Rendering.Data
         public uint HybridReflectionRayQueryOverflowCount { get; init; }
         public uint HybridReflectionRayQueryHitCount { get; init; }
         public uint HybridReflectionRayQueryMissCount { get; init; }
+        public uint HybridReflectionDdgiFallbackCount { get; init; }
         public uint HybridReflectionProbeFallbackCount { get; init; }
         public uint HybridReflectionEnvironmentFallbackCount { get; init; }
         public long GpuHybridReflectionSsrMicroseconds { get; init; }
         public long GpuHybridReflectionRayQueryMicroseconds { get; init; }
+        public long GpuHybridReflectionDdgiBaseMicroseconds { get; init; }
         public long GpuHybridReflectionResolveMicroseconds { get; init; }
         public long GpuHybridReflectionTemporalMicroseconds { get; init; }
         public long GpuHybridReflectionSpatialMicroseconds { get; init; }
@@ -728,9 +730,11 @@ namespace Njulf.Rendering.Data
         public int CameraDrivenCpuDrawListRebuilt { get; init; }
         public int SolidObjectCount { get; init; }
         public int GeometryDecalObjectCount { get; init; }
+        public int ThinGlassObjectCount { get; init; }
         public int SolidMeshletCount { get; init; }
         public int MaskedMeshletCount { get; init; }
         public int GeometryDecalMeshletCount { get; init; }
+        public int ThinGlassMeshletCount { get; init; }
         public int ForwardSimpleMeshletCount { get; init; }
         public int ForwardFullMaterialMeshletCount { get; init; }
         public int ForwardLocalProbeMeshletCount { get; init; }
@@ -750,6 +754,7 @@ namespace Njulf.Rendering.Data
         public DecalDebugView DecalDebugView { get; init; } = DecalDebugView.None;
         public int TransparentReceiveShadows { get; init; }
         public int TransparentReceiveGlobalIllumination { get; init; }
+        public int ThinGlassDirectionalOnlyPipelineEnabled { get; init; }
         public int WeightedOitEnabled { get; init; }
         public ulong WeightedOitRenderTargetBytes { get; init; }
         public int WeightedOitRenderTargetCount { get; init; }

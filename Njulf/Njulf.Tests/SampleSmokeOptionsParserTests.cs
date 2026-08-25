@@ -13,6 +13,17 @@ namespace Njulf.Tests;
 public sealed class SampleSmokeOptionsParserTests
 {
     [Test]
+    public void SponzaGiCapture_UsesControlledProductionWindow()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+            ["--sponza-gi-capture-dir", "artifacts/sponza"]);
+
+        Assert.That(
+            HelloGame.RequiresControlledProductionWindow(options),
+            Is.True);
+    }
+
+    [Test]
     public void ParsesVolumetricFogDebugCaptureOverrides()
     {
         SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
@@ -60,6 +71,7 @@ public sealed class SampleSmokeOptionsParserTests
         Environment.SetEnvironmentVariable("NJULF_RENDERER_TRANSPARENCY_MODE", null);
         Environment.SetEnvironmentVariable("NJULF_RENDERER_BASELINE_SNAPSHOT_DIR", null);
         Environment.SetEnvironmentVariable("NJULF_SPONZA_GI_CAPTURE_DIR", null);
+        Environment.SetEnvironmentVariable("NJULF_SPONZA_FIXTURE_MODE", null);
         Environment.SetEnvironmentVariable(
             "NJULF_SPONZA_TEMPORAL_CAPTURE_DIR",
             null);
@@ -132,6 +144,9 @@ public sealed class SampleSmokeOptionsParserTests
             null);
         Environment.SetEnvironmentVariable(
             "NJULF_RENDERER_BENCHMARK_REQUIRE_PRODUCTION",
+            null);
+        Environment.SetEnvironmentVariable(
+            "NJULF_RENDERER_BENCHMARK_REQUIRE_1080P60",
             null);
         Environment.SetEnvironmentVariable(
             "NJULF_RENDERER_BENCHMARK_HDR_REFERENCE",
@@ -1328,6 +1343,68 @@ public sealed class SampleSmokeOptionsParserTests
                 "--smoke-frames", "4"
             }),
             Throws.ArgumentException.With.Message.Contains("owns its deterministic frame sequence"));
+    }
+
+    [Test]
+    public void ParsesAbsolute1080p60BenchmarkTarget()
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--benchmark",
+            "--benchmark-require-1080p60"
+        ]);
+
+        Assert.That(options.Benchmark.RequireRealtime1080p60Target, Is.True);
+    }
+
+    [TestCase("architecture", SampleSponzaFixtureMode.Architecture)]
+    [TestCase("c5-residual-validation",
+        SampleSponzaFixtureMode.C5ResidualValidation)]
+    [TestCase("animation-demo", SampleSponzaFixtureMode.AnimationDemo)]
+    public void ParsesExplicitSponzaFixtureMode(
+        string value,
+        SampleSponzaFixtureMode expected)
+    {
+        SampleSmokeOptions options = SampleSmokeOptionsParser.Parse(
+        [
+            "--scene", "sponza",
+            "--benchmark",
+            "--sponza-fixture-mode", value
+        ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.SponzaFixtureMode, Is.EqualTo(expected));
+            Assert.That(options.Benchmark.SponzaFixtureMode, Is.EqualTo(expected));
+        });
+    }
+
+    [Test]
+    public void SponzaFixtureMode_DefaultsToArchitectureAndRejectsUnknownValue()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleSmokeOptionsParser.Parse(["--scene", "sponza"])
+                    .SponzaFixtureMode,
+                Is.EqualTo(SampleSponzaFixtureMode.Architecture));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--scene", "sponza",
+                    "--sponza-fixture-mode", "everything"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "Invalid Sponza fixture mode"));
+            Assert.That(
+                () => SampleSmokeOptionsParser.Parse(
+                [
+                    "--scene", "bistro",
+                    "--sponza-fixture-mode", "animation"
+                ]),
+                Throws.ArgumentException.With.Message.Contains(
+                    "requires the Sponza plaza scene"));
+        });
     }
 
     [Test]

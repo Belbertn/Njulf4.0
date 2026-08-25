@@ -1,0 +1,432 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+#include "common.glsl"
+
+// This pass is a read-only receiver. It never mutates sparse residency or
+// contributes a second ownership stream; the depth-driven DDGI receiver cache
+// remains the sole owner of those requests.
+#define SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT 0u
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE false
+#define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE false
+#define SIMPLE_DDGI_RECEIVER_COVERAGE_HASH 0u
+#define SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS SIMPLE_DDGI_RECEIVER_CONSUMER_OPAQUE
+#define SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK 0
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 0
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 0u
+#define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
+#define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
+// The DDGI reflection base is intentionally low frequency. Decode only L1;
+// SSR/ray query layer high-frequency scene detail above it during resolve.
+#define SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER 1
+#include "ddgi_simple_shared.glsl"
+#include "hybrid_reflection_compute.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform HybridReflectionDdgiPushBlock
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPositionAndPadding;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint ReceiverScale;
+    uint MaximumSurfaceGroupsPerTile;
+    float MinimumConfidence;
+    float NormalDotThreshold;
+    float MinimumWorldDepthTolerance;
+    float RelativeWorldDepthTolerance;
+    uint ReconstructionPass;
+    uint ForceExactReconstruction;
+} pc;
+
+const uint HYBRID_DDGI_MAXIMUM_COHORTS = 2u;
+
+ivec2 HybridDdgiTilePixel(ivec2 origin, uint lane, uint scale)
+{
+    return origin + ivec2(int(lane % scale), int(lane / scale));
+}
+
+bool HybridDdgiPixelInBounds(ivec2 pixel)
+{
+    return all(greaterThanEqual(pixel, ivec2(0))) &&
+        all(lessThan(pixel, ivec2(pc.ScreenWidth, pc.ScreenHeight)));
+}
+
+bool HybridDdgiReceiver(
+    ivec2 pixel,
+    out uvec4 payload,
+    out vec3 worldPosition,
+    out float depth)
+{
+    payload = uvec4(0u);
+    worldPosition = vec3(0.0);
+    depth = 0.0;
+    if (!HybridDdgiPixelInBounds(pixel))
+        return false;
+
+    payload = texelFetch(HybridReceiverPayload, pixel, 0);
+    if (!HybridReflectionPayloadValid(payload))
+        return false;
+
+    return HybridReconstructWorldPosition(
+        pixel,
+        uvec2(pc.ScreenWidth, pc.ScreenHeight),
+        pc.InverseViewProjectionMatrix,
+        worldPosition,
+        depth);
+}
+
+bool HybridEvaluateDdgiReflection(
+    uvec4 payload,
+    vec3 worldPosition,
+    out vec3 radiance,
+    out float confidence)
+{
+    radiance = vec3(0.0);
+    confidence = 0.0;
+    SimpleDdgiParams params = ReadSimpleDdgiParams(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+    uint directionalMode = SimpleDdgiDirectionalRadianceMode(
+        params.residencyFlags);
+    uint glossyMode = SimpleDdgiGlossyTransportMode(params.residencyFlags);
+    float roughness = HybridReflectionPayloadRoughness(payload);
+    bool configured =
+        (params.flags &
+            (SIMPLE_DDGI_FLAG_ENABLED |
+             SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) ==
+            (SIMPLE_DDGI_FLAG_ENABLED |
+             SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) &&
+        params.probeCount > 0u &&
+        directionalMode != SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF &&
+        glossyMode != SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_OFF;
+    if (!configured)
+        return false;
+
+    vec3 traceNormal = HybridReflectionTraceNormal(payload);
+    vec3 viewDirection = normalize(
+        pc.CameraPositionAndPadding.xyz - worldPosition);
+    vec3 reflectionDirection = normalize(
+        reflect(-viewDirection, traceNormal));
+    SetSimpleDdgiDirectionalRadianceQuery(reflectionDirection, roughness);
+    // DDGI is the stable base for every reflection lobe in this pass. SSR and
+    // ray query remain responsible for sharp detail and overwrite/blend above
+    // it during resolve.
+    SetSimpleDdgiDirectionalRadianceQueryEligibilityWeight(1.0);
+    SimpleDdgiGatherResult gather = SampleSimpleDdgiGather(
+        params, worldPosition, traceNormal, viewDirection);
+    radiance = gather.directionalRadiance *
+        max(params.indirectIntensity, 0.0);
+    confidence = clamp(
+        gather.directionalRadianceSupport *
+        SimpleDdgiRadiometricOwnership(gather),
+        0.0,
+        1.0);
+    return HybridFinite(radiance) && HybridFinite(confidence) &&
+        confidence >= pc.MinimumConfidence;
+}
+
+bool HybridDdgiSameSurface(
+    uvec4 referencePayload,
+    vec3 referenceWorldPosition,
+    uvec4 candidatePayload,
+    vec3 candidateWorldPosition)
+{
+    if (HybridReceiverIdentity(referencePayload) !=
+        HybridReceiverIdentity(candidatePayload))
+    {
+        return false;
+    }
+
+    // Match on the footprint-aware trace normal. Broad lobes intentionally
+    // use the geometric normal, so a high-frequency masonry normal map cannot
+    // fragment a DDGI cohort or turn probe interpolation into sparkle.
+    vec3 referenceNormal = HybridReflectionTraceNormal(referencePayload);
+    vec3 candidateNormal = HybridReflectionTraceNormal(candidatePayload);
+    if (dot(referenceNormal, candidateNormal) < pc.NormalDotThreshold)
+        return false;
+
+    // Receiver identity is stable at the primitive/material level, while a
+    // roughness texture can still vary inside it. Do not reconstruct a glossy
+    // directional query across a visibly different lobe.
+    if (abs(
+            HybridReflectionPayloadRoughness(referencePayload) -
+            HybridReflectionPayloadRoughness(candidatePayload)) > 0.08)
+    {
+        return false;
+    }
+
+    float receiverDistance = length(
+        pc.CameraPositionAndPadding.xyz - referenceWorldPosition);
+    float candidateDistance = length(
+        pc.CameraPositionAndPadding.xyz - candidateWorldPosition);
+    float tolerance = max(
+        pc.MinimumWorldDepthTolerance,
+        receiverDistance * pc.RelativeWorldDepthTolerance);
+    // Tangent displacement is expected across an architectural plane. Radial
+    // depth is the discontinuity test after identity and normal continuity.
+    return abs(candidateDistance - receiverDistance) <= tolerance;
+}
+
+vec4 HybridPackDdgiCohort(
+    vec3 radiance,
+    float confidence,
+    uint referenceLane)
+{
+    // RGBA16F leaves no separate integer channel. Store lane+1 in alpha's
+    // integer part and confidence in half of its fractional range. Values stay
+    // below 17, where half precision still retains useful confidence steps.
+    float packedLaneConfidence = float(referenceLane + 1u) +
+        min(clamp(confidence, 0.0, 1.0), 0.998) * 0.5;
+    return vec4(max(radiance, vec3(0.0)), packedLaneConfidence);
+}
+
+bool HybridUnpackDdgiCohort(
+    vec4 record,
+    uint laneCount,
+    out vec3 radiance,
+    out float confidence,
+    out uint referenceLane)
+{
+    radiance = vec3(0.0);
+    confidence = 0.0;
+    referenceLane = 0u;
+    if (!HybridFinite(record) || record.a < 1.0)
+        return false;
+
+    float lanePart = floor(record.a);
+    if (lanePart < 1.0 || lanePart > float(laneCount))
+        return false;
+    referenceLane = uint(lanePart) - 1u;
+    confidence = clamp(fract(record.a) * 2.0, 0.0, 1.0);
+    radiance = max(record.rgb, vec3(0.0));
+    return confidence >= pc.MinimumConfidence;
+}
+
+void HybridProduceDdgiCohorts()
+{
+    uint scale = clamp(pc.ReceiverScale, 1u, 4u);
+    ivec2 origin = ivec2(gl_GlobalInvocationID.xy * scale);
+    if (!HybridDdgiPixelInBounds(origin))
+        return;
+
+    uint laneCount = scale * scale;
+    uint maximumGroups = min(
+        clamp(pc.MaximumSurfaceGroupsPerTile, 1u, laneCount),
+        HYBRID_DDGI_MAXIMUM_COHORTS);
+    // Every slot read by reconstruction is initialized by this dispatch, so
+    // quality changes and prior frames cannot leak a stale cohort.
+    for (uint slot = 0u; slot < maximumGroups; slot++)
+    {
+        ivec2 slotPixel = origin + ivec2(int(slot), 0);
+        if (HybridDdgiPixelInBounds(slotPixel))
+            imageStore(HybridDdgiCohorts, slotPixel, vec4(0.0));
+    }
+
+    uint processedMask = 0u;
+    for (uint group = 0u; group < maximumGroups; group++)
+    {
+        int referenceLane = -1;
+        uvec4 referencePayload = uvec4(0u);
+        vec3 referenceWorldPosition = vec3(0.0);
+        float referenceDepth = 0.0;
+        for (uint lane = 0u; lane < laneCount; lane++)
+        {
+            if ((processedMask & (1u << lane)) != 0u)
+                continue;
+            ivec2 pixel = HybridDdgiTilePixel(origin, lane, scale);
+            if (HybridDdgiReceiver(pixel, referencePayload,
+                    referenceWorldPosition, referenceDepth))
+            {
+                referenceLane = int(lane);
+                break;
+            }
+            processedMask |= 1u << lane;
+        }
+        if (referenceLane < 0)
+            break;
+
+        vec3 ddgiRadiance;
+        float ddgiConfidence;
+        bool ddgiValid = HybridEvaluateDdgiReflection(
+            referencePayload,
+            referenceWorldPosition,
+            ddgiRadiance,
+            ddgiConfidence);
+
+        // Mark every receiver in this cohort even if its representative has
+        // no support. Reconstruction then evaluates those pixels exactly.
+        for (uint lane = uint(referenceLane); lane < laneCount; lane++)
+        {
+            if ((processedMask & (1u << lane)) != 0u)
+                continue;
+            ivec2 pixel = HybridDdgiTilePixel(origin, lane, scale);
+            uvec4 payload;
+            vec3 worldPosition;
+            float depth;
+            if (!HybridDdgiReceiver(pixel, payload, worldPosition, depth))
+            {
+                processedMask |= 1u << lane;
+                continue;
+            }
+            if (HybridDdgiSameSurface(referencePayload,
+                    referenceWorldPosition, payload, worldPosition))
+            {
+                processedMask |= 1u << lane;
+            }
+        }
+
+        if (ddgiValid)
+        {
+            ivec2 slotPixel = origin + ivec2(int(group), 0);
+            if (HybridDdgiPixelInBounds(slotPixel))
+            {
+                imageStore(HybridDdgiCohorts, slotPixel,
+                    HybridPackDdgiCohort(ddgiRadiance, ddgiConfidence,
+                        uint(referenceLane)));
+            }
+        }
+    }
+}
+
+bool HybridTryDdgiTile(
+    ivec2 tileOrigin,
+    uint scale,
+    uint maximumGroups,
+    uvec4 receiverPayload,
+    vec3 receiverWorldPosition,
+    out vec3 radiance,
+    out float confidence)
+{
+    radiance = vec3(0.0);
+    confidence = 0.0;
+    if (!HybridDdgiPixelInBounds(tileOrigin))
+        return false;
+
+    uint laneCount = scale * scale;
+    for (uint slot = 0u; slot < maximumGroups; slot++)
+    {
+        ivec2 slotPixel = tileOrigin + ivec2(int(slot), 0);
+        if (!HybridDdgiPixelInBounds(slotPixel))
+            continue;
+        vec3 cohortRadiance;
+        float cohortConfidence;
+        uint referenceLane;
+        if (!HybridUnpackDdgiCohort(
+                imageLoad(HybridDdgiCohorts, slotPixel),
+                laneCount,
+                cohortRadiance,
+                cohortConfidence,
+                referenceLane))
+        {
+            continue;
+        }
+
+        ivec2 referencePixel = HybridDdgiTilePixel(
+            tileOrigin, referenceLane, scale);
+        uvec4 referencePayload;
+        vec3 referenceWorldPosition;
+        float referenceDepth;
+        if (!HybridDdgiReceiver(referencePixel, referencePayload,
+                referenceWorldPosition, referenceDepth))
+        {
+            continue;
+        }
+        if (!HybridDdgiSameSurface(referencePayload,
+                referenceWorldPosition, receiverPayload,
+                receiverWorldPosition))
+        {
+            continue;
+        }
+
+        radiance = cohortRadiance;
+        confidence = cohortConfidence;
+        return true;
+    }
+    return false;
+}
+
+bool HybridFindDdgiCohort(
+    ivec2 pixel,
+    uvec4 payload,
+    vec3 worldPosition,
+    out vec3 radiance,
+    out float confidence)
+{
+    uint scale = clamp(pc.ReceiverScale, 1u, 4u);
+    uint laneCount = scale * scale;
+    uint maximumGroups = min(
+        clamp(pc.MaximumSurfaceGroupsPerTile, 1u, laneCount),
+        HYBRID_DDGI_MAXIMUM_COHORTS);
+    ivec2 tileOrigin = (pixel / int(scale)) * int(scale);
+    if (HybridTryDdgiTile(tileOrigin, scale, maximumGroups,
+            payload, worldPosition, radiance, confidence))
+    {
+        return true;
+    }
+
+    // A tile edge must not become a reconstruction edge. Only receivers that
+    // pass the full material/normal/depth compatibility contract are reused.
+    for (int tileY = -1; tileY <= 1; tileY++)
+    {
+        for (int tileX = -1; tileX <= 1; tileX++)
+        {
+            if (tileX == 0 && tileY == 0)
+                continue;
+            ivec2 neighborOrigin = tileOrigin +
+                ivec2(tileX, tileY) * int(scale);
+            if (HybridTryDdgiTile(neighborOrigin, scale, maximumGroups,
+                    payload, worldPosition, radiance, confidence))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void HybridReconstructDdgiBase()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (!HybridDdgiPixelInBounds(pixel))
+        return;
+
+    uvec4 payload;
+    vec3 worldPosition;
+    float depth;
+    if (!HybridDdgiReceiver(pixel, payload, worldPosition, depth))
+    {
+        imageStore(HybridFilterScratch, pixel, vec4(0.0));
+        return;
+    }
+
+    uint rawMetadata = imageLoad(HybridRawMetadata, pixel).x;
+    bool disoccluded = HybridMetadataReason(rawMetadata) ==
+        HYBRID_REFLECTION_REASON_DISOCCLUDED;
+    bool exactRequired = pc.ForceExactReconstruction != 0u ||
+        HybridReflectionRequiresSharpDetail(payload) || disoccluded;
+    vec3 radiance = vec3(0.0);
+    float confidence = 0.0;
+    bool valid = !exactRequired && HybridFindDdgiCohort(
+        pixel, payload, worldPosition, radiance, confidence);
+    if (!valid)
+    {
+        // This is the correctness backstop: every valid receiver omitted by
+        // the bounded cohort producer evaluates DDGI for itself. A zero output
+        // now means genuine lack of DDGI support, never a sampling hole.
+        valid = HybridEvaluateDdgiReflection(
+            payload, worldPosition, radiance, confidence);
+    }
+
+    imageStore(HybridFilterScratch, pixel,
+        valid ? vec4(max(radiance, vec3(0.0)), confidence) : vec4(0.0));
+}
+
+void main()
+{
+    if (pc.ReconstructionPass == 0u)
+        HybridProduceDdgiCohorts();
+    else
+        HybridReconstructDdgiBase();
+}

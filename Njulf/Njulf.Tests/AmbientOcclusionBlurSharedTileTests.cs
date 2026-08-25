@@ -92,6 +92,11 @@ public sealed class AmbientOcclusionBlurSharedTileTests
                 "Dispatch(cmd, _horizontalSet, _renderTargets.AmbientOcclusionRaw.Extent, new Vector2(1.0f, 0.0f)"));
             Assert.That(pass, Does.Contain(
                 "Dispatch(cmd, _verticalSet, _renderTargets.AmbientOcclusionBlurred.Extent, new Vector2(0.0f, 1.0f)"));
+            Assert.That(pass, Does.Contain(
+                "public override bool SupportsSecondaryCommandBuffer => false;"),
+                "the blur and its fragment-publication barrier must remain in one primary command stream");
+            Assert.That(pass, Does.Contain(
+                ".TransitionToShaderRead(cmd);"));
         });
     }
 

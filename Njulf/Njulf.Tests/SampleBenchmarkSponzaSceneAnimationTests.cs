@@ -881,6 +881,7 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
                 ReportPath: null)
             {
                 Trajectory = trajectory,
+                SponzaFixtureMode = SampleSponzaFixtureMode.AnimationDemo,
                 TrajectoryBistroVariant = bistroVariant,
                 TrajectoryFingerprint = trajectoryFingerprint
             },
@@ -925,6 +926,7 @@ public sealed class SampleBenchmarkSponzaSceneAnimationTests
                     trajectory,
                     bistroVariant),
                 TrajectorySequenceHash = Identity('e'),
+                SponzaFixtureMode = SampleSponzaFixtureMode.AnimationDemo,
                 Activation = SampleBenchmarkActivation.None,
                 ActivationFingerprint =
                     SampleBenchmarkActivation.CreateFingerprint(

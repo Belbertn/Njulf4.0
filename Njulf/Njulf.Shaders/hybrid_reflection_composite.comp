@@ -34,6 +34,28 @@ void main()
             : imageLoad(HybridRawRadiance, pixel);
     vec4 scene = imageLoad(HybridSceneColor, pixel);
 
+    if (pc.DebugView == 16u)
+    {
+        uvec4 payload = texelFetch(HybridReceiverPayload, pixel, 0);
+        vec3 material = HybridReflectionPayloadValid(payload)
+            ? vec3(
+                HybridReflectionPayloadRoughness(payload),
+                HybridMaximumComponent(HybridReflectionPayloadF0(payload)),
+                HybridReflectionPayloadSpecularOcclusion(payload))
+            : vec3(0.0);
+        imageStore(HybridSceneColor, pixel, vec4(material, scene.a));
+        return;
+    }
+
+    if (pc.DebugView == 11u)
+    {
+        imageStore(HybridSceneColor, pixel,
+            vec4(valid && HybridFinite(reflection)
+                ? max(reflection.rgb, vec3(0.0))
+                : vec3(0.0), scene.a));
+        return;
+    }
+
     if (pc.DebugView == 15u)
     {
         uvec4 payload = texelFetch(HybridReceiverPayload, pixel, 0);

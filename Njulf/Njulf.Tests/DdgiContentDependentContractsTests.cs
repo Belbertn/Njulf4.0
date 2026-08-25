@@ -127,11 +127,11 @@ public sealed class DdgiContentDependentContractsTests
             Assert.That(settings.EffectiveSimpleDdgiDirectionalRadianceMode,
                 Is.EqualTo(SimpleDdgiDirectionalRadianceMode.L2));
             Assert.That(settings.EffectiveSimpleDdgiGlossyTransportMode,
-                Is.EqualTo(SimpleDdgiGlossyTransportMode.Off));
+                Is.EqualTo(SimpleDdgiGlossyTransportMode.ReceiverOnly));
         });
 
-        // Glossy receiver use remains independently gated on High even though
-        // the production L2 publication is provisioned for froxel fog.
+        // One-bounce publication remains independently qualified; without it
+        // High deterministically falls back to its receiver-only glossy base.
         settings.SimpleDdgiDirectionalRadianceMode =
             SimpleDdgiDirectionalRadianceMode.L2;
         settings.SimpleDdgiGlossyTransportMode =

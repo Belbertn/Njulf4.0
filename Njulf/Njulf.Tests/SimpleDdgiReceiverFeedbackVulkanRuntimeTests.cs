@@ -218,39 +218,81 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                TransparentForwardPass.ShouldUseDecalReceiverCache(
+                TransparentForwardPass.ShouldUseGeometryDecalOverlay(
                     decalOnly,
                     exactFeedback: false,
                     rayVariant: false,
-                    receiverCacheAvailable: true,
-                    receiverCachePipelineAvailable: true),
+                    overlayPipelineAvailable: true),
                 Is.True);
             Assert.That(
-                TransparentForwardPass.ShouldUseDecalReceiverCache(
+                TransparentForwardPass.ShouldUseGeometryDecalOverlay(
                     decalOnly,
                     exactFeedback: true,
                     rayVariant: false,
-                    receiverCacheAvailable: true,
-                    receiverCachePipelineAvailable: true),
+                    overlayPipelineAvailable: true),
                 Is.False);
             Assert.That(
-                TransparentForwardPass.ShouldUseDecalReceiverCache(
+                TransparentForwardPass.ShouldUseGeometryDecalOverlay(
                     decalOnly,
                     exactFeedback: false,
                     rayVariant: true,
-                    receiverCacheAvailable: true,
-                    receiverCachePipelineAvailable: true),
+                    overlayPipelineAvailable: true),
                 Is.False);
         });
 
         decalOnly.TransparentObjectCount = 1;
         Assert.That(
-            TransparentForwardPass.ShouldUseDecalReceiverCache(
+            TransparentForwardPass.ShouldUseGeometryDecalOverlay(
                 decalOnly,
                 exactFeedback: false,
                 rayVariant: false,
-                receiverCacheAvailable: true,
-                receiverCachePipelineAvailable: true),
+                overlayPipelineAvailable: true),
+            Is.False);
+    }
+
+    [Test]
+    public void DirectionalOnlyThinGlass_RequiresAnAllGlassProductionDraw()
+    {
+        var glassOnly = new SceneRenderingData
+        {
+            TransparentObjectCount = 23,
+            ThinGlassObjectCount = 23,
+            TransparentMeshletCount = 481,
+            ThinGlassMeshletCount = 481
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                TransparentForwardPass.ShouldUseDirectionalOnlyThinGlass(
+                    glassOnly,
+                    exactFeedback: false,
+                    rayVariant: false,
+                    pipelineAvailable: true),
+                Is.True);
+            Assert.That(
+                TransparentForwardPass.ShouldUseDirectionalOnlyThinGlass(
+                    glassOnly,
+                    exactFeedback: true,
+                    rayVariant: false,
+                    pipelineAvailable: true),
+                Is.False);
+            Assert.That(
+                TransparentForwardPass.ShouldUseDirectionalOnlyThinGlass(
+                    glassOnly,
+                    exactFeedback: false,
+                    rayVariant: true,
+                    pipelineAvailable: true),
+                Is.False);
+        });
+
+        glassOnly.ThinGlassMeshletCount--;
+        Assert.That(
+            TransparentForwardPass.ShouldUseDirectionalOnlyThinGlass(
+                glassOnly,
+                exactFeedback: false,
+                rayVariant: false,
+                pipelineAvailable: true),
             Is.False);
     }
 

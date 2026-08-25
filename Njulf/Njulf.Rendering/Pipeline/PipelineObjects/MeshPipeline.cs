@@ -68,9 +68,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardSimpleFullInputCombinedAdvancedGiPipeline;
         private VkPipeline _forwardCompactedSimpleCombinedAdvancedGiPipeline;
         private VkPipeline _forwardCompactedSimpleFullInputCombinedAdvancedGiPipeline;
-        // [C4/C5 combination 0..3, base pipeline family 0..5].
-        private readonly VkPipeline[,] _hybridReflectionPipelines =
-            new VkPipeline[4, 6];
+        // [receiver-cache 0..1, C4/C5 combination 0..3,
+        //  base pipeline family 0..5].
+        private readonly VkPipeline[,,] _hybridReflectionPipelines =
+            new VkPipeline[2, 4, 6];
         private VkPipeline _forwardReceiverCachePipeline;
         private VkPipeline _forwardCompactedReceiverCachePipeline;
         private VkPipeline _forwardSimpleReceiverCachePipeline;
@@ -90,13 +91,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _forwardCompactedSimpleGiDisabledPipeline;
         private VkPipeline _forwardCompactedSimpleFullInputGiDisabledPipeline;
         private VkPipeline _transparentForwardPipeline;
-        private VkPipeline _transparentReceiverCachePipeline;
+        private VkPipeline _thinGlassForwardPipeline;
+        private VkPipeline _geometryDecalOverlayPipeline;
         private VkPipeline _weightedOitTransparentPipeline;
         private VkPipeline _rayTransparentForwardPipeline;
         private VkPipeline _rayWeightedOitTransparentPipeline;
         private VkPipeline _rayTransparentReceiverFeedbackPipeline;
         private VkPipeline _rayWeightedOitReceiverFeedbackPipeline;
         private VkPipeline _transparentReceiverFeedbackPipeline;
+        private VkPipeline _thinGlassReceiverFeedbackPipeline;
         private VkPipeline _weightedOitReceiverFeedbackPipeline;
         private VkPipeline _motionVectorPipeline;
         private VkPipeline _maskedMotionVectorPipeline;
@@ -169,8 +172,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public VkPipeline ForwardCompactedSimpleGlobalIblPipeline => _forwardCompactedSimplePipeline;
         public VkPipeline ForwardCompactedSimpleFullInputGlobalIblPipeline => _forwardCompactedSimpleFullInputPipeline;
         public VkPipeline TransparentForwardPipeline => _transparentForwardPipeline;
-        public VkPipeline TransparentReceiverCachePipeline =>
-            _transparentReceiverCachePipeline;
+        public VkPipeline ThinGlassForwardPipeline => _thinGlassForwardPipeline;
+        public VkPipeline GeometryDecalOverlayPipeline =>
+            _geometryDecalOverlayPipeline;
         public VkPipeline WeightedOitTransparentPipeline
         {
             get
@@ -206,6 +210,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             "ray-query transparent pipelines are unavailable";
         public VkPipeline TransparentReceiverFeedbackPipeline =>
             _transparentReceiverFeedbackPipeline;
+        public VkPipeline ThinGlassReceiverFeedbackPipeline =>
+            _thinGlassReceiverFeedbackPipeline;
         public VkPipeline WeightedOitReceiverFeedbackPipeline
         {
             get
@@ -267,6 +273,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             VkPipeline exactPipeline,
             bool nearFieldDirectSourceEnabled,
             bool giCausticReceiverEnabled,
+            bool receiverCacheRequired,
             out VkPipeline hybridPipeline)
         {
             hybridPipeline = default;
@@ -278,13 +285,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             int combination = (giCausticReceiverEnabled ? 1 : 0) |
                 (nearFieldDirectSourceEnabled ? 2 : 0);
-            if (_hybridReflectionPipelines[combination, family].Handle == 0 &&
-                !TryCreateHybridReflectionPipeline(combination, family))
+            int receiver = receiverCacheRequired ? 1 : 0;
+            if (_hybridReflectionPipelines[receiver, combination, family]
+                    .Handle == 0 &&
+                !TryCreateHybridReflectionPipeline(
+                    combination,
+                    family,
+                    receiverCacheRequired))
             {
                 return false;
             }
 
-            hybridPipeline = _hybridReflectionPipelines[combination, family];
+            hybridPipeline =
+                _hybridReflectionPipelines[receiver, combination, family];
             return hybridPipeline.Handle != 0;
         }
 
@@ -299,8 +312,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 (nearFieldDirectSourceEnabled ? 2 : 0);
             for (int family = 0; family < 6; family++)
             {
-                if (_hybridReflectionPipelines[combination, family].Handle == 0 &&
-                    !TryCreateHybridReflectionPipeline(combination, family))
+                if (_hybridReflectionPipelines[0, combination, family].Handle == 0 &&
+                    !TryCreateHybridReflectionPipeline(
+                        combination,
+                        family,
+                        receiverCacheRequired: false))
                 {
                     return false;
                 }
@@ -1455,10 +1471,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false);
             _context.SetDebugName(_transparentForwardPipeline.Handle, ObjectType.Pipeline, "Transparent Forward Plus Mesh Pipeline");
 
-            _transparentReceiverCachePipeline = CreateGraphicsPipeline(
+            _thinGlassForwardPipeline = CreateGraphicsPipeline(
                 transparentTaskShaderName,
                 transparentMeshShaderName,
-                "forward_transparent_ddgi_cache_required.frag.spv",
+                "forward_transparent_thin_glass.frag.spv",
                 colorFormat,
                 depthFormat,
                 hasColorAttachment: true,
@@ -1467,9 +1483,26 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: false);
             _context.SetDebugName(
-                _transparentReceiverCachePipeline.Handle,
+                _thinGlassForwardPipeline.Handle,
                 ObjectType.Pipeline,
-                "Decal Receiver Cache Forward Plus Mesh Pipeline");
+                "DDGI Directional Thin Glass Mesh Pipeline");
+
+            _geometryDecalOverlayPipeline = CreateGraphicsPipeline(
+                transparentTaskShaderName,
+                transparentMeshShaderName,
+                "geometry_decal.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: true,
+                depthWriteEnable: false,
+                blendEnable: true,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false,
+                destinationColorModulationBlend: true);
+            _context.SetDebugName(
+                _geometryDecalOverlayPipeline.Handle,
+                ObjectType.Pipeline,
+                "Geometry Decal Destination Modulation Mesh Pipeline");
 
             if (!RendererBuildConfiguration.FastPipelineStartup)
                 EnsureWeightedOitTransparentPipeline();
@@ -1619,6 +1652,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     _transparentReceiverFeedbackPipeline.Handle,
                     ObjectType.Pipeline,
                     "B1 Exact Transparent Forward Plus Mesh Pipeline");
+
+                _thinGlassReceiverFeedbackPipeline = CreateGraphicsPipeline(
+                    transparentTaskShaderName,
+                    transparentMeshShaderName,
+                    "forward_transparent_thin_glass_ddgi_b1.frag.spv",
+                    colorFormat,
+                    depthFormat,
+                    hasColorAttachment: true,
+                    depthWriteEnable: false,
+                    blendEnable: true,
+                    cullMode: CullModeFlags.None,
+                    depthBiasEnable: false);
+                _context.SetDebugName(
+                    _thinGlassReceiverFeedbackPipeline.Handle,
+                    ObjectType.Pipeline,
+                    "B1 Exact DDGI Directional Thin Glass Mesh Pipeline");
 
                 if (!RendererBuildConfiguration.FastPipelineStartup)
                     EnsureWeightedOitReceiverFeedbackPipeline();
@@ -1808,7 +1857,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private bool TryCreateHybridReflectionPipeline(
             int combination,
-            int family)
+            int family,
+            bool receiverCacheRequired)
         {
             bool giCaustic = (combination & 1) != 0;
             bool nearField = (combination & 2) != 0;
@@ -1820,7 +1870,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     simple,
                     simpleFullInput,
                     giCaustic,
-                    nearField);
+                    nearField,
+                    receiverCacheRequired);
             string meshShader = simple && !simpleFullInput
                 ? compacted
                     ? "forward_simple_compacted.mesh.spv"
@@ -1876,8 +1927,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _context.SetDebugName(
                     pipeline.Handle,
                     ObjectType.Pipeline,
-                    $"Hybrid Reflection Forward Pipeline C{combination} F{family}");
-                _hybridReflectionPipelines[combination, family] = pipeline;
+                    $"Hybrid Reflection Forward Pipeline R{(receiverCacheRequired ? 1 : 0)} C{combination} F{family}");
+                _hybridReflectionPipelines[
+                    receiverCacheRequired ? 1 : 0,
+                    combination,
+                    family] = pipeline;
                 HybridReflectionFailureReason = "valid";
                 return true;
             }
@@ -2342,7 +2396,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? quinaryColorFormat = null,
             Format? materialTransportProvenanceFormat = null,
             PipelineLayout pipelineLayout = default,
-            bool hybridReflectionReceiverEnabled = false)
+            bool hybridReflectionReceiverEnabled = false,
+            bool destinationColorModulationBlend = false)
         {
             ShaderModule taskModule = new ShaderModule();
             ShaderModule meshModule = new ShaderModule();
@@ -2384,7 +2439,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                             materialTransportProvenanceFormat,
                         pipelineLayout: pipelineLayout,
                         hybridReflectionReceiverEnabled:
-                            hybridReflectionReceiverEnabled));
+                            hybridReflectionReceiverEnabled,
+                        destinationColorModulationBlend:
+                            destinationColorModulationBlend));
             }
             catch (Exception exception)
             {
@@ -2523,7 +2580,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format? quinaryColorFormat = null,
             Format? materialTransportProvenanceFormat = null,
             PipelineLayout pipelineLayout = default,
-            bool hybridReflectionReceiverEnabled = false)
+            bool hybridReflectionReceiverEnabled = false,
+            bool destinationColorModulationBlend = false)
         {
             var stages = stackalloc PipelineShaderStageCreateInfo[3];
             int stageCount = 0;
@@ -2586,7 +2644,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             var colorBlendAttachment = new PipelineColorBlendAttachmentState
             {
                 BlendEnable = blendEnable,
-                SrcColorBlendFactor = blendEnable ? BlendFactor.SrcAlpha : BlendFactor.One,
+                SrcColorBlendFactor = destinationColorModulationBlend
+                    ? BlendFactor.DstColor
+                    : blendEnable ? BlendFactor.SrcAlpha : BlendFactor.One,
                 DstColorBlendFactor = blendEnable ? BlendFactor.OneMinusSrcAlpha : BlendFactor.Zero,
                 ColorBlendOp = BlendOp.Add,
                 SrcAlphaBlendFactor = BlendFactor.One,
@@ -3084,13 +3144,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _transparentForwardPipeline = default;
             }
 
-            if (_transparentReceiverCachePipeline.Handle != 0)
+            if (_thinGlassForwardPipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(
                     _context.Device,
-                    _transparentReceiverCachePipeline,
+                    _thinGlassForwardPipeline,
                     null);
-                _transparentReceiverCachePipeline = default;
+                _thinGlassForwardPipeline = default;
+            }
+
+            if (_geometryDecalOverlayPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _geometryDecalOverlayPipeline,
+                    null);
+                _geometryDecalOverlayPipeline = default;
             }
 
             if (_weightedOitTransparentPipeline.Handle != 0)
@@ -3193,16 +3262,27 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private void DestroyHybridReflectionPipelines()
         {
             HybridReflectionAttachmentEnabled = false;
-            for (int combination = 0; combination < 4; combination++)
+            for (int receiver = 0; receiver < 2; receiver++)
             {
-                for (int family = 0; family < 6; family++)
+                for (int combination = 0; combination < 4; combination++)
                 {
-                    VkPipeline pipeline =
-                        _hybridReflectionPipelines[combination, family];
-                    if (pipeline.Handle == 0)
-                        continue;
-                    _context.Api.DestroyPipeline(_context.Device, pipeline, null);
-                    _hybridReflectionPipelines[combination, family] = default;
+                    for (int family = 0; family < 6; family++)
+                    {
+                        VkPipeline pipeline = _hybridReflectionPipelines[
+                            receiver,
+                            combination,
+                            family];
+                        if (pipeline.Handle == 0)
+                            continue;
+                        _context.Api.DestroyPipeline(
+                            _context.Device,
+                            pipeline,
+                            null);
+                        _hybridReflectionPipelines[
+                            receiver,
+                            combination,
+                            family] = default;
+                    }
                 }
             }
         }
@@ -3226,6 +3306,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private void DestroyTransparentReceiverFeedbackPipelines()
         {
             DestroyOptionalPipeline(ref _transparentReceiverFeedbackPipeline);
+            DestroyOptionalPipeline(ref _thinGlassReceiverFeedbackPipeline);
             DestroyOptionalPipeline(ref _weightedOitReceiverFeedbackPipeline);
             DestroyOptionalPipeline(
                 ref _rayTransparentReceiverFeedbackPipeline);

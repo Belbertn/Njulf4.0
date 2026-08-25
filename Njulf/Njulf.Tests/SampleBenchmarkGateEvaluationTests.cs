@@ -32,6 +32,73 @@ public sealed class SampleBenchmarkGateEvaluationTests
     }
 
     [Test]
+    public void Evaluate_RealtimeTargetPassesAtLocked1080p60AndMemoryLimits()
+    {
+        SampleBenchmarkReport report = CreateReport(metrics: []) with
+        {
+            Options = CreateReport(metrics: []).Options with
+            {
+                RequireRealtime1080p60Target = true
+            },
+            CpuFrameMilliseconds = Timing("CPU", 6.0, 16.0),
+            GpuFrameMilliseconds = Timing("GPU", 10.0, 16.0),
+            LastDiagnostics = RendererDiagnostics.Empty with
+            {
+                CaptureRenderWidth = 1920,
+                CaptureRenderHeight = 1080,
+                TrackedGpuMemoryBytes =
+                    SampleRealtimePerformanceTarget.MaximumTrackedGpuMemoryBytes
+            }
+        };
+
+        SampleBenchmarkGateEvaluation evaluation =
+            SampleBenchmarkGateEvaluation.Evaluate(report);
+
+        Assert.That(evaluation.Passed, Is.True, evaluation.Failure);
+    }
+
+    [TestCase(6.01, 10.0, 16.0, 16.0, 0UL, "CPU frame P95")]
+    [TestCase(6.0, 10.01, 16.0, 16.0, 0UL, "GPU frame P95")]
+    [TestCase(6.0, 10.0, 16.68, 16.0, 0UL, "CPU frame P99")]
+    [TestCase(6.0, 10.0, 16.0, 16.68, 0UL, "GPU frame P99")]
+    [TestCase(6.0, 10.0, 16.0, 16.0, 1717986919UL,
+        "Tracked GPU memory")]
+    public void Evaluate_RealtimeTargetFailsClosedAtEachAbsoluteLimit(
+        double cpuP95,
+        double gpuP95,
+        double cpuP99,
+        double gpuP99,
+        ulong trackedBytes,
+        string expectedFailure)
+    {
+        SampleBenchmarkReport baseline = CreateReport(metrics: []);
+        SampleBenchmarkReport report = baseline with
+        {
+            Options = baseline.Options with
+            {
+                RequireRealtime1080p60Target = true
+            },
+            CpuFrameMilliseconds = Timing("CPU", cpuP95, cpuP99),
+            GpuFrameMilliseconds = Timing("GPU", gpuP95, gpuP99),
+            LastDiagnostics = RendererDiagnostics.Empty with
+            {
+                CaptureRenderWidth = 1920,
+                CaptureRenderHeight = 1080,
+                TrackedGpuMemoryBytes = trackedBytes
+            }
+        };
+
+        SampleBenchmarkGateEvaluation evaluation =
+            SampleBenchmarkGateEvaluation.Evaluate(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(evaluation.Passed, Is.False);
+            Assert.That(evaluation.Failure, Does.Contain(expectedFailure));
+        });
+    }
+
+    [Test]
     public void Evaluate_FailsWhenRequiredMetricIsMissing()
     {
         SampleBenchmarkReport report = CreateReport(metrics: []);
@@ -491,4 +558,15 @@ public sealed class SampleBenchmarkGateEvaluationTests
             BudgetMetrics: requiredMetrics.Values.ToArray(),
             LastDiagnostics: RendererDiagnostics.Empty);
     }
+
+    private static SampleBenchmarkTimingStats Timing(
+        string name,
+        double p95,
+        double p99) =>
+        new(name, 1, p95, p95, p99, p95)
+        {
+            MedianMilliseconds = p95,
+            P50Milliseconds = p95,
+            P99Milliseconds = p99
+        };
 }

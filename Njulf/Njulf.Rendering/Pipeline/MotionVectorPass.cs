@@ -60,6 +60,15 @@ namespace Njulf.Rendering.Pipeline
         {
             SurfaceHistoryConsumer consumers = ResolveHistoryConsumers(sceneData);
             sceneData.SurfaceHistoryConsumers = consumers;
+            bool cameraOnly = ShouldUseCameraOnlyReprojection(
+                consumers,
+                sceneData);
+            sceneData.CameraOnlyMotionReprojectionEnabled = cameraOnly ? 1 : 0;
+            if (cameraOnly)
+            {
+                sceneData.MotionVectorsEnabled = 0;
+                return false;
+            }
             return consumers.RequiresMotionVectors();
         }
 
@@ -67,6 +76,15 @@ namespace Njulf.Rendering.Pipeline
         {
             SurfaceHistoryConsumer consumers = ResolveHistoryConsumers(sceneData);
             sceneData.SurfaceHistoryConsumers = consumers;
+            bool cameraOnly = ShouldUseCameraOnlyReprojection(
+                consumers,
+                sceneData);
+            sceneData.CameraOnlyMotionReprojectionEnabled = cameraOnly ? 1 : 0;
+            if (cameraOnly)
+            {
+                sceneData.MotionVectorsEnabled = 0;
+                return;
+            }
             if (!consumers.RequiresMotionVectors())
             {
                 sceneData.MotionVectorsEnabled = 0;
@@ -376,6 +394,24 @@ namespace Njulf.Rendering.Pipeline
             (_historyConsumers?.Invoke() ??
              SurfaceHistoryPolicy.Resolve(_settings, nearFieldResidualActive: false)) |
             sceneData.DirectionalShadowFramePlan.HistoryConsumers;
+
+        internal static bool ShouldUseCameraOnlyReprojection(
+            SurfaceHistoryConsumer consumers,
+            SceneRenderingData sceneData)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+            // Camera reprojection is sufficient only when reflections are the
+            // sole temporal consumer and every submitted surface is static.
+            // TAA, screen-space shadows, C5, foliage, or any dynamic BLAS keep
+            // the authored per-object motion-vector pass.
+            return consumers == SurfaceHistoryConsumer.Reflection &&
+                   !sceneData.AnimationEnabled &&
+                   sceneData.SkinnedObjectCount == 0 &&
+                   !(sceneData.FoliageMotionVectorsEnabled &&
+                     sceneData.FoliageClusterCount > 0) &&
+                   sceneData.AccelerationStructureDynamicBottomLevelCount == 0 &&
+                   sceneData.DirectionalDynamicShadowMeshletCount == 0;
+        }
 
         private static uint PackHistoryFlags(
             bool previousFrameValid,

@@ -1052,6 +1052,43 @@ public sealed class MaterialTransportV2Tests
     }
 
     [Test]
+    public void Compiler_VisibleThinGlassPublishesIndependentRasterClassification()
+    {
+        CompiledMaterialTransport compiled = MaterialTransportCompiler.Compile(
+            new MaterialDefinition
+            {
+                AlphaMode = MaterialAlphaMode.Blend,
+                DoubleSided = true,
+                ShadingModel = MaterialShadingModel.ThinGlass,
+                FeatureFlags = MaterialFeatureFlags.Transmission |
+                    MaterialFeatureFlags.Ior,
+                Extensions = MaterialExtensionDefinition.None with
+                {
+                    TransmissionFactor = 0.94f,
+                    TransmissionPolicy = GiTransmissionPolicy.ThinSurface,
+                    ThinTransmissionTint = new Vector3(0.94f, 0.98f, 1.0f),
+                    Ior = 1.52f
+                }
+            });
+
+        GiMaterialTransportFlags flags =
+            (GiMaterialTransportFlags)compiled.GpuMaterial.TransportFlags;
+        Assert.Multiple(() =>
+        {
+            Assert.That(compiled.Metadata.ShadingModel,
+                Is.EqualTo(MaterialShadingModel.ThinGlass));
+            Assert.That(compiled.Metadata.RenderMode,
+                Is.EqualTo(MaterialRenderMode.Blend));
+            Assert.That(flags.HasFlag(GiMaterialTransportFlags.ThinGlass), Is.True);
+            Assert.That(
+                flags.HasFlag(GiMaterialTransportFlags.ThinSurfaceTransmission),
+                Is.True);
+            Assert.That(flags.HasFlag(GiMaterialTransportFlags.VolumeTransmission),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void Compiler_NonGeometryDecalShadingRemainsOutsideDiffuseTransport()
     {
         CompiledMaterialTransport compiled = MaterialTransportCompiler.Compile(

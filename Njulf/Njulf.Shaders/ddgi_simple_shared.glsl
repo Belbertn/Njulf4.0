@@ -46,9 +46,20 @@
 #ifndef SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER
 #define SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER 0
 #endif
+#ifndef SIMPLE_DDGI_TETRAHEDRAL_DIRECTIONAL_RECEIVER
+#define SIMPLE_DDGI_TETRAHEDRAL_DIRECTIONAL_RECEIVER 0
+#endif
+#ifndef SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER
+#define SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER 0
+#endif
 #if SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
 vec3 SimpleDdgiDirectionalRadianceQueryDirection = vec3(0.0, 1.0, 0.0);
 float SimpleDdgiDirectionalRadianceQueryRoughness = 1.0;
+// Negative keeps the authored rough-specular eligibility band. Reflection
+// consumers with an exact-detail layer (hybrid SSR/ray query) or an explicitly
+// classified dielectric sheet may opt into the DDGI field as their stable
+// base at any roughness without changing the lobe convolution roughness.
+float SimpleDdgiDirectionalRadianceQueryEligibilityWeight = -1.0;
 float SimpleDdgiDirectionalRadianceQueryAnisotropy = 0.0;
 uint SimpleDdgiDirectionalRadianceQueryBufferIndex =
     uint(SIMPLE_DDGI_DIRECTIONAL_RADIANCE_BUFFER_INDEX);
@@ -65,6 +76,12 @@ void SetSimpleDdgiDirectionalRadianceQuery(
 void SetSimpleDdgiDirectionalRadianceQueryBuffer(uint bufferIndex)
 {
     SimpleDdgiDirectionalRadianceQueryBufferIndex = bufferIndex;
+}
+
+void SetSimpleDdgiDirectionalRadianceQueryEligibilityWeight(float weight)
+{
+    SimpleDdgiDirectionalRadianceQueryEligibilityWeight =
+        clamp(weight, 0.0, 1.0);
 }
 
 void SetSimpleDdgiDirectionalRadianceHenyeyGreensteinQuery(
@@ -5599,6 +5616,12 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     float directionalRoughnessWeight = SimpleDdgiRoughSpecularWeight(
         p.residencyFlags,
         SimpleDdgiDirectionalRadianceQueryRoughness);
+    if (SimpleDdgiDirectionalRadianceQueryEligibilityWeight >= 0.0)
+    {
+        directionalRoughnessWeight = max(
+            directionalRoughnessWeight,
+            SimpleDdgiDirectionalRadianceQueryEligibilityWeight);
+    }
     bool evaluateDirectionalRadiance = directionalRadianceMode !=
             SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF &&
 #if !SIMPLE_DDGI_DIRECTIONAL_RADIANCE_HG_PHASE
@@ -5660,8 +5683,74 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
             continue;
         }
 
+#if SIMPLE_DDGI_TETRAHEDRAL_DIRECTIONAL_RECEIVER
+        // Tetrahedral interpolation is continuous over the cell while touching
+        // four, rather than eight, records. This is used only by the narrow
+        // ThinGlass directional receiver; diffuse irradiance retains canonical
+        // trilinear interpolation.
+        uint cornerOrdinal = x | (y << 1u) | (z << 2u);
+        float trilinear;
+        if (fracV.x >= fracV.y)
+        {
+            if (fracV.y >= fracV.z)
+            {
+                trilinear = cornerOrdinal == 0u ? 1.0 - fracV.x :
+                    cornerOrdinal == 1u ? fracV.x - fracV.y :
+                    cornerOrdinal == 3u ? fracV.y - fracV.z :
+                    cornerOrdinal == 7u ? fracV.z : 0.0;
+            }
+            else if (fracV.x >= fracV.z)
+            {
+                trilinear = cornerOrdinal == 0u ? 1.0 - fracV.x :
+                    cornerOrdinal == 1u ? fracV.x - fracV.z :
+                    cornerOrdinal == 5u ? fracV.z - fracV.y :
+                    cornerOrdinal == 7u ? fracV.y : 0.0;
+            }
+            else
+            {
+                trilinear = cornerOrdinal == 0u ? 1.0 - fracV.z :
+                    cornerOrdinal == 4u ? fracV.z - fracV.x :
+                    cornerOrdinal == 5u ? fracV.x - fracV.y :
+                    cornerOrdinal == 7u ? fracV.y : 0.0;
+            }
+        }
+        else
+        {
+            if (fracV.x >= fracV.z)
+            {
+                trilinear = cornerOrdinal == 0u ? 1.0 - fracV.y :
+                    cornerOrdinal == 2u ? fracV.y - fracV.x :
+                    cornerOrdinal == 3u ? fracV.x - fracV.z :
+                    cornerOrdinal == 7u ? fracV.z : 0.0;
+            }
+            else if (fracV.y >= fracV.z)
+            {
+                trilinear = cornerOrdinal == 0u ? 1.0 - fracV.y :
+                    cornerOrdinal == 2u ? fracV.y - fracV.z :
+                    cornerOrdinal == 6u ? fracV.z - fracV.x :
+                    cornerOrdinal == 7u ? fracV.x : 0.0;
+            }
+            else
+            {
+                trilinear = cornerOrdinal == 0u ? 1.0 - fracV.z :
+                    cornerOrdinal == 4u ? fracV.z - fracV.y :
+                    cornerOrdinal == 6u ? fracV.y - fracV.x :
+                    cornerOrdinal == 7u ? fracV.x : 0.0;
+            }
+        }
+#else
         vec3 w3 = mix(1.0 - fracV, fracV, vec3(x, y, z));
         float trilinear = w3.x * w3.y * w3.z;
+#endif
+#if SIMPLE_DDGI_TETRAHEDRAL_DIRECTIONAL_RECEIVER
+        // The narrow tetrahedral path deliberately leaves four corners at
+        // zero. Skip those records so ThinGlass pays for four L1 records, not
+        // eight. Canonical trilinear diffuse receivers retain their original
+        // eight-corner participation, including exact cell-boundary metadata
+        // and cache reconstruction semantics.
+        if (trilinear <= 0.000001)
+            continue;
+#endif
         result.spatialCoverage += trilinear;
 
         SimpleDdgiProbeAddress probeAddress =
@@ -5991,7 +6080,11 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
                     probeDirectionalRadiance,
                     negativeReconstruction)
 #else
+#if SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER
+                EvaluateSimpleDdgiRadianceShL1PreviewRecord(
+#else
                 EvaluateSimpleDdgiRadianceShRecord(
+#endif
                     SimpleDdgiDirectionalRadianceQueryBufferIndex,
                     atlasProbeAddress,
                     directionalRadianceMode,
@@ -6758,6 +6851,270 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
 #endif
     return selected;
 }
+
+#if SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER
+float SimpleDdgiThinGlassTetrahedralWeight(
+    vec3 fraction,
+    uint cornerOrdinal)
+{
+    if (fraction.x >= fraction.y)
+    {
+        if (fraction.y >= fraction.z)
+        {
+            return cornerOrdinal == 0u ? 1.0 - fraction.x :
+                cornerOrdinal == 1u ? fraction.x - fraction.y :
+                cornerOrdinal == 3u ? fraction.y - fraction.z :
+                cornerOrdinal == 7u ? fraction.z : 0.0;
+        }
+        if (fraction.x >= fraction.z)
+        {
+            return cornerOrdinal == 0u ? 1.0 - fraction.x :
+                cornerOrdinal == 1u ? fraction.x - fraction.z :
+                cornerOrdinal == 5u ? fraction.z - fraction.y :
+                cornerOrdinal == 7u ? fraction.y : 0.0;
+        }
+        return cornerOrdinal == 0u ? 1.0 - fraction.z :
+            cornerOrdinal == 4u ? fraction.z - fraction.x :
+            cornerOrdinal == 5u ? fraction.x - fraction.y :
+            cornerOrdinal == 7u ? fraction.y : 0.0;
+    }
+
+    if (fraction.x >= fraction.z)
+    {
+        return cornerOrdinal == 0u ? 1.0 - fraction.y :
+            cornerOrdinal == 2u ? fraction.y - fraction.x :
+            cornerOrdinal == 3u ? fraction.x - fraction.z :
+            cornerOrdinal == 7u ? fraction.z : 0.0;
+    }
+    if (fraction.y >= fraction.z)
+    {
+        return cornerOrdinal == 0u ? 1.0 - fraction.y :
+            cornerOrdinal == 2u ? fraction.y - fraction.z :
+            cornerOrdinal == 6u ? fraction.z - fraction.x :
+            cornerOrdinal == 7u ? fraction.x : 0.0;
+    }
+    return cornerOrdinal == 0u ? 1.0 - fraction.z :
+        cornerOrdinal == 4u ? fraction.z - fraction.y :
+        cornerOrdinal == 6u ? fraction.y - fraction.x :
+        cornerOrdinal == 7u ? fraction.x : 0.0;
+}
+
+// Thin dielectric sheets have no diffuse lobe and need only the stable local
+// directional-radiance base. Keep this gather independent of the diffuse
+// visibility-atlas, recovery-cascade, and detailed-investigation machinery.
+// Tetrahedral weights remain continuous and exact B1 builds still attribute
+// every record that actually contributes to the visible reflection.
+SimpleDdgiGatherResult SampleSimpleDdgiThinGlassDirectionalGather(
+    SimpleDdgiParams p,
+    vec3 worldPos,
+    vec3 normal,
+    vec3 viewDir)
+{
+    SimpleDdgiGatherResult result = EmptySimpleDdgiGatherResult();
+    vec3 safeNormal = length(normal) > 0.00001
+        ? normalize(normal)
+        : vec3(0.0, 1.0, 0.0);
+    uint volumeIndex;
+    SimpleDdgiVolume volume;
+    float edgeWeight;
+    bool refinementOrBaseFallback;
+    if (!SelectSimpleDdgiVolume(
+            p,
+            worldPos,
+            true,
+            volumeIndex,
+            volume,
+            edgeWeight,
+            refinementOrBaseFallback))
+    {
+        return result;
+    }
+
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+    result.exactFeedbackSelectedVolumeKind = volume.kind;
+    result.exactFeedbackRefinementOrBaseFallback =
+        refinementOrBaseFallback ? 1u : 0u;
+#endif
+    bool biasOutsideSelectionDomain;
+    vec3 interpolationPosition = SimpleDdgiResolveInterpolationPosition(
+        volume,
+        worldPos,
+        safeNormal,
+        viewDir,
+        p,
+        biasOutsideSelectionDomain);
+    vec3 grid = (interpolationPosition - volume.origin) / volume.spacing;
+    vec3 baseFloat = floor(grid);
+    ivec3 base = ivec3(baseFloat);
+    vec3 fraction = clamp(grid - baseFloat, vec3(0.0), vec3(1.0));
+    SimpleDdgiVolumePaging paging = ReadSimpleDdgiVolumePaging(
+        uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX),
+        volumeIndex);
+    float availableMass = 0.0;
+    float directionalMass = 0.0;
+    float radianceMass = 0.0;
+    vec3 radianceAccumulated = vec3(0.0);
+    vec3 negativeAccumulated = vec3(0.0);
+    vec3 queryDirection = normalize(
+        SimpleDdgiDirectionalRadianceQueryDirection);
+    vec3 queryBandScales = SimpleDdgiGgxBandScales(
+        SimpleDdgiDirectionalRadianceQueryRoughness);
+    vec4 queryBasisWeights = vec4(
+        0.2820947918,
+        -0.4886025119 * queryDirection.y * queryBandScales.y,
+        0.4886025119 * queryDirection.z * queryBandScales.y,
+        -0.4886025119 * queryDirection.x * queryBandScales.y);
+
+    for (uint z = 0u; z < 2u; z++)
+    for (uint y = 0u; y < 2u; y++)
+    for (uint x = 0u; x < 2u; x++)
+    {
+        uint cornerOrdinal = x | (y << 1u) | (z << 2u);
+        float spatialWeight = SimpleDdgiThinGlassTetrahedralWeight(
+            fraction,
+            cornerOrdinal);
+        if (spatialWeight <= 0.000001)
+            continue;
+        result.spatialCoverage += spatialWeight;
+
+        ivec3 coordinate = base + ivec3(int(x), int(y), int(z));
+        if (any(lessThan(coordinate, ivec3(0))) ||
+            any(greaterThanEqual(coordinate, ivec3(volume.gridCount))))
+        {
+            continue;
+        }
+
+        SimpleDdgiProbeAddress address = ResolveSimpleDdgiReceiverProbeAddress(
+            p,
+            volume,
+            paging,
+            uvec3(coordinate));
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+        result.requestedProbeByCorner[cornerOrdinal] =
+            address.virtualProbeIndex;
+        result.requestedPageByCorner[cornerOrdinal] =
+            address.virtualPageIndex;
+#endif
+#if SIMPLE_DDGI_RECEIVER_RESIDENCY_FEEDBACK != 0
+        if (SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE &&
+            address.virtualPageIndex != 0xffffffffu)
+        {
+            uint demandEpoch = SimpleDdgiDemandEpochForFrame(
+                p.frameIndex == 0xffffffffu
+                    ? 1u
+                    : p.frameIndex + SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET);
+            SimpleDdgiRecordReceiverPageDemand(
+                p,
+                address.virtualPageIndex,
+                demandEpoch);
+        }
+#endif
+        SimpleDdgiReceiverProbe receiver = ReadSimpleDdgiReceiverProbe(
+            uint(SIMPLE_DDGI_RECEIVER_PROBE_BUFFER_INDEX),
+            address.virtualProbeIndex,
+            volume.spacing);
+        if (!SimpleDdgiReceiverProbeSupportsGather(receiver) ||
+            receiver.atlasProbeAddress ==
+                SIMPLE_DDGI_RECEIVER_INVALID_ATLAS_ADDRESS ||
+            receiver.atlasProbeAddress >= p.physicalProbeCapacity)
+        {
+            result.nonResidentProbeCount++;
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+            result.requestedUnavailableByCorner[cornerOrdinal] = 1u;
+#endif
+            continue;
+        }
+
+        vec3 probePosition = volume.origin + vec3(coordinate) *
+            volume.spacing + receiver.relocation;
+        vec3 toSurface = interpolationPosition - probePosition;
+        float distanceToProbe = length(toSurface);
+        vec3 probeToSurface = distanceToProbe > 0.00001
+            ? toSurface / distanceToProbe
+            : safeNormal;
+        float halfLambert = clamp(
+            dot(safeNormal, -probeToSurface) * 0.5 + 0.5,
+            0.0,
+            1.0);
+        float directionalWeight =
+            (halfLambert * halfLambert + SIMPLE_DDGI_WRAP_SHADING_OFFSET) /
+            (1.0 + SIMPLE_DDGI_WRAP_SHADING_OFFSET);
+        float dataWeight = spatialWeight *
+            clamp(receiver.activeWeight, 0.0, 1.0);
+        float selectedWeight = dataWeight * directionalWeight;
+        availableMass += dataWeight;
+        directionalMass += selectedWeight;
+
+        vec3 probeRadiance;
+        vec3 negativeReconstruction;
+        if (EvaluateSimpleDdgiRadianceShL1PreviewRecordWithBasis(
+                SimpleDdgiDirectionalRadianceQueryBufferIndex,
+                receiver.atlasProbeAddress,
+                SimpleDdgiDirectionalRadianceMode(p.residencyFlags),
+                receiver.slotGeneration,
+                queryBasisWeights,
+                probeRadiance,
+                negativeReconstruction))
+        {
+            radianceAccumulated += probeRadiance * selectedWeight;
+            negativeAccumulated += negativeReconstruction * selectedWeight;
+            radianceMass += selectedWeight;
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+            AppendSimpleDdgiExactFeedbackOwner(
+                result,
+                address.virtualProbeIndex,
+                address.virtualProbeIndex,
+                address.virtualPageIndex,
+                address.virtualPageIndex,
+                receiver.slotGeneration,
+                0u,
+                cornerOrdinal,
+                selectedWeight);
+#endif
+        }
+#if !SIMPLE_DDGI_GATHER_USES_COMPUTE_STATE
+        SimpleDdgiRecordReceiverContribution(
+            p,
+            address.virtualProbeIndex,
+            SIMPLE_DDGI_GATHER_ROLE_PRIMARY,
+            selectedWeight);
+#endif
+    }
+
+    result.spatialCoverage = clamp(result.spatialCoverage, 0.0, 1.0) *
+        edgeWeight;
+    result.validSupport = result.spatialCoverage > 0.000001
+        ? clamp(availableMass / result.spatialCoverage, 0.0, 1.0)
+        : 0.0;
+    result.directionalSupport = availableMass > 0.000001
+        ? clamp(directionalMass / availableMass, 0.0, 1.0)
+        : 0.0;
+    result.transportVisibility = directionalMass > 0.000001 ? 1.0 : 0.0;
+    result.ownership = clamp(availableMass * edgeWeight, 0.0, 1.0);
+    result.directionalRadiance = radianceMass > 0.000001
+        ? radianceAccumulated / radianceMass
+        : vec3(0.0);
+    result.directionalRadianceSupport = directionalMass > 0.000001
+        ? clamp(radianceMass / directionalMass, 0.0, 1.0)
+        : 0.0;
+    result.directionalNegativeReconstruction = radianceMass > 0.000001
+        ? negativeAccumulated / radianceMass
+        : vec3(0.0);
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+    if (directionalMass > 0.000001)
+    {
+        for (uint ownerIndex = 0u;
+             ownerIndex < result.exactFeedbackOwnerCount;
+             ownerIndex++)
+        {
+            result.exactFeedbackOwners[ownerIndex].normalizedWeight /=
+                directionalMass;
+        }
+    }
+#endif
+    return result;
+}
+#endif
 
 SimpleDdgiGatherResult SampleSimpleDdgiGather(
     SimpleDdgiParams p,

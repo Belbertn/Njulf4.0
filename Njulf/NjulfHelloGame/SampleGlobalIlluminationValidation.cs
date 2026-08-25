@@ -485,6 +485,14 @@ public static class SampleGlobalIlluminationValidation
 
         SampleSponzaGlobalIlluminationProfile.Configure(settings);
         SampleSponzaGlobalIlluminationProfile.ApplyValidationOverlay(settings);
+        // Unlike the generic transport-only validation overlay, the locked
+        // Sponza quality contract exercises production reflections. DDGI owns
+        // the stable base, SSR/ray query own sharp detail, and individual A/B
+        // outputs explicitly disable this path when isolating indirect specular.
+        settings.Reflections.Enabled = true;
+        settings.Reflections.Mode = ReflectionMode.HybridRayQuery;
+        settings.Reflections.Intensity = 1.0f;
+        settings.Reflections.GlobalFallbackIntensity = 1.0f;
         // Exercise the authored curtain path only in the locked A/B
         // qualification sequence until its hardware acceptance gates pass.
         settings.GlobalIllumination.SimpleDdgiThinSurfaceTransmissionEnabled =

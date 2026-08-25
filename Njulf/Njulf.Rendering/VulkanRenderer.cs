@@ -2467,6 +2467,9 @@ namespace Njulf.Rendering
             AddPassInstance(new HybridReflectionRayQueryPass(
                 _context, _swapchain, _bindlessHeap,
                 hybridReflectionRuntime));
+            AddPassInstance(new HybridReflectionDdgiBasePass(
+                _context, _swapchain, _bindlessHeap,
+                hybridReflectionRuntime));
             AddPassInstance(new HybridReflectionResolvePass(
                 _context, _swapchain, _bindlessHeap,
                 hybridReflectionRuntime));
@@ -6337,11 +6340,6 @@ namespace Njulf.Rendering
                     shadowSettings,
                     _directionalShadowStabilizationState.Diagnostics,
                     DirectionalShadowMode.Cascaded);
-            _directionalShadowResources.UploadShadowData(
-                _stagingRing,
-                _currentCommandBuffer,
-                shadowData,
-                shadowParameters);
 
             sceneData.DirectionalShadowPassEnabled = enabled;
             ulong recordSignature = CreateDirectionalShadowRecordSignature(sceneData, shadowData, enabled, shadowSettings);
@@ -7876,6 +7874,8 @@ namespace Njulf.Rendering
                     sceneData.HybridReflectionRayQueryHitCount,
                 HybridReflectionRayQueryMissCount =
                     sceneData.HybridReflectionRayQueryMissCount,
+                HybridReflectionDdgiFallbackCount =
+                    sceneData.HybridReflectionDdgiFallbackCount,
                 HybridReflectionProbeFallbackCount =
                     sceneData.HybridReflectionProbeFallbackCount,
                 HybridReflectionEnvironmentFallbackCount =
@@ -7884,6 +7884,8 @@ namespace Njulf.Rendering
                     sceneData.GpuHybridReflectionSsrMicroseconds,
                 GpuHybridReflectionRayQueryMicroseconds =
                     sceneData.GpuHybridReflectionRayQueryMicroseconds,
+                GpuHybridReflectionDdgiBaseMicroseconds =
+                    sceneData.GpuHybridReflectionDdgiBaseMicroseconds,
                 GpuHybridReflectionResolveMicroseconds =
                     sceneData.GpuHybridReflectionResolveMicroseconds,
                 GpuHybridReflectionTemporalMicroseconds =
@@ -7897,9 +7899,11 @@ namespace Njulf.Rendering
                 CameraDrivenCpuDrawListRebuilt = sceneData.CameraDrivenCpuDrawListRebuilt,
                 SolidObjectCount = sceneData.SolidObjectCount,
                 GeometryDecalObjectCount = sceneData.GeometryDecalObjectCount,
+                ThinGlassObjectCount = sceneData.ThinGlassObjectCount,
                 SolidMeshletCount = sceneData.SolidMeshletCount,
                 MaskedMeshletCount = sceneData.MaskedMeshletCount,
                 GeometryDecalMeshletCount = sceneData.GeometryDecalMeshletCount,
+                ThinGlassMeshletCount = sceneData.ThinGlassMeshletCount,
                 ForwardSimpleMeshletCount = sceneData.ForwardSimpleMeshletCount,
                 ForwardFullMaterialMeshletCount = sceneData.ForwardFullMaterialMeshletCount,
                 ForwardLocalProbeMeshletCount = sceneData.ForwardLocalProbeMeshletCount,
@@ -7920,6 +7924,8 @@ namespace Njulf.Rendering
                 TransparentReceiveShadows = sceneData.TransparentReceiveShadows ? 1 : 0,
                 TransparentReceiveGlobalIllumination =
                     sceneData.TransparentReceiveGlobalIllumination ? 1 : 0,
+                ThinGlassDirectionalOnlyPipelineEnabled =
+                    sceneData.ThinGlassDirectionalOnlyPipelineEnabled,
                 WeightedOitEnabled = sceneData.TransparentPassEnabled && sceneData.TransparencyMode == TransparencyMode.WeightedBlendedOit ? 1 : 0,
                 WeightedOitRenderTargetBytes = _renderTargets?.WeightedOitRenderTargetBytes ?? 0,
                 WeightedOitRenderTargetCount = _renderTargets == null ? 0 : 2,
@@ -13332,6 +13338,7 @@ namespace Njulf.Rendering
                 sceneData.GpuReflectionProbePublishMicroseconds +
                 sceneData.GpuHybridReflectionSsrMicroseconds +
                 sceneData.GpuHybridReflectionRayQueryMicroseconds +
+                sceneData.GpuHybridReflectionDdgiBaseMicroseconds +
                 sceneData.GpuHybridReflectionResolveMicroseconds +
                 sceneData.GpuHybridReflectionTemporalMicroseconds +
                 sceneData.GpuHybridReflectionSpatialMicroseconds +
@@ -13437,6 +13444,9 @@ namespace Njulf.Rendering
             sceneData.GpuHybridReflectionRayQueryMicroseconds =
                 timings.GetGpuMicrosecondsOrZero(
                     "HybridReflectionRayQueryPass");
+            sceneData.GpuHybridReflectionDdgiBaseMicroseconds =
+                timings.GetGpuMicrosecondsOrZero(
+                    "HybridReflectionDdgiBasePass");
             sceneData.GpuHybridReflectionResolveMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("HybridReflectionResolvePass");
             sceneData.GpuHybridReflectionTemporalMicroseconds =
@@ -20529,6 +20539,8 @@ namespace Njulf.Rendering
                 counters.RayOverflows;
             sceneData.HybridReflectionRayQueryHitCount = counters.RayHits;
             sceneData.HybridReflectionRayQueryMissCount = counters.RayMisses;
+            sceneData.HybridReflectionDdgiFallbackCount =
+                counters.DdgiFallbacks;
             sceneData.HybridReflectionProbeFallbackCount =
                 counters.ProbeFallbacks;
             sceneData.HybridReflectionEnvironmentFallbackCount =

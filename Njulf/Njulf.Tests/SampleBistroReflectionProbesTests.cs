@@ -43,6 +43,6 @@ public sealed class SampleReflectionPolicyTests
         Assert.That(
             () => SampleReflectionPolicy.EnsureProbeFree(scene),
             Throws.InvalidOperationException.With.Message.Contains(
-                "must use SSR, ray-query recovery, and the global environment"));
+                "must use directional DDGI as the default reflection field"));
     }
 }

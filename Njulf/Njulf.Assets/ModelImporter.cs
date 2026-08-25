@@ -1526,6 +1526,12 @@ namespace Njulf.Assets
                 if (gltfManifest != null && i < gltfManifest.Materials.Count)
                     ApplyGltfMaterial(imported, gltfManifest.Materials[(int)i]);
 
+                if (options.AssimpMaterialTextureConvention ==
+                    AssimpMaterialTextureConvention.AmazonBistro)
+                {
+                    AmazonBistroMaterialProfile.Apply(modelPath, imported);
+                }
+
                 materials.Add(imported);
             }
 
@@ -3062,6 +3068,12 @@ namespace Njulf.Assets
         public bool DoubleSided { get; set; }
         public bool Unlit { get; set; }
         public bool IsGeometryDecal { get; set; }
+        /// <summary>
+        /// Explicit visible zero-thickness dielectric classification. This is
+        /// separate from <see cref="GiTransmissionPolicy"/> because thin cloth
+        /// may transmit GI while remaining opaque in the raster pass.
+        /// </summary>
+        public bool IsThinGlass { get; set; }
         public int DecalLayer { get; set; }
         public float DecalDepthBias { get; set; }
         public string? AlbedoTexturePath { get; set; }

@@ -189,7 +189,7 @@ public sealed class SampleBistroQualityCaptureHarnessTests
     }
 
     [Test]
-    public void SchemaV7_SerializesSeparateCurrentAndCompletedReflectionEvidence()
+    public void SchemaV8_SerializesDdgiAndSeparateProbeLifecycleEvidence()
     {
         ReflectionProbeLifecycleFrameSnapshot current =
             CreateReflectionLifecycleFrame(
@@ -231,7 +231,12 @@ public sealed class SampleBistroQualityCaptureHarnessTests
             ReflectionProbeCompletedLifecycle =
                 diagnostics.ReflectionProbeCompletedLifecycle,
             GpuReflectionProbePublishMicroseconds =
-                diagnostics.GpuReflectionProbePublishMicroseconds
+                diagnostics.GpuReflectionProbePublishMicroseconds,
+            HybridReflectionCountersReadbackValid = 1,
+            HybridReflectionDdgiFallbackCount = 2,
+            HybridReflectionProbeFallbackCount = 0,
+            HybridReflectionEnvironmentFallbackCount = 3,
+            GpuHybridReflectionDdgiBaseMicroseconds = 211
         };
         var contract = new SampleBistroQualityCaptureContract(
             SampleBistroQualityCaptureVariant.HybridRayQueryAb);
@@ -258,9 +263,9 @@ public sealed class SampleBistroQualityCaptureHarnessTests
         Assert.Multiple(() =>
         {
             Assert.That(SampleBistroQualityCaptureContract.Schema,
-                Is.EqualTo("bistro-quality-run/v7"));
+                Is.EqualTo("bistro-quality-run/v8"));
             Assert.That(document.RootElement.GetProperty("Schema").GetString(),
-                Is.EqualTo("bistro-quality-run/v7"));
+                Is.EqualTo("bistro-quality-run/v8"));
             Assert.That(frame.ReflectionProbeCurrentLifecycle, Is.EqualTo(current));
             Assert.That(frame.ReflectionProbeCompletedLifecycle, Is.EqualTo(completed));
             Assert.That(frame.ReflectionProbeCurrentCaptureBudget, Is.EqualTo(budget));
@@ -282,6 +287,19 @@ public sealed class SampleBistroQualityCaptureHarnessTests
                 jsonFrame.GetProperty("GpuReflectionProbePublishMicroseconds")
                     .GetInt64(),
                 Is.EqualTo(417));
+            Assert.That(
+                jsonFrame.GetProperty("HybridReflectionDdgiFallbackCount")
+                    .GetUInt32(),
+                Is.EqualTo(2u));
+            Assert.That(
+                jsonFrame.GetProperty("HybridReflectionProbeFallbackCount")
+                    .GetUInt32(),
+                Is.Zero);
+            Assert.That(
+                jsonFrame.GetProperty(
+                        "GpuHybridReflectionDdgiBaseMicroseconds")
+                    .GetInt64(),
+                Is.EqualTo(211));
         });
     }
 

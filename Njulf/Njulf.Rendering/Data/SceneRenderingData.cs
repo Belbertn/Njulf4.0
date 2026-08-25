@@ -65,6 +65,11 @@ namespace Njulf.Rendering.Data
         public int SolidObjectCount { get; set; }
         public int MaskedObjectCount { get; set; }
         public int TransparentObjectCount { get; set; }
+        /// <summary>
+        /// Visible alpha-blended objects whose material has the explicit
+        /// zero-thickness dielectric transport classification.
+        /// </summary>
+        public int ThinGlassObjectCount { get; set; }
         public int GeometryDecalObjectCount { get; set; }
         public int OpaqueMeshletCount { get; set; }
         public int SimpleOpaqueMeshletCount { get; set; }
@@ -76,6 +81,12 @@ namespace Njulf.Rendering.Data
         public int SolidMeshletCount { get; set; }
         public int MaskedMeshletCount { get; set; }
         public int TransparentMeshletCount { get; set; }
+        /// <summary>
+        /// Admitted transparent draw commands using the ThinGlass class. This
+        /// is compared with <see cref="TransparentMeshletCount"/> before the
+        /// renderer binds the directional-only DDGI glass program.
+        /// </summary>
+        public int ThinGlassMeshletCount { get; set; }
         public int GeometryDecalMeshletCount { get; set; }
         public int BlendMaterialCount { get; set; }
         public int MaskMaterialCount { get; set; }
@@ -186,6 +197,7 @@ namespace Njulf.Rendering.Data
         public bool TransparentReceiveShadows { get; set; } = true;
         public bool TransparentReceiveGlobalIllumination { get; set; } = true;
         public bool TransparentDdgiReceiverCountersEnabled { get; set; }
+        public int ThinGlassDirectionalOnlyPipelineEnabled { get; set; }
         public ThickTransmissionMode RequestedThickTransmissionMode { get; set; }
         public ThickTransmissionMode EffectiveThickTransmissionMode { get; set; }
         public ThickTransmissionFallbackReason ThickTransmissionFallbackReason
@@ -783,10 +795,12 @@ namespace Njulf.Rendering.Data
         public uint HybridReflectionRayQueryOverflowCount { get; set; }
         public uint HybridReflectionRayQueryHitCount { get; set; }
         public uint HybridReflectionRayQueryMissCount { get; set; }
+        public uint HybridReflectionDdgiFallbackCount { get; set; }
         public uint HybridReflectionProbeFallbackCount { get; set; }
         public uint HybridReflectionEnvironmentFallbackCount { get; set; }
         public long GpuHybridReflectionSsrMicroseconds { get; set; }
         public long GpuHybridReflectionRayQueryMicroseconds { get; set; }
+        public long GpuHybridReflectionDdgiBaseMicroseconds { get; set; }
         public long GpuHybridReflectionResolveMicroseconds { get; set; }
         public long GpuHybridReflectionTemporalMicroseconds { get; set; }
         public long GpuHybridReflectionSpatialMicroseconds { get; set; }
@@ -1492,6 +1506,7 @@ namespace Njulf.Rendering.Data
         public long GpuAntiAliasingMicroseconds { get; set; }
         public int SmaaLookupTexturesReady { get; set; }
         public int MotionVectorsEnabled { get; set; }
+        public int CameraOnlyMotionReprojectionEnabled { get; set; }
         public SurfaceHistoryConsumer SurfaceHistoryConsumers { get; set; }
         public int JitterEnabled { get; set; }
         public float JitterX { get; set; }
@@ -1656,11 +1671,13 @@ namespace Njulf.Rendering.Data
             SolidObjectCount = 0;
             MaskedObjectCount = 0;
             TransparentObjectCount = 0;
+            ThinGlassObjectCount = 0;
             GeometryDecalObjectCount = 0;
             OpaqueMeshletCount = 0;
             SolidMeshletCount = 0;
             MaskedMeshletCount = 0;
             TransparentMeshletCount = 0;
+            ThinGlassMeshletCount = 0;
             GeometryDecalMeshletCount = 0;
             BlendMaterialCount = 0;
             MaskMaterialCount = 0;
@@ -1685,6 +1702,7 @@ namespace Njulf.Rendering.Data
             TransparentReceiveShadows = true;
             TransparentReceiveGlobalIllumination = true;
             TransparentDdgiReceiverCountersEnabled = false;
+            ThinGlassDirectionalOnlyPipelineEnabled = 0;
             RequestedThickTransmissionMode = ThickTransmissionMode.Off;
             EffectiveThickTransmissionMode = ThickTransmissionMode.Off;
             ThickTransmissionFallbackReason =
@@ -2342,10 +2360,12 @@ namespace Njulf.Rendering.Data
             HybridReflectionRayQueryOverflowCount = 0;
             HybridReflectionRayQueryHitCount = 0;
             HybridReflectionRayQueryMissCount = 0;
+            HybridReflectionDdgiFallbackCount = 0;
             HybridReflectionProbeFallbackCount = 0;
             HybridReflectionEnvironmentFallbackCount = 0;
             GpuHybridReflectionSsrMicroseconds = 0;
             GpuHybridReflectionRayQueryMicroseconds = 0;
+            GpuHybridReflectionDdgiBaseMicroseconds = 0;
             GpuHybridReflectionResolveMicroseconds = 0;
             GpuHybridReflectionTemporalMicroseconds = 0;
             GpuHybridReflectionSpatialMicroseconds = 0;
@@ -3003,6 +3023,7 @@ namespace Njulf.Rendering.Data
             GpuAntiAliasingMicroseconds = 0;
             SmaaLookupTexturesReady = 0;
             MotionVectorsEnabled = 0;
+            CameraOnlyMotionReprojectionEnabled = 0;
             SurfaceHistoryConsumers = SurfaceHistoryConsumer.None;
             JitterEnabled = 0;
             JitterX = 0;

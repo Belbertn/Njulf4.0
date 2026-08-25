@@ -26,8 +26,9 @@ public enum ReflectionSource : uint
     None = 0,
     ScreenSpace = 1,
     RayQuery = 2,
-    LocalProbe = 3,
-    GlobalEnvironment = 4
+    Ddgi = 3,
+    LocalProbe = 4,
+    GlobalEnvironment = 5
 }
 
 /// <summary>Why a screen-space sample was admitted to the bounded recovery queue.</summary>
@@ -69,7 +70,9 @@ public enum ReflectionHistoryResetReason : uint
     ProbeGenerationChanged = 1u << 7,
     EnvironmentGenerationChanged = 1u << 8,
     ResourceRecreated = 1u << 9,
-    DeviceRecreated = 1u << 10
+    DeviceRecreated = 1u << 10,
+    DdgiTopologyChanged = 1u << 11,
+    MaterialRevisionChanged = 1u << 12
 }
 
 public readonly record struct ReflectionModeCapabilities(
@@ -265,7 +268,9 @@ public static class HybridReflectionBudgetPlanner
             squaredGloss * squaredGloss * occlusion;
         if (broadAnisotropic)
             importance *= BroadImportanceScale;
-        if (importance < MinimumRayImportance)
+        if (importance < MinimumRayImportance &&
+            (tier != ReflectionResolutionTier.Quarter ||
+             !requiresFullQuality))
             tier = Demote(tier);
         return tier;
     }
@@ -275,6 +280,8 @@ public static class HybridReflectionBudgetPlanner
         {
             ReflectionResolutionTier.Full => ReflectionResolutionTier.Half,
             ReflectionResolutionTier.Half => ReflectionResolutionTier.Quarter,
+            ReflectionResolutionTier.Quarter =>
+                ReflectionResolutionTier.AnalyticFallback,
             _ => tier
         };
 
@@ -371,7 +378,7 @@ public static class HybridReflectionGpuContract
     public const uint ReceiverPayloadWords = 4;
     public const uint HistoryMetadataWords = 4;
     public const uint TaskWords = 4;
-    public const uint CounterWords = 8;
+    public const uint CounterWords = 9;
     public const uint IndirectArgumentWords = 3;
     public const float NormalHistoryDotThreshold = 0.9f;
     public const float MinimumHistoryDepthToleranceMeters = 0.02f;
@@ -388,6 +395,7 @@ public readonly record struct HybridReflectionCounterSnapshot(
     uint RayOverflows,
     uint RayHits,
     uint RayMisses,
+    uint DdgiFallbacks,
     uint ProbeFallbacks,
     uint EnvironmentFallbacks)
 {
@@ -403,6 +411,8 @@ public readonly record struct HybridReflectionHistoryRevision(
     float HalfResolutionRoughness,
     float QuarterResolutionRoughness,
     uint RaySceneGeneration,
+    uint DdgiTopologyGeneration,
+    uint MaterialRevision,
     ulong ReflectionProbeRevision,
     uint EnvironmentGeneration,
     ulong CameraCutSerial)
@@ -429,6 +439,10 @@ public readonly record struct HybridReflectionHistoryRevision(
         }
         if (RaySceneGeneration != previous.RaySceneGeneration)
             reasons |= ReflectionHistoryResetReason.RaySceneChanged;
+        if (DdgiTopologyGeneration != previous.DdgiTopologyGeneration)
+            reasons |= ReflectionHistoryResetReason.DdgiTopologyChanged;
+        if (MaterialRevision != previous.MaterialRevision)
+            reasons |= ReflectionHistoryResetReason.MaterialRevisionChanged;
         if (ReflectionProbeRevision != previous.ReflectionProbeRevision)
             reasons |= ReflectionHistoryResetReason.ProbeGenerationChanged;
         if (EnvironmentGeneration != previous.EnvironmentGeneration)
@@ -437,6 +451,23 @@ public readonly record struct HybridReflectionHistoryRevision(
             reasons |= ReflectionHistoryResetReason.CameraCut;
         return reasons;
     }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct GPUHybridReflectionDdgiPushConstants
+{
+    public Matrix4x4 InverseViewProjectionMatrix;
+    public Vector4 CameraPositionAndPadding;
+    public uint ScreenWidth;
+    public uint ScreenHeight;
+    public uint ReceiverScale;
+    public uint MaximumSurfaceGroupsPerTile;
+    public float MinimumConfidence;
+    public float NormalDotThreshold;
+    public float MinimumWorldDepthTolerance;
+    public float RelativeWorldDepthTolerance;
+    public uint ReconstructionPass;
+    public uint ForceExactReconstruction;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -487,7 +518,7 @@ public struct GPUHybridReflectionResolvePushConstants
     public float SsrConfidenceThreshold;
     public float AnalyticTransitionStartRoughness;
     public float AnalyticTransitionEndRoughness;
-    public float Padding0;
+    public uint DdgiBaseAvailable;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -503,7 +534,7 @@ public struct GPUHybridReflectionTemporalPushConstants
     public float VarianceGamma;
     public float Padding0;
     public uint CurrentFrameIndex;
-    public uint Padding1;
+    public uint CameraOnlyReprojection;
     public uint Padding2;
     public uint Padding3;
 }

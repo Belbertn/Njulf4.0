@@ -67,6 +67,8 @@ public sealed record SampleBenchmarkReport(
         SampleBenchmarkMaterialTimingEvidence.Unavailable;
     public SampleBenchmarkCpuSpikeEvidence CpuSpikeEvidence { get; init; } =
         SampleBenchmarkCpuSpikeEvidence.Empty;
+    public SampleRealtimePerformanceTargetReport RealtimePerformanceTarget
+        { get; init; } = SampleRealtimePerformanceTargetReport.NotRequested;
     [JsonRequired]
     public SampleBenchmarkDdgiTransientRawEvidence
         DdgiTransientRawEvidence { get; init; } =
@@ -250,6 +252,8 @@ public sealed record SampleBenchmarkCaptureContract(
     public string ActivationFingerprint { get; init; } =
         SampleBenchmarkActivation.CreateFingerprint(
             SampleBenchmarkActivation.None);
+    public SampleSponzaFixtureMode SponzaFixtureMode { get; init; } =
+        SampleSponzaFixtureMode.Architecture;
     public string SponzaSceneAnimationFingerprint { get; init; } =
         "unavailable";
     public SampleBenchmarkSponzaSceneAnimationMode

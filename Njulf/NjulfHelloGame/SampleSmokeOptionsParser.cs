@@ -23,6 +23,7 @@ public static class SampleSmokeOptionsParser
         "--baseline-snapshot-dir",
         "--sponza-gi-capture-dir",
         "--sponza-gi-capture-mode",
+        "--sponza-fixture-mode",
         "--sponza-temporal-capture-dir",
         "--analyze-sponza-temporal-capture-dir",
         "--volumetric-temporal-capture-dir",
@@ -73,6 +74,7 @@ public static class SampleSmokeOptionsParser
         "--benchmark-activation",
         "--benchmark-trajectory",
         "--benchmark-require-production",
+        "--benchmark-require-1080p60",
         "--benchmark-hdr-reference",
         "--benchmark-hdr-candidate",
         "--benchmark-hdr-max-relative-rmse",
@@ -161,6 +163,9 @@ public static class SampleSmokeOptionsParser
                     "NJULF_VOLUMETRIC_TEMPORAL_ANALYZE_DIR"));
         SampleSponzaGiCaptureMode sponzaGiCaptureMode =
             SampleSponzaGiCaptureMode.DetailedDiagnostics;
+        SampleSponzaFixtureMode sponzaFixtureMode =
+            ParseSponzaFixtureMode(Environment.GetEnvironmentVariable(
+                "NJULF_SPONZA_FIXTURE_MODE"));
         bool sponzaGiCaptureModeSpecified = false;
         string? bistroQualityCaptureDirectory =
             RendererValidationSettings.NormalizeOptionalPath(
@@ -409,6 +414,10 @@ public static class SampleSmokeOptionsParser
         bool benchmarkRequireProduction = ParseBool(
             Environment.GetEnvironmentVariable("NJULF_RENDERER_BENCHMARK_REQUIRE_PRODUCTION"),
             "NJULF_RENDERER_BENCHMARK_REQUIRE_PRODUCTION");
+        bool benchmarkRequireRealtime1080p60 = ParseBool(
+            Environment.GetEnvironmentVariable(
+                "NJULF_RENDERER_BENCHMARK_REQUIRE_1080P60"),
+            "NJULF_RENDERER_BENCHMARK_REQUIRE_1080P60");
         string benchmarkHdrReferencePath =
             RendererValidationSettings.NormalizeOptionalPath(
                 Environment.GetEnvironmentVariable(
@@ -565,6 +574,9 @@ public static class SampleSmokeOptionsParser
                 case "--sponza-gi-capture-mode":
                     sponzaGiCaptureMode = ParseSponzaGiCaptureMode(value);
                     sponzaGiCaptureModeSpecified = true;
+                    break;
+                case "--sponza-fixture-mode":
+                    sponzaFixtureMode = ParseSponzaFixtureMode(value);
                     break;
                 case "--sponza-temporal-capture-dir":
                     sponzaTemporalCaptureDirectory =
@@ -779,6 +791,10 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--benchmark-require-production":
                     benchmarkRequireProduction = ParseBool(value, optionName);
+                    enableBenchmark = true;
+                    break;
+                case "--benchmark-require-1080p60":
+                    benchmarkRequireRealtime1080p60 = ParseBool(value, optionName);
                     enableBenchmark = true;
                     break;
                 case "--benchmark-hdr-reference":
@@ -1943,6 +1959,24 @@ public static class SampleSmokeOptionsParser
                     mode = SampleSmokeMode.Resize;
             }
         }
+        if (sponzaFixtureMode != SampleSponzaFixtureMode.Architecture &&
+            sceneKind != SampleSceneKind.SponzaPlaza)
+        {
+            throw new ArgumentException(
+                "A non-default Sponza fixture requires the Sponza plaza scene.");
+        }
+        string selectedBenchmarkActivation = enableBenchmarkQualitySequence
+            ? benchmarkQualitySequenceActivation
+            : benchmarkActivation;
+        if ((enableBenchmark || enableBenchmarkQualitySequence) &&
+            SampleBenchmarkActivation.RequiresDeterministicAnimation(
+                selectedBenchmarkActivation) &&
+            sponzaFixtureMode != SampleSponzaFixtureMode.AnimationDemo)
+        {
+            throw new ArgumentException(
+                "A benchmark activation with authored character animation " +
+                "requires --sponza-fixture-mode animation.");
+        }
         if (longRunOptionsSpecified && mode != SampleSmokeMode.LongRun)
         {
             throw new ArgumentException(
@@ -2009,6 +2043,7 @@ public static class SampleSmokeOptionsParser
                 SampleBenchmarkActivation.CreateFingerprint(
                     benchmarkActivation),
             Trajectory = benchmarkTrajectory,
+            SponzaFixtureMode = sponzaFixtureMode,
             TrajectoryFingerprint = SampleBenchmarkTrajectory.CreateFingerprint(
                 benchmarkTrajectory,
                 bistroQualityCaptureVariant),
@@ -2021,6 +2056,7 @@ public static class SampleSmokeOptionsParser
             HdrQualityContractPath = benchmarkHdrQualityContractPath,
             ShaderProfileArtifactPath = benchmarkShaderProfilePath,
             RequireShaderProfileEvidence = benchmarkRequireShaderProfile,
+            RequireRealtime1080p60Target = benchmarkRequireRealtime1080p60,
             MaximumAdditionalSettlingFrameCount = benchmarkMaximumSettlingFrames
         };
         var benchmarkQualitySequence =
@@ -2048,6 +2084,7 @@ public static class SampleSmokeOptionsParser
                 SceneKind = sceneKind,
                 Scenario = performanceScenario,
                 Trajectory = benchmarkQualitySequenceTrajectory,
+                SponzaFixtureMode = sponzaFixtureMode,
                 TrajectoryFingerprint =
                     SampleBenchmarkTrajectory.CreateFingerprint(
                         benchmarkQualitySequenceTrajectory,
@@ -2135,7 +2172,8 @@ public static class SampleSmokeOptionsParser
             fogDebugProjectionOverride,
             fogDebugSliceOverride,
             volumetricTemporalCaptureDirectory,
-            volumetricTemporalAnalyzeDirectory);
+            volumetricTemporalAnalyzeDirectory,
+            sponzaFixtureMode);
     }
 
     private static AsyncComputePath? ParseAsyncComputePath(string? value)
@@ -2185,6 +2223,28 @@ public static class SampleSmokeOptionsParser
                 SampleSponzaGiCaptureMode.PresentationReview,
             _ => throw new ArgumentException(
                 $"Invalid Sponza GI capture mode '{value}'. Valid values: detailed, production, presentation.")
+        };
+    }
+
+    private static SampleSponzaFixtureMode ParseSponzaFixtureMode(
+        string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return SampleSponzaFixtureMode.Architecture;
+
+        return value.Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant() switch
+        {
+            "architecture" or "default" or "shipping" =>
+                SampleSponzaFixtureMode.Architecture,
+            "c5" or "residual" or "c5residualvalidation" =>
+                SampleSponzaFixtureMode.C5ResidualValidation,
+            "animation" or "demo" or "animationdemo" =>
+                SampleSponzaFixtureMode.AnimationDemo,
+            _ => throw new ArgumentException(
+                $"Invalid Sponza fixture mode '{value}'. Valid values: architecture, c5, animation.")
         };
     }
 
@@ -2315,6 +2375,7 @@ public static class SampleSmokeOptionsParser
             "--benchmark" or
             "--benchmark-quality-sequence" or
             "--benchmark-require-production" or
+            "--benchmark-require-1080p60" or
             "--benchmark-require-shader-profile" or
             "--material-gi-qualification-candidate" or
             "--tail-ddgi-long-soak" or

@@ -15,7 +15,13 @@ public enum MaterialShadingModel : uint
     Unlit = 1,
     Foliage = 2,
     Decal = 3,
-    SubsurfaceApproximation = 4
+    SubsurfaceApproximation = 4,
+    /// <summary>
+    /// A zero-thickness dielectric sheet. Unlike cloth using the GI-only
+    /// ThinSurface policy, this model opts into visible Fresnel reflection and
+    /// tinted raster transmission in the transparent forward path.
+    /// </summary>
+    ThinGlass = 5
 }
 
 public enum MaterialAlphaMode : uint
@@ -120,7 +126,13 @@ public enum GiMaterialTransportFlags : uint
     /// An extension payload is present solely or additionally for optical
     /// boundary/caustic policy, even when no glTF lighting extension flag is set.
     /// </summary>
-    OpticalPolicyPayload = 1u << 28
+    OpticalPolicyPayload = 1u << 28,
+    /// <summary>
+    /// Distinguishes visible zero-thickness glass from opaque thin-surface
+    /// transport such as curtains. This bit is consumed by raster shading and
+    /// does not alter the canonical transmitted-diffuse GI lobe.
+    /// </summary>
+    ThinGlass = 1u << 29
 }
 
 [Flags]
@@ -299,7 +311,8 @@ public sealed record MaterialDefinition
         DiffuseGiParticipation == GiParticipationOverride.Default &&
         (ShadingModel is MaterialShadingModel.Pbr or
             MaterialShadingModel.Foliage or
-            MaterialShadingModel.SubsurfaceApproximation ||
+            MaterialShadingModel.SubsurfaceApproximation or
+            MaterialShadingModel.ThinGlass ||
          ShadingModel == MaterialShadingModel.Decal && IsGeometryDecal);
 
     public bool EmitsIntoGi =>

@@ -51,7 +51,7 @@ public sealed record SampleBistroQualityFrameState(
 /// </summary>
 public sealed class SampleBistroQualityCaptureContract
 {
-    public const string Schema = "bistro-quality-run/v7";
+    public const string Schema = "bistro-quality-run/v8";
     public const int Width = 1920;
     public const int Height = 1080;
     public const int FramesPerSecond = 60;
@@ -379,6 +379,23 @@ public sealed record SampleBistroQualityFrameTelemetry(
     /// </summary>
     public ReflectionProbeLifecycleFrameSnapshot ReflectionProbeCompletedLifecycle { get; init; }
     public long GpuReflectionProbePublishMicroseconds { get; init; }
+    public int HybridReflectionCountersReadbackValid { get; init; }
+    public uint HybridReflectionSsrHitCount { get; init; }
+    public uint HybridReflectionRayQueryRequestCount { get; init; }
+    public uint HybridReflectionRayQueryCount { get; init; }
+    public uint HybridReflectionRayQueryOverflowCount { get; init; }
+    public uint HybridReflectionRayQueryHitCount { get; init; }
+    public uint HybridReflectionRayQueryMissCount { get; init; }
+    public uint HybridReflectionDdgiFallbackCount { get; init; }
+    public uint HybridReflectionProbeFallbackCount { get; init; }
+    public uint HybridReflectionEnvironmentFallbackCount { get; init; }
+    public long GpuHybridReflectionSsrMicroseconds { get; init; }
+    public long GpuHybridReflectionRayQueryMicroseconds { get; init; }
+    public long GpuHybridReflectionDdgiBaseMicroseconds { get; init; }
+    public long GpuHybridReflectionResolveMicroseconds { get; init; }
+    public long GpuHybridReflectionTemporalMicroseconds { get; init; }
+    public long GpuHybridReflectionSpatialMicroseconds { get; init; }
+    public long GpuHybridReflectionCompositeMicroseconds { get; init; }
 }
 
 public sealed record SampleBistroQualityGateResult(
@@ -407,7 +424,13 @@ public sealed record SampleBistroQualityGateResult(
     int VisibleRelightProbeTarget,
     int VisibleRelightProbeUpdates,
     int ReflectionProbeCount,
-    IReadOnlyList<string> Failures);
+    IReadOnlyList<string> Failures)
+{
+    public bool HybridReflectionTelemetryValid { get; init; }
+    public ulong HybridReflectionDdgiFallbackCount { get; init; }
+    public ulong HybridReflectionProbeFallbackCount { get; init; }
+    public ulong HybridReflectionEnvironmentFallbackCount { get; init; }
+}
 
 public sealed record SampleBistroQualityArtifact(
     string Name,
@@ -440,6 +463,7 @@ internal sealed class SampleBistroQualityRuntimeController
     private readonly LightHandle _directionalLightHandle;
     private readonly Light _baseDirectionalLight;
     private readonly ReflectionMode _baseReflectionMode;
+    private readonly float _baseRayQueryPixelBudgetFraction;
     private readonly bool _baseAutoExposureEnabled;
     private readonly float _baseExposure;
     private SampleBistroQualityFrameState? _lastAppliedState;
@@ -468,6 +492,8 @@ internal sealed class SampleBistroQualityRuntimeController
         _directionalLightHandle = directional.Handle;
         _baseDirectionalLight = directional.Light;
         _baseReflectionMode = renderer.Settings.Reflections.Mode;
+        _baseRayQueryPixelBudgetFraction =
+            renderer.Settings.Reflections.RayQueryPixelBudgetFraction;
         _baseAutoExposureEnabled = renderer.Settings.AutoExposure.Enabled;
         _baseExposure = renderer.Settings.Exposure;
     }
@@ -491,6 +517,8 @@ internal sealed class SampleBistroQualityRuntimeController
             _directionalLightHandle,
             _baseDirectionalLight);
         _renderer.Settings.Reflections.Mode = _baseReflectionMode;
+        _renderer.Settings.Reflections.RayQueryPixelBudgetFraction =
+            _baseRayQueryPixelBudgetFraction;
         _renderer.Settings.Exposure = _baseExposure;
         _renderer.Settings.AutoExposure.Enabled = _baseAutoExposureEnabled;
     }
@@ -540,9 +568,13 @@ internal sealed class SampleBistroQualityRuntimeController
         if (Contract.Variant ==
             SampleBistroQualityCaptureVariant.HybridRayQueryAb)
         {
-            _renderer.Settings.Reflections.Mode = state.HybridRayQueryEnabled
-                ? ReflectionMode.HybridRayQuery
-                : ReflectionMode.StaticProbesAndSsr;
+            // DDGI remains the reflection base in both halves. The A/B event
+            // changes only the bounded sharp-detail recovery budget.
+            _renderer.Settings.Reflections.Mode = ReflectionMode.HybridRayQuery;
+            _renderer.Settings.Reflections.RayQueryPixelBudgetFraction =
+                state.HybridRayQueryEnabled
+                    ? _baseRayQueryPixelBudgetFraction
+                    : 0.0f;
         }
     }
 
@@ -822,7 +854,41 @@ internal sealed class SampleBistroQualityCaptureRunner
                 ReflectionProbeCompletedLifecycle =
                     diagnostics.ReflectionProbeCompletedLifecycle,
                 GpuReflectionProbePublishMicroseconds =
-                    diagnostics.GpuReflectionProbePublishMicroseconds
+                    diagnostics.GpuReflectionProbePublishMicroseconds,
+                HybridReflectionCountersReadbackValid =
+                    diagnostics.HybridReflectionCountersReadbackValid,
+                HybridReflectionSsrHitCount =
+                    diagnostics.HybridReflectionSsrHitCount,
+                HybridReflectionRayQueryRequestCount =
+                    diagnostics.HybridReflectionRayQueryRequestCount,
+                HybridReflectionRayQueryCount =
+                    diagnostics.HybridReflectionRayQueryCount,
+                HybridReflectionRayQueryOverflowCount =
+                    diagnostics.HybridReflectionRayQueryOverflowCount,
+                HybridReflectionRayQueryHitCount =
+                    diagnostics.HybridReflectionRayQueryHitCount,
+                HybridReflectionRayQueryMissCount =
+                    diagnostics.HybridReflectionRayQueryMissCount,
+                HybridReflectionDdgiFallbackCount =
+                    diagnostics.HybridReflectionDdgiFallbackCount,
+                HybridReflectionProbeFallbackCount =
+                    diagnostics.HybridReflectionProbeFallbackCount,
+                HybridReflectionEnvironmentFallbackCount =
+                    diagnostics.HybridReflectionEnvironmentFallbackCount,
+                GpuHybridReflectionSsrMicroseconds =
+                    diagnostics.GpuHybridReflectionSsrMicroseconds,
+                GpuHybridReflectionRayQueryMicroseconds =
+                    diagnostics.GpuHybridReflectionRayQueryMicroseconds,
+                GpuHybridReflectionDdgiBaseMicroseconds =
+                    diagnostics.GpuHybridReflectionDdgiBaseMicroseconds,
+                GpuHybridReflectionResolveMicroseconds =
+                    diagnostics.GpuHybridReflectionResolveMicroseconds,
+                GpuHybridReflectionTemporalMicroseconds =
+                    diagnostics.GpuHybridReflectionTemporalMicroseconds,
+                GpuHybridReflectionSpatialMicroseconds =
+                    diagnostics.GpuHybridReflectionSpatialMicroseconds,
+                GpuHybridReflectionCompositeMicroseconds =
+                    diagnostics.GpuHybridReflectionCompositeMicroseconds
             };
             _frames.Add(frame);
         }
@@ -1246,6 +1312,47 @@ internal sealed class SampleBistroQualityCaptureRunner
                 "Bistro recorded reflection-probe capture or publication work.");
         }
 
+        SampleBistroQualityFrameTelemetry[] validReflectionFrames = _frames
+            .Where(static frame =>
+                frame.HybridReflectionCountersReadbackValid != 0)
+            .ToArray();
+        bool hybridReflectionTelemetryValid =
+            validReflectionFrames.Length > 0;
+        ulong ddgiReflectionFallbacks = validReflectionFrames.Aggregate(
+            0UL,
+            static (total, frame) => total +
+                frame.HybridReflectionDdgiFallbackCount);
+        ulong probeReflectionFallbacks = validReflectionFrames.Aggregate(
+            0UL,
+            static (total, frame) => total +
+                frame.HybridReflectionProbeFallbackCount);
+        ulong environmentReflectionFallbacks = validReflectionFrames.Aggregate(
+            0UL,
+            static (total, frame) => total +
+                frame.HybridReflectionEnvironmentFallbackCount);
+        if (!hybridReflectionTelemetryValid)
+        {
+            failures.Add(
+                "Bistro did not publish hybrid-reflection counter telemetry.");
+        }
+        if (ddgiReflectionFallbacks == 0UL)
+        {
+            failures.Add(
+                "Bistro did not resolve any reflection receivers from DDGI.");
+        }
+        if (probeReflectionFallbacks != 0UL)
+        {
+            failures.Add(
+                $"Bistro resolved {probeReflectionFallbacks} reflection " +
+                "receivers from manual probes; DDGI must be the default.");
+        }
+        if (!_frames.Any(static frame =>
+                frame.GpuHybridReflectionDdgiBaseMicroseconds > 0))
+        {
+            failures.Add(
+                "Bistro did not record GPU work for the DDGI reflection base.");
+        }
+
         return new SampleBistroQualityGateResult(
             failures.Count == 0,
             projectionStable,
@@ -1272,7 +1379,14 @@ internal sealed class SampleBistroQualityCaptureRunner
             visibleRelightProbeTarget,
             visibleRelightProbeUpdates,
             reflectionProbeCount,
-            failures);
+            failures)
+        {
+            HybridReflectionTelemetryValid = hybridReflectionTelemetryValid,
+            HybridReflectionDdgiFallbackCount = ddgiReflectionFallbacks,
+            HybridReflectionProbeFallbackCount = probeReflectionFallbacks,
+            HybridReflectionEnvironmentFallbackCount =
+                environmentReflectionFallbacks
+        };
     }
 
     private static ulong CounterDelta(

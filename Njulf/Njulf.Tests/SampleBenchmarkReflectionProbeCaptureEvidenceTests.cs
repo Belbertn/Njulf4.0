@@ -862,7 +862,10 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
         SampleBenchmarkSponzaSceneAnimationBuild animation =
             CreatePhaseZeroAnimationBuild(
                 Path.Combine(directory, "sponza-animation.bin"));
-        SampleBenchmarkOptions options = CreateReflectionOptions();
+        SampleBenchmarkOptions options = CreateReflectionOptions() with
+        {
+            SponzaFixtureMode = SampleSponzaFixtureMode.AnimationDemo
+        };
         SampleBenchmarkReflectionProbeRawEvidence raw =
             SampleBenchmarkReflectionProbeCaptureEvaluator.CaptureRaw(
                 diagnostics,
@@ -873,6 +876,7 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
             SampleBenchmarkReflectionProbeCaptureEvaluator.Recompute(raw);
         SampleBenchmarkCaptureContract contract = CreateReflectionContract() with
         {
+            SponzaFixtureMode = SampleSponzaFixtureMode.AnimationDemo,
             SponzaSceneAnimationFingerprint = animation.Evidence.Fingerprint,
             SponzaSceneAnimationMode = animation.Evidence.Mode,
             SponzaSceneAnimationConfigurationFingerprint =
@@ -1011,7 +1015,7 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
                 GpuTimingSupported = 1,
                 GpuTimingValid = 1,
                 ReflectionProbeCount =
-                    SampleBenchmarkActivation.SponzaReflectionProbeCount,
+                    SampleBenchmarkActivation.SyntheticReflectionProbeCount,
                 ReflectionProbeResolution =
                     SampleBenchmarkActivation.SponzaReflectionProbeResolution,
                 ReflectionProbeMipCount =
@@ -1168,7 +1172,7 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
                     .GiSponzaReflectionProbeLifecycle.ToString()
             },
             ReflectionProbeCount =
-                SampleBenchmarkActivation.SponzaReflectionProbeCount,
+                SampleBenchmarkActivation.SyntheticReflectionProbeCount,
             ReflectionProbeResolution =
                 SampleBenchmarkActivation.SponzaReflectionProbeResolution,
             ReflectionProbeMipCount =
@@ -1208,14 +1212,14 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
                 ReflectionProbeLifecycleSnapshot after = before with
                 {
                     QueuedCount =
-                        SampleBenchmarkActivation.SponzaReflectionProbeCount,
+                        SampleBenchmarkActivation.SyntheticReflectionProbeCount,
                     State = ReflectionProbeCaptureState.Queued
                 };
                 requestMap.Add(
                     index,
                     new ReflectionProbeRecaptureRequestSummary(
-                        SampleBenchmarkActivation.SponzaReflectionProbeCount,
-                        SampleBenchmarkActivation.SponzaReflectionProbeCount,
+                        SampleBenchmarkActivation.SyntheticReflectionProbeCount,
+                        SampleBenchmarkActivation.SyntheticReflectionProbeCount,
                         0,
                         0,
                         0,
@@ -1300,7 +1304,7 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
                 GpuReflectionProbePrefilterMicroseconds = prefilter,
                 GpuReflectionProbePublishMicroseconds = publish,
                 ReflectionProbeCount =
-                    SampleBenchmarkActivation.SponzaReflectionProbeCount,
+                    SampleBenchmarkActivation.SyntheticReflectionProbeCount,
                 ReflectionProbeResolution =
                     SampleBenchmarkActivation.SponzaReflectionProbeResolution,
                 ReflectionProbeMipCount =
@@ -1340,7 +1344,7 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
         active,
         state,
         AwaitingGpuCompletionCount: 0,
-        PublishedCount: SampleBenchmarkActivation.SponzaReflectionProbeCount,
+        PublishedCount: SampleBenchmarkActivation.SyntheticReflectionProbeCount,
         startedThisFrame,
         completedThisFrame,
         faces,
@@ -1488,7 +1492,7 @@ public sealed class SampleBenchmarkReflectionProbeCaptureEvidenceTests
                 ? ReflectionProbeCaptureState.CapturingFaces
                 : ReflectionProbeCaptureState.Published,
             AwaitingGpuCompletionCount: 0,
-            PublishedCount: SampleBenchmarkActivation.SponzaReflectionProbeCount,
+            PublishedCount: SampleBenchmarkActivation.SyntheticReflectionProbeCount,
             CapturesStartedThisFrame: faces > 0 ? 1 : 0,
             CapturesCompletedThisFrame: copies > 0 ? 1 : 0,
             CaptureFaceUnitsThisFrame: faces,

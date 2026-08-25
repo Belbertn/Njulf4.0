@@ -91,6 +91,12 @@ public static class SampleBenchmarkPairComparer
         {
             failures.Add("Capture activation identities differ or are invalid.");
         }
+        if (!Enum.IsDefined(left.SponzaFixtureMode) ||
+            !Enum.IsDefined(right.SponzaFixtureMode) ||
+            left.SponzaFixtureMode != right.SponzaFixtureMode)
+        {
+            failures.Add("Capture Sponza fixture modes differ or are invalid.");
+        }
         foreach (string failure in ValidateAuthenticatedEvidence(baseline))
             failures.Add("Baseline " + failure);
         foreach (string failure in ValidateAuthenticatedEvidence(variant))
@@ -362,7 +368,11 @@ public static class SampleBenchmarkPairComparer
                 exception.Message);
             return Array.Empty<SampleBenchmarkActivationFrameState>();
         }
-        if (!SampleBenchmarkTrajectory.RequiresSponza(trajectory))
+        bool requiresSponzaAnimation =
+            SampleBenchmarkTrajectory.RequiresSponza(trajectory) &&
+            report.CaptureContract.SponzaFixtureMode ==
+                SampleSponzaFixtureMode.AnimationDemo;
+        if (!requiresSponzaAnimation)
         {
             if (!SampleBenchmarkSponzaSceneAnimationEvidence
                     .IsCanonicalUnavailable(evidence) ||
@@ -387,7 +397,8 @@ public static class SampleBenchmarkPairComparer
                     StringComparison.Ordinal))
             {
                 failures.Add(
-                    "A non-Sponza capture does not contain the exact " +
+                    "A capture without the explicit Sponza animation fixture " +
+                    "does not contain the exact " +
                     "canonical unavailable Sponza animation evidence and " +
                     "capture-contract shape.");
             }

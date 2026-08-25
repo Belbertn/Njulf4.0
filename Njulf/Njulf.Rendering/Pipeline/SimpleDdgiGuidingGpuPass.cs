@@ -160,17 +160,20 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         // Clear the complete bounded output first: a malformed work item can
         // return before its per-record loop, and stale records must never be
         // interpreted as fresh radiometric evidence.
+        RecordAliasedArenaReuseToClearBarrier(
+            commandBuffer,
+            new StorageRange(workload.TrainingRecords));
         _context.Api.CmdFillBuffer(
             commandBuffer,
             _bufferManager.GetBuffer(workload.TrainingRecords.Buffer),
             workload.TrainingRecords.OffsetBytes,
             workload.TrainingRecords.RangeBytes,
             0u);
+        RecordClearToComputeBarrier(
+            commandBuffer,
+            new StorageRange(workload.TrainingRecords));
         if (workload.UsesGpuResidentWork)
         {
-            RecordTransferToComputeBarrier(
-                commandBuffer,
-                new StorageRange(workload.TrainingRecords));
             RecordGpuResidentPrepare(
                 commandBuffer,
                 frameIndex,
@@ -211,13 +214,16 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         // Train writes every declared partial; zeroing the complete bounded
         // scratch prevents an invalid/missing source record from inheriting a
         // prior transaction.
+        RecordAliasedArenaReuseToClearBarrier(
+            commandBuffer,
+            TrainingScratchRange(buffers));
         _context.Api.CmdFillBuffer(
             commandBuffer,
             _bufferManager.GetBuffer(buffers.TrainingScratch),
             buffers.TrainingScratchOffsetBytes,
             buffers.TrainingScratchRangeBytes,
             0u);
-        RecordTransferToComputeBarrier(
+        RecordClearToComputeBarrier(
             commandBuffer,
             TrainingScratchRange(buffers));
 
@@ -1033,9 +1039,14 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
         in SimpleDdgiGuidingExternalBuffer range) =>
         BarrierBuilder.BufferBarrier(
             _bufferManager.GetBuffer(range.Buffer),
-            range.LastWriterStageMask,
-            range.LastWriterAccessMask,
-            PipelineStageFlags2.TransferBit,
+            range.LastWriterStageMask |
+                PipelineStageFlags2.CopyBit |
+                PipelineStageFlags2.ComputeShaderBit,
+            range.LastWriterAccessMask |
+                AccessFlags2.TransferReadBit |
+                AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ClearBit,
             AccessFlags2.TransferWriteBit,
             range.OffsetBytes,
             ValidationCounterByteCount);
@@ -1055,7 +1066,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             0u);
         BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
             _bufferManager.GetBuffer(counters.Buffer),
-            PipelineStageFlags2.TransferBit,
+            PipelineStageFlags2.ClearBit,
             AccessFlags2.TransferWriteBit,
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit |
@@ -1097,7 +1108,7 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             PipelineStageFlags2.ComputeShaderBit,
             AccessFlags2.ShaderStorageReadBit |
                 AccessFlags2.ShaderStorageWriteBit,
-            PipelineStageFlags2.TransferBit,
+            PipelineStageFlags2.ClearBit,
             AccessFlags2.TransferWriteBit,
             range.OffsetBytes,
             range.RangeBytes);
@@ -1116,6 +1127,50 @@ internal sealed unsafe class SimpleDdgiGuidingGpuPass : IDisposable
             AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
             range.OffsetBytes,
             range.RangeBytes);
+
+    private void RecordAliasedArenaReuseToClearBarrier(
+        CommandBuffer commandBuffer,
+        in StorageRange range)
+    {
+        // The central arena intentionally aliases non-overlapping feature
+        // lifetimes. Its prior owner may finish with a copy or compute read;
+        // queue order alone does not make a later fill safe. Scope the WAR/WAW
+        // dependency to the exact range being reclaimed.
+        BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
+            _bufferManager.GetBuffer(range.Buffer),
+            PipelineStageFlags2.CopyBit |
+                PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.TransferReadBit |
+                AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+            PipelineStageFlags2.ClearBit,
+            AccessFlags2.TransferWriteBit,
+            range.OffsetBytes,
+            range.RangeBytes);
+        Span<BufferMemoryBarrier2> barriers =
+            stackalloc BufferMemoryBarrier2[1];
+        barriers[0] = barrier;
+        ExecuteBufferBarriers(commandBuffer, barriers);
+    }
+
+    private void RecordClearToComputeBarrier(
+        CommandBuffer commandBuffer,
+        in StorageRange range)
+    {
+        BufferMemoryBarrier2 barrier = BarrierBuilder.BufferBarrier(
+            _bufferManager.GetBuffer(range.Buffer),
+            PipelineStageFlags2.ClearBit,
+            AccessFlags2.TransferWriteBit,
+            PipelineStageFlags2.ComputeShaderBit,
+            AccessFlags2.ShaderStorageReadBit |
+                AccessFlags2.ShaderStorageWriteBit,
+            range.OffsetBytes,
+            range.RangeBytes);
+        Span<BufferMemoryBarrier2> barriers =
+            stackalloc BufferMemoryBarrier2[1];
+        barriers[0] = barrier;
+        ExecuteBufferBarriers(commandBuffer, barriers);
+    }
 
     private void RecordComputeStorageBarrier(
         CommandBuffer commandBuffer,

@@ -832,6 +832,8 @@ public static class MaterialTransportCompiler
             flags |= GiMaterialTransportFlags.NormalProfileValid;
         if (material.ShadingModel == MaterialShadingModel.Unlit)
             flags |= GiMaterialTransportFlags.Unlit;
+        if (material.ShadingModel == MaterialShadingModel.ThinGlass)
+            flags |= GiMaterialTransportFlags.ThinGlass;
         if (material.DoubleSided)
             flags |= GiMaterialTransportFlags.DoubleSided;
         if (material.FeatureFlags.HasFlag(MaterialFeatureFlags.Transmission) &&

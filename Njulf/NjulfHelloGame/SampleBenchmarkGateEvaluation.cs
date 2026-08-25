@@ -45,6 +45,20 @@ internal readonly record struct SampleBenchmarkGateEvaluation(
                 "Benchmark GPU timing statistics do not match the declared valid sample count.");
         }
 
+        if (report.Options.RequireRealtime1080p60Target)
+        {
+            SampleRealtimePerformanceTargetReport target =
+                SampleRealtimePerformanceTarget.Evaluate(report);
+            if (!target.Passed)
+            {
+                return new SampleBenchmarkGateEvaluation(
+                    false,
+                    target.Failures.Count > 0
+                        ? target.Failures[0]
+                        : "The 1080p60 performance target failed without a detailed finding.");
+            }
+        }
+
         if (report.Options.MaterialGiQualificationCandidate)
         {
             RendererDiagnostics diagnostics = report.LastDiagnostics;

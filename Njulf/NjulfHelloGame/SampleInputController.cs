@@ -943,6 +943,7 @@ internal sealed class SampleInputController
                 ReflectionDebugView.SourceOwnership => ReflectionDebugView.Confidence,
                 ReflectionDebugView.Confidence => ReflectionDebugView.SourceSelection,
                 ReflectionDebugView.SourceSelection => ReflectionDebugView.DetailBudget,
+                ReflectionDebugView.DetailBudget => ReflectionDebugView.ReceiverMaterial,
                 _ => ReflectionDebugView.None
             };
             PrintReflectionSettings("Reflection debug");
@@ -1395,6 +1396,7 @@ internal sealed class SampleInputController
         _sponzaGiCaptureRestoreState = new SponzaGiCaptureRestoreState(
             _renderer.Settings.GlobalIllumination.Enabled,
             _renderer.Settings.GlobalIllumination.DebugView,
+            _renderer.Settings.Reflections.Enabled,
             _renderer.Settings.Debug.Enabled,
             _renderer.Settings.Debug.AllowScreenshots,
             _renderer.Settings.Debug.CpuSnapshotsEnabled,
@@ -1667,6 +1669,10 @@ internal sealed class SampleInputController
         bool disableEnvironmentLighting = output is { DisableEnvironmentLighting: true };
         bool disableIndirectSpecularLighting =
             output is { DisableIndirectSpecularLighting: true };
+        _renderer.Settings.Reflections.Enabled =
+            !disableEnvironmentLighting &&
+            !disableIndirectSpecularLighting &&
+            (_sponzaGiCaptureRestoreState?.ReflectionsEnabled ?? true);
         _renderer.Settings.Environment.DiffuseIntensity = disableEnvironmentLighting
             ? 0.0f
             : _sponzaGiCaptureRestoreState?.EnvironmentDiffuseIntensity ?? 1.0f;
@@ -2085,6 +2091,16 @@ internal sealed class SampleInputController
         SampleSponzaGiCaptureContract contract = _sponzaGiCaptureSequence.Contract;
         string relativePath = contract.GetRelativeTemporalTracePath(traceName);
         string path = Path.Combine(_sponzaGiCaptureDirectory, relativePath);
+        SampleSponzaGiReflectionGateResult reflectionGate =
+            SampleSponzaGiReflectionGate.Evaluate(
+                _sponzaGiTemporalTrace.Snapshot());
+        if (!reflectionGate.Passed)
+        {
+            AbortSponzaGiCapture(
+                $"Reflection telemetry gate failed for '{traceName}': " +
+                string.Join(" ", reflectionGate.Failures));
+            return false;
+        }
         try
         {
             _sponzaGiTemporalTrace.Write(path, contract.Fingerprint, traceName);
@@ -2506,6 +2522,7 @@ internal sealed class SampleInputController
             SponzaGiCaptureRestoreState state = _sponzaGiCaptureRestoreState;
             _renderer.Settings.GlobalIllumination.Enabled = state.GlobalIlluminationEnabled;
             _renderer.Settings.GlobalIllumination.DebugView = state.GlobalIlluminationDebugView;
+            _renderer.Settings.Reflections.Enabled = state.ReflectionsEnabled;
             _renderer.Settings.Debug.Enabled = state.DebugEnabled;
             _renderer.Settings.Debug.AllowScreenshots = state.AllowScreenshots;
             _renderer.Settings.Debug.CpuSnapshotsEnabled = state.CpuSnapshotsEnabled;
@@ -3695,6 +3712,7 @@ internal sealed class SampleInputController
     private sealed record SponzaGiCaptureRestoreState(
         bool GlobalIlluminationEnabled,
         GlobalIlluminationDebugView GlobalIlluminationDebugView,
+        bool ReflectionsEnabled,
         bool DebugEnabled,
         bool AllowScreenshots,
         bool CpuSnapshotsEnabled,

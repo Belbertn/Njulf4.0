@@ -1199,6 +1199,11 @@ public sealed class ModelAssetCooker : IDisposable
             options.Platform,
             MaterialTransportMetadataRevision,
             MaterialTexturePolicyRevision,
+            AmazonBistroMaterialProfileRevision =
+                options.ImporterOptions.AssimpMaterialTextureConvention ==
+                    AssimpMaterialTextureConvention.AmazonBistro
+                    ? AmazonBistroMaterialProfile.ProfileRevision
+                    : string.Empty,
             MeshLodAlgorithmRevision,
             CausticTopologyAlgorithmVersion =
                 ModelGiCausticHeroTopologyAnalyzer.CurrentAlgorithmVersion,

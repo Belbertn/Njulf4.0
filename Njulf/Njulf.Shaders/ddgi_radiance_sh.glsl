@@ -466,6 +466,130 @@ bool EvaluateSimpleDdgiRadianceShRecord(
     return true;
 }
 
+// Keep the narrow ThinGlass decoder out of every ordinary diffuse/directional
+// receiver module. In addition to shrinking those modules, this preserves the
+// canonical receiver's compiled control flow and register shape exactly.
+#if defined(SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER) && \
+    SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER
+// Thin dielectric receivers need a stable low-frequency DDGI reflection base,
+// while SSR/ray queries and the environment own unresolved high-frequency
+// detail. Read the L1 prefix of either an L1 or L2 record after validating its
+// publication markers. The producer clears metadata before writing and
+// publishes it last, so matching metadata/generation reads reject every torn
+// transaction without fetching the five unused L2 coefficients.
+bool EvaluateSimpleDdgiRadianceShL1PreviewRecordWithBasis(
+    uint bufferIndex,
+    uint probeIndex,
+    uint mode,
+    uint expectedSlotGeneration,
+    vec4 basisWeights,
+    out vec3 radiance,
+    out vec3 negativeReconstruction)
+{
+    radiance = vec3(0.0);
+    negativeReconstruction = vec3(0.0);
+    uint recordWords = SimpleDdgiRadianceShRecordWords(mode);
+    if (any(isnan(basisWeights)) || any(isinf(basisWeights)) ||
+        recordWords == 0u || expectedSlotGeneration == 0u)
+    {
+        return false;
+    }
+
+    uint baseWord = probeIndex * recordWords;
+    uint generationWord = recordWords - 2u;
+    uint metadataWord = recordWords - 1u;
+    uint metadata = ReadStorageWordUniform(
+        bufferIndex,
+        baseWord + metadataWord);
+    if ((metadata & SIMPLE_DDGI_RADIANCE_SH_VALID_BIT) == 0u ||
+        ((metadata & SIMPLE_DDGI_RADIANCE_SH_VERSION_MASK) >>
+            SIMPLE_DDGI_RADIANCE_SH_VERSION_SHIFT) !=
+                SimpleDdgiRadianceShRepresentationVersion(mode) ||
+        ((metadata >> SIMPLE_DDGI_RADIANCE_SH_SAMPLE_COUNT_SHIFT) & 0xffu) == 0u)
+    {
+        return false;
+    }
+
+    uint packedWords[6];
+    for (uint word = 0u; word < 6u; word++)
+        packedWords[word] = ReadStorageWordUniform(bufferIndex, baseWord + word);
+    uint slotGeneration = ReadStorageWordUniform(
+        bufferIndex,
+        baseWord + generationWord);
+    uint metadataAfter = ReadStorageWordUniform(
+        bufferIndex,
+        baseWord + metadataWord);
+    if (metadataAfter != metadata || slotGeneration != expectedSlotGeneration)
+        return false;
+
+    vec3 coefficients[4];
+    for (uint coefficient = 0u; coefficient < 4u; coefficient++)
+    {
+        uint firstValue = coefficient * 3u;
+        uint secondValue = firstValue + 1u;
+        uint thirdValue = firstValue + 2u;
+        vec2 firstPair = unpackHalf2x16(packedWords[firstValue / 2u]);
+        vec2 secondPair = unpackHalf2x16(packedWords[secondValue / 2u]);
+        vec2 thirdPair = unpackHalf2x16(packedWords[thirdValue / 2u]);
+        float x = (firstValue & 1u) == 0u ? firstPair.x : firstPair.y;
+        float y = (secondValue & 1u) == 0u ? secondPair.x : secondPair.y;
+        float z = (thirdValue & 1u) == 0u ? thirdPair.x : thirdPair.y;
+        coefficients[coefficient] = vec3(x, y, z);
+        if (any(isnan(coefficients[coefficient])) ||
+            any(isinf(coefficients[coefficient])))
+        {
+            return false;
+        }
+    }
+
+    vec3 reconstructed = coefficients[0] * basisWeights.x +
+        coefficients[1] * basisWeights.y +
+        coefficients[2] * basisWeights.z +
+        coefficients[3] * basisWeights.w;
+    if (any(isnan(reconstructed)) || any(isinf(reconstructed)))
+        return false;
+
+    negativeReconstruction = max(-reconstructed, vec3(0.0));
+    radiance = max(reconstructed, vec3(0.0));
+    return true;
+}
+
+bool EvaluateSimpleDdgiRadianceShL1PreviewRecord(
+    uint bufferIndex,
+    uint probeIndex,
+    uint mode,
+    uint expectedSlotGeneration,
+    vec3 direction,
+    float perceptualRoughness,
+    out vec3 radiance,
+    out vec3 negativeReconstruction)
+{
+    float directionLengthSquared = dot(direction, direction);
+    if (!(directionLengthSquared > 1.0e-12) ||
+        isnan(directionLengthSquared) || isinf(directionLengthSquared))
+    {
+        radiance = vec3(0.0);
+        negativeReconstruction = vec3(0.0);
+        return false;
+    }
+    vec3 omega = direction * inversesqrt(directionLengthSquared);
+    vec3 bandScales = SimpleDdgiGgxBandScales(perceptualRoughness);
+    vec4 basisWeights = vec4(
+        0.2820947918,
+        -0.4886025119 * omega.y * bandScales.y,
+        0.4886025119 * omega.z * bandScales.y,
+        -0.4886025119 * omega.x * bandScales.y);
+    return EvaluateSimpleDdgiRadianceShL1PreviewRecordWithBasis(
+        bufferIndex,
+        probeIndex,
+        mode,
+        expectedSlotGeneration,
+        basisWeights,
+        radiance,
+        negativeReconstruction);
+}
+#endif
+
 // Convolution of an incident-radiance SH expansion with the normalized
 // Henyey-Greenstein phase function. Its Legendre moments are g^l, so an L2
 // sidecar needs only the exact band scales (1, g, g^2). Coefficients remain

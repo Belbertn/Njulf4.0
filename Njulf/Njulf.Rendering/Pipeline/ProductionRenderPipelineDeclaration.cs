@@ -50,6 +50,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         "SkyboxPass",
         "HybridReflectionSsrPass",
         "HybridReflectionRayQueryPass",
+        "HybridReflectionDdgiBasePass",
         "HybridReflectionResolvePass",
         "HybridReflectionTemporalPass",
         "HybridReflectionSpatialPass",
@@ -598,6 +599,21 @@ internal sealed class ProductionRenderPipelineDeclaration
                 RenderGraphResourceId.HybridReflectionRawRadiance),
             ReadWriteComputeStorage(
                 RenderGraphResourceId.HybridReflectionRawMetadata)),
+            Pass("HybridReflectionDdgiBasePass",
+            ReadComputeSampled(
+                RenderGraphResourceId.HybridReflectionReceiverPayload),
+            ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+            ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiParameters),
+            ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
+            ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiVisibilityAtlas),
+            ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiReceiverProbes),
+            ReadComputeBuffer(RenderGraphResourceId.SimpleDdgiResidency),
+            ReadComputeBuffer(
+                RenderGraphResourceId.SimpleDdgiDirectionalRadiance),
+            WriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionDdgiCohorts),
+            WriteComputeStorage(
+                RenderGraphResourceId.HybridReflectionFilterScratch)),
             Pass("HybridReflectionResolvePass",
             ReadComputeSampled(
                 RenderGraphResourceId.HybridReflectionReceiverPayload),
@@ -605,6 +621,8 @@ internal sealed class ProductionRenderPipelineDeclaration
             ReadComputeBuffer(RenderGraphResourceId.EnvironmentData),
             ReadComputeSampled(RenderGraphResourceId.EnvironmentMaps),
             ReadComputeSampled(RenderGraphResourceId.ReflectionProbeCubemaps),
+            ReadComputeStorage(
+                RenderGraphResourceId.HybridReflectionFilterScratch),
             ReadWriteComputeStorage(
                 RenderGraphResourceId.HybridReflectionRawRadiance),
             ReadWriteComputeStorage(
@@ -1267,6 +1285,11 @@ internal sealed class ProductionRenderPipelineDeclaration
             TransientImageResource(
                 RenderGraphResourceId.HybridReflectionFilterScratch,
                 "Hybrid reflection spatial-filter scratch",
+                RenderTargetManager.HybridReflectionRadianceFormat,
+                RenderGraphResourceSizePolicy.SceneResolution),
+            TransientImageResource(
+                RenderGraphResourceId.HybridReflectionDdgiCohorts,
+                "Hybrid reflection sparse DDGI cohort records",
                 RenderTargetManager.HybridReflectionRadianceFormat,
                 RenderGraphResourceSizePolicy.SceneResolution),
             BufferSetResource(RenderGraphResourceId.HybridReflectionRayTasks,

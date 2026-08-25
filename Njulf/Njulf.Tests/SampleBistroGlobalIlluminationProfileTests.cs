@@ -10,6 +10,32 @@ namespace Njulf.Tests;
 public sealed class SampleBistroGlobalIlluminationProfileTests
 {
     [Test]
+    public void TextureBudget_DefaultsTo512ButPreservesExplicitOverrides()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                SampleBistroGlobalIlluminationProfile
+                    .DefaultImportedTextureDimension,
+                Is.EqualTo(512u));
+            Assert.That(
+                SampleBistroGlobalIlluminationProfile
+                    .ShouldApplyDefaultImportedTextureBudget(null, null),
+                Is.True);
+            Assert.That(
+                SampleBistroGlobalIlluminationProfile
+                    .ShouldApplyDefaultImportedTextureBudget("1024", null),
+                Is.False);
+            Assert.That(
+                SampleBistroGlobalIlluminationProfile
+                    .ShouldApplyDefaultImportedTextureBudget(
+                        null,
+                        "HighQuality"),
+                Is.False);
+        });
+    }
+
+    [Test]
     public void Configure_RemovesSponzaLayoutAndDisablesRefinementBricks()
     {
         var settings = new RenderSettings();
@@ -36,11 +62,11 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
             Assert.That(gi.SimpleDdgiAutomaticProbeDensityScale, Is.EqualTo(0.70f));
             Assert.That(gi.IndirectIntensity, Is.EqualTo(1.0f));
             Assert.That(gi.FarFieldSkyVisibilityEnabled, Is.False);
-            Assert.That(gi.SimpleDdgiRoughSpecularMinimumRoughness, Is.EqualTo(1.0f));
-            Assert.That(gi.SimpleDdgiRoughSpecularFullWeightRoughness, Is.EqualTo(1.0f));
+            Assert.That(gi.SimpleDdgiRoughSpecularMinimumRoughness, Is.EqualTo(0.55f));
+            Assert.That(gi.SimpleDdgiRoughSpecularFullWeightRoughness, Is.EqualTo(0.70f));
             Assert.That(
                 gi.SimpleDdgiNearFieldResidualMode,
-                Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
             Assert.That(gi.SimpleDdgiTransportSolverRelaxation, Is.EqualTo(0.90f));
             Assert.That(gi.SimpleDdgiAuthoredVolumes, Is.Empty);
             Assert.That(gi.SimpleDdgiRefinementBricksEnabled, Is.False);
@@ -94,7 +120,7 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
     }
 
     [Test]
-    public void PostRolloutPolicy_KeepsC5Enabled()
+    public void PostRolloutPolicy_KeepsUnqualifiedC5Disabled()
     {
         var settings = new RenderSettings();
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
@@ -105,6 +131,6 @@ public sealed class SampleBistroGlobalIlluminationProfileTests
 
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
-            Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
+            Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
     }
 }

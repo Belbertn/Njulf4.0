@@ -33,6 +33,8 @@ internal static class SampleReflectionPolicy
         throw new InvalidOperationException(
             $"Bundled sample scene '{scene.Name}' authored " +
             $"{scene.ReflectionProbes.Count} manual reflection probe(s). " +
-            "Sample scenes must use SSR, ray-query recovery, and the global environment.");
+            "Sample scenes must use directional DDGI as the default reflection " +
+            "field, with SSR/ray-query detail and the global environment only " +
+            "as a last-resort fallback.");
     }
 }

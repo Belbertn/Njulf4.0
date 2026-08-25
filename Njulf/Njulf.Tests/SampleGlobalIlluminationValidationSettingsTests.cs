@@ -80,12 +80,12 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
             Assert.That(settings.Reflections.Enabled, Is.True);
             Assert.That(
                 gi.SimpleDdgiNearFieldResidualMode,
-                Is.EqualTo(SimpleDdgiNearFieldResidualMode.HiZAdaptive));
+                Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
         });
     }
 
     [Test]
-    public void SponzaPostRolloutPolicy_KeepsC5Enabled()
+    public void SponzaPostRolloutPolicy_KeepsUnqualifiedC5Disabled()
     {
         var settings = new RenderSettings();
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
@@ -93,6 +93,21 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
 
         SampleSponzaGlobalIlluminationProfile
             .ConfigurePostAdvancedGiRollout(settings);
+
+        Assert.That(
+            settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
+            Is.EqualTo(SimpleDdgiNearFieldResidualMode.Off));
+    }
+
+    [Test]
+    public void SponzaPostRolloutPolicy_ExplicitC5FixtureEnablesResidual()
+    {
+        var settings = new RenderSettings();
+
+        SampleSponzaGlobalIlluminationProfile
+            .ConfigurePostAdvancedGiRollout(
+                settings,
+                residualValidationEnabled: true);
 
         Assert.That(
             settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode,
@@ -111,7 +126,9 @@ public sealed class SampleGlobalIlluminationValidationSettingsTests
         {
             Assert.That(settings.AutoExposure.Enabled, Is.False);
             Assert.That(settings.Exposure, Is.EqualTo(1.0f));
-            Assert.That(settings.Reflections.Enabled, Is.False);
+            Assert.That(settings.Reflections.Enabled, Is.True);
+            Assert.That(settings.Reflections.Mode,
+                Is.EqualTo(ReflectionMode.HybridRayQuery));
             Assert.That(settings.Bloom.Enabled, Is.False);
             Assert.That(
                 settings.GlobalIllumination

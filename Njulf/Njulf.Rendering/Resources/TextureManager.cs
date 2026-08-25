@@ -1470,18 +1470,24 @@ namespace Njulf.Rendering.Resources
             if (IsKtx2Source(source, fullPath))
             {
                 Ktx2Texture texture = Ktx2Texture.Parse(imageBytes, identity);
+                Ktx2MipSelection selection = texture.SelectMipWindow(maxDimension);
                 ulong estimatedBytes = ImageByteEstimator.EstimateBytes(
                     texture.Format,
-                    new Extent3D { Width = texture.Width, Height = texture.Height, Depth = 1 },
-                    texture.MipLevels);
+                    new Extent3D
+                    {
+                        Width = selection.Width,
+                        Height = selection.Height,
+                        Depth = 1
+                    },
+                    selection.MipLevels);
 
                 return new TextureAssetMemoryEntry(
                     identity,
-                    texture.Width,
-                    texture.Height,
-                    texture.MipLevels,
+                    selection.Width,
+                    selection.Height,
+                    selection.MipLevels,
                     estimatedBytes,
-                    WasDownscaled: false)
+                    selection.WasDownscaled)
                 {
                     SourceKind = sourceKind.ToString(),
                     OriginalWidth = texture.Width,
@@ -1763,6 +1769,8 @@ namespace Njulf.Rendering.Resources
             AuthenticatedCookedTexture? authenticatedCookedTexture)
         {
             Ktx2Texture texture = Ktx2Texture.Parse(imageBytes, cacheIdentity);
+            Ktx2MipSelection selection = texture.SelectMipWindow(
+                MaxLoadedTextureDimension);
             TextureTransportStatistics transportStatistics =
                 authenticatedCookedTexture?.Metadata.TransportStatistics ??
                 TextureCooker.AnalyzeTransportStatistics(
@@ -1790,17 +1798,20 @@ namespace Njulf.Rendering.Resources
                 throw new NotSupportedException($"KTX2 texture '{cacheIdentity}' uses format {texture.Format}, which is not supported as a sampled optimal-tiled image on this device.");
 
             TextureHandle handle = CreateTexture(
-                texture.Width,
-                texture.Height,
+                selection.Width,
+                selection.Height,
                 texture.Format,
-                texture.MipLevels,
+                selection.MipLevels,
                 samplerDescription: samplerDescription,
                 requireWithinMemoryBudget: requireWithinMemoryBudget,
                 debugName: CreateSampledTextureDebugName(source, source.FilePath));
 
             try
             {
-                UploadTextureDataMipLevels(handle, texture.Bytes.Span, texture.Levels);
+                UploadTextureDataMipLevels(
+                    handle,
+                    texture.Bytes.Span,
+                    selection.Levels);
 
                 string? fullPath = string.IsNullOrWhiteSpace(source.FilePath) ? null : Path.GetFullPath(source.FilePath);
                 TextureHandle resolvedHandle = RegisterLoadedTexture(
@@ -1822,7 +1833,7 @@ namespace Njulf.Rendering.Resources
                     authenticatedCookedTexture?.Metadata.OriginalHeight is int originalHeight
                         ? checked((uint)originalHeight)
                         : texture.Height,
-                    wasDownscaled: false,
+                    wasDownscaled: selection.WasDownscaled,
                     isCompressed: IsBlockCompressedFormat(texture.Format),
                     linearAverageColor: transportStatistics.TryGetLinearMean(out CoreVector4 average)
                         ? average
@@ -2685,6 +2696,8 @@ namespace Njulf.Rendering.Resources
                 semantic,
                 mipPolicy);
             Ktx2Texture texture = Ktx2Texture.Parse(imageBytes, sourceIdentity);
+            Ktx2MipSelection selection = texture.SelectMipWindow(
+                MaxLoadedTextureDimension);
             if (!SupportsSampledOptimalImage(texture.Format))
             {
                 throw new NotSupportedException(
@@ -2726,10 +2739,10 @@ namespace Njulf.Rendering.Resources
             }
 
             TextureHandle replacement = CreateTexture(
-                texture.Width,
-                texture.Height,
+                selection.Width,
+                selection.Height,
                 texture.Format,
-                texture.MipLevels,
+                selection.MipLevels,
                 samplerDescription: TextureSamplerDescription.Default,
                 requireWithinMemoryBudget: requireWithinMemoryBudget,
                 debugName: CreateSampledTextureDebugName(source, fullPath));
@@ -2739,7 +2752,7 @@ namespace Njulf.Rendering.Resources
                 UploadTextureDataMipLevels(
                     replacement,
                     texture.Bytes.Span,
-                    texture.Levels);
+                    selection.Levels);
 
                 // Descriptor updates and physical ownership publication happen
                 // only after every upload has completed at an explicit idle
@@ -2764,7 +2777,7 @@ namespace Njulf.Rendering.Resources
                         checked((int)authenticated.Metadata.EncodedBytes),
                         checked((uint)authenticated.Metadata.OriginalWidth),
                         checked((uint)authenticated.Metadata.OriginalHeight),
-                        wasDownscaled: false,
+                        wasDownscaled: selection.WasDownscaled,
                         statistics.TryGetLinearMean(out CoreVector4 average)
                             ? average
                             : null,
@@ -2773,7 +2786,7 @@ namespace Njulf.Rendering.Resources
                         isCompressed: IsBlockCompressedFormat(texture.Format),
                         semantic,
                         srgb,
-                        generateMipmaps: texture.MipLevels > 1,
+                        generateMipmaps: selection.MipLevels > 1,
                         mipPolicy,
                         CreateLoadedTextureDebugName(
                             fullPath,

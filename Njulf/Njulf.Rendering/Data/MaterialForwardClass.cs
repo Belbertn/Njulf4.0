@@ -11,7 +11,8 @@ namespace Njulf.Rendering.Data
         FullOpaque = 2,
         Masked = 3,
         Transparent = 4,
-        ThickTransmission = 5
+        ThickTransmission = 5,
+        ThinGlass = 6
     }
 
     public static class MaterialForwardClassifier
@@ -25,6 +26,9 @@ namespace Njulf.Rendering.Data
 
             if (metadata.TransmissionPolicy == GiTransmissionPolicy.Volume)
                 return MaterialForwardClass.ThickTransmission;
+            if (metadata.ShadingModel == MaterialShadingModel.ThinGlass &&
+                metadata.TransmissionPolicy == GiTransmissionPolicy.ThinSurface)
+                return MaterialForwardClass.ThinGlass;
             if (metadata.IsGeometryDecal || metadata.RenderMode == MaterialRenderMode.Blend)
                 return MaterialForwardClass.Transparent;
             if (metadata.RenderMode == MaterialRenderMode.Mask)

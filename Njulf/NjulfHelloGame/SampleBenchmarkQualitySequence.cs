@@ -49,6 +49,8 @@ public sealed record SampleBenchmarkQualitySequenceOptions
     public SampleBenchmarkTrajectoryKind Trajectory { get; init; } =
         SampleBenchmarkTrajectoryKind.Stationary;
     public string TrajectoryFingerprint { get; init; } = string.Empty;
+    public SampleSponzaFixtureMode SponzaFixtureMode { get; init; } =
+        SampleSponzaFixtureMode.Architecture;
     public SampleBistroQualityCaptureVariant TrajectoryBistroVariant { get; init; } =
         SampleBistroQualityCaptureVariant.SunScaleStep;
     public string ReferenceContractPath { get; init; } = string.Empty;
@@ -222,6 +224,8 @@ public sealed record SampleBenchmarkQualitySequenceReferenceContract(
     public IReadOnlyList<string> BaselineRepeatReportSha256 { get; init; } =
         Array.Empty<string>();
     public string Activation { get; init; } = SampleBenchmarkActivation.None;
+    public SampleSponzaFixtureMode SponzaFixtureMode { get; init; } =
+        SampleSponzaFixtureMode.Architecture;
     public string ActivationFingerprint { get; init; } =
         SampleBenchmarkActivation.CreateFingerprint(
             SampleBenchmarkActivation.None);
@@ -483,6 +487,8 @@ public sealed record SampleBenchmarkQualitySequenceReport(
     public PerformanceCaptureRunMetadata? CaptureRun { get; init; }
     public MaterialGiProducerIdentity? ProducerIdentity { get; init; }
     public string Activation { get; init; } = SampleBenchmarkActivation.None;
+    public SampleSponzaFixtureMode SponzaFixtureMode { get; init; } =
+        SampleSponzaFixtureMode.Architecture;
     public string ActivationFingerprint { get; init; } =
         SampleBenchmarkActivation.CreateFingerprint(
             SampleBenchmarkActivation.None);
@@ -562,7 +568,8 @@ internal static class SampleBenchmarkQualitySequenceReferenceLoader
             firstReference,
             firstReference);
         SampleBenchmarkSponzaSceneAnimationSidecarContent? animationSidecar =
-            SampleBenchmarkTrajectory.RequiresSponza(options.Trajectory)
+            SampleBenchmarkTrajectory.RequiresSponza(options.Trajectory) &&
+            options.SponzaFixtureMode == SampleSponzaFixtureMode.AnimationDemo
                 ? SampleBenchmarkSponzaSceneAnimationSidecar.Read(
                     contract.SponzaSceneAnimationSidecarPath,
                     contract.SponzaSceneAnimationSidecarSha256,
@@ -740,6 +747,13 @@ internal static class SampleBenchmarkQualitySequenceReferenceLoader
             options.ActivationFingerprint,
             contract.ActivationFingerprint,
             "requested activation fingerprint");
+        if (!Enum.IsDefined(options.SponzaFixtureMode) ||
+            !Enum.IsDefined(contract.SponzaFixtureMode) ||
+            options.SponzaFixtureMode != contract.SponzaFixtureMode)
+        {
+            throw new InvalidDataException(
+                "Quality-sequence Sponza fixture mode differs from the reference.");
+        }
         if (!SampleBenchmarkActivation.RequiresDeterministicAnimation(
                 contract.Activation))
         {
@@ -824,8 +838,10 @@ internal static class SampleBenchmarkQualitySequenceReferenceLoader
         }
         bool sponza = SampleBenchmarkTrajectory.RequiresSponza(
             options.Trajectory);
+        bool sponzaAnimation = sponza &&
+            options.SponzaFixtureMode == SampleSponzaFixtureMode.AnimationDemo;
         string? sponzaSidecarPath = null;
-        if (sponza)
+        if (sponzaAnimation)
         {
             SampleBenchmarkSponzaSceneAnimationMode expectedMode =
                 SampleBenchmarkSponzaSceneAnimationContract.ResolveMode(
@@ -876,7 +892,8 @@ internal static class SampleBenchmarkQualitySequenceReferenceLoader
                      contract.SponzaSceneAnimationSidecarSha256))
         {
             throw new InvalidDataException(
-                "A non-Sponza quality reference contains Sponza animation " +
+                "A quality reference without the explicit Sponza animation " +
+                "fixture contains Sponza animation " +
                 "evidence.");
         }
         ValidateExecutionBounds(

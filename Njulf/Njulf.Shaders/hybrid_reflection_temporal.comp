@@ -19,7 +19,7 @@ layout(push_constant) uniform HybridReflectionTemporalPushBlock
     float VarianceGamma;
     float Padding0;
     uint CurrentFrameIndex;
-    uint Padding1;
+    uint CameraOnlyReprojection;
     uint Padding2;
     uint Padding3;
 } pc;
@@ -94,7 +94,32 @@ void main()
     uint currentIdentity = HybridReceiverIdentity(payload);
     vec2 dimensions = vec2(pc.ScreenWidth, pc.ScreenHeight);
     vec2 uv = (vec2(pixel) + vec2(0.5)) / dimensions;
-    vec2 motion = texelFetch(HybridMotionVectors, pixel, 0).rg;
+    vec2 motion = vec2(0.0);
+    if (pc.CameraOnlyReprojection != 0u)
+    {
+        vec4 previousClip = MulRowMajor(
+            vec4(currentWorldPosition, 1.0),
+            ReadMeshletTaskPreviousHiZViewProjectionMatrix(
+                pc.CurrentFrameIndex));
+        if (ReadMeshletTaskPreviousHiZFrameValid(pc.CurrentFrameIndex) == 0u ||
+            any(isnan(previousClip)) || any(isinf(previousClip)) ||
+            abs(previousClip.w) <= 1.0e-7)
+        {
+            // A two-screen displacement is finite but guaranteed to reject
+            // history for every in-bounds current UV.
+            motion = vec2(2.0);
+        }
+        else
+        {
+            vec2 previousUvFromCamera =
+                previousClip.xy / previousClip.w * 0.5 + vec2(0.5);
+            motion = uv - previousUvFromCamera;
+        }
+    }
+    else
+    {
+        motion = texelFetch(HybridMotionVectors, pixel, 0).rg;
+    }
     vec2 previousUv = uv - motion;
     bool previousInside = HybridFinite(motion) &&
         all(greaterThanEqual(previousUv, vec2(0.0))) &&

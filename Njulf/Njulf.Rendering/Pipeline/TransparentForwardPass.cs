@@ -54,7 +54,11 @@ namespace Njulf.Rendering.Pipeline
             if (!ShouldExecute(frameIndex, sceneData))
                 return;
 
+            bool allTransparentSurfacesAreThinGlass =
+                AllTransparentSurfacesAreThinGlass(sceneData);
             bool rayVariant =
+                !allTransparentSurfacesAreThinGlass &&
+                sceneData.TransparentObjectCount > 0 &&
                 (sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
                     DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
                  sceneData.EffectiveThickTransmissionMode ==
@@ -77,25 +81,38 @@ namespace Njulf.Rendering.Pipeline
                 rayVariant,
                 out Silk.NET.Vulkan.Pipeline pipeline,
                 out PipelineLayout pipelineLayout);
-            bool decalReceiverCache = ShouldUseDecalReceiverCache(
+            bool geometryDecalOverlay = ShouldUseGeometryDecalOverlay(
                 sceneData,
                 exactFeedback,
                 rayVariant,
-                _forwardPlusPass.CanConsumeSimpleDdgiReceiverCacheForCurrentView,
-                _meshPipeline.TransparentReceiverCachePipeline.Handle != 0);
-            if (decalReceiverCache)
+                _meshPipeline.GeometryDecalOverlayPipeline.Handle != 0);
+            bool normalDirectionalOnlyThinGlass =
+                ShouldUseDirectionalOnlyThinGlass(
+                sceneData,
+                exactFeedback,
+                rayVariant,
+                _meshPipeline.ThinGlassForwardPipeline.Handle != 0);
+            bool exactDirectionalOnlyThinGlass =
+                exactFeedback &&
+                pipeline.Handle ==
+                    _meshPipeline.ThinGlassReceiverFeedbackPipeline.Handle;
+            bool directionalOnlyThinGlass =
+                normalDirectionalOnlyThinGlass ||
+                exactDirectionalOnlyThinGlass;
+            sceneData.ThinGlassDirectionalOnlyPipelineEnabled =
+                directionalOnlyThinGlass ? 1 : 0;
+            if (geometryDecalOverlay)
             {
-                pipeline = _meshPipeline.TransparentReceiverCachePipeline;
+                pipeline = _meshPipeline.GeometryDecalOverlayPipeline;
+                pipelineLayout = _meshPipeline.Layout;
+            }
+            else if (normalDirectionalOnlyThinGlass)
+            {
+                pipeline = _meshPipeline.ThinGlassForwardPipeline;
                 pipelineLayout = _meshPipeline.Layout;
             }
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
             BindBindlessStorageAndTextures(cmd, pipelineLayout);
-            if (decalReceiverCache)
-            {
-                _forwardPlusPass.BindSimpleDdgiReceiverCacheBuffer(
-                    cmd,
-                    frameIndex);
-            }
             if (rayVariant)
             {
                 _raySceneDescriptors!.Bind(
@@ -218,29 +235,67 @@ namespace Njulf.Rendering.Pipeline
             }
         }
 
-        internal static bool ShouldUseDecalReceiverCache(
+        internal static bool ShouldUseGeometryDecalOverlay(
             SceneRenderingData sceneData,
             bool exactFeedback,
             bool rayVariant,
-            bool receiverCacheAvailable,
-            bool receiverCachePipelineAvailable)
+            bool overlayPipelineAvailable)
         {
             ArgumentNullException.ThrowIfNull(sceneData);
 
-            // Geometry decals are depth-backed overlays, so the current-frame
-            // low-frequency irradiance cache produced from the opaque depth
-            // owner is the correct bounded approximation. Real transparent
-            // surfaces may not have an opaque depth owner and retain the exact
-            // gather path. Exact B1 feedback also always takes precedence.
+            // A color decal inherits the opaque depth owner's already shaded
+            // direct light, DDGI, shadows, and reflections through destination
+            // modulation. Real transparent surfaces retain full forward
+            // shading, and exact B1 captures retain their producer program.
             return sceneData.TransparentObjectCount == 0 &&
                    sceneData.TransparentMeshletCount > 0 &&
                    sceneData.GeometryDecalMeshletCount >=
                        sceneData.TransparentMeshletCount &&
-                   sceneData.DecalReceiveGlobalIllumination &&
+                   sceneData.DebugViewMode == 0u &&
+                   sceneData.DecalDebugView == DecalDebugView.None &&
+                   sceneData.TransparencyDebugView == TransparencyDebugView.None &&
                    !exactFeedback &&
                    !rayVariant &&
-                   receiverCacheAvailable &&
-                   receiverCachePipelineAvailable;
+                   overlayPipelineAvailable;
+        }
+
+        internal static bool ShouldUseDirectionalOnlyThinGlass(
+            SceneRenderingData sceneData,
+            bool exactFeedback,
+            bool rayVariant,
+            bool pipelineAvailable)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+
+            // A single mesh-task dispatch can bind only one fragment program.
+            // Admit the narrow program only when every real transparent draw
+            // is explicitly classified ThinGlass. Diagnostics, ray-query
+            // volume transport, decals, and B1 exact feedback retain the full
+            // semantic shader. Exact B1 uses a matching directional-only
+            // artifact selected separately by TrySelectExactFeedbackPipeline.
+            return AllTransparentSurfacesAreThinGlass(sceneData) &&
+                   sceneData.GeometryDecalMeshletCount == 0 &&
+                   sceneData.DebugViewMode == 0u &&
+                   sceneData.TransparencyDebugView ==
+                       TransparencyDebugView.None &&
+                   sceneData.DecalDebugView == DecalDebugView.None &&
+                   sceneData.AmbientOcclusionDebugView ==
+                       AmbientOcclusionDebugView.None &&
+                   !exactFeedback &&
+                   !rayVariant &&
+                   pipelineAvailable;
+        }
+
+        internal static bool AllTransparentSurfacesAreThinGlass(
+            SceneRenderingData sceneData)
+        {
+            ArgumentNullException.ThrowIfNull(sceneData);
+            return sceneData.TransparentObjectCount > 0 &&
+                   sceneData.ThinGlassObjectCount ==
+                       sceneData.TransparentObjectCount &&
+                   sceneData.TransparentMeshletCount > 0 &&
+                   sceneData.ThinGlassMeshletCount ==
+                       sceneData.TransparentMeshletCount;
         }
 
         private bool TrySelectExactFeedbackPipeline(
@@ -263,18 +318,24 @@ namespace Njulf.Rendering.Pipeline
             {
                 return false;
             }
+            bool thinGlassVariant = ShouldUseDirectionalOnlyThinGlass(
+                sceneData,
+                exactFeedback: false,
+                rayVariant,
+                _meshPipeline.ThinGlassReceiverFeedbackPipeline.Handle != 0);
+            Silk.NET.Vulkan.Pipeline exactPipeline = rayVariant
+                ? _meshPipeline.RayTransparentReceiverFeedbackPipeline
+                : thinGlassVariant
+                    ? _meshPipeline.ThinGlassReceiverFeedbackPipeline
+                    : _meshPipeline.TransparentReceiverFeedbackPipeline;
             if (sceneData.CurrentFrameIndex != checked((uint)frameIndex) ||
-                (rayVariant
-                    ? _meshPipeline.RayTransparentReceiverFeedbackPipeline.Handle
-                    : _meshPipeline.TransparentReceiverFeedbackPipeline.Handle) == 0)
+                exactPipeline.Handle == 0)
             {
                 _receiverFeedbackRuntime.AbortCapture(
                     "receiver-feedback-transparent-pipeline-or-frame-slot-unavailable");
                 return false;
             }
-            pipeline = rayVariant
-                ? _meshPipeline.RayTransparentReceiverFeedbackPipeline
-                : _meshPipeline.TransparentReceiverFeedbackPipeline;
+            pipeline = exactPipeline;
             return true;
         }
 

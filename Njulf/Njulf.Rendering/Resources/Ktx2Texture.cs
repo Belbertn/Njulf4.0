@@ -36,6 +36,43 @@ namespace Njulf.Rendering.Resources
         public uint MipLevels { get; }
         public IReadOnlyList<Ktx2MipLevel> Levels { get; }
 
+        /// <summary>
+        /// Selects an existing mip as the runtime base level. Cooked KTX2
+        /// textures already carry a complete, filtered mip chain, so dropping
+        /// oversized leading levels is both cheaper and higher quality than
+        /// decoding and resampling block-compressed source data at runtime.
+        /// </summary>
+        public Ktx2MipSelection SelectMipWindow(uint maxDimension)
+        {
+            int firstLevel = 0;
+            if (maxDimension > 0)
+            {
+                while (firstLevel < Levels.Count &&
+                       Math.Max(Levels[firstLevel].Width,
+                           Levels[firstLevel].Height) > maxDimension)
+                {
+                    firstLevel++;
+                }
+
+                if (firstLevel == Levels.Count)
+                {
+                    throw new NotSupportedException(
+                        $"KTX2 texture {Width}x{Height} has no authored mip " +
+                        $"at or below the {maxDimension}-pixel runtime limit.");
+                }
+            }
+
+            var selectedLevels = new Ktx2MipLevel[Levels.Count - firstLevel];
+            for (int i = 0; i < selectedLevels.Length; i++)
+                selectedLevels[i] = Levels[firstLevel + i];
+
+            return new Ktx2MipSelection(
+                checked((uint)firstLevel),
+                selectedLevels[0].Width,
+                selectedLevels[0].Height,
+                selectedLevels);
+        }
+
         public static Ktx2Texture Parse(ReadOnlyMemory<byte> bytes, string sourceName)
         {
             ReadOnlySpan<byte> span = bytes.Span;
@@ -125,4 +162,14 @@ namespace Njulf.Rendering.Resources
         long UncompressedByteLength,
         uint Width,
         uint Height);
+
+    internal readonly record struct Ktx2MipSelection(
+        uint FirstSourceMip,
+        uint Width,
+        uint Height,
+        IReadOnlyList<Ktx2MipLevel> Levels)
+    {
+        public uint MipLevels => checked((uint)Levels.Count);
+        public bool WasDownscaled => FirstSourceMip > 0;
+    }
 }

@@ -1823,6 +1823,7 @@ namespace Njulf.Rendering.Resources
                 _ when (flags & MaterialFeatureFlags.Foliage) != MaterialFeatureFlags.None =>
                     MaterialShadingModel.Foliage,
                 _ when material.IsGeometryDecal => MaterialShadingModel.Decal,
+                _ when material.IsThinGlass => MaterialShadingModel.ThinGlass,
                 _ when material.SubsurfaceStrength > 0f =>
                     MaterialShadingModel.SubsurfaceApproximation,
                 _ => MaterialShadingModel.Pbr

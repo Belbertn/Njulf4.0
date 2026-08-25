@@ -31,6 +31,29 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void SelectMipWindow_RuntimeCapDropsOversizedCompressedLevels()
+        {
+            byte[] bytes = CreateKtx2(
+                Format.BC7UnormBlock,
+                width: 1024,
+                height: 512,
+                mipLengths: [524288, 131072, 32768]);
+            Ktx2Texture texture = Ktx2Texture.Parse(bytes, "capped.ktx2");
+
+            Ktx2MipSelection selection = texture.SelectMipWindow(512);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(selection.FirstSourceMip, Is.EqualTo(1));
+                Assert.That(selection.Width, Is.EqualTo(512));
+                Assert.That(selection.Height, Is.EqualTo(256));
+                Assert.That(selection.MipLevels, Is.EqualTo(2));
+                Assert.That(selection.WasDownscaled, Is.True);
+                Assert.That(selection.Levels[0], Is.EqualTo(texture.Levels[1]));
+            });
+        }
+
+        [Test]
         public void Parse_SupercompressedKtx2_ThrowsTranscoderMessage()
         {
             byte[] bytes = CreateKtx2((Format)0, width: 4, height: 4, mipLengths: [16], supercompressionScheme: 1);
@@ -138,6 +161,40 @@ namespace Njulf.Tests
                 Assert.That(entry.Format, Is.EqualTo(Format.BC7UnormBlock.ToString()));
                 Assert.That(entry.IsCompressed, Is.True);
                 Assert.That(entry.WasDownscaled, Is.False);
+            });
+        }
+
+        [Test]
+        public void InspectTextureSourceBudget_CompressedKtx2HonorsRuntimeCap()
+        {
+            byte[] bytes = CreateKtx2(
+                Format.BC7UnormBlock,
+                width: 8,
+                height: 8,
+                mipLengths: [64, 16, 16]);
+            var source = new ModelTextureSource
+            {
+                Bytes = bytes,
+                DebugName = "compressed-capped.ktx2",
+                CacheIdentity = "memory#compressed-capped-ktx2",
+                ContainerKind = TextureContainerKind.Ktx2,
+                SourceKind = TextureSourceKind.EmbeddedMemory,
+                EncodedByteLength = bytes.Length
+            };
+
+            TextureAssetMemoryEntry entry = TextureManager.InspectTextureSourceBudget(
+                source,
+                maxDimension: 4);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(entry.OriginalWidth, Is.EqualTo(8));
+                Assert.That(entry.OriginalHeight, Is.EqualTo(8));
+                Assert.That(entry.Width, Is.EqualTo(4));
+                Assert.That(entry.Height, Is.EqualTo(4));
+                Assert.That(entry.MipLevels, Is.EqualTo(2));
+                Assert.That(entry.EstimatedBytes, Is.EqualTo(32));
+                Assert.That(entry.WasDownscaled, Is.True);
             });
         }
 

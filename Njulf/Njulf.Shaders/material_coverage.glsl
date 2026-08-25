@@ -13,6 +13,18 @@ struct MaterialAlphaCoverage
     float AlphaCutoff;
 };
 
+MaterialAlphaCoverage ResolveMaterialAlphaCoverage(
+    GPUMaterialData material,
+    vec4 albedoSample,
+    float vertexAlpha)
+{
+    MaterialAlphaCoverage coverage;
+    coverage.Alpha = material.Albedo.a * albedoSample.a * vertexAlpha;
+    coverage.AlphaMode = material.NormalScaleBias.y;
+    coverage.AlphaCutoff = material.NormalScaleBias.z;
+    return coverage;
+}
+
 vec4 SampleMaterialCoverageTexture(int textureIndex, vec2 uv)
 {
     bool valid = textureIndex >= FIRST_TEXTURE_INDEX && textureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES;
@@ -47,11 +59,10 @@ MaterialAlphaCoverage EvaluateMaterialAlphaCoverage(
         ? vec4(1.0)
         : SampleMaterialCoverageTexture(material.AlbedoTextureIndex, uv);
 
-    MaterialAlphaCoverage coverage;
-    coverage.Alpha = material.Albedo.a * albedoSample.a * vertexAlpha;
-    coverage.AlphaMode = material.NormalScaleBias.y;
-    coverage.AlphaCutoff = material.NormalScaleBias.z;
-    return coverage;
+    return ResolveMaterialAlphaCoverage(
+        material,
+        albedoSample,
+        vertexAlpha);
 }
 
 bool MaterialCoverageSurvivesForward(MaterialAlphaCoverage coverage)

@@ -97,7 +97,9 @@ public sealed class SampleBenchmarkQualitySequenceRunner
             options.CaptureVariant,
             SampleBenchmarkTrajectory.GetFrameCount(options.Trajectory),
             qualitySequence: true);
-        if (SampleBenchmarkTrajectory.RequiresSponza(options.Trajectory))
+        if (SampleBenchmarkTrajectory.RequiresSponza(options.Trajectory) &&
+            options.SponzaFixtureMode ==
+                SampleSponzaFixtureMode.AnimationDemo)
         {
             _sponzaSceneAnimationObserver =
                 new SampleBenchmarkSponzaSceneAnimationObserver(
@@ -1286,6 +1288,7 @@ public sealed class SampleBenchmarkQualitySequenceRunner
                 ?.Diagnostics.CaptureRun.BuildConfiguration ?? string.Empty,
             CaptureRun = _routeObservations.FirstOrDefault()?.Diagnostics.CaptureRun,
             ProducerIdentity = _routeObservations.FirstOrDefault()?.ProducerIdentity,
+            SponzaFixtureMode = _options.SponzaFixtureMode,
             Activation = SampleBenchmarkActivation.Normalize(
                 _options.Activation),
             ActivationFingerprint =

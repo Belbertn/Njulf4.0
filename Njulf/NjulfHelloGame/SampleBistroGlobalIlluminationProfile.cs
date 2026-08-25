@@ -12,6 +12,17 @@ namespace NjulfHelloGame;
 /// </summary>
 internal static class SampleBistroGlobalIlluminationProfile
 {
+    // Bistro ships hundreds of cooked BC textures. Selecting the authored
+    // 512px mip as their runtime base keeps the complete material set inside
+    // the 2 GiB/20%-headroom contract at 1080p without runtime resampling.
+    internal const uint DefaultImportedTextureDimension = 512u;
+
+    internal static bool ShouldApplyDefaultImportedTextureBudget(
+        string? explicitMaximum,
+        string? explicitProfile) =>
+        string.IsNullOrWhiteSpace(explicitMaximum) &&
+        string.IsNullOrWhiteSpace(explicitProfile);
+
     public static void Configure(RenderSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -36,17 +47,15 @@ internal static class SampleBistroGlobalIlluminationProfile
         // exhibit. Keep the conservative engine default for enclosed scenes,
         // but omit the redundant mask here; this also removes trace work.
         gi.FarFieldSkyVisibilityEnabled = false;
-        // The low-frequency receiver cache cannot reproduce the high-frequency
-        // visibility changes of Bistro's carved stone at every fragment. Let
-        // material/screen AO own rough-specular contact occlusion in this open
-        // exterior scene while the exact DDGI visibility remains available to
-        // diffuse transport. This removes cache-shaped reflection blotches
-        // without another gather, texture read, or dispatch.
-        gi.SimpleDdgiRoughSpecularMinimumRoughness = 1.0f;
-        gi.SimpleDdgiRoughSpecularFullWeightRoughness = 1.0f;
-        // Keep C5's adaptive screen-space residual enabled. DDGI owns stable
-        // low-frequency and off-screen transport while C5 restores nearby
-        // emissive and direct-lit bounce that a probe lattice cannot retain.
+        // Directional DDGI is Bistro's probe-free reflection base. Preserve a
+        // wide overlap band for stable broad lobes; SSR and bounded ray queries
+        // still own sharp detail. The hybrid resolve uses DDGI visibility and
+        // confidence before it admits the global environment fallback.
+        gi.SimpleDdgiRoughSpecularMinimumRoughness = 0.55f;
+        gi.SimpleDdgiRoughSpecularFullWeightRoughness = 0.70f;
+        // Do not reserve the unqualified C5 residual. Its completion witness
+        // is invalid in production captures, so it contributes no lighting;
+        // DDGI remains the stable low-frequency and off-screen owner.
         ConfigurePostAdvancedGiRollout(settings);
         // Keep the steady-state tier unchanged. During an actual lighting
         // transition, spend the already-bounded urgent lane on the full set of
@@ -71,15 +80,14 @@ internal static class SampleBistroGlobalIlluminationProfile
     }
 
     /// <summary>
-    /// Reasserts Bistro's scene-local advanced-GI policy after
-    /// the global rollout bootstrap. Explicit smoke/CLI overrides are applied
-    /// by the caller after this hook and therefore still take precedence.
+    /// Reasserts Bistro's scene-local advanced-GI policy after the global
+    /// rollout bootstrap. Explicit smoke/CLI overrides are applied afterwards.
     /// </summary>
     public static void ConfigurePostAdvancedGiRollout(RenderSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         settings.GlobalIllumination.SimpleDdgiNearFieldResidualMode =
-            SimpleDdgiNearFieldResidualMode.HiZAdaptive;
+            SimpleDdgiNearFieldResidualMode.Off;
     }
 
     private static void ConfigureEnvironment(EnvironmentSettings environment)
@@ -142,6 +150,11 @@ internal static class SampleBistroGlobalIlluminationProfile
         settings.Shadows.PcfRadius = 1;
 
         settings.AmbientOcclusion.Enabled = true;
+        // DDGI visibility owns broad outdoor transport. Half-resolution GTAO
+        // retains the small contact band without spending a second full-screen
+        // 32-sample solve over Bistro's dense facade geometry.
+        settings.AmbientOcclusion.ResolutionScale = 0.5f;
+        settings.AmbientOcclusion.SampleCount = 16;
         settings.AmbientOcclusion.Radius = 0.65f;
         settings.AmbientOcclusion.Intensity = 0.70f;
         settings.AmbientOcclusion.Power = 1.0f;

@@ -28,7 +28,12 @@ public static class SampleBenchmarkActivation
     public const int DirectionalTimingFrameCount = 240;
     public const int ReflectionRecaptureIntervalFrames = 60;
     public const int MinimumReflectionActiveFrameCount = 16;
-    public const int SponzaReflectionProbeCount = 2;
+    // Bundled Sponza is deliberately probe-free. Directional DDGI owns the
+    // reflection base; SSR/ray queries add sharp detail.
+    public const int SponzaReflectionProbeCount = 0;
+    // Renderer-level recapture evidence remains a synthetic compatibility
+    // workload. It must never be authored into bundled Sponza or Bistro.
+    public const int SyntheticReflectionProbeCount = 2;
     public const uint SponzaReflectionProbeResolution = 128;
     public const uint SponzaReflectionProbeMipCount = 8;
 
@@ -223,7 +228,7 @@ public static class SampleBenchmarkActivation
                     .Append(MinimumReflectionActiveFrameCount.ToString(
                         CultureInfo.InvariantCulture))
                     .Append("|probe-count=")
-                    .Append(SponzaReflectionProbeCount.ToString(
+                    .Append(SyntheticReflectionProbeCount.ToString(
                         CultureInfo.InvariantCulture))
                     .Append("|probe-resolution=")
                     .Append(SponzaReflectionProbeResolution.ToString(
@@ -854,7 +859,7 @@ public static class SampleBenchmarkActivationEvidenceValidator
             SampleBenchmarkActivation.ReflectionRecaptureSchedule.Count;
         int admitted = checked(
             expectedRequests *
-            SampleBenchmarkActivation.SponzaReflectionProbeCount);
+            SampleBenchmarkActivation.SyntheticReflectionProbeCount);
         bool requestTopology =
             evidence.ReflectionRequests.Count == expectedRequests &&
             evidence.ReflectionRequests.Select(static request =>
@@ -863,9 +868,9 @@ public static class SampleBenchmarkActivationEvidenceValidator
                     SampleBenchmarkActivation.ReflectionRecaptureSchedule) &&
             evidence.ReflectionRequests.All(static request =>
                 request.Admission.RequestedProbeCount ==
-                    SampleBenchmarkActivation.SponzaReflectionProbeCount &&
+                    SampleBenchmarkActivation.SyntheticReflectionProbeCount &&
                 request.Admission.AdmittedProbeCount ==
-                    SampleBenchmarkActivation.SponzaReflectionProbeCount &&
+                    SampleBenchmarkActivation.SyntheticReflectionProbeCount &&
                 request.Admission.DeferredProbeCount == 0 &&
                 request.Admission.CoalescedProbeCount == 0 &&
                 request.Admission.RejectedProbeCount == 0);
@@ -1799,7 +1804,7 @@ internal static class SampleBenchmarkActivationEvidenceEvaluator
         ref int submittedWorkFrameCount)
     {
         if (sample.ReflectionProbeCount !=
-                SampleBenchmarkActivation.SponzaReflectionProbeCount ||
+                SampleBenchmarkActivation.SyntheticReflectionProbeCount ||
             sample.ReflectionProbeResolution !=
                 SampleBenchmarkActivation.SponzaReflectionProbeResolution ||
             sample.ReflectionProbeMipCount !=
@@ -2001,16 +2006,16 @@ internal static class SampleBenchmarkActivationEvidenceEvaluator
             request.BeforeLifecycle.ActiveCount != 0 ||
             request.BeforeLifecycle.State != ReflectionProbeCaptureState.Published ||
             request.BeforeLifecycle.PublishedCount !=
-                SampleBenchmarkActivation.SponzaReflectionProbeCount)
+                SampleBenchmarkActivation.SyntheticReflectionProbeCount)
         {
             failures.Add(
                 $"Reflection request frame {frameIndex} did not begin from " +
                 "an idle published lifecycle.");
         }
         if (request.RequestedProbeCount !=
-                SampleBenchmarkActivation.SponzaReflectionProbeCount ||
+                SampleBenchmarkActivation.SyntheticReflectionProbeCount ||
             request.AdmittedProbeCount !=
-                SampleBenchmarkActivation.SponzaReflectionProbeCount ||
+                SampleBenchmarkActivation.SyntheticReflectionProbeCount ||
             request.DeferredProbeCount != 0 ||
             request.CoalescedProbeCount != 0 ||
             request.RejectedProbeCount != 0)
@@ -2020,11 +2025,11 @@ internal static class SampleBenchmarkActivationEvidenceEvaluator
                 "exactly once for every active probe.");
         }
         if (request.AfterLifecycle.QueuedCount !=
-                SampleBenchmarkActivation.SponzaReflectionProbeCount ||
+                SampleBenchmarkActivation.SyntheticReflectionProbeCount ||
             request.AfterLifecycle.ActiveCount != 0 ||
             request.AfterLifecycle.State != ReflectionProbeCaptureState.Queued ||
             request.AfterLifecycle.PublishedCount !=
-                SampleBenchmarkActivation.SponzaReflectionProbeCount)
+                SampleBenchmarkActivation.SyntheticReflectionProbeCount)
         {
             failures.Add(
                 $"Reflection request frame {frameIndex} did not publish an " +

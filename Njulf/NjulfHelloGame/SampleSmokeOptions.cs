@@ -79,7 +79,9 @@ public sealed record SampleSmokeOptions(
     FogDebugProjection? FogDebugProjectionOverride = null,
     int? FogDebugSliceOverride = null,
     string? VolumetricTemporalCaptureDirectory = null,
-    string? VolumetricTemporalAnalyzeDirectory = null)
+    string? VolumetricTemporalAnalyzeDirectory = null,
+    SampleSponzaFixtureMode SponzaFixtureMode =
+        SampleSponzaFixtureMode.Architecture)
 {
     public SampleBenchmarkOptions Benchmark { get; init; } = Benchmark ?? SampleBenchmarkOptions.Disabled;
     public SampleBenchmarkQualitySequenceOptions BenchmarkQualitySequence { get; init; } =
@@ -115,6 +117,7 @@ public sealed record SampleSmokeOptions(
         FogDebugViewOverride.HasValue ||
         FogDebugProjectionOverride.HasValue ||
         FogDebugSliceOverride.HasValue ||
+        SponzaFixtureMode != SampleSponzaFixtureMode.Architecture ||
         EnableFarFieldClipmap ||
         EnableFarFieldForceAll ||
         !string.IsNullOrWhiteSpace(BaselineSnapshotDirectory) ||

@@ -325,12 +325,8 @@ internal sealed class HelloGame : Game
             _smokeOptions.SponzaTemporalCaptureDirectory);
         bool volumetricTemporalCapture = !string.IsNullOrWhiteSpace(
             _smokeOptions.VolumetricTemporalCaptureDirectory);
-        bool controlledProductionRun =
-            _smokeOptions.Benchmark.Enabled ||
-            _smokeOptions.BenchmarkQualitySequence.Enabled ||
-            _smokeOptions.TailDdgiLongSoak ||
-            !string.IsNullOrWhiteSpace(
-                _smokeOptions.BistroQualityCaptureDirectory);
+        bool controlledProductionRun = RequiresControlledProductionWindow(
+            _smokeOptions);
         if (volumetricTemporalCapture)
         {
             (WindowWidth, WindowHeight) =
@@ -357,6 +353,17 @@ internal sealed class HelloGame : Game
                   volumetricTemporalCapture ||
                   !string.IsNullOrWhiteSpace(
                       _smokeOptions.BistroQualityCaptureDirectory));
+    }
+
+    internal static bool RequiresControlledProductionWindow(
+        SampleSmokeOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.Benchmark.Enabled ||
+               options.BenchmarkQualitySequence.Enabled ||
+               options.TailDdgiLongSoak ||
+               !string.IsNullOrWhiteSpace(options.SponzaGiCaptureDirectory) ||
+               !string.IsNullOrWhiteSpace(options.BistroQualityCaptureDirectory);
     }
 
     internal string? RequestedAdvancedGiStartupProfilePath =>
@@ -391,6 +398,18 @@ internal sealed class HelloGame : Game
                 _smokeOptions.AdvancedGiRuntimeEvidenceBundlePath;
             options.AdvancedGiStartupProfilePath =
                 _smokeOptions.AdvancedGiStartupProfilePath;
+            if (_sceneKind == SampleSceneKind.Bistro &&
+                SampleBistroGlobalIlluminationProfile
+                    .ShouldApplyDefaultImportedTextureBudget(
+                        Environment.GetEnvironmentVariable(
+                            "NJULF_MAX_IMPORTED_TEXTURE_SIZE"),
+                        Environment.GetEnvironmentVariable(
+                            "NJULF_TEXTURE_BUDGET_PROFILE")))
+            {
+                options.SetCustomMaxImportedTextureDimension(
+                    SampleBistroGlobalIlluminationProfile
+                        .DefaultImportedTextureDimension);
+            }
             ApplyPreInitializationRenderSettings(options.InitialSettings);
             if (_smokeOptions.DdgiOpacityMicromapModeOverride is
                 DdgiOpacityMicromapMode.ExtFourStateExperiment or
@@ -626,6 +645,20 @@ internal sealed class HelloGame : Game
                 SamplePerformanceScenario baselineScenario = ResolveBaselineSnapshotScenario();
                 _inputController.ApplyBaselineScenario(baselineScenario);
             }
+
+            // Baseline scenarios restore their authored render settings while
+            // positioning the camera. A benchmark capture variant is the final,
+            // intentional delta and must therefore be re-applied afterward;
+            // otherwise settings such as AO/reflection isolation are silently
+            // lost even though the report still names the requested variant.
+            if (_smokeOptions.Benchmark.Enabled)
+            {
+                SampleBenchmarkCaptureVariant.Apply(
+                    renderer.Settings,
+                    _smokeOptions.Benchmark.CaptureVariant);
+            }
+            if (ShouldAutoEnableGpuTiming())
+                renderer.Settings.Debug.AllowGpuTiming = true;
         }
 
         _sceneReloadRunner = new SampleSceneReloadRunner(() =>
@@ -1024,7 +1057,10 @@ internal sealed class HelloGame : Game
         else if (_smokeOptions.SceneKind == SampleSceneKind.SponzaPlaza)
         {
             SampleSponzaGlobalIlluminationProfile
-                .ConfigurePostAdvancedGiRollout(settings);
+                .ConfigurePostAdvancedGiRollout(
+                    settings,
+                    _smokeOptions.SponzaFixtureMode ==
+                        SampleSponzaFixtureMode.C5ResidualValidation);
         }
         if (_smokeOptions.SimpleDdgiSchedulerModeOverride.HasValue)
         {
@@ -1955,15 +1991,24 @@ internal sealed class HelloGame : Game
             meshManager,
             lightManager,
             assetManifest,
-            loadSceneDocument: _sceneKind == SampleSceneKind.SponzaPlaza);
+            loadSceneDocument: _sceneKind == SampleSceneKind.SponzaPlaza,
+            sponzaFixtureMode: _smokeOptions.SponzaFixtureMode);
         Model model = _sceneLoader.Load(Scene);
         if (_sceneKind == SampleSceneKind.SponzaPlaza &&
             !_sceneLoader.LoadedFromDocument)
         {
             SamplePlazaGlobalIllumination.ConfigureSceneLighting(Scene);
+        }
+        if (_sceneKind == SampleSceneKind.SponzaPlaza &&
+            !_sceneLoader.LoadedFromDocument &&
+            _smokeOptions.SponzaFixtureMode ==
+                SampleSponzaFixtureMode.AnimationDemo)
+        {
             SampleAnimatedCharacter.Configure(Scene, Content!);
         }
-        if (_sceneKind == SampleSceneKind.SponzaPlaza)
+        if (_sceneKind == SampleSceneKind.SponzaPlaza &&
+            _smokeOptions.SponzaFixtureMode ==
+                SampleSponzaFixtureMode.C5ResidualValidation)
         {
             TextureManager sponzaTextureManager = Services?.GetRequiredService<TextureManager>()
                 ?? throw new InvalidOperationException(
@@ -2039,6 +2084,9 @@ internal sealed class HelloGame : Game
             SamplePlazaGlobalIllumination.ConfigureRenderSettingsForMemoryProfile(
                 settings,
                 ResolveSponzaGpuMemoryProfile(renderer));
+            settings.Animation.Enabled =
+                _smokeOptions.SponzaFixtureMode ==
+                SampleSponzaFixtureMode.AnimationDemo;
             settings.Particles.Enabled = false;
         }
         else
@@ -2059,7 +2107,10 @@ internal sealed class HelloGame : Game
         else if (_sceneKind == SampleSceneKind.SponzaPlaza)
         {
             SampleSponzaGlobalIlluminationProfile
-                .ConfigurePostAdvancedGiRollout(settings);
+                .ConfigurePostAdvancedGiRollout(
+                    settings,
+                    _smokeOptions.SponzaFixtureMode ==
+                        SampleSponzaFixtureMode.C5ResidualValidation);
         }
 
         SampleReflectionPolicy.Apply(settings);

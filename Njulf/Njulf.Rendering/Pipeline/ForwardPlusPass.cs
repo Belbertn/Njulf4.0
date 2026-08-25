@@ -815,7 +815,8 @@ namespace Njulf.Rendering.Pipeline
             bool receiverCacheEligible = ShouldConsumeSimpleDdgiReceiverCache(
                     _settings.QualityPreset,
                     _settings.Diagnostics
-                        .ForceForwardGiReceiverCacheForBenchmark) &&
+                        .ForceForwardGiReceiverCacheForBenchmark,
+                    _hybridReflectionReceiverEnabledForCurrentView) &&
                 !giCausticReceiverEnabled &&
                 receiverGatherDispatchable;
             // B1 owns an exact opaque receiver producer in this compute
@@ -1423,7 +1424,6 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             bool receiverCacheEnabled = !giCausticReceiverEnabled &&
-                !_hybridReflectionReceiverEnabledForCurrentView &&
                 !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                 !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                 ShouldUseSimpleDdgiReceiverCacheForDraw();
@@ -1436,6 +1436,7 @@ namespace Njulf.Rendering.Pipeline
                         pipeline,
                         nearFieldDirectSourceEnabled,
                         giCausticReceiverEnabled,
+                        receiverCacheEnabled,
                         out Silk.NET.Vulkan.Pipeline hybridPipeline))
                 {
                     throw new InvalidOperationException(
@@ -1697,7 +1698,6 @@ namespace Njulf.Rendering.Pipeline
                 return;
 
             bool receiverCacheEnabled = !giCausticReceiverEnabled &&
-                !_hybridReflectionReceiverEnabledForCurrentView &&
                 !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                 !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                 ShouldUseSimpleDdgiReceiverCacheForDraw();
@@ -1710,6 +1710,7 @@ namespace Njulf.Rendering.Pipeline
                         pipeline,
                         nearFieldDirectSourceEnabled,
                         giCausticReceiverEnabled,
+                        receiverCacheEnabled,
                         out Silk.NET.Vulkan.Pipeline hybridPipeline))
                 {
                     throw new InvalidOperationException(
@@ -1863,7 +1864,8 @@ namespace Njulf.Rendering.Pipeline
                     .EffectiveSimpleDdgiGlossyTransportMode !=
                     SimpleDdgiGlossyTransportMode.Off;
             if (_recordingReflectionCapture || materialTransportProvenanceEnabled ||
-                directionalReceiverActive ||
+                (directionalReceiverActive &&
+                 !_hybridReflectionReceiverEnabledForCurrentView) ||
                 _settings.Diagnostics.ForceExactForwardGiGatherForBenchmark ||
                 !float.IsFinite(environmentFallbackIntensity) ||
                 environmentFallbackIntensity > 1.0f ||
@@ -2230,7 +2232,8 @@ namespace Njulf.Rendering.Pipeline
                    ShouldConsumeSimpleDdgiReceiverCache(
                        _settings.QualityPreset,
                        _settings.Diagnostics
-                           .ForceForwardGiReceiverCacheForBenchmark) &&
+                           .ForceForwardGiReceiverCacheForBenchmark,
+                       _hybridReflectionReceiverEnabledForCurrentView) &&
                    !_settings.Diagnostics.ForceExactForwardGiGatherForBenchmark &&
                    !_recordingReflectionCapture &&
                    !ShouldWriteMaterialTransportProvenance();
@@ -2238,15 +2241,18 @@ namespace Njulf.Rendering.Pipeline
 
         internal static bool ShouldConsumeSimpleDdgiReceiverCache(
             RenderQualityPreset qualityPreset,
-            bool forceForBenchmark)
+            bool forceForBenchmark,
+            bool hybridReflectionOwnsDirectionalRadiance = false)
         {
-            // The cache samples a depth-derived representative once per 12x12
-            // tile and therefore cannot meet high-tier surface-detail quality.
-            // Keep it available for explicitly lower-cost presets and for the
-            // existing controlled cache-vs-exact benchmark pair.
+            // The 12x12 gather lattice remains the diffuse owner when the
+            // hybrid-reflection path independently owns directional glossy
+            // radiance. This keeps DDGI High inside the 1080p60 budget while
+            // preserving exact gathers for other high-quality configurations.
             return forceForBenchmark ||
                    qualityPreset is RenderQualityPreset.Low or
-                       RenderQualityPreset.Medium;
+                        RenderQualityPreset.Medium ||
+                   qualityPreset == RenderQualityPreset.DdgiHigh &&
+                   hybridReflectionOwnsDirectionalRadiance;
         }
 
         internal bool CanConsumeSimpleDdgiReceiverCacheForCurrentView =>
@@ -2605,9 +2611,11 @@ namespace Njulf.Rendering.Pipeline
             }
             bool supportedReflectionDebug = sceneData.ReflectionDebugView is
                 ReflectionDebugView.None or ReflectionDebugView.SsrMask or
+                ReflectionDebugView.DdgiDirectionalRadianceLobe or
                 ReflectionDebugView.Confidence or
                 ReflectionDebugView.SourceSelection or
-                ReflectionDebugView.DetailBudget;
+                ReflectionDebugView.DetailBudget or
+                ReflectionDebugView.ReceiverMaterial;
             if (!supportedReflectionDebug || sceneData.DebugViewMode != 0u ||
                 sceneData.AmbientOcclusionDebugView != AmbientOcclusionDebugView.None ||
                 sceneData.TransparencyDebugView != TransparencyDebugView.None ||

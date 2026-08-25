@@ -6,6 +6,14 @@
 #define DIRECTIONAL_TRANSPARENT_RAY_QUERY 0
 #endif
 
+// Production ThinGlass is a separate native program. It retains the complete
+// dielectric material and direct-specular semantics, but asks DDGI only for
+// directional reflected radiance: a zero-thickness sheet has no diffuse
+// raster lobe to justify sampling or composing diffuse irradiance.
+#ifndef FORWARD_THIN_GLASS_ONLY
+#define FORWARD_THIN_GLASS_ONLY 0
+#endif
+
 #if DIRECTIONAL_TRANSPARENT_RAY_QUERY
 #extension GL_EXT_ray_query : require
 #endif
@@ -134,7 +142,23 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #define SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE (((uint(gl_FragCoord.x) & 7u) == 0u) && ((uint(gl_FragCoord.y) & 7u) == 0u))
 #define SIMPLE_DDGI_RECEIVER_COVERAGE_HASH (((uint(gl_FragCoord.x) >> 3u) * 73856093u) ^ ((uint(gl_FragCoord.y) >> 3u) * 19349663u))
 #define SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER 1
-#if defined(FORWARD_WEIGHTED_OIT)
+// Reflections consume the stable low-frequency L1 prefix. The full L2 record
+// remains the producer/transport representation, while SSR and ray queries
+// provide the high-frequency scene detail that L1 deliberately omits.
+#define SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER 1
+#if FORWARD_THIN_GLASS_ONLY
+// Window panes commonly overlap in screen space. One residency touch per 8x8
+// tile retains transparent-only pages without issuing the same atomic for
+// every layer and every fragment. The gather itself remains per fragment so
+// normals, parallax and confidence do not become blocky.
+#define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (((uint(gl_FragCoord.x) & 7u) == 0u) && ((uint(gl_FragCoord.y) & 7u) == 0u))
+#define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 1
+#define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 1u
+#define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
+#define SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS SIMPLE_DDGI_RECEIVER_CONSUMER_TRANSPARENT
+#define SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER 1
+#define SIMPLE_DDGI_TETRAHEDRAL_DIRECTIONAL_RECEIVER 1
+#elif defined(FORWARD_WEIGHTED_OIT)
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE (((uint(gl_FragCoord.x) & 1u) == 0u) && ((uint(gl_FragCoord.y) & 1u) == 0u))
 #define SIMPLE_DDGI_RECEIVER_TOUCHES_RESIDENT 1
 #define SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET 1u
@@ -167,6 +191,11 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #undef SIMPLE_DDGI_RECEIVER_CONTRIBUTION_SAMPLE
 #undef SIMPLE_DDGI_GATHER_DIAGNOSTIC_SAMPLE_WEIGHT
 #undef SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
+#undef SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER
+#if FORWARD_THIN_GLASS_ONLY
+#undef SIMPLE_DDGI_TETRAHEDRAL_DIRECTIONAL_RECEIVER
+#undef SIMPLE_DDGI_DIRECTIONAL_ONLY_RECEIVER
+#endif
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
 #include "ddgi_receiver_feedback_source_abi.glsl"
 #include "ddgi_receiver_feedback_producer.glsl"
@@ -390,6 +419,14 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 #define FORWARD_SIMPLE_OPAQUE 0
 #endif
 
+// A simple material program omits extension and authored local-probe code but
+// does not change the receiver class. Opaque fast paths opt in implicitly;
+// geometry decals use the same specialization while retaining transparent
+// coverage, blending, and DDGI feedback semantics.
+#ifndef FORWARD_SIMPLE_MATERIAL
+#define FORWARD_SIMPLE_MATERIAL FORWARD_SIMPLE_OPAQUE
+#endif
+
 #ifndef FORWARD_WEIGHTED_OIT
 #define FORWARD_WEIGHTED_OIT 0
 #endif
@@ -427,7 +464,8 @@ const float DEPTH_NORMAL_RELATIVE_EPSILON = 0.000001;
 // constant runtime branch) prevents parameter-buffer reads, sparse receiver
 // demand atomics, far-field fallback code, and debug-only gather paths from
 // consuming registers or instruction-cache space in the performance pair.
-#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE || FORWARD_GLOBAL_ILLUMINATION_DISABLED
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE || \
+    FORWARD_GLOBAL_ILLUMINATION_DISABLED || FORWARD_THIN_GLASS_ONLY
 #define FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE 1
 #else
 #define FORWARD_GI_STATIC_SPECIALIZATION_ACTIVE 0
@@ -757,6 +795,22 @@ vec4 SampleMaterialTexture(int textureIndex, vec2 uv)
     return SampleMaterialCoverageTexture(textureIndex, uv);
 }
 
+vec4 SampleMaterialTextureFootprint(
+    int textureIndex,
+    vec2 uv,
+    float footprintScale)
+{
+    bool valid = textureIndex >= FIRST_TEXTURE_INDEX &&
+        textureIndex < FIRST_TEXTURE_INDEX + MAX_TEXTURES;
+    int safeIndex = valid ? textureIndex : DEFAULT_BLACK_TEXTURE;
+    float scale = max(footprintScale, 1.0);
+    return textureGrad(
+        BindlessTextures[nonuniformEXT(safeIndex)],
+        uv,
+        dFdx(uv) * scale,
+        dFdy(uv) * scale);
+}
+
 vec2 SelectUv(float texCoordSet)
 {
     return int(round(texCoordSet)) == 1 ? fragTexCoord2 : fragTexCoord;
@@ -842,18 +896,34 @@ vec3 ReconstructNormalFromDepth(vec2 uv)
 
 float SampleScreenSpaceAoDirect()
 {
-    vec2 uv = clamp(gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)), vec2(0.0), vec2(1.0));
-    return clamp(texture(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], uv).r, 0.0, 1.0);
+    vec2 uv = clamp(
+        gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)),
+        vec2(0.0),
+        vec2(1.0));
+    return clamp(textureLod(
+        BindlessTextures[
+            nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)],
+        uv,
+        0.0).r, 0.0, 1.0);
 }
 
 float SampleScreenSpaceAoDepthAware()
 {
-    ivec2 depthSize = textureSize(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
-    ivec2 aoSize = textureSize(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], 0);
-    if (depthSize.x <= 0 || depthSize.y <= 0 || aoSize.x <= 0 || aoSize.y <= 0)
+    ivec2 depthSize = textureSize(
+        BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
+    ivec2 aoSize = textureSize(
+        BindlessTextures[
+            nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], 0);
+    if (depthSize.x <= 0 || depthSize.y <= 0 ||
+        aoSize.x <= 0 || aoSize.y <= 0)
+    {
         return 1.0;
+    }
 
-    ivec2 depthPixel = ivec2(clamp(gl_FragCoord.xy, vec2(0.0), vec2(depthSize - ivec2(1))));
+    ivec2 depthPixel = ivec2(clamp(
+        gl_FragCoord.xy,
+        vec2(0.0),
+        vec2(depthSize - ivec2(1))));
     vec2 uv = (vec2(depthPixel) + vec2(0.5)) / vec2(depthSize);
     float centerDepth = FetchDepthAtPixel(depthPixel, depthSize);
     if (centerDepth <= 0.000001)
@@ -863,7 +933,6 @@ float SampleScreenSpaceAoDepthAware()
     vec2 aoTexelPosition = uv * vec2(aoSize) - vec2(0.5);
     ivec2 baseAoPixel = ivec2(floor(aoTexelPosition));
     vec2 aoFraction = fract(aoTexelPosition);
-
     float weightedAo = 0.0;
     float totalWeight = 0.0;
     float depthSigma = max(0.25, centerViewDepth * 0.02);
@@ -872,25 +941,34 @@ float SampleScreenSpaceAoDepthAware()
     {
         for (int x = 0; x <= 1; x++)
         {
-            ivec2 aoPixel = clamp(baseAoPixel + ivec2(x, y), ivec2(0), aoSize - ivec2(1));
+            ivec2 aoPixel = clamp(
+                baseAoPixel + ivec2(x, y),
+                ivec2(0),
+                aoSize - ivec2(1));
             vec2 aoUv = (vec2(aoPixel) + vec2(0.5)) / vec2(aoSize);
             float sampleDepth = FetchDepthAtUv(aoUv, depthSize);
             if (sampleDepth <= 0.000001)
                 continue;
 
-            float sampleViewDepth = ReconstructViewDepth(aoUv, sampleDepth);
-            float depthWeight = exp(-abs(sampleViewDepth - centerViewDepth) / depthSigma);
-            float spatialWeight = (x == 0 ? 1.0 - aoFraction.x : aoFraction.x) *
-                                  (y == 0 ? 1.0 - aoFraction.y : aoFraction.y);
+            float sampleViewDepth = ReconstructViewDepth(
+                aoUv, sampleDepth);
+            float depthWeight = exp(
+                -abs(sampleViewDepth - centerViewDepth) / depthSigma);
+            float spatialWeight =
+                (x == 0 ? 1.0 - aoFraction.x : aoFraction.x) *
+                (y == 0 ? 1.0 - aoFraction.y : aoFraction.y);
             float weight = spatialWeight * depthWeight;
-            weightedAo += texelFetch(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], aoPixel, 0).r * weight;
+            weightedAo += texelFetch(
+                BindlessTextures[nonuniformEXT(
+                    AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)],
+                aoPixel,
+                0).r * weight;
             totalWeight += weight;
         }
     }
 
     if (totalWeight <= 0.000001)
-        return clamp(texture(BindlessTextures[nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], uv).r, 0.0, 1.0);
-
+        return SampleScreenSpaceAoDirect();
     return clamp(weightedAo / totalWeight, 0.0, 1.0);
 }
 
@@ -2606,17 +2684,29 @@ float GeometrySmith(float nDotV, float nDotL, float roughness)
 
 float FilterSpecularRoughness(float roughness, vec3 shadingNormal)
 {
-    // Normal maps can vary by substantially more than one microfacet lobe in a
-    // screen pixel. Folding that footprint into alpha prevents direct and IBL
-    // highlights from collapsing to isolated pixels as the camera moves.
+    // Normal and roughness maps can vary by substantially more than one
+    // microfacet lobe in a screen pixel. Folding both footprints into alpha
+    // prevents a single dark roughness texel (or normal-map spike) inside a
+    // broad material from scheduling an isolated SSR/ray-query firefly. A
+    // contiguous smooth pane has zero roughness variance and stays sharp.
     vec3 normalDx = dFdx(shadingNormal);
     vec3 normalDy = dFdy(shadingNormal);
     float normalVariance = clamp(
         0.5 * (dot(normalDx, normalDx) + dot(normalDy, normalDy)),
         0.0,
         0.18);
+    float roughnessDx = dFdx(roughness);
+    float roughnessDy = dFdy(roughness);
+    float roughnessFootprintVariance = clamp(
+        0.5 * (roughnessDx * roughnessDx +
+            roughnessDy * roughnessDy),
+        0.0,
+        0.50);
     float alphaSquared = roughness * roughness * roughness * roughness;
-    return pow(clamp(alphaSquared + normalVariance, 0.00000256, 1.0), 0.25);
+    return pow(clamp(
+        alphaSquared + normalVariance + roughnessFootprintVariance,
+        0.00000256,
+        1.0), 0.25);
 }
 
 vec3 FresnelSchlick(float cosTheta, vec3 f0)
@@ -2980,6 +3070,15 @@ void EvaluateIbl(
     reflectionDebugActive = false;
     reflectionDebugColor = vec3(0.0);
 
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE && \
+    NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+    // The receiver cache owns diffuse environment/DDGI and the deferred
+    // hybrid pass owns all indirect specular. This hot production variant has
+    // no forward IBL work left; avoid reading environment descriptors or
+    // evaluating a reflection that final composition deliberately excludes.
+    return;
+#endif
+
     GPUEnvironmentData environment = ReadEnvironmentData();
     if (environment.Enabled == 0u)
         return;
@@ -2990,11 +3089,11 @@ void EvaluateIbl(
         nDotV,
         f0,
         roughness);
-#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE || FORWARD_THIN_GLASS_ONLY
     // The cache producer evaluates diffuse environment irradiance once per
     // low-frequency gather sample and preserves it separately from DDGI so
-    // their AO policies remain exact. Avoid repeating this cubemap lookup for
-    // every full-resolution opaque fragment.
+    // their AO policies remain exact. ThinGlass has no diffuse raster lobe,
+    // so its irradiance result is identically zero as well.
     diffuseIbl = vec3(0.0);
 #else
     vec3 irradiance = EvaluateEnvironmentDiffuseIrradiance(environment, normal);
@@ -3009,6 +3108,13 @@ void EvaluateIbl(
         diffuseReflectance);
 #endif
 
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+    // HybridReflectionComposite adds the sole base indirect-specular term.
+    // Computing the legacy forward reflection here both wasted work and made
+    // accidental future composition changes prone to double reflections.
+    return;
+#endif
+
     vec3 reflectionDirection = reflect(-viewDirection, normal);
     float globalMaxLod = max(float(environment.PrefilteredMipCount) - 1.0, 0.0);
     float globalLod = roughness * globalMaxLod;
@@ -3020,7 +3126,10 @@ void EvaluateIbl(
         pow(ambientOcclusion, 1.0 + roughness) * indirectSpecularVisibility,
         0.0,
         1.0);
-#if FORWARD_SIMPLE_OPAQUE
+#if FORWARD_SIMPLE_MATERIAL || FORWARD_THIN_GLASS_ONLY
+    // ThinGlass deliberately has no authored local-probe branch. DDGI owns
+    // reflected scene radiance and the environment fills only its unsupported
+    // confidence share.
     specularIbl = EvaluateGlobalReflectionSpecular(
         environment,
         reflectionDirection,
@@ -4015,6 +4124,195 @@ bool C4CreateReceiverPayload(
 }
 #endif
 
+#if FORWARD_THIN_GLASS_ONLY
+void main()
+{
+    GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    bool doubleSided = material.NormalScaleBias.w >= 0.5;
+    if (!doubleSided && !gl_FrontFacing)
+        discard;
+
+    vec2 baseColorUv = MaterialUv(
+        material.TextureTexCoordSets.x,
+        material.BaseColorOffsetScale,
+        material.TextureRotations.x);
+    vec4 albedoSample = material.AlbedoTextureIndex == DEFAULT_WHITE_TEXTURE
+        ? vec4(1.0)
+        : SampleMaterialTexture(material.AlbedoTextureIndex, baseColorUv);
+    MaterialAlphaCoverage materialCoverage = ResolveMaterialAlphaCoverage(
+        material,
+        albedoSample,
+        fragVertexColor.a);
+    if (!MaterialCoverageSurvivesForward(materialCoverage))
+        discard;
+
+    vec3 geometricNormal = normalize(fragNormal) *
+        (gl_FrontFacing ? 1.0 : -1.0);
+    bool useNormalTexture =
+        material.NormalTextureIndex != DEFAULT_NORMAL_TEXTURE &&
+        material.NormalScaleBias.x > 0.001;
+    vec3 normal = useNormalTexture
+        ? ResolveNormal(
+            material,
+            fragNormal,
+            fragWorldTangent,
+            MaterialUv(
+                material.TextureTexCoordSets.y,
+                material.NormalOffsetScale,
+                material.TextureRotations.y))
+        : geometricNormal;
+    vec3 viewDirection = normalize(pc.Push.CameraPosition - fragWorldPosition);
+
+    // AmazonBistroMaterialProfile is the explicit authority for window lobe
+    // width. Do not multiply it by the FBX material's generic packed channel.
+    float roughness = FilterSpecularRoughness(
+        clamp(material.MetallicRoughnessAO.y, 0.04, 1.0),
+        normal);
+
+    // ThinGlass is an explicit compiled material class, so only the dielectric
+    // fields needed by this narrow shader are read from its extension record.
+    // Profile defaults keep malformed content transmissive rather than turning
+    // a missing extension into an opaque black pane.
+    float transmissionFactor = 0.90;
+    float ior = 1.50;
+    vec3 thinTransmissionTint = vec3(1.0);
+    bool hasMaterialExtension =
+        material.FeatureFlags != 0u && material.ExtensionDataIndex >= 0;
+    if (hasMaterialExtension)
+    {
+        GPUMaterialExtensionData extension =
+            ReadMaterialExtension(uint(material.ExtensionDataIndex));
+        transmissionFactor = clamp(extension.Transmission.x, 0.0, 1.0);
+        ior = clamp(extension.Transmission.y, 1.0, 3.0);
+        thinTransmissionTint = clamp(
+            extension.Dispersion.yzw,
+            vec3(0.0),
+            vec3(1.0));
+    }
+
+    SimpleDdgiGatherResult gather = EmptySimpleDdgiGatherResult();
+    vec3 ddgiDirectionalRadiance = vec3(0.0);
+    float ddgiDirectionalConfidence = 0.0;
+    bool gatherContributed = false;
+    float radiometricOwnership = 0.0;
+    float leakAttenuation = 0.0;
+    if (ForwardGlobalIlluminationEnabled() != 0u)
+    {
+        SimpleDdgiParams params = ReadSimpleDdgiParams(
+            uint(SIMPLE_DDGI_PARAMS_BUFFER_INDEX));
+        uint directionalMode = SimpleDdgiDirectionalRadianceMode(
+            params.residencyFlags);
+        uint glossyMode = SimpleDdgiGlossyTransportMode(
+            params.residencyFlags);
+        bool configured =
+            (params.flags &
+                (SIMPLE_DDGI_FLAG_ENABLED |
+                 SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED)) ==
+                (SIMPLE_DDGI_FLAG_ENABLED |
+                 SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) &&
+            params.probeCount > 0u &&
+            directionalMode != SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF &&
+            glossyMode != SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_OFF;
+        if (configured)
+        {
+            SetSimpleDdgiDirectionalRadianceQuery(
+                reflect(-viewDirection, normal),
+                roughness);
+            SetSimpleDdgiDirectionalRadianceQueryEligibilityWeight(1.0);
+            gather = SampleSimpleDdgiThinGlassDirectionalGather(
+                params,
+                fragWorldPosition,
+                geometricNormal,
+                viewDirection);
+            radiometricOwnership = SimpleDdgiRadiometricOwnership(gather);
+            leakAttenuation = SimpleDdgiLeakAttenuation(gather, params);
+            gatherContributed = radiometricOwnership > 0.000001;
+            ddgiDirectionalRadiance = gather.directionalRadiance *
+                max(params.indirectIntensity, 0.0);
+            // The compact L1 glass receiver owns low-frequency local scene
+            // radiance. Its deliberately unresolved high-frequency share is
+            // filled by the global environment, preserving crisp highlights
+            // without falling back to manually placed probes.
+            // L1 represents a larger fraction of a broad/frosted lobe than a
+            // sharp pane. Reserve the unresolved sharp band for the global HDR
+            // environment so windows retain readable reflections without a
+            // local probe, while DDGI remains the authoritative local base.
+            float representableFrequencyShare = mix(0.55, 0.85, roughness);
+            ddgiDirectionalConfidence = clamp(
+                gather.directionalRadianceSupport *
+                    radiometricOwnership * representableFrequencyShare,
+                0.0,
+                1.0);
+        }
+    }
+
+    GPUEnvironmentData environment = ReadEnvironmentData();
+    vec3 reflectedSpecular = vec3(0.0);
+    if (environment.Enabled != 0u)
+    {
+        vec3 reflectionDirection = reflect(-viewDirection, normal);
+        float maxLod = max(
+            float(environment.PrefilteredMipCount) - 1.0,
+            0.0);
+        float nDotV = max(dot(normal, viewDirection), 0.0);
+        vec3 dielectricF0 = EvaluateGiMaterialDielectricF0(
+            ior,
+            1.0,
+            vec3(1.0));
+        vec3 fresnel = FresnelSchlickIndirectRoughness(
+            nDotV,
+            dielectricF0,
+            roughness);
+        vec2 brdf = texture(
+            BindlessTextures[nonuniformEXT(environment.BrdfLutTextureIndex)],
+            vec2(nDotV, roughness)).rg;
+        bool reflectionDebugActive;
+        vec3 reflectionDebugColor;
+        reflectedSpecular = EvaluateGlobalReflectionSpecular(
+            environment,
+            reflectionDirection,
+            roughness * maxLod,
+            brdf,
+            fresnel,
+            1.0,
+            ddgiDirectionalRadiance,
+            ddgiDirectionalConfidence,
+            reflectionDebugActive,
+            reflectionDebugColor);
+        if (reflectionDebugActive)
+            reflectedSpecular = reflectionDebugColor;
+    }
+
+    float glassNdotV = clamp(
+        abs(dot(normalize(normal), viewDirection)),
+        0.0,
+        1.0);
+    float glassF0Ratio = (ior - 1.0) / max(ior + 1.0, 0.0001);
+    float glassF0 = glassF0Ratio * glassF0Ratio;
+    float glassFresnel = glassF0 +
+        (1.0 - glassF0) * pow(1.0 - glassNdotV, 5.0);
+    float tintTransmission = dot(
+        thinTransmissionTint,
+        vec3(0.2126, 0.7152, 0.0722));
+    float glassOpacity = clamp(
+        1.0 - transmissionFactor * tintTransmission *
+            (1.0 - glassFresnel),
+        0.08,
+        1.0);
+    float outputAlpha = min(materialCoverage.Alpha, glassOpacity);
+    vec3 color = max(reflectedSpecular, vec3(0.0)) / glassOpacity;
+
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
+    EmitSimpleDdgiTransparentReceiverFeedback(
+        gather,
+        gatherContributed,
+        radiometricOwnership,
+        leakAttenuation,
+        outputAlpha);
+#endif
+    WriteForwardColor(vec4(color, outputAlpha));
+}
+#else
 void main()
 {
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
@@ -4034,9 +4332,13 @@ void main()
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     WriteMaterialTransportProvenance(MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN);
     GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+#if FORWARD_THIN_GLASS_ONLY
+    const bool geometryDecal = false;
+#else
     bool geometryDecal = GiMaterialHasFlag(
         material.TransportFlags,
         GI_MATERIAL_GEOMETRY_DECAL);
+#endif
     if (geometryDecal)
         RecordDecalFragmentAttribution(DECAL_ESTIMATED_INVOCATION_COUNTER);
     bool doubleSided = material.NormalScaleBias.w >= 0.5;
@@ -4062,7 +4364,7 @@ void main()
         discard;
     }
 
-#if FORWARD_SIMPLE_OPAQUE
+#if FORWARD_SIMPLE_MATERIAL
     bool hasMaterialExtension = false;
 #else
     bool hasMaterialExtension = material.FeatureFlags != 0u && material.ExtensionDataIndex >= 0;
@@ -4075,14 +4377,16 @@ void main()
         material.BaseColorOffsetScale,
         material.TextureRotations.x);
 
-    MaterialAlphaCoverage materialCoverage = EvaluateMaterialAlphaCoverage(
-        material,
-        fragTexCoord,
-        fragTexCoord2,
-        fragVertexColor.a);
     vec4 albedoSample = material.AlbedoTextureIndex == DEFAULT_WHITE_TEXTURE
         ? vec4(1.0)
         : SampleMaterialTexture(material.AlbedoTextureIndex, baseColorUv);
+    // Coverage and visible albedo use the same transformed base-color sample.
+    // Sampling twice was especially expensive for large alpha-blended decal
+    // overlays and provided no semantic difference.
+    MaterialAlphaCoverage materialCoverage = ResolveMaterialAlphaCoverage(
+        material,
+        albedoSample,
+        fragVertexColor.a);
     float alphaMode = materialCoverage.AlphaMode;
     float alphaCutoff = materialCoverage.AlphaCutoff;
     float outputAlpha = materialCoverage.Alpha;
@@ -4152,25 +4456,54 @@ void main()
 
     // glTF metallic-roughness contract: G = roughness and B = metallic.
     // Occlusion is an independent binding even when it aliases the same image.
+    vec2 metallicRoughnessUv = MaterialUv(
+        material.TextureTexCoordSets.z,
+        material.MetallicRoughnessOffsetScale,
+        material.TextureRotations.z);
     vec4 armSample = material.MetallicRoughnessTextureIndex == DEFAULT_BLACK_TEXTURE
         ? vec4(1.0, 1.0, 1.0, 1.0)
         : SampleMaterialTexture(
             material.MetallicRoughnessTextureIndex,
-            MaterialUv(
-                material.TextureTexCoordSets.z,
-                material.MetallicRoughnessOffsetScale,
-                material.TextureRotations.z));
+            metallicRoughnessUv);
     // The upload contract binds DefaultWhiteTexture for a missing emissive texture.
     // Sample independently of the factor: material.Emissive is the authoritative black
     // default, while a texture-only material remains valid when its factor is non-zero.
-    vec4 emissiveSample = SampleMaterialTexture(
-        material.EmissiveTextureIndex,
-        MaterialUv(
-            material.TextureTexCoordSets.w,
-            material.EmissiveOffsetScale,
-            material.TextureRotations.w));
+    vec4 emissiveSample = material.EmissiveTextureIndex ==
+            DEFAULT_WHITE_TEXTURE
+        ? vec4(1.0)
+        : SampleMaterialTexture(
+            material.EmissiveTextureIndex,
+            MaterialUv(
+                material.TextureTexCoordSets.w,
+                material.EmissiveOffsetScale,
+                material.TextureRotations.w));
 
-    float roughness = clamp(material.MetallicRoughnessAO.y * armSample.g, 0.04, 1.0);
+    float authoredRoughness = clamp(
+        material.MetallicRoughnessAO.y * armSample.g,
+        0.04,
+        1.0);
+#if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
+    if (material.MetallicRoughnessTextureIndex != DEFAULT_BLACK_TEXTURE)
+    {
+        // A derivative-only variance estimate covers one fragment quad, but a
+        // dark roughness island can span several quads after texture
+        // minification. Such an island scheduled an isolated SSR/ray-query
+        // source inside otherwise broad Sponza stone and cloth. A single
+        // coarser mip-footprint sample provides the conservative lobe width
+        // used by the deferred reflection receiver. Continuous polished
+        // regions remain polished because both footprints agree.
+        float footprintRoughness = clamp(
+            material.MetallicRoughnessAO.y *
+                SampleMaterialTextureFootprint(
+                    material.MetallicRoughnessTextureIndex,
+                    metallicRoughnessUv,
+                    4.0).g,
+            0.04,
+            1.0);
+        authoredRoughness = max(authoredRoughness, footprintRoughness);
+    }
+#endif
+    float roughness = authoredRoughness;
     float metallic = clamp(material.MetallicRoughnessAO.x * armSample.b, 0.0, 1.0);
     roughness = FilterSpecularRoughness(roughness, normal);
     // Preserve the isotropic lobe width for reflection scheduling. The
@@ -4214,22 +4547,28 @@ void main()
     float iridescenceFactor = 0.0;
     float iridescenceThickness = 0.0;
     float dispersion = 0.0;
-    // NJULF's ThinSurface policy is a GI transport contract, not an opt-in to
-    // the forward KHR_materials_transmission approximation. The importer keeps
-    // the transmission feature bit so the factor/texture reaches DDGI, but the
-    // visible opaque cloth must retain its ordinary raster BRDF. Treating the
-    // bit alone as raster transmission removes reflected diffuse and replaces
-    // it with a saturated environment sample, which makes shadowed curtains
-    // look self-lit.
+    vec3 thinTransmissionTint = vec3(1.0);
+    // ThinSurface is normally a GI-only transport contract (for example,
+    // opaque curtains). ThinGlass is the explicit visible dielectric opt-in;
+    // keeping these independent prevents cloth from becoming accidental glass.
+#if FORWARD_THIN_GLASS_ONLY
+    const bool thinGiTransport = true;
+    const bool thinGlass = true;
+    const bool volumeGiTransport = false;
+#else
     bool thinGiTransport = GiMaterialHasFlag(
         material.TransportFlags,
         GI_MATERIAL_THIN_SURFACE_TRANSMISSION);
+    bool thinGlass = GiMaterialHasFlag(
+        material.TransportFlags,
+        GI_MATERIAL_THIN_GLASS);
     bool volumeGiTransport = GiMaterialHasFlag(
         material.TransportFlags,
         GI_MATERIAL_VOLUME_TRANSMISSION);
+#endif
     bool rasterTransmissionEnabled =
         (material.FeatureFlags & MATERIAL_FEATURE_TRANSMISSION) != 0u &&
-        !thinGiTransport;
+        (!thinGiTransport || thinGlass);
 
     if (hasMaterialExtension)
     {
@@ -4317,6 +4656,10 @@ void main()
         {
             dispersion = clamp(materialExtension.Dispersion.x, 0.0, 1.0);
         }
+        thinTransmissionTint = clamp(
+            materialExtension.Dispersion.yzw,
+            vec3(0.0),
+            vec3(1.0));
     }
 
     bool reflectsIndirectDiffuse = GiMaterialHasFlag(
@@ -4342,6 +4685,14 @@ void main()
             sheenColor,
             max(dot(normal, viewDirection), 0.0))
         : vec3(0.0);
+    if (thinGlass)
+    {
+        // The Bistro glass base color is a transmission tint, not a Lambertian
+        // paint layer. Keep the material in GI transport so it can transmit
+        // energy, but remove diffuse raster lighting from the visible sheet.
+        directionalDiffuseBase = vec3(0.0);
+        canonicalDiffuseReflectance = vec3(0.0);
+    }
 
     if (IsMaterialDebugView(debugViewMode))
     {
@@ -4628,7 +4979,7 @@ void main()
             directionalMode !=
                 SIMPLE_DDGI_DIRECTIONAL_RADIANCE_MODE_OFF &&
             glossyMode != SIMPLE_DDGI_GLOSSY_TRANSPORT_MODE_OFF &&
-            roughnessWeight > 0.0;
+            (roughnessWeight > 0.0 || thinGlass);
         bool diffuseGatherRequired =
             (directionalParams.flags &
                 (SIMPLE_DDGI_FLAG_ENABLED |
@@ -4643,12 +4994,38 @@ void main()
                 SetSimpleDdgiDirectionalRadianceQuery(
                     reflect(-viewDirection, normal),
                     roughness);
+                if (thinGlass)
+                {
+                    // Transparent sheets have no deferred SSR target. Their
+                    // explicit ThinGlass classification therefore admits the
+                    // directional DDGI field as the default reflected scene
+                    // at any roughness, with the environment only filling
+                    // genuinely unsupported DDGI weight.
+                    SetSimpleDdgiDirectionalRadianceQueryEligibilityWeight(
+                        1.0);
+                }
             }
             precomputedSimpleDdgiGather = SampleSimpleDdgiGather(
                 directionalParams,
                 fragWorldPosition,
                 ddgiNormal,
                 viewDirection);
+#if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION && \
+    FORWARD_THIN_GLASS_ONLY
+            // The directional-only program intentionally skips the diffuse
+            // composition block where ordinary B1 values are populated. The
+            // same authoritative gather still owns this visible dielectric
+            // receiver, and ThinGlass explicitly opts into its reflection
+            // lobe at every roughness.
+            exactFeedbackGatherContributed = true;
+            exactFeedbackRadiometricOwnership =
+                SimpleDdgiRadiometricOwnership(
+                    precomputedSimpleDdgiGather);
+            exactFeedbackLeakAttenuation = SimpleDdgiLeakAttenuation(
+                precomputedSimpleDdgiGather,
+                directionalParams);
+            exactFeedbackRoughDdgiOwnership = 1.0;
+#endif
             indirectSpecularVisibility =
                 SimpleDdgiRoughIndirectSpecularVisibility(
                     precomputedSimpleDdgiGather,
@@ -4895,7 +5272,11 @@ void main()
     }
 
     vec3 finalDiffuseIndirect = vec3(0.0);
-#if FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
+#if FORWARD_THIN_GLASS_ONLY
+    // ThinGlass participates in GI transport as a transmitting surface but
+    // exposes no Lambertian raster lobe. Directional DDGI was already consumed
+    // by EvaluateIbl as the default reflected-radiance source.
+#elif FORWARD_DDGI_RECEIVER_CACHE_REQUIRED_ACTIVE
     // Pipeline selection is the authoritative handshake: this native program
     // is bound only after the current-depth cache dispatch and its
     // compute-to-fragment barrier complete. The producer scans a complete 12x12
@@ -5840,8 +6221,38 @@ void main()
             color += filmTint * filmFresnel * iridescenceFactor * specularFactor * indirectAo;
         }
 
-        if (transmissionFactor > 0.0 && extensionEnvironment.Enabled != 0u)
+        if (transmissionFactor > 0.0)
         {
+            if (thinGlass)
+            {
+                // A zero-thickness sheet exits parallel to the incident ray.
+                // Let fixed-function source-over blending retain the already
+                // rendered opaque scene behind the window, while this fragment
+                // contributes only its Fresnel reflection/lighting. Dividing by
+                // opacity converts that reflected radiance to the pipeline's
+                // non-premultiplied blend convention instead of attenuating it
+                // a second time.
+                float glassNdotV = clamp(
+                    abs(dot(normalize(normal), viewDirection)),
+                    0.0,
+                    1.0);
+                float glassF0Ratio = (ior - 1.0) / max(ior + 1.0, 0.0001);
+                float glassF0 = glassF0Ratio * glassF0Ratio;
+                float glassFresnel = glassF0 +
+                    (1.0 - glassF0) * pow(1.0 - glassNdotV, 5.0);
+                float tintTransmission = dot(
+                    thinTransmissionTint,
+                    vec3(0.2126, 0.7152, 0.0722));
+                float glassOpacity = clamp(
+                    1.0 - transmissionFactor *
+                        tintTransmission * (1.0 - glassFresnel),
+                    0.08,
+                    1.0);
+                color = max(color, vec3(0.0)) / glassOpacity;
+                outputAlpha = min(outputAlpha, glassOpacity);
+            }
+            else if (extensionEnvironment.Enabled != 0u)
+            {
             vec3 incidentDirection = normalize(-viewDirection);
             vec3 orientedNormal = normalize(normal);
             vec3 transmitted = vec3(0.0);
@@ -5979,6 +6390,7 @@ void main()
             transmitted *= albedo;
             color = mix(color, transmitted, transmissionFactor);
             outputAlpha = min(outputAlpha, mix(1.0, 0.35, transmissionFactor));
+            }
         }
     }
 
@@ -6005,3 +6417,4 @@ void main()
 #endif
     WriteForwardColor(vec4(color, finalOutputAlpha));
 }
+#endif

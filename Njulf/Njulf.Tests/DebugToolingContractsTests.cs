@@ -679,10 +679,10 @@ namespace Njulf.Tests
             {
                 Assert.That(settings.GlobalIllumination.SimpleDdgiFogEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiParticlesEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.False);
+                Assert.That(settings.GlobalIllumination.SimpleDdgiRoughSpecularEnabled, Is.True);
                 Assert.That(
                     settings.GlobalIllumination.EffectiveSimpleDdgiGlossyTransportMode,
-                    Is.EqualTo(SimpleDdgiGlossyTransportMode.Off));
+                    Is.EqualTo(SimpleDdgiGlossyTransportMode.ReceiverOnly));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiReducedBlendEnabled, Is.False);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.True);
@@ -747,6 +747,9 @@ namespace Njulf.Tests
                     (uint)ReflectionDebugView.DetailBudget,
                     Is.EqualTo(15u));
                 Assert.That(
+                    (uint)ReflectionDebugView.ReceiverMaterial,
+                    Is.EqualTo(16u));
+                Assert.That(
                     shader,
                     Does.Contain(
                         "REFLECTION_DEBUG_DDGI_DIRECTIONAL_RADIANCE_LOBE = 11u"));
@@ -773,6 +776,10 @@ namespace Njulf.Tests
                     controller,
                     Does.Contain(
                         "ReflectionDebugView.SourceSelection => ReflectionDebugView.DetailBudget"));
+                Assert.That(
+                    controller,
+                    Does.Contain(
+                        "ReflectionDebugView.DetailBudget => ReflectionDebugView.ReceiverMaterial"));
             });
         }
 

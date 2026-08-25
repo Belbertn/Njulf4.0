@@ -262,4 +262,57 @@ public sealed class DirectionalShadowContractsTests
             Assert.That(softUnqualified.Detail, Does.Contain("finite-sun"));
         });
     }
+
+    [Test]
+    public void Renderer_UploadsDirectionalShadowDataOnlyAfterModeResolution()
+    {
+        string renderer = ReadRepoText("Njulf.Rendering",
+            "VulkanRenderer.cs");
+        int prepareStart = renderer.IndexOf(
+            "private void PrepareDirectionalShadows",
+            StringComparison.Ordinal);
+        int resolveStart = renderer.IndexOf(
+            "private void ResolveDirectionalShadowFramePlan",
+            prepareStart,
+            StringComparison.Ordinal);
+        int resolveEnd = renderer.IndexOf(
+            "private void PrepareAreaRayShadows",
+            resolveStart,
+            StringComparison.Ordinal);
+
+        Assert.That(prepareStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(resolveStart, Is.GreaterThan(prepareStart));
+        Assert.That(resolveEnd, Is.GreaterThan(resolveStart));
+        string prepare = renderer[prepareStart..resolveStart];
+        string resolve = renderer[resolveStart..resolveEnd];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(renderer.Split(
+                    "_directionalShadowResources?.UploadShadowData(",
+                    StringSplitOptions.None).Length - 1,
+                Is.EqualTo(1));
+            Assert.That(prepare, Does.Not.Contain("UploadShadowData("));
+            Assert.That(resolve, Does.Contain("UploadShadowData("));
+            Assert.That(resolve.IndexOf("sceneData.DirectionalShadowParameters = parameters;",
+                    StringComparison.Ordinal),
+                Is.LessThan(resolve.IndexOf("UploadShadowData(",
+                    StringComparison.Ordinal)));
+        });
+    }
+
+    private static string ReadRepoText(params string[] segments)
+    {
+        DirectoryInfo? directory = new(TestContext.CurrentContext.TestDirectory);
+        while (directory != null)
+        {
+            string candidate = Path.Combine([directory.FullName, .. segments]);
+            if (File.Exists(candidate))
+                return File.ReadAllText(candidate);
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException(
+            string.Join(Path.DirectorySeparatorChar, segments));
+    }
 }

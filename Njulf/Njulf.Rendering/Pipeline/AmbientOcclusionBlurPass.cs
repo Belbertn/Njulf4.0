@@ -49,7 +49,12 @@ namespace Njulf.Rendering.Pipeline
             RecreateDescriptorSets();
         }
 
-        public override bool SupportsSecondaryCommandBuffer => true;
+        // The pass contains an intra-pass compute dependency followed by a
+        // fragment-consumer publication barrier. Recording it on the primary
+        // command buffer keeps those stage scopes contiguous on drivers that
+        // otherwise expose stale columns when the publication follows an
+        // executed secondary command buffer.
+        public override bool SupportsSecondaryCommandBuffer => false;
         public override RenderGraphQueueIntent QueueIntent => RenderGraphQueueIntent.Compute;
         public override bool SupportsAsyncCompute => true;
         public override string AsyncComputeReason => "AO blur is compute-only and works on AO intermediate targets.";
@@ -77,7 +82,18 @@ namespace Njulf.Rendering.Pipeline
             _renderTargets.AmbientOcclusionScratch.TransitionToComputeShaderRead(cmd);
 
             Dispatch(cmd, _verticalSet, _renderTargets.AmbientOcclusionBlurred.Extent, new Vector2(0.0f, 1.0f), sceneData, "AmbientOcclusionBlurPass Vertical");
-            _renderTargets.AmbientOcclusionBlurred.TransitionToComputeShaderRead(cmd);
+            if (!IsRecordingOnComputeQueue)
+            {
+                // Publish in the producer command buffer on the ordinary
+                // graphics-queue path. The raw AO pass uses the same scope and
+                // is stable on the immediate Forward+ consumer; postponing this
+                // transition until the primary command buffer produced stale
+                // column reads on affected drivers. A true async-compute run
+                // deliberately leaves General here so its compiled
+                // release/acquire pair owns both layout and queue visibility.
+                _renderTargets.AmbientOcclusionBlurred
+                    .TransitionToShaderRead(cmd);
+            }
         }
 
         public override IEnumerable<DependencyInfo> GetBarriers(int frameIndex)

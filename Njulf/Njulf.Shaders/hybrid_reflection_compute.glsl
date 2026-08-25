@@ -40,11 +40,16 @@ layout(std430, set = 3, binding = 15) buffer HybridReflectionIndirectBuffer
     uint HybridIndirectGroupCountZ;
 };
 
+// Sparse records written at the first two pixels of each DDGI receiver tile.
+// The full-resolution reconstruction pass is the only consumer.
+layout(rgba16f, set = 3, binding = 16) uniform image2D HybridDdgiCohorts;
+
 const uint HYBRID_REFLECTION_SOURCE_NONE = 0u;
 const uint HYBRID_REFLECTION_SOURCE_SSR = 1u;
 const uint HYBRID_REFLECTION_SOURCE_RAY_QUERY = 2u;
-const uint HYBRID_REFLECTION_SOURCE_LOCAL_PROBE = 3u;
-const uint HYBRID_REFLECTION_SOURCE_ENVIRONMENT = 4u;
+const uint HYBRID_REFLECTION_SOURCE_DDGI = 3u;
+const uint HYBRID_REFLECTION_SOURCE_LOCAL_PROBE = 4u;
+const uint HYBRID_REFLECTION_SOURCE_ENVIRONMENT = 5u;
 
 const uint HYBRID_REFLECTION_REASON_NONE = 0u;
 const uint HYBRID_REFLECTION_REASON_DISOCCLUDED = 1u;
@@ -66,8 +71,9 @@ const uint HYBRID_REFLECTION_COUNTER_RAY_QUERIES = 2u;
 const uint HYBRID_REFLECTION_COUNTER_RAY_OVERFLOW = 3u;
 const uint HYBRID_REFLECTION_COUNTER_RAY_HITS = 4u;
 const uint HYBRID_REFLECTION_COUNTER_RAY_MISSES = 5u;
-const uint HYBRID_REFLECTION_COUNTER_PROBE_FALLBACKS = 6u;
-const uint HYBRID_REFLECTION_COUNTER_ENVIRONMENT_FALLBACKS = 7u;
+const uint HYBRID_REFLECTION_COUNTER_DDGI_FALLBACKS = 6u;
+const uint HYBRID_REFLECTION_COUNTER_PROBE_FALLBACKS = 7u;
+const uint HYBRID_REFLECTION_COUNTER_ENVIRONMENT_FALLBACKS = 8u;
 const float HYBRID_REFLECTION_PI = 3.14159265359;
 const float HYBRID_REFLECTION_MINIMUM_RADIANCE_LIMIT = 32.0;
 const float HYBRID_REFLECTION_RADIANCE_LIMIT_SCALE = 4.0;
@@ -126,7 +132,10 @@ vec3 HybridReflectionTraceNormal(uvec4 payload)
         return shadingNormal;
     vec3 geometricNormal = HybridReflectionPayloadGeometricNormal(payload);
     float roughness = HybridReflectionPayloadRoughness(payload);
-    float geometricWeight = smoothstep(0.15, 0.70, roughness);
+    // Broad architectural and cloth lobes must converge to their footprint
+    // normal before high-frequency normal-map detail can become reflection
+    // sparkle. Sharp glass/mirrors take the early return above unchanged.
+    float geometricWeight = smoothstep(0.12, 0.45, roughness);
     return normalize(mix(shadingNormal, geometricNormal, geometricWeight));
 }
 
@@ -157,9 +166,11 @@ uint HybridDemoteReflectionTier(uint tier)
         return 2u;
     if (tier == 2u)
         return 4u;
-    // The base roughness bands alone own the analytic cutoff. Material
-    // importance may reduce update frequency, but it must not replace an
-    // otherwise useful scene reflection with the global environment.
+    // A quarter-rate trace is still a geometric reflection and is visibly
+    // wrong on broad, low-F0 masonry. DDGI owns that low-frequency lobe; only
+    // sharp/transmissive/high-F0 receivers are protected below.
+    if (tier == 4u)
+        return 0u;
     return tier;
 }
 
@@ -206,7 +217,8 @@ uint HybridResolveAdaptiveReflectionTier(
         clamp(specularOcclusion, 0.0, 1.0);
     if (broadAnisotropic)
         rayImportance *= HYBRID_REFLECTION_BROAD_IMPORTANCE_SCALE;
-    if (rayImportance < HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE)
+    if (rayImportance < HYBRID_REFLECTION_MINIMUM_RAY_IMPORTANCE &&
+        (tier != 4u || !requiresFullQuality))
         tier = HybridDemoteReflectionTier(tier);
     return tier;
 }
@@ -428,6 +440,8 @@ vec3 HybridSourceDebugColor(uint source)
         return vec3(0.0, 0.9, 1.0);
     if (source == HYBRID_REFLECTION_SOURCE_RAY_QUERY)
         return vec3(1.0, 0.0, 0.9);
+    if (source == HYBRID_REFLECTION_SOURCE_DDGI)
+        return vec3(0.15, 1.0, 0.25);
     if (source == HYBRID_REFLECTION_SOURCE_LOCAL_PROBE)
         return vec3(1.0, 0.85, 0.0);
     if (source == HYBRID_REFLECTION_SOURCE_ENVIRONMENT)

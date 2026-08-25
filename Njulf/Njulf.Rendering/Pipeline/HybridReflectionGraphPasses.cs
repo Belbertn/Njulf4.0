@@ -109,6 +109,29 @@ internal sealed class HybridReflectionResolvePass : HybridReflectionGraphPass
         Runtime.RecordResolve(commandBuffer, frameIndex, sceneData);
 }
 
+internal sealed class HybridReflectionDdgiBasePass : HybridReflectionGraphPass
+{
+    public HybridReflectionDdgiBasePass(
+        VulkanContext context,
+        SwapchainManager swapchain,
+        BindlessHeap bindlessHeap,
+        HybridReflectionVulkanRuntime runtime)
+        : base("HybridReflectionDdgiBasePass", context, swapchain,
+            bindlessHeap, runtime)
+    {
+    }
+
+    public override bool ShouldExecute(
+        int frameIndex,
+        SceneRenderingData sceneData) => Runtime.ShouldEvaluateDdgiBase(sceneData);
+
+    public override void Execute(
+        CommandBuffer commandBuffer,
+        int frameIndex,
+        SceneRenderingData sceneData) =>
+        Runtime.RecordDdgiBase(commandBuffer, frameIndex, sceneData);
+}
+
 internal sealed class HybridReflectionTemporalPass : HybridReflectionGraphPass
 {
     public HybridReflectionTemporalPass(

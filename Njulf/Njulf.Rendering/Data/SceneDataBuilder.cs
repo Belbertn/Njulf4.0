@@ -153,6 +153,8 @@ namespace Njulf.Rendering.Data
         private int _opaqueObjectCount;
         private int _maskedObjectCount;
         private int _transparentObjectCount;
+        private int _thinGlassObjectCount;
+        private int _thinGlassMeshletCount;
         private int _geometryDecalObjectCount;
         private int _geometryDecalMeshletCount;
         private int _blendMaterialCount;
@@ -544,6 +546,8 @@ namespace Njulf.Rendering.Data
                     _opaqueObjectCount = 0;
                     _maskedObjectCount = 0;
                     _transparentObjectCount = 0;
+                    _thinGlassObjectCount = 0;
+                    _thinGlassMeshletCount = 0;
                     _geometryDecalObjectCount = 0;
                     _geometryDecalMeshletCount = 0;
                     _blendMaterialCount = 0;
@@ -708,6 +712,7 @@ namespace Njulf.Rendering.Data
                     OpaqueObjectCount = _opaqueObjectCount,
                     MaskedObjectCount = _maskedObjectCount,
                     TransparentObjectCount = _transparentObjectCount,
+                    ThinGlassObjectCount = _thinGlassObjectCount,
                     SolidObjectCount = _opaqueObjectCount,
                     GeometryDecalObjectCount = _geometryDecalObjectCount,
                     OpaqueMeshletCount = _meshletDrawCommands.Count +
@@ -719,6 +724,7 @@ namespace Njulf.Rendering.Data
                     SolidMeshletCount = _solidDepthMeshletDrawCommands.Count,
                     MaskedMeshletCount = _maskedDepthMeshletDrawCommands.Count,
                     TransparentMeshletCount = _transparentMeshletDrawCommands.Count,
+                    ThinGlassMeshletCount = _thinGlassMeshletCount,
                     GeometryDecalMeshletCount = _geometryDecalMeshletCount,
                     BlendMaterialCount = _blendMaterialCount,
                     MaskMaterialCount = _maskMaterialCount,
@@ -1040,6 +1046,8 @@ namespace Njulf.Rendering.Data
                         {
                             case MaterialRenderMode.Blend:
                                 _transparentObjectCount++;
+                                if (forwardClass == MaterialForwardClass.ThinGlass)
+                                    _thinGlassObjectCount++;
                                 break;
                             case MaterialRenderMode.Mask:
                                 _maskedObjectCount++;
@@ -1191,7 +1199,12 @@ namespace Njulf.Rendering.Data
                                 (geometryDecalsEnabled &&
                                  (isolatedDecalMaterialIndex < 0 ||
                                   isolatedDecalMaterialIndex == materialIndex)))
-                                AddTransparentDraw(command, transparentDistanceSquared, metadata.DecalLayer, maxTransparentMeshlets);
+                                AddTransparentDraw(
+                                    command,
+                                    transparentDistanceSquared,
+                                    metadata.DecalLayer,
+                                    forwardClass,
+                                    maxTransparentMeshlets);
                         }
                         else
                         {
@@ -1307,6 +1320,8 @@ namespace Njulf.Rendering.Data
                             {
                                 case MaterialRenderMode.Blend:
                                     _transparentObjectCount++;
+                                    if (forwardClass == MaterialForwardClass.ThinGlass)
+                                        _thinGlassObjectCount++;
                                     break;
                                 case MaterialRenderMode.Mask:
                                     _maskedObjectCount++;
@@ -1459,7 +1474,12 @@ namespace Njulf.Rendering.Data
                                     (geometryDecalsEnabled &&
                                      (isolatedDecalMaterialIndex < 0 ||
                                       isolatedDecalMaterialIndex == materialIndex)))
-                                    AddTransparentDraw(command, transparentDistanceSquared, metadata.DecalLayer, maxTransparentMeshlets);
+                                    AddTransparentDraw(
+                                        command,
+                                        transparentDistanceSquared,
+                                        metadata.DecalLayer,
+                                        forwardClass,
+                                        maxTransparentMeshlets);
                             }
                             else
                             {
@@ -1531,6 +1551,7 @@ namespace Njulf.Rendering.Data
             GPUMeshletDrawCommand command,
             float distanceSquared,
             int layer,
+            MaterialForwardClass forwardClass,
             int maxTransparentMeshlets)
         {
             if (_transparentSortScratch.Count >= maxTransparentMeshlets)
@@ -1539,6 +1560,8 @@ namespace Njulf.Rendering.Data
                 return;
             }
 
+            if (forwardClass == MaterialForwardClass.ThinGlass)
+                _thinGlassMeshletCount++;
             _transparentSortScratch.Add(new TransparentMeshletDraw(command, distanceSquared, layer));
         }
 

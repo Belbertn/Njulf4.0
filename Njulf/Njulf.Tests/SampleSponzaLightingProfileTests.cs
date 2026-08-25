@@ -80,6 +80,78 @@ public sealed class SampleSponzaLightingProfileTests
         Assert.That(document.ReflectionProbes, Is.Empty);
     }
 
+    [TestCase(SampleSponzaFixtureMode.Architecture)]
+    [TestCase(SampleSponzaFixtureMode.C5ResidualValidation)]
+    public void SampleScene_NonAnimationModesExcludeAuthoredStrut(
+        SampleSponzaFixtureMode fixtureMode)
+    {
+        SceneDocument document = ReadSampleScene();
+
+        SampleSceneLoader.ApplySponzaFixtureMode(document, fixtureMode);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                document.Objects,
+                Has.None.Matches<SceneObjectDocument>(item =>
+                    string.Equals(
+                        item.Model.Path,
+                        SampleBenchmarkSponzaSceneAnimationContract.AssetPath,
+                        StringComparison.Ordinal)));
+            Assert.That(
+                document.Dependencies,
+                Has.None.Matches<SceneAssetDependency>(item =>
+                    string.Equals(
+                        item.Path,
+                        SampleBenchmarkSponzaSceneAnimationContract.AssetPath,
+                        StringComparison.Ordinal)));
+        });
+    }
+
+    [Test]
+    public void SampleScene_AnimationDemoRetainsCanonicalStrut()
+    {
+        SceneDocument document = ReadSampleScene();
+
+        SampleSceneLoader.ApplySponzaFixtureMode(
+            document,
+            SampleSponzaFixtureMode.AnimationDemo);
+
+        SceneObjectDocument[] fixtures = document.Objects
+            .Where(item => string.Equals(
+                item.Model.Path,
+                SampleBenchmarkSponzaSceneAnimationContract.AssetPath,
+                StringComparison.Ordinal))
+            .OrderBy(item => item.Id)
+            .ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(fixtures, Has.Length.EqualTo(2));
+            Assert.That(
+                fixtures.Select(static item => item.Id),
+                Is.EqualTo(new[]
+                {
+                    SampleBenchmarkSponzaSceneAnimationContract.JointObjectId,
+                    SampleBenchmarkSponzaSceneAnimationContract.SurfaceObjectId
+                }));
+            Assert.That(
+                document.Dependencies.Count(item => string.Equals(
+                    item.Path,
+                    SampleBenchmarkSponzaSceneAnimationContract.AssetPath,
+                    StringComparison.Ordinal)),
+                Is.EqualTo(1));
+        });
+    }
+
+    private static SceneDocument ReadSampleScene()
+    {
+        string path = Path.Combine(
+            TestContext.CurrentContext.TestDirectory,
+            "Scenes",
+            "SampleScene.njscene.json");
+        return SceneDocumentJson.Read(path);
+    }
+
     private static SourceSun ReadSourceSun()
     {
         string path = ResolveRepositoryFile(

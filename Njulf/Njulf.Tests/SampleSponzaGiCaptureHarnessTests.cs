@@ -187,8 +187,8 @@ public sealed class SampleSponzaGiCaptureHarnessTests
         {
             Assert.That(contract.SceneKind, Is.EqualTo(SampleSceneKind.SponzaPlaza));
             Assert.That(contract.Scenario, Is.EqualTo(SamplePerformanceScenario.GiSponzaRightWallStationary));
-            Assert.That(contract.Width, Is.EqualTo(1600));
-            Assert.That(contract.Height, Is.EqualTo(900));
+            Assert.That(contract.Width, Is.EqualTo(1920));
+            Assert.That(contract.Height, Is.EqualTo(1080));
             Assert.That(contract.WarmupFrames, Is.EqualTo(SampleSponzaGiCaptureContract.FullSourceRefreshSweepFrameCount));
             Assert.That(
                 SampleSponzaGiCaptureContract.HighBookmarkStationarySettleFrameCount,
@@ -198,9 +198,9 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             Assert.That(contract.VerticalPathDurationSeconds, Is.InRange(10, 20));
             Assert.That(contract.VerticalTraversalFrameCount, Is.EqualTo(960));
             Assert.That(contract.MotionTraversalFrameCount, Is.EqualTo(300));
-            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v20"));
+            Assert.That(contract.SchemaVersion, Is.EqualTo("realtime-gi-closure-sponza-capture/v22"));
             Assert.That(SampleSponzaGiTemporalTrace.SchemaVersion,
-                Is.EqualTo("simple-ddgi-sponza-temporal-trace/v5"));
+                Is.EqualTo("simple-ddgi-sponza-temporal-trace/v6"));
             Assert.That(SampleSponzaGiTemporalTrace.Capacity, Is.EqualTo(960));
             Assert.That(contract.TotalCaptureFrameCount, Is.EqualTo(6_164));
             Assert.That(contract.LowBookmark.Name, Is.EqualTo("SponzaPlazaUpperFacadeLow"));
@@ -528,7 +528,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
     }
 
     [Test]
-    public void TemporalTraceV5_WritesAlignedReflectionLifecycleAndBudgetJson()
+    public void TemporalTraceV6_WritesDdgiOwnershipAndAlignedProbeLifecycleJson()
     {
         var trace = new SampleSponzaGiTemporalTrace();
         SampleSponzaGiCaptureContract contract = SampleSponzaGiCaptureContract.Default;
@@ -561,7 +561,12 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             ReflectionProbeCompletedLifecycle = completed,
             GpuReflectionProbeCaptureMicroseconds = 611,
             GpuReflectionProbePrefilterMicroseconds = 277,
-            GpuReflectionProbePublishMicroseconds = 43
+            GpuReflectionProbePublishMicroseconds = 43,
+            HybridReflectionCountersReadbackValid = 1,
+            HybridReflectionDdgiFallbackCount = 17,
+            HybridReflectionProbeFallbackCount = 0,
+            HybridReflectionEnvironmentFallbackCount = 4,
+            GpuHybridReflectionDdgiBaseMicroseconds = 211
         };
         trace.Record(
             new SampleSponzaGiCaptureInstruction(
@@ -586,7 +591,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             {
                 Assert.That(
                     document.RootElement.GetProperty("schemaVersion").GetString(),
-                    Is.EqualTo("simple-ddgi-sponza-temporal-trace/v5"));
+                    Is.EqualTo("simple-ddgi-sponza-temporal-trace/v6"));
                 Assert.That(
                     document.RootElement.GetProperty("contractFingerprint").GetString(),
                     Is.EqualTo(contract.Fingerprint));
@@ -611,6 +616,14 @@ public sealed class SampleSponzaGiCaptureHarnessTests
                     entry.GetProperty("gpuReflectionProbePublishMicroseconds")
                         .GetInt64(),
                     Is.EqualTo(43));
+                Assert.That(
+                    entry.GetProperty("hybridReflectionDdgiFallbackCount")
+                        .GetUInt32(),
+                    Is.EqualTo(17u));
+                Assert.That(
+                    document.RootElement.GetProperty("reflectionGate")
+                        .GetProperty("passed").GetBoolean(),
+                    Is.True);
             });
         }
         finally
@@ -618,6 +631,41 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             if (File.Exists(path))
                 File.Delete(path);
         }
+    }
+
+    [Test]
+    public void ReflectionGate_RequiresDdgiAndRejectsEveryManualProbePath()
+    {
+        SampleSponzaGiReflectionGateResult passing =
+            SampleSponzaGiReflectionGate.Evaluate(
+            [
+                new SampleSponzaGiTemporalTraceEntry
+                {
+                    HybridReflectionCountersReadbackValid = 1,
+                    HybridReflectionDdgiFallbackCount = 12,
+                    HybridReflectionEnvironmentFallbackCount = 3
+                }
+            ]);
+        SampleSponzaGiReflectionGateResult failing =
+            SampleSponzaGiReflectionGate.Evaluate(
+            [
+                new SampleSponzaGiTemporalTraceEntry
+                {
+                    ReflectionProbeCount = 1,
+                    HybridReflectionCountersReadbackValid = 1,
+                    HybridReflectionDdgiFallbackCount = 12,
+                    HybridReflectionProbeFallbackCount = 2
+                }
+            ]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(passing.Passed, Is.True,
+                string.Join(" ", passing.Failures));
+            Assert.That(passing.DdgiReceiverCount, Is.EqualTo(12UL));
+            Assert.That(failing.Passed, Is.False);
+            Assert.That(failing.Failures, Has.Some.Contains("manual"));
+        });
     }
 
     [Test]
@@ -948,7 +996,7 @@ public sealed class SampleSponzaGiCaptureHarnessTests
             SampleSponzaGiCaptureContract.Default;
         float[] pixels = CreateLockedLinearImagePixels(0.02f);
         int blackPixel = checked(
-            (820 * SampleSponzaGiCaptureContract.LockedWidth + 1200) * 3);
+            (984 * SampleSponzaGiCaptureContract.LockedWidth + 1440) * 3);
         pixels[blackPixel] = 0.0f;
         pixels[blackPixel + 1] = 0.0f;
         pixels[blackPixel + 2] = 0.0f;

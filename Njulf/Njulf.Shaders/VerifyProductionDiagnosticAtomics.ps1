@@ -101,6 +101,10 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_opaque_simple_full_input_ddgi_c4_c5_hybrid_reflection.frag.spv' = 14
     'forward_weighted_oit.frag.spv' = 14
+    # The directional-only ThinGlass program touches only the four continuous
+    # tetrahedral owners. Its bounded atomics are the sparse receiver-demand
+    # and contribution handshake; diffuse visibility/recovery sites are absent.
+    'forward_transparent_thin_glass.frag.spv' = 4
     # Normal ray-query transparent variants add one frame-local atomic task
     # admission ticket for bounded thick transmission. Exact B1 variants use
     # the deterministic analytic fallback and retain their established count.
@@ -121,6 +125,9 @@ $algorithmicAtomicCounts = @{
     'forward_opaque_simple_full_input_ddgi_b1.frag.spv' = 21
     'forward_opaque_simple_full_input_ddgi_b1_provenance.frag.spv' = 21
     'forward_transparent_ddgi_b1.frag.spv' = 21
+    # ThinGlass adds the same seven exact surface-attribution operations to its
+    # four functional receiver operations.
+    'forward_transparent_thin_glass_ddgi_b1.frag.spv' = 11
     'forward_weighted_oit_ddgi_b1.frag.spv' = 21
     'forward_transparent_ray_ddgi_b1.frag.spv' = 21
     'forward_weighted_oit_ray_ddgi_b1.frag.spv' = 21

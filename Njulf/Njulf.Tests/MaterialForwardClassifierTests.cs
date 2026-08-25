@@ -84,6 +84,30 @@ namespace Njulf.Tests
         }
 
         [Test]
+        public void Classify_VisibleThinGlass_UsesDedicatedTransparentClass()
+        {
+            GPUMaterialData material = CreateDefaultMaterial();
+            material.FeatureFlags = (uint)MaterialFeatureFlags.Transmission;
+            material.TransportFlags = (uint)(
+                GiMaterialTransportFlags.ThinSurfaceTransmission |
+                GiMaterialTransportFlags.ThinGlass);
+            material.NormalScaleBias = new Vector4(1f, 2f, 0.5f, 1f);
+            var metadata = new MaterialRenderMetadata
+            {
+                BlendMode = MaterialBlendMode.AlphaBlend,
+                ShadingModel = MaterialShadingModel.ThinGlass,
+                TransmissionPolicy = GiTransmissionPolicy.ThinSurface,
+                SurfaceFlags = MaterialSurfaceFlags.DoubleSided |
+                    MaterialSurfaceFlags.ReceivesShadows
+            };
+
+            MaterialForwardClass materialClass =
+                MaterialForwardClassifier.Classify(material, metadata);
+
+            Assert.That(materialClass, Is.EqualTo(MaterialForwardClass.ThinGlass));
+        }
+
+        [Test]
         public void Classify_Bc5NormalMap_StaysOnSimpleOpaqueNormalPath()
         {
             GPUMaterialData material = CreateDefaultMaterial();
