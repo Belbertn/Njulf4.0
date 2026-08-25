@@ -539,12 +539,15 @@ public sealed class SceneDocumentLoader
                     $"Scene light '{light.Name}' ({light.Id}) has unsupported attenuation mode '{light.AttenuationMode}'.");
             }
             bool finite = IsFinite(light.Position) && IsFinite(light.Direction) &&
+                IsFinite(light.Up) &&
+                float.IsFinite(light.Size.X) && float.IsFinite(light.Size.Y) &&
                 IsFinite(light.Color) && float.IsFinite(light.Intensity) &&
                 float.IsFinite(light.Range) && float.IsFinite(light.SpotAngle) &&
                 float.IsFinite(light.InnerSpotAngle) &&
                 float.IsFinite(light.AttenuationConstant) &&
                 float.IsFinite(light.AttenuationLinear) &&
-                float.IsFinite(light.AttenuationQuadratic);
+                float.IsFinite(light.AttenuationQuadratic) &&
+                float.IsFinite(light.IesRotationRadians);
             if (!finite || light.Intensity < 0f || light.Range <= 0f ||
                 light.Color.X < 0f || light.Color.Y < 0f || light.Color.Z < 0f)
             {
@@ -555,9 +558,14 @@ public sealed class SceneDocumentLoader
                 light.Direction.X * light.Direction.X +
                 light.Direction.Y * light.Direction.Y +
                 light.Direction.Z * light.Direction.Z;
-            if ((type is Njulf.Core.Scene.ModelLightType.Directional or
-                    Njulf.Core.Scene.ModelLightType.Spot) &&
-                directionLengthSquared <= float.Epsilon)
+            bool requiresDirection =
+                type is Njulf.Core.Scene.ModelLightType.Directional or
+                    Njulf.Core.Scene.ModelLightType.Spot or
+                    Njulf.Core.Scene.ModelLightType.Rectangle or
+                    Njulf.Core.Scene.ModelLightType.Disk or
+                    Njulf.Core.Scene.ModelLightType.Tube ||
+                light.IesProfile != null;
+            if (requiresDirection && directionLengthSquared <= float.Epsilon)
             {
                 throw new InvalidDataException(
                     $"Scene light '{light.Name}' ({light.Id}) has a zero direction.");
@@ -569,6 +577,49 @@ public sealed class SceneDocumentLoader
             {
                 throw new InvalidDataException(
                     $"Scene spot light '{light.Name}' ({light.Id}) has invalid cone angles.");
+            }
+            if (type is Njulf.Core.Scene.ModelLightType.Rectangle or
+                    Njulf.Core.Scene.ModelLightType.Disk or
+                    Njulf.Core.Scene.ModelLightType.Tube &&
+                (light.Up.X * light.Up.X + light.Up.Y * light.Up.Y +
+                    light.Up.Z * light.Up.Z <= float.Epsilon ||
+                 MathF.Abs(
+                     light.Direction.X * light.Up.X +
+                     light.Direction.Y * light.Up.Y +
+                     light.Direction.Z * light.Up.Z) >=
+                    MathF.Sqrt(directionLengthSquared *
+                        (light.Up.X * light.Up.X + light.Up.Y * light.Up.Y +
+                         light.Up.Z * light.Up.Z)) * 0.9999f))
+            {
+                throw new InvalidDataException(
+                    $"Scene area light '{light.Name}' ({light.Id}) has an invalid orientation frame.");
+            }
+            if (type is Njulf.Core.Scene.ModelLightType.Rectangle or
+                    Njulf.Core.Scene.ModelLightType.Disk or
+                    Njulf.Core.Scene.ModelLightType.Tube)
+            {
+                if (light.Size.X <= 1e-5f || light.Size.Y <= 1e-5f ||
+                    (type == Njulf.Core.Scene.ModelLightType.Disk &&
+                     MathF.Abs(light.Size.X - light.Size.Y) >
+                        MathF.Max(MathF.Max(light.Size.X, light.Size.Y), 1f) * 1e-4f))
+                {
+                    throw new InvalidDataException(
+                        $"Scene area light '{light.Name}' ({light.Id}) has invalid dimensions.");
+                }
+            }
+            if (light.IesProfile != null &&
+                type is not Njulf.Core.Scene.ModelLightType.Point and
+                    not Njulf.Core.Scene.ModelLightType.Spot)
+            {
+                throw new InvalidDataException(
+                    $"Scene light '{light.Name}' ({light.Id}) assigns an IES profile to a non-punctual light.");
+            }
+            if (light.IesProfile is { } profile &&
+                (string.IsNullOrWhiteSpace(profile.Path) ||
+                 (!string.IsNullOrWhiteSpace(profile.SubObject) && profile.SubObject != "*")))
+            {
+                throw new InvalidDataException(
+                    $"Scene light '{light.Name}' ({light.Id}) has an invalid IES asset reference.");
             }
             if (attenuation ==
                     Njulf.Core.Scene.ModelLightAttenuationMode.Polynomial &&

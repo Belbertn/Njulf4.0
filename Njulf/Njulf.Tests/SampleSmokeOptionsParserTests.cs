@@ -222,6 +222,7 @@ public sealed class SampleSmokeOptionsParserTests
     [TestCase("sponza", SampleSceneKind.SponzaPlaza)]
     [TestCase("sponza-plaza", SampleSceneKind.SponzaPlaza)]
     [TestCase("foliage-showcase", SampleSceneKind.FoliageShowcase)]
+    [TestCase("analytical-area-lights", SampleSceneKind.AnalyticalAreaLights)]
     [TestCase("vfx-showcase", SampleSceneKind.VfxShowcase)]
     public void ParsesSceneAndDefaultsToStartupSmoke(string value, SampleSceneKind expected)
     {

@@ -603,6 +603,36 @@ namespace Njulf.Rendering.Data
         long GpuReflectionProbePrefilterMicroseconds,
         long GpuReflectionProbePublishMicroseconds)
     {
+        public int DirectionalLightCount { get; init; }
+        public int LocalLightCount { get; init; }
+        public int PointLightCount { get; init; }
+        public int SpotLightCount { get; init; }
+        public int RectangleLightCount { get; init; }
+        public int DiskLightCount { get; init; }
+        public int TubeLightCount { get; init; }
+        public int AreaLightCount { get; init; }
+        public int AreaLightLtcTablesAvailable { get; init; }
+        public ulong AreaLightLtcTableBytes { get; init; }
+        public int AreaRayShadowPassEnabled { get; init; }
+        public int AreaShadowCandidateCount { get; init; }
+        public int AreaShadowSelectedCount { get; init; }
+        public int AreaShadowRejectedByBudgetCount { get; init; }
+        public int AreaShadowSampleCount { get; init; }
+        public float AreaShadowMaximumRayDistance { get; init; }
+        public uint AreaRayShadowMaskWidth { get; init; }
+        public uint AreaRayShadowMaskHeight { get; init; }
+        public ulong AreaRayShadowMaskBytes { get; init; }
+        public uint AreaRayShadowResourceGeneration { get; init; }
+        public string AreaRayShadowFailureDetail { get; init; } = string.Empty;
+        public int IesPhotometricProfileCount { get; init; }
+        public ulong IesPhotometricProfileBytes { get; init; }
+        public ulong IesPhotometricProfileLoadSuccessCount { get; init; }
+        public ulong IesPhotometricProfileLoadFailureCount { get; init; }
+        public string IesPhotometricProfileLastFailure { get; init; } = string.Empty;
+        public uint DdgiAreaLightSampleAttemptCount { get; init; }
+        public uint DdgiAreaLightSampleAcceptCount { get; init; }
+        public uint DdgiAreaLightInvalidPdfCount { get; init; }
+        public uint DdgiAreaLightVisibilityRayCount { get; init; }
         public ReflectionMode RequestedReflectionMode { get; init; } =
             ReflectionMode.Disabled;
         public ReflectionMode EffectiveReflectionMode { get; init; } =
@@ -1098,6 +1128,7 @@ namespace Njulf.Rendering.Data
         public long GpuBloomUpsampleMicroseconds { get; init; }
         public long GpuDirectionalShadowMicroseconds { get; init; }
         public long GpuDirectionalRayShadowMicroseconds { get; init; }
+        public long GpuAreaRayShadowMicroseconds { get; init; }
         public long GpuDirectionalShadowTemporalMicroseconds { get; init; }
         public long GpuDirectionalShadowSpatialMicroseconds { get; init; }
         public long GpuSpotShadowMicroseconds { get; init; }
@@ -1279,6 +1310,7 @@ namespace Njulf.Rendering.Data
         public float AverageLightsPerNonEmptyTile { get; init; }
         public int LightCullRejectedPointCount { get; init; }
         public int LightCullRejectedSpotCount { get; init; }
+        public int LightCullRejectedAreaCount { get; init; }
         public ulong TextureAssetBytes { get; init; }
         public ulong DefaultTextureBytes { get; init; }
         public ulong FileTextureBytes { get; init; }

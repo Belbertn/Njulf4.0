@@ -142,6 +142,7 @@ namespace Njulf.Rendering
         private SpotShadowAtlas? _spotShadowAtlas;
         private PointShadowCubemapArray? _pointShadowCubemapArray;
         private EnvironmentManager? _environmentManager;
+        private readonly IesPhotometricProfileManager _iesPhotometricProfileManager;
         private ReflectionProbeManager? _reflectionProbeManager;
         private ForwardPlusPass? _forwardPlusPass;
         private ReflectionProbeCapturePass? _reflectionProbeCapturePass;
@@ -403,6 +404,7 @@ namespace Njulf.Rendering
         private ForwardVisibilityCompactionPass _forwardVisibilityCompactionPass = null!;
         private DirectionalShadowPass? _directionalShadowPass;
         private DirectionalRayShadowPass? _directionalRayShadowPass;
+        private AreaRayShadowPass? _areaRayShadowPass;
 
         // State
         private int _currentFrame = 0;
@@ -451,6 +453,7 @@ namespace Njulf.Rendering
         private DdgiGeometryParticipationGpuCounters
             _completedDdgiGeometryParticipationCounters;
         private DdgiManyLightGpuCounters _completedDdgiManyLightCounters;
+        private DdgiAreaLightGpuCounters _completedDdgiAreaLightCounters;
         private DebugDdgiOverlayGpuCounters _completedDebugDdgiOverlayCounters;
         private GpuParticleCounterSnapshot _completedGpuParticleCounters;
         private FoliageCounterSnapshot _completedFoliageCounters;
@@ -1411,6 +1414,10 @@ namespace Njulf.Rendering
             _stagingRing = stagingRing ?? throw new ArgumentNullException(nameof(stagingRing));
             _deleter = deleter ?? throw new ArgumentNullException(nameof(deleter));
             _modelUploadService = modelUploadService ?? throw new ArgumentNullException(nameof(modelUploadService));
+            _iesPhotometricProfileManager = new IesPhotometricProfileManager(
+                _textureManager,
+                _bindlessHeap);
+            _lightManager.PhotometricProfiles = _iesPhotometricProfileManager;
             Settings = initialSettings ?? new RenderSettings();
             _ddgiMutationJournal = new DdgiMutationJournal(
                 _materialManager,
@@ -2060,6 +2067,19 @@ namespace Njulf.Rendering
                 _giPipelineCacheService);
             _directionalRayShadowPass = directionalRayShadowPass;
             AddPassInstance(directionalRayShadowPass);
+
+            var areaRayShadowPass = new AreaRayShadowPass(
+                _context,
+                _swapchain,
+                _bindlessHeap,
+                _renderTargets!,
+                Settings.Shadows,
+                _bufferManager,
+                _accelerationStructureManager!,
+                _raySceneDescriptorBank!,
+                _giPipelineCacheService);
+            _areaRayShadowPass = areaRayShadowPass;
+            AddPassInstance(areaRayShadowPass);
 
             AddPassInstance(new DirectionalShadowTemporalPass(
                 _context,
@@ -3682,6 +3702,9 @@ namespace Njulf.Rendering
             _completedDdgiManyLightCounters =
                 _diagnosticsBuffer.GetLastCompletedDdgiManyLightCounters(
                     _currentFrame);
+            _completedDdgiAreaLightCounters =
+                _diagnosticsBuffer.GetLastCompletedDdgiAreaLightCounters(
+                    _currentFrame);
             _completedDebugDdgiOverlayCounters =
                 _diagnosticsBuffer.GetLastCompletedDebugDdgiOverlayCounters(
                     _currentFrame);
@@ -4292,6 +4315,22 @@ namespace Njulf.Rendering
             sceneData.FrameIndex = frameRingIndex;
             sceneData.TemporalSampleIndex = _temporalSampleIndex;
             sceneData.DdgiFrameSerial = frameSerial;
+            sceneData.AreaShadowCandidateCount = shadowsAllowed
+                ? localShadowSelection.AreaCandidateCount
+                : 0;
+            sceneData.AreaShadowSelectedCount = shadowsAllowed
+                ? localShadowSelection.AreaLights.Length
+                : 0;
+            sceneData.AreaShadowRejectedByBudgetCount = shadowsAllowed
+                ? localShadowSelection.AreaRejectedByBudgetCount
+                : 0;
+            sceneData.AreaShadowSampleCount = shadowsAllowed
+                ? Settings.Shadows.AreaShadowSampleCount
+                : 0;
+            sceneData.AreaShadowMaximumRayDistance = shadowsAllowed
+                ? ResolveMaximumAreaShadowRayDistance(
+                    localShadowSelection.AreaLights)
+                : 0f;
             sceneData.MaterialDetailedTransportHitCount =
                 _completedMaterialGiCounters.EstimatedDetailedTransportHitCount;
             sceneData.MaterialCompactTransportHitCount =
@@ -4345,6 +4384,12 @@ namespace Njulf.Rendering
             sceneData.LightCount = lightCount;
             sceneData.DirectionalLightCount = directionalLightCount;
             sceneData.LocalLightCount = localLightCount;
+            sceneData.PointLightCount = lightSnapshot.PointLightCount;
+            sceneData.SpotLightCount = lightSnapshot.SpotLightCount;
+            sceneData.RectangleLightCount = lightSnapshot.RectangleLightCount;
+            sceneData.DiskLightCount = lightSnapshot.DiskLightCount;
+            sceneData.TubeLightCount = lightSnapshot.TubeLightCount;
+            sceneData.AreaLightCount = lightSnapshot.AreaLightCount;
             sceneData.LightUploadBytes = lightUploadBytes;
             UpdateTiledLightDiagnostics(sceneData, lightSnapshot);
             sceneData.UploadedBytes += lightUploadBytes;
@@ -4610,7 +4655,6 @@ namespace Njulf.Rendering
                     directionalShadowsEnabled,
                     shadowedDirectionalLightIndex,
                     shadowDiagnosticLightDirection);
-                PrepareLocalShadows(sceneData, localShadowSelection, lightCount);
             }
             _environmentManager?.Upload(_stagingRing, _currentCommandBuffer);
             PrepareDdgiFoliageProxies(scene, sceneData);
@@ -4689,6 +4733,14 @@ namespace Njulf.Rendering
             // Publish the new TLAS/metadata transaction before DDGI chooses a
             // trace backend or records any ray-query consumer.
             RecordAccelerationStructures(sceneData);
+            PrepareAreaRayShadows(
+                sceneData,
+                localShadowSelection,
+                shadowsAllowed);
+            PrepareLocalShadows(
+                sceneData,
+                localShadowSelection,
+                lightCount);
             PrepareThickTransmissionFrame(sceneData);
             if (reflectionsAllowed)
                 PrepareReflectionProbes(scene, sceneData);
@@ -6794,6 +6846,66 @@ namespace Njulf.Rendering
                 parameters);
         }
 
+        private void PrepareAreaRayShadows(
+            SceneRenderingData sceneData,
+            LocalShadowSelection selection,
+            bool shadowsAllowed)
+        {
+            bool requested = shadowsAllowed &&
+                Settings.Shadows.AreaShadowsEnabled &&
+                selection.AreaLights.Length > 0;
+            bool readiness = requested &&
+                sceneData.RaySceneReadiness.IsReady(
+                    RaySceneConsumer.AreaLightShadows,
+                    RaySceneGeometryCategory.DirectionalShadowDefault);
+            bool resources = readiness &&
+                _areaRayShadowPass?.EnsureResources(
+                    _lastSceneRenderExtent.Width,
+                    _lastSceneRenderExtent.Height,
+                    sceneData.DdgiFrameSerial) == true;
+            bool enabled = requested && readiness && resources;
+            sceneData.AreaRayShadowPassEnabled = enabled;
+            sceneData.AreaShadowSelectedCount = enabled
+                ? selection.AreaLights.Length
+                : 0;
+            sceneData.AreaShadowLights = enabled
+                ? selection.AreaLights
+                : [];
+            sceneData.AreaRayShadowMaskWidth = enabled
+                ? _areaRayShadowPass?.Width ?? 0u
+                : 0u;
+            sceneData.AreaRayShadowMaskHeight = enabled
+                ? _areaRayShadowPass?.Height ?? 0u
+                : 0u;
+            sceneData.AreaRayShadowMaskBytes = enabled
+                ? checked((_areaRayShadowPass?.BufferBytes ?? 0UL) *
+                    (ulong)FramesInFlight)
+                : 0UL;
+            sceneData.AreaRayShadowResourceGeneration = enabled
+                ? _areaRayShadowPass?.ResourceGeneration ?? 0u
+                : 0u;
+            sceneData.AreaRayShadowFailureDetail = enabled || !requested
+                ? string.Empty
+                : !readiness
+                    ? sceneData.RaySceneReadiness.FailureDetail
+                    : _areaRayShadowPass?.FailureDetail ??
+                        "area ray-shadow pass is unavailable";
+        }
+
+        private static float ResolveMaximumAreaShadowRayDistance(
+            ReadOnlySpan<SelectedLocalShadow> selectedLights)
+        {
+            float maximum = 0f;
+            for (int index = 0; index < selectedLights.Length; index++)
+            {
+                maximum = MathF.Max(
+                    maximum,
+                    AnalyticalLightGeometry.GetMaximumSurfaceSampleDistanceWithinRange(
+                        selectedLights[index].Light));
+            }
+            return float.IsFinite(maximum) ? maximum : 0f;
+        }
+
         private void PrepareLocalShadows(
             SceneRenderingData sceneData,
             LocalShadowSelection selection,
@@ -6809,9 +6921,18 @@ namespace Njulf.Rendering
             Span<GPUSpotShadow> spotShadows = _spotShadowScratch.AsSpan(0, selection.SpotLights.Length);
             Span<GPUPointShadow> pointShadows = _pointShadowScratch.AsSpan(0, selection.PointLights.Length);
             Span<GPULocalLightShadowIndex> shadowIndices = _localShadowIndexScratch.AsSpan(0, lightCount);
+            ReadOnlySpan<SelectedLocalShadow> areaShadows =
+                sceneData.AreaRayShadowPassEnabled
+                    ? selection.AreaLights
+                    : ReadOnlySpan<SelectedLocalShadow>.Empty;
             LocalShadowDataBuilder.FillSpotShadows(selection.SpotLights, shadowSettings, spotShadows);
             LocalShadowDataBuilder.FillPointShadows(selection.PointLights, shadowSettings, pointShadows);
-            LocalShadowDataBuilder.FillShadowIndexMap(lightCount, selection.SpotLights, selection.PointLights, shadowIndices);
+            LocalShadowDataBuilder.FillShadowIndexMap(
+                lightCount,
+                selection.SpotLights,
+                selection.PointLights,
+                areaShadows,
+                shadowIndices);
 
             ulong spotSignature = CreateSpotShadowSignature(selection.SpotLights, shadowSettings);
             if (!_hasUploadedSpotShadows || _lastSpotShadowUploadSignature != spotSignature)
@@ -6821,7 +6942,11 @@ namespace Njulf.Rendering
                 _hasUploadedSpotShadows = true;
             }
 
-            ulong indexSignature = CreateLocalShadowIndexSignature(lightCount, selection.SpotLights, selection.PointLights);
+            ulong indexSignature = CreateLocalShadowIndexSignature(
+                lightCount,
+                selection.SpotLights,
+                selection.PointLights,
+                areaShadows);
             if (!_hasUploadedLocalShadowIndices || _lastLocalShadowIndexUploadSignature != indexSignature)
             {
                 _spotShadowAtlas.UploadShadowIndices(_stagingRing, _currentCommandBuffer, shadowIndices);
@@ -6974,7 +7099,8 @@ namespace Njulf.Rendering
         private static ulong CreateLocalShadowIndexSignature(
             int lightCount,
             ReadOnlySpan<SelectedLocalShadow> selectedSpots,
-            ReadOnlySpan<SelectedLocalShadow> selectedPoints)
+            ReadOnlySpan<SelectedLocalShadow> selectedPoints,
+            ReadOnlySpan<SelectedLocalShadow> selectedAreas)
         {
             ulong hash = HashStart;
             hash = HashAdd(hash, lightCount);
@@ -6984,6 +7110,9 @@ namespace Njulf.Rendering
             hash = HashAdd(hash, selectedPoints.Length);
             for (int i = 0; i < selectedPoints.Length; i++)
                 hash = HashAdd(hash, selectedPoints[i].LightIndex);
+            hash = HashAdd(hash, selectedAreas.Length);
+            for (int i = 0; i < selectedAreas.Length; i++)
+                hash = HashAdd(hash, selectedAreas[i].LightIndex);
             return hash;
         }
 
@@ -7114,6 +7243,7 @@ namespace Njulf.Rendering
             sceneData.LightTileSaturationCount = 0;
             sceneData.LightCullRejectedPointCount = 0;
             sceneData.LightCullRejectedSpotCount = 0;
+            sceneData.LightCullRejectedAreaCount = 0;
 
             if (sceneData.LocalLightCount <= 0 ||
                 sceneData.TileCountX == 0 ||
@@ -7202,7 +7332,9 @@ namespace Njulf.Rendering
                 return false;
 
             Vector4 clip = TransformHomogeneous(light.Position, sceneData.ViewProjectionMatrix);
-            float radius = MathF.Max(light.Range, 0.001f);
+            float radius = MathF.Max(
+                AnalyticalLightGeometry.GetBoundingRadius(light),
+                0.001f);
             if (!IsFinite(clip.X) || !IsFinite(clip.Y) || !IsFinite(clip.W))
                 return false;
 
@@ -7267,6 +7399,8 @@ namespace Njulf.Rendering
                 sceneData.LightCullRejectedPointCount++;
             else if (lightType == LightType.Spot)
                 sceneData.LightCullRejectedSpotCount++;
+            else if (AnalyticalLightGeometry.IsArea(lightType))
+                sceneData.LightCullRejectedAreaCount++;
         }
 
         private void UpdateGlobalIlluminationCpuTiming(SceneRenderingData sceneData)
@@ -7662,6 +7796,56 @@ namespace Njulf.Rendering
                 GpuReflectionProbePrefilterMicroseconds: sceneData.GpuReflectionProbePrefilterMicroseconds,
                 GpuReflectionProbePublishMicroseconds: sceneData.GpuReflectionProbePublishMicroseconds)
             {
+                DirectionalLightCount = sceneData.DirectionalLightCount,
+                LocalLightCount = sceneData.LocalLightCount,
+                PointLightCount = sceneData.PointLightCount,
+                SpotLightCount = sceneData.SpotLightCount,
+                RectangleLightCount = sceneData.RectangleLightCount,
+                DiskLightCount = sceneData.DiskLightCount,
+                TubeLightCount = sceneData.TubeLightCount,
+                AreaLightCount = sceneData.AreaLightCount,
+                AreaLightLtcTablesAvailable =
+                    _environmentManager?.LtcLookupTablesAvailable == true ? 1 : 0,
+                AreaLightLtcTableBytes =
+                    _environmentManager?.LtcLookupTableBytes ?? 0UL,
+                AreaRayShadowPassEnabled =
+                    sceneData.AreaRayShadowPassEnabled ? 1 : 0,
+                AreaShadowCandidateCount = sceneData.AreaShadowCandidateCount,
+                AreaShadowSelectedCount = sceneData.AreaShadowSelectedCount,
+                AreaShadowRejectedByBudgetCount =
+                    sceneData.AreaShadowRejectedByBudgetCount,
+                AreaShadowSampleCount = sceneData.AreaShadowSampleCount,
+                AreaShadowMaximumRayDistance =
+                    sceneData.AreaShadowMaximumRayDistance,
+                AreaRayShadowMaskWidth = sceneData.AreaRayShadowMaskWidth,
+                AreaRayShadowMaskHeight = sceneData.AreaRayShadowMaskHeight,
+                AreaRayShadowMaskBytes = sceneData.AreaRayShadowMaskBytes,
+                AreaRayShadowResourceGeneration =
+                    sceneData.AreaRayShadowResourceGeneration,
+                AreaRayShadowFailureDetail =
+                    sceneData.AreaRayShadowFailureDetail,
+                IesPhotometricProfileCount =
+                    _iesPhotometricProfileManager.ProfileCount,
+                IesPhotometricProfileBytes =
+                    _iesPhotometricProfileManager.EstimatedBytes,
+                IesPhotometricProfileLoadSuccessCount =
+                    _iesPhotometricProfileManager.LoadSuccessCount,
+                IesPhotometricProfileLoadFailureCount =
+                    _iesPhotometricProfileManager.LoadFailureCount,
+                IesPhotometricProfileLastFailure =
+                    _iesPhotometricProfileManager.LastFailure ?? string.Empty,
+                DdgiAreaLightSampleAttemptCount = giUsesSimpleDdgi
+                    ? _completedDdgiAreaLightCounters.SampleAttemptCount
+                    : 0u,
+                DdgiAreaLightSampleAcceptCount = giUsesSimpleDdgi
+                    ? _completedDdgiAreaLightCounters.SampleAcceptCount
+                    : 0u,
+                DdgiAreaLightInvalidPdfCount = giUsesSimpleDdgi
+                    ? _completedDdgiAreaLightCounters.InvalidPdfCount
+                    : 0u,
+                DdgiAreaLightVisibilityRayCount = giUsesSimpleDdgi
+                    ? _completedDdgiAreaLightCounters.VisibilityRayCount
+                    : 0u,
                 RequestedReflectionMode = sceneData.RequestedReflectionMode,
                 EffectiveReflectionMode = sceneData.EffectiveReflectionMode,
                 ReflectionFallbackReason = sceneData.ReflectionFallbackReason,
@@ -9320,6 +9504,8 @@ namespace Njulf.Rendering
                 GpuDirectionalShadowMicroseconds = sceneData.GpuDirectionalShadowMicroseconds,
                 GpuDirectionalRayShadowMicroseconds =
                     sceneData.GpuDirectionalRayShadowMicroseconds,
+                GpuAreaRayShadowMicroseconds =
+                    sceneData.GpuAreaRayShadowMicroseconds,
                 GpuDirectionalShadowTemporalMicroseconds =
                     sceneData.GpuDirectionalShadowTemporalMicroseconds,
                 GpuDirectionalShadowSpatialMicroseconds =
@@ -9660,6 +9846,7 @@ namespace Njulf.Rendering
                 AverageLightsPerNonEmptyTile = sceneData.AverageLightsPerNonEmptyTile,
                 LightCullRejectedPointCount = sceneData.LightCullRejectedPointCount,
                 LightCullRejectedSpotCount = sceneData.LightCullRejectedSpotCount,
+                LightCullRejectedAreaCount = sceneData.LightCullRejectedAreaCount,
                 TextureAssetBytes = _textureManager.FileTextureBytes + _textureManager.DefaultTextureBytes,
                 DefaultTextureBytes = _textureManager.DefaultTextureBytes,
                 FileTextureBytes = _textureManager.FileTextureBytes,
@@ -11725,8 +11912,11 @@ namespace Njulf.Rendering
                     _directionalShadowHistoryResources?.GetDiagnostic(1) ?? BufferHandle.Invalid,
                     _directionalShadowHistoryResources?.GetCounters(0) ?? BufferHandle.Invalid,
                     _directionalShadowHistoryResources?.GetCounters(1) ?? BufferHandle.Invalid,
+                    _areaRayShadowPass?.GetMaskBuffer(0) ?? BufferHandle.Invalid,
+                    _areaRayShadowPass?.GetMaskBuffer(1) ?? BufferHandle.Invalid,
                     _directionalRayShadowPass?.ResourceGeneration ?? 0u,
-                    _directionalShadowHistoryResources?.ResourceGeneration ?? 0u),
+                    _directionalShadowHistoryResources?.ResourceGeneration ?? 0u,
+                    _areaRayShadowPass?.ResourceGeneration ?? 0u),
                 new CausticAsyncBufferIdentity(
                     causticBuffers.Tasks,
                     causticBuffers.Photons,
@@ -11940,6 +12130,15 @@ namespace Njulf.Rendering
                     RenderGraphResourceId.DirectionalShadowCounters,
                     $"Directional shadow counters frame {frameIndex}",
                     _directionalShadowHistoryResources?.GetCounters(frameIndex) ??
+                        BufferHandle.Invalid,
+                    queueFamilies,
+                    graphicsFamily,
+                    frameIndex: frameIndex);
+                AddAsyncComputeBufferBinding(
+                    bindings,
+                    RenderGraphResourceId.AreaRayShadowMask,
+                    $"Area ray-shadow mask frame {frameIndex}",
+                    _areaRayShadowPass?.GetMaskBuffer(frameIndex) ??
                         BufferHandle.Invalid,
                     queueFamilies,
                     graphicsFamily,
@@ -12830,8 +13029,11 @@ namespace Njulf.Rendering
             BufferHandle Diagnostic1,
             BufferHandle Counters0,
             BufferHandle Counters1,
+            BufferHandle AreaMask0,
+            BufferHandle AreaMask1,
             uint ResourceGeneration,
-            uint HistoryResourceGeneration);
+            uint HistoryResourceGeneration,
+            uint AreaMaskResourceGeneration);
 
         private readonly record struct CausticAsyncBufferIdentity(
             BufferHandle Tasks,
@@ -13099,6 +13301,7 @@ namespace Njulf.Rendering
             return sceneData.GpuDepthPrePassMicroseconds +
                 sceneData.GpuDirectionalShadowMicroseconds +
                 sceneData.GpuDirectionalRayShadowMicroseconds +
+                sceneData.GpuAreaRayShadowMicroseconds +
                 sceneData.GpuDirectionalShadowTemporalMicroseconds +
                 sceneData.GpuDirectionalShadowSpatialMicroseconds +
                 sceneData.GpuSpotShadowMicroseconds +
@@ -13206,6 +13409,8 @@ namespace Njulf.Rendering
             sceneData.GpuDirectionalShadowMicroseconds = timings.GetGpuMicrosecondsOrZero("DirectionalShadowPass");
             sceneData.GpuDirectionalRayShadowMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("DirectionalRayShadowPass");
+            sceneData.GpuAreaRayShadowMicroseconds =
+                timings.GetGpuMicrosecondsOrZero("AreaRayShadowPass");
             sceneData.GpuDirectionalShadowTemporalMicroseconds =
                 timings.GetGpuMicrosecondsOrZero("DirectionalShadowTemporalPass");
             sceneData.GpuDirectionalShadowSpatialMicroseconds =
@@ -16891,7 +17096,9 @@ namespace Njulf.Rendering
             float spotFactor = light.Type == LightType.Spot
                 ? Math.Clamp(1.0f - MathF.Cos(Math.Clamp(light.SpotAngle, 0.0f, MathF.PI)), 0.05f, 1.0f)
                 : 1.0f;
-            return LightLuminance(light) * Math.Max(light.Intensity, 0.0f) * range * range * spotFactor;
+            float weight = AnalyticalLightGeometry.ComputePowerWeight(light) *
+                range * range * spotFactor;
+            return float.IsFinite(weight) ? weight : 0.0f;
         }
 
         private static float LightLuminance(Light light)
@@ -18785,10 +18992,15 @@ namespace Njulf.Rendering
 
         private static BoundingBox CreateLocalLightBounds(Light light)
         {
-            float range = MathF.Max(light.Range, 0.0f);
-            Vector3 center = ToCoreVector(light.Position);
-            Vector3 radius = new(range);
-            return new BoundingBox(center - radius, center + radius);
+            if (!AnalyticalLightGeometry.TryGetInfluenceBounds(
+                    light,
+                    out System.Numerics.Vector3 minimum,
+                    out System.Numerics.Vector3 maximum))
+            {
+                minimum = light.Position;
+                maximum = light.Position;
+            }
+            return new BoundingBox(ToCoreVector(minimum), ToCoreVector(maximum));
         }
 
         private void AddDdgiDirtyRegion(BoundingBox bounds, float padding, DdgiDirtyReason reason)
@@ -19395,6 +19607,12 @@ namespace Njulf.Rendering
                     ? RaySceneRequirement.ForDirectionalShadows(Settings.Shadows)
                     : RaySceneRequirement.None;
             requirement = requirement.Union(directionalRequirement);
+            RaySceneRequirement areaShadowRequirement =
+                RaySceneRequirement.ForAreaLightShadows(
+                    Settings.Shadows,
+                    sceneData.AreaShadowSelectedCount > 0,
+                    sceneData.AreaShadowMaximumRayDistance);
+            requirement = requirement.Union(areaShadowRequirement);
             RaySceneRequirement reflectionRequirement =
                 RaySceneRequirement.ForReflections(Settings.Reflections);
             requirement = requirement.Union(reflectionRequirement);
@@ -19404,6 +19622,7 @@ namespace Njulf.Rendering
             requirement = requirement.Union(thickTransmissionRequirement);
             bool enabled = requirement.Enabled;
             bool directionalRaySceneRequested = directionalRequirement.Enabled;
+            bool areaShadowRaySceneRequested = areaShadowRequirement.Enabled;
             bool reflectionRaySceneRequested = reflectionRequirement.Enabled;
             bool thickTransmissionRaySceneRequested =
                 thickTransmissionRequirement.Enabled;
@@ -19429,10 +19648,12 @@ namespace Njulf.Rendering
                     AllowStaticMemoryCulling:
                         farFieldCoverageReady &&
                         !directionalRaySceneRequested &&
+                        !areaShadowRaySceneRequested &&
                         !reflectionRaySceneRequested &&
                         !thickTransmissionRaySceneRequested),
                 new DdgiDynamicRayScenePolicy(
-                    directionalRaySceneRequested || reflectionRaySceneRequested ||
+                    directionalRaySceneRequested || areaShadowRaySceneRequested ||
+                    reflectionRaySceneRequested ||
                     thickTransmissionRaySceneRequested
                         ? DdgiSkinnedGeometryMode.CurrentPose
                         : gi.EffectiveDdgiSkinnedGeometryMode,
@@ -19443,7 +19664,8 @@ namespace Njulf.Rendering
                     ddgiRaySceneEnabled
                         ? gi.EffectiveDdgiTransparentGeometryMode
                         : DdgiTransparentGeometryMode.MaskOnly,
-                    directionalRaySceneRequested || reflectionRaySceneRequested ||
+                    directionalRaySceneRequested || areaShadowRaySceneRequested ||
+                    reflectionRaySceneRequested ||
                     thickTransmissionRaySceneRequested
                         ? DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
                         : gi.EffectiveDdgiFoliageGeometryMode,
@@ -19452,7 +19674,8 @@ namespace Njulf.Rendering
                         (gi.ActiveContentDependentFeatures &
                             DdgiContentFeature.TransparentGeometry) != 0,
                     AlphaMaskedTransportEnabled:
-                        directionalRaySceneRequested || reflectionRaySceneRequested ||
+                    directionalRaySceneRequested || areaShadowRaySceneRequested ||
+                    reflectionRaySceneRequested ||
                         thickTransmissionRaySceneRequested ||
                         gi.DdgiAlphaMaskedTransportEnabled,
                     DynamicStorageBudgetBytes: gi.DdgiDynamicBlasMemoryBudgetBytes,
@@ -19495,6 +19718,9 @@ namespace Njulf.Rendering
                     ? Settings.Reflections.Enabled &&
                       Settings.Reflections.Mode == ReflectionMode.HybridRayQuery
                         ? DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
+                        : sceneData.AreaShadowSelectedCount > 0 &&
+                          Settings.Shadows.AreaShadowsEnabled
+                            ? DdgiFoliageGeometryMode.AuthoredAndProceduralProxy
                         : sceneData.DirectionalShadowPassEnabled &&
                       Settings.Shadows.RequestedDirectionalShadowMode is
                           DirectionalShadowMode.HybridContact or
@@ -20234,6 +20460,27 @@ namespace Njulf.Rendering
                 hash = HashAdd(hash, QuantizeForHash(light.SpotAngle, 0.0025f));
                 hash = HashAdd(hash, QuantizeForHash(
                     light.InnerSpotAngle,
+                    0.0025f));
+            }
+
+            if (AnalyticalLightGeometry.IsArea(light.Type))
+            {
+                hash = HashAdd(hash, QuantizeForHash(light.Direction.X, 0.0025f));
+                hash = HashAdd(hash, QuantizeForHash(light.Direction.Y, 0.0025f));
+                hash = HashAdd(hash, QuantizeForHash(light.Direction.Z, 0.0025f));
+                hash = HashAdd(hash, QuantizeForHash(light.Up.X, 0.0025f));
+                hash = HashAdd(hash, QuantizeForHash(light.Up.Y, 0.0025f));
+                hash = HashAdd(hash, QuantizeForHash(light.Up.Z, 0.0025f));
+                hash = HashAdd(hash, QuantizeForHash(light.Size.X, 0.0025f));
+                hash = HashAdd(hash, QuantizeForHash(light.Size.Y, 0.0025f));
+                hash = HashAdd(hash, light.TwoSided);
+            }
+            if (AnalyticalLightGeometry.IsPunctual(light.Type))
+            {
+                hash = HashAdd(hash, light.PhotometricProfile.Value);
+                hash = HashAdd(hash, light.PhotometricProfile.Revision);
+                hash = HashAdd(hash, QuantizeForHash(
+                    light.IesRotationRadians,
                     0.0025f));
             }
 
@@ -22751,6 +22998,18 @@ namespace Njulf.Rendering
             AddResourceStage(
                 "environment-manager",
                 () => _environmentManager?.Dispose());
+            AddResourceStage(
+                "ies-photometric-profile-manager",
+                () =>
+                {
+                    if (ReferenceEquals(
+                        _lightManager.PhotometricProfiles,
+                        _iesPhotometricProfileManager))
+                    {
+                        _lightManager.PhotometricProfiles = null;
+                    }
+                    _iesPhotometricProfileManager.Dispose();
+                });
             AddResourceStage(
                 "reflection-probe-manager",
                 () =>

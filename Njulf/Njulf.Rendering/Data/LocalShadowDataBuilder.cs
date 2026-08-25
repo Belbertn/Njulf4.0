@@ -117,11 +117,29 @@ namespace Njulf.Rendering.Data
             SelectedLocalShadow[] selectedSpots,
             SelectedLocalShadow[] selectedPoints)
         {
+            return BuildShadowIndexMap(
+                lightCount,
+                selectedSpots,
+                selectedPoints,
+                []);
+        }
+
+        public static GPULocalLightShadowIndex[] BuildShadowIndexMap(
+            int lightCount,
+            SelectedLocalShadow[] selectedSpots,
+            SelectedLocalShadow[] selectedPoints,
+            SelectedLocalShadow[] selectedAreas)
+        {
             if (lightCount < 0)
                 throw new ArgumentOutOfRangeException(nameof(lightCount));
 
             var indices = new GPULocalLightShadowIndex[lightCount];
-            FillShadowIndexMap(lightCount, selectedSpots, selectedPoints, indices);
+            FillShadowIndexMap(
+                lightCount,
+                selectedSpots,
+                selectedPoints,
+                selectedAreas,
+                indices);
             return indices;
         }
 
@@ -129,6 +147,21 @@ namespace Njulf.Rendering.Data
             int lightCount,
             ReadOnlySpan<SelectedLocalShadow> selectedSpots,
             ReadOnlySpan<SelectedLocalShadow> selectedPoints,
+            Span<GPULocalLightShadowIndex> destination)
+        {
+            FillShadowIndexMap(
+                lightCount,
+                selectedSpots,
+                selectedPoints,
+                ReadOnlySpan<SelectedLocalShadow>.Empty,
+                destination);
+        }
+
+        public static void FillShadowIndexMap(
+            int lightCount,
+            ReadOnlySpan<SelectedLocalShadow> selectedSpots,
+            ReadOnlySpan<SelectedLocalShadow> selectedPoints,
+            ReadOnlySpan<SelectedLocalShadow> selectedAreas,
             Span<GPULocalLightShadowIndex> destination)
         {
             if (lightCount < 0)
@@ -140,7 +173,7 @@ namespace Njulf.Rendering.Data
             {
                 destination[i].SpotShadowIndex = -1;
                 destination[i].PointShadowIndex = -1;
-                destination[i].Padding0 = 0;
+                destination[i].AreaShadowIndex = -1;
                 destination[i].Padding1 = 0;
             }
 
@@ -148,6 +181,8 @@ namespace Njulf.Rendering.Data
                 destination[selectedSpots[i].LightIndex].SpotShadowIndex = i;
             for (int i = 0; i < selectedPoints.Length; i++)
                 destination[selectedPoints[i].LightIndex].PointShadowIndex = i;
+            for (int i = 0; i < selectedAreas.Length; i++)
+                destination[selectedAreas[i].LightIndex].AreaShadowIndex = i;
         }
 
         public static CoreMatrix4x4 BuildSpotViewProjection(Light light)

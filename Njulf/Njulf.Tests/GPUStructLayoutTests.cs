@@ -153,7 +153,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDebugLineVertex>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(320));
                 Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(548));
-                Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(80));
+                Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
                 Assert.That(Marshal.SizeOf<GPUMeshletDrawCommand>(), Is.EqualTo(16));
                 Assert.That(Marshal.SizeOf<GPUPackedMeshletDrawCommand>(), Is.EqualTo(32));
@@ -179,6 +179,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUShadowData>(), Is.EqualTo(320));
                 Assert.That(Marshal.SizeOf<GPUDirectionalShadowParameters>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUDirectionalRayShadowPushConstants>(), Is.EqualTo(128));
+                Assert.That(Marshal.SizeOf<GPUAreaRayShadowPushConstants>(), Is.EqualTo(128));
                 Assert.That(Marshal.SizeOf<GPUSpotShadow>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUPointShadow>(), Is.EqualTo(432));
                 Assert.That(Marshal.SizeOf<GPULocalLightShadowIndex>(), Is.EqualTo(16));
@@ -458,6 +459,7 @@ namespace Njulf.Tests
                 typeof(GPUShadowData),
                 typeof(GPUDirectionalShadowParameters),
                 typeof(GPUDirectionalRayShadowPushConstants),
+                typeof(GPUAreaRayShadowPushConstants),
                 typeof(GPUSpotShadow),
                 typeof(GPUPointShadow),
                 typeof(GPULocalLightShadowIndex),

@@ -840,6 +840,14 @@ namespace Njulf.Rendering.Descriptors
         public const int PrefilteredEnvironmentNextTexture =
             MaterialTransportProvenanceTexture + 1;
 
+        /// <summary>Fixed 64x64 GGX LTC inverse-matrix lookup.</summary>
+        public const int AreaLightLtcMatrixTexture =
+            PrefilteredEnvironmentNextTexture + 1;
+
+        /// <summary>Fixed 64x64 GGX LTC magnitude/Fresnel lookup.</summary>
+        public const int AreaLightLtcAmplitudeTexture =
+            AreaLightLtcMatrixTexture + 1;
+
         /// <summary>
         /// Number of fixed sampled-image Simple-DDGI atlas groups reserved for the
         /// optional A/B migration path.  Each group is a 2D-array texture and the
@@ -849,7 +857,7 @@ namespace Njulf.Rendering.Descriptors
 
         /// <summary>First fixed sampled Simple-DDGI irradiance atlas texture group.</summary>
         public const int SimpleDdgiSampledIrradianceTextureBase =
-            PrefilteredEnvironmentNextTexture + 1;
+            AreaLightLtcAmplitudeTexture + 1;
 
         /// <summary>First fixed sampled Simple-DDGI visibility atlas texture group.</summary>
         public const int SimpleDdgiSampledVisibilityTextureBase =
@@ -876,8 +884,16 @@ namespace Njulf.Rendering.Descriptors
         public const int VolumetricFogBounceRadianceBuffer =
             DirectionalShadowCounterBufferFrame1 + 1;
 
-        public const int StaticBufferCount =
+        /// <summary>Full-resolution packed area-light visibility for frame 0.</summary>
+        public const int AreaRayShadowMaskBufferBase =
             VolumetricFogBounceRadianceBuffer + 1;
+
+        /// <summary>Full-resolution packed area-light visibility for frame 1.</summary>
+        public const int AreaRayShadowMaskBufferFrame1 =
+            AreaRayShadowMaskBufferBase + 1;
+
+        public const int StaticBufferCount =
+            AreaRayShadowMaskBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -1116,6 +1132,8 @@ namespace Njulf.Rendering.Descriptors
                     DirectionalShadowCounterBufferBase => nameof(DirectionalShadowCounterBufferBase),
                     DirectionalShadowCounterBufferFrame1 => nameof(DirectionalShadowCounterBufferFrame1),
                     VolumetricFogBounceRadianceBuffer => nameof(VolumetricFogBounceRadianceBuffer),
+                    AreaRayShadowMaskBufferBase => nameof(AreaRayShadowMaskBufferBase),
+                    AreaRayShadowMaskBufferFrame1 => nameof(AreaRayShadowMaskBufferFrame1),
                     _ => "Unknown"
                 };
             }

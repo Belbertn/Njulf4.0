@@ -143,6 +143,37 @@ public sealed class DirectionalShadowContractsTests
     }
 
     [Test]
+    public void RaySceneRequirements_AreaShadowsRequireSelectedEmitterAndFullCoverage()
+    {
+        var settings = new ShadowSettings
+        {
+            AreaShadowsEnabled = true
+        };
+
+        RaySceneRequirement enabled =
+            RaySceneRequirement.ForAreaLightShadows(
+                settings,
+                hasSelectedAreaLight: true,
+                maximumRayDistance: 18f);
+        RaySceneRequirement empty =
+            RaySceneRequirement.ForAreaLightShadows(
+                settings,
+                hasSelectedAreaLight: false,
+                maximumRayDistance: 18f);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(enabled.Consumers,
+                Is.EqualTo(RaySceneConsumer.AreaLightShadows));
+            Assert.That(enabled.RequiredCategories,
+                Is.EqualTo(RaySceneGeometryCategory.DirectionalShadowDefault));
+            Assert.That(enabled.MaximumRayDistance, Is.EqualTo(18f));
+            Assert.That(enabled.RequiresCurrentPose, Is.True);
+            Assert.That(empty.Enabled, Is.False);
+        });
+    }
+
+    [Test]
     public void DirectionalModeResolver_FailsClosedUntilSharedRaySceneIsComplete()
     {
         var settings = new ShadowSettings

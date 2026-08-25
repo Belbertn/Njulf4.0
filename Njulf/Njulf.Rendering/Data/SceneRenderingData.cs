@@ -87,6 +87,12 @@ namespace Njulf.Rendering.Data
         public int LightCount { get; set; }
         public int DirectionalLightCount { get; set; }
         public int LocalLightCount { get; set; }
+        public int PointLightCount { get; set; }
+        public int SpotLightCount { get; set; }
+        public int RectangleLightCount { get; set; }
+        public int DiskLightCount { get; set; }
+        public int TubeLightCount { get; set; }
+        public int AreaLightCount { get; set; }
         public int TextureCount { get; set; }
         public uint CurrentFrameIndex { get; set; }
         public uint ScreenWidth { get; set; }
@@ -368,6 +374,7 @@ namespace Njulf.Rendering.Data
         public int LightTileSaturationCount { get; set; }
         public int LightCullRejectedPointCount { get; set; }
         public int LightCullRejectedSpotCount { get; set; }
+        public int LightCullRejectedAreaCount { get; set; }
         public ulong UploadedBytes { get; set; }
         public long CpuSceneBuildMicroseconds { get; set; }
         public long CpuPayloadSignatureMicroseconds { get; set; }
@@ -424,6 +431,7 @@ namespace Njulf.Rendering.Data
         public long GpuTransparentMicroseconds { get; set; }
         public long GpuDirectionalShadowMicroseconds { get; set; }
         public long GpuDirectionalRayShadowMicroseconds { get; set; }
+        public long GpuAreaRayShadowMicroseconds { get; set; }
         public long GpuDirectionalShadowTemporalMicroseconds { get; set; }
         public long GpuDirectionalShadowSpatialMicroseconds { get; set; }
         public long GpuSpotShadowMicroseconds { get; set; }
@@ -567,6 +575,18 @@ namespace Njulf.Rendering.Data
         public uint DirectionalRayShadowMaskHeight { get; set; }
         public ulong DirectionalRayShadowMaskBytes { get; set; }
         public uint DirectionalRayShadowResourceGeneration { get; set; }
+        public bool AreaRayShadowPassEnabled { get; set; }
+        public int AreaShadowCandidateCount { get; set; }
+        public int AreaShadowSelectedCount { get; set; }
+        public int AreaShadowRejectedByBudgetCount { get; set; }
+        public int AreaShadowSampleCount { get; set; }
+        public float AreaShadowMaximumRayDistance { get; set; }
+        public uint AreaRayShadowMaskWidth { get; set; }
+        public uint AreaRayShadowMaskHeight { get; set; }
+        public ulong AreaRayShadowMaskBytes { get; set; }
+        public uint AreaRayShadowResourceGeneration { get; set; }
+        public string AreaRayShadowFailureDetail { get; set; } = string.Empty;
+        public SelectedLocalShadow[] AreaShadowLights { get; set; } = [];
         public bool DirectionalShadowTemporalPassEnabled { get; set; }
         public bool DirectionalShadowSpatialPassEnabled { get; set; }
         public bool DirectionalShadowRayCountersEnabled { get; set; }
@@ -1652,6 +1672,12 @@ namespace Njulf.Rendering.Data
             LightCount = 0;
             DirectionalLightCount = 0;
             LocalLightCount = 0;
+            PointLightCount = 0;
+            SpotLightCount = 0;
+            RectangleLightCount = 0;
+            DiskLightCount = 0;
+            TubeLightCount = 0;
+            AreaLightCount = 0;
             TextureCount = 0;
             TransparentPassEnabled = true;
             TransparencyMode = TransparencyMode.SortedAlphaBlend;
@@ -1840,6 +1866,7 @@ namespace Njulf.Rendering.Data
             LightTileSaturationCount = 0;
             LightCullRejectedPointCount = 0;
             LightCullRejectedSpotCount = 0;
+            LightCullRejectedAreaCount = 0;
             UploadedBytes = 0;
             CpuSceneBuildMicroseconds = 0;
             CpuPayloadSignatureMicroseconds = 0;
@@ -1889,6 +1916,7 @@ namespace Njulf.Rendering.Data
             GpuTransparentMicroseconds = 0;
             GpuDirectionalShadowMicroseconds = 0;
             GpuDirectionalRayShadowMicroseconds = 0;
+            GpuAreaRayShadowMicroseconds = 0;
             GpuDirectionalShadowTemporalMicroseconds = 0;
             GpuDirectionalShadowSpatialMicroseconds = 0;
             GpuSpotShadowMicroseconds = 0;
@@ -2101,6 +2129,18 @@ namespace Njulf.Rendering.Data
             DirectionalRayShadowMaskHeight = 0u;
             DirectionalRayShadowMaskBytes = 0UL;
             DirectionalRayShadowResourceGeneration = 0u;
+            AreaRayShadowPassEnabled = false;
+            AreaShadowCandidateCount = 0;
+            AreaShadowSelectedCount = 0;
+            AreaShadowRejectedByBudgetCount = 0;
+            AreaShadowSampleCount = 0;
+            AreaShadowMaximumRayDistance = 0f;
+            AreaRayShadowMaskWidth = 0u;
+            AreaRayShadowMaskHeight = 0u;
+            AreaRayShadowMaskBytes = 0UL;
+            AreaRayShadowResourceGeneration = 0u;
+            AreaRayShadowFailureDetail = string.Empty;
+            AreaShadowLights = [];
             DirectionalShadowTemporalPassEnabled = false;
             DirectionalShadowSpatialPassEnabled = false;
             DirectionalShadowRayCountersEnabled = false;

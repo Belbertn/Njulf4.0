@@ -4,6 +4,7 @@
 #extension GL_EXT_ray_query : require
 
 #include "froxel_common.glsl"
+#include "area_lighting.glsl"
 
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 8) in;
 
@@ -144,11 +145,30 @@ float FroxelShadowMapVisibility(
 {
     if ((uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u)
         return 1.0;
-    if (light.Type == 1)
+    if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL)
         return FroxelDirectionalShadow(lightIndex, worldPosition);
-    if (light.Type == 2)
+    if (light.Type == GPU_LIGHT_TYPE_SPOT)
         return FroxelSpotShadow(lightIndex, worldPosition);
-    return FroxelPointShadow(lightIndex, worldPosition);
+    if (light.Type == GPU_LIGHT_TYPE_POINT)
+        return FroxelPointShadow(lightIndex, worldPosition);
+    return 1.0;
+}
+
+vec3 FroxelAreaRandom(vec3 worldPosition, uint lightIndex)
+{
+    uvec3 bits = floatBitsToUint(worldPosition);
+    uint state = bits.x ^ bits.y * 0x9e3779b9u ^
+        bits.z * 0x85ebca6bu ^ lightIndex * 0xc2b2ae35u;
+    state ^= state >> 16u;
+    state *= 0x7feb352du;
+    float x = float(state >> 8u) * (1.0 / 16777216.0);
+    state ^= state >> 15u;
+    state *= 0x846ca68bu;
+    float y = float(state >> 8u) * (1.0 / 16777216.0);
+    state ^= state >> 16u;
+    state *= 0x7feb352du;
+    float z = float(state >> 8u) * (1.0 / 16777216.0);
+    return vec3(x, y, z);
 }
 
 float FroxelRayQueryVisibility(
@@ -196,9 +216,36 @@ vec3 FroxelEvaluateDirect(
         vec3 directionToLight;
         float attenuation = 1.0;
         float lightDistance = FroxelFrame.NoiseSelfShadowAndHistory.z;
-        if (light.Type == 1)
+        bool areaLight = NjulfIsAreaLight(light);
+        if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL)
         {
             directionToLight = normalize(-light.Direction);
+        }
+        else if (areaLight)
+        {
+            NjulfAreaSurfaceSample emitter = NjulfSampleAreaLightSurface(
+                light, FroxelAreaRandom(worldPosition, lightIndex));
+            if (!emitter.valid)
+                continue;
+            vec3 offset = emitter.position - worldPosition;
+            lightDistance = length(offset);
+            if (!(lightDistance > 0.0001))
+                continue;
+            directionToLight = offset / lightDistance;
+            float sourceCosine = max(dot(emitter.normal, -directionToLight), 0.0);
+            vec3 axis;
+            vec3 up;
+            vec3 right;
+            if (sourceCosine <= 0.0 ||
+                !NjulfBuildLightFrame(light, axis, up, right))
+            {
+                continue;
+            }
+            float closestDistance = NjulfAreaClosestDistance(
+                light, worldPosition, axis, up, right);
+            attenuation = EvaluateNjulfFiniteRangeWindow(
+                closestDistance, light.Range) * sourceCosine /
+                max(lightDistance * lightDistance * emitter.areaPdf, 1e-8);
         }
         else
         {
@@ -209,14 +256,18 @@ vec3 FroxelEvaluateDirect(
             directionToLight = offset / lightDistance;
             attenuation = EvaluateNjulfLightDistanceAttenuation(
                 light, lightDistance);
-            if (light.Type == 2)
+            attenuation *= EvaluateNjulfIesProfile(light, -directionToLight);
+            if (light.Type == GPU_LIGHT_TYPE_SPOT)
                 attenuation *= EvaluateNjulfSpotAttenuation(
                     light, directionToLight);
             if (!(attenuation > 0.0))
                 continue;
         }
-        float mapVisibility = FroxelShadowMapVisibility(
-            lightIndex, light, worldPosition);
+        float mapVisibility = areaLight &&
+                (uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) != 0u
+            ? FroxelRayQueryVisibility(
+                worldPosition, directionToLight, lightDistance)
+            : FroxelShadowMapVisibility(lightIndex, light, worldPosition);
         float mediumVisibility = FroxelMediumTransmittance(
             worldPosition, directionToLight, lightDistance);
         float visibility = mapVisibility * mediumVisibility;
@@ -245,9 +296,36 @@ void FroxelPrepareClusterDirectLight(
     vec3 directionToLight;
     float attenuation = 1.0;
     float lightDistance = FroxelFrame.NoiseSelfShadowAndHistory.z;
-    if (light.Type == 1)
+    bool areaLight = NjulfIsAreaLight(light);
+    if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL)
     {
         directionToLight = normalize(-light.Direction);
+    }
+    else if (areaLight)
+    {
+        NjulfAreaSurfaceSample emitter = NjulfSampleAreaLightSurface(
+            light, FroxelAreaRandom(worldPosition, lightIndex));
+        if (!emitter.valid)
+            return;
+        vec3 offset = emitter.position - worldPosition;
+        lightDistance = length(offset);
+        if (!(lightDistance > 0.0001))
+            return;
+        directionToLight = offset / lightDistance;
+        float sourceCosine = max(dot(emitter.normal, -directionToLight), 0.0);
+        vec3 axis;
+        vec3 up;
+        vec3 right;
+        if (sourceCosine <= 0.0 ||
+            !NjulfBuildLightFrame(light, axis, up, right))
+        {
+            return;
+        }
+        float closestDistance = NjulfAreaClosestDistance(
+            light, worldPosition, axis, up, right);
+        attenuation = EvaluateNjulfFiniteRangeWindow(
+            closestDistance, light.Range) * sourceCosine /
+            max(lightDistance * lightDistance * emitter.areaPdf, 1e-8);
     }
     else
     {
@@ -258,15 +336,18 @@ void FroxelPrepareClusterDirectLight(
         directionToLight = offset / lightDistance;
         attenuation = EvaluateNjulfLightDistanceAttenuation(
             light, lightDistance);
-        if (light.Type == 2)
+        attenuation *= EvaluateNjulfIesProfile(light, -directionToLight);
+        if (light.Type == GPU_LIGHT_TYPE_SPOT)
             attenuation *= EvaluateNjulfSpotAttenuation(
                 light, directionToLight);
         if (!(attenuation > 0.0))
             return;
     }
 
-    float mapVisibility = FroxelShadowMapVisibility(
-        lightIndex, light, worldPosition);
+    float mapVisibility = areaLight &&
+            (uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) != 0u
+        ? FroxelRayQueryVisibility(worldPosition, directionToLight, lightDistance)
+        : FroxelShadowMapVisibility(lightIndex, light, worldPosition);
     float mediumVisibility = FroxelMediumTransmittance(
         worldPosition, directionToLight, lightDistance);
     float visibility = clamp(mapVisibility * mediumVisibility, 0.0, 1.0);

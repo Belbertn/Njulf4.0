@@ -6,6 +6,7 @@ public enum SampleSceneKind
     SponzaPlaza,
     Bistro,
     MaterialShowcase,
+    AnalyticalAreaLights,
     FoliageShowcase,
     VfxShowcase
 }

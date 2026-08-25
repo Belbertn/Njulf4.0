@@ -225,9 +225,27 @@ public sealed class DdgiMutationJournalTests
             local));
         DdgiDirtyRegion localRegion = journal.Drain(SceneBounds)[0];
 
-        var directional = new Light { Type = LightType.Directional };
+        var area = new Light
+        {
+            Type = LightType.Rectangle,
+            Position = new System.Numerics.Vector3(5f, 0f, 0f),
+            Direction = System.Numerics.Vector3.UnitZ,
+            Up = System.Numerics.Vector3.UnitY,
+            Size = new System.Numerics.Vector2(4f, 2f),
+            Range = 3f
+        };
         lightSource.Publish(new LightMutation(
             3,
+            LightMutationKind.Added,
+            default,
+            Guid.NewGuid(),
+            null,
+            area));
+        DdgiDirtyRegion areaRegion = journal.Drain(SceneBounds)[0];
+
+        var directional = new Light { Type = LightType.Directional };
+        lightSource.Publish(new LightMutation(
+            4,
             LightMutationKind.Added,
             default,
             Guid.NewGuid(),
@@ -243,6 +261,12 @@ public sealed class DdgiMutationJournalTests
                 Is.EqualTo(new Vector3(1f, -4f, -4f)));
             Assert.That(localRegion.InfluenceBounds.Max,
                 Is.EqualTo(new Vector3(9f, 4f, 4f)));
+            Assert.That(areaRegion.Reason,
+                Is.EqualTo(DdgiDirtyReason.LocalLightChanged));
+            Assert.That(areaRegion.InfluenceBounds.Min,
+                Is.EqualTo(new Vector3(-1f, -5f, -4f)));
+            Assert.That(areaRegion.InfluenceBounds.Max,
+                Is.EqualTo(new Vector3(11f, 5f, 4f)));
             Assert.That(directionalRegions, Has.Count.EqualTo(1));
             Assert.That(directionalRegions[0].Reason,
                 Is.EqualTo(DdgiDirtyReason.Teleport));

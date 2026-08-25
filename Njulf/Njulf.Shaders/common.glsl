@@ -267,7 +267,8 @@ const int DIRECTIONAL_SHADOW_DIAGNOSTIC_BUFFER_FRAME1_INDEX = 219;
 const int DIRECTIONAL_SHADOW_COUNTER_BUFFER_BASE_INDEX = 220;
 const int DIRECTIONAL_SHADOW_COUNTER_BUFFER_FRAME1_INDEX = 221;
 const int VOLUMETRIC_FOG_BOUNCE_RADIANCE_BUFFER_INDEX = 222;
-const int STATIC_BUFFER_COUNT = 223;
+const int AREA_RAY_SHADOW_MASK_BUFFER_BASE_INDEX = 223;
+const int STATIC_BUFFER_COUNT = 225;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -280,6 +281,13 @@ const uint MESHLET_DRAW_FLAG_CAN_HIZ_TEST = 1u << 5;
 const uint FOLIAGE_PROTOTYPE_FLAG_CAST_SHADOWS = 1u << 0;
 const uint FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR = 1u << 1;
 const uint GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS = 1u << 0;
+const uint GPU_LIGHT_AREA_FLAG_TWO_SIDED = 1u << 0;
+const int GPU_LIGHT_TYPE_POINT = 0;
+const int GPU_LIGHT_TYPE_DIRECTIONAL = 1;
+const int GPU_LIGHT_TYPE_SPOT = 2;
+const int GPU_LIGHT_TYPE_RECTANGLE = 3;
+const int GPU_LIGHT_TYPE_DISK = 4;
+const int GPU_LIGHT_TYPE_TUBE = 5;
 const uint GPU_LIGHT_ATTENUATION_MODE_SHIFT = 8u;
 const uint GPU_LIGHT_ATTENUATION_MODE_MASK = 3u << GPU_LIGHT_ATTENUATION_MODE_SHIFT;
 const uint GPU_LIGHT_ATTENUATION_LEGACY_WINDOWED = 0u;
@@ -329,13 +337,15 @@ const int WEIGHTED_OIT_ACCUMULATION_TEXTURE_INDEX = 36;
 const int WEIGHTED_OIT_REVEALAGE_TEXTURE_INDEX = 37;
 const int MATERIAL_TRANSPORT_PROVENANCE_TEXTURE_INDEX = 38;
 const int PREFILTERED_ENVIRONMENT_NEXT_TEXTURE_INDEX = 39;
+const int AREA_LIGHT_LTC_MATRIX_TEXTURE_INDEX = 40;
+const int AREA_LIGHT_LTC_AMPLITUDE_TEXTURE_INDEX = 41;
 // Optional sampled-image Simple-DDGI atlas migration. The two bounded ranges
 // stay fixed so the runtime can use device-safe 2D-array groups without
 // consuming dynamically allocated material texture slots.
 const int SIMPLE_DDGI_SAMPLED_ATLAS_TEXTURE_GROUP_COUNT = 128;
-const int SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX = 40;
-const int SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX = 168;
-const int FIRST_DYNAMIC_TEXTURE_INDEX = 296;
+const int SIMPLE_DDGI_SAMPLED_IRRADIANCE_TEXTURE_BASE_INDEX = 42;
+const int SIMPLE_DDGI_SAMPLED_VISIBILITY_TEXTURE_BASE_INDEX = 170;
+const int FIRST_DYNAMIC_TEXTURE_INDEX = 298;
 
 // ============================================
 // GPU STRUCT DEFINITIONS
@@ -743,6 +753,12 @@ struct GPULight
     float AttenuationConstant;
     float AttenuationLinear;
     float AttenuationQuadratic;
+    vec3 Up;
+    float SizeX;
+    float SizeY;
+    int IesTextureIndex;
+    float IesRotationRadians;
+    int AreaFlags;
 };
 
 struct GPUSceneData
@@ -1241,7 +1257,7 @@ struct GPULocalLightShadowIndex
 {
     int SpotShadowIndex;
     int PointShadowIndex;
-    int Padding0;
+    int AreaShadowIndex;
     int Padding1;
 };
 
@@ -1472,7 +1488,7 @@ const int SIZEOF_GPU_OBJECT_DATA = 224;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
 const int SIZEOF_GPU_MATERIAL_DATA = 320;
 const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
-const int SIZEOF_GPU_LIGHT = 80;
+const int SIZEOF_GPU_LIGHT = 112;
 const int SIZEOF_GPU_SCENE_DATA = 400;
 const int SIZEOF_GPU_MESHLET_DRAW_COMMAND = 16;
 const int SIZEOF_GPU_PACKED_MESHLET_DRAW_COMMAND = 32;
@@ -2235,6 +2251,16 @@ const uint THICK_TRANSMISSION_COUNTER_BASE =
     DEBUG_DDGI_OVERLAY_COUNTER_BASE + 27u;
 const uint THICK_TRANSMISSION_TASK_COUNTER =
     THICK_TRANSMISSION_COUNTER_BASE + 0u;
+const uint DDGI_AREA_LIGHT_COUNTER_BASE =
+    THICK_TRANSMISSION_COUNTER_BASE + 1u;
+const uint DDGI_AREA_LIGHT_SAMPLE_ATTEMPT_COUNTER =
+    DDGI_AREA_LIGHT_COUNTER_BASE + 0u;
+const uint DDGI_AREA_LIGHT_SAMPLE_ACCEPT_COUNTER =
+    DDGI_AREA_LIGHT_COUNTER_BASE + 1u;
+const uint DDGI_AREA_LIGHT_INVALID_PDF_COUNTER =
+    DDGI_AREA_LIGHT_COUNTER_BASE + 2u;
+const uint DDGI_AREA_LIGHT_VISIBILITY_RAY_COUNTER =
+    DDGI_AREA_LIGHT_COUNTER_BASE + 3u;
 const float SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_SUM_SCALE = 256.0;
 const float SIMPLE_DDGI_NEAR_VISIBILITY_CLAMP_MAX_SCALE = 65535.0;
 const float DDGI_MANY_LIGHT_PDF_SCALE = 1048576.0;
@@ -3431,6 +3457,8 @@ GPULight ReadLight(uint lightIndex)
     vec4 directionAngle = ReadStorageAlignedVec4Uniform(lightBufferIndex, baseWord + 8u);
     uvec4 typeShadow = ReadStorageAlignedUVec4Uniform(lightBufferIndex, baseWord + 12u);
     vec4 attenuation = ReadStorageAlignedVec4Uniform(lightBufferIndex, baseWord + 16u);
+    vec4 upSize = ReadStorageAlignedVec4Uniform(lightBufferIndex, baseWord + 20u);
+    uvec4 shapeProfile = ReadStorageAlignedUVec4Uniform(lightBufferIndex, baseWord + 24u);
     GPULight light;
     light.Position = positionIntensity.xyz;
     light.Intensity = positionIntensity.w;
@@ -3446,7 +3474,36 @@ GPULight ReadLight(uint lightIndex)
     light.AttenuationConstant = attenuation.y;
     light.AttenuationLinear = attenuation.z;
     light.AttenuationQuadratic = attenuation.w;
+    light.Up = upSize.xyz;
+    light.SizeX = upSize.w;
+    light.SizeY = uintBitsToFloat(shapeProfile.x);
+    light.IesTextureIndex = int(shapeProfile.y);
+    light.IesRotationRadians = uintBitsToFloat(shapeProfile.z);
+    light.AreaFlags = int(shapeProfile.w);
     return light;
+}
+
+bool NjulfIsAreaLight(GPULight light)
+{
+    return light.Type == GPU_LIGHT_TYPE_RECTANGLE ||
+        light.Type == GPU_LIGHT_TYPE_DISK ||
+        light.Type == GPU_LIGHT_TYPE_TUBE;
+}
+
+bool NjulfIsPunctualLight(GPULight light)
+{
+    return light.Type == GPU_LIGHT_TYPE_POINT ||
+        light.Type == GPU_LIGHT_TYPE_SPOT;
+}
+
+bool NjulfIsLocalLight(GPULight light)
+{
+    return light.Type != GPU_LIGHT_TYPE_DIRECTIONAL;
+}
+
+bool NjulfAreaLightIsTwoSided(GPULight light)
+{
+    return (uint(light.AreaFlags) & GPU_LIGHT_AREA_FLAG_TWO_SIDED) != 0u;
 }
 
 // Legacy authored lights retain Njulf's squared scene-range convention. Model
@@ -3576,6 +3633,12 @@ int ReadLocalPointShadowIndex(uint lightIndex)
 {
     uint baseWord = lightIndex * uint(SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX / 4);
     return int(ReadStorageWordUniform(uint(LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX), baseWord + 1u));
+}
+
+int ReadLocalAreaShadowIndex(uint lightIndex)
+{
+    uint baseWord = lightIndex * uint(SIZEOF_GPU_LOCAL_LIGHT_SHADOW_INDEX / 4);
+    return int(ReadStorageWordUniform(uint(LOCAL_LIGHT_SHADOW_INDEX_BUFFER_INDEX), baseWord + 2u));
 }
 
 GPUEnvironmentData ReadEnvironmentDataFrom(uint bufferIndex)

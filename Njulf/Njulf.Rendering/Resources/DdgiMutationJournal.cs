@@ -593,15 +593,17 @@ public sealed class DdgiMutationJournal : IDisposable
 
     private static CoreBoundingBox CreateLightBounds(in Light light)
     {
-        float range = float.IsFinite(light.Range)
-            ? Math.Max(0.0f, light.Range)
-            : 0.0f;
-        var center = new CoreVector3(
-            light.Position.X,
-            light.Position.Y,
-            light.Position.Z);
-        var extent = new CoreVector3(range);
-        return new CoreBoundingBox(center - extent, center + extent);
+        if (!AnalyticalLightGeometry.TryGetInfluenceBounds(
+                light,
+                out System.Numerics.Vector3 minimum,
+                out System.Numerics.Vector3 maximum))
+        {
+            minimum = light.Position;
+            maximum = light.Position;
+        }
+        return new CoreBoundingBox(
+            new CoreVector3(minimum.X, minimum.Y, minimum.Z),
+            new CoreVector3(maximum.X, maximum.Y, maximum.Z));
     }
 
     private void TrackMaterialUserLocked(RenderObject renderObject, object? material)

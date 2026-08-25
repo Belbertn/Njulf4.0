@@ -181,7 +181,8 @@ public enum DdgiStochasticDecisionDomain : uint
     ReceiverContributionFeedback = 0x67u,
     DirectionalGuiding = 0x71u,
     TaggedCaustic = 0x83u,
-    NearFieldResidual = 0x97u
+    NearFieldResidual = 0x97u,
+    AreaLightSurface = 0xA7u
 }
 
 /// <summary>

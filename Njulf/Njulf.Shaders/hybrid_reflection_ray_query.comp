@@ -4,6 +4,7 @@
 #extension GL_EXT_ray_query : require
 
 #include "common.glsl"
+#include "area_lighting.glsl"
 
 #define SIMPLE_DDGI_DISABLE_SAMPLED_ATLAS 1
 #define SIMPLE_DDGI_RECEIVER_DEMAND_SAMPLE false
@@ -183,12 +184,63 @@ vec3 HybridShadeHit(RayQuerySurfaceHit hit, vec3 incomingDirection)
     for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)
     {
         GPULight light = ReadLight(lightIndex);
+        if (NjulfIsAreaLight(light))
+        {
+            if (shadedLocalLights >= pc.MaximumShadedLights)
+                continue;
+            vec3 specularF0 = mix(vec3(0.04), albedo, metallic);
+            NjulfAreaLightResult area = EvaluateNjulfAreaLightLtc(
+                light,
+                hit.Position,
+                normal,
+                viewDirection,
+                roughness,
+                albedo * (1.0 - metallic),
+                specularF0);
+            if (area.rangeAttenuation <= 0.0)
+                continue;
+            uint state = floatBitsToUint(hit.Position.x) ^
+                floatBitsToUint(hit.Position.y) * 0x9e3779b9u ^
+                floatBitsToUint(hit.Position.z) * 0x85ebca6bu ^
+                light.StableIdentity ^ pc.TemporalSampleIndex * 0xc2b2ae35u;
+            state ^= state >> 16u;
+            vec3 random = vec3(
+                float(state & 0x00ffffffu) * (1.0 / 16777216.0),
+                float((state * 1664525u + 1013904223u) & 0x00ffffffu) *
+                    (1.0 / 16777216.0),
+                float((state * 22695477u + 1u) & 0x00ffffffu) *
+                    (1.0 / 16777216.0));
+            NjulfAreaSurfaceSample emitter = NjulfSampleAreaLightSurface(
+                light, random);
+            float visibility = 1.0;
+            if (emitter.valid &&
+                (uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) != 0u)
+            {
+                vec3 toEmitter = emitter.position - hit.Position;
+                float emitterDistance = length(toEmitter);
+                if (emitterDistance > 0.004)
+                {
+                    vec3 emitterDirection = toEmitter / emitterDistance;
+                    visibility = HybridVisible(
+                        hit.Position + normal * 0.004,
+                        emitterDirection,
+                        max(emitterDistance - 0.004, 0.002))
+                        ? 1.0
+                        : 0.0;
+                }
+            }
+            radiance += area.lighting * visibility;
+            shadedLocalLights++;
+            continue;
+        }
         vec3 lightDirection;
         float attenuation = 1.0;
         float maximumDistance = pc.CameraPositionAndMaximumDistance.w;
-        bool local = light.Type != 1;
+        bool local = NjulfIsLocalLight(light);
         if (local)
         {
+            if (!NjulfIsPunctualLight(light))
+                continue;
             if (shadedLocalLights >= pc.MaximumShadedLights)
                 continue;
             vec3 toLight = light.Position - hit.Position;
@@ -201,7 +253,8 @@ vec3 HybridShadeHit(RayQuerySurfaceHit hit, vec3 incomingDirection)
             lightDirection = toLight / maximumDistance;
             attenuation = EvaluateNjulfLightDistanceAttenuation(
                 light, maximumDistance);
-            if (light.Type == 2)
+            attenuation *= EvaluateNjulfIesProfile(light, -lightDirection);
+            if (light.Type == GPU_LIGHT_TYPE_SPOT)
                 attenuation *= EvaluateNjulfSpotAttenuation(
                     light, lightDirection);
             if (attenuation <= 0.0)

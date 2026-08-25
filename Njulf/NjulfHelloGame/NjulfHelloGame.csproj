@@ -33,6 +33,9 @@
             CopyToOutputDirectory="PreserveNewest"
             CopyToPublishDirectory="PreserveNewest" />
       <None Update="Assets\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(CookedAssetsOnly)' != 'true'" />
+      <None Update="Assets\Photometry\*.ies"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
       <None Update="Assets\Bistro_v5_2\san_giuseppe_bridge_4k.hdr"
             CopyToOutputDirectory="PreserveNewest" />
       <None Update="textures\**\*.*" CopyToOutputDirectory="IfDifferent" Condition="'$(CookedAssetsOnly)' != 'true'" />

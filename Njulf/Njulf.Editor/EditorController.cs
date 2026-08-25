@@ -332,6 +332,12 @@ public sealed class EditorController
             Type = type,
             Position = new System.Numerics.Vector3(camera.Position.X, camera.Position.Y, camera.Position.Z),
             Direction = new System.Numerics.Vector3(camera.Forward.X, camera.Forward.Y, camera.Forward.Z),
+            Up = new System.Numerics.Vector3(camera.Up.X, camera.Up.Y, camera.Up.Z),
+            Size = type switch
+            {
+                LightType.Tube => new System.Numerics.Vector2(2f, 0.25f),
+                _ => new System.Numerics.Vector2(1f, 1f)
+            },
             Color = System.Numerics.Vector3.One,
             Intensity = type == LightType.Directional ? 3f : 10f,
             Range = 12f,

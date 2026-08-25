@@ -64,7 +64,8 @@ public enum RaySceneConsumer : uint
     DirectionalFull = 1u << 2,
     GiCaustics = 1u << 3,
     Reflection = 1u << 4,
-    ThickTransmission = 1u << 5
+    ThickTransmission = 1u << 5,
+    AreaLightShadows = 1u << 6
 }
 
 [Flags]
@@ -245,6 +246,27 @@ public readonly record struct RaySceneRequirement(
             // shaded by the forward transparent receiver path.
             RaySceneGeometryCategory.DirectionalShadowDefault,
             settings.SsrMaxDistance,
+            RequiresCurrentPose: true);
+    }
+
+    public static RaySceneRequirement ForAreaLightShadows(
+        ShadowSettings settings,
+        bool hasSelectedAreaLight,
+        float maximumRayDistance)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (!settings.AreaShadowsEnabled ||
+            !hasSelectedAreaLight ||
+            !float.IsFinite(maximumRayDistance) ||
+            maximumRayDistance <= 0f)
+        {
+            return None;
+        }
+
+        return new RaySceneRequirement(
+            RaySceneConsumer.AreaLightShadows,
+            RaySceneGeometryCategory.DirectionalShadowDefault,
+            maximumRayDistance,
             RequiresCurrentPose: true);
     }
 

@@ -103,6 +103,7 @@ layout(early_fragment_tests) in;
 #endif
 
 #include "common.glsl"
+#include "area_lighting.glsl"
 #include "directional_csm_sampling.glsl"
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
 #include "c5_receiver_payload.glsl"
@@ -1821,6 +1822,35 @@ float EvaluateDirectionalRayShadowMask(
     return mix(1.0, visibility, shadowStrength);
 }
 
+float EvaluateAreaRayShadowMask(
+    uint lightIndex,
+    GPULight light,
+    bool geometryDecal)
+{
+    int shadowIndex = ReadLocalAreaShadowIndex(lightIndex);
+    if (ForwardReflectionCaptureEnabled() ||
+        shadowIndex < 0 || shadowIndex >= 4 ||
+        !ForwardLayeredReceiverAcceptsShadows(geometryDecal) ||
+        !DirectionalRayShadowMaskSupportsReceiver(geometryDecal))
+    {
+        return 1.0;
+    }
+    uvec2 dimensions = uvec2(max(
+        round(pc.Push.ScreenDimensions),
+        vec2(1.0)));
+    uvec2 pixel = uvec2(clamp(
+        floor(gl_FragCoord.xy),
+        vec2(0.0),
+        vec2(dimensions - uvec2(1u))));
+    uint pixelIndex = pixel.y * dimensions.x + pixel.x;
+    uint frameSlot = min(pc.Push.CurrentFrameIndex, uint(FRAMES_IN_FLIGHT - 1));
+    uint bufferIndex = uint(AREA_RAY_SHADOW_MASK_BUFFER_BASE_INDEX) + frameSlot;
+    uint packedVisibility = ReadStorageWord(bufferIndex, pixelIndex);
+    uint byteShift = uint(shadowIndex) * 8u;
+    float visibility = float((packedVisibility >> byteShift) & 0xffu) / 255.0;
+    return mix(1.0, visibility, clamp(light.ShadowStrength, 0.0, 1.0));
+}
+
 float EvaluateDirectionalShadow(
     uint lightIndex,
     vec3 worldPosition,
@@ -3084,7 +3114,7 @@ void AccumulateLight(
     vec3 lightDirection;
     float attenuation = 1.0;
 
-    if (light.Type == 1)
+    if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL)
     {
         lightDirection = normalize(-light.Direction);
         // A light below the geometric horizon cannot contribute diffuse or
@@ -3100,7 +3130,35 @@ void AccumulateLight(
             geometryDecal,
             shadowCascade);
     }
-    else
+    else if (NjulfIsAreaLight(light))
+    {
+        float nDotV = max(dot(normal, viewDirection), 0.0);
+        vec3 diffuseReflectance = EvaluateGiDiffuseBrdf(
+            directionalDiffuseBase,
+            dielectricF0,
+            max(dot(normal, normalize(light.Position - worldPosition)), 0.0),
+            nDotV) * GI_MATERIAL_PI;
+        vec3 specularF0 = mix(dielectricF0, albedo, metallic);
+        NjulfAreaLightResult area = EvaluateNjulfAreaLightLtc(
+            light,
+            worldPosition,
+            normal,
+            viewDirection,
+            roughness,
+            diffuseReflectance,
+            specularF0);
+        if (area.rangeAttenuation <= 0.0)
+            return;
+        shadowFactor = EvaluateAreaRayShadowMask(
+            lightIndex,
+            light,
+            geometryDecal);
+        directLighting += area.lighting * shadowFactor;
+        directDiffuseSource += area.diffuse * shadowFactor;
+        lightDirection = area.representativeDirection;
+        return;
+    }
+    else if (NjulfIsPunctualLight(light))
     {
         vec3 toLight = light.Position - worldPosition;
         float distanceToLight = length(toLight);
@@ -3114,7 +3172,9 @@ void AccumulateLight(
             light,
             distanceToLight);
 
-        if (light.Type == 2)
+        attenuation *= EvaluateNjulfIesProfile(light, -lightDirection);
+
+        if (light.Type == GPU_LIGHT_TYPE_SPOT)
         {
             attenuation *= EvaluateNjulfSpotAttenuation(
                 light,
@@ -3125,7 +3185,7 @@ void AccumulateLight(
                 shadowNormal,
                 geometryDecal);
         }
-        else
+        else if (light.Type == GPU_LIGHT_TYPE_POINT)
         {
             shadowFactor = EvaluatePointShadow(
                 lightIndex,
@@ -3133,6 +3193,10 @@ void AccumulateLight(
                 shadowNormal,
                 geometryDecal);
         }
+    }
+    else
+    {
+        return;
     }
 
     vec3 radiance = max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0) * attenuation;

@@ -85,6 +85,14 @@ public sealed class EditorImGuiPanels
         ImGui.SameLine();
         if (ImGui.Button("Add Directional Light"))
             Run(() => editor.AddLightAtCamera(LightType.Directional));
+        if (ImGui.Button("Add Rectangle Light"))
+            Run(() => editor.AddLightAtCamera(LightType.Rectangle));
+        ImGui.SameLine();
+        if (ImGui.Button("Add Disk Light"))
+            Run(() => editor.AddLightAtCamera(LightType.Disk));
+        ImGui.SameLine();
+        if (ImGui.Button("Add Tube Light"))
+            Run(() => editor.AddLightAtCamera(LightType.Tube));
 
         ImGui.SeparatorText("Imported model lights");
         ImportedModelLightEditorStatus importedLights =
@@ -361,6 +369,43 @@ public sealed class EditorImGuiPanels
                 if (ImGui.Selectable(type.ToString(), type == light.Type))
                 {
                     light.Type = type;
+                    if (AnalyticalLightGeometry.IsArea(type))
+                    {
+                        System.Numerics.Vector2 defaults = type == LightType.Tube
+                            ? new System.Numerics.Vector2(2f, 0.25f)
+                            : System.Numerics.Vector2.One;
+                        light.Size = new System.Numerics.Vector2(
+                            float.IsFinite(light.Size.X) && light.Size.X > 0f
+                                ? light.Size.X
+                                : defaults.X,
+                            float.IsFinite(light.Size.Y) && light.Size.Y > 0f
+                                ? light.Size.Y
+                                : defaults.Y);
+                        if (type == LightType.Disk)
+                            light.Size.Y = light.Size.X;
+
+                        NumericsVector3 selectedDirection =
+                            IsFiniteNonZero(light.Direction)
+                                ? NumericsVector3.Normalize(light.Direction)
+                                : -NumericsVector3.UnitY;
+                        NumericsVector3 selectedUp = IsFiniteNonZero(light.Up)
+                            ? NumericsVector3.Normalize(light.Up)
+                            : NumericsVector3.UnitZ;
+                        var orientation = new Light
+                        {
+                            Direction = selectedDirection,
+                            Up = selectedUp
+                        };
+                        if (AnalyticalLightGeometry.TryGetFrame(
+                                orientation,
+                                out NumericsVector3 axis,
+                                out NumericsVector3 frameUp,
+                                out _))
+                        {
+                            light.Direction = axis;
+                            light.Up = frameUp;
+                        }
+                    }
                     editor.UpdateSelectedLight(light);
                 }
             }
@@ -369,6 +414,8 @@ public sealed class EditorImGuiPanels
 
         NumericsVector3 position = light.Position;
         NumericsVector3 direction = light.Direction;
+        NumericsVector3 up = light.Up;
+        System.Numerics.Vector2 size = light.Size;
         NumericsVector3 color = light.Color;
         float intensity = light.Intensity;
         float range = light.Range;
@@ -377,8 +424,11 @@ public sealed class EditorImGuiPanels
         float shadowNear = light.ShadowNearPlane;
         float shadowFar = light.ShadowFarPlane;
         bool shadows = light.CastsShadows;
+        bool twoSided = light.TwoSided;
         bool changed = ImGui.DragFloat3("Position", ref position, 0.05f);
         changed |= ImGui.DragFloat3("Direction", ref direction, 0.01f);
+        if (light.Type is LightType.Rectangle or LightType.Disk)
+            changed |= ImGui.DragFloat3("Up", ref up, 0.01f);
         if (ImGui.Button("Set from camera") && editor.Camera != null)
         {
             position = ToNumerics(editor.Camera.Position);
@@ -390,6 +440,20 @@ public sealed class EditorImGuiPanels
         changed |= ImGui.DragFloat("Range", ref range, 0.05f, 0.01f, 100000f);
         if (light.Type == LightType.Spot)
             changed |= ImGui.DragFloat("Spot angle", ref spotDegrees, 0.25f, 1f, 179f);
+        if (AnalyticalLightGeometry.IsArea(light.Type))
+        {
+            string sizeLabel = light.Type switch
+            {
+                LightType.Rectangle => "Width / height",
+                LightType.Disk => "Diameter",
+                _ => "Length / diameter"
+            };
+            changed |= ImGui.DragFloat2(sizeLabel, ref size, 0.01f, 0.001f, 100000f);
+            if (light.Type == LightType.Disk && size.X != size.Y)
+                size.Y = size.X;
+            if (light.Type is LightType.Rectangle or LightType.Disk)
+                changed |= ImGui.Checkbox("Two-sided", ref twoSided);
+        }
         changed |= ImGui.Checkbox("Casts shadows", ref shadows);
         changed |= ImGui.DragFloat("Shadow strength", ref shadowStrength, 0.01f, 0f, 1f);
         changed |= ImGui.DragFloat("Shadow near", ref shadowNear, 0.01f, 0.001f, 1000f);
@@ -397,7 +461,35 @@ public sealed class EditorImGuiPanels
         if (changed)
         {
             light.Position = position;
-            light.Direction = direction.LengthSquared() > 0f ? NumericsVector3.Normalize(direction) : -NumericsVector3.UnitY;
+            NumericsVector3 resolvedDirection = direction.LengthSquared() > 0f
+                ? NumericsVector3.Normalize(direction)
+                : -NumericsVector3.UnitY;
+            NumericsVector3 resolvedUp = up.LengthSquared() > 0f
+                ? NumericsVector3.Normalize(up)
+                : NumericsVector3.UnitZ;
+            if (AnalyticalLightGeometry.IsArea(light.Type))
+            {
+                var orientation = new Light
+                {
+                    Direction = resolvedDirection,
+                    Up = resolvedUp
+                };
+                if (AnalyticalLightGeometry.TryGetFrame(
+                        orientation,
+                        out NumericsVector3 axis,
+                        out NumericsVector3 frameUp,
+                        out _))
+                {
+                    resolvedDirection = axis;
+                    resolvedUp = frameUp;
+                }
+            }
+            light.Direction = resolvedDirection;
+            light.Up = resolvedUp;
+            light.Size = System.Numerics.Vector2.Max(size, new System.Numerics.Vector2(0.001f));
+            if (light.Type == LightType.Disk)
+                light.Size.Y = light.Size.X;
+            light.TwoSided = twoSided;
             light.Color = color;
             light.Intensity = Math.Max(0f, intensity);
             light.Range = Math.Max(0.01f, range);
@@ -409,6 +501,10 @@ public sealed class EditorImGuiPanels
             editor.UpdateSelectedLight(light);
         }
     }
+
+    private static bool IsFiniteNonZero(NumericsVector3 value) =>
+        float.IsFinite(value.X) && float.IsFinite(value.Y) &&
+        float.IsFinite(value.Z) && value.LengthSquared() > 1e-12f;
 
     private void RenderMaterialInspector(EditorController editor, EditorMaterialInspection inspection)
     {

@@ -14,7 +14,10 @@ namespace Njulf.Rendering.Resources
     {
         Point = 0,
         Directional = 1,
-        Spot = 2
+        Spot = 2,
+        Rectangle = 3,
+        Disk = 4,
+        Tube = 5
     }
 
     public enum LightAttenuationMode : int
@@ -47,6 +50,20 @@ namespace Njulf.Rendering.Resources
         public static bool operator !=(LightHandle left, LightHandle right) => !left.Equals(right);
         public override string ToString() => IsValid ? $"Light({Slot}:{Generation})" : "Light(invalid)";
     }
+
+    /// <summary>
+    /// Stable reference to a cached photometric profile. Zero/default is invalid;
+    /// the texture index is already resolved for the bindless light ABI.
+    /// </summary>
+    public readonly record struct PhotometricProfileHandle(
+        int Value,
+        int TextureIndex,
+        uint Revision)
+    {
+        public bool IsValid => Value > 0 && Revision > 0 &&
+            TextureIndex >= BindlessIndex.FirstDynamicTextureIndex &&
+            BindlessIndex.IsTextureIndex(TextureIndex);
+    }
     
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct Light
@@ -69,6 +86,14 @@ namespace Njulf.Rendering.Resources
         public float ShadowNearPlane;
         public float ShadowFarPlane;
         public int ShadowPriority;
+        public Vector3 Up;
+        /// <summary>
+        /// Rectangle width/height; disk equal X/Y diameters; tube length/diameter.
+        /// </summary>
+        public Vector2 Size;
+        public bool TwoSided;
+        public PhotometricProfileHandle PhotometricProfile;
+        public float IesRotationRadians;
     }
 
     public readonly struct LightFrameSnapshot
@@ -95,12 +120,40 @@ namespace Njulf.Rendering.Resources
             TopologyRevision = topologyRevision;
             ContentRevision = contentRevision;
             StableIdentities = stableIdentities;
+
+            int point = 0;
+            int spot = 0;
+            int rectangle = 0;
+            int disk = 0;
+            int tube = 0;
+            foreach (Light light in lights.Span)
+            {
+                switch (light.Type)
+                {
+                    case LightType.Point: point++; break;
+                    case LightType.Spot: spot++; break;
+                    case LightType.Rectangle: rectangle++; break;
+                    case LightType.Disk: disk++; break;
+                    case LightType.Tube: tube++; break;
+                }
+            }
+            PointLightCount = point;
+            SpotLightCount = spot;
+            RectangleLightCount = rectangle;
+            DiskLightCount = disk;
+            TubeLightCount = tube;
         }
 
         public ReadOnlyMemory<Light> Lights { get; }
         public int Count { get; }
         public int DirectionalLightCount { get; }
         public int LocalLightCount { get; }
+        public int PointLightCount { get; }
+        public int SpotLightCount { get; }
+        public int RectangleLightCount { get; }
+        public int DiskLightCount { get; }
+        public int TubeLightCount { get; }
+        public int AreaLightCount => RectangleLightCount + DiskLightCount + TubeLightCount;
         public bool HasShadowCastingDirectionalLight => FirstShadowCastingDirectionalLightIndex >= 0;
         public int FirstShadowCastingDirectionalLightIndex { get; }
         public Light FirstShadowCastingDirectionalLight { get; }
@@ -161,6 +214,12 @@ namespace Njulf.Rendering.Resources
         private bool _disposed;
 
         public event Action<LightMutation>? Changed;
+
+        /// <summary>
+        /// Optional renderer-owned resolver used by scene bridges for LM-63 profiles.
+        /// A null resolver is a supported fail-open configuration.
+        /// </summary>
+        public IPhotometricProfileResolver? PhotometricProfiles { get; internal set; }
         
         public const int MaxLights = 1024;
         private static readonly ulong LightStride = (ulong)Marshal.SizeOf<GPULight>();
@@ -491,6 +550,12 @@ namespace Njulf.Rendering.Resources
         }
 
         public int DirectionalLightCount => CountLights(LightType.Directional);
+        public int PointLightCount => CountLights(LightType.Point);
+        public int SpotLightCount => CountLights(LightType.Spot);
+        public int RectangleLightCount => CountLights(LightType.Rectangle);
+        public int DiskLightCount => CountLights(LightType.Disk);
+        public int TubeLightCount => CountLights(LightType.Tube);
+        public int AreaLightCount => RectangleLightCount + DiskLightCount + TubeLightCount;
         public int LocalLightCount
         {
             get
@@ -736,9 +801,38 @@ namespace Njulf.Rendering.Resources
                 InnerSpotAngle = light.InnerSpotAngle,
                 AttenuationConstant = light.AttenuationConstant,
                 AttenuationLinear = light.AttenuationLinear,
-                AttenuationQuadratic = light.AttenuationQuadratic
+                AttenuationQuadratic = light.AttenuationQuadratic,
+                Up = ToGpuUp(light.Up, light.Direction),
+                SizeX = light.Size.X,
+                SizeY = light.Size.Y,
+                IesTextureIndex = AnalyticalLightGeometry.IsPunctual(light.Type) &&
+                    light.PhotometricProfile.IsValid
+                    ? light.PhotometricProfile.TextureIndex
+                    : -1,
+                IesRotationRadians = float.IsFinite(light.IesRotationRadians)
+                    ? light.IesRotationRadians
+                    : 0f,
+                AreaFlags = light.TwoSided ? GPULight.TwoSidedAreaFlag : 0
             };
         }
+
+        private static Njulf.Core.Math.Vector3 ToGpuUp(Vector3 up, Vector3 direction)
+        {
+            var frameLight = new Light { Direction = direction, Up = up };
+            Vector3 resolved = AnalyticalLightGeometry.TryGetFrame(
+                frameLight,
+                out _,
+                out Vector3 resolvedUp,
+                out _)
+                ? resolvedUp
+                : Vector3.UnitY;
+            return new Njulf.Core.Math.Vector3(
+                CanonicalizeZero(resolved.X),
+                CanonicalizeZero(resolved.Y),
+                CanonicalizeZero(resolved.Z));
+        }
+
+        private static float CanonicalizeZero(float value) => value == 0f ? 0f : value;
 
         private static float ResolveShadowStrength(float shadowStrength)
         {
@@ -876,11 +970,14 @@ namespace Njulf.Rendering.Resources
                 return false;
             }
 
-            float luminance =
-                MathF.Max(light.Color.X, 0f) * 0.2126f +
-                MathF.Max(light.Color.Y, 0f) * 0.7152f +
-                MathF.Max(light.Color.Z, 0f) * 0.0722f;
-            float flux = luminance * MathF.Max(light.Intensity, 0f);
+            if (AnalyticalLightGeometry.IsArea(light.Type) &&
+                (!AnalyticalLightGeometry.HasValidDimensions(light) ||
+                 !AnalyticalLightGeometry.TryGetFrame(light, out _, out _, out _)))
+            {
+                return false;
+            }
+
+            float flux = AnalyticalLightGeometry.ComputePowerWeight(light);
             return float.IsFinite(flux) && flux > 1e-20f;
         }
         

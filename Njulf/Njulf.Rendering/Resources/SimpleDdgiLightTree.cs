@@ -12,7 +12,8 @@ public enum DdgiLightTreeNodeFlags : ushort
     Leaf = 1 << 0,
     ContainsMalformedRange = 1 << 1,
     ContainsSpotLight = 1 << 2,
-    InvalidBound = 1 << 3
+    InvalidBound = 1 << 3,
+    ContainsAreaLight = 1 << 4
 }
 
 public enum DdgiLightTreeBuildAction : uint
@@ -50,7 +51,10 @@ public readonly record struct DdgiLocalLightTreeInput(
     float Range,
     Vector3 Direction,
     float SpotAngle,
-    LightType Type)
+    LightType Type,
+    Vector3 Up = default,
+    Vector2 Size = default,
+    bool TwoSided = false)
 {
     public static DdgiLocalLightTreeInput FromLight(
         int packedLightIndex,
@@ -66,7 +70,10 @@ public readonly record struct DdgiLocalLightTreeInput(
             light.Range,
             light.Direction,
             light.SpotAngle,
-            light.Type);
+            light.Type,
+            light.Up,
+            light.Size,
+            light.TwoSided);
 }
 
 public readonly record struct DdgiLightTreeSample(
@@ -142,19 +149,42 @@ public sealed class SimpleDdgiLightTreeReference
                 continue;
 
             bool finitePosition = IsFinite(input.Position);
-            bool finiteColor = IsFinite(input.Color);
-            bool finiteIntensity = float.IsFinite(input.Intensity);
-            float flux = finiteColor && finiteIntensity
-                ? MathF.Max(0f, Luminance(Vector3.Max(input.Color, Vector3.Zero)) *
-                    MathF.Max(input.Intensity, 0f))
-                : 0f;
-            if (!(flux > MinimumFiniteFlux) || !finitePosition)
+            var light = new Light
+            {
+                Type = input.Type,
+                Position = input.Position,
+                Color = input.Color,
+                Intensity = input.Intensity,
+                Range = input.Range,
+                Direction = input.Direction,
+                SpotAngle = input.SpotAngle,
+                Up = input.Up,
+                Size = input.Size,
+                TwoSided = input.TwoSided
+            };
+            bool validAreaGeometry = !AnalyticalLightGeometry.IsArea(input.Type) ||
+                (AnalyticalLightGeometry.HasValidDimensions(light) &&
+                 AnalyticalLightGeometry.TryGetFrame(light, out _, out _, out _));
+            float flux = AnalyticalLightGeometry.ComputePowerWeight(light);
+            if (!(flux > MinimumFiniteFlux) || !finitePosition ||
+                !validAreaGeometry)
                 continue;
 
             bool malformedRange = !float.IsFinite(input.Range) || input.Range <= 0f;
-            float extent = malformedRange ? MalformedRangeExtent : input.Range;
-            Vector3 minimum = input.Position - new Vector3(extent);
-            Vector3 maximum = input.Position + new Vector3(extent);
+            Vector3 minimum = default;
+            Vector3 maximum = default;
+            bool hasBounds = !malformedRange &&
+                AnalyticalLightGeometry.TryGetInfluenceBounds(
+                    light,
+                    out minimum,
+                    out maximum);
+            if (!hasBounds)
+            {
+                Vector3 fallbackExtent = new(MalformedRangeExtent);
+                minimum = input.Position - fallbackExtent;
+                maximum = input.Position + fallbackExtent;
+                malformedRange = true;
+            }
             bool invalidBound = !IsFinite(minimum) || !IsFinite(maximum);
             if (invalidBound)
             {
@@ -262,7 +292,10 @@ public sealed class SimpleDdgiLightTreeReference
                     parent,
                     first,
                     1,
+                    leaf.MalformedRange,
                     leaf.InvalidBound,
+                    leaf.Input.Type == LightType.Spot,
+                    AnalyticalLightGeometry.IsArea(leaf.Input.Type),
                     depth);
                 return nodeIndex;
             }
@@ -282,7 +315,10 @@ public sealed class SimpleDdgiLightTreeReference
                 parent,
                 first,
                 count,
+                leftNode.MalformedRange || rightNode.MalformedRange,
                 leftNode.InvalidBound || rightNode.InvalidBound,
+                leftNode.ContainsSpotLight || rightNode.ContainsSpotLight,
+                leftNode.ContainsAreaLight || rightNode.ContainsAreaLight,
                 depth);
             return nodeIndex;
         }
@@ -424,6 +460,12 @@ public sealed class SimpleDdgiLightTreeReference
                 : DdgiLightTreeNodeFlags.None;
             if (node.InvalidBound)
                 flags |= DdgiLightTreeNodeFlags.InvalidBound;
+            if (node.MalformedRange)
+                flags |= DdgiLightTreeNodeFlags.ContainsMalformedRange;
+            if (node.ContainsSpotLight)
+                flags |= DdgiLightTreeNodeFlags.ContainsSpotLight;
+            if (node.ContainsAreaLight)
+                flags |= DdgiLightTreeNodeFlags.ContainsAreaLight;
             uint checksum = ComputeNodeChecksum(node, flags) & 0xffffu;
             result[index] = new GPUDdgiLightTreeNode
             {
@@ -454,7 +496,7 @@ public sealed class SimpleDdgiLightTreeReference
                 LightBufferRevisionHigh = (uint)(leaf.Input.LightBufferRevision >> 32),
                 CenterAndRange = new Vector4(
                     leaf.Input.Position,
-                    leaf.MalformedRange ? -1f : leaf.Input.Range)
+                    ResolveLeafRange(leaf))
             };
         }
 
@@ -483,7 +525,8 @@ public sealed class SimpleDdgiLightTreeReference
         if (leaf.MalformedRange)
             return true;
         Vector3 delta = hitPosition - leaf.Input.Position;
-        return Vector3.Dot(delta, delta) <= leaf.Input.Range * leaf.Input.Range;
+        float range = ResolveLeafRange(leaf);
+        return Vector3.Dot(delta, delta) <= range * range;
     }
 
     private static float ContributionBound(in Node node, Vector3 hitPosition)
@@ -507,9 +550,24 @@ public sealed class SimpleDdgiLightTreeReference
             Leaf leaf = _leaves[index];
             if (leaf.MalformedRange)
                 return -1f;
-            maximum = MathF.Max(maximum, leaf.Input.Range);
+            maximum = MathF.Max(maximum, ResolveLeafRange(leaf));
         }
         return maximum;
+    }
+
+    private static float ResolveLeafRange(in Leaf leaf)
+    {
+        if (leaf.MalformedRange)
+            return -1f;
+        if (!AnalyticalLightGeometry.IsArea(leaf.Input.Type))
+            return leaf.Input.Range;
+        var light = new Light
+        {
+            Type = leaf.Input.Type,
+            Range = leaf.Input.Range,
+            Size = leaf.Input.Size
+        };
+        return AnalyticalLightGeometry.GetBoundingRadius(light);
     }
 
     private static float DecisionRandom(
@@ -594,7 +652,10 @@ public sealed class SimpleDdgiLightTreeReference
         int Parent,
         int FirstLeaf,
         int LeafCount,
+        bool MalformedRange,
         bool InvalidBound,
+        bool ContainsSpotLight,
+        bool ContainsAreaLight,
         int Depth)
     {
         public bool IsLeaf => Right < 0;

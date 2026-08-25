@@ -41,7 +41,7 @@ DdgiLightTreeNode DdgiCombineBuildNodes(
     node.rightOrLeafCount = rightIndex;
     node.descendantLeafCount = left.descendantLeafCount + right.descendantLeafCount;
     node.flagsAndChecksum = (left.flagsAndChecksum | right.flagsAndChecksum) &
-        DDGI_LIGHT_TREE_NODE_INVALID_BOUND_BIT;
+        DDGI_LIGHT_TREE_NODE_PROPAGATED_BITS;
     return node;
 }
 
@@ -95,7 +95,7 @@ void main()
             node.descendantLeafCount = 1u;
             node.flagsAndChecksum = DDGI_LIGHT_TREE_NODE_LEAF_BIT |
                 (ReadStorageWordUniform(scratch, baseWord + 11u) &
-                    DDGI_LIGHT_TREE_NODE_INVALID_BOUND_BIT);
+                    DDGI_LIGHT_TREE_NODE_PROPAGATED_BITS);
         }
         else
         {

@@ -486,6 +486,7 @@ namespace Njulf.Rendering.Data
     public struct GPULight
     {
         public const int CastsShadowsFlag = 1 << 0;
+        public const int TwoSidedAreaFlag = 1 << 0;
         public const int AttenuationModeShift = 8;
         public const int AttenuationModeMask = 0x3 << AttenuationModeShift;
 
@@ -514,6 +515,12 @@ namespace Njulf.Rendering.Data
         public float AttenuationConstant;
         public float AttenuationLinear;
         public float AttenuationQuadratic;
+        public Vector3 Up;
+        public float SizeX;
+        public float SizeY;
+        public int IesTextureIndex;
+        public float IesRotationRadians;
+        public int AreaFlags;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -1258,6 +1265,26 @@ namespace Njulf.Rendering.Data
         public uint DebugFlags;
     }
 
+    /// <summary>Full-resolution visibility mask contract for up to four area emitters.</summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUAreaRayShadowPushConstants
+    {
+        public Matrix4x4 InverseViewProjectionMatrix;
+        public Vector4 CameraPosition;
+        public uint LightIndex0;
+        public uint LightIndex1;
+        public uint LightIndex2;
+        public uint LightIndex3;
+        public uint ScreenWidth;
+        public uint ScreenHeight;
+        public uint OutputBufferIndex;
+        public uint InstanceMask;
+        public uint TemporalSampleIndex;
+        public uint TraceSampleCount;
+        public uint SelectedLightCount;
+        public uint CurrentFrameIndex;
+    }
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUDirectionalShadowTemporalPushConstants
     {
@@ -1328,7 +1355,7 @@ namespace Njulf.Rendering.Data
     {
         public int SpotShadowIndex;
         public int PointShadowIndex;
-        public int Padding0;
+        public int AreaShadowIndex;
         public int Padding1;
     }
 

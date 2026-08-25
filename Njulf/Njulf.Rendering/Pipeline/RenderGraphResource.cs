@@ -176,7 +176,9 @@ namespace Njulf.Rendering.Pipeline
         HybridReflectionCounters,
         HybridReflectionIndirectArguments,
         // Appended after the original P0 range to preserve capture IDs.
-        HybridReflectionRawMetadata
+        HybridReflectionRawMetadata,
+        // Full-resolution packed visibility for up to four scheduled area lights.
+        AreaRayShadowMask
     }
 
     public enum RenderGraphResourceKind

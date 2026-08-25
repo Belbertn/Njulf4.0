@@ -1,0 +1,268 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : require
+
+#include "common.glsl"
+#include "area_lighting.glsl"
+
+layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
+
+#include "directional_ray_visibility.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform AreaRayShadowPushBlock
+{
+    mat4 InverseViewProjectionMatrix;
+    vec4 CameraPosition;
+    uint LightIndex0;
+    uint LightIndex1;
+    uint LightIndex2;
+    uint LightIndex3;
+    uint ScreenWidth;
+    uint ScreenHeight;
+    uint OutputBufferIndex;
+    uint InstanceMask;
+    uint TemporalSampleIndex;
+    uint TraceSampleCount;
+    uint SelectedLightCount;
+    uint CurrentFrameIndex;
+} pc;
+
+bool AreaShadowReconstructReceiver(
+    ivec2 pixel,
+    out vec3 worldPosition,
+    out float depth)
+{
+    worldPosition = vec3(0.0);
+    depth = 0.0;
+    if (any(lessThan(pixel, ivec2(0))) ||
+        any(greaterThanEqual(pixel, ivec2(pc.ScreenWidth, pc.ScreenHeight))))
+    {
+        return false;
+    }
+    depth = texelFetch(
+        BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
+        pixel,
+        0).r;
+    if (!DirectionalRayFinite(depth) || depth <= 0.0 || depth > 1.0)
+        return false;
+    vec2 uv = (vec2(pixel) + vec2(0.5)) /
+        max(vec2(pc.ScreenWidth, pc.ScreenHeight), vec2(1.0));
+    vec4 clip = vec4(uv * 2.0 - vec2(1.0), depth, 1.0);
+    vec4 world = MulRowMajor(clip, pc.InverseViewProjectionMatrix);
+    if (any(isnan(world)) || any(isinf(world)) || abs(world.w) <= 1e-7)
+        return false;
+    worldPosition = world.xyz / world.w;
+    return DirectionalRayFinite(worldPosition);
+}
+
+vec3 AreaShadowClosestDerivative(
+    vec3 center,
+    vec3 negativePosition,
+    bool negativeValid,
+    vec3 positivePosition,
+    bool positiveValid)
+{
+    vec3 positiveDerivative = positivePosition - center;
+    vec3 negativeDerivative = center - negativePosition;
+    if (positiveValid && negativeValid)
+    {
+        return dot(positiveDerivative, positiveDerivative) <=
+                dot(negativeDerivative, negativeDerivative)
+            ? positiveDerivative
+            : negativeDerivative;
+    }
+    if (positiveValid)
+        return positiveDerivative;
+    if (negativeValid)
+        return negativeDerivative;
+    return vec3(0.0);
+}
+
+bool AreaShadowReconstructNormalAndFootprint(
+    ivec2 pixel,
+    vec3 center,
+    out vec3 normal,
+    out float footprint)
+{
+    vec3 leftPosition;
+    vec3 rightPosition;
+    vec3 upperPosition;
+    vec3 lowerPosition;
+    float ignoredDepth;
+    bool leftValid = AreaShadowReconstructReceiver(
+        pixel + ivec2(-1, 0), leftPosition, ignoredDepth);
+    bool rightValid = AreaShadowReconstructReceiver(
+        pixel + ivec2(1, 0), rightPosition, ignoredDepth);
+    bool upperValid = AreaShadowReconstructReceiver(
+        pixel + ivec2(0, -1), upperPosition, ignoredDepth);
+    bool lowerValid = AreaShadowReconstructReceiver(
+        pixel + ivec2(0, 1), lowerPosition, ignoredDepth);
+    vec3 derivativeX = AreaShadowClosestDerivative(
+        center, leftPosition, leftValid, rightPosition, rightValid);
+    vec3 derivativeY = AreaShadowClosestDerivative(
+        center, upperPosition, upperValid, lowerPosition, lowerValid);
+    footprint = max(length(derivativeX), length(derivativeY));
+    normal = cross(derivativeX, derivativeY);
+    float lengthSquared = dot(normal, normal);
+    if (!DirectionalRayFinite(normal) || lengthSquared <= 1e-12 ||
+        !DirectionalRayFinite(footprint) || footprint <= 1e-7)
+    {
+        normal = vec3(0.0, 1.0, 0.0);
+        footprint = 0.001;
+        return false;
+    }
+    normal *= inversesqrt(lengthSquared);
+    if (dot(normal, pc.CameraPosition.xyz - center) < 0.0)
+        normal = -normal;
+    return true;
+}
+
+uint AreaShadowLightIndex(uint slot)
+{
+    if (slot == 0u)
+        return pc.LightIndex0;
+    if (slot == 1u)
+        return pc.LightIndex1;
+    if (slot == 2u)
+        return pc.LightIndex2;
+    return pc.LightIndex3;
+}
+
+vec3 AreaShadowRandom(
+    uvec2 pixel,
+    GPULight light,
+    uint slot,
+    uint sampleIndex)
+{
+    uint sequence = pc.TemporalSampleIndex * 4u + sampleIndex;
+    uint seed = DirectionalRayHash(
+        pixel.x * 0x9e3779b9u ^
+        pixel.y * 0x85ebca6bu ^
+        light.StableIdentity * 0xc2b2ae35u ^
+        slot * 0x27d4eb2du ^
+        sequence * 0x165667b1u);
+    uint x = DirectionalRayHash(seed ^ 0xa511e9b3u);
+    uint y = DirectionalRayHash(seed ^ 0x63d83595u);
+    uint z = DirectionalRayHash(seed ^ 0xb5297a4du);
+    return (vec3(x, y, z) + vec3(0.5)) * (1.0 / 4294967296.0);
+}
+
+float AreaShadowVisibility(
+    uvec2 pixel,
+    vec3 worldPosition,
+    vec3 geometricNormal,
+    float primaryFootprint,
+    uint slot)
+{
+    GPULight light = ReadLight(AreaShadowLightIndex(slot));
+    if (!NjulfIsAreaLight(light) ||
+        (uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u)
+    {
+        return 1.0;
+    }
+    vec3 axis;
+    vec3 up;
+    vec3 right;
+    if (!NjulfBuildLightFrame(light, axis, up, right))
+        return 1.0;
+    float closestDistance = NjulfAreaClosestDistance(
+        light, worldPosition, axis, up, right);
+    if (EvaluateNjulfFiniteRangeWindow(closestDistance, light.Range) <= 0.0)
+        return 1.0;
+
+    uint sampleCount = clamp(pc.TraceSampleCount, 1u, 4u);
+    float visibleWeight = 0.0;
+    float totalWeight = 0.0;
+    for (uint sampleIndex = 0u; sampleIndex < sampleCount; sampleIndex++)
+    {
+        NjulfAreaSurfaceSample emitter = NjulfSampleAreaLightSurface(
+            light,
+            AreaShadowRandom(pixel, light, slot, sampleIndex));
+        if (!emitter.valid)
+            continue;
+        vec3 toEmitter = emitter.position - worldPosition;
+        float distanceSquared = dot(toEmitter, toEmitter);
+        if (!(distanceSquared > 4e-6) || !DirectionalRayFinite(distanceSquared))
+            continue;
+        float distanceToEmitter = sqrt(distanceSquared);
+        vec3 direction = toEmitter / distanceToEmitter;
+        float receiverCosine = max(dot(geometricNormal, direction), 0.0);
+        float emitterCosine = light.Type != GPU_LIGHT_TYPE_TUBE &&
+                NjulfAreaLightIsTwoSided(light)
+            ? abs(dot(axis, -direction))
+            : max(dot(emitter.normal, -direction), 0.0);
+        float weight = receiverCosine * emitterCosine / distanceSquared;
+        if (!(weight > 0.0) || !DirectionalRayFinite(weight))
+            continue;
+
+        float coordinateScale = max(
+            max(abs(worldPosition.x), max(abs(worldPosition.y), abs(worldPosition.z))),
+            1.0);
+        float normalEpsilon = clamp(coordinateScale * 1e-7, 0.0005, 0.02);
+        float rayEpsilon = clamp(distanceToEmitter * 1e-6, 0.0005, 0.01);
+        vec3 origin = worldPosition + geometricNormal * normalEpsilon +
+            direction * rayEpsilon;
+        float maximumDistance = max(
+            distanceToEmitter - normalEpsilon - rayEpsilon,
+            0.0001);
+        float hitDistance;
+        uint candidates;
+        uint alphaSamples;
+        bool capHit;
+        bool blocked = DirectionalTraceVisibility(
+            SceneTlas,
+            origin,
+            direction,
+            maximumDistance,
+            primaryFootprint,
+            pc.InstanceMask,
+            hitDistance,
+            candidates,
+            alphaSamples,
+            capHit);
+        totalWeight += weight;
+        if (!blocked)
+            visibleWeight += weight;
+    }
+    return totalWeight > 1e-12
+        ? clamp(visibleWeight / totalWeight, 0.0, 1.0)
+        : 1.0;
+}
+
+void main()
+{
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.x >= pc.ScreenWidth || pixel.y >= pc.ScreenHeight)
+        return;
+    uint pixelIndex = pixel.y * pc.ScreenWidth + pixel.x;
+    vec3 worldPosition;
+    float depth;
+    if (!AreaShadowReconstructReceiver(ivec2(pixel), worldPosition, depth))
+    {
+        WriteStorageWord(pc.OutputBufferIndex, pixelIndex, 0xffffffffu);
+        return;
+    }
+    vec3 geometricNormal;
+    float primaryFootprint;
+    AreaShadowReconstructNormalAndFootprint(
+        ivec2(pixel), worldPosition, geometricNormal, primaryFootprint);
+
+    uint packed = 0xffffffffu;
+    uint selectedCount = min(pc.SelectedLightCount, 4u);
+    for (uint slot = 0u; slot < selectedCount; slot++)
+    {
+        float visibility = AreaShadowVisibility(
+            pixel,
+            worldPosition,
+            geometricNormal,
+            primaryFootprint,
+            slot);
+        uint visibilityByte = uint(round(visibility * 255.0));
+        uint shift = slot * 8u;
+        packed = (packed & ~(0xffu << shift)) | (visibilityByte << shift);
+    }
+    WriteStorageWord(pc.OutputBufferIndex, pixelIndex, packed);
+}

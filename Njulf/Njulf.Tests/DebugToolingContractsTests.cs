@@ -70,7 +70,8 @@ namespace Njulf.Tests
                 ("DDGI many-light estimator", RendererDiagnosticsBuffer.DdgiManyLightCounterBase, RendererDiagnosticsBuffer.DdgiManyLightCounterCount),
                 ("simple DDGI near visibility", RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterCount),
                 ("DDGI debug overlay", RendererDiagnosticsBuffer.DebugDdgiOverlayCounterBase, RendererDiagnosticsBuffer.DebugDdgiOverlayCounterCount),
-                ("thick transmission", RendererDiagnosticsBuffer.ThickTransmissionCounterBase, RendererDiagnosticsBuffer.ThickTransmissionCounterCount)
+                ("thick transmission", RendererDiagnosticsBuffer.ThickTransmissionCounterBase, RendererDiagnosticsBuffer.ThickTransmissionCounterCount),
+                ("DDGI area-light sampling", RendererDiagnosticsBuffer.DdgiAreaLightCounterBase, RendererDiagnosticsBuffer.DdgiAreaLightCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -129,7 +130,7 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.ThickTransmissionCounterCount,
                     Is.EqualTo(1));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
-                    Is.EqualTo(RendererDiagnosticsBuffer.ThickTransmissionCounterBase + 1));
+                    Is.EqualTo(RendererDiagnosticsBuffer.DdgiAreaLightCounterBase + 4));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
                     Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount * sizeof(uint)));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize % 256ul, Is.Zero);
@@ -163,6 +164,8 @@ namespace Njulf.Tests
                     "DEBUG_DDGI_OVERLAY_COUNTER_BASE ="));
                 Assert.That(commonShader, Does.Contain(
                     "THICK_TRANSMISSION_COUNTER_BASE ="));
+                Assert.That(commonShader, Does.Contain(
+                    "DDGI_AREA_LIGHT_COUNTER_BASE ="));
                 Assert.That(simpleSharedShader, Does.Contain(
                     "void RecordSimpleDdgiVolumeEnergyEvidence("));
                 Assert.That(simpleSharedShader, Does.Contain(

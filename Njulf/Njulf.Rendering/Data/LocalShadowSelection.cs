@@ -20,10 +20,13 @@ namespace Njulf.Rendering.Data
     {
         public SelectedLocalShadow[] SpotLights { get; init; } = [];
         public SelectedLocalShadow[] PointLights { get; init; } = [];
+        public SelectedLocalShadow[] AreaLights { get; init; } = [];
         public int SpotCandidateCount { get; init; }
         public int PointCandidateCount { get; init; }
+        public int AreaCandidateCount { get; init; }
         public int SpotRejectedByBudgetCount { get; init; }
         public int PointRejectedByBudgetCount { get; init; }
+        public int AreaRejectedByBudgetCount { get; init; }
         public int SpotAtlasCapacity { get; init; }
     }
 }

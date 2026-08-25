@@ -3,6 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 #include "common.glsl"
+#include "area_lighting.glsl"
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -92,17 +93,25 @@ bool SphereOverlapsTileFrustum(vec3 center, float radius)
 bool SphereOverlapsTileDepthRange(GPULight light)
 {
     float lightDepth = dot(light.Position - pc.Push.CameraPosition, pc.Push.CameraForward);
-    return lightDepth + light.Range >= SharedVisibleNearDepth &&
-        lightDepth - light.Range <= SharedVisibleFarDepth;
+    float radius = light.Range + NjulfAreaBoundingRadius(light);
+    return lightDepth + radius >= SharedVisibleNearDepth &&
+        lightDepth - radius <= SharedVisibleFarDepth;
 }
 
 float ComputeLightInfluence(GPULight light)
 {
     vec3 toLight = light.Position - SharedVisibleCenter;
-    float distanceSquared = dot(toLight, toLight);
+    float centerDistance = length(toLight);
+    float distanceToEmitter = max(
+        centerDistance - NjulfAreaBoundingRadius(light), 0.0);
+    float distanceSquared = distanceToEmitter * distanceToEmitter;
     float rangeSquared = max(light.Range * light.Range, 0.0001);
     float attenuation = clamp(1.0 - distanceSquared / rangeSquared, 0.0, 1.0);
-    float influence = max(light.Intensity, 0.0) * (attenuation * attenuation + 0.000001) /
+    float sourceWeight = NjulfIsAreaLight(light)
+        ? NJULF_LTC_PI * NjulfAreaSurfaceArea(light)
+        : 1.0;
+    float influence = max(light.Intensity, 0.0) * sourceWeight *
+        (attenuation * attenuation + 0.000001) /
         max(distanceSquared, 1.0);
     return (isnan(influence) || isinf(influence)) ? 0.0 : influence;
 }
@@ -152,13 +161,14 @@ void InsertDeterministicLightCandidate(uint lightIndex, float influence)
 
 bool LightCanAffectVisibleTile(GPULight light)
 {
-    if (light.Type == 1)
+    if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL)
         return false;
 
     if (light.Range <= 0.0 || light.Intensity <= 0.0)
         return false;
 
-    return SphereOverlapsTileFrustum(light.Position, light.Range) &&
+    float radius = light.Range + NjulfAreaBoundingRadius(light);
+    return SphereOverlapsTileFrustum(light.Position, radius) &&
            SphereOverlapsTileDepthRange(light);
 }
 

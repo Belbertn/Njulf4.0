@@ -6,7 +6,10 @@ public enum ModelLightType
 {
     Point,
     Directional,
-    Spot
+    Spot,
+    Rectangle,
+    Disk,
+    Tube
 }
 
 public enum ModelLightAttenuationMode

@@ -144,6 +144,51 @@ public sealed class ProductionRenderPipelineDeclarationTests
     }
 
     [Test]
+    public void AreaRayShadowMask_IsAfterDepthAndBeforeForwardWithExplicitDependencies()
+    {
+        var production = ProductionRenderPipelineDeclaration.Instance;
+        var order = production.PassOrder.ToList();
+        var declarations = production.CreatePassResourceDeclarations()
+            .ToDictionary(declaration => declaration.PassName);
+        int depth = order.IndexOf("DepthPrePass");
+        int ray = order.IndexOf("AreaRayShadowPass");
+        int forward = order.IndexOf("ForwardPlusPass");
+        RenderGraphPassResourceDeclaration rayDeclaration =
+            declarations["AreaRayShadowPass"];
+        RenderGraphResourceUsage maskWrite = rayDeclaration.Usages.Single(
+            usage => usage.Resource == RenderGraphResourceId.AreaRayShadowMask);
+        RenderGraphResourceUsage maskRead = declarations["ForwardPlusPass"]
+            .Usages.Single(usage =>
+                usage.Resource == RenderGraphResourceId.AreaRayShadowMask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ray, Is.GreaterThan(depth));
+            Assert.That(ray, Is.LessThan(forward));
+            Assert.That(rayDeclaration.Usages.Any(usage =>
+                usage.Resource == RenderGraphResourceId.SceneDepth), Is.True);
+            Assert.That(rayDeclaration.Usages.Any(usage =>
+                usage.Resource == RenderGraphResourceId.TlasStorage), Is.True);
+            Assert.That(rayDeclaration.Usages.Any(usage =>
+                usage.Resource == RenderGraphResourceId.LightBuffers), Is.True);
+            Assert.That(maskWrite.Access,
+                Is.EqualTo(RenderGraphResourceAccess.Write));
+            Assert.That(maskWrite.StageMask & PipelineStageFlags2.ComputeShaderBit,
+                Is.Not.Zero);
+            Assert.That(maskWrite.StageMask & PipelineStageFlags2.TransferBit,
+                Is.Not.Zero);
+            Assert.That(maskRead.Access,
+                Is.EqualTo(RenderGraphResourceAccess.Read));
+            Assert.That(maskRead.StageMask & PipelineStageFlags2.FragmentShaderBit,
+                Is.Not.Zero);
+            Assert.That(AsyncComputePassCatalog.GetClassification(
+                    "AreaRayShadowPass"),
+                Is.EqualTo(
+                    AsyncComputePassClassification.GraphicsQueueComputeByDesign));
+        });
+    }
+
+    [Test]
     public void ContentDependentPrelude_DeclaresComputeToAsAndTreeToTraceEdges()
     {
         var production = ProductionRenderPipelineDeclaration.Instance;

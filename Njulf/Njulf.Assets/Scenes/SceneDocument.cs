@@ -6,7 +6,7 @@ namespace Njulf.Assets.Scenes;
 /// <summary>Versioned, renderer-independent source representation of an authorable scene.</summary>
 public sealed class SceneDocument
 {
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 9;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -123,6 +123,12 @@ public sealed class SceneLightDocument
     public string Type { get; init; } = "Point";
     public SceneVector3 Position { get; init; }
     public SceneVector3 Direction { get; init; } = new(0f, -1f, 0f);
+    public SceneVector3 Up { get; init; } = new(0f, 0f, 1f);
+    /// <summary>
+    /// Rectangle width/height; disk equal X/Y diameters; tube length/diameter.
+    /// </summary>
+    public SceneVector2 Size { get; init; } = new(1f, 1f);
+    public bool TwoSided { get; init; }
     public SceneVector3 Color { get; init; } = SceneVector3.One;
     public float Intensity { get; init; } = 1f;
     public float Range { get; init; } = 10f;
@@ -138,6 +144,8 @@ public sealed class SceneLightDocument
     public float ShadowNearPlane { get; init; } = 0.1f;
     public float ShadowFarPlane { get; init; } = 100f;
     public int ShadowPriority { get; init; }
+    public SceneAssetReferenceDocument? IesProfile { get; init; }
+    public float IesRotationRadians { get; init; }
 }
 
 public sealed class SceneReflectionProbeDocument

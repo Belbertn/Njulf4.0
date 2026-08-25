@@ -122,6 +122,8 @@ namespace Njulf.Rendering.Data
         private float _spotSlopeScaledDepthBias = 1.5f;
         private int _spotPcfRadius = 1;
         private int _maxShadowedPointLights = 1;
+        private int _maxShadowedAreaLights = 2;
+        private int _areaShadowSampleCount = 1;
         private uint _pointShadowMapSize = 512;
         private float _pointNormalBias = 0.03f;
         private float _pointConstantDepthBias = 0.001f;
@@ -131,6 +133,7 @@ namespace Njulf.Rendering.Data
         public bool DirectionalShadowsEnabled { get; set; } = true;
         public bool SpotShadowsEnabled { get; set; } = true;
         public bool PointShadowsEnabled { get; set; } = true;
+        public bool AreaShadowsEnabled { get; set; } = true;
 
         public DirectionalShadowMode RequestedDirectionalShadowMode
         {
@@ -378,6 +381,20 @@ namespace Njulf.Rendering.Data
         {
             get => _maxShadowedPointLights;
             set => _maxShadowedPointLights = value < 0 ? 0 : value > 4 ? 4 : value;
+        }
+
+        /// <summary>Maximum area emitters receiving full-resolution ray-query masks.</summary>
+        public int MaxShadowedAreaLights
+        {
+            get => _maxShadowedAreaLights;
+            set => _maxShadowedAreaLights = Math.Clamp(value, 0, 4);
+        }
+
+        /// <summary>Visibility samples per selected area emitter and opaque pixel.</summary>
+        public int AreaShadowSampleCount
+        {
+            get => _areaShadowSampleCount;
+            set => _areaShadowSampleCount = Math.Clamp(value, 1, 4);
         }
 
         public uint PointShadowMapSize
@@ -806,6 +823,7 @@ namespace Njulf.Rendering.Data
             return debugView is not FogDebugView.None and
                 not FogDebugView.FoggedScene;
         }
+
     }
 
     /// <summary>
@@ -5393,6 +5411,9 @@ namespace Njulf.Rendering.Data
                     Shadows.MaxShadowedSpotLights = 0;
                     Shadows.PointShadowsEnabled = false;
                     Shadows.MaxShadowedPointLights = 0;
+                    Shadows.AreaShadowsEnabled = false;
+                    Shadows.MaxShadowedAreaLights = 0;
+                    Shadows.AreaShadowSampleCount = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     Transparency.ReceiveGlobalIllumination = false;
                     Decals.ReceiveGlobalIllumination = false;
@@ -5456,6 +5477,9 @@ namespace Njulf.Rendering.Data
                     Shadows.PointShadowsEnabled = true;
                     Shadows.MaxShadowedSpotLights = 2;
                     Shadows.MaxShadowedPointLights = 1;
+                    Shadows.AreaShadowsEnabled = true;
+                    Shadows.MaxShadowedAreaLights = 1;
+                    Shadows.AreaShadowSampleCount = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     // Dynamic diffuse GI is intentionally not sampled by
                     // layered forward receivers in this quality tier.
@@ -5518,6 +5542,11 @@ namespace Njulf.Rendering.Data
                     Shadows.PointShadowsEnabled = true;
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 3);
                     Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
+                    Shadows.AreaShadowsEnabled = true;
+                    Shadows.MaxShadowedAreaLights = Math.Max(
+                        Shadows.MaxShadowedAreaLights,
+                        2);
+                    Shadows.AreaShadowSampleCount = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     Transparency.ReceiveGlobalIllumination = true;
                     Decals.ReceiveGlobalIllumination = true;
@@ -5578,6 +5607,9 @@ namespace Njulf.Rendering.Data
                     Shadows.PointShadowsEnabled = true;
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 4);
                     Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
+                    Shadows.AreaShadowsEnabled = true;
+                    Shadows.MaxShadowedAreaLights = 4;
+                    Shadows.AreaShadowSampleCount = 2;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     Transparency.ReceiveGlobalIllumination = true;
                     Decals.ReceiveGlobalIllumination = true;
@@ -5643,6 +5675,11 @@ namespace Njulf.Rendering.Data
                     Shadows.PointShadowsEnabled = true;
                     Shadows.MaxShadowedSpotLights = Math.Max(Shadows.MaxShadowedSpotLights, 2);
                     Shadows.MaxShadowedPointLights = Math.Max(Shadows.MaxShadowedPointLights, 1);
+                    Shadows.AreaShadowsEnabled = true;
+                    Shadows.MaxShadowedAreaLights = Math.Max(
+                        Shadows.MaxShadowedAreaLights,
+                        2);
+                    Shadows.AreaShadowSampleCount = 1;
                     Transparency.Mode = TransparencyMode.SortedAlphaBlend;
                     Transparency.ReceiveGlobalIllumination = true;
                     Decals.ReceiveGlobalIllumination = true;
@@ -6342,6 +6379,9 @@ namespace Njulf.Rendering.Data
             public float SlopeScaledDepthBias { get; init; } = 1.5f;
             public float ConstantDepthBias { get; init; } = 0.0005f;
             public int PcfRadius { get; init; } = 1;
+            public bool AreaShadowsEnabled { get; init; } = true;
+            public int MaxShadowedAreaLights { get; init; } = 2;
+            public int AreaShadowSampleCount { get; init; } = 1;
 
             public static ShadowSettingsFile FromSettings(ShadowSettings settings) => new()
             {
@@ -6366,7 +6406,10 @@ namespace Njulf.Rendering.Data
                 NormalBias = settings.NormalBias,
                 SlopeScaledDepthBias = settings.SlopeScaledDepthBias,
                 ConstantDepthBias = settings.ConstantDepthBias,
-                PcfRadius = settings.PcfRadius
+                PcfRadius = settings.PcfRadius,
+                AreaShadowsEnabled = settings.AreaShadowsEnabled,
+                MaxShadowedAreaLights = settings.MaxShadowedAreaLights,
+                AreaShadowSampleCount = settings.AreaShadowSampleCount
             };
 
             public void ApplyTo(ShadowSettings settings)
@@ -6393,6 +6436,9 @@ namespace Njulf.Rendering.Data
                 settings.SlopeScaledDepthBias = SlopeScaledDepthBias;
                 settings.ConstantDepthBias = ConstantDepthBias;
                 settings.PcfRadius = PcfRadius;
+                settings.AreaShadowsEnabled = AreaShadowsEnabled;
+                settings.MaxShadowedAreaLights = MaxShadowedAreaLights;
+                settings.AreaShadowSampleCount = AreaShadowSampleCount;
             }
         }
 

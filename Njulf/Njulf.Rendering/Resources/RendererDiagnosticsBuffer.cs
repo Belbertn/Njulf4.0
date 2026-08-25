@@ -180,8 +180,11 @@ namespace Njulf.Rendering.Resources
         public const int ThickTransmissionTaskCounter =
             ThickTransmissionCounterBase;
         public const int ThickTransmissionCounterCount = 1;
-        public const int CounterCount =
+        public const int DdgiAreaLightCounterBase =
             ThickTransmissionCounterBase + ThickTransmissionCounterCount;
+        public const int DdgiAreaLightCounterCount = 4;
+        public const int CounterCount =
+            DdgiAreaLightCounterBase + DdgiAreaLightCounterCount;
         public const float DdgiForwardEstimateWeightScale = 1024.0f;
         public const float DdgiForwardEstimateLuminanceScale = 4096.0f;
         public const float DdgiShadowHitDistanceScale = 256.0f;
@@ -224,6 +227,9 @@ namespace Njulf.Rendering.Resources
         private readonly DdgiManyLightGpuCounters[]
             _lastCompletedDdgiManyLightCounters =
                 new DdgiManyLightGpuCounters[FramesInFlight];
+        private readonly DdgiAreaLightGpuCounters[]
+            _lastCompletedDdgiAreaLightCounters =
+                new DdgiAreaLightGpuCounters[FramesInFlight];
         private readonly DebugDdgiOverlayGpuCounters[]
             _lastCompletedDebugDdgiOverlayCounters =
                 new DebugDdgiOverlayGpuCounters[FramesInFlight];
@@ -378,6 +384,12 @@ namespace Njulf.Rendering.Resources
                     QuantizedMaximumNegativeLog2Pdf: counters[DdgiManyLightCounterBase + 13],
                     QuantizedMaximumEstimatorWeight: counters[DdgiManyLightCounterBase + 14],
                     ExactLightEvaluationCount: counters[DdgiManyLightCounterBase + 15]);
+            _lastCompletedDdgiAreaLightCounters[frameIndex] =
+                new DdgiAreaLightGpuCounters(
+                    SampleAttemptCount: counters[DdgiAreaLightCounterBase + 0],
+                    SampleAcceptCount: counters[DdgiAreaLightCounterBase + 1],
+                    InvalidPdfCount: counters[DdgiAreaLightCounterBase + 2],
+                    VisibilityRayCount: counters[DdgiAreaLightCounterBase + 3]);
 
             _lastCompletedCounters[frameIndex] = new GpuMeshletCounters(
                 checked((int)counters[0]),
@@ -1024,6 +1036,13 @@ namespace Njulf.Rendering.Resources
         {
             ValidateFrameIndex(frameIndex);
             return _lastCompletedDdgiManyLightCounters[frameIndex];
+        }
+
+        public DdgiAreaLightGpuCounters GetLastCompletedDdgiAreaLightCounters(
+            int frameIndex)
+        {
+            ValidateFrameIndex(frameIndex);
+            return _lastCompletedDdgiAreaLightCounters[frameIndex];
         }
 
         public DebugDdgiOverlayGpuCounters

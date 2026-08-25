@@ -184,6 +184,26 @@ public sealed class ReflectionProbeFrameTelemetryTests
     }
 
     [Test]
+    public void AreaRayShadowTimingContributesMicrosecondsToGpuFrameTotal()
+    {
+        using var sceneData = new SceneRenderingData();
+        var timings = new FrameTimingSnapshot(
+        [
+            new PassTiming("AreaRayShadowPass", 0, 19, true)
+        ]);
+
+        VulkanRenderer.ApplyCompletedGpuTimings(sceneData, timings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sceneData.GpuAreaRayShadowMicroseconds, Is.EqualTo(19));
+            Assert.That(
+                VulkanRenderer.CalculateGpuFrameMicroseconds(sceneData),
+                Is.EqualTo(19));
+        });
+    }
+
+    [Test]
     public void CompletionPulseSurvivesPollAndUploadUntilNextBeginCaptureFrame()
     {
         var scheduler = new ReflectionProbeCaptureScheduler(1);

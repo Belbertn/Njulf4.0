@@ -1897,6 +1897,17 @@ internal sealed class HelloGame : Game
             return Finish(new Model { Name = "Material Showcase" });
         }
 
+        if (_sceneKind == SampleSceneKind.AnalyticalAreaLights)
+        {
+            _sceneLoader = null;
+            SampleAnalyticalAreaLightRoomScene.Configure(
+                Scene,
+                meshManager,
+                materialManager);
+            meshManager.CompactStaticBuffers();
+            return Finish(new Model { Name = "Analytical Area Light Room" });
+        }
+
         if (_sceneKind == SampleSceneKind.FoliageShowcase)
         {
             _sceneLoader = null;
@@ -1979,6 +1990,10 @@ internal sealed class HelloGame : Game
         {
             SampleMaterialShowcaseScene.ConfigureRenderSettings(settings);
             settings.Particles.Enabled = false;
+        }
+        else if (_sceneKind == SampleSceneKind.AnalyticalAreaLights)
+        {
+            SampleAnalyticalAreaLightRoomScene.ConfigureRenderSettings(settings);
         }
         else if (_sceneKind == SampleSceneKind.FoliageShowcase)
         {
@@ -2121,15 +2136,20 @@ internal sealed class HelloGame : Game
         VulkanRenderer renderer,
         FirstPersonCamera camera)
     {
-        SampleSceneKind[] sceneKinds = Enum.GetValues<SampleSceneKind>();
-        int index = Array.IndexOf(sceneKinds, _sceneKind);
         LoadSceneKind(
-            sceneKinds[(index + 1) % sceneKinds.Length],
+            GetNextKey3Scene(_sceneKind),
             meshManager,
             materialManager,
             lightManager,
             renderer,
             camera);
+    }
+
+    internal static SampleSceneKind GetNextKey3Scene(SampleSceneKind current)
+    {
+        SampleSceneKind[] sceneKinds = Enum.GetValues<SampleSceneKind>();
+        int index = Array.IndexOf(sceneKinds, current);
+        return sceneKinds[(index + 1) % sceneKinds.Length];
     }
 
     private void CycleSponzaAndBistro(
@@ -2271,6 +2291,7 @@ internal sealed class HelloGame : Game
         {
             SampleSceneKind.MaterialShowcase => SampleEnvironmentMode.StudioNeutral,
             SampleSceneKind.GlobalIlluminationTest => SampleEnvironmentMode.Disabled,
+            SampleSceneKind.AnalyticalAreaLights => SampleEnvironmentMode.Disabled,
             SampleSceneKind.VfxShowcase => SampleEnvironmentMode.StudioNeutral,
             _ => EnvironmentMode
         });
@@ -2283,6 +2304,8 @@ internal sealed class HelloGame : Game
             SampleSceneKind.GlobalIlluminationTest => SampleLightingMode.PointShadowDemo,
             SampleSceneKind.FoliageShowcase => SampleLightingMode.DirectionalKey,
             SampleSceneKind.MaterialShowcase => SampleLightingMode.ThreePointDemo,
+            SampleSceneKind.AnalyticalAreaLights =>
+                SampleLightingMode.AnalyticalAreaLightShowcase,
             SampleSceneKind.VfxShowcase => SampleLightingMode.VolumetricShowcase,
             _ => LightingMode
         };
@@ -2376,6 +2399,8 @@ internal sealed class HelloGame : Game
             SampleSceneKind.Bistro =>
                 (new CoreVector3(-16.003326f, 2.5132222f, 1.2387409f), 1.6121571f, 0.0660575f, 500f),
             SampleSceneKind.MaterialShowcase => (new CoreVector3(0f, 2.15f, 9.0f), 0f, -0.17f, 120f),
+            SampleSceneKind.AnalyticalAreaLights =>
+                (new CoreVector3(0f, 2.15f, 8.25f), 0f, -0.08f, 60f),
             SampleSceneKind.FoliageShowcase => (new CoreVector3(0f, 1.6f, 5.5f), 0f, -0.14f, 180f),
             SampleSceneKind.VfxShowcase => (new CoreVector3(0f, 1.7f, 7.2f), 0f, -0.12f, 100f),
             // Face across the courtyard on Sponza startup instead of directly
@@ -2391,6 +2416,7 @@ internal sealed class HelloGame : Game
             SampleSceneKind.GlobalIlluminationTest => "GI Test Scene",
             SampleSceneKind.Bistro => "Bistro",
             SampleSceneKind.MaterialShowcase => "Material Showcase",
+            SampleSceneKind.AnalyticalAreaLights => "Analytical Area Light Room",
             SampleSceneKind.FoliageShowcase => "Foliage Showcase",
             SampleSceneKind.VfxShowcase => "Volumetric VFX Showcase",
             _ => "Sponza Plaza"

@@ -3,6 +3,32 @@
 
 #include "gi_material_transport.glsl"
 #include "ddgi_alpha_coverage.glsl"
+#include "ddgi_content_stochastic.glsl"
+#include "area_lighting.glsl"
+
+#ifndef DDGI_HIT_WORLD_PROBE_STABLE_KEY
+#define DDGI_HIT_WORLD_PROBE_STABLE_KEY uvec2(0u)
+#endif
+#ifndef DDGI_HIT_DIRECTION_RAY_ORDINAL
+#define DDGI_HIT_DIRECTION_RAY_ORDINAL 0u
+#endif
+#ifndef DDGI_HIT_SOURCE_LIGHTING_EPOCH
+#define DDGI_HIT_SOURCE_LIGHTING_EPOCH 1u
+#endif
+#ifndef DDGI_HIT_SAMPLING_SEQUENCE_EPOCH
+#define DDGI_HIT_SAMPLING_SEQUENCE_EPOCH 1u
+#endif
+#ifndef DDGI_HIT_CURRENT_FRAME_INDEX
+#define DDGI_HIT_CURRENT_FRAME_INDEX pc.CurrentFrameIndex
+#endif
+
+vec3 TraceLightVisibility(
+    vec3 worldPosition,
+    vec3 normal,
+    vec3 lightDirection,
+    float maxDistance,
+    float receiverProbeSpacing,
+    bool recordAnalyticDirectDiagnostics);
 
 #ifndef DDGI_HIT_USE_SELECTED_LIGHTS
 #define DDGI_HIT_USE_SELECTED_LIGHTS 1
@@ -38,6 +64,196 @@
 #ifndef DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED
 #define DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED true
 #endif
+
+struct DdgiAreaLightSurfaceSample
+{
+    bool valid;
+    vec3 position;
+    vec3 normal;
+    float areaPdf;
+};
+
+float DdgiAreaLightRandom(inout uint state)
+{
+    state = DdgiStochasticMix(state, 0x9E3779B9u);
+    return (float(state >> 8u) + 0.5) * (1.0 / 16777216.0);
+}
+
+DdgiAreaLightSurfaceSample DdgiSampleAreaLightSurface(
+    GPULight light,
+    uint sampleOrdinal)
+{
+    DdgiAreaLightSurfaceSample emitterSample;
+    emitterSample.valid = false;
+    emitterSample.position = light.Position;
+    emitterSample.normal = vec3(0.0, 1.0, 0.0);
+    emitterSample.areaPdf = 0.0;
+    AddRendererDiagnostic(
+        DDGI_HIT_CURRENT_FRAME_INDEX,
+        DDGI_AREA_LIGHT_SAMPLE_ATTEMPT_COUNTER,
+        1u);
+    vec3 axis;
+    vec3 up;
+    vec3 right;
+    float totalArea = NjulfAreaSurfaceArea(light);
+    if (!NjulfBuildLightFrame(light, axis, up, right) ||
+        !(totalArea > 0.0) || isnan(totalArea) || isinf(totalArea))
+    {
+        AddRendererDiagnostic(
+            DDGI_HIT_CURRENT_FRAME_INDEX,
+            DDGI_AREA_LIGHT_INVALID_PDF_COUNTER,
+            1u);
+        return emitterSample;
+    }
+    uint state = DdgiStableDecisionHash(
+        DDGI_HIT_WORLD_PROBE_STABLE_KEY,
+        DDGI_HIT_DIRECTION_RAY_ORDINAL,
+        DDGI_HIT_SOURCE_LIGHTING_EPOCH,
+        DDGI_HIT_SAMPLING_SEQUENCE_EPOCH,
+        DDGI_STOCHASTIC_DOMAIN_AREA_LIGHT_SURFACE,
+        light.StableIdentity,
+        sampleOrdinal);
+    vec3 random = vec3(
+        DdgiAreaLightRandom(state),
+        DdgiAreaLightRandom(state),
+        DdgiAreaLightRandom(state));
+    if (light.Type == GPU_LIGHT_TYPE_RECTANGLE)
+    {
+        emitterSample.position = light.Position +
+            right * ((random.x - 0.5) * light.SizeX) +
+            up * ((random.y - 0.5) * light.SizeY);
+        emitterSample.normal = NjulfAreaLightIsTwoSided(light) && random.z >= 0.5
+            ? -axis
+            : axis;
+    }
+    else if (light.Type == GPU_LIGHT_TYPE_DISK)
+    {
+        float radius = light.SizeX * 0.5 * sqrt(random.x);
+        float angle = 2.0 * NJULF_LTC_PI * random.y;
+        emitterSample.position = light.Position +
+            right * (radius * cos(angle)) +
+            up * (radius * sin(angle));
+        emitterSample.normal = NjulfAreaLightIsTwoSided(light) && random.z >= 0.5
+            ? -axis
+            : axis;
+    }
+    else if (light.Type == GPU_LIGHT_TYPE_TUBE)
+    {
+        float radius = light.SizeY * 0.5;
+        float sideArea = 2.0 * NJULF_LTC_PI * radius * light.SizeX;
+        float capArea = NJULF_LTC_PI * radius * radius;
+        float selector = random.z * totalArea;
+        if (selector < sideArea)
+        {
+            float angle = 2.0 * NJULF_LTC_PI * random.x;
+            emitterSample.normal = right * cos(angle) + up * sin(angle);
+            emitterSample.position = light.Position +
+                axis * ((random.y - 0.5) * light.SizeX) +
+                emitterSample.normal * radius;
+        }
+        else
+        {
+            bool positiveCap = selector >= sideArea + capArea;
+            float radial = radius * sqrt(random.x);
+            float angle = 2.0 * NJULF_LTC_PI * random.y;
+            emitterSample.normal = positiveCap ? axis : -axis;
+            emitterSample.position = light.Position +
+                axis * (positiveCap ? light.SizeX * 0.5 : -light.SizeX * 0.5) +
+                right * (radial * cos(angle)) +
+                up * (radial * sin(angle));
+        }
+    }
+    else
+    {
+        return emitterSample;
+    }
+    emitterSample.areaPdf = 1.0 / totalArea;
+    emitterSample.valid = NjulfAreaFinite(emitterSample.position) &&
+        NjulfAreaFinite(emitterSample.normal) && emitterSample.areaPdf > 0.0 &&
+        !isnan(emitterSample.areaPdf) && !isinf(emitterSample.areaPdf);
+    AddRendererDiagnostic(
+        DDGI_HIT_CURRENT_FRAME_INDEX,
+        emitterSample.valid
+            ? DDGI_AREA_LIGHT_SAMPLE_ACCEPT_COUNTER
+            : DDGI_AREA_LIGHT_INVALID_PDF_COUNTER,
+        1u);
+    return emitterSample;
+}
+
+vec3 EvaluateDdgiAreaLightDiffuseRadianceAtHit(
+    vec3 worldPosition,
+    GiSurfaceSample surface,
+    vec3 viewDirection,
+    GPULight light,
+    uint sampleOrdinal,
+    float energyScale,
+    float receiverProbeSpacing,
+    out vec3 noShadowDiffuse)
+{
+    noShadowDiffuse = vec3(0.0);
+    DdgiAreaLightSurfaceSample emitter = DdgiSampleAreaLightSurface(
+        light,
+        sampleOrdinal);
+    if (!emitter.valid)
+        return vec3(0.0);
+    vec3 toEmitter = emitter.position - worldPosition;
+    float distanceSquared = dot(toEmitter, toEmitter);
+    if (!(distanceSquared > 4e-6) || isnan(distanceSquared) ||
+        isinf(distanceSquared))
+    {
+        return vec3(0.0);
+    }
+    float distanceToEmitter = sqrt(distanceSquared);
+    vec3 lightDirection = toEmitter / distanceToEmitter;
+    bool transmitted = DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED &&
+        GiMaterialHasFlag(surface.Flags, GI_MATERIAL_THIN_SURFACE_TRANSMISSION) &&
+        dot(surface.GeometricNormal, lightDirection) < 0.0;
+    float receiverCosine = transmitted
+        ? max(dot(-surface.ShadingNormal, lightDirection), 0.0)
+        : max(dot(surface.ShadingNormal, lightDirection), 0.0);
+    float emitterCosine = max(dot(emitter.normal, -lightDirection), 0.0);
+    if (receiverCosine <= 0.0 || emitterCosine <= 0.0)
+        return vec3(0.0);
+    vec3 axis;
+    vec3 up;
+    vec3 right;
+    if (!NjulfBuildLightFrame(light, axis, up, right))
+        return vec3(0.0);
+    float closestDistance = NjulfAreaClosestDistance(
+        light, worldPosition, axis, up, right);
+    float rangeWindow = EvaluateNjulfFiniteRangeWindow(
+        closestDistance, light.Range);
+    if (rangeWindow <= 0.0)
+        return vec3(0.0);
+    float nDotV = max(dot(surface.ShadingNormal, viewDirection), 0.0);
+    vec3 radiance = max(light.Color, vec3(0.0)) *
+        max(light.Intensity, 0.0) * max(energyScale, 0.0) * rangeWindow;
+    vec3 incidentIrradiance = radiance *
+        (receiverCosine * emitterCosine /
+         max(distanceSquared * emitter.areaPdf, 1e-10));
+    noShadowDiffuse = transmitted
+        ? incidentIrradiance *
+            (surface.TransmittedDiffuseReflectance / GI_MATERIAL_PI)
+        : incidentIrradiance * EvaluateGiDiffuseBrdf(
+            surface.DirectionalDiffuseBase,
+            surface.DielectricF0,
+            receiverCosine,
+            nDotV);
+    if ((uint(light.ShadowFlags) & GPU_LIGHT_SHADOW_FLAG_CASTS_SHADOWS) == 0u)
+        return noShadowDiffuse;
+    AddRendererDiagnostic(
+        DDGI_HIT_CURRENT_FRAME_INDEX,
+        DDGI_AREA_LIGHT_VISIBILITY_RAY_COUNTER,
+        1u);
+    vec3 visibility = TraceLightVisibility(
+        worldPosition,
+        surface.GeometricNormal,
+        lightDirection,
+        distanceToEmitter,
+        receiverProbeSpacing,
+        false);
+    return noShadowDiffuse * visibility;
+}
 
 #ifndef DDGI_HIT_BINARY_OPAQUE_SHADOW_FAST_PATH
 #define DDGI_HIT_BINARY_OPAQUE_SHADOW_FAST_PATH 0
@@ -1636,7 +1852,7 @@ bool TryBuildSelectedDdgiLocalLightContribution(
         return false;
 
     light = ReadLight(pc.SelectedLocalLightIndex);
-    if (light.Type == 1)
+    if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL || NjulfIsAreaLight(light))
         return false;
 
     vec3 toLight = light.Position - worldPosition;
@@ -1654,7 +1870,8 @@ bool TryBuildSelectedDdgiLocalLightContribution(
     attenuation = EvaluateNjulfLightDistanceAttenuation(
         light,
         distanceToLight);
-    if (light.Type == 2)
+    attenuation *= EvaluateNjulfIesProfile(light, -lightDirection);
+    if (light.Type == GPU_LIGHT_TYPE_SPOT)
         attenuation *= EvaluateNjulfSpotAttenuation(light, lightDirection);
 
     attenuation *= max(pc.SelectedLocalLightEnergyScale, 0.0);
@@ -1759,7 +1976,8 @@ bool DdgiTryBuildLocalLightContribution(
     lightDirection = vec3(0.0, 1.0, 0.0);
     distanceToLight = 0.0;
     attenuation = 0.0;
-    if (light.Type == 1 || !DdgiFiniteLocalLight(light) ||
+    if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL || NjulfIsAreaLight(light) ||
+        !NjulfIsPunctualLight(light) || !DdgiFiniteLocalLight(light) ||
         isnan(light.Range) || light.Range <= 0.0 || light.Intensity <= 0.0 ||
         DdgiHitLuminance(light.Color) <= 0.0)
     {
@@ -1786,7 +2004,8 @@ bool DdgiTryBuildLocalLightContribution(
     attenuation = EvaluateNjulfLightDistanceAttenuation(
         light,
         distanceToLight);
-    if (light.Type == 2)
+    attenuation *= EvaluateNjulfIesProfile(light, -lightDirection);
+    if (light.Type == GPU_LIGHT_TYPE_SPOT)
     {
         attenuation *= EvaluateNjulfSpotAttenuation(
             light,
@@ -1843,6 +2062,25 @@ void DdgiEvaluateLocalLightsExact(
     for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)
     {
         GPULight light = ReadLight(lightIndex);
+        if (NjulfIsAreaLight(light))
+        {
+            AddRendererDiagnostic(
+                DDGI_HIT_CURRENT_FRAME_INDEX,
+                DDGI_MANY_LIGHT_EXACT_LIGHT_EVALUATION_COUNTER,
+                1u);
+            vec3 lightNoShadow;
+            radiance += EvaluateDdgiAreaLightDiffuseRadianceAtHit(
+                worldPosition,
+                surface,
+                viewDirection,
+                light,
+                lightIndex,
+                1.0,
+                receiverProbeSpacing,
+                lightNoShadow);
+            noShadowRadiance += lightNoShadow;
+            continue;
+        }
         vec3 lightDirection;
         float distanceToLight;
         float attenuation;
@@ -1975,7 +2213,7 @@ bool DdgiEvaluateLocalLightTreeSamples(
         // Packed indices are allowed to change after topology edits. The stable
         // identity turns a stale publication into an exact fallback instead of
         // silently sampling the wrong light.
-        if (light.Type == 1 ||
+        if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL ||
             light.StableIdentity != lightSample.stableLightIdentity)
         {
             AddRendererDiagnostic(
@@ -1985,39 +2223,54 @@ bool DdgiEvaluateLocalLightTreeSamples(
             return false;
         }
 
-        vec3 lightDirection;
-        float distanceToLight;
-        float attenuation;
-        if (!DdgiTryBuildLocalLightContribution(
-            worldPosition,
-            surface,
-            light,
-            lightDirection,
-            distanceToLight,
-            attenuation))
+        vec3 lightNoShadow;
+        vec3 contribution;
+        if (NjulfIsAreaLight(light))
         {
-            AddRendererDiagnostic(
-                DDGI_HIT_CURRENT_FRAME_INDEX,
-                DDGI_MANY_LIGHT_REJECTED_ZERO_TERM_COUNTER,
-                1u);
-            continue;
+            contribution = EvaluateDdgiAreaLightDiffuseRadianceAtHit(
+                worldPosition,
+                surface,
+                viewDirection,
+                light,
+                sampleOrdinal,
+                1.0,
+                receiverProbeSpacing,
+                lightNoShadow);
         }
-
+        else
+        {
+            vec3 lightDirection;
+            float distanceToLight;
+            float attenuation;
+            if (!DdgiTryBuildLocalLightContribution(
+                worldPosition,
+                surface,
+                light,
+                lightDirection,
+                distanceToLight,
+                attenuation))
+            {
+                AddRendererDiagnostic(
+                    DDGI_HIT_CURRENT_FRAME_INDEX,
+                    DDGI_MANY_LIGHT_REJECTED_ZERO_TERM_COUNTER,
+                    1u);
+                continue;
+            }
+            contribution = EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
+                worldPosition,
+                surface,
+                viewDirection,
+                light,
+                lightDirection,
+                distanceToLight,
+                attenuation,
+                receiverProbeSpacing,
+                lightNoShadow);
+        }
         AddRendererDiagnostic(
             DDGI_HIT_CURRENT_FRAME_INDEX,
             DDGI_MANY_LIGHT_VISIBILITY_EVALUATION_COUNTER,
             1u);
-        vec3 lightNoShadow;
-        vec3 contribution = EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
-            worldPosition,
-            surface,
-            viewDirection,
-            light,
-            lightDirection,
-            distanceToLight,
-            attenuation,
-            receiverProbeSpacing,
-            lightNoShadow);
         float inverseEstimatorPdf = 1.0 /
             (float(sampleCount) * lightSample.pdf);
         if (isnan(inverseEstimatorPdf) || isinf(inverseEstimatorPdf) ||
@@ -2869,14 +3122,31 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
         return directDiffuseRadiance;
 
 #if DDGI_HIT_LOCAL_LIGHTS_ENABLED
-    GPULight localLight;
+    GPULight localLight = pc.SelectedLocalLightIndex < pc.LightCount
+        ? ReadLight(pc.SelectedLocalLightIndex)
+        : ReadLight(0u);
     vec3 localLightDirection;
     float localLightDistance;
     float localLightAttenuation;
     bool thinSurface = DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED && GiMaterialHasFlag(
         surface.Flags,
         GI_MATERIAL_THIN_SURFACE_TRANSMISSION);
-    if (TryBuildSelectedDdgiLocalLightContribution(
+    if (pc.SelectedLocalLightIndex < pc.LightCount &&
+        NjulfIsAreaLight(localLight))
+    {
+        vec3 lightNoShadowDiffuse;
+        directDiffuseRadiance += EvaluateDdgiAreaLightDiffuseRadianceAtHit(
+            worldPosition,
+            surface,
+            viewDirection,
+            localLight,
+            pc.SelectedLocalLightIndex,
+            max(pc.SelectedLocalLightEnergyScale, 0.0),
+            receiverProbeSpacing,
+            lightNoShadowDiffuse);
+        directNoShadowDiffuse += lightNoShadowDiffuse;
+    }
+    else if (TryBuildSelectedDdgiLocalLightContribution(
         worldPosition,
         surface.ShadingNormal,
         thinSurface,
@@ -2963,8 +3233,22 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
 
         vec3 toLight = light.Position - worldPosition;
         float distanceToLight = length(toLight);
-        if (distanceToLight >= light.Range || light.Range <= 0.0)
+        if (NjulfIsAreaLight(light))
+        {
+            vec3 axis;
+            vec3 up;
+            vec3 right;
+            if (!NjulfBuildLightFrame(light, axis, up, right))
+                continue;
+            float closestDistance = NjulfAreaClosestDistance(
+                light, worldPosition, axis, up, right);
+            if (closestDistance >= light.Range || light.Range <= 0.0)
+                continue;
+        }
+        else if (distanceToLight >= light.Range || light.Range <= 0.0)
+        {
             continue;
+        }
         vec3 lightDirection = toLight / max(distanceToLight, 0.0001);
         float nDotL = DDGI_HIT_THIN_SURFACE_TRANSMISSION_ENABLED && GiMaterialHasFlag(
                 surface.Flags,
@@ -2974,12 +3258,19 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
         if (nDotL <= 0.0)
             continue;
 
-        float attenuation = EvaluateNjulfLightDistanceAttenuation(
-            light,
-            distanceToLight);
-        if (light.Type == 2)
+        float attenuation = NjulfIsAreaLight(light)
+            ? EvaluateNjulfFiniteRangeWindow(
+                max(distanceToLight - NjulfAreaBoundingRadius(light), 0.0),
+                light.Range)
+            : EvaluateNjulfLightDistanceAttenuation(light, distanceToLight) *
+                EvaluateNjulfIesProfile(light, -lightDirection);
+        if (light.Type == GPU_LIGHT_TYPE_SPOT)
             attenuation *= EvaluateNjulfSpotAttenuation(light, lightDirection);
-        float importance = DdgiHitLuminance(max(light.Color, vec3(0.0)) * max(light.Intensity, 0.0)) * attenuation * nDotL;
+        float sourceWeight = NjulfIsAreaLight(light)
+            ? NJULF_LTC_PI * NjulfAreaSurfaceArea(light)
+            : 1.0;
+        float importance = DdgiHitLuminance(max(light.Color, vec3(0.0)) *
+            max(light.Intensity, 0.0)) * sourceWeight * attenuation * nDotL;
         if (importance <= 0.000001)
             continue;
 
@@ -3010,16 +3301,31 @@ vec3 EvaluateDirectDiffuseRadianceAtHit(
     for (uint i = 0u; i < selectedLocalCount; i++)
     {
         vec3 lightNoShadowDiffuse;
-        directDiffuseRadiance += EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
-            worldPosition,
-            surface,
-            viewDirection,
-            selectedLocalLights[i],
-            selectedDirections[i],
-            selectedDistances[i],
-            selectedAttenuations[i],
-            receiverProbeSpacing,
-            lightNoShadowDiffuse);
+        if (NjulfIsAreaLight(selectedLocalLights[i]))
+        {
+            directDiffuseRadiance += EvaluateDdgiAreaLightDiffuseRadianceAtHit(
+                worldPosition,
+                surface,
+                viewDirection,
+                selectedLocalLights[i],
+                i,
+                1.0,
+                receiverProbeSpacing,
+                lightNoShadowDiffuse);
+        }
+        else
+        {
+            directDiffuseRadiance += EvaluateSelectedDdgiDirectDiffuseRadianceAtHit(
+                worldPosition,
+                surface,
+                viewDirection,
+                selectedLocalLights[i],
+                selectedDirections[i],
+                selectedDistances[i],
+                selectedAttenuations[i],
+                receiverProbeSpacing,
+                lightNoShadowDiffuse);
+        }
         directNoShadowDiffuse += lightNoShadowDiffuse;
     }
 #endif

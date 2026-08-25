@@ -4,6 +4,7 @@
 #extension GL_EXT_scalar_block_layout : require
 
 #include "common.glsl"
+#include "area_lighting.glsl"
 #include "ddgi_light_tree.glsl"
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
@@ -68,21 +69,46 @@ void main()
     for (uint lightIndex = 0u; lightIndex < pc.LightCount; lightIndex++)
     {
         GPULight light = ReadLight(lightIndex);
-        if (light.Type == 1)
+        if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL)
             continue;
+        bool areaLight = NjulfIsAreaLight(light);
+        vec3 areaAxis;
+        vec3 areaUp;
+        vec3 areaRight;
+        float area = areaLight ? NjulfAreaSurfaceArea(light) : 1.0;
+        bool validAreaGeometry = !areaLight ||
+            (area > 0.0 &&
+             NjulfBuildLightFrame(light, areaAxis, areaUp, areaRight));
         float flux = dot(max(light.Color, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) *
             max(light.Intensity, 0.0);
+        if (areaLight)
+            flux *= NJULF_LTC_PI * area;
         if (!(flux > 1e-20) || !DdgiLightTreeFinite(flux) ||
-            !DdgiLightTreeFinite(light.Position) || localCount >= pc.LeafCapacity)
+            !DdgiLightTreeFinite(light.Position) || !validAreaGeometry ||
+            localCount >= pc.LeafCapacity)
         {
             continue;
         }
 
         bool malformedRange = !DdgiLightTreeFinite(light.Range) || light.Range <= 0.0;
-        float extent = malformedRange ? 1000000.0 : light.Range;
-        vec3 minimum = light.Position - vec3(extent);
-        vec3 maximum = light.Position + vec3(extent);
-        uint recordFlags = malformedRange ? 1u : 0u;
+        vec3 shapeExtent = areaLight
+            ? NjulfAreaShapeExtent(light)
+            : vec3(0.0);
+        float treeRange = malformedRange
+            ? -1.0
+            : light.Range + NjulfAreaBoundingRadius(light);
+        vec3 extent = malformedRange
+            ? vec3(1000000.0)
+            : shapeExtent + vec3(light.Range);
+        vec3 minimum = light.Position - extent;
+        vec3 maximum = light.Position + extent;
+        uint recordFlags = malformedRange
+            ? DDGI_LIGHT_TREE_NODE_MALFORMED_RANGE_BIT
+            : 0u;
+        if (light.Type == GPU_LIGHT_TYPE_SPOT)
+            recordFlags |= DDGI_LIGHT_TREE_NODE_SPOT_LIGHT_BIT;
+        if (areaLight)
+            recordFlags |= DDGI_LIGHT_TREE_NODE_AREA_LIGHT_BIT;
         if (!DdgiLightTreeFinite(minimum) || !DdgiLightTreeFinite(maximum))
         {
             minimum = vec3(-1000000.0);
@@ -100,7 +126,7 @@ void main()
         WriteStorageFloatUniform(scratch, baseWord + 4u, maximum.x);
         WriteStorageFloatUniform(scratch, baseWord + 5u, maximum.y);
         WriteStorageFloatUniform(scratch, baseWord + 6u, maximum.z);
-        WriteStorageFloatUniform(scratch, baseWord + 7u, malformedRange ? -1.0 : light.Range);
+        WriteStorageFloatUniform(scratch, baseWord + 7u, treeRange);
         WriteStorageWordUniform(scratch, baseWord + 8u, lightIndex);
         WriteStorageWordUniform(scratch, baseWord + 9u,
             light.StableIdentity != 0u ? light.StableIdentity : lightIndex + 1u);

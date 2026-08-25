@@ -4,6 +4,7 @@
 #extension GL_EXT_scalar_block_layout : require
 
 #include "common.glsl"
+#include "area_lighting.glsl"
 #include "ddgi_light_tree.glsl"
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
@@ -41,7 +42,7 @@ DdgiLightTreeNode DdgiRefitCombine(
     node.rightOrLeafCount = rightIndex;
     node.descendantLeafCount = left.descendantLeafCount + right.descendantLeafCount;
     node.flagsAndChecksum = (left.flagsAndChecksum | right.flagsAndChecksum) &
-        DDGI_LIGHT_TREE_NODE_INVALID_BOUND_BIT;
+        DDGI_LIGHT_TREE_NODE_PROPAGATED_BITS;
     return node;
 }
 
@@ -66,14 +67,29 @@ void main()
             DdgiLightTreeLeaf sourceLeaf = DdgiReadLightTreeLeaf(
                 sourceLeafBase + ordinal);
             GPULight light = ReadLight(sourceLeaf.packedLightIndex);
+            bool areaLight = NjulfIsAreaLight(light);
+            vec3 areaAxis;
+            vec3 areaUp;
+            vec3 areaRight;
+            float area = areaLight ? NjulfAreaSurfaceArea(light) : 1.0;
+            bool validAreaGeometry = !areaLight ||
+                (area > 0.0 &&
+                 NjulfBuildLightFrame(light, areaAxis, areaUp, areaRight));
             float flux = dot(max(light.Color, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) *
                 max(light.Intensity, 0.0);
+            if (areaLight)
+                flux *= NJULF_LTC_PI * area;
             bool identityValid = light.StableIdentity == sourceLeaf.stableLightIdentity;
             bool malformedRange = !DdgiLightTreeFinite(light.Range) || light.Range <= 0.0;
-            float extent = malformedRange ? 1000000.0 : light.Range;
-            vec3 minimum = light.Position - vec3(extent);
-            vec3 maximum = light.Position + vec3(extent);
-            bool valid = identityValid && flux > 1e-20 &&
+            vec3 shapeExtent = areaLight
+                ? NjulfAreaShapeExtent(light)
+                : vec3(0.0);
+            vec3 extent = malformedRange
+                ? vec3(1000000.0)
+                : shapeExtent + vec3(light.Range);
+            vec3 minimum = light.Position - extent;
+            vec3 maximum = light.Position + extent;
+            bool valid = identityValid && validAreaGeometry && flux > 1e-20 &&
                 DdgiLightTreeFinite(flux) &&
                 DdgiLightTreeFinite(minimum) &&
                 DdgiLightTreeFinite(maximum);
@@ -90,7 +106,9 @@ void main()
                 pc.LightBufferRevisionLow,
                 pc.LightBufferRevisionHigh);
             targetLeaf.center = light.Position;
-            targetLeaf.range = malformedRange ? -1.0 : light.Range;
+            targetLeaf.range = malformedRange
+                ? -1.0
+                : light.Range + NjulfAreaBoundingRadius(light);
             targetNode.minimum = minimum;
             targetNode.flux = flux;
             targetNode.maximum = maximum;
@@ -101,6 +119,15 @@ void main()
             targetNode.rightOrLeafCount = 1u;
             targetNode.descendantLeafCount = 1u;
             targetNode.flagsAndChecksum = DDGI_LIGHT_TREE_NODE_LEAF_BIT |
+                (malformedRange
+                    ? DDGI_LIGHT_TREE_NODE_MALFORMED_RANGE_BIT
+                    : 0u) |
+                (light.Type == GPU_LIGHT_TYPE_SPOT
+                    ? DDGI_LIGHT_TREE_NODE_SPOT_LIGHT_BIT
+                    : 0u) |
+                (areaLight
+                    ? DDGI_LIGHT_TREE_NODE_AREA_LIGHT_BIT
+                    : 0u) |
                 (valid ? 0u : DDGI_LIGHT_TREE_NODE_INVALID_BOUND_BIT);
         }
         else

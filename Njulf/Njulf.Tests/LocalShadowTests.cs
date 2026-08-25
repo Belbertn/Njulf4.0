@@ -29,7 +29,9 @@ namespace Njulf.Tests
                 PointNormalBias = -1f,
                 PointConstantDepthBias = 1f,
                 PointSlopeScaledDepthBias = 99f,
-                PointPcfRadius = 99
+                PointPcfRadius = 99,
+                MaxShadowedAreaLights = 99,
+                AreaShadowSampleCount = 99
             };
 
             Assert.Multiple(() =>
@@ -47,6 +49,8 @@ namespace Njulf.Tests
                 Assert.That(settings.PointConstantDepthBias, Is.EqualTo(0.1f));
                 Assert.That(settings.PointSlopeScaledDepthBias, Is.EqualTo(16f));
                 Assert.That(settings.PointPcfRadius, Is.EqualTo(3));
+                Assert.That(settings.MaxShadowedAreaLights, Is.EqualTo(4));
+                Assert.That(settings.AreaShadowSampleCount, Is.EqualTo(4));
             });
         }
 
@@ -147,14 +151,18 @@ namespace Njulf.Tests
                 SpotShadowsEnabled = true,
                 MaxShadowedSpotLights = 1,
                 PointShadowsEnabled = true,
-                MaxShadowedPointLights = 1
+                MaxShadowedPointLights = 1,
+                AreaShadowsEnabled = true,
+                MaxShadowedAreaLights = 1
             };
             Light[] lights =
             [
                 Spot(priority: 0, x: 0f),
                 Spot(priority: 10, x: 1f),
                 Point(priority: 0, x: 2f),
-                Point(priority: 20, x: 3f)
+                Point(priority: 20, x: 3f),
+                Rectangle(priority: 0, x: 4f),
+                Rectangle(priority: 30, x: 5f)
             ];
 
             LocalShadowSelection selection = new LocalShadowSelector().Select(lights, camera, settings);
@@ -163,12 +171,16 @@ namespace Njulf.Tests
             {
                 Assert.That(selection.SpotCandidateCount, Is.EqualTo(2));
                 Assert.That(selection.PointCandidateCount, Is.EqualTo(2));
+                Assert.That(selection.AreaCandidateCount, Is.EqualTo(2));
                 Assert.That(selection.SpotLights, Has.Length.EqualTo(1));
                 Assert.That(selection.PointLights, Has.Length.EqualTo(1));
+                Assert.That(selection.AreaLights, Has.Length.EqualTo(1));
                 Assert.That(selection.SpotLights[0].LightIndex, Is.EqualTo(1));
                 Assert.That(selection.PointLights[0].LightIndex, Is.EqualTo(3));
+                Assert.That(selection.AreaLights[0].LightIndex, Is.EqualTo(5));
                 Assert.That(selection.SpotRejectedByBudgetCount, Is.EqualTo(1));
                 Assert.That(selection.PointRejectedByBudgetCount, Is.EqualTo(1));
+                Assert.That(selection.AreaRejectedByBudgetCount, Is.EqualTo(1));
             });
         }
 
@@ -177,12 +189,19 @@ namespace Njulf.Tests
         {
             SelectedLocalShadow[] spots = [new(2, Spot(priority: 0, x: 0f), 1f)];
             SelectedLocalShadow[] points = [new(4, Point(priority: 0, x: 0f), 1f)];
+            SelectedLocalShadow[] areas = [new(1, Rectangle(priority: 0, x: 0f), 1f)];
 
-            GPULocalLightShadowIndex[] map = LocalShadowDataBuilder.BuildShadowIndexMap(5, spots, points);
+            GPULocalLightShadowIndex[] map = LocalShadowDataBuilder.BuildShadowIndexMap(
+                5,
+                spots,
+                points,
+                areas);
 
             Assert.Multiple(() =>
             {
                 Assert.That(map[0].SpotShadowIndex, Is.EqualTo(-1));
+                Assert.That(map[0].AreaShadowIndex, Is.EqualTo(-1));
+                Assert.That(map[1].AreaShadowIndex, Is.EqualTo(0));
                 Assert.That(map[2].SpotShadowIndex, Is.EqualTo(0));
                 Assert.That(map[4].PointShadowIndex, Is.EqualTo(0));
             });
@@ -252,6 +271,23 @@ namespace Njulf.Tests
             {
                 Type = LightType.Point,
                 Position = new Vector3(x, 2f, 0f),
+                Color = Vector3.One,
+                Intensity = 10f,
+                Range = 8f,
+                CastsShadows = true,
+                ShadowPriority = priority
+            };
+        }
+
+        private static Light Rectangle(int priority, float x)
+        {
+            return new Light
+            {
+                Type = LightType.Rectangle,
+                Position = new Vector3(x, 2f, 0f),
+                Direction = new Vector3(0f, -1f, 0f),
+                Up = Vector3.UnitZ,
+                Size = new Vector2(2f, 1f),
                 Color = Vector3.One,
                 Intensity = 10f,
                 Range = 8f,

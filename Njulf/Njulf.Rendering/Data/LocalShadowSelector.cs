@@ -10,6 +10,7 @@ namespace Njulf.Rendering.Data
     {
         private readonly HashSet<int> _previousSpotSelection = new();
         private readonly HashSet<int> _previousPointSelection = new();
+        private readonly HashSet<int> _previousAreaSelection = new();
 
         public LocalShadowSelection Select(
             Light[] lights,
@@ -38,6 +39,7 @@ namespace Njulf.Rendering.Data
 
             var spotCandidates = new List<SelectedLocalShadow>();
             var pointCandidates = new List<SelectedLocalShadow>();
+            var areaCandidates = new List<SelectedLocalShadow>();
 
             for (int i = 0; i < lights.Length; i++)
             {
@@ -50,6 +52,10 @@ namespace Njulf.Rendering.Data
                     spotCandidates.Add(new SelectedLocalShadow(i, light, score + (_previousSpotSelection.Contains(i) ? 0.05f : 0f)));
                 else if (light.Type == LightType.Point)
                     pointCandidates.Add(new SelectedLocalShadow(i, light, score + (_previousPointSelection.Contains(i) ? 0.05f : 0f)));
+                else if (AnalyticalLightGeometry.IsArea(light.Type) &&
+                         AnalyticalLightGeometry.HasValidDimensions(light) &&
+                         AnalyticalLightGeometry.TryGetFrame(light, out _, out _, out _))
+                    areaCandidates.Add(new SelectedLocalShadow(i, light, score + (_previousAreaSelection.Contains(i) ? 0.05f : 0f)));
             }
 
             int spotAtlasCapacity = spotAtlasCapacityOverride >= 0
@@ -60,20 +66,28 @@ namespace Njulf.Rendering.Data
                 : settings.MaxShadowedPointLights;
             int spotBudget = settings.SpotShadowsEnabled ? Math.Min(settings.MaxShadowedSpotLights, spotAtlasCapacity) : 0;
             int pointBudget = settings.PointShadowsEnabled ? Math.Min(settings.MaxShadowedPointLights, pointShadowCapacity) : 0;
+            int areaBudget = settings.AreaShadowsEnabled
+                ? settings.MaxShadowedAreaLights
+                : 0;
 
             SelectedLocalShadow[] selectedSpots = SelectTop(spotCandidates, spotBudget);
             SelectedLocalShadow[] selectedPoints = SelectTop(pointCandidates, pointBudget);
+            SelectedLocalShadow[] selectedAreas = SelectTop(areaCandidates, areaBudget);
             Remember(_previousSpotSelection, selectedSpots);
             Remember(_previousPointSelection, selectedPoints);
+            Remember(_previousAreaSelection, selectedAreas);
 
             return new LocalShadowSelection
             {
                 SpotLights = selectedSpots,
                 PointLights = selectedPoints,
+                AreaLights = selectedAreas,
                 SpotCandidateCount = spotCandidates.Count,
                 PointCandidateCount = pointCandidates.Count,
+                AreaCandidateCount = areaCandidates.Count,
                 SpotRejectedByBudgetCount = Math.Max(0, spotCandidates.Count - selectedSpots.Length),
                 PointRejectedByBudgetCount = Math.Max(0, pointCandidates.Count - selectedPoints.Length),
+                AreaRejectedByBudgetCount = Math.Max(0, areaCandidates.Count - selectedAreas.Length),
                 SpotAtlasCapacity = spotAtlasCapacity
             };
         }
@@ -83,7 +97,8 @@ namespace Njulf.Rendering.Data
             return light.CastsShadows &&
                    light.Intensity > 0f &&
                    light.Range > 0f &&
-                   (light.Type == LightType.Spot || light.Type == LightType.Point);
+                   (light.Type == LightType.Spot || light.Type == LightType.Point ||
+                    AnalyticalLightGeometry.IsArea(light.Type));
         }
 
         private static bool IsValidSpot(Light light)
@@ -95,7 +110,7 @@ namespace Njulf.Rendering.Data
         {
             NumericsVector3 toLight = light.Position - new NumericsVector3(camera.Position.X, camera.Position.Y, camera.Position.Z);
             float distance = MathF.Max(toLight.Length(), 0.001f);
-            float projectedSize = light.Range / distance;
+            float projectedSize = AnalyticalLightGeometry.GetBoundingRadius(light) / distance;
             return light.ShadowPriority * 1000f +
                    projectedSize * 100f +
                    MathF.Max(light.Intensity, 0f) +

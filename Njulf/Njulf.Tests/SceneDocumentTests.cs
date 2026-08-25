@@ -238,6 +238,133 @@ public sealed class SceneDocumentTests
     }
 
     [Test]
+    public void AnalyticalLightsAndIesReferences_RoundTripWithoutSchemaLoss()
+    {
+        var source = new SceneDocument
+        {
+            Lights =
+            [
+                new SceneLightDocument
+                {
+                    Id = Guid.Parse("40000000-0000-0000-0000-000000000001"),
+                    Name = "Window softbox",
+                    Type = "Rectangle",
+                    Position = new SceneVector3(1f, 2f, 3f),
+                    Direction = new SceneVector3(0f, 0f, -1f),
+                    Up = new SceneVector3(0f, 1f, 0f),
+                    Size = new SceneVector2(3f, 1.5f),
+                    TwoSided = true,
+                    Intensity = 20f,
+                    Range = 14f
+                },
+                new SceneLightDocument
+                {
+                    Id = Guid.Parse("40000000-0000-0000-0000-000000000002"),
+                    Name = "Photometric spot",
+                    Type = "Spot",
+                    Direction = new SceneVector3(0f, -1f, 0f),
+                    IesProfile = new SceneAssetReferenceDocument(
+                        "profiles/downlight.ies",
+                        ContentHash: "fixture-hash"),
+                    IesRotationRadians = 0.25f
+                }
+            ],
+            Dependencies =
+            [
+                new SceneAssetDependency("profiles/downlight.ies", "fixture-hash")
+            ]
+        };
+        var lights = new MemoryLightStore();
+        Scene scene = new SceneDocumentLoader(new ThrowingContentManager()).Load(source, lights);
+        try
+        {
+            SceneDocument captured = new SceneDocumentWriter().CreateDocument(scene, lights);
+            Assert.Multiple(() =>
+            {
+                Assert.That(SceneDocument.CurrentSchemaVersion, Is.EqualTo(9));
+                Assert.That(SceneDocumentJson.Serialize(captured),
+                    Is.EqualTo(SceneDocumentJson.Serialize(source)));
+                Assert.That(captured.Dependencies.Single().Path,
+                    Is.EqualTo("profiles/downlight.ies"));
+            });
+        }
+        finally
+        {
+            scene.Dispose();
+        }
+    }
+
+    [Test]
+    public void Loader_RejectsInvalidAreaDimensionsAndIesUsage()
+    {
+        var loader = new SceneDocumentLoader(new ThrowingContentManager());
+        var store = new MemoryLightStore();
+        var nonCircularDisk = new SceneDocument
+        {
+            Lights =
+            [
+                new SceneLightDocument
+                {
+                    Type = "Disk",
+                    Direction = new SceneVector3(0f, 0f, -1f),
+                    Up = new SceneVector3(0f, 1f, 0f),
+                    Size = new SceneVector2(2f, 1f)
+                }
+            ]
+        };
+        var areaWithIes = new SceneDocument
+        {
+            Lights =
+            [
+                new SceneLightDocument
+                {
+                    Type = "Rectangle",
+                    Direction = new SceneVector3(0f, 0f, -1f),
+                    Up = new SceneVector3(0f, 1f, 0f),
+                    IesProfile = new SceneAssetReferenceDocument("profile.ies")
+                }
+            ]
+        };
+        var degenerateRectangle = new SceneDocument
+        {
+            Lights =
+            [
+                new SceneLightDocument
+                {
+                    Type = "Rectangle",
+                    Direction = new SceneVector3(0f, 0f, -1f),
+                    Up = new SceneVector3(0f, 1f, 0f),
+                    Size = new SceneVector2(1e-6f, 1f)
+                }
+            ]
+        };
+        var unorientedPhotometricPoint = new SceneDocument
+        {
+            Lights =
+            [
+                new SceneLightDocument
+                {
+                    Type = "Point",
+                    Direction = new SceneVector3(0f, 0f, 0f),
+                    IesProfile = new SceneAssetReferenceDocument("profile.ies")
+                }
+            ]
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => loader.Load(nonCircularDisk, store),
+                Throws.TypeOf<InvalidDataException>().With.Message.Contains("dimensions"));
+            Assert.That(() => loader.Load(areaWithIes, store),
+                Throws.TypeOf<InvalidDataException>().With.Message.Contains("non-punctual"));
+            Assert.That(() => loader.Load(degenerateRectangle, store),
+                Throws.TypeOf<InvalidDataException>().With.Message.Contains("dimensions"));
+            Assert.That(() => loader.Load(unorientedPhotometricPoint, store),
+                Throws.TypeOf<InvalidDataException>().With.Message.Contains("zero direction"));
+        });
+    }
+
+    [Test]
     public void AuthoredGiVolumes_LoadAndSaveWithoutSchemaLoss()
     {
         Guid volumeId = Guid.Parse("20000000-0000-0000-0000-000000000001");

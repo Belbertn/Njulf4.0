@@ -41,6 +41,11 @@ public sealed class SceneDocumentWriter
                 .ToList() ?? [],
             Dependencies = []
         };
+        foreach (SceneLightDocument light in document.Lights)
+        {
+            if (light.IesProfile is { } profile)
+                AddDependency(profile, light.Id, light.Name, dependencies);
+        }
         document.Dependencies.AddRange(dependencies.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
             .Select(static pair => new SceneAssetDependency(pair.Key, pair.Value)));
         return document;
@@ -150,6 +155,24 @@ public sealed class SceneDocumentWriter
         else
             dependencies.Add(source.Path, source.ContentHash);
         return new SceneAssetReferenceDocument(source.Path, source.SubObject, source.ContentHash);
+    }
+
+    private static void AddDependency(
+        SceneAssetReferenceDocument source,
+        Guid id,
+        string name,
+        Dictionary<string, string?> dependencies)
+    {
+        if (string.IsNullOrWhiteSpace(source.Path))
+            throw new InvalidOperationException(
+                $"Scene light '{name}' ({id}) has an empty IES profile path.");
+        if (dependencies.TryGetValue(source.Path, out string? existingHash) &&
+            !string.Equals(existingHash, source.ContentHash, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Asset '{source.Path}' is referenced with conflicting content hashes.");
+        }
+        dependencies[source.Path] = source.ContentHash;
     }
 
     private static SceneTransformDocument ToTransform(Matrix4x4 world)

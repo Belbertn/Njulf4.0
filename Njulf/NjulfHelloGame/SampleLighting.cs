@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Numerics;
+using Njulf.Assets.Scenes;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 
@@ -12,17 +14,23 @@ internal enum SampleLightingMode
     ThreePointDemo,
     SpotShadowDemo,
     PointShadowDemo,
+    AnalyticalAreaLightShowcase,
     VolumetricShowcase
 }
 
 internal static class SampleLighting
 {
+    internal const string AnalyticalAreaLightIesFileName =
+        "area-light-room-cross.ies";
+
     public static void ConfigureRenderSettings(RenderSettings settings, SampleLightingMode mode)
     {
         if (settings == null)
             throw new ArgumentNullException(nameof(settings));
 
-        settings.Shadows.DirectionalShadowsEnabled = true;
+        bool areaLightShowcase = mode ==
+            SampleLightingMode.AnalyticalAreaLightShowcase;
+        settings.Shadows.DirectionalShadowsEnabled = !areaLightShowcase;
         bool spotShadows = mode is SampleLightingMode.SpotShadowDemo or
             SampleLightingMode.VolumetricShowcase;
         bool pointShadows = mode is SampleLightingMode.PointShadowDemo or
@@ -35,6 +43,9 @@ internal static class SampleLighting
         settings.Shadows.MaxShadowedPointLights = pointShadows
             ? Math.Max(settings.Shadows.MaxShadowedPointLights, 1)
             : 0;
+        settings.Shadows.AreaShadowsEnabled = areaLightShowcase;
+        settings.Shadows.MaxShadowedAreaLights = areaLightShowcase ? 3 : 0;
+        settings.Shadows.AreaShadowSampleCount = areaLightShowcase ? 2 : 1;
     }
 
     public static void Configure(LightManager lightManager, SampleLightingMode mode)
@@ -57,6 +68,15 @@ internal static class SampleLighting
                 break;
             case SampleLightingMode.PointShadowDemo:
                 AddPointShadowDemo(lightManager);
+                break;
+            case SampleLightingMode.AnalyticalAreaLightShowcase:
+                foreach (Light light in CreateAnalyticalAreaLightShowcaseLights())
+                {
+                    lightManager.AddLightHandle(
+                        light,
+                        $"AreaLightRoom.{light.Type}");
+                }
+                AddAnalyticalAreaLightIesShowcase(lightManager);
                 break;
             case SampleLightingMode.VolumetricShowcase:
                 foreach (Light light in CreateVolumetricShowcaseLights())
@@ -198,5 +218,102 @@ internal static class SampleLighting
                 CastsShadows = false
             }
         ];
+    }
+
+    internal static IReadOnlyList<Light> CreateAnalyticalAreaLightShowcaseLights()
+    {
+        return
+        [
+            new Light
+            {
+                Type = LightType.Rectangle,
+                Position = new Vector3(-2.75f, 4.82f, -0.55f),
+                Direction = -Vector3.UnitY,
+                Up = -Vector3.UnitZ,
+                Size = new Vector2(2.15f, 1.25f),
+                Color = new Vector3(1.0f, 0.67f, 0.34f),
+                Intensity = 4.2f,
+                Range = 8.5f,
+                CastsShadows = true,
+                ShadowStrength = 0.94f,
+                ShadowPriority = 30
+            },
+            new Light
+            {
+                Type = LightType.Disk,
+                Position = new Vector3(2.75f, 3.35f, -3.86f),
+                Direction = Vector3.Normalize(new Vector3(0f, -0.20f, 1f)),
+                Up = Vector3.UnitY,
+                Size = new Vector2(1.25f, 1.25f),
+                Color = new Vector3(0.25f, 0.52f, 1.0f),
+                Intensity = 5.8f,
+                Range = 9.0f,
+                CastsShadows = true,
+                ShadowStrength = 0.92f,
+                ShadowPriority = 20
+            },
+            new Light
+            {
+                Type = LightType.Tube,
+                Position = new Vector3(0f, 4.02f, 0.65f),
+                Direction = Vector3.UnitX,
+                Up = Vector3.UnitY,
+                Size = new Vector2(2.5f, 0.16f),
+                Color = new Vector3(0.18f, 1.0f, 0.66f),
+                Intensity = 3.8f,
+                Range = 7.5f,
+                CastsShadows = true,
+                ShadowStrength = 0.90f,
+                ShadowPriority = 10
+            }
+        ];
+    }
+
+    internal static Light CreateAnalyticalAreaLightIesShowcaseLight(
+        PhotometricProfileHandle profile) => new()
+    {
+        Type = LightType.Spot,
+        Position = new Vector3(0f, 4.55f, 2.65f),
+        Direction = Vector3.Normalize(new Vector3(0f, -1.70f, -6.53f)),
+        Up = Vector3.UnitY,
+        Color = new Vector3(1.0f, 0.90f, 0.72f),
+        Intensity = 12f,
+        Range = 11.5f,
+        SpotAngle = 0.78f,
+        CastsShadows = false,
+        ShadowStrength = 0f,
+        ShadowPriority = 0,
+        PhotometricProfile = profile
+    };
+
+    private static void AddAnalyticalAreaLightIesShowcase(
+        LightManager lightManager)
+    {
+        string profilePath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Assets",
+            "Photometry",
+            AnalyticalAreaLightIesFileName);
+        var source = new SceneAssetReferenceDocument(profilePath);
+        PhotometricProfileHandle profile = default;
+        bool loaded = lightManager.PhotometricProfiles?.TryResolve(
+            source,
+            out profile) == true;
+
+        lightManager.AddLightHandle(
+            CreateAnalyticalAreaLightIesShowcaseLight(profile),
+            "AreaLightRoom.IES.CrossProfileSpot");
+
+        if (loaded)
+        {
+            Console.WriteLine(
+                $"Analytical area-light room IES profile: {profilePath}");
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                $"Analytical area-light room IES profile was unavailable: " +
+                $"{profilePath}. The demonstration spot uses its unit profile.");
+        }
     }
 }

@@ -31,6 +31,8 @@ namespace Njulf.Rendering.Resources
         private TextureHandle _prefilteredCubemap;
         private TextureHandle _nextPrefilteredCubemap;
         private TextureHandle _brdfLut;
+        private TextureHandle _ltcMatrixLut;
+        private TextureHandle _ltcAmplitudeLut;
         private ResourceSignature _resourceSignature;
         private uint _prefilteredMipCount;
         private ulong _estimatedBytes;
@@ -115,7 +117,7 @@ namespace Njulf.Rendering.Resources
         public uint PrefilteredMipCount => _prefilteredMipCount;
         public uint BrdfLutSize => _settings.Environment.BrdfLutSize;
         public ulong EstimatedBytes => _estimatedBytes;
-        public int TextureResourceCount => _usesAnalyticSky ? 3 : 4;
+        public int TextureResourceCount => (_usesAnalyticSky ? 3 : 4) + 2;
         public Format EnvironmentFormat => ResolveEnvironmentFormat(_settings.Environment.TexturePrecision);
         public ulong EnvironmentMapBytes =>
             _settings.Environment.SourceKind == EnvironmentSourceKind.ProceduralSky
@@ -131,6 +133,8 @@ namespace Njulf.Rendering.Resources
             EnvironmentFormat) *
             (_settings.Environment.SourceKind == EnvironmentSourceKind.ProceduralSky ? 2UL : 1UL);
         public ulong BrdfLutBytes => checked((ulong)BrdfLutSize * BrdfLutSize * GetBytesPerPixel(EnvironmentFormat));
+        public ulong LtcLookupTableBytes => checked((ulong)LtcLookupTableData.PayloadSize * 2UL);
+        public bool LtcLookupTablesAvailable => _ltcMatrixLut.IsValid && _ltcAmplitudeLut.IsValid;
         public BufferHandle EnvironmentBuffer => _environmentBuffer;
         public BufferHandle PrefilterEnvironmentBuffer => _prefilterEnvironmentBuffer;
         public BufferHandle GiEnvironmentBuffer => _giEnvironmentBuffer;
@@ -156,12 +160,14 @@ namespace Njulf.Rendering.Resources
         /// </summary>
         public IReadOnlyList<TextureHandle> GetSampledTextureHandles()
         {
-            var handles = new List<TextureHandle>(5);
+            var handles = new List<TextureHandle>(7);
             AddIfValid(handles, _environmentCubemap);
             AddIfValid(handles, _irradianceCubemap);
             AddIfValid(handles, _prefilteredCubemap);
             AddIfValid(handles, _nextPrefilteredCubemap);
             AddIfValid(handles, _brdfLut);
+            AddIfValid(handles, _ltcMatrixLut);
+            AddIfValid(handles, _ltcAmplitudeLut);
             return handles;
         }
 
@@ -1035,6 +1041,34 @@ namespace Njulf.Rendering.Resources
                 brdfSize,
                 environmentFormat);
 
+            _ltcMatrixLut = _textureManager.CreateTexture(
+                LtcLookupTableData.Size,
+                LtcLookupTableData.Size,
+                Format.R16G16B16A16Sfloat,
+                mipLevels: 1,
+                bindlessIndex: BindlessIndex.AreaLightLtcMatrixTexture,
+                debugName: "Area Light LTC Matrix LUT");
+            _textureManager.UploadTextureData(
+                _ltcMatrixLut,
+                LtcLookupTableData.Matrix,
+                LtcLookupTableData.Size,
+                LtcLookupTableData.Size,
+                Format.R16G16B16A16Sfloat);
+
+            _ltcAmplitudeLut = _textureManager.CreateTexture(
+                LtcLookupTableData.Size,
+                LtcLookupTableData.Size,
+                Format.R16G16B16A16Sfloat,
+                mipLevels: 1,
+                bindlessIndex: BindlessIndex.AreaLightLtcAmplitudeTexture,
+                debugName: "Area Light LTC Amplitude LUT");
+            _textureManager.UploadTextureData(
+                _ltcAmplitudeLut,
+                LtcLookupTableData.Amplitude,
+                LtcLookupTableData.Size,
+                LtcLookupTableData.Size,
+                Format.R16G16B16A16Sfloat);
+
             _estimatedBytes =
                 (useAnalyticSky
                     ? 2UL * EstimateCubeBytes(
@@ -1047,7 +1081,8 @@ namespace Njulf.Rendering.Resources
                             prefilteredSize,
                             _prefilteredMipCount,
                             environmentFormat)) +
-                checked((ulong)brdfSize * brdfSize * GetBytesPerPixel(environmentFormat));
+                checked((ulong)brdfSize * brdfSize * GetBytesPerPixel(environmentFormat)) +
+                LtcLookupTableBytes;
 
             _resourceSignature = signature;
             _usesAnalyticSky = useAnalyticSky;
@@ -1372,6 +1407,18 @@ namespace Njulf.Rendering.Resources
             {
                 _textureManager.DestroyTexture(_brdfLut);
                 _brdfLut = TextureHandle.Invalid;
+            }
+
+            if (_ltcMatrixLut.IsValid)
+            {
+                _textureManager.DestroyTexture(_ltcMatrixLut);
+                _ltcMatrixLut = TextureHandle.Invalid;
+            }
+
+            if (_ltcAmplitudeLut.IsValid)
+            {
+                _textureManager.DestroyTexture(_ltcAmplitudeLut);
+                _ltcAmplitudeLut = TextureHandle.Invalid;
             }
         }
 
