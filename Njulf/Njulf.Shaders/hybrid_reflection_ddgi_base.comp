@@ -126,6 +126,16 @@ bool HybridEvaluateDdgiReflection(
     vec3 reflectionDirection = normalize(
         reflect(-viewDirection, traceNormal));
     SetSimpleDdgiDirectionalRadianceQuery(reflectionDirection, roughness);
+    // L1 SH cannot represent a broad positive radiance lobe without ringing.
+    // The per-probe non-negative clamp turns that ringing into large dark and
+    // bright lobes which appear to crawl when the reflection direction moves
+    // with the camera. Retain exact directionality for polished surfaces, but
+    // converge rough receivers toward the stable L0 mean. This affects only
+    // the hybrid reflection preview: diffuse DDGI and its bounce energy keep
+    // their existing representation and code path.
+    float broadLobeWeight = smoothstep(0.45, 0.85, roughness);
+    SetSimpleDdgiDirectionalRadianceQueryL1Scale(
+        mix(1.0, 0.25, broadLobeWeight));
     // DDGI is the stable base for every reflection lobe in this pass. SSR and
     // ray query remain responsible for sharp detail and overwrite/blend above
     // it during resolve.

@@ -561,6 +561,7 @@ bool EvaluateSimpleDdgiRadianceShL1PreviewRecord(
     uint expectedSlotGeneration,
     vec3 direction,
     float perceptualRoughness,
+    float l1Scale,
     out vec3 radiance,
     out vec3 negativeReconstruction)
 {
@@ -574,6 +575,10 @@ bool EvaluateSimpleDdgiRadianceShL1PreviewRecord(
     }
     vec3 omega = direction * inversesqrt(directionLengthSquared);
     vec3 bandScales = SimpleDdgiGgxBandScales(perceptualRoughness);
+    // Some low-frequency receivers deliberately suppress directionality for
+    // broad lobes while retaining the L0 radiance term exactly. Keep that
+    // receiver policy outside the shared SH representation and its producer.
+    bandScales.y *= clamp(l1Scale, 0.0, 1.0);
     vec4 basisWeights = vec4(
         0.2820947918,
         -0.4886025119 * omega.y * bandScales.y,

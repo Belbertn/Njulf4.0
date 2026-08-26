@@ -909,6 +909,52 @@ public sealed class HybridReflectionContractsTests
         });
     }
 
+    [Test]
+    public void DdgiReflectionPreview_StabilizesOnlyTheRoughL1Lobe()
+    {
+        string ddgiBase = ReadRepoText("Njulf.Shaders",
+            "hybrid_reflection_ddgi_base.comp");
+        string shared = ReadRepoText("Njulf.Shaders",
+            "ddgi_simple_shared.glsl");
+        string radianceSh = ReadRepoText("Njulf.Shaders",
+            "ddgi_radiance_sh.glsl");
+        int ordinaryEvaluatorStart = radianceSh.IndexOf(
+            "bool EvaluateSimpleDdgiRadianceShRecord(",
+            StringComparison.Ordinal);
+        int previewDecoderStart = radianceSh.IndexOf(
+            "bool EvaluateSimpleDdgiRadianceShL1PreviewRecordWithBasis(",
+            StringComparison.Ordinal);
+        Assert.That(ordinaryEvaluatorStart, Is.GreaterThanOrEqualTo(0));
+        Assert.That(previewDecoderStart, Is.GreaterThan(ordinaryEvaluatorStart));
+        string ordinaryEvaluator = radianceSh[
+            ordinaryEvaluatorStart..previewDecoderStart];
+        string previewDecoder = radianceSh[previewDecoderStart..];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ddgiBase, Does.Contain(
+                "float broadLobeWeight = smoothstep(0.45, 0.85, roughness)"));
+            Assert.That(ddgiBase, Does.Contain(
+                "mix(1.0, 0.25, broadLobeWeight)"));
+            Assert.That(shared, Does.Contain(
+                "float SimpleDdgiDirectionalRadianceQueryL1Scale = 1.0"));
+            Assert.That(shared, Does.Contain(
+                "SetSimpleDdgiDirectionalRadianceQueryL1Scale(float scale)"));
+            Assert.That(previewDecoder, Does.Contain(
+                "bandScales.y *= clamp(l1Scale, 0.0, 1.0)"));
+            Assert.That(previewDecoder, Does.Not.Contain(
+                "bandScales.x *= clamp(l1Scale"),
+                "The L0 mean carries bounce energy and must remain unchanged.");
+            Assert.That(ordinaryEvaluator, Does.Not.Contain("l1Scale"),
+                "The ordinary directional SH evaluator must remain unchanged.");
+            Assert.That(ddgiBase.Split(
+                    "SetSimpleDdgiDirectionalRadianceQueryL1Scale(",
+                    StringSplitOptions.None).Length - 1,
+                Is.EqualTo(1),
+                "Only the hybrid reflection preview may opt into damping.");
+        });
+    }
+
     private static HybridReflectionHistoryRevision Revision() => new(
         Width: 1920u,
         Height: 1080u,

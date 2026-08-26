@@ -55,6 +55,7 @@
 #if SIMPLE_DDGI_DIRECTIONAL_RADIANCE_RECEIVER
 vec3 SimpleDdgiDirectionalRadianceQueryDirection = vec3(0.0, 1.0, 0.0);
 float SimpleDdgiDirectionalRadianceQueryRoughness = 1.0;
+float SimpleDdgiDirectionalRadianceQueryL1Scale = 1.0;
 // Negative keeps the authored rough-specular eligibility band. Reflection
 // consumers with an exact-detail layer (hybrid SSR/ray query) or an explicitly
 // classified dielectric sheet may opt into the DDGI field as their stable
@@ -76,6 +77,11 @@ void SetSimpleDdgiDirectionalRadianceQuery(
 void SetSimpleDdgiDirectionalRadianceQueryBuffer(uint bufferIndex)
 {
     SimpleDdgiDirectionalRadianceQueryBufferIndex = bufferIndex;
+}
+
+void SetSimpleDdgiDirectionalRadianceQueryL1Scale(float scale)
+{
+    SimpleDdgiDirectionalRadianceQueryL1Scale = clamp(scale, 0.0, 1.0);
 }
 
 void SetSimpleDdgiDirectionalRadianceQueryEligibilityWeight(float weight)
@@ -6112,6 +6118,9 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
                     directionalSlotGeneration,
                     SimpleDdgiDirectionalRadianceQueryDirection,
                     SimpleDdgiDirectionalRadianceQueryRoughness,
+#if SIMPLE_DDGI_DIRECTIONAL_L1_PREVIEW_RECEIVER
+                    SimpleDdgiDirectionalRadianceQueryL1Scale,
+#endif
                     probeDirectionalRadiance,
                     negativeReconstruction)
 #endif
@@ -6992,6 +7001,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiThinGlassDirectionalGather(
         SimpleDdgiDirectionalRadianceQueryDirection);
     vec3 queryBandScales = SimpleDdgiGgxBandScales(
         SimpleDdgiDirectionalRadianceQueryRoughness);
+    queryBandScales.y *= SimpleDdgiDirectionalRadianceQueryL1Scale;
     vec4 queryBasisWeights = vec4(
         0.2820947918,
         -0.4886025119 * queryDirection.y * queryBandScales.y,
