@@ -72,6 +72,17 @@ namespace Njulf.Rendering.Diagnostics
     /// </summary>
     public static class RendererBuildFeatures
     {
+#if DEBUG || NJULF_DEVELOPMENT || NJULF_DETAILED_INVESTIGATION
+        /// <summary>
+        /// Receiver-side GI visualization branches are present. Development
+        /// retains these read-only views without compiling the expensive
+        /// investigation counter and atomic paths.
+        /// </summary>
+        public const bool DdgiVisualDebugViewsCompiled = true;
+#else
+        public const bool DdgiVisualDebugViewsCompiled = false;
+#endif
+
 #if DEBUG || NJULF_DETAILED_INVESTIGATION
         public const bool DetailedDdgiDiagnosticsCompiled = true;
 #else
@@ -105,7 +116,7 @@ namespace Njulf.Rendering.Diagnostics
         /// views (final indirect, far-field inspection, and material provenance)
         /// remain usable in production artifacts.
         /// </summary>
-        public static bool RequiresDetailedDdgiReceiverDiagnostics(
+        public static bool RequiresDdgiVisualDebugShaders(
             GlobalIlluminationDebugView view)
         {
             return view is GlobalIlluminationDebugView.DdgiIrradiance
@@ -149,14 +160,22 @@ namespace Njulf.Rendering.Diagnostics
                 or GlobalIlluminationDebugView.DdgiPhysicalPage;
         }
 
+        /// <summary>
+        /// Compatibility name retained for tooling that predates the split
+        /// between read-only visual views and detailed counter instrumentation.
+        /// </summary>
+        public static bool RequiresDetailedDdgiReceiverDiagnostics(
+            GlobalIlluminationDebugView view) =>
+            RequiresDdgiVisualDebugShaders(view);
+
         public static bool IsGlobalIlluminationDebugViewAvailable(
             GlobalIlluminationDebugView view) =>
             (SourceCacheRadianceReceiverDiagnosticCompiled ||
              view != GlobalIlluminationDebugView.DdgiSourceCacheRadiance) &&
             (ExtendedProbeMetadataReceiverDiagnosticsCompiled ||
              !RequiresExtendedProbeMetadata(view)) &&
-            (DetailedDdgiDiagnosticsCompiled ||
-             !RequiresDetailedDdgiReceiverDiagnostics(view));
+            (DdgiVisualDebugViewsCompiled ||
+             !RequiresDdgiVisualDebugShaders(view));
 
         /// <summary>
         /// Resolves an authored request to a branch that exists in the running
@@ -186,7 +205,8 @@ namespace Njulf.Rendering.Diagnostics
                     "DDGI Updated Probes / Update Reasons overlay for scheduler evidence.";
             }
 
-            return "The requested DDGI receiver view requires a Debug or DetailedInvestigation shader artifact.";
+            return "The requested DDGI receiver view requires a Development, Debug, or " +
+                "DetailedInvestigation shader artifact.";
         }
     }
 

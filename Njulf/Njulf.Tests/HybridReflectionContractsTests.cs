@@ -749,6 +749,20 @@ public sealed class HybridReflectionContractsTests
             Assert.That(ddgiBase, Does.Contain(
                 "HybridFindDdgiCohort"));
             Assert.That(ddgiBase, Does.Contain(
+                "HybridPrepareDdgiSharedCohorts"));
+            Assert.That(ddgiBase, Does.Contain(
+                "memoryBarrierShared();"));
+            Assert.That(ddgiBase, Does.Contain(
+                "vec2 coarsePosition"));
+            Assert.That(ddgiBase, Does.Contain(
+                "weightedRadiance += cohortRadiance * weight"));
+            Assert.That(ddgiBase, Does.Contain(
+                "weightedConfidence += cohortConfidence * weight"));
+            Assert.That(ddgiBase, Does.Contain(
+                "uint centreLow = (scale - 1u) / 2u"));
+            Assert.That(ddgiBase, Does.Not.Contain(
+                "HybridTryDdgiTile("));
+            Assert.That(ddgiBase, Does.Contain(
                 "if (!valid)"));
             Assert.That(ddgiBase, Does.Contain(
                 "valid = HybridEvaluateDdgiReflection("));
@@ -794,6 +808,10 @@ public sealed class HybridReflectionContractsTests
             Assert.That(resolveMain, Does.Contain(
                 "dot(reflectionNormal, viewDirection)"));
             Assert.That(temporal, Does.Contain("HybridMotionVectors"));
+            Assert.That(temporal, Does.Contain(
+                "vec3 currentNormal = HybridReflectionTraceNormal(payload)"));
+            Assert.That(temporal, Does.Not.Contain(
+                "currentNormal =\n        HybridReflectionPayloadShadingNormal"));
             Assert.That(temporal, Does.Contain(
                 "HYBRID_REFLECTION_REASON_RESOLUTION_SKIP"));
             Assert.That(temporal, Does.Contain(

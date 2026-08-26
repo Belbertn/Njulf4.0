@@ -96,6 +96,53 @@ namespace Njulf.Tests
             });
         }
 
+        [Test]
+        public void BuildMeshlets_ComputesTightConeForCoplanarTriangles()
+        {
+            Vector3[] vertices =
+            [
+                new(0f, 0f, 0f),
+                new(1f, 0f, 0f),
+                new(0f, 1f, 0f),
+                new(1f, 1f, 0f)
+            ];
+            uint[] indices = [0, 1, 2, 2, 1, 3];
+
+            MeshletMesh mesh = new MeshletBuilder(
+                maxTrianglesPerMeshlet: 3).BuildMeshlets(vertices, indices);
+
+            Meshlet meshlet = mesh.Meshlets.Single();
+            Assert.Multiple(() =>
+            {
+                Assert.That(meshlet.NormalConeAxis.X, Is.EqualTo(0f).Within(1e-6f));
+                Assert.That(meshlet.NormalConeAxis.Y, Is.EqualTo(0f).Within(1e-6f));
+                Assert.That(meshlet.NormalConeAxis.Z, Is.EqualTo(1f).Within(1e-6f));
+                Assert.That(meshlet.NormalConeCutoff, Is.EqualTo(0f).Within(1e-6f));
+            });
+        }
+
+        [Test]
+        public void BuildMeshlets_DisablesConeForOpposingWinding()
+        {
+            Vector3[] vertices =
+            [
+                new(0f, 0f, 0f),
+                new(1f, 0f, 0f),
+                new(0f, 1f, 0f)
+            ];
+            uint[] indices = [0, 1, 2, 0, 2, 1];
+
+            MeshletMesh mesh = new MeshletBuilder(
+                maxTrianglesPerMeshlet: 3).BuildMeshlets(vertices, indices);
+
+            Meshlet meshlet = mesh.Meshlets.Single();
+            Assert.Multiple(() =>
+            {
+                Assert.That(meshlet.NormalConeAxis, Is.EqualTo(Vector3.Zero));
+                Assert.That(meshlet.NormalConeCutoff, Is.EqualTo(1f));
+            });
+        }
+
         private static void AssertMeshletOutputIsValid(MeshletMesh mesh, int expectedTriangleCount)
         {
             Assert.Multiple(() =>

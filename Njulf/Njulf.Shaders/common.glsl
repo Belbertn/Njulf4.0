@@ -28,6 +28,12 @@ uint NextSimpleDdgiPhysicalGeneration(uint generation)
 // ============================================
 
 const int FRAMES_IN_FLIGHT = 2;
+const uint FORWARD_CLUSTER_TILE_SIZE = 16u;
+const uint FORWARD_CLUSTER_DEPTH_SLICE_COUNT = 24u;
+const uint FORWARD_CLUSTER_MAX_LIGHTS = 64u;
+const float FORWARD_CLUSTER_NEAR_PLANE = 0.1;
+const float FORWARD_CLUSTER_FAR_PLANE = 1000.0;
+const int FORWARD_REFLECTION_PROBE_CANDIDATE_LIMIT = 32;
 
 // ============================================
 // DESCRIPTOR SET CONTRACT
@@ -268,7 +274,8 @@ const int DIRECTIONAL_SHADOW_COUNTER_BUFFER_BASE_INDEX = 220;
 const int DIRECTIONAL_SHADOW_COUNTER_BUFFER_FRAME1_INDEX = 221;
 const int VOLUMETRIC_FOG_BOUNCE_RADIANCE_BUFFER_INDEX = 222;
 const int AREA_RAY_SHADOW_MASK_BUFFER_BASE_INDEX = 223;
-const int STATIC_BUFFER_COUNT = 225;
+const int FORWARD_MATERIAL_DATA_BUFFER_INDEX = 225;
+const int STATIC_BUFFER_COUNT = 226;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -277,6 +284,10 @@ const uint MESHLET_DRAW_FLAG_OBJECT_FULLY_INSIDE_FRUSTUM = 1u << 2;
 const uint MESHLET_DRAW_FLAG_MATERIAL_MASKED = 1u << 3;
 const uint MESHLET_DRAW_FLAG_MATERIAL_BLEND = 1u << 4;
 const uint MESHLET_DRAW_FLAG_CAN_HIZ_TEST = 1u << 5;
+const uint MESHLET_DRAW_FLAG_MATERIAL_DOUBLE_SIDED = 1u << 6;
+const uint MESHLET_DRAW_FLAG_NORMAL_CONE_CULL_ELIGIBLE = 1u << 7;
+const uint MESHLET_COMMAND_FLAG_MATERIAL_DOUBLE_SIDED = 1u << 0;
+const uint MESHLET_COMMAND_FLAG_NORMAL_CONE_CULL_ELIGIBLE = 1u << 1;
 
 const uint FOLIAGE_PROTOTYPE_FLAG_CAST_SHADOWS = 1u << 0;
 const uint FOLIAGE_PROTOTYPE_FLAG_FAR_IMPOSTOR = 1u << 1;
@@ -626,6 +637,8 @@ struct GPUMeshlet
     uint LocalVertexCount;
     uint LocalTriangleOffset;
     uint LocalTriangleCount;
+    vec3 NormalConeAxis;
+    float NormalConeCutoff;
 };
 
 struct GPUObjectData
@@ -1045,6 +1058,7 @@ struct GPUSceneOpaqueCompactionPushConstants
     float GpuLod2DistanceRatio;
     uint GpuShadowLodBias;
     uint DirectionalStaticShadowCascadeMask;
+    vec4 DirectionalShadowLightDirection;
 };
 
 struct GPUForwardVisibilityCompactionPushConstants
@@ -1160,7 +1174,7 @@ struct GPUForwardPushConstants
     uint CurrentFrameIndex;
     uint MeshletDrawCount;
     uint MeshletDrawBufferBaseIndex;
-    uint LightCount;
+    uint PackedLightDispatch;
     uint LocalLightCount;
     uint HiZMipCount;
     uint OcclusionCullingEnabled;
@@ -1168,6 +1182,33 @@ struct GPUForwardPushConstants
     uint DebugAndAoFlags;
     uint DiagnosticFlags;
 };
+
+const uint FORWARD_TOTAL_LIGHT_COUNT_MASK = 0x7ffu;
+const uint FORWARD_DIRECTIONAL_LIGHT_INDEX_MASK = 0x3ffu;
+
+uint ForwardTotalLightCount(GPUForwardPushConstants pushConstants)
+{
+    return pushConstants.PackedLightDispatch &
+        FORWARD_TOTAL_LIGHT_COUNT_MASK;
+}
+
+uint ForwardDirectionalLightCount(GPUForwardPushConstants pushConstants)
+{
+    return min(
+        ForwardTotalLightCount(pushConstants) -
+            min(pushConstants.LocalLightCount,
+                ForwardTotalLightCount(pushConstants)),
+        2u);
+}
+
+uint ForwardDirectionalLightIndex(
+    GPUForwardPushConstants pushConstants,
+    uint ordinal)
+{
+    uint shift = ordinal == 0u ? 11u : 21u;
+    return (pushConstants.PackedLightDispatch >> shift) &
+        FORWARD_DIRECTIONAL_LIGHT_INDEX_MASK;
+}
 
 struct GPUMotionVectorPushConstants
 {
@@ -1198,7 +1239,7 @@ struct GPULightCullPushConstants
     uint TileCountX;
     uint TileCountY;
     uint DepthTextureIndex;
-    uint Padding1;
+    uint ClusterCountZ;
     uint Padding2;
     uint Padding3;
 };
@@ -1483,10 +1524,11 @@ const int SIZEOF_GPU_PARTICLE_SORT_KEY = 8;
 const int SIZEOF_GPU_PARTICLE_RESET_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_PARTICLE_SIMULATE_PUSH_CONSTANTS = 48;
 const int SIZEOF_GPU_PARTICLE_SORT_PUSH_CONSTANTS = 32;
-const int SIZEOF_GPU_MESHLET = 48;
+const int SIZEOF_GPU_MESHLET = 64;
 const int SIZEOF_GPU_OBJECT_DATA = 224;
 const int SIZEOF_GPU_DEBUG_LINE_VERTEX = 32;
 const int SIZEOF_GPU_MATERIAL_DATA = 320;
+const int SIZEOF_GPU_FORWARD_MATERIAL_DATA = 112;
 const int SIZEOF_GPU_MATERIAL_EXTENSION_DATA = 548;
 const int SIZEOF_GPU_LIGHT = 112;
 const int SIZEOF_GPU_SCENE_DATA = 400;
@@ -1503,7 +1545,7 @@ const int SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS = 16;
 const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_PATCH = 80;
 const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_GENERATION_PUSH_CONSTANTS = 32;
 const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 280;
-const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 168;
+const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 184;
 const int SIZEOF_GPU_FORWARD_VISIBILITY_COMPACTION_PUSH_CONSTANTS = 92;
 const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 52;
 const int SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS = 128;
@@ -3155,7 +3197,78 @@ GPUMeshlet ReadMeshlet(uint meshletIndex)
     meshlet.LocalVertexCount = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 9u);
     meshlet.LocalTriangleOffset = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 10u);
     meshlet.LocalTriangleCount = ReadStorageWord(uint(MESHLET_BUFFER_INDEX), baseWord + 11u);
+    meshlet.NormalConeAxis = ReadStorageVec3(uint(MESHLET_BUFFER_INDEX), baseWord + 12u);
+    meshlet.NormalConeCutoff = ReadStorageFloat(uint(MESHLET_BUFFER_INDEX), baseWord + 15u);
     return meshlet;
+}
+
+bool MeshletBackfaceConeCulled(
+    GPUMeshlet meshlet,
+    uint instanceBufferIndex,
+    uint objectWordOffset,
+    vec3 worldCenter,
+    float worldRadius,
+    vec3 viewPosition)
+{
+    float coneCutoff = meshlet.NormalConeCutoff;
+    float objectAxisLengthSquared = dot(
+        meshlet.NormalConeAxis,
+        meshlet.NormalConeAxis);
+    if (coneCutoff >= 0.999999 ||
+        coneCutoff < 0.0 ||
+        objectAxisLengthSquared <= 1e-12)
+    {
+        return false;
+    }
+
+    vec3 worldAxis = TransformRowMajorVector(
+        meshlet.NormalConeAxis,
+        instanceBufferIndex,
+        objectWordOffset + 16u);
+    float worldAxisLengthSquared = dot(worldAxis, worldAxis);
+    if (worldAxisLengthSquared <= 1e-12)
+        return false;
+    worldAxis *= inversesqrt(worldAxisLengthSquared);
+
+    vec3 cameraToCenter = worldCenter - viewPosition;
+    float distanceSquared = dot(cameraToCenter, cameraToCenter);
+    float safeRadius = max(worldRadius, 0.0);
+    if (distanceSquared <= safeRadius * safeRadius + 1e-8)
+        return false;
+
+    float inverseDistance = inversesqrt(distanceSquared);
+    float sphereSine = clamp(safeRadius * inverseDistance, 0.0, 1.0);
+    float sphereCosine = sqrt(max(1.0 - sphereSine * sphereSine, 0.0));
+    float coneCosine = sqrt(max(1.0 - coneCutoff * coneCutoff, 0.0));
+    float conservativeCutoff = min(
+        coneCutoff * sphereCosine + coneCosine * sphereSine,
+        1.0);
+    return dot(cameraToCenter * inverseDistance, worldAxis) >=
+        conservativeCutoff;
+}
+
+bool MeshletBackfaceConeCulledDirectional(
+    GPUMeshlet meshlet,
+    uint instanceBufferIndex,
+    uint objectWordOffset,
+    vec3 viewDirection)
+{
+    float coneCutoff = meshlet.NormalConeCutoff;
+    if (coneCutoff >= 0.999999 || coneCutoff < 0.0)
+        return false;
+
+    vec3 worldAxis = TransformRowMajorVector(
+        meshlet.NormalConeAxis,
+        instanceBufferIndex,
+        objectWordOffset + 16u);
+    float worldAxisLengthSquared = dot(worldAxis, worldAxis);
+    float viewLengthSquared = dot(viewDirection, viewDirection);
+    if (worldAxisLengthSquared <= 1e-12 || viewLengthSquared <= 1e-12)
+        return false;
+
+    return dot(
+        worldAxis * inversesqrt(worldAxisLengthSquared),
+        viewDirection * inversesqrt(viewLengthSquared)) >= coneCutoff;
 }
 
 GPUMeshletDrawCommand ReadMeshletDrawCommandFromBase(uint bufferBaseIndex, uint frameIndex, uint drawIndex)
@@ -3375,6 +3488,151 @@ GPUMaterialData ReadMaterial(uint materialIndex)
     return material;
 }
 
+float UnpackForwardMaterialUvSet(uint packedUvSets, uint selectorIndex)
+{
+    return float((packedUvSets >> (selectorIndex * 4u)) & 0x0fu);
+}
+
+GPUMaterialData ReadForwardMaterial(uint materialIndex)
+{
+    const vec4 identityOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    uint hotBaseWord = materialIndex *
+        uint(SIZEOF_GPU_FORWARD_MATERIAL_DATA / 4);
+    uint hotBufferIndex = uint(FORWARD_MATERIAL_DATA_BUFFER_INDEX);
+    uint coldBaseWord = materialIndex *
+        uint(SIZEOF_GPU_MATERIAL_DATA / 4);
+    uint coldBufferIndex = uint(MATERIAL_DATA_BUFFER_INDEX);
+
+    GPUMaterialData material;
+    material.Albedo = ReadStorageAlignedVec4Uniform(
+        hotBufferIndex,
+        hotBaseWord + 0u);
+    material.Emissive = ReadStorageAlignedVec4Uniform(
+        hotBufferIndex,
+        hotBaseWord + 4u);
+    material.NormalScaleBias = ReadStorageAlignedVec4Uniform(
+        hotBufferIndex,
+        hotBaseWord + 8u);
+    material.MetallicRoughnessAO = ReadStorageAlignedVec4Uniform(
+        hotBufferIndex,
+        hotBaseWord + 12u);
+    uvec4 textureBindings = ReadStorageAlignedUVec4Uniform(
+        hotBufferIndex,
+        hotBaseWord + 16u);
+    uvec4 controls0 = ReadStorageAlignedUVec4Uniform(
+        hotBufferIndex,
+        hotBaseWord + 20u);
+    uvec4 controls1 = ReadStorageAlignedUVec4Uniform(
+        hotBufferIndex,
+        hotBaseWord + 24u);
+
+    material.AlbedoTextureIndex = int(textureBindings.x);
+    material.NormalTextureIndex = int(textureBindings.y);
+    material.MetallicRoughnessTextureIndex = int(textureBindings.z);
+    material.OcclusionTextureIndex = int(textureBindings.w);
+    material.EmissiveTextureIndex = int(controls0.x);
+    material.ExtensionDataIndex = int(controls0.y);
+    material.FeatureFlags = controls0.z;
+    material.TransportFlags = controls0.w;
+    material.MaterialRevision = controls1.z;
+    material.TextureContentRevision = controls1.w;
+
+    material.TextureTexCoordSets = vec4(
+        UnpackForwardMaterialUvSet(controls1.x, 0u),
+        UnpackForwardMaterialUvSet(controls1.x, 1u),
+        UnpackForwardMaterialUvSet(controls1.x, 2u),
+        UnpackForwardMaterialUvSet(controls1.x, 3u));
+    material.OcclusionBinding = vec4(
+        0.0,
+        UnpackForwardMaterialUvSet(controls1.x, 4u),
+        0.0,
+        0.0);
+    material.BaseColorOffsetScale = identityOffsetScale;
+    material.NormalOffsetScale = identityOffsetScale;
+    material.MetallicRoughnessOffsetScale = identityOffsetScale;
+    material.OcclusionOffsetScale = identityOffsetScale;
+    material.EmissiveOffsetScale = identityOffsetScale;
+    material.TextureRotations = vec4(0.0);
+
+    uint identityMask = controls1.y;
+    if ((identityMask & (1u << 0u)) == 0u)
+    {
+        material.BaseColorOffsetScale = ReadStorageAlignedVec4Uniform(
+            coldBufferIndex,
+            coldBaseWord + 16u);
+        material.TextureRotations.x = ReadStorageFloatUniform(
+            coldBufferIndex,
+            coldBaseWord + 36u);
+    }
+    if ((identityMask & (1u << 1u)) == 0u)
+    {
+        material.NormalOffsetScale = ReadStorageAlignedVec4Uniform(
+            coldBufferIndex,
+            coldBaseWord + 20u);
+        material.TextureRotations.y = ReadStorageFloatUniform(
+            coldBufferIndex,
+            coldBaseWord + 37u);
+    }
+    if ((identityMask & (1u << 2u)) == 0u)
+    {
+        material.MetallicRoughnessOffsetScale = ReadStorageAlignedVec4Uniform(
+            coldBufferIndex,
+            coldBaseWord + 24u);
+        material.TextureRotations.z = ReadStorageFloatUniform(
+            coldBufferIndex,
+            coldBaseWord + 38u);
+    }
+    if ((identityMask & (1u << 3u)) == 0u)
+    {
+        material.EmissiveOffsetScale = ReadStorageAlignedVec4Uniform(
+            coldBufferIndex,
+            coldBaseWord + 32u);
+        material.TextureRotations.w = ReadStorageFloatUniform(
+            coldBufferIndex,
+            coldBaseWord + 39u);
+    }
+    if ((identityMask & (1u << 4u)) == 0u)
+    {
+        material.OcclusionOffsetScale = ReadStorageAlignedVec4Uniform(
+            coldBufferIndex,
+            coldBaseWord + 28u);
+        material.OcclusionBinding.x = ReadStorageFloatUniform(
+            coldBufferIndex,
+            coldBaseWord + 44u);
+    }
+
+    // These are consumed only by two material diagnostic views. The forward
+    // fragment shader demand-loads them for those views, keeping the ordinary
+    // material read entirely inside the compact record unless a UV transform
+    // is non-identity.
+    material.TransportProfileRevision = 0u;
+    material.TransportProfileQuality = 0u;
+    material.PackedMeanMetallicRoughness = 0u;
+    material.PackedMeanGiDirectionalDiffuseBaseRg = 0u;
+    material.PackedMeanGiDirectionalDiffuseBaseBAndF0R = 0u;
+    material.PackedMeanGiDielectricF0Gb = 0u;
+    material.DdgiAverageAlbedo = vec4(0.0);
+    material.DdgiAverageEmissive = vec4(0.0);
+    material.DdgiAverageTransmission = vec4(0.0);
+    material.DdgiMaterialPolicy = vec4(0.0);
+    return material;
+}
+
+void LoadForwardMaterialDiagnosticMetadata(
+    uint materialIndex,
+    inout GPUMaterialData material)
+{
+    uint coldBaseWord = materialIndex *
+        uint(SIZEOF_GPU_MATERIAL_DATA / 4);
+    uint coldBufferIndex = uint(MATERIAL_DATA_BUFFER_INDEX);
+    material.TransportProfileRevision = ReadStorageWordUniform(
+        coldBufferIndex,
+        coldBaseWord + 56u);
+    material.TransportProfileQuality = ReadStorageWordUniform(
+        coldBufferIndex,
+        coldBaseWord + 58u);
+}
+
 GPUMaterialExtensionData ReadMaterialExtension(uint extensionIndex)
 {
     uint baseWord = extensionIndex * uint(SIZEOF_GPU_MATERIAL_EXTENSION_DATA / 4);
@@ -3432,6 +3690,332 @@ GPUMaterialExtensionData ReadMaterialExtension(uint extensionIndex)
     data.Padding2 = int(textureIndices3.w);
     data.Padding3 = int(ReadStorageWordUniform(bufferIndex, baseWord + 136u));
     return data;
+}
+
+GPUMaterialExtensionData EmptyForwardMaterialExtension()
+{
+    GPUMaterialExtensionData data;
+    data.Clearcoat = vec4(0.0);
+    data.SheenColor = vec4(0.0);
+    data.Anisotropy = vec4(0.0);
+    data.Transmission = vec4(0.0);
+    data.AttenuationColor = vec4(0.0);
+    data.Subsurface = vec4(0.0);
+    data.SpecularColor = vec4(0.0);
+    data.Iridescence = vec4(0.0);
+    data.Dispersion = vec4(0.0);
+    data.ClearcoatOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.ClearcoatRoughnessOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.ClearcoatNormalOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.SheenColorOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.SheenRoughnessOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.AnisotropyOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.TransmissionOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.ThicknessOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.SpecularOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.SpecularColorOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.IridescenceOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.IridescenceThicknessOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.SubsurfaceOffsetScale = vec4(0.0, 0.0, 1.0, 1.0);
+    data.ExtensionTextureRotations0 = vec4(0.0);
+    data.ExtensionTextureRotations1 = vec4(0.0);
+    data.ExtensionTextureRotations2 = vec4(0.0);
+    data.ExtensionTextureRotations3 = vec4(0.0);
+    data.ExtensionTextureTexCoordSets0 = vec4(0.0);
+    data.ExtensionTextureTexCoordSets1 = vec4(0.0);
+    data.ExtensionTextureTexCoordSets2 = vec4(0.0);
+    data.ExtensionTextureTexCoordSets3 = vec4(0.0);
+    data.ClearcoatTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.ClearcoatRoughnessTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.ClearcoatNormalTextureIndex = DEFAULT_NORMAL_TEXTURE;
+    data.SheenColorTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.SheenRoughnessTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.AnisotropyTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.TransmissionTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.ThicknessTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.SubsurfaceTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.SpecularTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.SpecularColorTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.IridescenceTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.IridescenceThicknessTextureIndex = DEFAULT_WHITE_TEXTURE;
+    data.Padding0 = 0;
+    data.Padding1 = 0;
+    data.Padding2 = 0;
+    data.Padding3 = 0;
+    return data;
+}
+
+GPUMaterialExtensionData ReadForwardMaterialExtension(
+    uint extensionIndex,
+    uint featureFlags)
+{
+    uint baseWord = extensionIndex *
+        uint(SIZEOF_GPU_MATERIAL_EXTENSION_DATA / 4);
+    uint bufferIndex = uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX);
+    GPUMaterialExtensionData data = EmptyForwardMaterialExtension();
+
+    const uint clearcoatMask =
+        MATERIAL_FEATURE_CLEARCOAT |
+        MATERIAL_FEATURE_CLEARCOAT_TEXTURE |
+        MATERIAL_FEATURE_CLEARCOAT_ROUGHNESS_TEXTURE |
+        MATERIAL_FEATURE_CLEARCOAT_NORMAL_TEXTURE |
+        MATERIAL_FEATURE_EMISSIVE_STRENGTH;
+    if ((featureFlags & clearcoatMask) != 0u)
+    {
+        data.Clearcoat = ReadStorageVec4Uniform(bufferIndex, baseWord + 0u);
+        if ((featureFlags & MATERIAL_FEATURE_CLEARCOAT_TEXTURE) != 0u)
+        {
+            data.ClearcoatOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 36u);
+            data.ExtensionTextureRotations0.x = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 88u);
+            data.ExtensionTextureTexCoordSets0.x = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 104u);
+            data.ClearcoatTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 120u));
+        }
+        if ((featureFlags & MATERIAL_FEATURE_CLEARCOAT_ROUGHNESS_TEXTURE) != 0u)
+        {
+            data.ClearcoatRoughnessOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 40u);
+            data.ExtensionTextureRotations0.y = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 89u);
+            data.ExtensionTextureTexCoordSets0.y = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 105u);
+            data.ClearcoatRoughnessTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 121u));
+        }
+    }
+
+    const uint sheenMask =
+        MATERIAL_FEATURE_SHEEN |
+        MATERIAL_FEATURE_SHEEN_COLOR_TEXTURE |
+        MATERIAL_FEATURE_SHEEN_ROUGHNESS_TEXTURE;
+    if ((featureFlags & sheenMask) != 0u)
+    {
+        data.SheenColor = ReadStorageVec4Uniform(bufferIndex, baseWord + 4u);
+        if ((featureFlags & MATERIAL_FEATURE_SHEEN_COLOR_TEXTURE) != 0u)
+        {
+            data.SheenColorOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 48u);
+            data.ExtensionTextureRotations0.w = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 91u);
+            data.ExtensionTextureTexCoordSets0.w = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 107u);
+            data.SheenColorTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 123u));
+        }
+        if ((featureFlags & MATERIAL_FEATURE_SHEEN_ROUGHNESS_TEXTURE) != 0u)
+        {
+            data.SheenRoughnessOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 52u);
+            data.ExtensionTextureRotations1.x = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 92u);
+            data.ExtensionTextureTexCoordSets1.x = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 108u);
+            data.SheenRoughnessTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 124u));
+        }
+    }
+
+    const uint anisotropyMask =
+        MATERIAL_FEATURE_ANISOTROPY |
+        MATERIAL_FEATURE_ANISOTROPY_TEXTURE;
+    if ((featureFlags & anisotropyMask) != 0u)
+    {
+        data.Anisotropy = ReadStorageVec4Uniform(bufferIndex, baseWord + 8u);
+        if ((featureFlags & MATERIAL_FEATURE_ANISOTROPY_TEXTURE) != 0u)
+        {
+            data.AnisotropyOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 56u);
+            data.ExtensionTextureRotations1.y = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 93u);
+            data.ExtensionTextureTexCoordSets1.y = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 109u);
+            data.AnisotropyTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 125u));
+        }
+    }
+
+    const uint transmissionMask =
+        MATERIAL_FEATURE_TRANSMISSION |
+        MATERIAL_FEATURE_TRANSMISSION_TEXTURE |
+        MATERIAL_FEATURE_VOLUME_APPROXIMATION |
+        MATERIAL_FEATURE_IOR;
+    if ((featureFlags & transmissionMask) != 0u)
+    {
+        data.Transmission = ReadStorageVec4Uniform(bufferIndex, baseWord + 12u);
+        if ((featureFlags & MATERIAL_FEATURE_TRANSMISSION) != 0u)
+            data.AttenuationColor = ReadStorageVec4Uniform(bufferIndex, baseWord + 16u);
+        if ((featureFlags & MATERIAL_FEATURE_TRANSMISSION_TEXTURE) != 0u)
+        {
+            data.TransmissionOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 60u);
+            data.ExtensionTextureRotations1.z = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 94u);
+            data.ExtensionTextureTexCoordSets1.z = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 110u);
+            data.TransmissionTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 126u));
+        }
+        if ((featureFlags & MATERIAL_FEATURE_VOLUME_APPROXIMATION) != 0u)
+        {
+            data.ThicknessOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 64u);
+            data.ExtensionTextureRotations1.w = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 95u);
+            data.ExtensionTextureTexCoordSets1.w = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 111u);
+            data.ThicknessTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 127u));
+        }
+    }
+
+    const uint subsurfaceMask =
+        MATERIAL_FEATURE_SUBSURFACE |
+        MATERIAL_FEATURE_SUBSURFACE_TEXTURE;
+    if ((featureFlags & subsurfaceMask) != 0u)
+    {
+        data.Subsurface = ReadStorageVec4Uniform(bufferIndex, baseWord + 20u);
+        if ((featureFlags & MATERIAL_FEATURE_SUBSURFACE_TEXTURE) != 0u)
+        {
+            data.SubsurfaceOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 84u);
+            data.ExtensionTextureRotations3.x = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 100u);
+            data.ExtensionTextureTexCoordSets3.x = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 116u);
+            data.SubsurfaceTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 128u));
+        }
+    }
+
+    const uint specularMask =
+        MATERIAL_FEATURE_SPECULAR |
+        MATERIAL_FEATURE_SPECULAR_TEXTURE |
+        MATERIAL_FEATURE_SPECULAR_COLOR_TEXTURE;
+    if ((featureFlags & specularMask) != 0u)
+    {
+        data.SpecularColor = ReadStorageVec4Uniform(bufferIndex, baseWord + 24u);
+        if ((featureFlags & MATERIAL_FEATURE_SPECULAR_TEXTURE) != 0u)
+        {
+            data.SpecularOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 68u);
+            data.ExtensionTextureRotations2.x = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 96u);
+            data.ExtensionTextureTexCoordSets2.x = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 112u);
+            data.SpecularTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 129u));
+        }
+        if ((featureFlags & MATERIAL_FEATURE_SPECULAR_COLOR_TEXTURE) != 0u)
+        {
+            data.SpecularColorOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 72u);
+            data.ExtensionTextureRotations2.y = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 97u);
+            data.ExtensionTextureTexCoordSets2.y = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 113u);
+            data.SpecularColorTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 130u));
+        }
+    }
+
+    const uint iridescenceMask =
+        MATERIAL_FEATURE_IRIDESCENCE |
+        MATERIAL_FEATURE_IRIDESCENCE_TEXTURE |
+        MATERIAL_FEATURE_IRIDESCENCE_THICKNESS_TEXTURE;
+    if ((featureFlags & iridescenceMask) != 0u)
+    {
+        data.Iridescence = ReadStorageVec4Uniform(bufferIndex, baseWord + 28u);
+        if ((featureFlags & MATERIAL_FEATURE_IRIDESCENCE_TEXTURE) != 0u)
+        {
+            data.IridescenceOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 76u);
+            data.ExtensionTextureRotations2.z = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 98u);
+            data.ExtensionTextureTexCoordSets2.z = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 114u);
+            data.IridescenceTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 131u));
+        }
+        if ((featureFlags & MATERIAL_FEATURE_IRIDESCENCE_THICKNESS_TEXTURE) != 0u)
+        {
+            data.IridescenceThicknessOffsetScale = ReadStorageVec4Uniform(
+                bufferIndex,
+                baseWord + 80u);
+            data.ExtensionTextureRotations2.w = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 99u);
+            data.ExtensionTextureTexCoordSets2.w = ReadStorageFloatUniform(
+                bufferIndex,
+                baseWord + 115u);
+            data.IridescenceThicknessTextureIndex = int(ReadStorageWordUniform(
+                bufferIndex,
+                baseWord + 132u));
+        }
+    }
+
+    // yzw carries the compiled thin-transmission tint for every optical
+    // extension, while x is the optional dispersion strength.
+    data.Dispersion = ReadStorageVec4Uniform(bufferIndex, baseWord + 32u);
+    return data;
+}
+
+void ReadForwardThinGlassOptics(
+    uint extensionIndex,
+    out vec4 transmission,
+    out vec4 dispersion)
+{
+    uint baseWord = extensionIndex *
+        uint(SIZEOF_GPU_MATERIAL_EXTENSION_DATA / 4);
+    uint bufferIndex = uint(MATERIAL_EXTENSION_DATA_BUFFER_INDEX);
+    transmission = ReadStorageVec4Uniform(bufferIndex, baseWord + 12u);
+    dispersion = ReadStorageVec4Uniform(bufferIndex, baseWord + 32u);
 }
 
 GPUTiledLightHeader ReadTiledLightHeader(uint tileIndex)

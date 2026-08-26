@@ -158,7 +158,11 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 MeshletDrawCount = (uint)sceneData.TransparentMeshletCount,
                 MeshletDrawBufferBaseIndex = BindlessIndex.TransparentMeshletDrawBufferBase,
-                LightCount = (uint)sceneData.LightCount,
+                PackedLightDispatch = GPUForwardPushConstants.PackLightDispatch(
+                    sceneData.LightCount,
+                    sceneData.LocalLightCount,
+                    sceneData.DirectionalLightIndex0,
+                    sceneData.DirectionalLightIndex1),
                 LocalLightCount = (uint)sceneData.LocalLightCount,
                 // Hi-Z is disabled for transparent task culling, so this word
                 // carries the exact bounded optical traversal limits to the

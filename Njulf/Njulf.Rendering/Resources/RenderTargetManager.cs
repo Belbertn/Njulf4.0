@@ -219,7 +219,7 @@ namespace Njulf.Rendering.Resources
                 RenderGraphResourceId.AmbientOcclusionBlurred,
                 "Ambient Occlusion Blurred",
                 AmbientOcclusionFormat,
-                ambientOcclusionExtent,
+                ambientOcclusionEnabled ? extent : PlaceholderExtent,
                 AmbientOcclusionBlurredDescriptor);
             AmbientOcclusionScratch = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.AmbientOcclusionScratch,
@@ -1014,12 +1014,15 @@ namespace Njulf.Rendering.Resources
             RecreateGraphOwnedTarget(RenderGraphResourceId.WeightedOitRevealage, WeightedOitRevealage, targetExtent);
         }
 
-        public void RecreateAmbientOcclusionTargets(Extent2D swapchainExtent, float resolutionScale, bool enabled)
+        public void RecreateAmbientOcclusionTargets(Extent2D sceneExtent, float resolutionScale, bool enabled)
         {
-            Extent2D extent = enabled ? CalculateAmbientOcclusionExtent(swapchainExtent, resolutionScale) : PlaceholderExtent;
-            RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionRaw, AmbientOcclusionRaw, extent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionBlurred, AmbientOcclusionBlurred, extent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionScratch, AmbientOcclusionScratch, extent);
+            Extent2D workingExtent = enabled
+                ? CalculateAmbientOcclusionExtent(sceneExtent, resolutionScale)
+                : PlaceholderExtent;
+            Extent2D resolvedExtent = enabled ? sceneExtent : PlaceholderExtent;
+            RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionRaw, AmbientOcclusionRaw, workingExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionBlurred, AmbientOcclusionBlurred, resolvedExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.AmbientOcclusionScratch, AmbientOcclusionScratch, workingExtent);
         }
 
         private void CreateHybridReflectionTargets(Extent2D extent)

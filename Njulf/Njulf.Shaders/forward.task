@@ -266,6 +266,26 @@ void main()
         return;
     }
 
+    if ((command.Flags & MESHLET_DRAW_FLAG_NORMAL_CONE_CULL_ELIGIBLE) != 0u)
+    {
+        GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+        uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
+            pc.Push.CurrentFrameIndex;
+        uint objectWordOffset = command.InstanceId *
+            uint(SIZEOF_GPU_OBJECT_DATA / 4);
+        if (MeshletBackfaceConeCulled(
+                meshlet,
+                instanceBufferIndex,
+                objectWordOffset,
+                worldCenterRadius.xyz,
+                worldCenterRadius.w,
+                pc.Push.CameraPosition))
+        {
+            EmitMeshTasksEXT(0, 0, 0);
+            return;
+        }
+    }
+
     bool canHiZTest = (command.Flags & MESHLET_DRAW_FLAG_CAN_HIZ_TEST) != 0u;
     if (canHiZTest && ForwardHiZTestMode() != HIZ_TEST_MODE_OFF && pc.Push.HiZMipCount != 0u)
         IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_FORWARD_OCCLUSION_TESTED);

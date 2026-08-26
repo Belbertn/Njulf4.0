@@ -86,8 +86,14 @@ void main()
         imageStore(HybridMetadataCurrent, pixel, uvec4(0u));
         return;
     }
-    vec3 currentNormal =
-        HybridReflectionPayloadShadingNormal(payload);
+    // Reprojection must validate the broad-lobe footprint used for DDGI
+    // sampling and remain compatible with the spatial filter. Using the
+    // high-frequency shading normal here rejects otherwise valid broad DDGI
+    // history as normal-map texels move across the screen, exposing fresh
+    // coarse samples as camera-relative crawl. HybridReflectionTraceNormal
+    // retains the shading normal for sharp glass/mirrors and converges only
+    // broad lobes toward geometry.
+    vec3 currentNormal = HybridReflectionTraceNormal(payload);
 
     vec4 current = imageLoad(HybridRawRadiance, pixel);
     uvec2 currentMetadata = imageLoad(HybridRawMetadata, pixel).xy;

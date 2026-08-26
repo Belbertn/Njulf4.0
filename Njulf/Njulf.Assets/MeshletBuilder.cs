@@ -63,6 +63,12 @@ namespace Njulf.Assets
                 meshletVertices,
                 meshletTriangles);
 
+            ComputeMeshletNormalCones(
+                vertices,
+                meshlets,
+                meshletVertices,
+                meshletTriangles);
+
             mesh.Meshlets = meshlets.ToArray();
             mesh.MeshletVertices = meshletVertices.ToArray();
             mesh.MeshletTriangles = meshletTriangles.ToArray();
@@ -368,6 +374,93 @@ namespace Njulf.Assets
                     Vector3.Distance(
                         center,
                         vertices[checked((int)meshletVertexIndices[i])]));
+            }
+        }
+
+        private static void ComputeMeshletNormalCones(
+            Vector3[] vertices,
+            List<Meshlet> meshlets,
+            List<uint> meshletVertices,
+            List<uint> meshletTriangles)
+        {
+            const float normalLengthEpsilon = 1e-20f;
+            const float axisLengthEpsilon = 1e-12f;
+
+            for (int meshletIndex = 0; meshletIndex < meshlets.Count; meshletIndex++)
+            {
+                Meshlet meshlet = meshlets[meshletIndex];
+                int triangleBase = checked((int)meshlet.LocalTriangleOffset * 3);
+                int triangleCount = checked((int)meshlet.LocalTriangleCount);
+                int vertexBase = checked((int)meshlet.LocalVertexOffset);
+                Vector3 axisSum = Vector3.Zero;
+                int validTriangleCount = 0;
+
+                for (int triangle = 0; triangle < triangleCount; triangle++)
+                {
+                    int scalar = checked(triangleBase + triangle * 3);
+                    uint local0 = meshletTriangles[scalar + 0];
+                    uint local1 = meshletTriangles[scalar + 1];
+                    uint local2 = meshletTriangles[scalar + 2];
+                    Vector3 p0 = vertices[checked((int)meshletVertices[checked(vertexBase + (int)local0)])];
+                    Vector3 p1 = vertices[checked((int)meshletVertices[checked(vertexBase + (int)local1)])];
+                    Vector3 p2 = vertices[checked((int)meshletVertices[checked(vertexBase + (int)local2)])];
+                    Vector3 geometricNormal = Vector3.Cross(p1 - p0, p2 - p0);
+                    float lengthSquared = geometricNormal.LengthSquared();
+                    if (!float.IsFinite(lengthSquared) || lengthSquared <= normalLengthEpsilon)
+                        continue;
+
+                    axisSum += geometricNormal / MathF.Sqrt(lengthSquared);
+                    validTriangleCount++;
+                }
+
+                float axisLengthSquared = axisSum.LengthSquared();
+                if (validTriangleCount == 0 ||
+                    !float.IsFinite(axisLengthSquared) ||
+                    axisLengthSquared <= axisLengthEpsilon)
+                {
+                    meshlet.NormalConeAxis = Vector3.Zero;
+                    meshlet.NormalConeCutoff = 1.0f;
+                    meshlets[meshletIndex] = meshlet;
+                    continue;
+                }
+
+                Vector3 axis = axisSum / MathF.Sqrt(axisLengthSquared);
+                float minimumDot = 1.0f;
+                for (int triangle = 0; triangle < triangleCount; triangle++)
+                {
+                    int scalar = checked(triangleBase + triangle * 3);
+                    uint local0 = meshletTriangles[scalar + 0];
+                    uint local1 = meshletTriangles[scalar + 1];
+                    uint local2 = meshletTriangles[scalar + 2];
+                    Vector3 p0 = vertices[checked((int)meshletVertices[checked(vertexBase + (int)local0)])];
+                    Vector3 p1 = vertices[checked((int)meshletVertices[checked(vertexBase + (int)local1)])];
+                    Vector3 p2 = vertices[checked((int)meshletVertices[checked(vertexBase + (int)local2)])];
+                    Vector3 geometricNormal = Vector3.Cross(p1 - p0, p2 - p0);
+                    float lengthSquared = geometricNormal.LengthSquared();
+                    if (!float.IsFinite(lengthSquared) || lengthSquared <= normalLengthEpsilon)
+                        continue;
+
+                    Vector3 normal = geometricNormal / MathF.Sqrt(lengthSquared);
+                    minimumDot = MathF.Min(minimumDot, Vector3.Dot(axis, normal));
+                }
+
+                // Cones spanning 90 degrees or more cannot conservatively
+                // reject a view hemisphere. Mark them disabled instead of
+                // introducing false negatives on folded or non-manifold data.
+                if (!float.IsFinite(minimumDot) || minimumDot <= 0.0f)
+                {
+                    meshlet.NormalConeAxis = Vector3.Zero;
+                    meshlet.NormalConeCutoff = 1.0f;
+                }
+                else
+                {
+                    minimumDot = Math.Clamp(minimumDot, 0.0f, 1.0f);
+                    meshlet.NormalConeAxis = axis;
+                    meshlet.NormalConeCutoff = MathF.Sqrt(
+                        MathF.Max(0.0f, 1.0f - minimumDot * minimumDot));
+                }
+
+                meshlets[meshletIndex] = meshlet;
             }
         }
 

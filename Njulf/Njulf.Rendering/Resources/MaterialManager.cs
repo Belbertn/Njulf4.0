@@ -20,6 +20,8 @@ namespace Njulf.Rendering.Resources
     {
         private const uint InitialMaterialCapacity = 1024;
         private static readonly ulong MaterialStride = (ulong)Marshal.SizeOf<GPUMaterialData>();
+        private static readonly ulong ForwardMaterialStride =
+            (ulong)Marshal.SizeOf<GPUForwardMaterialData>();
         private static readonly ulong MaterialExtensionStride = (ulong)Marshal.SizeOf<GPUMaterialExtensionData>();
         public const ulong MaximumPrimitiveProfileGpuBytes = 32UL * 1024UL * 1024UL;
         public static ulong PrimitiveProfileGpuStrideBytes => MaterialStride;
@@ -67,8 +69,10 @@ namespace Njulf.Rendering.Resources
         private Exception? _lastMaterialBindingPublicationFailure;
 
         private BufferHandle _materialBuffer = BufferHandle.Invalid;
+        private BufferHandle _forwardMaterialBuffer = BufferHandle.Invalid;
         private BufferHandle _materialExtensionBuffer = BufferHandle.Invalid;
         private uint _materialBufferCapacity;
+        private uint _forwardMaterialBufferCapacity;
         private uint _materialExtensionBufferCapacity;
         private uint _materialDataRevision;
         private uint _giTransportInputRevision = 1;
@@ -79,6 +83,7 @@ namespace Njulf.Rendering.Resources
         private ulong _referencedTextureSetGeneration;
         private bool _gpuUploadDirty = true;
         private ulong _lastUploadBytes;
+        private ulong _lastForwardUploadBytes;
         private ulong _lastExtensionUploadBytes;
         private long _lastUploadMicroseconds;
         private long _lastCompileMicroseconds;
@@ -197,6 +202,9 @@ namespace Njulf.Rendering.Resources
                 _materialBuffer = CreateMaterialBuffer(InitialMaterialCapacity);
                 _materialBufferCapacity =
                     InitialMaterialCapacity;
+                _forwardMaterialBuffer = CreateForwardMaterialBuffer(
+                    InitialMaterialCapacity);
+                _forwardMaterialBufferCapacity = InitialMaterialCapacity;
                 _materialExtensionBuffer = CreateMaterialExtensionBuffer(1);
                 _materialExtensionBufferCapacity = 1;
             }
@@ -205,6 +213,8 @@ namespace Njulf.Rendering.Resources
         public MaterialHandle DefaultMaterialHandle { get; }
 
         public BufferHandle MaterialBuffer => _materialBuffer;
+
+        public BufferHandle ForwardMaterialBuffer => _forwardMaterialBuffer;
 
         public BufferHandle MaterialExtensionBuffer => _materialExtensionBuffer;
 
@@ -352,6 +362,15 @@ namespace Njulf.Rendering.Resources
             {
                 lock (_lock)
                     return _materialExtensionBufferCapacity * MaterialExtensionStride;
+            }
+        }
+
+        public ulong ForwardMaterialBufferSize
+        {
+            get
+            {
+                lock (_lock)
+                    return _forwardMaterialBufferCapacity * ForwardMaterialStride;
             }
         }
 
@@ -623,6 +642,15 @@ namespace Njulf.Rendering.Resources
             {
                 lock (_lock)
                     return _lastUploadBytes;
+            }
+        }
+
+        public ulong LastForwardUploadBytes
+        {
+            get
+            {
+                lock (_lock)
+                    return _lastForwardUploadBytes;
             }
         }
 
@@ -1814,8 +1842,11 @@ namespace Njulf.Rendering.Resources
                 DrainRetiredMaterialBuffersBestEffortLocked();
                 long uploadStart = Stopwatch.GetTimestamp();
                 _lastUploadBytes = 0;
+                _lastForwardUploadBytes = 0;
                 _lastExtensionUploadBytes = 0;
                 EnsureMaterialBufferCapacityLocked((uint)Math.Max(1, _materials.Count));
+                EnsureForwardMaterialBufferCapacityLocked(
+                    (uint)Math.Max(1, _materials.Count));
                 EnsureMaterialExtensionBufferCapacityLocked((uint)Math.Max(1, _materialExtensions.Count));
 
                 bool uploadedMaterialData = _gpuUploadDirty;
@@ -1823,12 +1854,18 @@ namespace Njulf.Rendering.Resources
                 {
                     GPUMaterialData[] snapshot = GetMaterialDataSnapshotLocked();
                     _lastUploadBytes = UploadMaterialSpan(snapshot, commandBuffer);
+                    GPUForwardMaterialData[] forwardSnapshot =
+                        GetForwardMaterialDataSnapshot(snapshot);
+                    _lastForwardUploadBytes = UploadForwardMaterialSpan(
+                        forwardSnapshot,
+                        commandBuffer);
                     GPUMaterialExtensionData[] extensionSnapshot = GetMaterialExtensionDataSnapshotLocked();
                     _lastExtensionUploadBytes = UploadMaterialExtensionSpan(extensionSnapshot, commandBuffer);
                     _gpuUploadDirty = false;
                 }
 
                 RecordMaterialReadBarrier(commandBuffer);
+                RecordForwardMaterialReadBarrier(commandBuffer);
                 RecordMaterialExtensionReadBarrier(commandBuffer);
                 UpdateRegisteredBindlessBuffer();
                 _lastUploadMicroseconds = ElapsedMicroseconds(uploadStart);
@@ -1859,6 +1896,8 @@ namespace Njulf.Rendering.Resources
                 throw new ArgumentNullException(nameof(bindlessHeap));
             if (!_materialBuffer.IsValid)
                 throw new InvalidOperationException("Material GPU buffer has not been created.");
+            if (!_forwardMaterialBuffer.IsValid)
+                throw new InvalidOperationException("Forward material GPU buffer has not been created.");
             if (!_materialExtensionBuffer.IsValid)
                 throw new InvalidOperationException("Material extension GPU buffer has not been created.");
 
@@ -2564,6 +2603,106 @@ namespace Njulf.Rendering.Resources
                 replaceExtensionBuffer: true);
         }
 
+        private void EnsureForwardMaterialBufferCapacityLocked(
+            uint requiredMaterialCount)
+        {
+            if (_bufferManager == null ||
+                requiredMaterialCount <= _forwardMaterialBufferCapacity)
+            {
+                return;
+            }
+
+            WaitForOtherInFlightFrames();
+            uint newCapacity = _forwardMaterialBufferCapacity == 0
+                ? InitialMaterialCapacity
+                : _forwardMaterialBufferCapacity;
+            while (newCapacity < requiredMaterialCount)
+                newCapacity = checked(newCapacity * 2);
+            ReplaceForwardMaterialBufferLocked(newCapacity);
+        }
+
+        private void ReplaceForwardMaterialBufferLocked(uint newCapacity)
+        {
+            if (_bufferManager == null)
+            {
+                throw new InvalidOperationException(
+                    "Forward material buffer replacement requires a BufferManager.");
+            }
+
+            _retiredMaterialBuffers.EnsureCapacity(
+                checked(
+                    _retiredMaterialBuffers.Count +
+                    _quarantinedMaterialBuffers.Count +
+                    1));
+            _quarantinedMaterialBuffers.EnsureCapacity(
+                checked(_quarantinedMaterialBuffers.Count + 1));
+
+            BufferHandle oldBuffer = _forwardMaterialBuffer;
+            uint oldCapacity = _forwardMaterialBufferCapacity;
+            BufferHandle candidate = CreateForwardMaterialBuffer(newCapacity);
+            try
+            {
+                MaterialBufferReplacementTransaction.Execute(
+                    publishCandidateBinding: () =>
+                        PublishRegisteredBindlessBuffers(
+                            _materialBuffer,
+                            _materialExtensionBuffer,
+                            candidate,
+                            restoringAuthoritativeBinding: false),
+                    commitAuthoritativeState: () =>
+                    {
+                        _forwardMaterialBuffer = candidate;
+                        _forwardMaterialBufferCapacity = newCapacity;
+                        MarkMaterialDataDirtyLocked();
+                    },
+                    restoreAuthoritativeBinding: () =>
+                    {
+                        try
+                        {
+                            PublishRegisteredBindlessBuffers(
+                                _materialBuffer,
+                                _materialExtensionBuffer,
+                                oldBuffer,
+                                restoringAuthoritativeBinding: true);
+                        }
+                        catch (Exception restorationFailure)
+                        {
+                            _materialBindingRepairRequired = true;
+                            _lastMaterialBindingPublicationFailure =
+                                restorationFailure;
+                            throw;
+                        }
+                    },
+                    destroyCandidate: () =>
+                        _bufferManager.DestroyBuffer(candidate),
+                    retireCandidate: () =>
+                        _retiredMaterialBuffers.Add(candidate),
+                    quarantineCandidate: () =>
+                    {
+                        _quarantinedMaterialBuffers.Add(candidate);
+                        _materialBindingRepairRequired = true;
+                    },
+                    reportDeferredCandidateCleanup:
+                        RecordRetiredBufferCleanupFailureLocked);
+            }
+            catch (Exception publicationFailure)
+            {
+                _forwardMaterialBuffer = oldBuffer;
+                _forwardMaterialBufferCapacity = oldCapacity;
+                if (_materialBindingRepairRequired)
+                {
+                    _lastMaterialBindingPublicationFailure =
+                        publicationFailure;
+                }
+
+                throw;
+            }
+
+            if (oldBuffer.IsValid)
+                _retiredMaterialBuffers.Add(oldBuffer);
+            DrainRetiredMaterialBuffersBestEffortLocked();
+        }
+
         private void ReplaceMaterialBufferLocked(
             uint newCapacity,
             bool replaceExtensionBuffer)
@@ -2613,6 +2752,7 @@ namespace Njulf.Rendering.Resources
                         PublishRegisteredBindlessBuffers(
                             candidateMaterialBuffer,
                             candidateExtensionBuffer,
+                            _forwardMaterialBuffer,
                             restoringAuthoritativeBinding:
                                 false),
                     commitAuthoritativeState: () =>
@@ -2640,6 +2780,7 @@ namespace Njulf.Rendering.Resources
                             PublishRegisteredBindlessBuffers(
                                 oldMaterialBuffer,
                                 oldExtensionBuffer,
+                                _forwardMaterialBuffer,
                                 restoringAuthoritativeBinding:
                                     true);
                         }
@@ -2782,6 +2923,24 @@ namespace Njulf.Rendering.Resources
                 "Material Extension Data Buffer");
         }
 
+        private BufferHandle CreateForwardMaterialBuffer(uint materialCapacity)
+        {
+            if (_bufferManager == null)
+            {
+                throw new InvalidOperationException(
+                    "Forward material GPU buffer creation requires a BufferManager.");
+            }
+
+            return _bufferManager.CreateDeviceBuffer(
+                checked(materialCapacity * ForwardMaterialStride),
+                BufferUsageFlags.StorageBufferBit |
+                BufferUsageFlags.TransferDstBit |
+                BufferUsageFlags.TransferSrcBit,
+                true,
+                MemoryBudgetCategory.MaterialBuffers,
+                "Forward Material Data Buffer");
+        }
+
         private void WaitForOtherInFlightFrames()
         {
             if (_sync == null || _stagingRing == null)
@@ -2820,6 +2979,27 @@ namespace Njulf.Rendering.Resources
                 _stagingRing,
                 commandBuffer,
                 _materialExtensionBuffer,
+                data).ByteCount;
+        }
+
+        private ulong UploadForwardMaterialSpan(
+            ReadOnlySpan<GPUForwardMaterialData> data,
+            CommandBuffer commandBuffer)
+        {
+            if (data.IsEmpty ||
+                _bufferManager == null ||
+                _stagingRing == null ||
+                _context == null)
+            {
+                return 0;
+            }
+
+            return GpuBufferUploader.UploadSpanToBuffer(
+                _context,
+                _bufferManager,
+                _stagingRing,
+                commandBuffer,
+                _forwardMaterialBuffer,
                 data).ByteCount;
         }
 
@@ -2888,23 +3068,60 @@ namespace Njulf.Rendering.Resources
             _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
         }
 
+        private void RecordForwardMaterialReadBarrier(CommandBuffer commandBuffer)
+        {
+            if (_context == null ||
+                _bufferManager == null ||
+                !_forwardMaterialBuffer.IsValid)
+            {
+                return;
+            }
+
+            var barrier = new BufferMemoryBarrier2
+            {
+                SType = StructureType.BufferMemoryBarrier2,
+                SrcStageMask = PipelineStageFlags2.TransferBit,
+                SrcAccessMask = AccessFlags2.TransferWriteBit,
+                DstStageMask = PipelineStageFlags2.FragmentShaderBit |
+                               PipelineStageFlags2.ComputeShaderBit,
+                DstAccessMask = AccessFlags2.ShaderStorageReadBit,
+                SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+                Buffer = _bufferManager.GetBuffer(_forwardMaterialBuffer),
+                Offset = 0,
+                Size = Vk.WholeSize
+            };
+
+            var dependencyInfo = new DependencyInfo
+            {
+                SType = StructureType.DependencyInfo,
+                BufferMemoryBarrierCount = 1,
+                PBufferMemoryBarriers = &barrier
+            };
+
+            _context.Api.CmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        }
+
         private void UpdateRegisteredBindlessBuffer()
         {
             PublishRegisteredBindlessBuffers(
                 _materialBuffer,
                 _materialExtensionBuffer,
+                _forwardMaterialBuffer,
                 restoringAuthoritativeBinding: true);
         }
 
         private void PublishRegisteredBindlessBuffers(
             BufferHandle materialBuffer,
             BufferHandle extensionBuffer,
+            BufferHandle forwardMaterialBuffer,
             bool restoringAuthoritativeBinding)
         {
             if (_registeredBindlessHeap == null ||
                 _bufferManager == null ||
                 !materialBuffer.IsValid ||
-                !extensionBuffer.IsValid)
+                !extensionBuffer.IsValid ||
+                !forwardMaterialBuffer.IsValid)
             {
                 return;
             }
@@ -2935,6 +3152,20 @@ namespace Njulf.Rendering.Resources
                         .AfterAuthoritativeExtensionBinding
                     : MaterialBufferBindingPublicationStage
                         .AfterCandidateExtensionBinding);
+
+            VkBuffer forwardMaterial =
+                _bufferManager.GetBuffer(forwardMaterialBuffer);
+            _registeredBindlessHeap.RegisterStorageBuffer(
+                BindlessIndex.ForwardMaterialDataBuffer,
+                forwardMaterial,
+                0,
+                Vk.WholeSize);
+            BufferBindingPublicationFaultInjector?.Invoke(
+                restoringAuthoritativeBinding
+                    ? MaterialBufferBindingPublicationStage
+                        .AfterAuthoritativeForwardMaterialBinding
+                    : MaterialBufferBindingPublicationStage
+                        .AfterCandidateForwardMaterialBinding);
         }
 
         private void RepairMaterialBindingsLocked()
@@ -2947,6 +3178,7 @@ namespace Njulf.Rendering.Resources
                 PublishRegisteredBindlessBuffers(
                     _materialBuffer,
                     _materialExtensionBuffer,
+                    _forwardMaterialBuffer,
                     restoringAuthoritativeBinding: true);
             }
             catch (Exception repairFailure)
@@ -3029,6 +3261,19 @@ namespace Njulf.Rendering.Resources
             var snapshot = new GPUMaterialData[_materials.Count];
             for (int i = 0; i < _materials.Count; i++)
                 snapshot[i] = _materials[i].Active ? _materials[i].Data : CreateDefaultMaterial();
+
+            return snapshot;
+        }
+
+        private static GPUForwardMaterialData[] GetForwardMaterialDataSnapshot(
+            ReadOnlySpan<GPUMaterialData> materials)
+        {
+            var snapshot = new GPUForwardMaterialData[materials.Length];
+            for (int i = 0; i < materials.Length; i++)
+            {
+                snapshot[i] = GPUForwardMaterialData.FromMaterial(
+                    materials[i]);
+            }
 
             return snapshot;
         }
@@ -4145,6 +4390,20 @@ namespace Njulf.Rendering.Resources
                             .Add(disposeFailure);
                     }
                 }
+                if (_forwardMaterialBuffer.IsValid && _bufferManager != null)
+                {
+                    Exception? disposeFailure =
+                        DurableResourceDestruction.TryDestroy(
+                            ref _forwardMaterialBuffer,
+                            BufferHandle.Invalid,
+                            static handle => handle.IsValid,
+                            _bufferManager.DestroyBuffer);
+                    if (disposeFailure != null)
+                    {
+                        (failures ??= new List<Exception>())
+                            .Add(disposeFailure);
+                    }
+                }
 
                 if (_bufferManager != null)
                 {
@@ -4183,6 +4442,7 @@ namespace Njulf.Rendering.Resources
                 _disposeCompleted =
                     !_materialBuffer.IsValid &&
                     !_materialExtensionBuffer.IsValid &&
+                    !_forwardMaterialBuffer.IsValid &&
                     _retiredTextureReleases.Count == 0 &&
                     _retiredMaterialBuffers.Count == 0;
             }
@@ -4409,9 +4669,11 @@ namespace Njulf.Rendering.Resources
         BeforeCandidatePublication,
         AfterCandidateMaterialBinding,
         AfterCandidateExtensionBinding,
+        AfterCandidateForwardMaterialBinding,
         BeforeAuthoritativeRestore,
         AfterAuthoritativeMaterialBinding,
-        AfterAuthoritativeExtensionBinding
+        AfterAuthoritativeExtensionBinding,
+        AfterAuthoritativeForwardMaterialBinding
     }
 
     public sealed record MaterialManagerDiagnostics(

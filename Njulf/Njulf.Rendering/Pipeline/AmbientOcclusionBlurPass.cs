@@ -23,6 +23,7 @@ namespace Njulf.Rendering.Pipeline
         private DescriptorPool _descriptorPool;
         private DescriptorSet _horizontalSet;
         private DescriptorSet _verticalSet;
+        private DescriptorSet _resolveRawSet;
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
@@ -65,7 +66,12 @@ namespace Njulf.Rendering.Pipeline
             if (!sceneData.AmbientOcclusionEnabled)
                 return false;
 
-            if (ao.BlurRadius == 0)
+            bool requiresFullResolutionResolve =
+                _renderTargets.AmbientOcclusionRaw.Extent.Width !=
+                    _renderTargets.AmbientOcclusionBlurred.Extent.Width ||
+                _renderTargets.AmbientOcclusionRaw.Extent.Height !=
+                    _renderTargets.AmbientOcclusionBlurred.Extent.Height;
+            if (ao.BlurRadius == 0 && !requiresFullResolutionResolve)
             {
                 RegisterBlurredAoTexture(_renderTargets.AmbientOcclusionRaw.View);
                 return false;
@@ -78,10 +84,22 @@ namespace Njulf.Rendering.Pipeline
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
         {
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Compute, _pipeline);
-            Dispatch(cmd, _horizontalSet, _renderTargets.AmbientOcclusionRaw.Extent, new Vector2(1.0f, 0.0f), sceneData, "AmbientOcclusionBlurPass Horizontal");
-            _renderTargets.AmbientOcclusionScratch.TransitionToComputeShaderRead(cmd);
+            bool blurEnabled = _settings.AmbientOcclusion.BlurRadius > 0;
+            if (blurEnabled)
+            {
+                Dispatch(cmd, _horizontalSet, _renderTargets.AmbientOcclusionRaw.Extent, new Vector2(1.0f, 0.0f), sceneData, "AmbientOcclusionBlurPass Horizontal");
+                _renderTargets.AmbientOcclusionScratch.TransitionToComputeShaderRead(cmd);
+            }
 
-            Dispatch(cmd, _verticalSet, _renderTargets.AmbientOcclusionBlurred.Extent, new Vector2(0.0f, 1.0f), sceneData, "AmbientOcclusionBlurPass Vertical");
+            Dispatch(
+                cmd,
+                blurEnabled ? _verticalSet : _resolveRawSet,
+                _renderTargets.AmbientOcclusionBlurred.Extent,
+                new Vector2(0.0f, 1.0f),
+                sceneData,
+                blurEnabled
+                    ? "AmbientOcclusionBlurPass Vertical Resolve"
+                    : "AmbientOcclusionBlurPass Resolve");
             if (!IsRecordingOnComputeQueue)
             {
                 // Publish in the producer command buffer on the ordinary
@@ -281,28 +299,29 @@ namespace Njulf.Rendering.Pipeline
                 _context.Api.DestroyDescriptorPool(_context.Device, _descriptorPool, null);
 
             var poolSizes = stackalloc DescriptorPoolSize[2];
-            poolSizes[0] = new DescriptorPoolSize { Type = DescriptorType.CombinedImageSampler, DescriptorCount = 4 };
-            poolSizes[1] = new DescriptorPoolSize { Type = DescriptorType.StorageImage, DescriptorCount = 2 };
+            poolSizes[0] = new DescriptorPoolSize { Type = DescriptorType.CombinedImageSampler, DescriptorCount = 6 };
+            poolSizes[1] = new DescriptorPoolSize { Type = DescriptorType.StorageImage, DescriptorCount = 3 };
             var poolInfo = new DescriptorPoolCreateInfo
             {
                 SType = StructureType.DescriptorPoolCreateInfo,
                 PoolSizeCount = 2,
                 PPoolSizes = poolSizes,
-                MaxSets = 2
+                MaxSets = 3
             };
             Result result = _context.Api.CreateDescriptorPool(_context.Device, &poolInfo, null, out _descriptorPool);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create ambient occlusion blur descriptor pool", result);
 
-            var sets = stackalloc DescriptorSet[2];
-            var layouts = stackalloc DescriptorSetLayout[2];
+            var sets = stackalloc DescriptorSet[3];
+            var layouts = stackalloc DescriptorSetLayout[3];
             layouts[0] = _descriptorSetLayout;
             layouts[1] = _descriptorSetLayout;
+            layouts[2] = _descriptorSetLayout;
             var allocInfo = new DescriptorSetAllocateInfo
             {
                 SType = StructureType.DescriptorSetAllocateInfo,
                 DescriptorPool = _descriptorPool,
-                DescriptorSetCount = 2,
+                DescriptorSetCount = 3,
                 PSetLayouts = layouts
             };
             result = _context.Api.AllocateDescriptorSets(_context.Device, &allocInfo, sets);
@@ -310,9 +329,11 @@ namespace Njulf.Rendering.Pipeline
                 throw new VulkanException("Failed to allocate ambient occlusion blur descriptor sets", result);
             _horizontalSet = sets[0];
             _verticalSet = sets[1];
+            _resolveRawSet = sets[2];
 
             WriteSet(_horizontalSet, _renderTargets.AmbientOcclusionRaw.View, _renderTargets.AmbientOcclusionScratch.View);
             WriteSet(_verticalSet, _renderTargets.AmbientOcclusionScratch.View, _renderTargets.AmbientOcclusionBlurred.View);
+            WriteSet(_resolveRawSet, _renderTargets.AmbientOcclusionRaw.View, _renderTargets.AmbientOcclusionBlurred.View);
         }
 
         private void WriteSet(DescriptorSet set, ImageView sourceAo, ImageView destination)

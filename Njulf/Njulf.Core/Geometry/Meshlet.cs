@@ -16,6 +16,12 @@ namespace Njulf.Core.Geometry
         public uint LocalVertexCount;
         public uint LocalTriangleOffset;
         public uint LocalTriangleCount;
+        // Conservative geometric-normal cone used for whole-meshlet
+        // back-face rejection. A cutoff of 1 disables cone culling (the
+        // representation used for degenerate or wider-than-a-hemisphere
+        // clusters).
+        public Vector3 NormalConeAxis;
+        public float NormalConeCutoff;
 
         public Meshlet(
             Vector3 boundingSphereCenter,
@@ -27,7 +33,9 @@ namespace Njulf.Core.Geometry
             uint localVertexOffset,
             uint localVertexCount,
             uint localTriangleOffset,
-            uint localTriangleCount)
+            uint localTriangleCount,
+            Vector3 normalConeAxis = default,
+            float normalConeCutoff = 1.0f)
         {
             BoundingSphereCenter = boundingSphereCenter;
             BoundingSphereRadius = boundingSphereRadius;
@@ -39,6 +47,8 @@ namespace Njulf.Core.Geometry
             LocalVertexCount = localVertexCount;
             LocalTriangleOffset = localTriangleOffset;
             LocalTriangleCount = localTriangleCount;
+            NormalConeAxis = normalConeAxis;
+            NormalConeCutoff = normalConeCutoff;
         }
     }
 }

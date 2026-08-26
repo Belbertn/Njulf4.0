@@ -85,6 +85,31 @@ void main()
         return;
     }
 
+    if ((command.Flags & MESHLET_DRAW_FLAG_NORMAL_CONE_CULL_ELIGIBLE) != 0u)
+    {
+        GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+        uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
+            pc.Push.CurrentFrameIndex;
+        uint objectWordOffset = command.InstanceId *
+            uint(SIZEOF_GPU_OBJECT_DATA / 4);
+        mat4 inverseView = ReadMeshletTaskInverseViewMatrix(
+            pc.Push.CurrentFrameIndex);
+        vec3 cameraPosition = MulRowMajor(
+            vec4(0.0, 0.0, 0.0, 1.0),
+            inverseView).xyz;
+        if (MeshletBackfaceConeCulled(
+                meshlet,
+                instanceBufferIndex,
+                objectWordOffset,
+                worldCenterRadius.xyz,
+                worldCenterRadius.w,
+                cameraPosition))
+        {
+            EmitMeshTasksEXT(0, 0, 0);
+            return;
+        }
+    }
+
     IncrementRendererDiagnosticOptional(pc.Push.CurrentFrameIndex, DIAGNOSTIC_DEPTH_EMITTED);
     depthPayload.Visible = 1u;
     EmitMeshTasksEXT(1, 1, 1);

@@ -42,6 +42,22 @@ layout(push_constant) uniform HybridReflectionDdgiPushBlock
 } pc;
 
 const uint HYBRID_DDGI_MAXIMUM_COHORTS = 2u;
+// Reconstruction workgroups are 8x8. At the production 2x/4x receiver
+// scales, the bilinear coarse grid plus its one-tile compatibility fallback
+// spans at most 6x6 tiles. Cache both cohorts once per workgroup instead of
+// re-fetching their payload/depth reference for every full-resolution pixel.
+const uint HYBRID_DDGI_SHARED_MAXIMUM_TILE_AXIS = 6u;
+const uint HYBRID_DDGI_SHARED_MAXIMUM_RECORDS =
+    HYBRID_DDGI_SHARED_MAXIMUM_TILE_AXIS *
+    HYBRID_DDGI_SHARED_MAXIMUM_TILE_AXIS *
+    HYBRID_DDGI_MAXIMUM_COHORTS;
+
+shared vec4 HybridDdgiSharedRadianceConfidence[
+    HYBRID_DDGI_SHARED_MAXIMUM_RECORDS];
+shared vec4 HybridDdgiSharedReferenceNormalRoughness[
+    HYBRID_DDGI_SHARED_MAXIMUM_RECORDS];
+shared uvec2 HybridDdgiSharedReferenceIdentityDistance[
+    HYBRID_DDGI_SHARED_MAXIMUM_RECORDS];
 
 ivec2 HybridDdgiTilePixel(ivec2 origin, uint lane, uint scale)
 {
@@ -231,8 +247,18 @@ void HybridProduceDdgiCohorts()
         uvec4 referencePayload = uvec4(0u);
         vec3 referenceWorldPosition = vec3(0.0);
         float referenceDepth = 0.0;
-        for (uint lane = 0u; lane < laneCount; lane++)
+        uint centreLow = (scale - 1u) / 2u;
+        uint centreHigh = scale / 2u;
+        uint examinedCentreMask = 0u;
+        for (uint centre = 0u; centre < 4u; centre++)
         {
+            uint laneX = (centre & 1u) == 0u ? centreLow : centreHigh;
+            uint laneY = (centre & 2u) == 0u ? centreLow : centreHigh;
+            uint lane = laneY * scale + laneX;
+            uint laneBit = 1u << lane;
+            if ((examinedCentreMask & laneBit) != 0u)
+                continue;
+            examinedCentreMask |= laneBit;
             if ((processedMask & (1u << lane)) != 0u)
                 continue;
             ivec2 pixel = HybridDdgiTilePixel(origin, lane, scale);
@@ -243,6 +269,26 @@ void HybridProduceDdgiCohorts()
                 break;
             }
             processedMask |= 1u << lane;
+        }
+
+        // A tile can end at the viewport boundary or have no valid receiver
+        // in its central footprint. Retain the bounded row-major fallback,
+        // but only after the stable centre candidates have been exhausted.
+        if (referenceLane < 0)
+        {
+            for (uint lane = 0u; lane < laneCount; lane++)
+            {
+                if ((processedMask & (1u << lane)) != 0u)
+                    continue;
+                ivec2 pixel = HybridDdgiTilePixel(origin, lane, scale);
+                if (HybridDdgiReceiver(pixel, referencePayload,
+                        referenceWorldPosition, referenceDepth))
+                {
+                    referenceLane = int(lane);
+                    break;
+                }
+                processedMask |= 1u << lane;
+            }
         }
         if (referenceLane < 0)
             break;
@@ -257,7 +303,7 @@ void HybridProduceDdgiCohorts()
 
         // Mark every receiver in this cohort even if its representative has
         // no support. Reconstruction then evaluates those pixels exactly.
-        for (uint lane = uint(referenceLane); lane < laneCount; lane++)
+        for (uint lane = 0u; lane < laneCount; lane++)
         {
             if ((processedMask & (1u << lane)) != 0u)
                 continue;
@@ -290,23 +336,57 @@ void HybridProduceDdgiCohorts()
     }
 }
 
-bool HybridTryDdgiTile(
-    ivec2 tileOrigin,
+void HybridDdgiSharedTileRange(
     uint scale,
-    uint maximumGroups,
-    uvec4 receiverPayload,
-    vec3 receiverWorldPosition,
-    out vec3 radiance,
-    out float confidence)
+    out ivec2 firstTileIndex,
+    out uvec2 tileCount)
 {
-    radiance = vec3(0.0);
-    confidence = 0.0;
-    if (!HybridDdgiPixelInBounds(tileOrigin))
-        return false;
+    ivec2 workgroupOrigin = ivec2(
+        gl_WorkGroupID.xy * gl_WorkGroupSize.xy);
+    ivec2 workgroupLast = workgroupOrigin +
+        ivec2(gl_WorkGroupSize.xy) - ivec2(1);
+    float inverseScale = 1.0 / float(scale);
+    vec2 firstGridPosition =
+        (vec2(workgroupOrigin) + vec2(0.5)) * inverseScale - vec2(0.5);
+    vec2 lastGridPosition =
+        (vec2(workgroupLast) + vec2(0.5)) * inverseScale - vec2(0.5);
+    firstTileIndex = ivec2(floor(firstGridPosition));
+    ivec2 lastTileIndex = ivec2(floor(lastGridPosition)) + ivec2(1);
+    tileCount = uvec2(lastTileIndex - firstTileIndex + ivec2(1));
+}
 
-    uint laneCount = scale * scale;
-    for (uint slot = 0u; slot < maximumGroups; slot++)
+uint HybridDdgiSharedRecordIndex(
+    uvec2 tileOffset,
+    uvec2 tileCount,
+    uint slot,
+    uint maximumGroups)
+{
+    return (tileOffset.y * tileCount.x + tileOffset.x) *
+        maximumGroups + slot;
+}
+
+void HybridPrepareDdgiSharedCohorts(uint scale, uint maximumGroups)
+{
+    ivec2 firstTileIndex;
+    uvec2 tileCount;
+    HybridDdgiSharedTileRange(scale, firstTileIndex, tileCount);
+    uint recordCount = tileCount.x * tileCount.y * maximumGroups;
+    uint invocationCount = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
+    for (uint recordIndex = gl_LocalInvocationIndex;
+        recordIndex < recordCount;
+        recordIndex += invocationCount)
     {
+        HybridDdgiSharedRadianceConfidence[recordIndex] = vec4(0.0);
+        uint tileLinearIndex = recordIndex / maximumGroups;
+        uint slot = recordIndex % maximumGroups;
+        uvec2 tileOffset = uvec2(
+            tileLinearIndex % tileCount.x,
+            tileLinearIndex / tileCount.x);
+        ivec2 tileIndex = firstTileIndex + ivec2(tileOffset);
+        ivec2 tileOrigin = tileIndex * int(scale);
+        if (!HybridDdgiPixelInBounds(tileOrigin))
+            continue;
+
         ivec2 slotPixel = tileOrigin + ivec2(int(slot), 0);
         if (!HybridDdgiPixelInBounds(slotPixel))
             continue;
@@ -315,7 +395,7 @@ bool HybridTryDdgiTile(
         uint referenceLane;
         if (!HybridUnpackDdgiCohort(
                 imageLoad(HybridDdgiCohorts, slotPixel),
-                laneCount,
+                scale * scale,
                 cohortRadiance,
                 cohortConfidence,
                 referenceLane))
@@ -333,15 +413,78 @@ bool HybridTryDdgiTile(
         {
             continue;
         }
-        if (!HybridDdgiSameSurface(referencePayload,
-                referenceWorldPosition, receiverPayload,
-                receiverWorldPosition))
+
+        HybridDdgiSharedReferenceNormalRoughness[recordIndex] = vec4(
+            HybridReflectionTraceNormal(referencePayload),
+            HybridReflectionPayloadRoughness(referencePayload));
+        HybridDdgiSharedReferenceIdentityDistance[recordIndex] = uvec2(
+            HybridReceiverIdentity(referencePayload),
+            floatBitsToUint(length(
+                pc.CameraPositionAndPadding.xyz - referenceWorldPosition)));
+        HybridDdgiSharedRadianceConfidence[recordIndex] =
+            vec4(cohortRadiance, cohortConfidence);
+    }
+
+    memoryBarrierShared();
+    barrier();
+}
+
+bool HybridTryCachedDdgiTile(
+    ivec2 tileIndex,
+    ivec2 firstTileIndex,
+    uvec2 tileCount,
+    uint maximumGroups,
+    uint receiverIdentity,
+    vec3 receiverNormal,
+    float receiverRoughness,
+    float receiverDistance,
+    out vec3 radiance,
+    out float confidence)
+{
+    radiance = vec3(0.0);
+    confidence = 0.0;
+    ivec2 signedTileOffset = tileIndex - firstTileIndex;
+    if (any(lessThan(signedTileOffset, ivec2(0))) ||
+        any(greaterThanEqual(signedTileOffset, ivec2(tileCount))))
+    {
+        return false;
+    }
+
+    uvec2 tileOffset = uvec2(signedTileOffset);
+    for (uint slot = 0u; slot < maximumGroups; slot++)
+    {
+        uint recordIndex = HybridDdgiSharedRecordIndex(
+            tileOffset, tileCount, slot, maximumGroups);
+        vec4 cohort = HybridDdgiSharedRadianceConfidence[recordIndex];
+        if (cohort.a < pc.MinimumConfidence || !HybridFinite(cohort))
+            continue;
+        uvec2 referenceIdentityDistance =
+            HybridDdgiSharedReferenceIdentityDistance[recordIndex];
+        if (referenceIdentityDistance.x != receiverIdentity)
+            continue;
+
+        vec4 referenceNormalRoughness =
+            HybridDdgiSharedReferenceNormalRoughness[recordIndex];
+        if (dot(referenceNormalRoughness.xyz, receiverNormal) <
+            pc.NormalDotThreshold)
+        {
+            continue;
+        }
+        if (abs(referenceNormalRoughness.w - receiverRoughness) > 0.08)
+            continue;
+
+        float referenceDistance = uintBitsToFloat(
+            referenceIdentityDistance.y);
+        float tolerance = max(
+            pc.MinimumWorldDepthTolerance,
+            referenceDistance * pc.RelativeWorldDepthTolerance);
+        if (abs(receiverDistance - referenceDistance) > tolerance)
         {
             continue;
         }
 
-        radiance = cohortRadiance;
-        confidence = cohortConfidence;
+        radiance = cohort.rgb;
+        confidence = cohort.a;
         return true;
     }
     return false;
@@ -359,31 +502,114 @@ bool HybridFindDdgiCohort(
     uint maximumGroups = min(
         clamp(pc.MaximumSurfaceGroupsPerTile, 1u, laneCount),
         HYBRID_DDGI_MAXIMUM_COHORTS);
-    ivec2 tileOrigin = (pixel / int(scale)) * int(scale);
-    if (HybridTryDdgiTile(tileOrigin, scale, maximumGroups,
-            payload, worldPosition, radiance, confidence))
+    ivec2 firstTileIndex;
+    uvec2 tileCount;
+    HybridDdgiSharedTileRange(scale, firstTileIndex, tileCount);
+    uint receiverIdentity = HybridReceiverIdentity(payload);
+    vec3 receiverNormal = HybridReflectionTraceNormal(payload);
+    float receiverRoughness = HybridReflectionPayloadRoughness(payload);
+    float receiverDistance = length(
+        pc.CameraPositionAndPadding.xyz - worldPosition);
+
+    // Treat cohort records as samples at coarse-tile centres. The old
+    // current-tile/first-neighbour lookup was a nearest-neighbour upsample:
+    // it changed the entire 4x4 footprint at once as the camera crossed a
+    // screen-tile boundary. Bilinear weights go continuously to zero at every
+    // boundary, while the full identity/normal/roughness/depth contract keeps
+    // interpolation from crossing real surface edges.
+    vec2 coarsePosition =
+        (vec2(pixel) + vec2(0.5)) / float(scale) - vec2(0.5);
+    ivec2 baseTileIndex = ivec2(floor(coarsePosition));
+    vec2 fraction = fract(coarsePosition);
+    vec3 weightedRadiance = vec3(0.0);
+    float weightedConfidence = 0.0;
+    float weightSum = 0.0;
+    for (uint corner = 0u; corner < 4u; corner++)
     {
+        ivec2 cornerOffset = ivec2(
+            int(corner & 1u), int((corner >> 1u) & 1u));
+        float weightX = cornerOffset.x == 0
+            ? 1.0 - fraction.x
+            : fraction.x;
+        float weightY = cornerOffset.y == 0
+            ? 1.0 - fraction.y
+            : fraction.y;
+        float weight = weightX * weightY;
+        if (weight <= 0.0)
+            continue;
+
+        vec3 cohortRadiance;
+        float cohortConfidence;
+        if (!HybridTryCachedDdgiTile(
+                baseTileIndex + cornerOffset,
+                firstTileIndex,
+                tileCount,
+                maximumGroups,
+                receiverIdentity,
+                receiverNormal,
+                receiverRoughness,
+                receiverDistance,
+                cohortRadiance,
+                cohortConfidence))
+        {
+            continue;
+        }
+
+        weightedRadiance += cohortRadiance * weight;
+        weightedConfidence += cohortConfidence * weight;
+        weightSum += weight;
+    }
+    if (weightSum > 1.0e-5)
+    {
+        radiance = weightedRadiance / weightSum;
+        confidence = weightedConfidence / weightSum;
         return true;
     }
 
-    // A tile edge must not become a reconstruction edge. Only receivers that
-    // pass the full material/normal/depth compatibility contract are reused.
+    // Preserve the old no-hole performance backstop for thin/disconnected
+    // receivers not represented by the four interpolation nodes. These
+    // records are already in shared memory; choose the nearest compatible
+    // tile rather than a scan-order-dependent first match.
+    ivec2 receiverTileIndex = pixel / int(scale);
+    float bestDistanceSquared = 1.0e30;
+    bool found = false;
     for (int tileY = -1; tileY <= 1; tileY++)
     {
         for (int tileX = -1; tileX <= 1; tileX++)
         {
-            if (tileX == 0 && tileY == 0)
-                continue;
-            ivec2 neighborOrigin = tileOrigin +
-                ivec2(tileX, tileY) * int(scale);
-            if (HybridTryDdgiTile(neighborOrigin, scale, maximumGroups,
-                    payload, worldPosition, radiance, confidence))
+            ivec2 candidateTileIndex = receiverTileIndex +
+                ivec2(tileX, tileY);
+            vec3 cohortRadiance;
+            float cohortConfidence;
+            if (!HybridTryCachedDdgiTile(
+                    candidateTileIndex,
+                    firstTileIndex,
+                    tileCount,
+                    maximumGroups,
+                    receiverIdentity,
+                    receiverNormal,
+                    receiverRoughness,
+                    receiverDistance,
+                    cohortRadiance,
+                    cohortConfidence))
             {
-                return true;
+                continue;
+            }
+
+            vec2 tileCentre =
+                (vec2(candidateTileIndex) + vec2(0.5)) * float(scale);
+            vec2 centreOffset = vec2(pixel) + vec2(0.5) - tileCentre;
+            float distanceSquared = dot(centreOffset, centreOffset);
+            if (distanceSquared < bestDistanceSquared)
+            {
+                radiance = cohortRadiance;
+                confidence = cohortConfidence;
+                bestDistanceSquared = distanceSquared;
+                found = true;
             }
         }
     }
-    return false;
+    return found;
 }
 
 void HybridReconstructDdgiBase()
@@ -404,7 +630,8 @@ void HybridReconstructDdgiBase()
     uint rawMetadata = imageLoad(HybridRawMetadata, pixel).x;
     bool disoccluded = HybridMetadataReason(rawMetadata) ==
         HYBRID_REFLECTION_REASON_DISOCCLUDED;
-    bool exactRequired = pc.ForceExactReconstruction != 0u ||
+    uint scale = clamp(pc.ReceiverScale, 1u, 4u);
+    bool exactRequired = pc.ForceExactReconstruction != 0u || scale <= 1u ||
         HybridReflectionRequiresSharpDetail(payload) || disoccluded;
     vec3 radiance = vec3(0.0);
     float confidence = 0.0;
@@ -426,7 +653,20 @@ void HybridReconstructDdgiBase()
 void main()
 {
     if (pc.ReconstructionPass == 0u)
+    {
         HybridProduceDdgiCohorts();
+    }
     else
+    {
+        uint scale = clamp(pc.ReceiverScale, 1u, 4u);
+        if (pc.ForceExactReconstruction == 0u && scale > 1u)
+        {
+            uint laneCount = scale * scale;
+            uint maximumGroups = min(
+                clamp(pc.MaximumSurfaceGroupsPerTile, 1u, laneCount),
+                HYBRID_DDGI_MAXIMUM_COHORTS);
+            HybridPrepareDdgiSharedCohorts(scale, maximumGroups);
+        }
         HybridReconstructDdgiBase();
+    }
 }

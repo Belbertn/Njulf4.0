@@ -97,6 +97,8 @@ namespace Njulf.Rendering.Data
         public int MaterialCount { get; set; }
         public int LightCount { get; set; }
         public int DirectionalLightCount { get; set; }
+        public int DirectionalLightIndex0 { get; set; } = -1;
+        public int DirectionalLightIndex1 { get; set; } = -1;
         public int LocalLightCount { get; set; }
         public int PointLightCount { get; set; }
         public int SpotLightCount { get; set; }
@@ -110,6 +112,7 @@ namespace Njulf.Rendering.Data
         public uint ScreenHeight { get; set; }
         public uint TileCountX { get; set; }
         public uint TileCountY { get; set; }
+        public uint ClusterCountZ { get; set; }
         public uint HiZMipCount { get; set; }
         public bool OcclusionCullingEnabled { get; set; } = true;
         public HiZTestMode HiZTestMode { get; set; } = HiZTestMode.Bounds4Tap;
@@ -463,6 +466,8 @@ namespace Njulf.Rendering.Data
         public int MeshletLod0SubmittedCpu { get; set; }
         public int MeshletLod1SubmittedCpu { get; set; }
         public int MeshletLod2SubmittedCpu { get; set; }
+        public int NormalConeEligibleOpaqueMeshletCount { get; set; }
+        public int DoubleSidedOpaqueMeshletCount { get; set; }
         public ulong StableSceneInputUploadBytes { get; set; }
         public ulong CpuCandidateListUploadBytes { get; set; }
         public int CameraDrivenCpuDrawListRebuilt { get; set; }
@@ -474,6 +479,9 @@ namespace Njulf.Rendering.Data
         public int ForwardOcclusionTestedMeshletsGpu { get; set; }
         public int ForwardOcclusionCulledMeshletsGpu { get; set; }
         public int ForwardEmittedMeshletsGpu { get; set; }
+        public int ForwardMeshOnlyIndirectDrawCount { get; set; }
+        public int DepthMeshOnlyIndirectDrawCount { get; set; }
+        public int DirectionalShadowMeshOnlyIndirectDrawCount { get; set; }
         public bool SceneSubmissionGpuCompactionEnabled { get; set; }
         public bool SceneSubmissionIndirectMeshletDispatchEnabled { get; set; }
         public bool SceneSubmissionGpuLodSelectionEnabled { get; set; }
@@ -547,6 +555,7 @@ namespace Njulf.Rendering.Data
         public ulong PackedMaskedDepthMeshletDrawUploadBytes { get; set; }
         public ulong TransparentMeshletDrawUploadBytes { get; set; }
         public ulong MaterialUploadBytes { get; set; }
+        public ulong ForwardMaterialUploadBytes { get; set; }
         public ulong MaterialExtensionUploadBytes { get; set; }
         public ulong LightUploadBytes { get; set; }
         public uint HiZWidth { get; set; }
@@ -1513,6 +1522,7 @@ namespace Njulf.Rendering.Data
         public float JitterY { get; set; }
         public ulong ObjectBufferSize { get; set; }
         public ulong MaterialBufferSize { get; set; }
+        public ulong ForwardMaterialBufferSize { get; set; }
         public ulong MaterialExtensionBufferSize { get; set; }
         public ulong InstanceBufferSize { get; set; }
         public ulong MeshletDrawBufferSize { get; set; }
@@ -1535,6 +1545,8 @@ namespace Njulf.Rendering.Data
         public ulong TiledLightIndexBufferClearBytes { get; set; }
         public BufferHandle ObjectDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MaterialDataBuffer { get; set; } = BufferHandle.Invalid;
+        public BufferHandle ForwardMaterialDataBuffer { get; set; } =
+            BufferHandle.Invalid;
         public BufferHandle MaterialExtensionDataBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle InstanceBuffer { get; set; } = BufferHandle.Invalid;
         public BufferHandle MeshletDrawBuffer { get; set; } = BufferHandle.Invalid;
@@ -1688,6 +1700,8 @@ namespace Njulf.Rendering.Data
             MaterialCount = 0;
             LightCount = 0;
             DirectionalLightCount = 0;
+            DirectionalLightIndex0 = -1;
+            DirectionalLightIndex1 = -1;
             LocalLightCount = 0;
             PointLightCount = 0;
             SpotLightCount = 0;
@@ -1954,6 +1968,8 @@ namespace Njulf.Rendering.Data
             MeshletLod0SubmittedCpu = 0;
             MeshletLod1SubmittedCpu = 0;
             MeshletLod2SubmittedCpu = 0;
+            NormalConeEligibleOpaqueMeshletCount = 0;
+            DoubleSidedOpaqueMeshletCount = 0;
             StableSceneInputUploadBytes = 0;
             CpuCandidateListUploadBytes = 0;
             CameraDrivenCpuDrawListRebuilt = 0;
@@ -1968,6 +1984,7 @@ namespace Njulf.Rendering.Data
             DepthPrePassFrameSerial = 0;
             TiledLightCullingCompleted = false;
             TiledLightCullingFrameSerial = 0;
+            ClusterCountZ = 0;
             ForwardVisibilityCompactionEnabled = false;
             ForwardVisibilityCompactionActive = false;
             ForwardVisibilityCompactionSkipReason = string.Empty;
@@ -2017,6 +2034,9 @@ namespace Njulf.Rendering.Data
             ForwardOcclusionTestedMeshletsGpu = 0;
             ForwardOcclusionCulledMeshletsGpu = 0;
             ForwardEmittedMeshletsGpu = 0;
+            ForwardMeshOnlyIndirectDrawCount = 0;
+            DepthMeshOnlyIndirectDrawCount = 0;
+            DirectionalShadowMeshOnlyIndirectDrawCount = 0;
             SceneSubmissionGpuCompactionEnabled = false;
             SceneSubmissionIndirectMeshletDispatchEnabled = false;
             SceneSubmissionGpuLodSelectionEnabled = false;
@@ -2096,6 +2116,7 @@ namespace Njulf.Rendering.Data
             PackedMaskedDepthMeshletDrawUploadBytes = 0;
             TransparentMeshletDrawUploadBytes = 0;
             MaterialUploadBytes = 0;
+            ForwardMaterialUploadBytes = 0;
             MaterialExtensionUploadBytes = 0;
             MeshletDrawBufferSize = 0;
             FullOpaqueMeshletDrawBufferSize = 0;
@@ -3077,6 +3098,8 @@ namespace Njulf.Rendering.Data
             DebugDecalVolumesDrawn = 0;
             HasCpuSnapshots = false;
             MaterialExtensionBufferSize = 0;
+            ForwardMaterialBufferSize = 0;
+            ForwardMaterialDataBuffer = BufferHandle.Invalid;
             MaterialExtensionDataBuffer = BufferHandle.Invalid;
         }
 

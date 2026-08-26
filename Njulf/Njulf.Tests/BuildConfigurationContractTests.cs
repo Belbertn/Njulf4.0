@@ -51,6 +51,9 @@ public sealed class BuildConfigurationContractTests
         XElement detailedCounters = shaderProject
             .Descendants("NjulfShaderDetailedDiagnosticsOptions")
             .Single(element => element.Value.Trim().EndsWith("=1", StringComparison.Ordinal));
+        XElement visualDebugViews = shaderProject
+            .Descendants("NjulfShaderVisualDebugOptions")
+            .Single(element => element.Value.Trim().EndsWith("=1", StringComparison.Ordinal));
         XElement shadowDetailedCounters = shaderProject
             .Descendants("NjulfDirectionalShadowDetailedCountersOptions")
             .Single(element => element.Value.Trim().EndsWith("=1", StringComparison.Ordinal));
@@ -79,6 +82,9 @@ public sealed class BuildConfigurationContractTests
             Assert.That(
                 (string?)detailedCounters.Attribute("Condition"),
                 Does.Not.Contain("Development"));
+            Assert.That(
+                (string?)visualDebugViews.Attribute("Condition"),
+                Does.Contain("'$(Configuration)' == 'Development'"));
             Assert.That(
                 (string?)shadowDetailedCounters.Attribute("Condition"),
                 Does.Not.Contain("Development"));

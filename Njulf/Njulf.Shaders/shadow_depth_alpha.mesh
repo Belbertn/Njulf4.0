@@ -4,9 +4,15 @@
 
 #include "common.glsl"
 
-layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+#ifdef SHADOW_COMPACTED_MESH
+#define SHADOW_MESH_LOCAL_SIZE 64
+#else
+#define SHADOW_MESH_LOCAL_SIZE 128
+#endif
+layout(local_size_x = SHADOW_MESH_LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 126) out;
 
+#ifndef SHADOW_COMPACTED_MESH
 struct ShadowDepthTaskPayload
 {
     uint DrawCommandIndex;
@@ -14,6 +20,7 @@ struct ShadowDepthTaskPayload
 };
 
 taskPayloadSharedEXT ShadowDepthTaskPayload shadowPayload;
+#endif
 shared uint meshNegativeDeterminant;
 
 layout(location = 0) out vec2 meshTexCoord[];
@@ -28,6 +35,15 @@ layout(push_constant) uniform ShadowDepthPushConstantBlock
 
 void main()
 {
+#ifdef SHADOW_COMPACTED_MESH
+    uint drawCommandIndex = gl_WorkGroupID.x;
+    if (drawCommandIndex >= pc.Push.MeshletDrawCount)
+    {
+        if (gl_LocalInvocationIndex == 0u)
+            SetMeshOutputsEXT(0u, 0u);
+        return;
+    }
+#else
     if (shadowPayload.Visible == 0u)
     {
         if (gl_LocalInvocationIndex == 0u)
@@ -35,7 +51,10 @@ void main()
         return;
     }
 
-    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(pc.Push.MeshletDrawBufferBaseIndex, pc.Push.CurrentFrameIndex, shadowPayload.DrawCommandIndex);
+    uint drawCommandIndex = shadowPayload.DrawCommandIndex;
+#endif
+
+    GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(pc.Push.MeshletDrawBufferBaseIndex, pc.Push.CurrentFrameIndex, drawCommandIndex);
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);

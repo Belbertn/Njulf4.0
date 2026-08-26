@@ -126,17 +126,51 @@ namespace Njulf.Rendering.Resources
             int rectangle = 0;
             int disk = 0;
             int tube = 0;
-            foreach (Light light in lights.Span)
+            int observedDirectionalCount = 0;
+            int shadowCastingDirectionalCount = 0;
+            int directionalLightIndex0 = -1;
+            int directionalLightIndex1 = -1;
+            ReadOnlySpan<Light> lightSpan = lights.Span;
+            for (int lightIndex = 0; lightIndex < lightSpan.Length; lightIndex++)
             {
+                Light light = lightSpan[lightIndex];
                 switch (light.Type)
                 {
                     case LightType.Point: point++; break;
+                    case LightType.Directional:
+                        if (observedDirectionalCount == 0)
+                            directionalLightIndex0 = lightIndex;
+                        else if (observedDirectionalCount == 1)
+                            directionalLightIndex1 = lightIndex;
+                        observedDirectionalCount++;
+                        if (light.CastsShadows)
+                            shadowCastingDirectionalCount++;
+                        break;
                     case LightType.Spot: spot++; break;
                     case LightType.Rectangle: rectangle++; break;
                     case LightType.Disk: disk++; break;
                     case LightType.Tube: tube++; break;
                 }
             }
+            if (observedDirectionalCount != directionalLightCount)
+            {
+                throw new ArgumentException(
+                    "The supplied directional-light count does not match the light snapshot.",
+                    nameof(directionalLightCount));
+            }
+            if (observedDirectionalCount > LightManager.MaxDirectionalLights)
+            {
+                throw new InvalidOperationException(
+                    $"Forward+ supports at most {LightManager.MaxDirectionalLights} directional lights.");
+            }
+            if (shadowCastingDirectionalCount >
+                LightManager.MaxShadowCastingDirectionalLights)
+            {
+                throw new InvalidOperationException(
+                    "Forward+ supports only one shadow-casting directional light.");
+            }
+            DirectionalLightIndex0 = directionalLightIndex0;
+            DirectionalLightIndex1 = directionalLightIndex1;
             PointLightCount = point;
             SpotLightCount = spot;
             RectangleLightCount = rectangle;
@@ -147,6 +181,8 @@ namespace Njulf.Rendering.Resources
         public ReadOnlyMemory<Light> Lights { get; }
         public int Count { get; }
         public int DirectionalLightCount { get; }
+        public int DirectionalLightIndex0 { get; }
+        public int DirectionalLightIndex1 { get; }
         public int LocalLightCount { get; }
         public int PointLightCount { get; }
         public int SpotLightCount { get; }
@@ -222,6 +258,8 @@ namespace Njulf.Rendering.Resources
         public IPhotometricProfileResolver? PhotometricProfiles { get; internal set; }
         
         public const int MaxLights = 1024;
+        public const int MaxDirectionalLights = 2;
+        public const int MaxShadowCastingDirectionalLights = 1;
         private static readonly ulong LightStride = (ulong)Marshal.SizeOf<GPULight>();
         public static readonly ulong LightBufferStateOffset =
             checked((ulong)MaxLights * LightStride);
@@ -322,6 +360,7 @@ namespace Njulf.Rendering.Resources
                 Light previous = _cpuLights[index];
                 if (previous.Equals(light))
                     return;
+                ValidateDirectionalLimitsUnsafe(light, index);
                 _cpuLights[index] = light;
                 _needsUpload = true;
                 _revision++;
@@ -367,6 +406,7 @@ namespace Njulf.Rendering.Resources
                 Light previous = _cpuLights[index];
                 if (previous.Equals(light))
                     return true;
+                ValidateDirectionalLimitsUnsafe(light, index);
                 _cpuLights[index] = light;
                 _needsUpload = true;
                 _revision++;
@@ -864,6 +904,7 @@ namespace Njulf.Rendering.Resources
         {
             if (_lightCount >= MaxLights || _freeSlots.Count == 0)
                 throw new InvalidOperationException($"Forward+ supports at most {MaxLights} lights.");
+            ValidateDirectionalLimitsUnsafe(light, replacedIndex: -1);
 
             int index = _lightCount++;
             int slot = _freeSlots.Pop();
@@ -884,6 +925,43 @@ namespace Njulf.Rendering.Resources
             if (HasLocalTreeMembership(light))
                 _topologyRevision++;
             return (index, new LightHandle(slot, _slotGenerations[slot]));
+        }
+
+        private void ValidateDirectionalLimitsUnsafe(
+            in Light candidate,
+            int replacedIndex)
+        {
+            int directionalCount = candidate.Type == LightType.Directional
+                ? 1
+                : 0;
+            int shadowCastingDirectionalCount =
+                candidate.Type == LightType.Directional && candidate.CastsShadows
+                    ? 1
+                    : 0;
+
+            for (int index = 0; index < _lightCount; index++)
+            {
+                if (index == replacedIndex)
+                    continue;
+                Light existing = _cpuLights[index];
+                if (existing.Type != LightType.Directional)
+                    continue;
+                directionalCount++;
+                if (existing.CastsShadows)
+                    shadowCastingDirectionalCount++;
+            }
+
+            if (directionalCount > MaxDirectionalLights)
+            {
+                throw new InvalidOperationException(
+                    $"Forward+ supports at most {MaxDirectionalLights} directional lights.");
+            }
+            if (shadowCastingDirectionalCount >
+                MaxShadowCastingDirectionalLights)
+            {
+                throw new InvalidOperationException(
+                    "Forward+ supports only one shadow-casting directional light.");
+            }
         }
 
         private bool TryResolveHandleUnsafe(LightHandle handle, out int index)

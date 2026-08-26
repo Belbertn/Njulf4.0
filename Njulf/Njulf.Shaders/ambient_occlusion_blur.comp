@@ -125,14 +125,98 @@ void PreloadAoTile(
     }
 }
 
+float ResolveDepthAwareAo(
+    ivec2 pixel,
+    ivec2 outputExtent,
+    ivec2 sourceExtent)
+{
+    vec2 outputUv = (vec2(pixel) + vec2(0.5)) / vec2(outputExtent);
+    float centerDepth = FetchDepth(outputUv);
+    if (centerDepth <= 0.000001)
+        return 1.0;
+
+    float centerViewDepth = ReconstructViewDepth(outputUv, centerDepth);
+    vec2 sourcePosition = outputUv * vec2(sourceExtent) - vec2(0.5);
+    ivec2 sourceBase = ivec2(floor(sourcePosition));
+    vec2 sourceFraction = fract(sourcePosition);
+    int radius = int(clamp(pc.Radius, 0u, 4u));
+    float depthSigma = min(
+        max(pc.DepthSigma, 0.05),
+        max(0.08, centerViewDepth * 0.03));
+    float total = 0.0;
+    float weightSum = 0.0;
+
+    // Horizontal blur has already been applied when radius is non-zero, so
+    // two X taps reconstruct between its low-resolution texels while the Y
+    // range performs the vertical bilateral blur and reconstruction together.
+    for (int y = -radius; y <= radius + 1; y++)
+    {
+        for (int x = 0; x <= 1; x++)
+        {
+            ivec2 sourcePixel = clamp(
+                sourceBase + ivec2(x, y),
+                ivec2(0),
+                sourceExtent - ivec2(1));
+            vec2 sourceUv =
+                (vec2(sourcePixel) + vec2(0.5)) / vec2(sourceExtent);
+            float sampleDepth = FetchDepth(sourceUv);
+            if (sampleDepth <= 0.000001)
+                continue;
+
+            float sampleViewDepth = ReconstructViewDepth(
+                sourceUv,
+                sampleDepth);
+            float depthDifference = abs(
+                centerViewDepth - sampleViewDepth);
+            if (depthDifference > depthSigma * 4.0)
+                continue;
+
+            float xWeight = x == 0
+                ? 1.0 - sourceFraction.x
+                : sourceFraction.x;
+            float yWeight = radius == 0
+                ? (y == 0 ? 1.0 - sourceFraction.y : sourceFraction.y)
+                : Gaussian(
+                    abs(float(sourceBase.y + y) - sourcePosition.y),
+                    max(float(radius), 1.0));
+            float depthWeight = Gaussian(depthDifference, depthSigma);
+            float weight = xWeight * yWeight * depthWeight;
+            total += FetchSourceAo(sourcePixel) * weight;
+            weightSum += weight;
+        }
+    }
+
+    ivec2 fallbackPixel = clamp(
+        ivec2(round(sourcePosition)),
+        ivec2(0),
+        sourceExtent - ivec2(1));
+    return weightSum > 0.000001
+        ? total / weightSum
+        : FetchSourceAo(fallbackPixel);
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 localPixel = ivec2(gl_LocalInvocationID.xy);
     ivec2 groupBase = pixel - localPixel;
     ivec2 extent = imageSize(AoOutput);
+    ivec2 sourceExtent = textureSize(SourceTextures[0], 0);
     bool horizontal = pc.Direction.x == 1.0;
-    vec2 invAoSize = 1.0 / max(pc.Dimensions, vec2(1.0));
+    vec2 invAoSize = 1.0 / max(vec2(sourceExtent), vec2(1.0));
+
+    if (sourceExtent != extent)
+    {
+        if (pixel.x >= extent.x || pixel.y >= extent.y)
+            return;
+
+        float resolvedAo = ResolveDepthAwareAo(
+            pixel,
+            extent,
+            sourceExtent);
+        imageStore(AoOutput, pixel, vec4(resolvedAo, 0.0, 0.0, 1.0));
+        return;
+    }
 
     PreloadAoTile(
         pixel,

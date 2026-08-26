@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Njulf.Assets;
 using Njulf.Assets.Cooked;
 using Njulf.Core.Geometry;
@@ -411,7 +412,7 @@ public sealed class CookedAssetTests
             [new(), new(), new()],
             [],
             [0u, 1u, 2u],
-            [new Meshlet(Vector3.Zero, 1, 0, 3, 0, 3, 0, 3, 0, 1)],
+            [new Meshlet(Vector3.Zero, 1, 0, 3, 0, 3, 0, 3, 0, 1, Vector3.UnitZ, 0.25f)],
             [new Meshlet(Vector3.Zero, 1, 0, 3, 0, 3, 0, 3, 0, 1)],
             [new Meshlet(Vector3.Zero, 1, 0, 3, 0, 3, 0, 3, 0, 1)],
             [0u, 1u, 2u], [0u, 1u, 2u]);
@@ -423,7 +424,56 @@ public sealed class CookedAssetTests
             Assert.That(loaded.VertexPositions, Has.Length.EqualTo(3));
             Assert.That(loaded.Indices, Is.EqualTo(new uint[] { 0, 1, 2 }));
             Assert.That(loaded.MeshletsLod0, Has.Length.EqualTo(1));
+            Assert.That(loaded.MeshletsLod0[0].NormalConeAxis, Is.EqualTo(Vector3.UnitZ));
+            Assert.That(loaded.MeshletsLod0[0].NormalConeCutoff, Is.EqualTo(0.25f));
             Assert.That(bytesRead, Is.GreaterThan(0));
+        });
+    }
+
+    [Test]
+    public void LegacyMeshletPayload_LoadsWithNormalConeCullingDisabled()
+    {
+        string path = Path.Combine(_directory, "legacy-meshlets.njmesh");
+        using (var writer = new CookedAssetWriter(
+                   path,
+                   CookedAssetKind.Mesh))
+        {
+            LegacyMeshletV12[] legacy =
+            [
+                new(
+                    new Vector3(1f, 2f, 3f),
+                    4f,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9,
+                    10,
+                    11,
+                    12)
+            ];
+            writer.WriteSection(
+                CookedSectionIds.Meshlets0,
+                CookedSectionFlags.Required,
+                legacy);
+            writer.Complete();
+        }
+
+        byte[] bytes = File.ReadAllBytes(path);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(8, 2), 2);
+        File.WriteAllBytes(path, bytes);
+
+        using var reader = new CookedAssetReader(path, CookedAssetKind.Mesh);
+        Meshlet meshlet = CookedMeshletCompatibility.ReadRequired(
+            reader,
+            CookedSectionIds.Meshlets0).Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(meshlet.BoundingSphereCenter, Is.EqualTo(new Vector3(1f, 2f, 3f)));
+            Assert.That(meshlet.BoundingSphereRadius, Is.EqualTo(4f));
+            Assert.That(meshlet.LocalTriangleCount, Is.EqualTo(12));
+            Assert.That(meshlet.NormalConeAxis, Is.EqualTo(Vector3.Zero));
+            Assert.That(meshlet.NormalConeCutoff, Is.EqualTo(1f));
         });
     }
 
@@ -1072,4 +1122,17 @@ public sealed class CookedAssetTests
             return new Model { Name = model.Manifest.Name };
         }
     }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private readonly record struct LegacyMeshletV12(
+        Vector3 BoundingSphereCenter,
+        float BoundingSphereRadius,
+        uint VertexOffset,
+        uint VertexCount,
+        uint IndexOffset,
+        uint IndexCount,
+        uint LocalVertexOffset,
+        uint LocalVertexCount,
+        uint LocalTriangleOffset,
+        uint LocalTriangleCount);
 }

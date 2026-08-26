@@ -4386,6 +4386,10 @@ namespace Njulf.Rendering
             sceneData.ImageIndex = _imageIndex;
             sceneData.LightCount = lightCount;
             sceneData.DirectionalLightCount = directionalLightCount;
+            sceneData.DirectionalLightIndex0 =
+                lightSnapshot.DirectionalLightIndex0;
+            sceneData.DirectionalLightIndex1 =
+                lightSnapshot.DirectionalLightIndex1;
             sceneData.LocalLightCount = localLightCount;
             sceneData.PointLightCount = lightSnapshot.PointLightCount;
             sceneData.SpotLightCount = lightSnapshot.SpotLightCount;
@@ -9841,12 +9845,32 @@ namespace Njulf.Rendering
                     sceneDepthHighWaterBytes +
                     sceneTransparentHighWaterBytes +
                     sceneShadowHighWaterBytes,
-                MaterialBufferAllocatedBytes = _materialManager.MaterialBufferSize + _materialManager.MaterialExtensionBufferSize,
+                MaterialBufferAllocatedBytes = _materialManager.MaterialBufferSize +
+                    _materialManager.ForwardMaterialBufferSize +
+                    _materialManager.MaterialExtensionBufferSize,
                 MaterialBufferUtilization = _materialManager.MaterialBufferUtilization,
                 LightBufferAllocatedBytes = _lightManager.LightBufferAllocatedBytes,
                 TiledLightBufferAllocatedBytes = sceneData.TiledLightHeaderBufferSize + sceneData.TiledLightIndexBufferSize,
                 TiledLightHeaderBufferClearBytes = sceneData.TiledLightHeaderBufferClearBytes,
                 TiledLightIndexBufferClearBytes = sceneData.TiledLightIndexBufferClearBytes,
+                ForwardClusterDepthSliceCount = sceneData.ClusterCountZ,
+                ForwardClusterCount = sceneData.LocalLightCount > 0
+                    ? RenderingConstants.CalculateForwardClusterCount(
+                        sceneData.TileCountX,
+                        sceneData.TileCountY)
+                    : 0u,
+                ForwardOpaquePipelineCacheEntryCount =
+                    _meshPipeline?.ForwardOpaquePipelineCacheEntryCount ?? 0,
+                NormalConeEligibleOpaqueMeshletCount =
+                    sceneData.NormalConeEligibleOpaqueMeshletCount,
+                DoubleSidedOpaqueMeshletCount =
+                    sceneData.DoubleSidedOpaqueMeshletCount,
+                ForwardMeshOnlyIndirectDrawCount =
+                    sceneData.ForwardMeshOnlyIndirectDrawCount,
+                DepthMeshOnlyIndirectDrawCount =
+                    sceneData.DepthMeshOnlyIndirectDrawCount,
+                DirectionalShadowMeshOnlyIndirectDrawCount =
+                    sceneData.DirectionalShadowMeshOnlyIndirectDrawCount,
                 LightTileSaturationCount = sceneData.LightTileSaturationCount,
                 MaxLightsInAnyTile = sceneData.MaxLightsInAnyTile,
                 AverageLightsPerNonEmptyTile = sceneData.AverageLightsPerNonEmptyTile,
@@ -9926,7 +9950,7 @@ namespace Njulf.Rendering
                          ? 1
                          : 0,
                  ForwardGiDisabledPipelineUsed =
-                     _forwardPlusPass?.UsedForwardGiDisabledBenchmarkPipelineForCurrentView == true
+                     _forwardPlusPass?.UsedForwardGiDisabledPipelineForCurrentView == true
                          ? 1
                          : 0,
                  ForwardGiExactGatherUsed =

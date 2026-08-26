@@ -8,6 +8,46 @@ namespace Njulf.Tests;
 public sealed class AmbientOcclusionShaderContractTests
 {
     [Test]
+    public void ForwardAo_ConsumesOneFullResolutionResolvedSample()
+    {
+        string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
+        string renderingDirectory = FindRepoDirectory("Njulf.Rendering");
+        string forward = File.ReadAllText(Path.Combine(
+            shaderDirectory,
+            "forward.frag"));
+        string targets = File.ReadAllText(Path.Combine(
+            renderingDirectory,
+            "Resources",
+            "RenderTargetManager.cs"));
+        string declaration = File.ReadAllText(Path.Combine(
+            renderingDirectory,
+            "Pipeline",
+            "ProductionRenderPipelineDeclaration.cs"));
+        string aoPass = File.ReadAllText(Path.Combine(
+            renderingDirectory,
+            "Pipeline",
+            "AmbientOcclusionPass.cs"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(forward, Does.Not.Contain(
+                "SampleScreenSpaceAoDepthAware"));
+            Assert.That(forward, Does.Contain(
+                "return SampleScreenSpaceAoDirect();"));
+            Assert.That(targets, Does.Contain(
+                "ambientOcclusionEnabled ? extent : PlaceholderExtent"));
+            Assert.That(targets, Does.Contain(
+                "Extent2D resolvedExtent = enabled ? sceneExtent : PlaceholderExtent;"));
+            Assert.That(declaration, Does.Contain(
+                "RenderGraphResourceId.AmbientOcclusionBlurred, \"Ambient occlusion blurred\", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.SceneResolution"));
+            Assert.That(aoPass, Does.Contain(
+                "return AmbientOcclusionForwardSamplingMode.Direct;"));
+            Assert.That(aoPass, Does.Contain(
+                "sceneData.AmbientOcclusionForwardDepthAwareSamples = 0;"));
+        });
+    }
+
+    [Test]
     public void ReconstructNormal_ReusesValidatedCenterDepthAndPosition()
     {
         string source = File.ReadAllText(Path.Combine(

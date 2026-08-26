@@ -10,6 +10,74 @@ namespace Njulf.Tests;
 public sealed class LightGpuPackingTests
 {
     [Test]
+    public void LightFrameSnapshot_ReportsTwoDirectionalIndicesInPackedOrder()
+    {
+        Light[] lights =
+        [
+            new Light { Type = LightType.Point },
+            new Light { Type = LightType.Directional, CastsShadows = true },
+            new Light { Type = LightType.Spot },
+            new Light { Type = LightType.Directional }
+        ];
+
+        var snapshot = new LightFrameSnapshot(
+            lights,
+            lights.Length,
+            directionalLightCount: 2,
+            localLightCount: 2,
+            firstShadowCastingDirectionalLightIndex: 1,
+            firstShadowCastingDirectionalLight: lights[1],
+            revision: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.DirectionalLightIndex0, Is.EqualTo(1));
+            Assert.That(snapshot.DirectionalLightIndex1, Is.EqualTo(3));
+            Assert.That(snapshot.DirectionalLightCount, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void LightFrameSnapshot_RejectsUnsupportedDirectionalConfigurations()
+    {
+        Light[] threeDirectionals =
+        [
+            new Light { Type = LightType.Directional },
+            new Light { Type = LightType.Directional },
+            new Light { Type = LightType.Directional }
+        ];
+        Light[] twoShadowCasters =
+        [
+            new Light { Type = LightType.Directional, CastsShadows = true },
+            new Light { Type = LightType.Directional, CastsShadows = true }
+        ];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => new LightFrameSnapshot(
+                    threeDirectionals,
+                    threeDirectionals.Length,
+                    3,
+                    0,
+                    -1,
+                    default,
+                    1),
+                Throws.TypeOf<InvalidOperationException>());
+            Assert.That(
+                () => new LightFrameSnapshot(
+                    twoShadowCasters,
+                    twoShadowCasters.Length,
+                    2,
+                    0,
+                    0,
+                    twoShadowCasters[0],
+                    1),
+                Throws.TypeOf<InvalidOperationException>());
+        });
+    }
+
+    [Test]
     public void GpuLight_AppendsAttenuationMetadataToExistingShadowLayout()
     {
         Assert.Multiple(() =>

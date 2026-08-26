@@ -299,7 +299,12 @@ namespace Njulf.Rendering.Pipeline
                 GpuLod1DistanceRatio = gpuLod1DistanceRatio,
                 GpuLod2DistanceRatio = gpuLod2DistanceRatio,
                 GpuShadowLodBias = checked((uint)Math.Clamp(sceneData.SceneSubmissionGpuShadowLodBias, 0, 2)),
-                DirectionalStaticShadowCascadeMask = directionalStaticShadowCascadeMask
+                DirectionalStaticShadowCascadeMask = directionalStaticShadowCascadeMask,
+                DirectionalShadowLightDirection = new Njulf.Core.Math.Vector4(
+                    sceneData.DirectionalShadowLightDirection.X,
+                    sceneData.DirectionalShadowLightDirection.Y,
+                    sceneData.DirectionalShadowLightDirection.Z,
+                    0.0f)
             };
             _context.Api.CmdPushConstants(
                 cmd,

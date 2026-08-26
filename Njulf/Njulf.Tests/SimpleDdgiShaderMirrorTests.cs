@@ -2236,7 +2236,11 @@ namespace Njulf.Tests
                 Assert.That(forward, Does.Contain("DDGI_INVESTIGATION_FAR_SUN_SHADOW_SAMPLE_COUNTER"));
                 Assert.That(forward, Does.Not.Contain("DDGI_INVESTIGATION_ROUGH_SPECULAR_SAMPLE_COUNTER"));
                 Assert.That(forward, Does.Not.Contain("SampleSimpleDdgiUnifiedIrradiance(fragWorldPosition, reflectionDirection, viewDirection, false)"));
-                Assert.That(forward, Does.Contain("if (IsDdgiDebugView(debugViewMode) || DdgiForwardEstimateDiagnosticPixel())"));
+                Assert.That(forward, Does.Contain(
+                    "bool sampleSimpleDdgiDebug = IsDdgiDebugView(debugViewMode) ||"));
+                Assert.That(forward, Does.Contain("DdgiForwardEstimateDiagnosticPixel();"));
+                Assert.That(forward, Does.Contain(
+                    "bool sampleSimpleDdgiDebug = IsDdgiDebugView(debugViewMode);"));
                 Assert.That(forward, Does.Contain("SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug("));
                 Assert.That(forward, Does.Contain("bool diagnosticBiasOutsideSelectionDomain;"));
                 Assert.That(forward, Does.Contain("SimpleDdgiResolveInterpolationPosition("));

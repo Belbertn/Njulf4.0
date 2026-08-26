@@ -292,6 +292,8 @@ namespace Njulf.Rendering.Data
         public uint LocalVertexCount;
         public uint LocalTriangleOffset;
         public uint LocalTriangleCount;
+        public Vector3 NormalConeAxis;
+        public float NormalConeCutoff;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -430,6 +432,126 @@ namespace Njulf.Rendering.Data
         }
     }
 
+    /// <summary>
+    /// Compact material payload consumed by raster forward variants. The
+    /// authoritative <see cref="GPUMaterialData"/> buffer remains available to
+    /// ray/GI and tooling consumers; this mirror removes transport statistics
+    /// and usually-unused UV transforms from the fragment hot path.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUForwardMaterialData
+    {
+        public const uint UvSetBits = 4u;
+        public const uint UvSetMask = (1u << (int)UvSetBits) - 1u;
+
+        public Vector4 Albedo;
+        public Vector4 Emissive;
+        public Vector4 NormalScaleBias;
+        public Vector4 MetallicRoughnessAO;
+        public int AlbedoTextureIndex;
+        public int NormalTextureIndex;
+        public int MetallicRoughnessTextureIndex;
+        public int OcclusionTextureIndex;
+        public int EmissiveTextureIndex;
+        public int ExtensionDataIndex;
+        public uint FeatureFlags;
+        public uint TransportFlags;
+        // Four bits each: base color, normal, metallic/roughness, emissive,
+        // and occlusion UV-set selectors.
+        public uint PackedUvSets;
+        // One bit per selector above. A set bit means offset=(0,0), scale=(1,1),
+        // and rotation=0, so the cold transform payload need not be read.
+        public uint IdentityTransformMask;
+        public uint MaterialRevision;
+        public uint TextureContentRevision;
+
+        public static GPUForwardMaterialData FromMaterial(
+            in GPUMaterialData material)
+        {
+            uint packedUvSets =
+                PackUvSet(material.TextureTexCoordSets.X, 0) |
+                PackUvSet(material.TextureTexCoordSets.Y, 1) |
+                PackUvSet(material.TextureTexCoordSets.Z, 2) |
+                PackUvSet(material.TextureTexCoordSets.W, 3) |
+                PackUvSet(material.OcclusionBinding.Y, 4);
+            uint identityTransformMask = 0u;
+            SetIdentityTransformBit(
+                ref identityTransformMask,
+                0,
+                material.BaseColorOffsetScale,
+                material.TextureRotations.X);
+            SetIdentityTransformBit(
+                ref identityTransformMask,
+                1,
+                material.NormalOffsetScale,
+                material.TextureRotations.Y);
+            SetIdentityTransformBit(
+                ref identityTransformMask,
+                2,
+                material.MetallicRoughnessOffsetScale,
+                material.TextureRotations.Z);
+            SetIdentityTransformBit(
+                ref identityTransformMask,
+                3,
+                material.EmissiveOffsetScale,
+                material.TextureRotations.W);
+            SetIdentityTransformBit(
+                ref identityTransformMask,
+                4,
+                material.OcclusionOffsetScale,
+                material.OcclusionBinding.X);
+
+            return new GPUForwardMaterialData
+            {
+                Albedo = material.Albedo,
+                Emissive = material.Emissive,
+                NormalScaleBias = material.NormalScaleBias,
+                MetallicRoughnessAO = material.MetallicRoughnessAO,
+                AlbedoTextureIndex = material.AlbedoTextureIndex,
+                NormalTextureIndex = material.NormalTextureIndex,
+                MetallicRoughnessTextureIndex =
+                    material.MetallicRoughnessTextureIndex,
+                OcclusionTextureIndex = material.OcclusionTextureIndex,
+                EmissiveTextureIndex = material.EmissiveTextureIndex,
+                ExtensionDataIndex = material.ExtensionDataIndex,
+                FeatureFlags = material.FeatureFlags,
+                TransportFlags = material.TransportFlags,
+                PackedUvSets = packedUvSets,
+                IdentityTransformMask = identityTransformMask,
+                MaterialRevision = material.MaterialRevision,
+                TextureContentRevision = material.TextureContentRevision
+            };
+        }
+
+        private static uint PackUvSet(float uvSet, int selectorIndex)
+        {
+            if (!float.IsFinite(uvSet))
+                uvSet = 0f;
+
+            uint encoded = (uint)System.Math.Clamp(
+                (int)System.MathF.Round(uvSet),
+                0,
+                (int)UvSetMask);
+            return encoded << checked(selectorIndex * (int)UvSetBits);
+        }
+
+        private static void SetIdentityTransformBit(
+            ref uint mask,
+            int selectorIndex,
+            Vector4 offsetScale,
+            float rotation)
+        {
+            if (offsetScale.X == 0f &&
+                offsetScale.Y == 0f &&
+                offsetScale.Z == 1f &&
+                offsetScale.W == 1f &&
+                rotation == 0f)
+            {
+                mask |= 1u << selectorIndex;
+            }
+        }
+    }
+
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUMaterialExtensionData
     {
@@ -563,7 +685,17 @@ namespace Njulf.Rendering.Data
         ObjectFullyInsideFrustum = 1u << 2,
         MaterialMasked = 1u << 3,
         MaterialBlend = 1u << 4,
-        CanHiZTest = 1u << 5
+        CanHiZTest = 1u << 5,
+        MaterialDoubleSided = 1u << 6,
+        NormalConeCullEligible = 1u << 7
+    }
+
+    [Flags]
+    public enum GPUMeshletCommandFlags : uint
+    {
+        None = 0,
+        MaterialDoubleSided = 1u << 0,
+        NormalConeCullEligible = 1u << 1
     }
 
     public enum HiZTestMode : uint
@@ -820,6 +952,7 @@ namespace Njulf.Rendering.Data
         public float GpuLod2DistanceRatio;
         public uint GpuShadowLodBias;
         public uint DirectionalStaticShadowCascadeMask;
+        public Vector4 DirectionalShadowLightDirection;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -966,6 +1099,18 @@ namespace Njulf.Rendering.Data
     public struct GPUForwardPushConstants
     {
         public const int MaximumReflectionCaptureLayer = 0x1FFF;
+        public const int MaximumPackedLightCount = 1024;
+        public const int MaximumDirectionalLightCount = 2;
+
+        private const int TotalLightCountBits = 11;
+        private const int DirectionalLightIndexBits = 10;
+        private const int DirectionalLightIndex0Shift = TotalLightCountBits;
+        private const int DirectionalLightIndex1Shift =
+            DirectionalLightIndex0Shift + DirectionalLightIndexBits;
+        private const uint TotalLightCountMask =
+            (1u << TotalLightCountBits) - 1u;
+        private const uint DirectionalLightIndexMask =
+            (1u << DirectionalLightIndexBits) - 1u;
 
         private const uint DebugViewModeMask = 0xFFu;
         private const int AmbientOcclusionEnabledShift = 8;
@@ -1013,13 +1158,107 @@ namespace Njulf.Rendering.Data
         public uint CurrentFrameIndex;
         public uint MeshletDrawCount;
         public uint MeshletDrawBufferBaseIndex;
-        public uint LightCount;
+        public uint PackedLightDispatch;
         public uint LocalLightCount;
         public uint HiZMipCount;
         public uint OcclusionCullingEnabled;
         public float OcclusionBias;
         public uint DebugAndAoFlags;
         public uint DiagnosticFlags;
+
+        public static uint PackLightDispatch(
+            int totalLightCount,
+            int localLightCount,
+            int directionalLightIndex0,
+            int directionalLightIndex1)
+        {
+            if (totalLightCount is < 0 or > MaximumPackedLightCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(totalLightCount),
+                    totalLightCount,
+                    $"Forward+ supports between 0 and {MaximumPackedLightCount} lights.");
+            }
+            if (localLightCount < 0 || localLightCount > totalLightCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(localLightCount),
+                    localLightCount,
+                    "The local-light count must be between zero and the total light count.");
+            }
+
+            int directionalLightCount = totalLightCount - localLightCount;
+            if (directionalLightCount > MaximumDirectionalLightCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(localLightCount),
+                    localLightCount,
+                    $"Forward+ supports at most {MaximumDirectionalLightCount} directional lights.");
+            }
+
+            ValidateDirectionalLightIndex(
+                directionalLightIndex0,
+                totalLightCount,
+                directionalLightCount >= 1,
+                nameof(directionalLightIndex0));
+            ValidateDirectionalLightIndex(
+                directionalLightIndex1,
+                totalLightCount,
+                directionalLightCount >= 2,
+                nameof(directionalLightIndex1));
+            if (directionalLightCount == 2 &&
+                directionalLightIndex0 == directionalLightIndex1)
+            {
+                throw new ArgumentException(
+                    "The two directional-light indices must be distinct.",
+                    nameof(directionalLightIndex1));
+            }
+
+            uint index0 = directionalLightCount >= 1
+                ? checked((uint)directionalLightIndex0)
+                : 0u;
+            uint index1 = directionalLightCount >= 2
+                ? checked((uint)directionalLightIndex1)
+                : 0u;
+            return checked((uint)totalLightCount) |
+                   (index0 << DirectionalLightIndex0Shift) |
+                   (index1 << DirectionalLightIndex1Shift);
+        }
+
+        public static int UnpackTotalLightCount(uint packedLightDispatch) =>
+            checked((int)(packedLightDispatch & TotalLightCountMask));
+
+        public static int UnpackDirectionalLightIndex(
+            uint packedLightDispatch,
+            int ordinal)
+        {
+            int shift = ordinal switch
+            {
+                0 => DirectionalLightIndex0Shift,
+                1 => DirectionalLightIndex1Shift,
+                _ => throw new ArgumentOutOfRangeException(nameof(ordinal))
+            };
+            return checked((int)((packedLightDispatch >> shift) &
+                DirectionalLightIndexMask));
+        }
+
+        private static void ValidateDirectionalLightIndex(
+            int index,
+            int totalLightCount,
+            bool required,
+            string parameterName)
+        {
+            if (!required)
+                return;
+            if (index < 0 || index >= totalLightCount ||
+                index >= MaximumPackedLightCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    parameterName,
+                    index,
+                    "A required directional-light index must identify a packed light.");
+            }
+        }
 
         public uint CaptureFlags
         {
@@ -1192,7 +1431,7 @@ namespace Njulf.Rendering.Data
         public uint TileCountX;
         public uint TileCountY;
         public uint DepthTextureIndex;
-        public uint Padding1;
+        public uint ClusterCountZ;
         public uint Padding2;
         public uint Padding3;
     }

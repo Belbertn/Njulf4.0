@@ -892,8 +892,12 @@ namespace Njulf.Rendering.Descriptors
         public const int AreaRayShadowMaskBufferFrame1 =
             AreaRayShadowMaskBufferBase + 1;
 
-        public const int StaticBufferCount =
+        /// <summary>Compact raster-forward material payload buffer.</summary>
+        public const int ForwardMaterialDataBuffer =
             AreaRayShadowMaskBufferFrame1 + 1;
+
+        public const int StaticBufferCount =
+            ForwardMaterialDataBuffer + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -924,6 +928,7 @@ namespace Njulf.Rendering.Descriptors
                     ObjectDataBuffer => nameof(ObjectDataBuffer),
                     MaterialDataBuffer => nameof(MaterialDataBuffer),
                     MaterialExtensionDataBuffer => nameof(MaterialExtensionDataBuffer),
+                    ForwardMaterialDataBuffer => nameof(ForwardMaterialDataBuffer),
                     SceneMeshMetadataBuffer => nameof(SceneMeshMetadataBuffer),
                     VertexBuffer => nameof(VertexBuffer),
                     IndexBuffer => nameof(IndexBuffer),

@@ -52,9 +52,10 @@ public static class CookedFormatVersions
     // 1.3 adds optional imported-light metadata to the model manifest. Readers
     // retain 1.0-1.2 compatibility by materializing an empty collection.
     public static CookedFormatVersion Model { get; } = new(1, 3);
-    // 1.2 adds optional, load-time-revalidated C4 hero topology evidence to
-    // submesh metadata. Legacy 1.0/1.1 meshes remain valid but cannot admit C4.
-    public static CookedFormatVersion Mesh { get; } = new(1, 2);
+    // 1.3 appends conservative geometric-normal cones to meshlets. Legacy
+    // 1.0-1.2 meshlets load with cone culling disabled and can be recooked
+    // incrementally.
+    public static CookedFormatVersion Mesh { get; } = new(1, 3);
     public static CookedFormatVersion Material { get; } = new(1, 2);
     public static CookedFormatVersion Texture { get; } = new(1, 3);
     public static CookedFormatVersion Animation { get; } = new(1, 1);

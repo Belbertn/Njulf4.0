@@ -145,6 +145,7 @@ namespace Njulf.Rendering.Pipeline
                     cmd,
                     sceneData,
                     _meshPipeline.DepthPipeline,
+                    _meshPipeline.CompactedDepthPipeline,
                     Math.Min(sceneData.SceneSubmissionGpuDepthSolidCandidateCount, sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity),
                     BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase,
                     SceneOpaqueCompactionPass.GetSolidDepthIndirectDispatchOffset(),
@@ -154,6 +155,7 @@ namespace Njulf.Rendering.Pipeline
                     cmd,
                     sceneData,
                     _meshPipeline.MaskedDepthPipeline,
+                    _meshPipeline.CompactedMaskedDepthPipeline,
                     Math.Min(sceneData.SceneSubmissionGpuDepthMaskedCandidateCount, sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity),
                     BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase,
                     SceneOpaqueCompactionPass.GetMaskedDepthIndirectDispatchOffset(),
@@ -240,7 +242,8 @@ namespace Njulf.Rendering.Pipeline
         private void DrawSceneCompactedDepthList(
             CommandBuffer cmd,
             SceneRenderingData sceneData,
-            Silk.NET.Vulkan.Pipeline pipeline,
+            Silk.NET.Vulkan.Pipeline fallbackPipeline,
+            Silk.NET.Vulkan.Pipeline compactedPipeline,
             int meshletCapacity,
             int meshletDrawBufferBaseIndex,
             ulong indirectDispatchOffset,
@@ -251,7 +254,7 @@ namespace Njulf.Rendering.Pipeline
                 DrawDepthListIndirect(
                     cmd,
                     sceneData,
-                    pipeline,
+                    compactedPipeline,
                     meshletCapacity,
                     meshletDrawBufferBaseIndex,
                     indirectDispatchOffset,
@@ -259,7 +262,12 @@ namespace Njulf.Rendering.Pipeline
                 return;
             }
 
-            DrawDepthList(cmd, sceneData, pipeline, meshletCapacity, meshletDrawBufferBaseIndex);
+            DrawDepthList(
+                cmd,
+                sceneData,
+                fallbackPipeline,
+                meshletCapacity,
+                meshletDrawBufferBaseIndex);
         }
 
         private void DrawDepthListIndirect(
@@ -294,7 +302,9 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            sceneData.DepthTaskInvocations += Math.Max(0, completedEmittedCount);
+            // The exact indirect count feeds a mesh-only compacted pipeline;
+            // no pass-through task workgroups are launched on this path.
+            sceneData.DepthMeshOnlyIndirectDrawCount++;
             VkBuffer indirect = _bufferManager.GetBuffer(sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
             _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
                 cmd,

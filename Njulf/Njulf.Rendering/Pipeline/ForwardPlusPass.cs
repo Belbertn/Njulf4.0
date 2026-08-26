@@ -373,24 +373,24 @@ namespace Njulf.Rendering.Pipeline
                     cmd,
                     sceneData,
                     selection.UseSimpleGlobalIblPipeline
-                        ? _meshPipeline.ForwardSimpleGlobalIblPipeline
-                        : _meshPipeline.ForwardFullMaterialPipeline,
+                        ? ForwardOpaquePipelineFamily.Simple
+                        : ForwardOpaquePipelineFamily.Full,
                     Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
                     BindlessIndex.MeshletDrawBufferBase);
                 DrawForwardBucket(
                     cmd,
                     sceneData,
                     selection.UseSimpleGlobalIblPipeline
-                        ? _meshPipeline.ForwardSimpleFullInputGlobalIblPipeline
-                        : _meshPipeline.ForwardFullMaterialPipeline,
+                        ? ForwardOpaquePipelineFamily.SimpleFullInput
+                        : ForwardOpaquePipelineFamily.Full,
                     Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
                     BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase);
                 DrawForwardBucket(
                     cmd,
                     sceneData,
                     selection.UseSimpleGlobalIblPipeline
-                        ? _meshPipeline.ForwardSimpleGlobalIblPipeline
-                        : _meshPipeline.ForwardFullMaterialPipeline,
+                        ? ForwardOpaquePipelineFamily.Simple
+                        : ForwardOpaquePipelineFamily.Full,
                     Math.Max(0, sceneData.FullOpaqueMeshletCount),
                     BindlessIndex.FullOpaqueMeshletDrawBufferBase);
                 DrawFoliageForward(cmd, sceneData);
@@ -1160,8 +1160,8 @@ namespace Njulf.Rendering.Pipeline
                     cmd,
                     sceneData,
                     variantSelection.UseSimpleGlobalIblPipeline
-                        ? _meshPipeline.ForwardSimpleGlobalIblPipeline
-                        : _meshPipeline.ForwardFullMaterialPipeline,
+                        ? ForwardOpaquePipelineFamily.Simple
+                        : ForwardOpaquePipelineFamily.Full,
                     sceneData.SimpleOpaqueMeshletCount,
                     BindlessIndex.MeshletDrawBufferBase,
                     nearFieldDirectSourceEnabled,
@@ -1170,8 +1170,8 @@ namespace Njulf.Rendering.Pipeline
                     cmd,
                     sceneData,
                     variantSelection.UseSimpleGlobalIblPipeline
-                        ? _meshPipeline.ForwardSimpleFullInputGlobalIblPipeline
-                        : _meshPipeline.ForwardFullMaterialPipeline,
+                        ? ForwardOpaquePipelineFamily.SimpleFullInput
+                        : ForwardOpaquePipelineFamily.Full,
                     sceneData.SimpleNormalOpaqueMeshletCount,
                     BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase,
                     nearFieldDirectSourceEnabled,
@@ -1179,7 +1179,7 @@ namespace Njulf.Rendering.Pipeline
                 DrawForwardBucket(
                     cmd,
                     sceneData,
-                    _meshPipeline.ForwardFullMaterialPipeline,
+                    ForwardOpaquePipelineFamily.Full,
                     sceneData.FullOpaqueMeshletCount,
                     BindlessIndex.FullOpaqueMeshletDrawBufferBase,
                     nearFieldDirectSourceEnabled,
@@ -1414,7 +1414,7 @@ namespace Njulf.Rendering.Pipeline
         private void DrawForwardBucket(
             CommandBuffer cmd,
             Data.SceneRenderingData sceneData,
-            Silk.NET.Vulkan.Pipeline pipeline,
+            ForwardOpaquePipelineFamily pipelineFamily,
             int meshletCount,
             int meshletDrawBufferBaseIndex,
             bool nearFieldDirectSourceEnabled = false,
@@ -1429,75 +1429,31 @@ namespace Njulf.Rendering.Pipeline
                 ShouldUseSimpleDdgiReceiverCacheForDraw();
             bool disabledBenchmarkPipeline =
                 ShouldUseForwardGiDisabledBenchmarkPipeline();
-            if (_hybridReflectionReceiverEnabledForCurrentView &&
-                !_recordingReflectionCapture)
+            ForwardOpaquePipelineKey pipelineKey = BuildForwardPipelineKey(
+                sceneData,
+                pipelineFamily,
+                receiverCacheEnabled,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled,
+                disabledBenchmarkPipeline);
+            if (!_meshPipeline.TryResolveForwardOpaquePipeline(
+                    pipelineKey,
+                    out Silk.NET.Vulkan.Pipeline pipeline))
             {
-                if (!_meshPipeline.TryResolveHybridReflectionPipeline(
-                        pipeline,
-                        nearFieldDirectSourceEnabled,
-                        giCausticReceiverEnabled,
-                        receiverCacheEnabled,
-                        out Silk.NET.Vulkan.Pipeline hybridPipeline))
-                {
-                    throw new InvalidOperationException(
-                        "The hybrid reflection pass selected an opaque pipeline without a matching receiver MRT variant.");
-                }
-
-                pipeline = hybridPipeline;
+                throw new InvalidOperationException(
+                    $"No opaque forward pipeline is available for {pipelineKey}.");
             }
-            else if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
-            {
-                if (!_meshPipeline.TryResolveCombinedAdvancedGiPipeline(
-                        pipeline,
-                        out Silk.NET.Vulkan.Pipeline combinedPipeline))
-                {
-                    throw new InvalidOperationException(
-                        "The combined C4/C5 pass selected an opaque pipeline without a matching four-attachment semantic variant.");
-                }
-
-                pipeline = combinedPipeline;
-            }
-            else if (nearFieldDirectSourceEnabled)
-            {
-                if (!_meshPipeline.TryResolveNearFieldDirectSourcePipeline(
-                        pipeline,
-                        receiverCacheEnabled,
-                        out Silk.NET.Vulkan.Pipeline nearFieldPipeline))
-                {
-                    throw new InvalidOperationException(
-                        "The C5 direct-source pass selected an opaque pipeline without a matching semantic MRT variant.");
-                }
-
-                pipeline = nearFieldPipeline;
-            }
-            else if (giCausticReceiverEnabled)
-            {
-                if (!_meshPipeline.TryResolveGiCausticReceiverPipeline(
-                        pipeline,
-                        out Silk.NET.Vulkan.Pipeline causticPipeline))
-                {
-                    throw new InvalidOperationException(
-                        "The C4 receiver pass selected an opaque pipeline without a matching semantic MRT variant.");
-                }
-
-                pipeline = causticPipeline;
-            }
-            else
-            {
-                pipeline = _meshPipeline.ResolveOpaqueSpecializedPipeline(
-                    pipeline,
-                    receiverCacheEnabled,
-                    disabledBenchmarkPipeline,
-                    _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView ||
-                    _simpleDdgiReflectionFeedbackRequiredForCurrentView);
-            }
+            bool giDisabledPipeline = pipelineKey.Has(
+                ForwardOpaquePipelineFeatures.GlobalIlluminationDisabled);
+            bool receiverCachePipeline = pipelineKey.Has(
+                ForwardOpaquePipelineFeatures.ReceiverCache);
             _simpleDdgiReceiverCacheConsumedForCurrentView |=
-                receiverCacheEnabled && !disabledBenchmarkPipeline;
+                receiverCachePipeline;
             _forwardGiDisabledBenchmarkPipelineUsedForCurrentView |=
-                disabledBenchmarkPipeline;
+                giDisabledPipeline;
             _forwardGiExactGatherUsedForCurrentView |=
-                !disabledBenchmarkPipeline &&
-                !receiverCacheEnabled &&
+                !giDisabledPipeline &&
+                !receiverCachePipeline &&
                 sceneData.SimpleDdgiActive != 0 &&
                 ShouldApplyGlobalIllumination(sceneData);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
@@ -1518,7 +1474,12 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 MeshletDrawCount = (uint)meshletCount,
                 MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
-                LightCount = (uint)sceneData.LightCount,
+                PackedLightDispatch = Data.GPUForwardPushConstants
+                    .PackLightDispatch(
+                        sceneData.LightCount,
+                        sceneData.LocalLightCount,
+                        sceneData.DirectionalLightIndex0,
+                        sceneData.DirectionalLightIndex1),
                 LocalLightCount = (uint)sceneData.LocalLightCount,
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
@@ -1541,7 +1502,7 @@ namespace Njulf.Rendering.Pipeline
                         !nearFieldDirectSourceEnabled &&
                         !giCausticReceiverEnabled &&
                         ShouldWriteMaterialTransportProvenance(),
-                    ddgiReceiverCacheEnabled: receiverCacheEnabled),
+                    ddgiReceiverCacheEnabled: receiverCachePipeline),
                 CaptureFlags = Data.GPUForwardPushConstants.PackCaptureFlags(
                     _recordingReflectionCapture,
                     _reflectionFeedbackCubemapArrayLayer)
@@ -1571,8 +1532,8 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 useSimpleGlobalIblPipeline
-                    ? _meshPipeline.ForwardCompactedSimpleGlobalIblPipeline
-                    : _meshPipeline.ForwardCompactedPipeline,
+                    ? ForwardOpaquePipelineFamily.CompactedSimple
+                    : ForwardOpaquePipelineFamily.CompactedFull,
                 Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
                 BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
@@ -1583,8 +1544,8 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 useSimpleGlobalIblPipeline
-                    ? _meshPipeline.ForwardCompactedSimpleFullInputGlobalIblPipeline
-                    : _meshPipeline.ForwardCompactedPipeline,
+                    ? ForwardOpaquePipelineFamily.CompactedSimpleFullInput
+                    : ForwardOpaquePipelineFamily.CompactedFull,
                 Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
                 BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
@@ -1594,7 +1555,7 @@ namespace Njulf.Rendering.Pipeline
             DrawForwardBucketIndirect(
                 cmd,
                 sceneData,
-                _meshPipeline.ForwardCompactedPipeline,
+                ForwardOpaquePipelineFamily.CompactedFull,
                 Math.Max(0, sceneData.FullOpaqueMeshletCount),
                 BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
@@ -1614,8 +1575,8 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 useSimpleGlobalIblPipeline
-                    ? _meshPipeline.ForwardCompactedSimpleGlobalIblPipeline
-                    : _meshPipeline.ForwardCompactedPipeline,
+                    ? ForwardOpaquePipelineFamily.CompactedSimple
+                    : ForwardOpaquePipelineFamily.CompactedFull,
                 Math.Max(0, sceneData.ForwardVisibilitySimpleCapacity),
                 BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
@@ -1626,8 +1587,8 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 useSimpleGlobalIblPipeline
-                    ? _meshPipeline.ForwardCompactedSimpleFullInputGlobalIblPipeline
-                    : _meshPipeline.ForwardCompactedPipeline,
+                    ? ForwardOpaquePipelineFamily.CompactedSimpleFullInput
+                    : ForwardOpaquePipelineFamily.CompactedFull,
                 Math.Max(0, sceneData.ForwardVisibilitySimpleNormalCapacity),
                 BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
@@ -1637,7 +1598,7 @@ namespace Njulf.Rendering.Pipeline
             DrawForwardBucketIndirect(
                 cmd,
                 sceneData,
-                _meshPipeline.ForwardCompactedPipeline,
+                ForwardOpaquePipelineFamily.CompactedFull,
                 Math.Max(0, sceneData.ForwardVisibilityFullCapacity),
                 BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
@@ -1657,8 +1618,8 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 useSimpleGlobalIblPipeline
-                    ? _meshPipeline.ForwardSimpleGlobalIblPipeline
-                    : _meshPipeline.ForwardFullMaterialPipeline,
+                    ? ForwardOpaquePipelineFamily.Simple
+                    : ForwardOpaquePipelineFamily.Full,
                 Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
                 BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
                 nearFieldDirectSourceEnabled,
@@ -1667,8 +1628,8 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 useSimpleGlobalIblPipeline
-                    ? _meshPipeline.ForwardSimpleFullInputGlobalIblPipeline
-                    : _meshPipeline.ForwardFullMaterialPipeline,
+                    ? ForwardOpaquePipelineFamily.SimpleFullInput
+                    : ForwardOpaquePipelineFamily.Full,
                 Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
                 BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
                 nearFieldDirectSourceEnabled,
@@ -1676,7 +1637,7 @@ namespace Njulf.Rendering.Pipeline
             DrawForwardBucket(
                 cmd,
                 sceneData,
-                _meshPipeline.ForwardFullMaterialPipeline,
+                ForwardOpaquePipelineFamily.Full,
                 Math.Max(0, sceneData.FullOpaqueMeshletCount),
                 BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
                 nearFieldDirectSourceEnabled,
@@ -1686,7 +1647,7 @@ namespace Njulf.Rendering.Pipeline
         private void DrawForwardBucketIndirect(
             CommandBuffer cmd,
             Data.SceneRenderingData sceneData,
-            Silk.NET.Vulkan.Pipeline pipeline,
+            ForwardOpaquePipelineFamily pipelineFamily,
             int meshletCapacity,
             int meshletDrawBufferBaseIndex,
             ulong indirectOffset,
@@ -1703,75 +1664,31 @@ namespace Njulf.Rendering.Pipeline
                 ShouldUseSimpleDdgiReceiverCacheForDraw();
             bool disabledBenchmarkPipeline =
                 ShouldUseForwardGiDisabledBenchmarkPipeline();
-            if (_hybridReflectionReceiverEnabledForCurrentView &&
-                !_recordingReflectionCapture)
+            ForwardOpaquePipelineKey pipelineKey = BuildForwardPipelineKey(
+                sceneData,
+                pipelineFamily,
+                receiverCacheEnabled,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled,
+                disabledBenchmarkPipeline);
+            if (!_meshPipeline.TryResolveForwardOpaquePipeline(
+                    pipelineKey,
+                    out Silk.NET.Vulkan.Pipeline pipeline))
             {
-                if (!_meshPipeline.TryResolveHybridReflectionPipeline(
-                        pipeline,
-                        nearFieldDirectSourceEnabled,
-                        giCausticReceiverEnabled,
-                        receiverCacheEnabled,
-                        out Silk.NET.Vulkan.Pipeline hybridPipeline))
-                {
-                    throw new InvalidOperationException(
-                        "The hybrid reflection pass selected an indirect opaque pipeline without a matching receiver MRT variant.");
-                }
-
-                pipeline = hybridPipeline;
+                throw new InvalidOperationException(
+                    $"No indirect opaque forward pipeline is available for {pipelineKey}.");
             }
-            else if (nearFieldDirectSourceEnabled && giCausticReceiverEnabled)
-            {
-                if (!_meshPipeline.TryResolveCombinedAdvancedGiPipeline(
-                        pipeline,
-                        out Silk.NET.Vulkan.Pipeline combinedPipeline))
-                {
-                    throw new InvalidOperationException(
-                        "The combined C4/C5 pass selected an indirect opaque pipeline without a matching four-attachment semantic variant.");
-                }
-
-                pipeline = combinedPipeline;
-            }
-            else if (nearFieldDirectSourceEnabled)
-            {
-                if (!_meshPipeline.TryResolveNearFieldDirectSourcePipeline(
-                        pipeline,
-                        receiverCacheEnabled,
-                        out Silk.NET.Vulkan.Pipeline nearFieldPipeline))
-                {
-                    throw new InvalidOperationException(
-                        "The C5 direct-source pass selected an indirect opaque pipeline without a matching semantic MRT variant.");
-                }
-
-                pipeline = nearFieldPipeline;
-            }
-            else if (giCausticReceiverEnabled)
-            {
-                if (!_meshPipeline.TryResolveGiCausticReceiverPipeline(
-                        pipeline,
-                        out Silk.NET.Vulkan.Pipeline causticPipeline))
-                {
-                    throw new InvalidOperationException(
-                        "The C4 receiver pass selected an indirect opaque pipeline without a matching semantic MRT variant.");
-                }
-
-                pipeline = causticPipeline;
-            }
-            else
-            {
-                pipeline = _meshPipeline.ResolveOpaqueSpecializedPipeline(
-                    pipeline,
-                    receiverCacheEnabled,
-                    disabledBenchmarkPipeline,
-                    _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView ||
-                    _simpleDdgiReflectionFeedbackRequiredForCurrentView);
-            }
+            bool giDisabledPipeline = pipelineKey.Has(
+                ForwardOpaquePipelineFeatures.GlobalIlluminationDisabled);
+            bool receiverCachePipeline = pipelineKey.Has(
+                ForwardOpaquePipelineFeatures.ReceiverCache);
             _simpleDdgiReceiverCacheConsumedForCurrentView |=
-                receiverCacheEnabled && !disabledBenchmarkPipeline;
+                receiverCachePipeline;
             _forwardGiDisabledBenchmarkPipelineUsedForCurrentView |=
-                disabledBenchmarkPipeline;
+                giDisabledPipeline;
             _forwardGiExactGatherUsedForCurrentView |=
-                !disabledBenchmarkPipeline &&
-                !receiverCacheEnabled &&
+                !giDisabledPipeline &&
+                !receiverCachePipeline &&
                 sceneData.SimpleDdgiActive != 0 &&
                 ShouldApplyGlobalIllumination(sceneData);
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
@@ -1789,7 +1706,12 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 MeshletDrawCount = (uint)meshletCapacity,
                 MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
-                LightCount = (uint)sceneData.LightCount,
+                PackedLightDispatch = Data.GPUForwardPushConstants
+                    .PackLightDispatch(
+                        sceneData.LightCount,
+                        sceneData.LocalLightCount,
+                        sceneData.DirectionalLightIndex0,
+                        sceneData.DirectionalLightIndex1),
                 LocalLightCount = (uint)sceneData.LocalLightCount,
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
@@ -1812,7 +1734,7 @@ namespace Njulf.Rendering.Pipeline
                         !nearFieldDirectSourceEnabled &&
                         !giCausticReceiverEnabled &&
                         ShouldWriteMaterialTransportProvenance(),
-                    ddgiReceiverCacheEnabled: receiverCacheEnabled),
+                    ddgiReceiverCacheEnabled: receiverCachePipeline),
                 CaptureFlags = Data.GPUForwardPushConstants.PackCaptureFlags(
                     _recordingReflectionCapture,
                     _reflectionFeedbackCubemapArrayLayer)
@@ -1835,6 +1757,7 @@ namespace Njulf.Rendering.Pipeline
             sceneData.ForwardTaskInvocations = Math.Max(
                 sceneData.ForwardTaskInvocations,
                 sceneData.SceneSubmissionGpuIndirectMeshletTaskCount);
+            sceneData.ForwardMeshOnlyIndirectDrawCount++;
             _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
                 cmd,
                 indirect,
@@ -2264,6 +2187,9 @@ namespace Njulf.Rendering.Pipeline
         internal bool UsedForwardGiDisabledBenchmarkPipelineForCurrentView =>
             _forwardGiDisabledBenchmarkPipelineUsedForCurrentView;
 
+        internal bool UsedForwardGiDisabledPipelineForCurrentView =>
+            _forwardGiDisabledBenchmarkPipelineUsedForCurrentView;
+
         internal bool UsedForwardGiExactGatherForCurrentView =>
             _forwardGiExactGatherUsedForCurrentView;
 
@@ -2304,6 +2230,71 @@ namespace Njulf.Rendering.Pipeline
                        GlobalIlluminationDebugView.None &&
                    !_recordingReflectionCapture &&
                    !ShouldWriteMaterialTransportProvenance();
+        }
+
+        private ForwardOpaquePipelineKey BuildForwardPipelineKey(
+            Data.SceneRenderingData sceneData,
+            ForwardOpaquePipelineFamily family,
+            bool receiverCacheEnabled,
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled,
+            bool disabledBenchmarkPipeline)
+        {
+            bool hybridReflection =
+                _hybridReflectionReceiverEnabledForCurrentView &&
+                !_recordingReflectionCapture;
+            bool feedbackRequired =
+                _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView ||
+                _simpleDdgiReflectionFeedbackRequiredForCurrentView;
+            bool advancedOutput = hybridReflection ||
+                nearFieldDirectSourceEnabled || giCausticReceiverEnabled;
+            bool giDisabled = !advancedOutput && !feedbackRequired &&
+                _meshPipeline.GiDisabledPipelinesAvailable &&
+                (disabledBenchmarkPipeline ||
+                 ShouldUseProductionForwardGiDisabledPipeline(sceneData));
+
+            ForwardOpaquePipelineFeatures features =
+                ForwardOpaquePipelineFeatures.None;
+            if (receiverCacheEnabled && !giDisabled && !feedbackRequired)
+            {
+                features |= ForwardOpaquePipelineFeatures.ReceiverCache;
+            }
+            if (giDisabled)
+            {
+                features |= ForwardOpaquePipelineFeatures
+                    .GlobalIlluminationDisabled;
+            }
+            if (feedbackRequired && !advancedOutput)
+            {
+                features |= ForwardOpaquePipelineFeatures
+                    .AlphaMaskReceiverFeedback;
+            }
+            if (nearFieldDirectSourceEnabled)
+            {
+                features |= ForwardOpaquePipelineFeatures
+                    .NearFieldDirectSource;
+            }
+            if (giCausticReceiverEnabled)
+            {
+                features |= ForwardOpaquePipelineFeatures.GiCausticReceiver;
+            }
+            if (hybridReflection)
+            {
+                features |= ForwardOpaquePipelineFeatures
+                    .HybridReflectionReceiver;
+            }
+
+            return new ForwardOpaquePipelineKey(family, features);
+        }
+
+        private bool ShouldUseProductionForwardGiDisabledPipeline(
+            Data.SceneRenderingData sceneData)
+        {
+            return _settings.GlobalIllumination.DebugView ==
+                       GlobalIlluminationDebugView.None &&
+                   !_recordingReflectionCapture &&
+                   !ShouldWriteMaterialTransportProvenance() &&
+                   !ShouldApplyGlobalIllumination(sceneData);
         }
 
         private static uint DivideRoundUp(uint value, uint divisor)

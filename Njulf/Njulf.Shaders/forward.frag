@@ -181,7 +181,13 @@ layout(set = 2, binding = 0) uniform accelerationStructureEXT SceneTlas;
 #define SIMPLE_DDGI_OPAQUE_GATHER_ORACLE 0
 #define SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS SIMPLE_DDGI_RECEIVER_CONSUMER_TRANSPARENT
 #endif
+#if NJULF_DDGI_VISUAL_DEBUG_VIEWS
+#define NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA 1
+#endif
 #include "ddgi_simple_shared.glsl"
+#if NJULF_DDGI_VISUAL_DEBUG_VIEWS
+#undef NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
+#endif
 #undef SIMPLE_DDGI_RECEIVER_CONSUMER_FLAGS
 #undef SIMPLE_DDGI_OPAQUE_GATHER_ORACLE
 #undef SIMPLE_DDGI_RECEIVER_DEMAND_FRAME_OFFSET
@@ -867,11 +873,6 @@ float FetchDepthAtUv(vec2 uv, ivec2 depthSize)
     return FetchDepthAtPixel(pixel, depthSize);
 }
 
-float ReconstructViewDepth(vec2 uv, float depth)
-{
-    return abs(ReconstructViewPositionFromDepth(uv, depth).z);
-}
-
 vec3 ReconstructNormalFromDepth(vec2 uv)
 {
     vec2 invScreen = 1.0 / max(pc.Push.ScreenDimensions, vec2(1.0));
@@ -907,84 +908,11 @@ float SampleScreenSpaceAoDirect()
         0.0).r, 0.0, 1.0);
 }
 
-float SampleScreenSpaceAoDepthAware()
-{
-    ivec2 depthSize = textureSize(
-        BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
-    ivec2 aoSize = textureSize(
-        BindlessTextures[
-            nonuniformEXT(AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)], 0);
-    if (depthSize.x <= 0 || depthSize.y <= 0 ||
-        aoSize.x <= 0 || aoSize.y <= 0)
-    {
-        return 1.0;
-    }
-
-    ivec2 depthPixel = ivec2(clamp(
-        gl_FragCoord.xy,
-        vec2(0.0),
-        vec2(depthSize - ivec2(1))));
-    vec2 uv = (vec2(depthPixel) + vec2(0.5)) / vec2(depthSize);
-    float centerDepth = FetchDepthAtPixel(depthPixel, depthSize);
-    if (centerDepth <= 0.000001)
-        return 1.0;
-
-    float centerViewDepth = ReconstructViewDepth(uv, centerDepth);
-    vec2 aoTexelPosition = uv * vec2(aoSize) - vec2(0.5);
-    ivec2 baseAoPixel = ivec2(floor(aoTexelPosition));
-    vec2 aoFraction = fract(aoTexelPosition);
-    float weightedAo = 0.0;
-    float totalWeight = 0.0;
-    float depthSigma = max(0.25, centerViewDepth * 0.02);
-
-    for (int y = 0; y <= 1; y++)
-    {
-        for (int x = 0; x <= 1; x++)
-        {
-            ivec2 aoPixel = clamp(
-                baseAoPixel + ivec2(x, y),
-                ivec2(0),
-                aoSize - ivec2(1));
-            vec2 aoUv = (vec2(aoPixel) + vec2(0.5)) / vec2(aoSize);
-            float sampleDepth = FetchDepthAtUv(aoUv, depthSize);
-            if (sampleDepth <= 0.000001)
-                continue;
-
-            float sampleViewDepth = ReconstructViewDepth(
-                aoUv, sampleDepth);
-            float depthWeight = exp(
-                -abs(sampleViewDepth - centerViewDepth) / depthSigma);
-            float spatialWeight =
-                (x == 0 ? 1.0 - aoFraction.x : aoFraction.x) *
-                (y == 0 ? 1.0 - aoFraction.y : aoFraction.y);
-            float weight = spatialWeight * depthWeight;
-            weightedAo += texelFetch(
-                BindlessTextures[nonuniformEXT(
-                    AMBIENT_OCCLUSION_BLURRED_TEXTURE_INDEX)],
-                aoPixel,
-                0).r * weight;
-            totalWeight += weight;
-        }
-    }
-
-    if (totalWeight <= 0.000001)
-        return SampleScreenSpaceAoDirect();
-    return clamp(weightedAo / totalWeight, 0.0, 1.0);
-}
-
 float SampleScreenSpaceAo()
 {
     if (ForwardAmbientOcclusionEnabled() == 0u)
         return 1.0;
-
-    uint samplingMode = ForwardAmbientOcclusionSamplingMode();
-    if (samplingMode == AO_FORWARD_SAMPLING_DIRECT)
-        return SampleScreenSpaceAoDirect();
-
-    if (samplingMode == AO_FORWARD_SAMPLING_DEPTH_AWARE_UPSAMPLE)
-        return SampleScreenSpaceAoDepthAware();
-
-    return 1.0;
+    return SampleScreenSpaceAoDirect();
 }
 
 struct DdgiSampleResult
@@ -2896,10 +2824,19 @@ vec3 EvaluateReflectionSpecular(
     int selectedProbeIndex = -1;
     bool blendingEnabled = (header.Flags & REFLECTION_PROBE_BLENDING_ENABLED_FLAG) != 0u;
     int maxAcceptedProbes = max(header.MaxProbesPerPixel, 1);
+    int candidateProbeCount = min(
+        header.ProbeCount,
+        FORWARD_REFLECTION_PROBE_CANDIDATE_LIMIT);
 
     if (!ForwardReflectionCaptureEnabled())
     {
-        for (int probeIndex = 0; probeIndex < header.ProbeCount && acceptedProbeCount < maxAcceptedProbes; probeIndex++)
+        // Probe records are priority sorted on upload. Bound the miss-heavy
+        // volume scan so a pixel outside authored volumes cannot walk all 256
+        // records before falling back to DDGI/global radiance.
+        for (int probeIndex = 0;
+             probeIndex < candidateProbeCount &&
+                 acceptedProbeCount < maxAcceptedProbes;
+             probeIndex++)
         {
             GPUReflectionProbe probe = ReadReflectionProbe(uint(probeIndex));
             // Array layers are recyclable. Only probe captures that have completed both rendering
@@ -3601,7 +3538,7 @@ vec3 ForwardEvaluateThickTerminalRadiance(
     float ignoredShadow;
     uint ignoredCascade;
     for (uint lightIndex = 0u;
-         lightIndex < pc.Push.LightCount;
+         lightIndex < ForwardTotalLightCount(pc.Push);
          ++lightIndex)
     {
         AccumulateLight(
@@ -4127,7 +4064,7 @@ bool C4CreateReceiverPayload(
 #if FORWARD_THIN_GLASS_ONLY
 void main()
 {
-    GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    GPUMaterialData material = ReadForwardMaterial(fragMaterialIndex);
     bool doubleSided = material.NormalScaleBias.w >= 0.5;
     if (!doubleSided && !gl_FrontFacing)
         discard;
@@ -4180,12 +4117,16 @@ void main()
         material.FeatureFlags != 0u && material.ExtensionDataIndex >= 0;
     if (hasMaterialExtension)
     {
-        GPUMaterialExtensionData extension =
-            ReadMaterialExtension(uint(material.ExtensionDataIndex));
-        transmissionFactor = clamp(extension.Transmission.x, 0.0, 1.0);
-        ior = clamp(extension.Transmission.y, 1.0, 3.0);
+        vec4 transmission;
+        vec4 dispersion;
+        ReadForwardThinGlassOptics(
+            uint(material.ExtensionDataIndex),
+            transmission,
+            dispersion);
+        transmissionFactor = clamp(transmission.x, 0.0, 1.0);
+        ior = clamp(transmission.y, 1.0, 3.0);
         thinTransmissionTint = clamp(
-            extension.Dispersion.yzw,
+            dispersion.yzw,
             vec3(0.0),
             vec3(1.0));
     }
@@ -4331,7 +4272,14 @@ void main()
     uint debugViewMode = ForwardDebugViewMode();
     uint ambientOcclusionDebugView = ForwardAmbientOcclusionDebugView();
     WriteMaterialTransportProvenance(MATERIAL_TRANSPORT_PROVENANCE_UNKNOWN);
-    GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    GPUMaterialData material = ReadForwardMaterial(fragMaterialIndex);
+    if (debugViewMode == MATERIAL_DEBUG_TRANSPORT_PROFILE ||
+        debugViewMode == MATERIAL_DEBUG_MATERIAL_REVISIONS)
+    {
+        LoadForwardMaterialDiagnosticMetadata(
+            fragMaterialIndex,
+            material);
+    }
 #if FORWARD_THIN_GLASS_ONLY
     const bool geometryDecal = false;
 #else
@@ -4371,7 +4319,9 @@ void main()
 #endif
     GPUMaterialExtensionData materialExtension;
     if (hasMaterialExtension)
-        materialExtension = ReadMaterialExtension(uint(material.ExtensionDataIndex));
+        materialExtension = ReadForwardMaterialExtension(
+            uint(material.ExtensionDataIndex),
+            material.FeatureFlags);
     vec2 baseColorUv = MaterialUv(
         material.TextureTexCoordSets.x,
         material.BaseColorOffsetScale,
@@ -5106,14 +5056,13 @@ void main()
         return;
     }
 
-    for (uint i = 0u; i < pc.Push.LightCount; i++)
+    uint directionalLightCount = ForwardDirectionalLightCount(pc.Push);
+    float directionalShadowFactor = 1.0;
+    uint directionalShadowCascade = 0u;
+    if (directionalLightCount > 0u)
     {
-        GPULight light = ReadLight(i);
-        if (light.Type != 1)
-            continue;
-
         AccumulateLight(
-            i,
+            ForwardDirectionalLightIndex(pc.Push, 0u),
             albedo,
             metallic,
             directionalDiffuseBase,
@@ -5128,10 +5077,40 @@ void main()
             lastShadowCascade,
             directLighting,
             directDiffuseSource);
+        if (lastShadowFactor < 1.0 || lastShadowCascade != 0u)
+        {
+            directionalShadowFactor = lastShadowFactor;
+            directionalShadowCascade = lastShadowCascade;
+        }
     }
-
-    float directionalShadowFactor = lastShadowFactor;
-    uint directionalShadowCascade = lastShadowCascade;
+    if (directionalLightCount > 1u)
+    {
+        AccumulateLight(
+            ForwardDirectionalLightIndex(pc.Push, 1u),
+            albedo,
+            metallic,
+            directionalDiffuseBase,
+            roughness,
+            dielectricF0,
+            normal,
+            shadowNormal,
+            viewDirection,
+            fragWorldPosition,
+            geometryDecal,
+            lastShadowFactor,
+            lastShadowCascade,
+            directLighting,
+            directDiffuseSource);
+        // A non-shadow-casting moon/sun returns the exact sentinel 1/0. Do
+        // not let it overwrite the debug state produced by the other
+        // directional light. A fully lit cascade-zero caster has the same
+        // values as the initialized state, so no special case is needed.
+        if (lastShadowFactor < 1.0 || lastShadowCascade != 0u)
+        {
+            directionalShadowFactor = lastShadowFactor;
+            directionalShadowCascade = lastShadowCascade;
+        }
+    }
     vec3 directionalShadowDebugColor;
     if (TryEvaluateDirectionalShadowDebug(
             debugViewMode,
@@ -5153,10 +5132,32 @@ void main()
     {
         vec2 safeScreenSize = max(pc.Push.ScreenDimensions, vec2(1.0));
         uvec2 pixel = uvec2(clamp(gl_FragCoord.xy, vec2(0.0), safeScreenSize - vec2(1.0)));
-        uvec2 tile = pixel / uvec2(16u, 16u);
-        uint tileCountX = uint(ceil(safeScreenSize.x / 16.0));
-        uint tileIndex = tile.y * tileCountX + tile.x;
-        GPUTiledLightHeader tileHeader = ReadTiledLightHeader(tileIndex);
+        uvec2 tile = pixel / uvec2(
+            FORWARD_CLUSTER_TILE_SIZE,
+            FORWARD_CLUSTER_TILE_SIZE);
+        uint tileCountX = uint(ceil(
+            safeScreenSize.x / float(FORWARD_CLUSTER_TILE_SIZE)));
+        uint tileCountY = uint(ceil(
+            safeScreenSize.y / float(FORWARD_CLUSTER_TILE_SIZE)));
+        float viewDepth = clamp(
+            CameraForwardDistance(fragWorldPosition),
+            FORWARD_CLUSTER_NEAR_PLANE,
+            FORWARD_CLUSTER_FAR_PLANE);
+        float normalizedClusterDepth =
+            log(viewDepth / FORWARD_CLUSTER_NEAR_PLANE) /
+            log(FORWARD_CLUSTER_FAR_PLANE /
+                FORWARD_CLUSTER_NEAR_PLANE);
+        uint depthSlice = min(
+            uint(clamp(
+                floor(normalizedClusterDepth *
+                    float(FORWARD_CLUSTER_DEPTH_SLICE_COUNT)),
+                0.0,
+                float(FORWARD_CLUSTER_DEPTH_SLICE_COUNT - 1u))),
+            FORWARD_CLUSTER_DEPTH_SLICE_COUNT - 1u);
+        uint clusterIndex =
+            (depthSlice * tileCountY + tile.y) * tileCountX + tile.x;
+        GPUTiledLightHeader tileHeader =
+            ReadTiledLightHeader(clusterIndex);
 
         for (uint i = 0u; i < tileHeader.LightCount; i++)
         {
@@ -5310,7 +5311,7 @@ void main()
     bool simpleDdgiConfigured = (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_ENABLED) != 0u && simpleDdgiParams.probeCount > 0u;
     bool simpleDdgiActive = simpleDdgiConfigured &&
         (simpleDdgiParams.flags & SIMPLE_DDGI_FLAG_STRUCTURED_GATHER_ENABLED) != 0u;
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_VIEWS
     DdgiSampleResult ddgiSample = EmptyDdgiSampleResult();
     vec3 simpleDdgiContributingVolumeColor = vec3(0.0);
     vec3 simpleDdgiSourceCacheIrradiance = vec3(0.0);
@@ -5347,7 +5348,7 @@ void main()
         // while avoiding DDGI/legacy probe work that the pass explicitly opted
         // out of.  This also gives feature-isolated rendering a stable fallback.
         finalDiffuseIndirect = diffuseIbl * indirectAo;
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_VIEWS
         fallbackWeight = 1.0;
         // This view intentionally removes Simple-DDGI ownership/support and
         // environment substitution so it cannot alias FinalIndirect.
@@ -5399,16 +5400,20 @@ void main()
         // Leak attenuation represents blocked transport, not missing field
         // coverage, so it must not be refilled with the environment complement.
         float simpleFallback = (1.0 - simpleRadiometricOwnership) * simpleDdgiParams.environmentFallbackIntensity;
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_VIEWS
         simpleDdgiContributingVolumeColor = simpleGather.contributingVolumeColor;
+#if NJULF_DDGI_DETAILED_COUNTERS
         simpleDdgiSourceCacheIrradiance = simpleGather.sourceCacheIrradiance;
+#endif
         simpleDdgiPrimaryVolume = simpleGather.selectedVolume;
         simpleDdgiSecondaryVolume = simpleGather.secondaryVolume;
         simpleDdgiSecondVolumeUsed = simpleGather.secondVolumeUsed;
         simpleDdgiPrimaryContributionWeight = simpleGather.primaryContributionWeight;
         simpleDdgiSecondaryContributionWeight = simpleGather.secondaryContributionWeight;
+#if NJULF_DDGI_DETAILED_COUNTERS
         simpleDdgiCombinedRejectionMask = simpleGather.combinedRejectionMask;
         simpleDdgiFirstRejectionReason = simpleGather.firstRejectionReason;
+#endif
         simpleDdgiNonResidentProbeCount = simpleGather.nonResidentProbeCount;
         ddgiSample.irradiance = simpleIrradiance;
         ddgiSample.coverage = simpleGather.spatialCoverage;
@@ -5436,10 +5441,16 @@ void main()
         // Diagnostic sampling is intentionally opt-in.  It rereads probe state and
         // atlases, so doing it per shaded fragment made normal production frames
         // pay the cost of a second gather.
+#if NJULF_DDGI_VISUAL_DEBUG_VIEWS
 #if NJULF_DDGI_DETAILED_COUNTERS
         float simpleDiagnosticVisibility = simpleGather.transportVisibility;
         float simpleDiagnosticVisibilityMean = 0.0;
-        if (IsDdgiDebugView(debugViewMode) || DdgiForwardEstimateDiagnosticPixel())
+        bool sampleSimpleDdgiDebug = IsDdgiDebugView(debugViewMode) ||
+            DdgiForwardEstimateDiagnosticPixel();
+#else
+        bool sampleSimpleDdgiDebug = IsDdgiDebugView(debugViewMode);
+#endif
+        if (sampleSimpleDdgiDebug)
         {
             SimpleDdgiDebugSample simpleDebug = SampleSimpleDdgiDebug(
                 simpleDdgiParams,
@@ -5459,8 +5470,10 @@ void main()
             ddgiSample.visibilityMomentVariance = simpleDebug.visibilityMomentVariance;
             ddgiSample.visibilityProbeDistance = simpleDebug.visibilityProbeDistance;
             ddgiSample.visibilityMaxRayDistance = simpleDebug.visibilityMaxRayDistance;
+#if NJULF_DDGI_DETAILED_COUNTERS
             simpleDiagnosticVisibility = simpleDebug.visibility;
             simpleDiagnosticVisibilityMean = simpleDebug.visibilityMomentMean;
+#endif
             simpleDdgiResidencyTableFlags = simpleDebug.residencyTableFlags;
             simpleDdgiResidencyHistoryFlags = simpleDebug.residencyHistoryFlags;
             simpleDdgiResidencyDemandMask = simpleDebug.residencyDemandMask;
@@ -5468,6 +5481,7 @@ void main()
             simpleDdgiPageMappingGeneration = simpleDebug.pageMappingGeneration;
             simpleDdgiPageAgeNormalized = simpleDebug.pageAgeNormalized;
         }
+#if NJULF_DDGI_DETAILED_COUNTERS
         AccumulateDdgiVisibilityMomentDiagnostics(
             ddgiSample.visibilityMomentMean,
             ddgiSample.visibilityMomentVariance,
@@ -5475,6 +5489,7 @@ void main()
             ddgiSample.visibilityMaxRayDistance,
             simpleDiagnosticVisibility,
             ddgiSample.irradianceAtlasConfidence);
+#endif
 #endif
 
         // Once valid probe data produces a normalized estimate, DDGI owns the
@@ -5503,7 +5518,7 @@ void main()
                 DdgiSparseDiagnosticSampleWeight());
         }
         finalDiffuseIndirect = finalDdgiDiffuse + simpleEnvironmentFallback * simpleFallback * indirectAo;
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_VIEWS
         fallbackWeight = simpleFallback;
         nearContactSuppression = 1.0 - simpleLeakAttenuation;
         hybridDebugDiffuse = finalDiffuseIndirect;
@@ -5554,10 +5569,12 @@ void main()
             ? simpleDdgiParams.environmentFallbackIntensity
             : 1.0;
         finalDiffuseIndirect = diffuseIbl * simpleDisabledFallbackWeight * indirectAo;
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_VIEWS
         fallbackWeight = simpleDisabledFallbackWeight;
         hybridDebugDiffuse = finalDiffuseIndirect;
         hybridSuppressionMask = vec3(0.0);
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
         HybridDiffuseGiResult simpleFallbackDiagnostics;
         simpleFallbackDiagnostics.diffuse = finalDiffuseIndirect;
         simpleFallbackDiagnostics.ddgiCoverage = 0.0;
@@ -5646,19 +5663,19 @@ void main()
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW)
     {
         float farShadow = 1.0;
-        for (uint lightIndex = 0u; lightIndex < uint(pc.Push.LightCount); lightIndex++)
+        int shadowLightIndex = int(round(ReadShadowIndices().w));
+        if (shadowLightIndex >= 0 &&
+            shadowLightIndex < int(ForwardTotalLightCount(pc.Push)))
         {
+            uint lightIndex = uint(shadowLightIndex);
             GPULight light = ReadLight(lightIndex);
-            if (light.Type != 1)
-                continue;
             farShadow = EstimateFarFieldSunShadow(fragWorldPosition, normal, normalize(-light.Direction));
-            break;
         }
         WriteDdgiDebugColor(GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_SUN_SHADOW, vec3(farShadow));
         return;
     }
 
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_VIEWS
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_DDGI_IRRADIANCE)
     {
         // A logarithmic presentation keeps exact zero black while retaining

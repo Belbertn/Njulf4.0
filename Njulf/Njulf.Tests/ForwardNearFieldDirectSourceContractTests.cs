@@ -224,7 +224,9 @@ public sealed class ForwardNearFieldDirectSourceContractTests
             Assert.That(meshPipeline,
                 Does.Contain("quaternaryColorFormat"));
             Assert.That(forwardPass,
-                Does.Contain("TryResolveCombinedAdvancedGiPipeline"));
+                Does.Contain("TryResolveForwardOpaquePipeline"));
+            Assert.That(forwardPass,
+                Does.Contain("BuildForwardPipelineKey"));
             Assert.That(forwardPass,
                 Does.Contain("CombinedAdvancedGiAttachmentEnabled"));
             Assert.That(forwardPass,

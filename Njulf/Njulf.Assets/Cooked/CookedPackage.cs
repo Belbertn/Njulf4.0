@@ -439,9 +439,17 @@ public static class CookedPackage
         var uvColors = reader.ReadSection<CookedVertexUvColorStream>(CookedSectionIds.VertexUvColors);
         _ = reader.TryReadSection(CookedSectionIds.VertexSkinning, out CookedVertexSkinningData[] skinning);
         var indices = reader.ReadSection<uint>(CookedSectionIds.Indices);
-        var lod0 = reader.ReadSection<Meshlet>(CookedSectionIds.Meshlets0);
-        _ = reader.TryReadSection(CookedSectionIds.Meshlets1, out Meshlet[] lod1);
-        _ = reader.TryReadSection(CookedSectionIds.Meshlets2, out Meshlet[] lod2);
+        var lod0 = CookedMeshletCompatibility.ReadRequired(
+            reader,
+            CookedSectionIds.Meshlets0);
+        _ = CookedMeshletCompatibility.TryRead(
+            reader,
+            CookedSectionIds.Meshlets1,
+            out Meshlet[] lod1);
+        _ = CookedMeshletCompatibility.TryRead(
+            reader,
+            CookedSectionIds.Meshlets2,
+            out Meshlet[] lod2);
         var meshletVertices = reader.ReadSection<uint>(CookedSectionIds.MeshletVertices);
         var meshletTriangles = reader.ReadSection<uint>(CookedSectionIds.MeshletTriangles);
         bytesRead = reader.BytesRead;

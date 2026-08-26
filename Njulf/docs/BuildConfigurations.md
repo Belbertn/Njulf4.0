@@ -12,6 +12,10 @@ portable managed symbols, and enables standard Vulkan validation and debug
 labels. Managed code and shaders are optimized, while the expensive detailed
 GPU counter variants and shader debug information are compiled out. This keeps
 startup and frame iteration representative enough for productive work.
+Read-only GI receiver visualizations remain compiled so the editor's GI debug
+view menu is useful during ordinary Development builds; selecting one performs
+its diagnostic sampling only for that view and does not enable detailed
+counters or diagnostic atomics.
 
 Stale or missing cooked packages automatically fall back to source import in
 `Development`. Set `NJULF_ALLOW_SOURCE_ASSET_RUNTIME_LOAD=false` when a

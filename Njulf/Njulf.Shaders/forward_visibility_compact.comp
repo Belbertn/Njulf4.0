@@ -159,11 +159,12 @@ float ReadInstanceMaxScale(uint instanceBufferIndex, uint objectWordOffset)
     return max(length(basisX), max(length(basisY), length(basisZ)));
 }
 
-vec4 ResolveMeshletWorldCenterRadius(GPUMeshletDrawCommand command)
+vec4 ResolveMeshletWorldCenterRadius(
+    GPUMeshletDrawCommand command,
+    GPUMeshlet meshlet)
 {
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
     vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
     float worldRadius = meshlet.BoundingSphereRadius * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
     return vec4(worldCenter.xyz, worldRadius);
@@ -237,8 +238,12 @@ bool MeshletOccludedByCurrentHiZBounds4Tap(vec3 worldCenter, float worldRadius)
 
 bool CanHiZTestMeshletDrawCommand(GPUMeshletDrawCommand command)
 {
-    GPUMaterialData material = ReadMaterial(command.MaterialIndex);
-    return material.NormalScaleBias.y < 1.5;
+    uint materialBaseWord = command.MaterialIndex *
+        uint(SIZEOF_GPU_FORWARD_MATERIAL_DATA / 4);
+    float alphaMode = ReadStorageFloatUniform(
+        uint(FORWARD_MATERIAL_DATA_BUFFER_INDEX),
+        materialBaseWord + 9u);
+    return alphaMode < 1.5;
 }
 
 void ProcessBucketCandidate(uint bucket, uint localIndex)
@@ -249,11 +254,35 @@ void ProcessBucketCandidate(uint bucket, uint localIndex)
 
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[FORWARD_VISIBILITY_COUNTER_CANDIDATE], 1u);
     GPUMeshletDrawCommand command = ReadBucketCommand(bucket, localIndex);
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId *
+        uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    vec4 worldCenterRadius = ResolveMeshletWorldCenterRadius(command, meshlet);
+    if ((command.Padding &
+            MESHLET_COMMAND_FLAG_NORMAL_CONE_CULL_ELIGIBLE) != 0u)
+    {
+        mat4 inverseView = ReadMeshletTaskInverseViewMatrix(
+            pc.Push.CurrentFrameIndex);
+        vec3 cameraPosition = MulRowMajor(
+            vec4(0.0, 0.0, 0.0, 1.0),
+            inverseView).xyz;
+        if (MeshletBackfaceConeCulled(
+                meshlet,
+                instanceBufferIndex,
+                objectWordOffset,
+                worldCenterRadius.xyz,
+                worldCenterRadius.w,
+                cameraPosition))
+        {
+            return;
+        }
+    }
 
     bool canHiZTest = CanHiZTestMeshletDrawCommand(command);
     if (canHiZTest && pc.Push.OcclusionCullingEnabled != HIZ_TEST_MODE_OFF && pc.Push.HiZMipCount != 0u)
     {
-        vec4 worldCenterRadius = ResolveMeshletWorldCenterRadius(command);
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[FORWARD_VISIBILITY_COUNTER_HIZ_TESTED], 1u);
         if (MeshletOccludedByCurrentHiZBounds4Tap(worldCenterRadius.xyz, worldCenterRadius.w))
         {

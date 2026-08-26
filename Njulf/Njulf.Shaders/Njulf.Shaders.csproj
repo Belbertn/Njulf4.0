@@ -689,11 +689,13 @@
       <NjulfShaderOptimizationOptions Condition="'$(Configuration)' == 'Development' or '$(Configuration)' == 'Release' or '$(Configuration)' == 'ShippingPerformance' or '$(Configuration)' == 'ProfileSymbols' or '$(Configuration)' == 'DetailedInvestigation'">-Os</NjulfShaderOptimizationOptions>
       <NjulfShaderDebugInformation Condition="'$(NJULF_SHADER_PROFILE)' == '1'">true</NjulfShaderDebugInformation>
       <NjulfShaderDebugOptions Condition="'$(NjulfShaderDebugInformation)' == 'true'">-gVS</NjulfShaderDebugOptions>
+      <NjulfShaderVisualDebugOptions>-DNJULF_DDGI_VISUAL_DEBUG_VIEWS=0</NjulfShaderVisualDebugOptions>
+      <NjulfShaderVisualDebugOptions Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'Development' or '$(Configuration)' == 'DetailedInvestigation'">-DNJULF_DDGI_VISUAL_DEBUG_VIEWS=1</NjulfShaderVisualDebugOptions>
       <NjulfShaderDetailedDiagnosticsOptions>-DNJULF_DDGI_DETAILED_COUNTERS=0</NjulfShaderDetailedDiagnosticsOptions>
       <NjulfShaderDetailedDiagnosticsOptions Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'DetailedInvestigation'">-DNJULF_DDGI_DETAILED_COUNTERS=1</NjulfShaderDetailedDiagnosticsOptions>
       <NjulfDirectionalShadowDetailedCountersOptions>-DNJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS=0</NjulfDirectionalShadowDetailedCountersOptions>
       <NjulfDirectionalShadowDetailedCountersOptions Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'DetailedInvestigation'">-DNJULF_DIRECTIONAL_SHADOW_DETAILED_COUNTERS=1</NjulfDirectionalShadowDetailedCountersOptions>
-      <NjulfShaderCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) $(NjulfShaderDetailedDiagnosticsOptions) $(NjulfDirectionalShadowDetailedCountersOptions)</NjulfShaderCompileOptions>
+      <NjulfShaderCompileOptions>$(NjulfShaderOptimizationOptions) $(NjulfShaderDebugOptions) $(NjulfShaderVisualDebugOptions) $(NjulfShaderDetailedDiagnosticsOptions) $(NjulfDirectionalShadowDetailedCountersOptions)</NjulfShaderCompileOptions>
       <!-- Detailed transport-audit counters create a particularly expensive
            NVIDIA native pipeline in Debug. Optimize only this shader family;
            the counter ABI stays enabled and all other Debug shaders retain
@@ -815,6 +817,9 @@
         </NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_compacted.mesh"><Source>$(MSBuildProjectDirectory)\forward.mesh</Source><Defines>-DFORWARD_COMPACTED_MESH=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_simple_compacted.mesh"><Source>$(MSBuildProjectDirectory)\forward_simple.mesh</Source><Defines>-DFORWARD_COMPACTED_MESH=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="depth_compacted.mesh"><Source>$(MSBuildProjectDirectory)\depth.mesh</Source><Defines>-DDEPTH_COMPACTED_MESH=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="depth_alpha_compacted.mesh"><Source>$(MSBuildProjectDirectory)\depth_alpha.mesh</Source><Defines>-DDEPTH_COMPACTED_MESH=1</Defines></NjulfShaderArtifact>
+        <NjulfShaderArtifact Include="shadow_depth_alpha_compacted.mesh"><Source>$(MSBuildProjectDirectory)\shadow_depth_alpha.mesh</Source><Defines>-DSHADOW_COMPACTED_MESH=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_opaque_ddgi.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_OPAQUE=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_opaque_simple_ddgi.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1 -DFORWARD_SIMPLE_VERTEX_INPUT=1</Defines></NjulfShaderArtifact>
         <NjulfShaderArtifact Include="forward_opaque_simple_full_input_ddgi.frag"><Source>$(MSBuildProjectDirectory)\forward.frag</Source><Defines>-DFORWARD_SIMPLE_OPAQUE=1</Defines></NjulfShaderArtifact>

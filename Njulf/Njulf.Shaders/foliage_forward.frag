@@ -268,7 +268,7 @@ void main()
     outHybridReflectionReceiverPayload = uvec4(0u);
 #endif
     WriteFoliageMaterialTransportProvenance(255u);
-    GPUMaterialData material = ReadMaterial(fragMaterialIndex);
+    GPUMaterialData material = ReadForwardMaterial(fragMaterialIndex);
     vec4 sampledAlbedo;
     if (!FoliageCoverageSurvives(
             material,

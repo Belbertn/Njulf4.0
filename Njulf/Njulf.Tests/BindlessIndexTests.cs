@@ -54,7 +54,8 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.DirectionalRayShadowMaskBufferFrame1, Is.EqualTo(BindlessIndex.DirectionalRayShadowMaskBufferBase + 1));
             Assert.That(BindlessIndex.AreaRayShadowMaskBufferBase, Is.EqualTo(BindlessIndex.VolumetricFogBounceRadianceBuffer + 1));
             Assert.That(BindlessIndex.AreaRayShadowMaskBufferFrame1, Is.EqualTo(BindlessIndex.AreaRayShadowMaskBufferBase + 1));
-            Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(BindlessIndex.AreaRayShadowMaskBufferFrame1 + 1));
+            Assert.That(BindlessIndex.ForwardMaterialDataBuffer, Is.EqualTo(BindlessIndex.AreaRayShadowMaskBufferFrame1 + 1));
+            Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(BindlessIndex.ForwardMaterialDataBuffer + 1));
             Assert.That(BindlessIndex.AreaLightLtcMatrixTexture, Is.EqualTo(BindlessIndex.PrefilteredEnvironmentNextTexture + 1));
             Assert.That(BindlessIndex.AreaLightLtcAmplitudeTexture, Is.EqualTo(BindlessIndex.AreaLightLtcMatrixTexture + 1));
             Assert.That(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase, Is.EqualTo(BindlessIndex.AreaLightLtcAmplitudeTexture + 1));
@@ -71,6 +72,7 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiDirectionalRadianceBuffer), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiDirectionalRadianceBuffer)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.DirectionalRayShadowMaskBufferBase), Is.EqualTo(nameof(BindlessIndex.DirectionalRayShadowMaskBufferBase)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.AreaRayShadowMaskBufferBase), Is.EqualTo(nameof(BindlessIndex.AreaRayShadowMaskBufferBase)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.ForwardMaterialDataBuffer), Is.EqualTo(nameof(BindlessIndex.ForwardMaterialDataBuffer)));
             Assert.That(
                 BindlessIndex.FirstDynamicTextureIndex,
                 Is.EqualTo(
@@ -133,6 +135,7 @@ public sealed class BindlessIndexTests
             ["DIRECTIONAL_RAY_SHADOW_MASK_BUFFER_BASE_INDEX"] = BindlessIndex.DirectionalRayShadowMaskBufferBase,
             ["DIRECTIONAL_RAY_SHADOW_MASK_BUFFER_FRAME1_INDEX"] = BindlessIndex.DirectionalRayShadowMaskBufferFrame1,
             ["AREA_RAY_SHADOW_MASK_BUFFER_BASE_INDEX"] = BindlessIndex.AreaRayShadowMaskBufferBase,
+            ["FORWARD_MATERIAL_DATA_BUFFER_INDEX"] = BindlessIndex.ForwardMaterialDataBuffer,
             ["AREA_LIGHT_LTC_MATRIX_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcMatrixTexture,
             ["AREA_LIGHT_LTC_AMPLITUDE_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcAmplitudeTexture,
             ["STATIC_BUFFER_COUNT"] = BindlessIndex.StaticBufferCount

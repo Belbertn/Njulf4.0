@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Njulf.Core.Geometry;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -49,6 +50,7 @@ namespace Njulf.Tests
                 ["SIZEOF_GPU_OBJECT_DATA"] = Marshal.SizeOf<GPUObjectData>(),
                 ["SIZEOF_GPU_DEBUG_LINE_VERTEX"] = Marshal.SizeOf<GPUDebugLineVertex>(),
                 ["SIZEOF_GPU_MATERIAL_DATA"] = Marshal.SizeOf<GPUMaterialData>(),
+                ["SIZEOF_GPU_FORWARD_MATERIAL_DATA"] = Marshal.SizeOf<GPUForwardMaterialData>(),
                 ["SIZEOF_GPU_MATERIAL_EXTENSION_DATA"] = Marshal.SizeOf<GPUMaterialExtensionData>(),
                 ["SIZEOF_GPU_LIGHT"] = Marshal.SizeOf<GPULight>(),
                 ["SIZEOF_GPU_SCENE_DATA"] = Marshal.SizeOf<GPUSceneData>(),
@@ -142,7 +144,7 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUParticleResetPushConstants>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUParticleSimulatePushConstants>(), Is.EqualTo(48));
                 Assert.That(Marshal.SizeOf<GPUParticleSortPushConstants>(), Is.EqualTo(32));
-                Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<GPUMeshlet>(), Is.EqualTo(64));
                 Assert.That(Marshal.SizeOf<GPUObjectData>(), Is.EqualTo(224));
                 Assert.That(Marshal.OffsetOf<GPUObjectData>(
                     nameof(GPUObjectData.NearFieldStableObjectId)).ToInt32(),
@@ -152,6 +154,7 @@ namespace Njulf.Tests
                     Is.EqualTo(220));
                 Assert.That(Marshal.SizeOf<GPUDebugLineVertex>(), Is.EqualTo(32));
                 Assert.That(Marshal.SizeOf<GPUMaterialData>(), Is.EqualTo(320));
+                Assert.That(Marshal.SizeOf<GPUForwardMaterialData>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUMaterialExtensionData>(), Is.EqualTo(548));
                 Assert.That(Marshal.SizeOf<GPULight>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUSceneData>(), Is.EqualTo(400));
@@ -246,6 +249,89 @@ namespace Njulf.Tests
                 Assert.That(Marshal.SizeOf<GPUDdgiProbeVolume>(), Is.EqualTo(ReadShaderIntConstant("SIZEOF_GPU_DDGI_PROBE_VOLUME")));
                 AssertFieldOffset<GPUDdgiProbeVolume>(nameof(GPUDdgiProbeVolume.RayAndUpdateParams), "OFFSET_GPU_DDGI_PROBE_VOLUME_RAY_AND_UPDATE_PARAMS");
                 Assert.That(Marshal.OffsetOf<GPUDdgiProbeVolume>(nameof(GPUDdgiProbeVolume.RayAndUpdateParams)).ToInt32() / sizeof(uint), Is.EqualTo(16));
+            });
+        }
+
+        [Test]
+        public void ForwardPushConstants_PackTwoDirectionalIndicesWithoutGrowingAbi()
+        {
+            uint packed = GPUForwardPushConstants.PackLightDispatch(
+                totalLightCount: 1024,
+                localLightCount: 1022,
+                directionalLightIndex0: 1023,
+                directionalLightIndex1: 17);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    GPUForwardPushConstants.UnpackTotalLightCount(packed),
+                    Is.EqualTo(1024));
+                Assert.That(
+                    GPUForwardPushConstants.UnpackDirectionalLightIndex(packed, 0),
+                    Is.EqualTo(1023));
+                Assert.That(
+                    GPUForwardPushConstants.UnpackDirectionalLightIndex(packed, 1),
+                    Is.EqualTo(17));
+                Assert.That(packed & 0x8000_0000u, Is.Zero);
+                Assert.That(Marshal.SizeOf<GPUForwardPushConstants>(), Is.EqualTo(256));
+                Assert.That(
+                    () => GPUForwardPushConstants.PackLightDispatch(
+                        3, 0, 0, 1),
+                    Throws.TypeOf<ArgumentOutOfRangeException>());
+                Assert.That(
+                    () => GPUForwardPushConstants.PackLightDispatch(
+                        2, 0, 1, 1),
+                    Throws.TypeOf<ArgumentException>());
+            });
+        }
+
+        [Test]
+        public void GPUForwardMaterialData_HasCompactPackedLayout()
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    Marshal.SizeOf<GPUForwardMaterialData>(),
+                    Is.EqualTo(112));
+                Assert.That(
+                    Marshal.OffsetOf<GPUForwardMaterialData>(
+                        nameof(GPUForwardMaterialData.AlbedoTextureIndex))
+                        .ToInt32(),
+                    Is.EqualTo(64));
+                Assert.That(
+                    Marshal.OffsetOf<GPUForwardMaterialData>(
+                        nameof(GPUForwardMaterialData.EmissiveTextureIndex))
+                        .ToInt32(),
+                    Is.EqualTo(80));
+                Assert.That(
+                    Marshal.OffsetOf<GPUForwardMaterialData>(
+                        nameof(GPUForwardMaterialData.PackedUvSets))
+                        .ToInt32(),
+                    Is.EqualTo(96));
+            });
+
+            GPUMaterialData material = MaterialManager.CreateDefaultMaterial();
+            GPUForwardMaterialData packed =
+                GPUForwardMaterialData.FromMaterial(material);
+            Assert.That(packed.IdentityTransformMask, Is.EqualTo(0x1fu));
+
+            material.TextureTexCoordSets =
+                new Njulf.Core.Math.Vector4(1f, 2f, 3f, 4f);
+            material.OcclusionBinding.Y = 5f;
+            material.TextureRotations.X = 0.25f;
+            packed = GPUForwardMaterialData.FromMaterial(material);
+            uint expectedUvSets =
+                1u | (2u << 4) | (3u << 8) | (4u << 12) |
+                (5u << 16);
+            Assert.Multiple(() =>
+            {
+                Assert.That(packed.PackedUvSets, Is.EqualTo(expectedUvSets));
+                Assert.That(
+                    packed.IdentityTransformMask & 1u,
+                    Is.Zero);
+                Assert.That(
+                    packed.IdentityTransformMask & 0x1eu,
+                    Is.EqualTo(0x1eu));
             });
         }
 
@@ -626,7 +712,7 @@ namespace Njulf.Tests
         {
             Assert.Multiple(() =>
             {
-                Assert.That(Marshal.SizeOf<Meshlet>(), Is.EqualTo(48));
+                Assert.That(Marshal.SizeOf<Meshlet>(), Is.EqualTo(64));
                 Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.BoundingSphereCenter)).ToInt32(), Is.EqualTo(0));
                 Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.BoundingSphereRadius)).ToInt32(), Is.EqualTo(12));
                 Assert.That(Marshal.OffsetOf<Meshlet>(nameof(Meshlet.VertexOffset)).ToInt32(), Is.EqualTo(16));

@@ -151,6 +151,19 @@ void SetSimpleDdgiDirectionalRadianceHenyeyGreensteinQuery(
 #define NJULF_DDGI_DETAILED_COUNTERS 0
 #endif
 
+// Development keeps read-only receiver visualizations while omitting the
+// counter buffers, diagnostic atomics, and always-on investigation sampling.
+#ifndef NJULF_DDGI_VISUAL_DEBUG_VIEWS
+#define NJULF_DDGI_VISUAL_DEBUG_VIEWS NJULF_DDGI_DETAILED_COUNTERS
+#endif
+
+// Only receiver shaders that present visual diagnostics need the additional
+// gather attribution fields. Other Development shaders keep their compact
+// production result shape even though the bundle contains visual views.
+#ifndef NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
+#define NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA NJULF_DDGI_DETAILED_COUNTERS
+#endif
+
 // The source cache is update-side authority, not part of the compact receiver
 // contract. Only the forward diagnostic artifact opts into the additional
 // compute-state/source-cache dependency; every other receiver stays compact in
@@ -160,7 +173,7 @@ void SetSimpleDdgiDirectionalRadianceHenyeyGreensteinQuery(
 #endif
 
 #ifndef NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
 #define NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION 1
 #elif defined(NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT) && NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 #define NJULF_SIMPLE_DDGI_GATHER_ATTRIBUTION 1
@@ -5178,6 +5191,8 @@ struct SimpleDdgiGatherResult
     // Direct + emissive + sky source cache evaluated independently of recursive
     // bounce, using the same probe/cascade weights as the receiver gather.
     vec3 sourceCacheIrradiance;
+#endif
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
     // Weighted with the same directional masses that compose irradiance. This
     // lets the cascade-selection debug view show every volume that contributed,
     // rather than only the finest volume selected before fallback blending.
@@ -5213,10 +5228,12 @@ struct SimpleDdgiGatherResult
     float primaryContributionWeight;
     float secondaryContributionWeight;
 #endif
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
     float selectedSpacing;
     float transitionWeight;
     float secondVolumeUsed;
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
     uint validProbeCount;
     uint combinedRejectionMask;
     uint firstRejectionReason;
@@ -5235,6 +5252,8 @@ SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
 #endif
 #if NJULF_DDGI_DETAILED_COUNTERS
     result.sourceCacheIrradiance = vec3(0.0);
+#endif
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
     result.contributingVolumeColor = vec3(0.0);
 #endif
     result.validSupport = 0.0;
@@ -5263,10 +5282,12 @@ SimpleDdgiGatherResult EmptySimpleDdgiGatherResult()
     result.primaryContributionWeight = 0.0;
     result.secondaryContributionWeight = 0.0;
 #endif
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
     result.selectedSpacing = 0.0;
     result.transitionWeight = 1.0;
     result.secondVolumeUsed = 0.0;
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
     result.validProbeCount = 0u;
     result.combinedRejectionMask = 0u;
     result.firstRejectionReason = SIMPLE_DDGI_GATHER_REJECTION_REASON_COUNT;
@@ -5593,7 +5614,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     result.selectedVolume = volumeIndex;
     result.secondaryVolume = SIMPLE_DDGI_INVALID_VOLUME_INDEX;
 #endif
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
     result.selectedSpacing = volume.spacing;
 #endif
     vec3 grid = (biasedWorldPos - volume.origin) / volume.spacing;
@@ -6197,9 +6218,13 @@ SimpleDdgiGatherResult SampleSimpleDdgiVolumeGather(
     result.sourceCacheIrradiance = directionalMass > 0.000001
         ? clamp(sourceCacheAccumulated / directionalMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
+#endif
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
     result.contributingVolumeColor = directionalMass > 0.000001
         ? SimpleDdgiVolumeContributorDebugColor(volumeIndex, volume.kind)
         : vec3(0.0);
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
     result.validProbeCount = validProbeCount;
     if (validProbeCount == 0u && result.spatialCoverage > 0.000001)
     {
@@ -6405,6 +6430,8 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
 #if NJULF_DDGI_DETAILED_COUNTERS
     vec3 sourceCacheAccumulated = outer.sourceCacheIrradiance * outerAvailableMass +
         inner.sourceCacheIrradiance * innerAvailableMass;
+#endif
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
     vec3 contributorColorAccumulated = outer.contributingVolumeColor * outerAvailableMass +
         inner.contributingVolumeColor * innerAvailableMass;
 #endif
@@ -6531,6 +6558,8 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
     result.sourceCacheIrradiance = availableMass > 0.000001
         ? clamp(sourceCacheAccumulated / availableMass, vec3(0.0), vec3(64.0))
         : vec3(0.0);
+#endif
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
     result.contributingVolumeColor = availableMass > 0.000001
         ? clamp(contributorColorAccumulated / availableMass, vec3(0.0), vec3(1.0))
         : vec3(0.0);
@@ -6545,13 +6574,15 @@ SimpleDdgiGatherResult BlendSimpleDdgiGatherResults(
         ? clamp(outerAvailableMass / availableMass, 0.0, 1.0)
         : 0.0;
 #endif
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
     result.transitionWeight = w;
     result.selectedSpacing = mix(
         outer.selectedSpacing,
         inner.selectedSpacing,
         result.primaryContributionWeight);
     result.secondVolumeUsed = result.secondaryContributionWeight > 0.000001 ? 1.0 : 0.0;
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
     result.validProbeCount = inner.validProbeCount + outer.validProbeCount;
     result.combinedRejectionMask = inner.combinedRejectionMask | outer.combinedRejectionMask;
     result.firstRejectionReason =
@@ -6672,7 +6703,7 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
 #endif
         selected.spatialCoverage *= edgeWeight;
         selected.ownership *= edgeWeight;
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
         selected.transitionWeight = edgeWeight;
 #endif
         return selected;
@@ -6842,8 +6873,10 @@ SimpleDdgiGatherResult SampleSimpleDdgiGather(
     // share exactly once.
     selected.spatialCoverage *= edgeWeight;
     selected.ownership *= edgeWeight;
-#if NJULF_DDGI_DETAILED_COUNTERS
+#if NJULF_DDGI_VISUAL_DEBUG_GATHER_DATA
     selected.transitionWeight = edgeWeight;
+#endif
+#if NJULF_DDGI_DETAILED_COUNTERS
     AddSimpleDdgiGatherDiagnostic(
         p,
         diagnosticFrame,

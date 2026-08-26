@@ -306,7 +306,10 @@ public static class CookedAssetMigrator
             else if (id == CookedSectionIds.VertexNormals) writer.WriteMeshoptVertexSection(id, flags, reader.ReadSection<CookedVertexNormalTangentStream>(id));
             else if (id == CookedSectionIds.VertexUvColors) writer.WriteMeshoptVertexSection(id, flags, reader.ReadSection<CookedVertexUvColorStream>(id));
             else if (id == CookedSectionIds.VertexSkinning) writer.WriteMeshoptVertexSection(id, flags, reader.ReadSection<CookedVertexSkinningData>(id));
-            else writer.WriteMeshoptVertexSection(id, flags, reader.ReadSection<Meshlet>(id));
+            else writer.WriteMeshoptVertexSection(
+                id,
+                flags,
+                CookedMeshletCompatibility.ReadRequired(reader, id));
             return;
         }
         if (id is var indexId && (indexId == CookedSectionIds.Indices || indexId == CookedSectionIds.MeshletVertices || indexId == CookedSectionIds.MeshletTriangles))

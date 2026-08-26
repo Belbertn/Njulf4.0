@@ -518,6 +518,8 @@ namespace Njulf.Tests
         {
             bool detailedCompiled =
                 RendererBuildFeatures.DetailedDdgiDiagnosticsCompiled;
+            bool visualViewsCompiled =
+                RendererBuildFeatures.DdgiVisualDebugViewsCompiled;
 
             Assert.Multiple(() =>
             {
@@ -574,13 +576,17 @@ namespace Njulf.Tests
                 Assert.That(
                     RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(
                         GlobalIlluminationDebugView.DdgiProbeState),
-                    Is.EqualTo(detailedCompiled));
+                    Is.EqualTo(visualViewsCompiled));
                 Assert.That(
                     RendererBuildFeatures.ResolveGlobalIlluminationDebugView(
                         GlobalIlluminationDebugView.DdgiProbeState),
-                    Is.EqualTo(detailedCompiled
+                    Is.EqualTo(visualViewsCompiled
                         ? GlobalIlluminationDebugView.DdgiProbeState
                         : GlobalIlluminationDebugView.None));
+                Assert.That(
+                    !detailedCompiled || visualViewsCompiled,
+                    Is.True,
+                    "Detailed counter artifacts must also retain visual GI views.");
                 Assert.That(
                     RendererBuildFeatures.IsGlobalIlluminationDebugViewAvailable(
                         GlobalIlluminationDebugView.FarFieldSunShadow),

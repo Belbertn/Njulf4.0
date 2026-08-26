@@ -13,7 +13,7 @@ public sealed class AmbientOcclusionBlurSharedTileTests
     private const int SharedSampleCount = GroupSize * SharedStride;
 
     [Test]
-    public void ShaderContract_UsesOnePreBarrierSharedTileForOnlyTheEstablishedAxes()
+    public void ShaderContract_UsesSharedTilesAtNativeResolutionAndOneFullResolutionResolve()
     {
         string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
         string renderingDirectory = FindRepoDirectory("Njulf.Rendering");
@@ -30,7 +30,7 @@ public sealed class AmbientOcclusionBlurSharedTileTests
             "PreloadAoTile(",
             StringComparison.Ordinal);
         int barrierIndex = main.IndexOf("barrier();", StringComparison.Ordinal);
-        int boundsReturnIndex = main.IndexOf(
+        int boundsReturnIndex = main.LastIndexOf(
             "if (pixel.x >= extent.x || pixel.y >= extent.y)",
             StringComparison.Ordinal);
 
@@ -51,7 +51,7 @@ public sealed class AmbientOcclusionBlurSharedTileTests
             Assert.That(shader, Does.Contain(
                 "? -1.0 : ReconstructViewDepth(sampleUv, depth);"));
             Assert.That(shader, Does.Contain(
-                "vec2 invAoSize = 1.0 / max(pc.Dimensions, vec2(1.0));"));
+                "vec2 invAoSize = 1.0 / max(vec2(sourceExtent), vec2(1.0));"));
             Assert.That(shader, Does.Contain(
                 "vec2 sampleUv = (vec2(samplePixel) + vec2(0.5)) * invAoSize;"));
             Assert.That(shader, Does.Contain(
@@ -77,21 +77,32 @@ public sealed class AmbientOcclusionBlurSharedTileTests
                 "if (viewDepth < 0.0)\n            continue;"));
             Assert.That(main, Does.Contain(
                 "if (depthDifference > depthSigma * 4.0)"));
-            Assert.That(CountOccurrences(shader, "FetchSourceAo("), Is.EqualTo(2),
-                "only the function declaration and shared preload may fetch AO");
-            Assert.That(CountOccurrences(shader, "FetchDepth("), Is.EqualTo(2),
-                "only the function declaration and shared preload may fetch depth");
-            Assert.That(CountOccurrences(shader, "ReconstructViewDepth("), Is.EqualTo(2),
-                "only the function declaration and shared preload may reconstruct depth");
+            Assert.That(CountOccurrences(shader, "FetchSourceAo("), Is.EqualTo(4),
+                "AO fetches are confined to the shared preload and one compute resolve");
+            Assert.That(CountOccurrences(shader, "FetchDepth("), Is.EqualTo(4),
+                "depth fetches are confined to the shared preload and one compute resolve");
+            Assert.That(CountOccurrences(shader, "ReconstructViewDepth("), Is.EqualTo(4),
+                "depth reconstruction is confined to the shared preload and one compute resolve");
             Assert.That(preloadIndex, Is.GreaterThanOrEqualTo(0));
             Assert.That(barrierIndex, Is.GreaterThan(preloadIndex));
             Assert.That(boundsReturnIndex, Is.GreaterThan(barrierIndex),
                 "fringe invocations must preload and reach the workgroup barrier before returning");
-            Assert.That(CountOccurrences(pass, "            Dispatch(cmd,"), Is.EqualTo(2));
+            Assert.That(shader, Does.Contain("if (sourceExtent != extent)"));
+            Assert.That(shader, Does.Contain("ResolveDepthAwareAo("));
+            Assert.That(shader, Does.Contain(
+                "for (int y = -radius; y <= radius + 1; y++)"));
+            Assert.That(CountOccurrences(pass, "private void Dispatch("), Is.EqualTo(1));
+            Assert.That(CountOccurrences(pass, "AmbientOcclusionBlurPass Horizontal"), Is.EqualTo(1));
+            Assert.That(CountOccurrences(pass, "AmbientOcclusionBlurPass Vertical Resolve"), Is.EqualTo(1));
             Assert.That(pass, Does.Contain(
                 "Dispatch(cmd, _horizontalSet, _renderTargets.AmbientOcclusionRaw.Extent, new Vector2(1.0f, 0.0f)"));
             Assert.That(pass, Does.Contain(
-                "Dispatch(cmd, _verticalSet, _renderTargets.AmbientOcclusionBlurred.Extent, new Vector2(0.0f, 1.0f)"));
+                "blurEnabled ? _verticalSet : _resolveRawSet"));
+            Assert.That(pass, Does.Contain(
+                "_renderTargets.AmbientOcclusionBlurred.Extent"));
+            Assert.That(pass, Does.Contain("requiresFullResolutionResolve"));
+            Assert.That(pass, Does.Contain("DescriptorCount = 6"));
+            Assert.That(pass, Does.Contain("MaxSets = 3"));
             Assert.That(pass, Does.Contain(
                 "public override bool SupportsSecondaryCommandBuffer => false;"),
                 "the blur and its fragment-publication barrier must remain in one primary command stream");

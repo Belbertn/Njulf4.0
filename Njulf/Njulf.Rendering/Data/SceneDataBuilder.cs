@@ -27,8 +27,11 @@ namespace Njulf.Rendering.Data
     /// </summary>
     public sealed unsafe class SceneDataBuilder : IDisposable
     {
-        private const int TileSize = 16;
-        private const int MaxLightsPerTile = 128;
+        private const int TileSize = RenderingConstants.ForwardClusterTileSize;
+        private const int ClusterDepthSliceCount =
+            RenderingConstants.ForwardClusterDepthSliceCount;
+        private const int MaxLightsPerTile =
+            RenderingConstants.ForwardClusterMaxLights;
 
         private const uint InitialObjectCapacity = 4096;
         private const uint InitialInstanceCapacity = 4096;
@@ -146,6 +149,7 @@ namespace Njulf.Rendering.Data
         private ulong _sceneContentRevision;
         private uint _lastTileCountX;
         private uint _lastTileCountY;
+        private uint _lastClusterCountZ;
         private ulong _lastUploadedBytes;
         private int _lastSceneUploadCount;
         private int _lastSceneUploadSkipped;
@@ -198,6 +202,8 @@ namespace Njulf.Rendering.Data
         private ulong _submittedMeshletVertexSum;
         private int _submittedSmallMeshletsUnder16Triangles;
         private int _submittedSmallMeshletsUnder32Triangles;
+        private int _normalConeEligibleOpaqueMeshletCount;
+        private int _doubleSidedOpaqueMeshletCount;
         private bool _disposed;
 
         public bool CaptureCpuSnapshots { get; set; }
@@ -574,6 +580,8 @@ namespace Njulf.Rendering.Data
                     _submittedMeshletVertexSum = 0;
                     _submittedSmallMeshletsUnder16Triangles = 0;
                     _submittedSmallMeshletsUnder32Triangles = 0;
+                    _normalConeEligibleOpaqueMeshletCount = 0;
+                    _doubleSidedOpaqueMeshletCount = 0;
 
                     BuildCpuScenePayload(
                         scene,
@@ -625,9 +633,14 @@ namespace Njulf.Rendering.Data
 
                 uint tileCountX = Math.Max(1u, DivideRoundUp(screenWidth, TileSize));
                 uint tileCountY = Math.Max(1u, DivideRoundUp(screenHeight, TileSize));
-                uint totalTiles = checked(tileCountX * tileCountY);
+                uint clusterCountZ = ClusterDepthSliceCount;
+                uint totalClusters =
+                    RenderingConstants.CalculateForwardClusterCount(
+                        tileCountX,
+                        tileCountY);
                 _lastTileCountX = tileCountX;
                 _lastTileCountY = tileCountY;
+                _lastClusterCountZ = clusterCountZ;
 
                 long uploadStart = Stopwatch.GetTimestamp();
                 if (EnsureCapacity(ref _objectDataBuffer, CheckedCount(_objectData.Count), ObjectStride, uploadCommandBuffer))
@@ -643,7 +656,7 @@ namespace Njulf.Rendering.Data
                     stream.EnsureCapacity(this, frameIndex, uploadCommandBuffer);
                 EnsureCapacity(ref _meshletTaskFrameDataBuffers[frameIndex], 1, MeshletTaskFrameDataStride, uploadCommandBuffer);
                 if (useTiledLightCulling)
-                    EnsureTiledLightBuffers(totalTiles, uploadCommandBuffer);
+                    EnsureTiledLightBuffers(totalClusters, uploadCommandBuffer);
                 else
                     ReleaseTiledLightBuffers();
 
@@ -676,7 +689,7 @@ namespace Njulf.Rendering.Data
                 _hasPreviousHiZFrameData = true;
 
                 if (useTiledLightCulling)
-                    ClearTiledLightBuffers(uploadCommandBuffer, totalTiles);
+                    ClearTiledLightBuffers(uploadCommandBuffer, totalClusters);
 
                 RecordUploadReadBarriers(uploadCommandBuffer, frameIndex, useTiledLightCulling);
                 UpdateRegisteredBindlessBuffers();
@@ -690,8 +703,11 @@ namespace Njulf.Rendering.Data
                     ? 0f
                     : (float)_submittedMeshletVertexSum / _submittedMeshletCountCpu;
                 ulong materialUploadBytes = _materialManager.LastUploadBytes;
+                ulong forwardMaterialUploadBytes =
+                    _materialManager.LastForwardUploadBytes;
                 ulong materialExtensionUploadBytes = _materialManager.LastExtensionUploadBytes;
-                ulong uploadedBytes = _lastUploadedBytes + materialUploadBytes + materialExtensionUploadBytes;
+                ulong uploadedBytes = _lastUploadedBytes + materialUploadBytes +
+                    forwardMaterialUploadBytes + materialExtensionUploadBytes;
                 AnimationSceneStats animationStats = CountAnimationSceneStats(scene);
 
                 var sceneData = new SceneRenderingData
@@ -761,6 +777,7 @@ namespace Njulf.Rendering.Data
                     ScreenHeight = screenHeight,
                     TileCountX = tileCountX,
                     TileCountY = tileCountY,
+                    ClusterCountZ = clusterCountZ,
                     MaxLightsPerTile = MaxLightsPerTile,
                     UploadedBytes = uploadedBytes,
                     CpuSceneBuildMicroseconds = _lastBuildMicroseconds,
@@ -779,7 +796,13 @@ namespace Njulf.Rendering.Data
                     MeshletLod0SubmittedCpu = _meshletLod0SubmittedCpu,
                     MeshletLod1SubmittedCpu = _meshletLod1SubmittedCpu,
                     MeshletLod2SubmittedCpu = _meshletLod2SubmittedCpu,
-                    StableSceneInputUploadBytes = _lastObjectUploadBytes + _lastInstanceUploadBytes + materialUploadBytes + materialExtensionUploadBytes,
+                    NormalConeEligibleOpaqueMeshletCount =
+                        _normalConeEligibleOpaqueMeshletCount,
+                    DoubleSidedOpaqueMeshletCount =
+                        _doubleSidedOpaqueMeshletCount,
+                    StableSceneInputUploadBytes = _lastObjectUploadBytes +
+                        _lastInstanceUploadBytes + materialUploadBytes +
+                        forwardMaterialUploadBytes + materialExtensionUploadBytes,
                     CpuCandidateListUploadBytes = _lastMeshletDrawUploadBytes +
                         _lastSolidDepthMeshletDrawUploadBytes +
                         _lastMaskedDepthMeshletDrawUploadBytes +
@@ -805,9 +828,12 @@ namespace Njulf.Rendering.Data
                     PackedMaskedDepthMeshletDrawUploadBytes = _lastPackedMaskedDepthMeshletDrawUploadBytes,
                     TransparentMeshletDrawUploadBytes = _lastTransparentMeshletDrawUploadBytes,
                     MaterialUploadBytes = materialUploadBytes,
+                    ForwardMaterialUploadBytes = forwardMaterialUploadBytes,
                     MaterialExtensionUploadBytes = materialExtensionUploadBytes,
                     ObjectBufferSize = _objectDataBuffer.ByteSize,
                     MaterialBufferSize = _materialManager.MaterialBufferSize,
+                    ForwardMaterialBufferSize =
+                        _materialManager.ForwardMaterialBufferSize,
                     MaterialExtensionBufferSize = _materialManager.MaterialExtensionBufferSize,
                     InstanceBufferSize = _instanceBuffers[frameIndex].ByteSize,
                     MeshletDrawBufferSize = _meshletDrawBuffers[frameIndex].ByteSize,
@@ -830,6 +856,8 @@ namespace Njulf.Rendering.Data
                     TiledLightIndexBufferClearBytes = _lastTiledLightIndexBufferClearBytes,
                     ObjectDataBuffer = _objectDataBuffer.Handle,
                     MaterialDataBuffer = _materialManager.MaterialBuffer,
+                    ForwardMaterialDataBuffer =
+                        _materialManager.ForwardMaterialBuffer,
                     MaterialExtensionDataBuffer = _materialManager.MaterialExtensionBuffer,
                     InstanceBuffer = _instanceBuffers[frameIndex].Handle,
                     MeshletDrawBuffer = _meshletDrawBuffers[frameIndex].Handle,
@@ -1145,6 +1173,10 @@ namespace Njulf.Rendering.Data
                                         !isGeometryDecal;
                 bool objectIntersectsShadowCascade = castsDirectionalShadow && !useCameraDependentCpuPayload;
                 bool isSkinnedObject = renderObject is SkinnedRenderObject { SkinningEnabled: true };
+                uint meshletCommandFlags = CreateMeshletCommandFlags(
+                    metadata,
+                    cullingMatrix,
+                    isSkinnedObject);
                 if (castsDirectionalShadow && useCameraDependentCpuPayload)
                 {
                     for (int cascade = 0; cascade < directionalShadowCascadeCount; cascade++)
@@ -1183,7 +1215,7 @@ namespace Njulf.Rendering.Data
                         MeshletIndex = meshletIndex,
                         InstanceId = instanceId,
                         MaterialIndex = (uint)materialIndex,
-                        Padding = 0
+                        Padding = meshletCommandFlags
                     };
 
                     if (meshletVisibleToCamera)
@@ -1405,6 +1437,10 @@ namespace Njulf.Rendering.Data
                     _lastObjectCullMicroseconds += ElapsedMicroseconds(objectStart);
 
                     long meshletStart = Stopwatch.GetTimestamp();
+                    uint meshletCommandFlags = CreateMeshletCommandFlags(
+                        metadata,
+                        worldMatrix,
+                        isSkinned: false);
                     var staticInstanceKey = new StaticInstanceKey(batch, instance);
                     int previousLodLevel = _previousStaticInstanceLods.TryGetValue(staticInstanceKey, out int storedLodLevel)
                         ? storedLodLevel
@@ -1458,7 +1494,7 @@ namespace Njulf.Rendering.Data
                             MeshletIndex = meshletIndex,
                             InstanceId = instanceId,
                             MaterialIndex = (uint)materialIndex,
-                            Padding = 0
+                            Padding = meshletCommandFlags
                         };
 
                         if (meshletVisibleToCamera)
@@ -1571,6 +1607,19 @@ namespace Njulf.Rendering.Data
             MaterialForwardClass forwardClass,
             MeshInfo meshInfo)
         {
+            GPUMeshletCommandFlags commandFlags =
+                (GPUMeshletCommandFlags)command.Padding;
+            if ((commandFlags &
+                 GPUMeshletCommandFlags.NormalConeCullEligible) != 0)
+            {
+                _normalConeEligibleOpaqueMeshletCount++;
+            }
+            if ((commandFlags &
+                 GPUMeshletCommandFlags.MaterialDoubleSided) != 0)
+            {
+                _doubleSidedOpaqueMeshletCount++;
+            }
+
             if (MaterialForwardClassifier.IsSimpleOpaque(forwardClass) &&
                 !meshInfo.HasVertexColor)
             {
@@ -1655,6 +1704,12 @@ namespace Njulf.Rendering.Data
                 flags |= GPUMeshletDrawFlags.MaterialBlend;
             if (renderMode != MaterialRenderMode.Blend)
                 flags |= GPUMeshletDrawFlags.CanHiZTest;
+            GPUMeshletCommandFlags commandFlags =
+                (GPUMeshletCommandFlags)command.Padding;
+            if ((commandFlags & GPUMeshletCommandFlags.MaterialDoubleSided) != 0)
+                flags |= GPUMeshletDrawFlags.MaterialDoubleSided;
+            if ((commandFlags & GPUMeshletCommandFlags.NormalConeCullEligible) != 0)
+                flags |= GPUMeshletDrawFlags.NormalConeCullEligible;
 
             return new GPUPackedMeshletDrawCommand
             {
@@ -1664,6 +1719,65 @@ namespace Njulf.Rendering.Data
                 Flags = (uint)flags,
                 WorldCenterRadius = new Vector4(worldCenter.X, worldCenter.Y, worldCenter.Z, worldRadius)
             };
+        }
+
+        private static uint CreateMeshletCommandFlags(
+            MaterialRenderMetadata metadata,
+            Matrix4x4 worldMatrix,
+            bool isSkinned)
+        {
+            GPUMeshletCommandFlags flags = GPUMeshletCommandFlags.None;
+            if (metadata.DoubleSided)
+                flags |= GPUMeshletCommandFlags.MaterialDoubleSided;
+
+            // Skinning and anisotropic transforms can widen an object-space
+            // normal cone. Restrict whole-meshlet rejection to rigid or
+            // uniformly-scaled one-sided instances, where inverse-transpose
+            // preserves every cone angle exactly.
+            if (!metadata.DoubleSided &&
+                !isSkinned &&
+                IsNormalConePreservingTransform(worldMatrix))
+            {
+                flags |= GPUMeshletCommandFlags.NormalConeCullEligible;
+            }
+
+            return (uint)flags;
+        }
+
+        internal static bool IsNormalConePreservingTransform(Matrix4x4 matrix)
+        {
+            Vector3 basisX = new(matrix.M11, matrix.M12, matrix.M13);
+            Vector3 basisY = new(matrix.M21, matrix.M22, matrix.M23);
+            Vector3 basisZ = new(matrix.M31, matrix.M32, matrix.M33);
+            float xLength = basisX.Length();
+            float yLength = basisY.Length();
+            float zLength = basisZ.Length();
+            float maximumLength = MathF.Max(xLength, MathF.Max(yLength, zLength));
+            if (!float.IsFinite(maximumLength) || maximumLength <= 1e-6f)
+                return false;
+
+            float scaleTolerance = maximumLength * 1e-3f;
+            if (MathF.Abs(xLength - yLength) > scaleTolerance ||
+                MathF.Abs(xLength - zLength) > scaleTolerance)
+            {
+                return false;
+            }
+
+            float orthogonalityTolerance = maximumLength * maximumLength * 1e-3f;
+            if (MathF.Abs(Vector3.Dot(basisX, basisY)) > orthogonalityTolerance ||
+                MathF.Abs(Vector3.Dot(basisX, basisZ)) > orthogonalityTolerance ||
+                MathF.Abs(Vector3.Dot(basisY, basisZ)) > orthogonalityTolerance)
+            {
+                return false;
+            }
+
+            // A reflection reverses triangle winding. The inverse-transpose
+            // axis alone does not include that orientation sign, so using its
+            // object-space cone could reject front-facing mirrored geometry.
+            float determinant = Vector3.Dot(
+                basisX,
+                Vector3.Cross(basisY, basisZ));
+            return float.IsFinite(determinant) && determinant > 0.0f;
         }
 
         private void AccumulatePointShadowFaceCoverage(
@@ -2649,12 +2763,16 @@ namespace Njulf.Rendering.Data
 
         public BufferHandle ObjectDataBuffer => _objectDataBuffer.Handle;
         public BufferHandle MaterialDataBuffer => _materialManager.MaterialBuffer;
+        public BufferHandle ForwardMaterialDataBuffer =>
+            _materialManager.ForwardMaterialBuffer;
         public BufferHandle MaterialExtensionDataBuffer => _materialManager.MaterialExtensionBuffer;
         public BufferHandle TiledLightHeaderBuffer => _tiledLightHeaderBuffer.Handle;
         public BufferHandle TiledLightIndexBuffer => _tiledLightIndexBuffer.Handle;
 
         public ulong ObjectBufferSize => _objectDataBuffer.ByteSize;
         public ulong MaterialBufferSize => _materialManager.MaterialBufferSize;
+        public ulong ForwardMaterialBufferSize =>
+            _materialManager.ForwardMaterialBufferSize;
         public ulong MaterialExtensionBufferSize => _materialManager.MaterialExtensionBufferSize;
         public ulong TiledLightHeaderBufferSize => _tiledLightHeaderBuffer.ByteSize;
         public ulong TiledLightIndexBufferSize => _tiledLightIndexBuffer.ByteSize;
@@ -2664,6 +2782,7 @@ namespace Njulf.Rendering.Data
         public long LastBuildMicroseconds => _lastBuildMicroseconds;
         public uint LastTileCountX => _lastTileCountX;
         public uint LastTileCountY => _lastTileCountY;
+        public uint LastClusterCountZ => _lastClusterCountZ;
 
         public BufferHandle GetInstanceBuffer(int frameIndex)
         {

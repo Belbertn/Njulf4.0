@@ -58,11 +58,8 @@ namespace Njulf.Rendering.Pipeline
             sceneData.AmbientOcclusionEnabled = enabled;
             sceneData.AmbientOcclusionMode = enabled ? ao.Mode : AmbientOcclusionMode.Disabled;
             sceneData.AmbientOcclusionDebugView = ao.DebugView;
-            sceneData.AmbientOcclusionForwardSamplingMode = ResolveForwardSamplingMode(enabled, ao);
-            sceneData.AmbientOcclusionForwardDepthAwareSamples =
-                sceneData.AmbientOcclusionForwardSamplingMode == AmbientOcclusionForwardSamplingMode.DepthAwareUpsample
-                    ? 4
-                    : 0;
+            sceneData.AmbientOcclusionForwardSamplingMode = ResolveForwardSamplingMode(enabled);
+            sceneData.AmbientOcclusionForwardDepthAwareSamples = 0;
             sceneData.AmbientOcclusionWidth = enabled ? _renderTargets.AmbientOcclusionRaw.Extent.Width : 1u;
             sceneData.AmbientOcclusionHeight = enabled ? _renderTargets.AmbientOcclusionRaw.Extent.Height : 1u;
             sceneData.AmbientOcclusionFormat = RenderTargetManager.AmbientOcclusionFormat.ToString();
@@ -76,15 +73,15 @@ namespace Njulf.Rendering.Pipeline
         }
 
         private static AmbientOcclusionForwardSamplingMode ResolveForwardSamplingMode(
-            bool enabled,
-            AmbientOcclusionSettings ao)
+            bool enabled)
         {
             if (!enabled)
                 return AmbientOcclusionForwardSamplingMode.Disabled;
 
-            return ao.ResolutionScale >= 0.999f
-                ? AmbientOcclusionForwardSamplingMode.Direct
-                : AmbientOcclusionForwardSamplingMode.DepthAwareUpsample;
+            // Reduced-resolution AO is reconstructed into the full-resolution
+            // blurred target once by AmbientOcclusionBlurPass. Forward shading
+            // therefore performs one direct sample regardless of AO scale.
+            return AmbientOcclusionForwardSamplingMode.Direct;
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)

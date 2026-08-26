@@ -91,6 +91,13 @@ namespace Njulf.Rendering.Pipeline
 
             uint tileCountX = sceneData.TileCountX;
             uint tileCountY = sceneData.TileCountY;
+            uint clusterCountZ = sceneData.ClusterCountZ;
+            if (clusterCountZ !=
+                RenderingConstants.ForwardClusterDepthSliceCount)
+            {
+                throw new InvalidOperationException(
+                    $"Forward cluster depth-slice count {clusterCountZ} does not match the shader contract {RenderingConstants.ForwardClusterDepthSliceCount}.");
+            }
             
             // Push constants
             var pushConstants = new Data.GPULightCullPushConstants
@@ -103,14 +110,14 @@ namespace Njulf.Rendering.Pipeline
                     -sceneData.ViewMatrix.M23,
                     -sceneData.ViewMatrix.M33),
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
-                NearPlane = 0.1f,
-                FarPlane = 1000.0f,
+                NearPlane = RenderingConstants.ForwardClusterNearPlane,
+                FarPlane = RenderingConstants.ForwardClusterFarPlane,
                 LightCount = (uint)sceneData.LightCount,
                 MaxLightsPerTile = (uint)sceneData.MaxLightsPerTile,
                 TileCountX = tileCountX,
                 TileCountY = tileCountY,
                 DepthTextureIndex = (uint)BindlessIndex.DepthTexture,
-                Padding1 = 0,
+                ClusterCountZ = clusterCountZ,
                 Padding2 = 0,
                 Padding3 = 0
             };

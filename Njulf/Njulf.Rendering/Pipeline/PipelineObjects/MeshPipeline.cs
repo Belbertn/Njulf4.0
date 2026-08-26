@@ -11,6 +11,59 @@ using VkPipeline = Silk.NET.Vulkan.Pipeline;
 
 namespace Njulf.Rendering.Pipeline.PipelineObjects
 {
+    public enum ForwardOpaquePipelineFamily : byte
+    {
+        Full = 0,
+        CompactedFull = 1,
+        Simple = 2,
+        SimpleFullInput = 3,
+        CompactedSimple = 4,
+        CompactedSimpleFullInput = 5
+    }
+
+    [Flags]
+    public enum ForwardOpaquePipelineFeatures : byte
+    {
+        None = 0,
+        ReceiverCache = 1 << 0,
+        GlobalIlluminationDisabled = 1 << 1,
+        AlphaMaskReceiverFeedback = 1 << 2,
+        NearFieldDirectSource = 1 << 3,
+        GiCausticReceiver = 1 << 4,
+        HybridReflectionReceiver = 1 << 5
+    }
+
+    public readonly record struct ForwardOpaquePipelineKey(
+        ForwardOpaquePipelineFamily Family,
+        ForwardOpaquePipelineFeatures Features)
+    {
+        public const int FamilyCount = 6;
+        public const int FeatureCombinationCount = 64;
+        public const int CacheEntryCount =
+            FamilyCount * FeatureCombinationCount;
+
+        public int CacheIndex
+        {
+            get
+            {
+                int family = (int)Family;
+                int features = (int)Features;
+                if ((uint)family >= FamilyCount ||
+                    (uint)features >= FeatureCombinationCount)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(ForwardOpaquePipelineKey),
+                        "Forward pipeline key contains an unknown family or feature bit.");
+                }
+
+                return family + FamilyCount * features;
+            }
+        }
+
+        public bool Has(ForwardOpaquePipelineFeatures feature) =>
+            (Features & feature) != 0;
+    }
+
     public sealed unsafe class MeshPipeline : IDisposable
     {
         private const string EntryPoint = "main";
@@ -36,8 +89,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private VkPipeline _depthPipeline;
         private VkPipeline _maskedDepthPipeline;
+        private VkPipeline _compactedDepthPipeline;
+        private VkPipeline _compactedMaskedDepthPipeline;
         private VkPipeline _shadowDepthPipeline;
         private VkPipeline _shadowAlphaDepthPipeline;
+        private VkPipeline _compactedShadowAlphaDepthPipeline;
         private VkPipeline _forwardPipeline;
         private VkPipeline _forwardCompactedPipeline;
         private VkPipeline _forwardSimplePipeline;
@@ -72,6 +128,11 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         //  base pipeline family 0..5].
         private readonly VkPipeline[,,] _hybridReflectionPipelines =
             new VkPipeline[2, 4, 6];
+        private readonly VkPipeline[] _forwardOpaquePipelineCache =
+            new VkPipeline[ForwardOpaquePipelineKey.CacheEntryCount];
+        private readonly bool[] _forwardOpaquePipelineCacheValid =
+            new bool[ForwardOpaquePipelineKey.CacheEntryCount];
+        private int _forwardOpaquePipelineCacheEntryCount;
         private VkPipeline _forwardReceiverCachePipeline;
         private VkPipeline _forwardCompactedReceiverCachePipeline;
         private VkPipeline _forwardSimpleReceiverCachePipeline;
@@ -161,8 +222,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         public VkPipeline DepthPipeline => _depthPipeline;
         public VkPipeline MaskedDepthPipeline => _maskedDepthPipeline;
+        public VkPipeline CompactedDepthPipeline => _compactedDepthPipeline;
+        public VkPipeline CompactedMaskedDepthPipeline =>
+            _compactedMaskedDepthPipeline;
         public VkPipeline ShadowDepthPipeline => _shadowDepthPipeline;
         public VkPipeline ShadowAlphaDepthPipeline => _shadowAlphaDepthPipeline;
+        public VkPipeline CompactedShadowAlphaDepthPipeline =>
+            _compactedShadowAlphaDepthPipeline;
         public VkPipeline ForwardPipeline => _forwardPipeline;
         public VkPipeline ForwardFullMaterialPipeline => _forwardPipeline;
         public VkPipeline ForwardCompactedPipeline => _forwardCompactedPipeline;
@@ -229,6 +295,13 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _forwardSimpleFullInputAlphaMaskReceiverFeedbackPipeline.Handle != 0 &&
             _forwardCompactedSimpleAlphaMaskReceiverFeedbackPipeline.Handle != 0 &&
             _forwardCompactedSimpleFullInputAlphaMaskReceiverFeedbackPipeline.Handle != 0;
+        public bool GiDisabledPipelinesAvailable =>
+            _forwardGiDisabledPipeline.Handle != 0 &&
+            _forwardCompactedGiDisabledPipeline.Handle != 0 &&
+            _forwardSimpleGiDisabledPipeline.Handle != 0 &&
+            _forwardSimpleFullInputGiDisabledPipeline.Handle != 0 &&
+            _forwardCompactedSimpleGiDisabledPipeline.Handle != 0 &&
+            _forwardCompactedSimpleFullInputGiDisabledPipeline.Handle != 0;
         public string ReceiverFeedbackPipelineFailureReason { get; private set; } =
             "receiver-feedback-pipelines-not-admitted-at-startup";
         public VkPipeline MotionVectorPipeline => _motionVectorPipeline;
@@ -350,12 +423,120 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         }
 
         /// <summary>
+        /// Resolves the complete opaque-forward semantic key once, then serves
+        /// subsequent draws from a fixed-size handle cache. This replaces the
+        /// repeated family/feature decision chain on every bucket submission.
+        /// </summary>
+        public bool TryResolveForwardOpaquePipeline(
+            in ForwardOpaquePipelineKey key,
+            out VkPipeline pipeline)
+        {
+            int cacheIndex = key.CacheIndex;
+            if (_forwardOpaquePipelineCacheValid[cacheIndex])
+            {
+                pipeline = _forwardOpaquePipelineCache[cacheIndex];
+                return pipeline.Handle != 0;
+            }
+
+            VkPipeline exactPipeline = ResolveBasePipeline(key.Family);
+            bool receiverCache = key.Has(
+                ForwardOpaquePipelineFeatures.ReceiverCache);
+            bool nearField = key.Has(
+                ForwardOpaquePipelineFeatures.NearFieldDirectSource);
+            bool caustic = key.Has(
+                ForwardOpaquePipelineFeatures.GiCausticReceiver);
+
+            bool resolved;
+            if (key.Has(
+                    ForwardOpaquePipelineFeatures.HybridReflectionReceiver))
+            {
+                resolved = TryResolveHybridReflectionPipeline(
+                    exactPipeline,
+                    nearField,
+                    caustic,
+                    receiverCache,
+                    out pipeline);
+            }
+            else if (nearField && caustic)
+            {
+                resolved = TryResolveCombinedAdvancedGiPipeline(
+                    exactPipeline,
+                    out pipeline);
+            }
+            else if (nearField)
+            {
+                resolved = TryResolveNearFieldDirectSourcePipeline(
+                    exactPipeline,
+                    receiverCache,
+                    out pipeline);
+            }
+            else if (caustic)
+            {
+                resolved = TryResolveGiCausticReceiverPipeline(
+                    exactPipeline,
+                    out pipeline);
+            }
+            else
+            {
+                pipeline = ResolveOpaqueSpecializedPipeline(
+                    exactPipeline,
+                    receiverCache,
+                    key.Has(
+                        ForwardOpaquePipelineFeatures
+                            .GlobalIlluminationDisabled),
+                    key.Has(
+                        ForwardOpaquePipelineFeatures
+                            .AlphaMaskReceiverFeedback));
+                resolved = pipeline.Handle != 0;
+            }
+
+            if (!resolved || pipeline.Handle == 0)
+                return false;
+
+            _forwardOpaquePipelineCache[cacheIndex] = pipeline;
+            _forwardOpaquePipelineCacheValid[cacheIndex] = true;
+            _forwardOpaquePipelineCacheEntryCount++;
+            return true;
+        }
+
+        internal int ForwardOpaquePipelineCacheEntryCount =>
+            _forwardOpaquePipelineCacheEntryCount;
+
+        private VkPipeline ResolveBasePipeline(
+            ForwardOpaquePipelineFamily family) =>
+            family switch
+            {
+                ForwardOpaquePipelineFamily.Full => _forwardPipeline,
+                ForwardOpaquePipelineFamily.CompactedFull =>
+                    _forwardCompactedPipeline,
+                ForwardOpaquePipelineFamily.Simple => _forwardSimplePipeline,
+                ForwardOpaquePipelineFamily.SimpleFullInput =>
+                    _forwardSimpleFullInputPipeline,
+                ForwardOpaquePipelineFamily.CompactedSimple =>
+                    _forwardCompactedSimplePipeline,
+                ForwardOpaquePipelineFamily.CompactedSimpleFullInput =>
+                    _forwardCompactedSimpleFullInputPipeline,
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(family),
+                    family,
+                    "Unknown forward opaque pipeline family.")
+            };
+
+        private void InvalidateForwardOpaquePipelineCache()
+        {
+            Array.Clear(_forwardOpaquePipelineCache);
+            Array.Clear(_forwardOpaquePipelineCacheValid);
+            _forwardOpaquePipelineCacheEntryCount = 0;
+        }
+
+        /// <summary>
         /// Releases the optional C5 MRT variants during a renderer-controlled
         /// device-idle fallback transition. Ordinary forward pipelines remain
         /// intact and immediately become the sole selectable path.
         /// </summary>
         internal void DisableNearFieldDirectSourceAfterDeviceIdle(string reason)
         {
+            InvalidateForwardOpaquePipelineCache();
             DestroyNearFieldDirectSourcePipelines();
             DestroyCombinedAdvancedGiPipelines();
             _nearFieldDirectSourceConfiguration =
@@ -370,6 +551,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         internal void DisableGiCausticReceiverAfterDeviceIdle(string reason)
         {
+            InvalidateForwardOpaquePipelineCache();
             DestroyGiCausticReceiverPipelines();
             DestroyCombinedAdvancedGiPipelines();
             _giCausticReceiverConfiguration =
@@ -1262,6 +1444,38 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 depthBiasEnable: false);
             _context.SetDebugName(_maskedDepthPipeline.Handle, ObjectType.Pipeline, "Masked Depth Alpha-Test Mesh Pipeline");
 
+            _compactedDepthPipeline = CreateGraphicsPipeline(
+                taskShaderName: null,
+                "depth_compacted.mesh.spv",
+                "depth_sided.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: false,
+                depthWriteEnable: true,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            _context.SetDebugName(
+                _compactedDepthPipeline.Handle,
+                ObjectType.Pipeline,
+                "Compacted Mesh-Only Depth Prepass Pipeline");
+
+            _compactedMaskedDepthPipeline = CreateGraphicsPipeline(
+                taskShaderName: null,
+                "depth_alpha_compacted.mesh.spv",
+                "depth_alpha.frag.spv",
+                colorFormat,
+                depthFormat,
+                hasColorAttachment: false,
+                depthWriteEnable: true,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: false);
+            _context.SetDebugName(
+                _compactedMaskedDepthPipeline.Handle,
+                ObjectType.Pipeline,
+                "Compacted Mesh-Only Masked Depth Prepass Pipeline");
+
             _shadowDepthPipeline = CreateGraphicsPipeline(
                 "shadow_depth.task.spv",
                 "shadow_depth.mesh.spv",
@@ -1287,6 +1501,22 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 cullMode: CullModeFlags.None,
                 depthBiasEnable: true);
             _context.SetDebugName(_shadowAlphaDepthPipeline.Handle, ObjectType.Pipeline, "Alpha-Test Shadow Mesh Pipeline");
+
+            _compactedShadowAlphaDepthPipeline = CreateGraphicsPipeline(
+                taskShaderName: null,
+                "shadow_depth_alpha_compacted.mesh.spv",
+                "depth_alpha.frag.spv",
+                colorFormat,
+                Format.D32Sfloat,
+                hasColorAttachment: false,
+                depthWriteEnable: true,
+                blendEnable: false,
+                cullMode: CullModeFlags.None,
+                depthBiasEnable: true);
+            _context.SetDebugName(
+                _compactedShadowAlphaDepthPipeline.Handle,
+                ObjectType.Pipeline,
+                "Compacted Mesh-Only Alpha-Test Shadow Pipeline");
 
             _forwardPipeline = CreateGraphicsPipeline(
                 forwardTaskShaderName,
@@ -2989,6 +3219,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void DestroyPipelines()
         {
+            InvalidateForwardOpaquePipelineCache();
             NearFieldDirectSourceAttachmentEnabled = false;
             GiCausticReceiverAttachmentEnabled = false;
             CombinedAdvancedGiAttachmentEnabled = false;
@@ -3018,10 +3249,37 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _maskedDepthPipeline = default;
             }
 
+            if (_compactedDepthPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _compactedDepthPipeline,
+                    null);
+                _compactedDepthPipeline = default;
+            }
+
+            if (_compactedMaskedDepthPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _compactedMaskedDepthPipeline,
+                    null);
+                _compactedMaskedDepthPipeline = default;
+            }
+
             if (_shadowAlphaDepthPipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(_context.Device, _shadowAlphaDepthPipeline, null);
                 _shadowAlphaDepthPipeline = default;
+            }
+
+            if (_compactedShadowAlphaDepthPipeline.Handle != 0)
+            {
+                _context.Api.DestroyPipeline(
+                    _context.Device,
+                    _compactedShadowAlphaDepthPipeline,
+                    null);
+                _compactedShadowAlphaDepthPipeline = default;
             }
 
             if (_forwardPipeline.Handle != 0)

@@ -298,6 +298,18 @@ namespace Njulf.Rendering.Pipeline
             if (meshletCount <= 0 && loadOp != AttachmentLoadOp.Clear)
                 return;
 
+            bool useCompactedIndirect = meshletCount > 0 &&
+                indirectDispatchOffset.HasValue &&
+                CanUseSceneIndirectDispatch(
+                    sceneData,
+                    indirectDispatchOffset.GetValueOrDefault());
+            _context.Api.CmdBindPipeline(
+                cmd,
+                PipelineBindPoint.Graphics,
+                useCompactedIndirect
+                    ? _meshPipeline.CompactedShadowAlphaDepthPipeline
+                    : _meshPipeline.ShadowAlphaDepthPipeline);
+
             SetReverseDepthBias(cmd, sceneData, cascade);
 
             var depthAttachment = new RenderingAttachmentInfo
@@ -347,14 +359,14 @@ namespace Njulf.Rendering.Pipeline
 
             if (meshletCount > 0)
             {
-                if (indirectDispatchOffset.HasValue &&
-                    CanUseSceneIndirectDispatch(sceneData, indirectDispatchOffset.Value))
+                if (useCompactedIndirect)
                 {
+                    sceneData.DirectionalShadowMeshOnlyIndirectDrawCount++;
                     VkBuffer indirect = _bufferManager!.GetBuffer(sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer);
                     _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
                         cmd,
                         indirect,
-                        indirectDispatchOffset.Value,
+                        indirectDispatchOffset.GetValueOrDefault(),
                         1,
                         (uint)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
                 }

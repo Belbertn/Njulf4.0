@@ -249,28 +249,28 @@ float ReadInstanceMaxScale(uint instanceBufferIndex, uint objectWordOffset)
     return max(length(basisX), max(length(basisY), length(basisZ)));
 }
 
-bool IsMeshletVisible(GPUMeshletDrawCommand command, vec4 frustumPlanes[6])
+vec4 ResolveMeshletWorldCenterRadius(
+    GPUMeshletDrawCommand command,
+    GPUMeshlet meshlet)
 {
-    if ((pc.Push.Flags & SCENE_OPAQUE_COMPACTION_FLAG_FRUSTUM_TEST) == 0u)
-        return true;
-
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
     uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
     vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
     float worldRadius = meshlet.BoundingSphereRadius * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
-
-    return SphereIntersectsFrustumPlanes(worldCenter.xyz, worldRadius, frustumPlanes);
+    return vec4(worldCenter.xyz, worldRadius);
 }
 
 vec4 ResolveMeshletWorldCenterRadius(GPUMeshletDrawCommand command)
 {
-    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) + pc.Push.CurrentFrameIndex;
-    uint objectWordOffset = command.InstanceId * uint(SIZEOF_GPU_OBJECT_DATA / 4);
-    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
-    vec4 worldCenter = TransformRowMajorPoint(meshlet.BoundingSphereCenter, instanceBufferIndex, objectWordOffset);
-    float worldRadius = meshlet.BoundingSphereRadius * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
-    return vec4(worldCenter.xyz, worldRadius);
+    return ResolveMeshletWorldCenterRadius(
+        command,
+        ReadMeshlet(command.MeshletIndex));
+}
+
+bool IsNormalConeCullEligible(GPUMeshletDrawCommand command)
+{
+    return (command.Padding &
+        MESHLET_COMMAND_FLAG_NORMAL_CONE_CULL_ELIGIBLE) != 0u;
 }
 
 bool ProjectToUvDepth(vec3 worldPosition, mat4 viewProjection, out vec3 uvDepth)
@@ -415,14 +415,12 @@ bool MeshletOccludedByHiZ(vec3 worldCenter, float worldRadius)
 
 bool CanHiZTestMeshletDrawCommand(GPUMeshletDrawCommand command)
 {
-    GPUMaterialData material = ReadMaterial(command.MaterialIndex);
-    return material.NormalScaleBias.y < 1.5;
-}
-
-bool IsMeshletVisibleToMatrix(GPUMeshletDrawCommand command, mat4 viewProjection)
-{
-    vec4 sphere = ResolveMeshletWorldCenterRadius(command);
-    return SphereIntersectsRowMajorFrustum(sphere.xyz, sphere.w, viewProjection);
+    uint materialBaseWord = command.MaterialIndex *
+        uint(SIZEOF_GPU_FORWARD_MATERIAL_DATA / 4);
+    float alphaMode = ReadStorageFloatUniform(
+        uint(FORWARD_MATERIAL_DATA_BUFFER_INDEX),
+        materialBaseWord + 9u);
+    return alphaMode < 1.5;
 }
 
 uint SelectLodLevel(vec3 cameraPosition, vec3 worldCenter, float worldRadius)
@@ -610,9 +608,31 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
     if (!ApplyGpuLodSelection(command, effectiveLod, 0u))
         return;
 
-    if (!IsMeshletVisible(command, frustumPlanes))
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId *
+        uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    vec4 worldCenterRadius = ResolveMeshletWorldCenterRadius(command, meshlet);
+    if ((pc.Push.Flags & SCENE_OPAQUE_COMPACTION_FLAG_FRUSTUM_TEST) != 0u &&
+        !SphereIntersectsFrustumPlanes(
+            worldCenterRadius.xyz,
+            worldCenterRadius.w,
+            frustumPlanes))
     {
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_FRUSTUM_REJECTED], 1u);
+        return;
+    }
+
+    if (IsNormalConeCullEligible(command) &&
+        MeshletBackfaceConeCulled(
+            meshlet,
+            instanceBufferIndex,
+            objectWordOffset,
+            worldCenterRadius.xyz,
+            worldCenterRadius.w,
+            pc.Push.CameraPosition.xyz))
+    {
         return;
     }
 
@@ -623,7 +643,6 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
         pc.Push.PreviousHiZFrameValid != 0u &&
         ReadMeshletTaskPreviousHiZFrameValid(pc.Push.CurrentFrameIndex) != 0u)
     {
-        vec4 worldCenterRadius = ResolveMeshletWorldCenterRadius(command);
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_HIZ_TESTED], 1u);
         if (MeshletOccludedByHiZ(worldCenterRadius.xyz, worldCenterRadius.w))
         {
@@ -685,7 +704,27 @@ void ProcessDepthCandidate(
     if (!ApplyGpuLodSelection(command, effectiveLod, 0u))
         return;
 
-    if (!IsMeshletVisible(command, frustumPlanes))
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId *
+        uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    vec4 worldCenterRadius = ResolveMeshletWorldCenterRadius(command, meshlet);
+    if ((pc.Push.Flags & SCENE_OPAQUE_COMPACTION_FLAG_FRUSTUM_TEST) != 0u &&
+        !SphereIntersectsFrustumPlanes(
+            worldCenterRadius.xyz,
+            worldCenterRadius.w,
+            frustumPlanes))
+        return;
+
+    if (IsNormalConeCullEligible(command) &&
+        MeshletBackfaceConeCulled(
+            meshlet,
+            instanceBufferIndex,
+            objectWordOffset,
+            worldCenterRadius.xyz,
+            worldCenterRadius.w,
+            pc.Push.CameraPosition.xyz))
         return;
 
     uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[appendCounterWord], 1u);
@@ -722,6 +761,22 @@ void ProcessDirectionalShadowCandidate(
     if (!ApplyConservativeDirectionalShadowLodSelection(command, effectiveLod, pc.Push.GpuShadowLodBias))
         return;
 
+    GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
+    vec4 worldSphere = ResolveMeshletWorldCenterRadius(command, meshlet);
+    uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
+        pc.Push.CurrentFrameIndex;
+    uint objectWordOffset = command.InstanceId *
+        uint(SIZEOF_GPU_OBJECT_DATA / 4);
+    if (IsNormalConeCullEligible(command) &&
+        MeshletBackfaceConeCulledDirectional(
+            meshlet,
+            instanceBufferIndex,
+            objectWordOffset,
+            pc.Push.DirectionalShadowLightDirection.xyz))
+    {
+        return;
+    }
+
     uint cascadeCount = min(pc.Push.DirectionalShadowCascadeCount, SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT);
     for (uint cascade = 0u; cascade < cascadeCount; cascade++)
     {
@@ -736,7 +791,6 @@ void ProcessDirectionalShadowCandidate(
             1u);
 
         mat4 shadowMatrix = ReadShadowMatrix(cascade);
-        vec4 worldSphere = ResolveMeshletWorldCenterRadius(command);
         bool visible = SphereIntersectsRowMajorFrustum(
             worldSphere.xyz,
             worldSphere.w,

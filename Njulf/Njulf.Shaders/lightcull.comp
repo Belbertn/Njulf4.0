@@ -5,6 +5,9 @@
 #include "common.glsl"
 #include "area_lighting.glsl"
 
+// One workgroup owns an entire 16x16 screen tile and emits all logarithmic
+// depth slices. A light is tested against the screen frustum once, then
+// appended only to the slices overlapped by its bounding sphere.
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(push_constant) uniform LightCullPushConstantBlock
@@ -12,32 +15,25 @@ layout(push_constant) uniform LightCullPushConstantBlock
     GPULightCullPushConstants Push;
 } pc;
 
-shared uint SharedMinDepthBits;
-shared uint SharedMaxDepthBits;
-shared uint SharedCandidateCount;
-shared uint SharedSelectedCount;
-shared uint SharedSelectedLightIndices[128];
-shared float SharedSelectedInfluences[128];
+const uint CLUSTER_SLICE_COUNT = FORWARD_CLUSTER_DEPTH_SLICE_COUNT;
+const uint CLUSTER_LIGHT_CAPACITY = FORWARD_CLUSTER_MAX_LIGHTS;
+const uint CLUSTER_ENTRY_COUNT =
+    CLUSTER_SLICE_COUNT * CLUSTER_LIGHT_CAPACITY;
+
+shared uint SharedCandidateCounts[CLUSTER_SLICE_COUNT];
+shared uint SharedSelectedCounts[CLUSTER_SLICE_COUNT];
+shared uint SharedSelectedLightIndices[CLUSTER_ENTRY_COUNT];
+shared float SharedSelectedInfluences[CLUSTER_ENTRY_COUNT];
 shared vec4 SharedTilePlanes[4];
-shared float SharedVisibleNearDepth;
-shared float SharedVisibleFarDepth;
-shared vec3 SharedVisibleCenter;
-
-uint PackDepthForAtomic(float depth)
-{
-    return uint(clamp(depth, 0.0, 1.0) * 4294967295.0);
-}
-
-float UnpackAtomicDepth(uint depth)
-{
-    return float(depth) / 4294967295.0;
-}
+shared vec3 SharedClusterCenters[CLUSTER_SLICE_COUNT];
 
 vec3 UnprojectPixel(float pixelX, float pixelY, float depth)
 {
     vec2 safeScreen = max(pc.Push.ScreenDimensions, vec2(1.0));
     vec2 ndc = vec2(pixelX, pixelY) / safeScreen * 2.0 - 1.0;
-    vec4 world = MulRowMajor(vec4(ndc, depth, 1.0), pc.Push.InverseViewProjectionMatrix);
+    vec4 world = MulRowMajor(
+        vec4(ndc, depth, 1.0),
+        pc.Push.InverseViewProjectionMatrix);
     return world.xyz / max(abs(world.w), 0.000001);
 }
 
@@ -54,59 +50,122 @@ vec4 BuildPlane(vec3 a, vec3 b, vec3 c, vec3 interiorPoint)
     return vec4(normal, d);
 }
 
-void BuildTileFrustumAndDepthInterval(uvec2 tile, float minDepth, float maxDepth)
+float ClusterBoundaryDepth(uint boundaryIndex)
+{
+    float nearPlane = max(pc.Push.NearPlane, 0.0001);
+    float farPlane = max(pc.Push.FarPlane, nearPlane + 0.0001);
+    float t = float(boundaryIndex) /
+        float(max(pc.Push.ClusterCountZ, 1u));
+    return nearPlane * pow(farPlane / nearPlane, t);
+}
+
+uint ClusterSliceForDepth(float viewDepth)
+{
+    float nearPlane = max(pc.Push.NearPlane, 0.0001);
+    float farPlane = max(pc.Push.FarPlane, nearPlane + 0.0001);
+    float normalized = log(max(viewDepth, nearPlane) / nearPlane) /
+        log(farPlane / nearPlane);
+    return min(
+        uint(clamp(
+            floor(normalized * float(pc.Push.ClusterCountZ)),
+            0.0,
+            float(pc.Push.ClusterCountZ - 1u))),
+        pc.Push.ClusterCountZ - 1u);
+}
+
+void BuildTileFrustumAndClusterCenters(uvec2 tile)
 {
     vec2 screen = max(pc.Push.ScreenDimensions, vec2(1.0));
-    vec2 tileMin = vec2(tile * uvec2(16u, 16u));
-    vec2 tileMax = min(tileMin + vec2(16.0), screen);
+    vec2 tileMin = vec2(tile * uvec2(
+        FORWARD_CLUSTER_TILE_SIZE,
+        FORWARD_CLUSTER_TILE_SIZE));
+    vec2 tileMax = min(
+        tileMin + vec2(FORWARD_CLUSTER_TILE_SIZE),
+        screen);
     vec3 camera = pc.Push.CameraPosition;
     vec3 topLeft = UnprojectPixel(tileMin.x, tileMin.y, 0.5);
     vec3 topRight = UnprojectPixel(tileMax.x, tileMin.y, 0.5);
     vec3 bottomRight = UnprojectPixel(tileMax.x, tileMax.y, 0.5);
     vec3 bottomLeft = UnprojectPixel(tileMin.x, tileMax.y, 0.5);
-    vec3 interior = UnprojectPixel((tileMin.x + tileMax.x) * 0.5, (tileMin.y + tileMax.y) * 0.5, 0.5);
+    vec2 tileCenter = (tileMin + tileMax) * 0.5;
+    vec3 interior = UnprojectPixel(tileCenter.x, tileCenter.y, 0.5);
 
     SharedTilePlanes[0] = BuildPlane(camera, bottomLeft, topLeft, interior);
     SharedTilePlanes[1] = BuildPlane(camera, topLeft, topRight, interior);
     SharedTilePlanes[2] = BuildPlane(camera, topRight, bottomRight, interior);
     SharedTilePlanes[3] = BuildPlane(camera, bottomRight, bottomLeft, interior);
-    vec2 tileCenter = (tileMin + tileMax) * 0.5;
-    vec3 depthAWorld = UnprojectPixel(tileCenter.x, tileCenter.y, minDepth);
-    vec3 depthBWorld = UnprojectPixel(tileCenter.x, tileCenter.y, maxDepth);
-    float depthA = dot(depthAWorld - camera, pc.Push.CameraForward);
-    float depthB = dot(depthBWorld - camera, pc.Push.CameraForward);
-    SharedVisibleNearDepth = min(depthA, depthB);
-    SharedVisibleFarDepth = max(depthA, depthB);
-    SharedVisibleCenter = (depthAWorld + depthBWorld) * 0.5;
+
+    vec3 centerRay = normalize(interior - camera);
+    float forwardProjection = max(
+        dot(centerRay, normalize(pc.Push.CameraForward)),
+        0.0001);
+    for (uint slice = 0u; slice < pc.Push.ClusterCountZ; slice++)
+    {
+        float nearDepth = ClusterBoundaryDepth(slice);
+        float farDepth = ClusterBoundaryDepth(slice + 1u);
+        float centerDepth = sqrt(nearDepth * farDepth);
+        SharedClusterCenters[slice] = camera +
+            centerRay * (centerDepth / forwardProjection);
+    }
 }
 
 bool SphereOverlapsTileFrustum(vec3 center, float radius)
 {
-    for (int i = 0; i < 4; i++)
+    for (int planeIndex = 0; planeIndex < 4; planeIndex++)
     {
-        if (dot(SharedTilePlanes[i].xyz, center) + SharedTilePlanes[i].w < -radius)
+        if (dot(
+                SharedTilePlanes[planeIndex].xyz,
+                center) + SharedTilePlanes[planeIndex].w < -radius)
+        {
             return false;
+        }
     }
     return true;
 }
 
-bool SphereOverlapsTileDepthRange(GPULight light)
+bool LightCanAffectTile(
+    GPULight light,
+    out uint minimumSlice,
+    out uint maximumSlice)
 {
-    float lightDepth = dot(light.Position - pc.Push.CameraPosition, pc.Push.CameraForward);
+    minimumSlice = 0u;
+    maximumSlice = 0u;
+    if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL ||
+        light.Range <= 0.0 || light.Intensity <= 0.0)
+    {
+        return false;
+    }
+
     float radius = light.Range + NjulfAreaBoundingRadius(light);
-    return lightDepth + radius >= SharedVisibleNearDepth &&
-        lightDepth - radius <= SharedVisibleFarDepth;
+    if (!SphereOverlapsTileFrustum(light.Position, radius))
+        return false;
+
+    float lightDepth = dot(
+        light.Position - pc.Push.CameraPosition,
+        normalize(pc.Push.CameraForward));
+    float nearDepth = lightDepth - radius;
+    float farDepth = lightDepth + radius;
+    if (farDepth < pc.Push.NearPlane || nearDepth > pc.Push.FarPlane)
+        return false;
+
+    minimumSlice = ClusterSliceForDepth(max(nearDepth, pc.Push.NearPlane));
+    maximumSlice = ClusterSliceForDepth(min(farDepth, pc.Push.FarPlane));
+    return minimumSlice <= maximumSlice;
 }
 
-float ComputeLightInfluence(GPULight light)
+float ComputeLightInfluence(GPULight light, uint slice)
 {
-    vec3 toLight = light.Position - SharedVisibleCenter;
+    vec3 toLight = light.Position - SharedClusterCenters[slice];
     float centerDistance = length(toLight);
     float distanceToEmitter = max(
-        centerDistance - NjulfAreaBoundingRadius(light), 0.0);
+        centerDistance - NjulfAreaBoundingRadius(light),
+        0.0);
     float distanceSquared = distanceToEmitter * distanceToEmitter;
     float rangeSquared = max(light.Range * light.Range, 0.0001);
-    float attenuation = clamp(1.0 - distanceSquared / rangeSquared, 0.0, 1.0);
+    float attenuation = clamp(
+        1.0 - distanceSquared / rangeSquared,
+        0.0,
+        1.0);
     float sourceWeight = NjulfIsAreaLight(light)
         ? NJULF_LTC_PI * NjulfAreaSurfaceArea(light)
         : 1.0;
@@ -116,21 +175,28 @@ float ComputeLightInfluence(GPULight light)
     return (isnan(influence) || isinf(influence)) ? 0.0 : influence;
 }
 
-bool IsBetterLightCandidate(float influence, uint lightIndex, float otherInfluence, uint otherLightIndex)
+bool IsBetterLightCandidate(
+    float influence,
+    uint lightIndex,
+    float otherInfluence,
+    uint otherLightIndex)
 {
     return influence > otherInfluence ||
         (influence == otherInfluence && lightIndex < otherLightIndex);
 }
 
-void InsertDeterministicLightCandidate(uint lightIndex, float influence)
+void InsertDeterministicLightCandidate(
+    uint slice,
+    uint lightIndex,
+    float influence)
 {
-    // Called by one invocation only during saturated-tile reconciliation.
-    uint capacity = min(pc.Push.MaxLightsPerTile, 128u);
-    if (SharedSelectedCount < capacity)
+    uint capacity = min(pc.Push.MaxLightsPerTile, CLUSTER_LIGHT_CAPACITY);
+    uint baseEntry = slice * CLUSTER_LIGHT_CAPACITY;
+    if (SharedSelectedCounts[slice] < capacity)
     {
-        uint slot = SharedSelectedCount++;
-        SharedSelectedLightIndices[slot] = lightIndex;
-        SharedSelectedInfluences[slot] = influence;
+        uint slot = SharedSelectedCounts[slice]++;
+        SharedSelectedLightIndices[baseEntry + slot] = lightIndex;
+        SharedSelectedInfluences[baseEntry + slot] = influence;
     }
     else if (capacity > 0u)
     {
@@ -138,10 +204,10 @@ void InsertDeterministicLightCandidate(uint lightIndex, float influence)
         for (uint slot = 1u; slot < capacity; slot++)
         {
             if (IsBetterLightCandidate(
-                    SharedSelectedInfluences[worstSlot],
-                    SharedSelectedLightIndices[worstSlot],
-                    SharedSelectedInfluences[slot],
-                    SharedSelectedLightIndices[slot]))
+                    SharedSelectedInfluences[baseEntry + worstSlot],
+                    SharedSelectedLightIndices[baseEntry + worstSlot],
+                    SharedSelectedInfluences[baseEntry + slot],
+                    SharedSelectedLightIndices[baseEntry + slot]))
             {
                 worstSlot = slot;
             }
@@ -150,133 +216,131 @@ void InsertDeterministicLightCandidate(uint lightIndex, float influence)
         if (IsBetterLightCandidate(
                 influence,
                 lightIndex,
-                SharedSelectedInfluences[worstSlot],
-                SharedSelectedLightIndices[worstSlot]))
+                SharedSelectedInfluences[baseEntry + worstSlot],
+                SharedSelectedLightIndices[baseEntry + worstSlot]))
         {
-            SharedSelectedLightIndices[worstSlot] = lightIndex;
-            SharedSelectedInfluences[worstSlot] = influence;
+            SharedSelectedLightIndices[baseEntry + worstSlot] = lightIndex;
+            SharedSelectedInfluences[baseEntry + worstSlot] = influence;
         }
     }
 }
 
-bool LightCanAffectVisibleTile(GPULight light)
+void FinalizeCluster(uvec2 tile, uint slice)
 {
-    if (light.Type == GPU_LIGHT_TYPE_DIRECTIONAL)
-        return false;
+    uint capacity = min(pc.Push.MaxLightsPerTile, CLUSTER_LIGHT_CAPACITY);
+    uint candidateCount = SharedCandidateCounts[slice];
+    uint selectedCount = min(candidateCount, capacity);
+    uint baseEntry = slice * CLUSTER_LIGHT_CAPACITY;
 
-    if (light.Range <= 0.0 || light.Intensity <= 0.0)
-        return false;
+    if (candidateCount > capacity)
+    {
+        // Saturated clusters pay for deterministic top-K reconciliation. The
+        // ordinary path remains one screen-frustum test per light and tile.
+        SharedSelectedCounts[slice] = 0u;
+        for (uint lightIndex = 0u;
+             lightIndex < pc.Push.LightCount;
+             lightIndex++)
+        {
+            GPULight light = ReadLight(lightIndex);
+            uint minimumSlice;
+            uint maximumSlice;
+            if (LightCanAffectTile(light, minimumSlice, maximumSlice) &&
+                slice >= minimumSlice && slice <= maximumSlice)
+            {
+                InsertDeterministicLightCandidate(
+                    slice,
+                    lightIndex,
+                    ComputeLightInfluence(light, slice));
+            }
+        }
+        selectedCount = SharedSelectedCounts[slice];
+    }
 
-    float radius = light.Range + NjulfAreaBoundingRadius(light);
-    return SphereOverlapsTileFrustum(light.Position, radius) &&
-           SphereOverlapsTileDepthRange(light);
+    for (uint index = 1u; index < selectedCount; index++)
+    {
+        uint lightIndex = SharedSelectedLightIndices[baseEntry + index];
+        float influence = SharedSelectedInfluences[baseEntry + index];
+        uint slot = index;
+        while (slot > 0u && IsBetterLightCandidate(
+                   influence,
+                   lightIndex,
+                   SharedSelectedInfluences[baseEntry + slot - 1u],
+                   SharedSelectedLightIndices[baseEntry + slot - 1u]))
+        {
+            SharedSelectedLightIndices[baseEntry + slot] =
+                SharedSelectedLightIndices[baseEntry + slot - 1u];
+            SharedSelectedInfluences[baseEntry + slot] =
+                SharedSelectedInfluences[baseEntry + slot - 1u];
+            slot--;
+        }
+        SharedSelectedLightIndices[baseEntry + slot] = lightIndex;
+        SharedSelectedInfluences[baseEntry + slot] = influence;
+    }
+
+    uint clusterIndex =
+        (slice * pc.Push.TileCountY + tile.y) * pc.Push.TileCountX + tile.x;
+    uint clusterLightOffset = clusterIndex * pc.Push.MaxLightsPerTile;
+    for (uint slot = 0u; slot < selectedCount; slot++)
+    {
+        WriteTiledLightIndex(
+            clusterLightOffset + slot,
+            SharedSelectedLightIndices[baseEntry + slot]);
+    }
+    uint overflowCount = candidateCount > selectedCount
+        ? candidateCount - selectedCount
+        : 0u;
+    WriteTiledLightHeader(
+        clusterIndex,
+        selectedCount,
+        clusterLightOffset,
+        overflowCount);
 }
 
 void main()
 {
     uvec2 tile = gl_WorkGroupID.xy;
-    if (tile.x >= pc.Push.TileCountX || tile.y >= pc.Push.TileCountY)
+    if (tile.x >= pc.Push.TileCountX ||
+        tile.y >= pc.Push.TileCountY ||
+        pc.Push.ClusterCountZ == 0u ||
+        pc.Push.ClusterCountZ > CLUSTER_SLICE_COUNT)
+    {
         return;
+    }
 
-    uvec2 local = gl_LocalInvocationID.xy;
-    uvec2 pixel = tile * uvec2(16u, 16u) + local;
-    uvec2 screen = uvec2(pc.Push.ScreenDimensions);
     uint localIndex = gl_LocalInvocationIndex;
-    uint tileIndex = tile.y * pc.Push.TileCountX + tile.x;
-    uint tileLightOffset = tileIndex * pc.Push.MaxLightsPerTile;
-
+    if (localIndex < pc.Push.ClusterCountZ)
+    {
+        SharedCandidateCounts[localIndex] = 0u;
+        SharedSelectedCounts[localIndex] = 0u;
+    }
     if (localIndex == 0u)
-    {
-        SharedMinDepthBits = 0xffffffffu;
-        SharedMaxDepthBits = 0u;
-        SharedCandidateCount = 0u;
-        SharedSelectedCount = 0u;
-    }
-
+        BuildTileFrustumAndClusterCenters(tile);
     barrier();
 
-    if (pixel.x < screen.x && pixel.y < screen.y)
-    {
-        float depth = texelFetch(BindlessTextures[nonuniformEXT(pc.Push.DepthTextureIndex)], ivec2(pixel), 0).r;
-        uint depthBits = PackDepthForAtomic(depth);
-        atomicMin(SharedMinDepthBits, depthBits);
-        atomicMax(SharedMaxDepthBits, depthBits);
-    }
-
-    barrier();
-
-    float minDepth = UnpackAtomicDepth(SharedMinDepthBits);
-    float maxDepth = UnpackAtomicDepth(SharedMaxDepthBits);
-    if (maxDepth <= 0.0)
-    {
-        if (localIndex == 0u)
-            WriteTiledLightHeader(tileIndex, 0u, tileLightOffset, 0u);
-        return;
-    }
-
-    if (localIndex == 0u)
-        BuildTileFrustumAndDepthInterval(tile, minDepth, maxDepth);
-
-    barrier();
-
-    for (uint lightIndex = localIndex; lightIndex < pc.Push.LightCount; lightIndex += 256u)
+    for (uint lightIndex = localIndex;
+         lightIndex < pc.Push.LightCount;
+         lightIndex += gl_WorkGroupSize.x * gl_WorkGroupSize.y)
     {
         GPULight light = ReadLight(lightIndex);
-        if (!LightCanAffectVisibleTile(light))
+        uint minimumSlice;
+        uint maximumSlice;
+        if (!LightCanAffectTile(light, minimumSlice, maximumSlice))
             continue;
 
-        uint slot = atomicAdd(SharedCandidateCount, 1u);
-        if (slot < min(pc.Push.MaxLightsPerTile, 128u))
+        for (uint slice = minimumSlice; slice <= maximumSlice; slice++)
         {
-            SharedSelectedLightIndices[slot] = lightIndex;
-            SharedSelectedInfluences[slot] = ComputeLightInfluence(light);
+            uint slot = atomicAdd(SharedCandidateCounts[slice], 1u);
+            if (slot < min(pc.Push.MaxLightsPerTile, CLUSTER_LIGHT_CAPACITY))
+            {
+                uint entry = slice * CLUSTER_LIGHT_CAPACITY + slot;
+                SharedSelectedLightIndices[entry] = lightIndex;
+                SharedSelectedInfluences[entry] =
+                    ComputeLightInfluence(light, slice);
+            }
         }
     }
 
     barrier();
-
-    if (localIndex == 0u)
-    {
-        uint capacity = min(pc.Push.MaxLightsPerTile, 128u);
-        uint selectedCount = min(SharedCandidateCount, capacity);
-        if (SharedCandidateCount > capacity)
-        {
-            // The fast parallel append path intentionally does no contended ranking.  Only a
-            // saturated tile pays for this serial, deterministic top-K reconciliation.
-            SharedSelectedCount = 0u;
-            for (uint lightIndex = 0u; lightIndex < pc.Push.LightCount; lightIndex++)
-            {
-                GPULight light = ReadLight(lightIndex);
-                if (LightCanAffectVisibleTile(light))
-                    InsertDeterministicLightCandidate(lightIndex, ComputeLightInfluence(light));
-            }
-            selectedCount = SharedSelectedCount;
-        }
-        // Canonicalize the retained set as well as its membership.  Forward shading accumulates
-        // these lights in list order, so a deterministic sort avoids frame-to-frame FP drift.
-        for (uint i = 1u; i < selectedCount; i++)
-        {
-            uint lightIndex = SharedSelectedLightIndices[i];
-            float influence = SharedSelectedInfluences[i];
-            uint slot = i;
-            while (slot > 0u && IsBetterLightCandidate(
-                       influence,
-                       lightIndex,
-                       SharedSelectedInfluences[slot - 1u],
-                       SharedSelectedLightIndices[slot - 1u]))
-            {
-                SharedSelectedLightIndices[slot] = SharedSelectedLightIndices[slot - 1u];
-                SharedSelectedInfluences[slot] = SharedSelectedInfluences[slot - 1u];
-                slot--;
-            }
-            SharedSelectedLightIndices[slot] = lightIndex;
-            SharedSelectedInfluences[slot] = influence;
-        }
-        for (uint slot = 0u; slot < selectedCount; slot++)
-            WriteTiledLightIndex(tileLightOffset + slot, SharedSelectedLightIndices[slot]);
-        uint overflowCount = SharedCandidateCount > selectedCount
-            ? SharedCandidateCount - selectedCount
-            : 0u;
-        WriteTiledLightHeader(tileIndex, selectedCount, tileLightOffset, overflowCount);
-    }
+    if (localIndex < pc.Push.ClusterCountZ)
+        FinalizeCluster(tile, localIndex);
 }

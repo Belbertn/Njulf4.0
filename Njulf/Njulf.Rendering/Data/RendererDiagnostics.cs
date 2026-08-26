@@ -1310,6 +1310,14 @@ namespace Njulf.Rendering.Data
         public ulong TiledLightBufferAllocatedBytes { get; init; }
         public ulong TiledLightHeaderBufferClearBytes { get; init; }
         public ulong TiledLightIndexBufferClearBytes { get; init; }
+        public uint ForwardClusterDepthSliceCount { get; init; }
+        public uint ForwardClusterCount { get; init; }
+        public int ForwardOpaquePipelineCacheEntryCount { get; init; }
+        public int NormalConeEligibleOpaqueMeshletCount { get; init; }
+        public int DoubleSidedOpaqueMeshletCount { get; init; }
+        public int ForwardMeshOnlyIndirectDrawCount { get; init; }
+        public int DepthMeshOnlyIndirectDrawCount { get; init; }
+        public int DirectionalShadowMeshOnlyIndirectDrawCount { get; init; }
         public int LightTileSaturationCount { get; init; }
         public int MaxLightsInAnyTile { get; init; }
         public float AverageLightsPerNonEmptyTile { get; init; }
