@@ -20,7 +20,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly BufferManager _bufferManager;
         private readonly RenderTargetManager _renderTargets;
         private readonly ParticleSettings _settings;
-        private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
+
+        private readonly ISimpleDdgiReceiverFeedbackCapture?
             _receiverFeedbackRuntime;
 
         public ParticlePass(
@@ -31,7 +32,7 @@ namespace Njulf.Rendering.Pipeline
             BufferManager bufferManager,
             RenderTargetManager renderTargets,
             ParticleSettings settings,
-            SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime = null)
+            ISimpleDdgiReceiverFeedbackCapture? receiverFeedbackRuntime = null)
             : base("ParticlePass", context, swapchain, bindlessHeap)
         {
             _particlePipeline = particlePipeline ?? throw new ArgumentNullException(nameof(particlePipeline));
@@ -60,6 +61,7 @@ namespace Njulf.Rendering.Pipeline
                 receiverFeedbackRequired = false;
                 useReceiverFeedback = false;
             }
+
             if (useReceiverFeedback &&
                 !_particlePipeline.ReceiverFeedbackPipelinesAvailable)
             {
@@ -85,13 +87,15 @@ namespace Njulf.Rendering.Pipeline
                 return;
             }
 
-            if (!sceneData.ParticlesEnabled || sceneData.RenderedParticleCount <= 0 || sceneData.ParticleBatches.Count == 0)
+            if (!sceneData.ParticlesEnabled || sceneData.RenderedParticleCount <= 0 ||
+                sceneData.ParticleBatches.Count == 0)
             {
                 if (receiverFeedbackRequired)
                 {
                     AbortReceiverFeedback(
                         "receiver-feedback-particle-producer-required-without-draws");
                 }
+
                 return;
             }
 
@@ -119,8 +123,10 @@ namespace Njulf.Rendering.Pipeline
 
             var storageSet = _bindlessHeap.StorageBufferSet;
             var textureSet = _bindlessHeap.TextureSamplerSet;
-            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _particlePipeline.Layout, 0, 1, &storageSet, 0, null);
-            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _particlePipeline.Layout, 1, 1, &textureSet, 0, null);
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _particlePipeline.Layout, 0, 1,
+                &storageSet, 0, null);
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _particlePipeline.Layout, 1, 1,
+                &textureSet, 0, null);
 
             var colorAttachment = new RenderingAttachmentInfo
             {
@@ -238,8 +244,10 @@ namespace Njulf.Rendering.Pipeline
 
             var storageSet = _bindlessHeap.StorageBufferSet;
             var textureSet = _bindlessHeap.TextureSamplerSet;
-            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _particlePipeline.Layout, 0, 1, &storageSet, 0, null);
-            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _particlePipeline.Layout, 1, 1, &textureSet, 0, null);
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _particlePipeline.Layout, 0, 1,
+                &storageSet, 0, null);
+            _context.Api.CmdBindDescriptorSets(cmd, PipelineBindPoint.Graphics, _particlePipeline.Layout, 1, 1,
+                &textureSet, 0, null);
 
             var colorAttachment = new RenderingAttachmentInfo
             {
@@ -302,8 +310,10 @@ namespace Njulf.Rendering.Pipeline
                     &pushConstants);
 
                 ulong indirectOffset = bucket * (ulong)Marshal.SizeOf<GPUParticleDrawCommand>();
-                _context.Api.CmdDrawIndirect(cmd, indirectBuffer, indirectOffset, 1, (uint)Marshal.SizeOf<GPUParticleDrawCommand>());
+                _context.Api.CmdDrawIndirect(cmd, indirectBuffer, indirectOffset, 1,
+                    (uint)Marshal.SizeOf<GPUParticleDrawCommand>());
             }
+
             _context.KhrDynamicRendering.CmdEndRendering(cmd);
             return true;
         }
@@ -323,6 +333,7 @@ namespace Njulf.Rendering.Pipeline
                     "receiver-feedback-particle-producer-did-not-record-exact-draws");
                 return;
             }
+
             if (_receiverFeedbackRuntime is null)
                 return;
             if (!_receiverFeedbackRuntime.TryRecordOwnedProducerCompletion(

@@ -87,9 +87,9 @@ namespace Njulf.Tests
             Vector3I boxMin = new(10, 11, 12);
             Vector3I boxMaxExclusive = new(15, 17, 16);
             for (int z = boxMin.Z; z < boxMaxExclusive.Z; z++)
-                for (int y = boxMin.Y; y < boxMaxExclusive.Y; y++)
-                    for (int x = boxMin.X; x < boxMaxExclusive.X; x++)
-                        grid.Set(x, y, z, true);
+            for (int y = boxMin.Y; y < boxMaxExclusive.Y; y++)
+            for (int x = boxMin.X; x < boxMaxExclusive.X; x++)
+                grid.Set(x, y, z, true);
 
             ushort[] distances = BuildJumpFloodDistanceField(grid);
             Vector3I[] samples =
@@ -159,7 +159,8 @@ namespace Njulf.Tests
                     Is.EqualTo(356));
                 Assert.That(
                     Marshal.OffsetOf<GPUSimpleDdgiResidencyFeedback>(
-                        nameof(GPUSimpleDdgiResidencyFeedback.VisibleDemandInitializingOrUnpublishedPageCount)).ToInt32(),
+                            nameof(GPUSimpleDdgiResidencyFeedback.VisibleDemandInitializingOrUnpublishedPageCount))
+                        .ToInt32(),
                     Is.EqualTo(360));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageDemandPushConstants>(), Is.EqualTo(112));
                 Assert.That(Marshal.SizeOf<GPUSimpleDdgiPageResidencyPushConstants>(), Is.EqualTo(80));
@@ -353,15 +354,18 @@ namespace Njulf.Tests
             GPUFarFieldMaterialVoxelV2 packed = FarFieldMaterialPayloadV2.Pack(candidate);
             FarFieldMaterialPayloadV2.Candidate unpacked = FarFieldMaterialPayloadV2.Unpack(packed);
             CoreVector3 expectedNormal = candidate.GeometricNormal /
-                MathF.Sqrt(candidate.GeometricNormal.LengthSquared());
+                                         MathF.Sqrt(candidate.GeometricNormal.LengthSquared());
 
             Assert.Multiple(() =>
             {
                 Assert.That(unpacked.StablePrimitiveKey, Is.EqualTo(candidate.StablePrimitiveKey));
                 Assert.That(unpacked.Coverage, Is.EqualTo(candidate.Coverage).Within(1f / 255f));
-                Assert.That(unpacked.DiffuseReflectance.X, Is.EqualTo(candidate.DiffuseReflectance.X).Within(1f / 1023f));
-                Assert.That(unpacked.DiffuseReflectance.Y, Is.EqualTo(candidate.DiffuseReflectance.Y).Within(1f / 1023f));
-                Assert.That(unpacked.DiffuseReflectance.Z, Is.EqualTo(candidate.DiffuseReflectance.Z).Within(1f / 1023f));
+                Assert.That(unpacked.DiffuseReflectance.X,
+                    Is.EqualTo(candidate.DiffuseReflectance.X).Within(1f / 1023f));
+                Assert.That(unpacked.DiffuseReflectance.Y,
+                    Is.EqualTo(candidate.DiffuseReflectance.Y).Within(1f / 1023f));
+                Assert.That(unpacked.DiffuseReflectance.Z,
+                    Is.EqualTo(candidate.DiffuseReflectance.Z).Within(1f / 1023f));
                 Assert.That(unpacked.EmissiveRadiance.X, Is.EqualTo(candidate.EmissiveRadiance.X).Within(0.001f));
                 Assert.That(unpacked.EmissiveRadiance.Y, Is.EqualTo(candidate.EmissiveRadiance.Y).Within(0.01f));
                 Assert.That(unpacked.EmissiveRadiance.Z, Is.EqualTo(candidate.EmissiveRadiance.Z).Within(0.5f));
@@ -446,9 +450,12 @@ namespace Njulf.Tests
                     FarFieldMaterialPayloadV2.SurvivesAlpha(1.0f, MaterialAlphaMode.Blend, 0.0f),
                     Is.False,
                     "Transparent geometry remains outside the opaque far-field representation.");
-                Assert.That(FarFieldMaterialPayloadV2.SurvivesSidedness(doubleSided: false, frontFacing: true), Is.True);
-                Assert.That(FarFieldMaterialPayloadV2.SurvivesSidedness(doubleSided: false, frontFacing: false), Is.False);
-                Assert.That(FarFieldMaterialPayloadV2.SurvivesSidedness(doubleSided: true, frontFacing: false), Is.True);
+                Assert.That(FarFieldMaterialPayloadV2.SurvivesSidedness(doubleSided: false, frontFacing: true),
+                    Is.True);
+                Assert.That(FarFieldMaterialPayloadV2.SurvivesSidedness(doubleSided: false, frontFacing: false),
+                    Is.False);
+                Assert.That(FarFieldMaterialPayloadV2.SurvivesSidedness(doubleSided: true, frontFacing: false),
+                    Is.True);
             });
         }
 
@@ -481,7 +488,7 @@ namespace Njulf.Tests
                 StablePrimitiveKey = 12u,
                 Coverage = 0.25f,
                 MaterialFlags =
-                    singleSidedFlags | (uint)GiMaterialTransportFlags.DoubleSided
+                singleSidedFlags | (uint)GiMaterialTransportFlags.DoubleSided
             };
             FarFieldMaterialPayloadV2.Candidate angledConeContender = dominant with
             {
@@ -649,17 +656,24 @@ namespace Njulf.Tests
                 string jumpFlood = ReadRepoText("Njulf.Shaders", "farfield_jumpflood.comp");
                 Assert.That(voxelize, Does.Contain("const uint FARFIELD_VOXELIZE_MODE_TRIANGLES = 1u;"));
                 Assert.That(voxelize, Does.Contain("const uint FARFIELD_VOXELIZE_MODE_PUBLISH = 2u;"));
-                Assert.That(voxelize, Does.Contain("const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V2_DOMINANCE_KEY = 3u;"));
-                Assert.That(voxelize, Does.Contain("const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V2_STABLE_TIE_BREAK = 4u;"));
+                Assert.That(voxelize,
+                    Does.Contain("const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V2_DOMINANCE_KEY = 3u;"));
+                Assert.That(voxelize,
+                    Does.Contain("const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V2_STABLE_TIE_BREAK = 4u;"));
                 Assert.That(voxelize, Does.Contain("const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V2_PAYLOAD = 5u;"));
-                Assert.That(voxelize, Does.Contain("const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V3_SIDEDNESS_CONE = 6u;"));
+                Assert.That(voxelize,
+                    Does.Contain("const uint FARFIELD_VOXELIZE_MODE_MATERIAL_V3_SIDEDNESS_CONE = 6u;"));
                 Assert.That(voxelize, Does.Contain("uint SelectionScratchBufferIndex;"));
                 Assert.That(voxelize, Does.Contain("uint CurrentFrameIndex;"));
                 Assert.That(voxelize, Does.Contain("uint PageVoxelOffset;"));
                 Assert.That(voxelize, Does.Contain("uint PageGeneration;"));
-                Assert.That(voxelize, Does.Contain("WriteStorageFloat(pc.ParamsBufferIndex, 16u, float(pc.VoxelBufferIndex));"));
-                Assert.That(voxelize, Does.Contain("bool FarFieldTriangleBoxOverlap(vec3 boxCenter, vec3 halfSize, vec3 p0, vec3 p1, vec3 p2)"));
-                Assert.That(voxelize, Does.Contain("if (!FarFieldTriangleBoxOverlap(voxelCenter, halfVoxel, p0, p1, p2))"));
+                Assert.That(voxelize,
+                    Does.Contain("WriteStorageFloat(pc.ParamsBufferIndex, 16u, float(pc.VoxelBufferIndex));"));
+                Assert.That(voxelize,
+                    Does.Contain(
+                        "bool FarFieldTriangleBoxOverlap(vec3 boxCenter, vec3 halfSize, vec3 p0, vec3 p1, vec3 p2)"));
+                Assert.That(voxelize,
+                    Does.Contain("if (!FarFieldTriangleBoxOverlap(voxelCenter, halfVoxel, p0, p1, p2))"));
                 Assert.That(voxelize, Does.Contain("if (determinant(mat3(world)) < 0.0)"));
                 Assert.That(voxelize, Does.Contain("i1 = i2;"));
                 Assert.That(voxelize, Does.Contain("i2 = mirroredSwap;"));
@@ -684,7 +698,8 @@ namespace Njulf.Tests
                 Assert.That(voxelize, Does.Contain("atomicMax("));
                 Assert.That(
                     voxelize,
-                    Does.Not.Contain("WriteStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 0u, stablePrimitiveKey)"),
+                    Does.Not.Contain(
+                        "WriteStorageWord(pc.VoxelBufferIndex, payloadWordOffset + 0u, stablePrimitiveKey)"),
                     "The payload pass must not overwrite either selection key while contenders are still reading it.");
                 Assert.That(voxelize, Does.Contain("EvaluateGiCompactSurface("));
                 Assert.That(voxelize, Does.Contain("bool IsFarFieldCompactProfileValid("));
@@ -722,15 +737,26 @@ namespace Njulf.Tests
                 Assert.That(voxelize, Does.Contain("sourceRevisionLow == pc.PageSourceRevisionLow"));
                 Assert.That(common, Does.Contain("const uint FAR_FIELD_RAY_COUNTER = FAR_FIELD_COUNTER_BASE + 0u;"));
                 Assert.That(common, Does.Contain("const uint FAR_FIELD_HIT_COUNTER = FAR_FIELD_COUNTER_BASE + 1u;"));
-                Assert.That(common, Does.Contain("const uint FAR_FIELD_STEP_EXHAUSTED_COUNTER = FAR_FIELD_COUNTER_BASE + 2u;"));
-                Assert.That(common, Does.Contain("const uint FAR_FIELD_BAKED_TRIANGLE_COUNTER = FAR_FIELD_COUNTER_BASE + 3u;"));
-                Assert.That(common, Does.Contain("const uint FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER = FAR_FIELD_COUNTER_BASE + 4u;"));
-                Assert.That(common, Does.Contain("const uint FAR_FIELD_STEP_BUCKET_4_COUNTER = FAR_FIELD_COUNTER_BASE + 9u;"));
-                Assert.That(common, Does.Contain("const uint FAR_FIELD_MATERIAL_CONFLICT_COUNTER = FAR_FIELD_MATERIAL_V2_COUNTER_BASE + 0u;"));
-                Assert.That(common, Does.Contain("const uint FAR_FIELD_MATERIAL_STALE_PUBLICATION_COUNTER = FAR_FIELD_MATERIAL_V2_COUNTER_BASE + 1u;"));
-                Assert.That(simpleTrace, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_RAY_COUNTER, 1u);"));
-                Assert.That(simpleTrace, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_HIT_COUNTER, 1u);"));
-                Assert.That(simpleTrace, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_STEP_EXHAUSTED_COUNTER, 1u);"));
+                Assert.That(common,
+                    Does.Contain("const uint FAR_FIELD_STEP_EXHAUSTED_COUNTER = FAR_FIELD_COUNTER_BASE + 2u;"));
+                Assert.That(common,
+                    Does.Contain("const uint FAR_FIELD_BAKED_TRIANGLE_COUNTER = FAR_FIELD_COUNTER_BASE + 3u;"));
+                Assert.That(common,
+                    Does.Contain("const uint FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER = FAR_FIELD_COUNTER_BASE + 4u;"));
+                Assert.That(common,
+                    Does.Contain("const uint FAR_FIELD_STEP_BUCKET_4_COUNTER = FAR_FIELD_COUNTER_BASE + 9u;"));
+                Assert.That(common,
+                    Does.Contain(
+                        "const uint FAR_FIELD_MATERIAL_CONFLICT_COUNTER = FAR_FIELD_MATERIAL_V2_COUNTER_BASE + 0u;"));
+                Assert.That(common,
+                    Does.Contain(
+                        "const uint FAR_FIELD_MATERIAL_STALE_PUBLICATION_COUNTER = FAR_FIELD_MATERIAL_V2_COUNTER_BASE + 1u;"));
+                Assert.That(simpleTrace,
+                    Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_RAY_COUNTER, 1u);"));
+                Assert.That(simpleTrace,
+                    Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_HIT_COUNTER, 1u);"));
+                Assert.That(simpleTrace,
+                    Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, FAR_FIELD_STEP_EXHAUSTED_COUNTER, 1u);"));
                 Assert.That(simpleTrace, Does.Contain("farFieldOnlyRing = volume.spacing >= 15.999;"));
                 Assert.That(simpleTrace, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, stepBucket, 1u);"));
                 Assert.That(simpleTrace, Does.Contain("farSurface.EmissiveRadiance = clamp(farEmission"));
@@ -743,11 +769,16 @@ namespace Njulf.Tests
                 Assert.That(jumpFlood, Does.Contain("bool occupied = FarFieldVoxelOccupied("));
                 Assert.That(voxelize, Does.Contain("uint DiagnosticFlags;"));
                 Assert.That(voxelize, Does.Contain("void AddFarFieldDiagnostic(uint counterIndex, uint value)"));
-                Assert.That(voxelize, Does.Contain("if ((pc.DiagnosticFlags & FARFIELD_DIAGNOSTIC_FLAG_DETAILED) != 0u)"));
-                Assert.That(voxelize, Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, counterIndex, value);"));
+                Assert.That(voxelize,
+                    Does.Contain("if ((pc.DiagnosticFlags & FARFIELD_DIAGNOSTIC_FLAG_DETAILED) != 0u)"));
+                Assert.That(voxelize,
+                    Does.Contain("AddRendererDiagnostic(pc.CurrentFrameIndex, counterIndex, value);"));
                 Assert.That(voxelize, Does.Contain("AddFarFieldDiagnostic(FAR_FIELD_BAKED_TRIANGLE_COUNTER, 1u);"));
-                Assert.That(voxelize, Does.Contain("AddFarFieldDiagnostic(FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER, 1u);"));
-                Assert.That(renderer, Does.Contain("public const int FarFieldCounterBase = DdgiTraceRingMismatchSampleBase + DdgiTraceRingMismatchSampleCount;"));
+                Assert.That(voxelize,
+                    Does.Contain("AddFarFieldDiagnostic(FAR_FIELD_OCCUPIED_VOXEL_WRITE_COUNTER, 1u);"));
+                Assert.That(renderer,
+                    Does.Contain(
+                        "public const int FarFieldCounterBase = DdgiTraceRingMismatchSampleBase + DdgiTraceRingMismatchSampleCount;"));
                 Assert.That(renderer, Does.Contain("public const int FarFieldCounterCount = 10;"));
                 Assert.That(renderer, Does.Contain("public const int FarFieldMaterialV2CounterCount = 2;"));
                 Assert.That(bakePass, Does.Contain("CurrentFrameIndex = sceneData.CurrentFrameIndex"));
@@ -764,7 +795,8 @@ namespace Njulf.Tests
                 Assert.That(bakePass, Does.Contain("checked((uint)_manager.JumpFloodScratch0BufferIndex)"));
                 Assert.That(bakePass, Does.Contain("AuxiliaryBufferIndex = selectionScratchBufferIndex"));
                 Assert.That(bakePass, Does.Contain("private const uint JumpFloodModePropagate = 1;"));
-                Assert.That(bakePass, Does.Contain("uint bakeVoxelBufferIndex = checked((uint)_manager.BakeVoxelBufferIndex);"));
+                Assert.That(bakePass,
+                    Does.Contain("uint bakeVoxelBufferIndex = checked((uint)_manager.BakeVoxelBufferIndex);"));
                 Assert.That(bakePass, Does.Contain("BuildJumpFloodDistanceField("));
                 Assert.That(bakePass, Does.Contain("_manager.MarkPageBakePublished(work.Request);"));
                 Assert.That(bakePass, Does.Contain("PageVoxelOffset = pageVoxelOffset"));
@@ -1275,7 +1307,8 @@ namespace Njulf.Tests
                 Assert.That(reseededRecentered, Is.False);
                 Assert.That(reseeded, Is.Not.EqualTo(initial),
                     "Clearing the has-origin state re-seeds the lattice from transient bounds.");
-                Assert.That((reseeded.X - initial.X) / spacing, Is.Not.EqualTo(MathF.Round((reseeded.X - initial.X) / spacing)).Within(1.0e-4f));
+                Assert.That((reseeded.X - initial.X) / spacing,
+                    Is.Not.EqualTo(MathF.Round((reseeded.X - initial.X) / spacing)).Within(1.0e-4f));
             });
         }
 
@@ -1296,31 +1329,35 @@ namespace Njulf.Tests
                 int nextOffsetX = PositiveModulo((int)current.RaysAndReserved.Y + deltaX, countX);
                 int nextOffsetY = PositiveModulo((int)current.RaysAndReserved.Z + deltaY, countY);
                 int nextOffsetZ = PositiveModulo((int)current.RaysAndReserved.W + deltaZ, countZ);
-                GPUSimpleDdgiVolume next = CreateToroidalVolume(countX, countY, countZ, nextOffsetX, nextOffsetY, nextOffsetZ);
+                GPUSimpleDdgiVolume next =
+                    CreateToroidalVolume(countX, countY, countZ, nextOffsetX, nextOffsetY, nextOffsetZ);
 
                 for (int z = 0; z < countZ; z++)
-                    for (int y = 0; y < countY; y++)
-                        for (int x = 0; x < countX; x++)
-                        {
-                            int nextLogicalX = x - deltaX;
-                            int nextLogicalY = y - deltaY;
-                            int nextLogicalZ = z - deltaZ;
-                            if (nextLogicalX < 0 || nextLogicalX >= countX ||
-                                nextLogicalY < 0 || nextLogicalY >= countY ||
-                                nextLogicalZ < 0 || nextLogicalZ >= countZ)
-                            {
-                                continue;
-                            }
+                for (int y = 0; y < countY; y++)
+                for (int x = 0; x < countX; x++)
+                {
+                    int nextLogicalX = x - deltaX;
+                    int nextLogicalY = y - deltaY;
+                    int nextLogicalZ = z - deltaZ;
+                    if (nextLogicalX < 0 || nextLogicalX >= countX ||
+                        nextLogicalY < 0 || nextLogicalY >= countY ||
+                        nextLogicalZ < 0 || nextLogicalZ >= countZ)
+                    {
+                        continue;
+                    }
 
-                            int previousPhysical = SimpleDdgiVolumeManager.CalculatePhysicalProbeLocalIndex(current, x, y, z);
-                            int nextPhysical = SimpleDdgiVolumeManager.CalculatePhysicalProbeLocalIndex(next, nextLogicalX, nextLogicalY, nextLogicalZ);
-                            Assert.That(nextPhysical, Is.EqualTo(previousPhysical),
-                                $"step={step}, logical=({x},{y},{z}), delta=({deltaX},{deltaY},{deltaZ})");
-                        }
+                    int previousPhysical = SimpleDdgiVolumeManager.CalculatePhysicalProbeLocalIndex(current, x, y, z);
+                    int nextPhysical =
+                        SimpleDdgiVolumeManager.CalculatePhysicalProbeLocalIndex(next, nextLogicalX, nextLogicalY,
+                            nextLogicalZ);
+                    Assert.That(nextPhysical, Is.EqualTo(previousPhysical),
+                        $"step={step}, logical=({x},{y},{z}), delta=({deltaX},{deltaY},{deltaZ})");
+                }
 
                 for (int physical = 0; physical < countX * countY * countZ; physical++)
                 {
-                    (int logicalX, int logicalY, int logicalZ) = SimpleDdgiVolumeManager.CalculateLogicalProbeCoordinate(next, physical);
+                    (int logicalX, int logicalY, int logicalZ) =
+                        SimpleDdgiVolumeManager.CalculateLogicalProbeCoordinate(next, physical);
                     Assert.That(
                         SimpleDdgiVolumeManager.CalculatePhysicalProbeLocalIndex(next, logicalX, logicalY, logicalZ),
                         Is.EqualTo(physical),
@@ -1420,7 +1457,8 @@ namespace Njulf.Tests
             int legacyResolution = FarFieldClipmapManager.ResolveLegacyClipmapResolution(gi);
             int pageResolution = FarFieldClipmapManager.ResolvePagedPageResolution(gi);
             int pageCapacity = FarFieldClipmapManager.ResolvePagedPageCapacity(gi, pageResolution);
-            ulong instanceInputBudget = FarFieldClipmapManager.ResolveFarFieldInstanceInputBudgetBytes(totalBudgetBytes);
+            ulong instanceInputBudget =
+                FarFieldClipmapManager.ResolveFarFieldInstanceInputBudgetBytes(totalBudgetBytes);
             ulong pageCacheBudget = FarFieldClipmapManager.ResolveFarFieldPageCacheBudgetBytes(totalBudgetBytes);
 
             Assert.Multiple(() =>
@@ -1453,7 +1491,6 @@ namespace Njulf.Tests
         {
             string simpleManager = ReadRepoText("Njulf.Rendering", "Resources", "SimpleDdgiVolumeManager.cs");
             string farFieldManager = ReadRepoText("Njulf.Rendering", "Resources", "FarFieldClipmapManager.cs");
-            string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
             int pageCacheBytesStart = farFieldManager.IndexOf(
                 "public ulong PageCacheBytes =>",
                 StringComparison.Ordinal);
@@ -1463,15 +1500,6 @@ namespace Njulf.Tests
                 StringComparison.Ordinal);
             string pageCacheBytesDefinition =
                 farFieldManager[pageCacheBytesStart..pageCacheBytesEnd];
-            int farFieldBudgetStart = renderer.IndexOf(
-                "FarFieldMemoryBudgetBytes =",
-                StringComparison.Ordinal);
-            int farFieldBudgetEnd = renderer.IndexOf(
-                "FarFieldInstanceBufferBytes =",
-                farFieldBudgetStart,
-                StringComparison.Ordinal);
-            string farFieldBudgetPublication =
-                renderer[farFieldBudgetStart..farFieldBudgetEnd];
             int disableCoreStart = simpleManager.IndexOf(
                 "private void DisableCore(",
                 StringComparison.Ordinal);
@@ -1483,71 +1511,94 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(renderer, Does.Contain("_farFieldClipmapManager!.Upload("));
-                Assert.That(renderer, Does.Contain("sceneData.SceneContentRevision);"));
-                Assert.That(renderer, Does.Contain("SimpleDdgiDirtySignature dirtySignature = CreateSimpleDdgiDirtySignature("));
-                Assert.That(renderer, Does.Contain("_ddgiEmissiveSourceRevision);"));
-                Assert.That(renderer, Does.Not.Contain(
-                    "HashAdd(sourcePolicySignature, farFieldCoverageAvailable)"));
-                Assert.That(renderer, Does.Contain("dirtySignature.Signature"));
-                Assert.That(renderer, Does.Contain("dirtySignature.ReasonFlags"));
                 Assert.That(pageCacheBytesDefinition, Does.Contain("_bakeVoxelBufferBytes"),
                     "Legacy double-buffered voxel storage must be included in far-field cache telemetry.");
-                Assert.That(farFieldBudgetPublication, Does.Not.Contain("FarFieldPagedEnabled"),
-                    "The configured cap applies to legacy and paged far-field storage.");
                 Assert.That(simpleManager, Does.Contain("ulong lightingSignature,"));
                 Assert.That(simpleManager, Does.Contain("uint dirtyReasonFlags"));
-                Assert.That(simpleManager, Does.Contain("ResolveSceneClampedOrigin(sceneBounds.Min, sceneBounds.Max, latticeSize, spacing, cameraPosition"));
+                Assert.That(simpleManager,
+                    Does.Contain(
+                        "ResolveSceneClampedOrigin(sceneBounds.Min, sceneBounds.Max, latticeSize, spacing, cameraPosition"));
                 Assert.That(simpleManager, Does.Contain("if (_recenteredThisFrame)"));
                 Assert.That(simpleManager, Does.Contain("PreserveToroidalAtlasData();"));
                 Assert.That(simpleManager, Does.Not.Contain("BuildScrollCopyRunsForTest"));
                 Assert.That(simpleManager, Does.Not.Contain("CopyScrolledAtlasRuns"));
                 Assert.That(simpleManager, Does.Contain("_atlasPreservedOnRecenterThisFrame = true;"));
-                Assert.That(simpleManager, Does.Contain("public bool AtlasClearedThisFrame => _atlasClearedThisFrame;"));
+                Assert.That(simpleManager,
+                    Does.Contain("public bool AtlasClearedThisFrame => _atlasClearedThisFrame;"));
                 Assert.That(simpleManager, Does.Contain("MarkFreshForNewOrScrolledProbes();"));
                 Assert.That(simpleManager, Does.Contain("_probesToUpdate = BuildUpdateQueue(updateBudget);"));
                 Assert.That(simpleManager, Does.Contain("UploadProbeUpdateQueue(stagingRing, commandBuffer);"));
                 Assert.That(simpleManager, Does.Contain("ClearAtlasBuffersIfRequired(commandBuffer);"));
-                Assert.That(simpleManager, Does.Not.Contain("if (_recenteredThisFrame)\r\n                _atlasClearRequired = true;"));
+                Assert.That(simpleManager,
+                    Does.Not.Contain("if (_recenteredThisFrame)\r\n                _atlasClearRequired = true;"));
                 Assert.That(disableCore, Does.Not.Contain("Array.Fill(_ringHasOrigins, false);"),
                     "Disabling Simple DDGI must preserve the established camera-ring lattice phase.");
                 Assert.That(simpleManager, Does.Contain("internal static Vector3 ResolveSceneClampedOrigin("));
                 Assert.That(simpleManager, Does.Contain("private static float ResolveAlignedSceneClampedAxisOrigin("));
-                Assert.That(simpleManager, Does.Contain("float quarterExtent = latticeExtent * Math.Clamp(recenterHysteresisFraction, 0.0f, 0.49f);"));
+                Assert.That(simpleManager,
+                    Does.Contain(
+                        "float quarterExtent = latticeExtent * Math.Clamp(recenterHysteresisFraction, 0.0f, 0.49f);"));
                 Assert.That(simpleManager, Does.Contain("ShouldRecenterAxis("));
-                Assert.That(simpleManager, Does.Contain("ResolveDesiredSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, latticeSize.X, spacing, cameraPosition.X)"));
-                Assert.That(simpleManager, Does.Contain("return sceneMin - Math.Max(latticeExtent - sceneExtent, 0.0f) * 0.5f;"));
-                Assert.That(simpleManager, Does.Contain("float target = SnapScalar(cameraPosition - latticeExtent * 0.5f, spacing);"));
-                Assert.That(simpleManager, Does.Contain("return sceneExtent > latticeExtent && (cameraPosition < innerMin || cameraPosition > innerMax);"));
+                Assert.That(simpleManager,
+                    Does.Contain(
+                        "ResolveDesiredSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, latticeSize.X, spacing, cameraPosition.X)"));
+                Assert.That(simpleManager,
+                    Does.Contain("return sceneMin - Math.Max(latticeExtent - sceneExtent, 0.0f) * 0.5f;"));
+                Assert.That(simpleManager,
+                    Does.Contain("float target = SnapScalar(cameraPosition - latticeExtent * 0.5f, spacing);"));
+                Assert.That(simpleManager,
+                    Does.Contain(
+                        "return sceneExtent > latticeExtent && (cameraPosition < innerMin || cameraPosition > innerMax);"));
                 Assert.That(simpleManager, Does.Contain("MathF.Floor(value / s) * s"));
-                Assert.That(simpleManager, Does.Contain("CalculatePhysicalProbeLocalIndex(GPUSimpleDdgiVolume volume, int logicalX, int logicalY, int logicalZ)"));
-                Assert.That(simpleManager, Does.Contain("CalculateLogicalProbeCoordinate(GPUSimpleDdgiVolume volume, int physicalLocalIndex)"));
+                Assert.That(simpleManager,
+                    Does.Contain(
+                        "CalculatePhysicalProbeLocalIndex(GPUSimpleDdgiVolume volume, int logicalX, int logicalY, int logicalZ)"));
+                Assert.That(simpleManager,
+                    Does.Contain(
+                        "CalculateLogicalProbeCoordinate(GPUSimpleDdgiVolume volume, int physicalLocalIndex)"));
                 Assert.That(simpleManager, Does.Contain("AdvanceProbeGeneration"));
                 Assert.That(simpleManager, Does.Contain("_probeStateReadbackUpdateMarkers"));
-                Assert.That(farFieldManager, Does.Contain("public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)"));
-                Assert.That(farFieldManager, Does.Contain("public int BakeVoxelBufferIndex => _pagedMode ? BindlessIndex.FarFieldClipmapVoxelBuffer : _bakeVoxelBufferIndex;"));
+                Assert.That(farFieldManager,
+                    Does.Contain(
+                        "public void Upload(Scene scene, Vector3 cameraPosition, StagingRing stagingRing, CommandBuffer commandBuffer)"));
+                Assert.That(farFieldManager,
+                    Does.Contain(
+                        "public int BakeVoxelBufferIndex => _pagedMode ? BindlessIndex.FarFieldClipmapVoxelBuffer : _bakeVoxelBufferIndex;"));
                 Assert.That(farFieldManager, Does.Contain("public bool CoverageReady =>"));
-                Assert.That(farFieldManager, Does.Contain("_pageCache.ResidentCount > 0 && _pageCache.PendingCount == 0"));
+                Assert.That(farFieldManager,
+                    Does.Contain("_pageCache.ResidentCount > 0 && _pageCache.PendingCount == 0"));
                 Assert.That(farFieldManager, Does.Contain("!_bakePending && _distanceFieldValid"));
                 Assert.That(farFieldManager, Does.Contain("private void UploadPaged("));
                 Assert.That(farFieldManager, Does.Contain("EnsurePagedCapacity(pageResolution, pagePoolCapacity);"));
-                Assert.That(farFieldManager, Does.Contain("RequestCameraPages(cameraPosition, gi, settingsSignature);"));
+                Assert.That(farFieldManager,
+                    Does.Contain("RequestCameraPages(cameraPosition, gi, settingsSignature);"));
                 Assert.That(farFieldManager, Does.Contain("validationRevision == _lastPagedSceneSignature"));
                 Assert.That(farFieldManager, Does.Contain("FarFieldPageBakeWork"));
-                Assert.That(farFieldManager, Does.Contain("public int DistanceBufferIndex => BindlessIndex.FarFieldClipmapDistanceBuffer;"));
+                Assert.That(farFieldManager,
+                    Does.Contain("public int DistanceBufferIndex => BindlessIndex.FarFieldClipmapDistanceBuffer;"));
                 Assert.That(farFieldManager, Does.Contain("Far Field Clipmap Distance Field R16"));
                 Assert.That(farFieldManager, Does.Contain("public void MarkBakePublished()"));
-                Assert.That(farFieldManager, Does.Contain("(_activeVoxelBufferIndex, _bakeVoxelBufferIndex) = (_bakeVoxelBufferIndex, _activeVoxelBufferIndex);"));
+                Assert.That(farFieldManager,
+                    Does.Contain(
+                        "(_activeVoxelBufferIndex, _bakeVoxelBufferIndex) = (_bakeVoxelBufferIndex, _activeVoxelBufferIndex);"));
                 Assert.That(farFieldManager, Does.Contain("_distanceFieldValid = true;"));
-                Assert.That(farFieldManager, Does.Contain("ResolveSceneClampedOrigin(bounds.Min, bounds.Max, cubicExtent, voxelSize, cameraPosition"));
+                Assert.That(farFieldManager,
+                    Does.Contain(
+                        "ResolveSceneClampedOrigin(bounds.Min, bounds.Max, cubicExtent, voxelSize, cameraPosition"));
                 Assert.That(farFieldManager, Does.Contain("if (recentered)"));
                 Assert.That(farFieldManager, Does.Contain("_bakePending = true;"));
                 Assert.That(farFieldManager, Does.Contain("internal static Vector3 ResolveSceneClampedOrigin("));
-                Assert.That(farFieldManager, Does.Contain("private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, float extent, Vector3 sceneMin, Vector3 sceneMax)"));
+                Assert.That(farFieldManager,
+                    Does.Contain(
+                        "private static bool ShouldRecenter(Vector3 cameraPosition, Vector3 currentOrigin, float extent, Vector3 sceneMin, Vector3 sceneMax)"));
                 Assert.That(farFieldManager, Does.Contain("Vector3 quarter = e * 0.25f;"));
-                Assert.That(farFieldManager, Does.Contain("ResolveDesiredSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, extent, voxelSize, cameraPosition.X)"));
-                Assert.That(farFieldManager, Does.Contain("return sceneMin - Math.Max(extent - sceneExtent, 0.0f) * 0.5f;"));
-                Assert.That(farFieldManager, Does.Contain("float target = SnapScalar(cameraPosition - extent * 0.5f, voxelSize);"));
+                Assert.That(farFieldManager,
+                    Does.Contain(
+                        "ResolveDesiredSceneClampedAxisOrigin(sceneMin.X, sceneMax.X, extent, voxelSize, cameraPosition.X)"));
+                Assert.That(farFieldManager,
+                    Does.Contain("return sceneMin - Math.Max(extent - sceneExtent, 0.0f) * 0.5f;"));
+                Assert.That(farFieldManager,
+                    Does.Contain("float target = SnapScalar(cameraPosition - extent * 0.5f, voxelSize);"));
                 Assert.That(farFieldManager, Does.Contain("CreateStaticInstanceSourceRevision"));
                 Assert.That(farFieldManager, Does.Contain("mesh.Generation"));
                 Assert.That(farFieldManager, Does.Contain("GetMaterialAspectRevisions"));
@@ -1556,7 +1607,8 @@ namespace Njulf.Tests
             });
         }
 
-        private static GPUSimpleDdgiVolume CreateToroidalVolume(int countX, int countY, int countZ, int offsetX, int offsetY, int offsetZ)
+        private static GPUSimpleDdgiVolume CreateToroidalVolume(int countX, int countY, int countZ, int offsetX,
+            int offsetY, int offsetZ)
         {
             return new GPUSimpleDdgiVolume
             {
@@ -1590,7 +1642,8 @@ namespace Njulf.Tests
                 InvDirComponent(dir.Y),
                 InvDirComponent(dir.Z));
             Vector3 boundsMin = grid.Origin;
-            Vector3 boundsMax = grid.Origin + new Vector3(grid.Resolution.X, grid.Resolution.Y, grid.Resolution.Z) * grid.VoxelSize;
+            Vector3 boundsMax = grid.Origin +
+                                new Vector3(grid.Resolution.X, grid.Resolution.Y, grid.Resolution.Z) * grid.VoxelSize;
             Vector3 t0 = (boundsMin - origin) * invDir;
             Vector3 t1 = (boundsMax - origin) * invDir;
             Vector3 tNear3 = Vector3.Min(t0, t1);
@@ -1603,7 +1656,8 @@ namespace Njulf.Tests
             Vector3 pos = origin + dir * tNear;
             Vector3I voxel = Clamp(WorldToVoxel(grid, pos), Vector3I.Zero, grid.Resolution - Vector3I.One);
             Vector3I stepDir = new(Math.Sign(dir.X), Math.Sign(dir.Y), Math.Sign(dir.Z));
-            Vector3 nextBoundary = grid.Origin + (new Vector3(voxel.X, voxel.Y, voxel.Z) + Step(Vector3.Zero, dir)) * grid.VoxelSize;
+            Vector3 nextBoundary = grid.Origin +
+                                   (new Vector3(voxel.X, voxel.Y, voxel.Z) + Step(Vector3.Zero, dir)) * grid.VoxelSize;
             Vector3 tMaxAxis = (nextBoundary - origin) * invDir;
             Vector3 tDelta = Vector3.Abs(new Vector3(grid.VoxelSize) * invDir);
             float t = tNear;
@@ -1656,56 +1710,60 @@ namespace Njulf.Tests
             Vector3I?[] source = new Vector3I?[count];
             Vector3I?[] dest = new Vector3I?[count];
             for (int z = 0; z < grid.Resolution.Z; z++)
-                for (int y = 0; y < grid.Resolution.Y; y++)
-                    for (int x = 0; x < grid.Resolution.X; x++)
-                    {
-                        int index = Linear(grid, x, y, z);
-                        if (grid.Get(x, y, z))
-                            source[index] = dest[index] = new Vector3I(x, y, z);
-                    }
+            for (int y = 0; y < grid.Resolution.Y; y++)
+            for (int x = 0; x < grid.Resolution.X; x++)
+            {
+                int index = Linear(grid, x, y, z);
+                if (grid.Get(x, y, z))
+                    source[index] = dest[index] = new Vector3I(x, y, z);
+            }
 
-            for (int stride = HighestPowerOfTwoLessThanOrEqualTo(Math.Max(Math.Max(grid.Resolution.X, grid.Resolution.Y), grid.Resolution.Z)) >> 1; stride >= 1; stride >>= 1)
+            for (int stride =
+                     HighestPowerOfTwoLessThanOrEqualTo(Math.Max(Math.Max(grid.Resolution.X, grid.Resolution.Y),
+                         grid.Resolution.Z)) >> 1;
+                 stride >= 1;
+                 stride >>= 1)
             {
                 for (int z = 0; z < grid.Resolution.Z; z++)
-                    for (int y = 0; y < grid.Resolution.Y; y++)
-                        for (int x = 0; x < grid.Resolution.X; x++)
+                for (int y = 0; y < grid.Resolution.Y; y++)
+                for (int x = 0; x < grid.Resolution.X; x++)
+                {
+                    Vector3I voxel = new(x, y, z);
+                    Vector3I? best = source[Linear(grid, x, y, z)];
+                    float bestDistance2 = SeedDistance2(voxel, best);
+                    for (int dz = -1; dz <= 1; dz++)
+                    for (int dy = -1; dy <= 1; dy++)
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        Vector3I neighbor = new(x + dx * stride, y + dy * stride, z + dz * stride);
+                        if (!grid.Inside(neighbor))
+                            continue;
+                        Vector3I? candidate = source[Linear(grid, neighbor.X, neighbor.Y, neighbor.Z)];
+                        float candidateDistance2 = SeedDistance2(voxel, candidate);
+                        if (candidateDistance2 < bestDistance2)
                         {
-                            Vector3I voxel = new(x, y, z);
-                            Vector3I? best = source[Linear(grid, x, y, z)];
-                            float bestDistance2 = SeedDistance2(voxel, best);
-                            for (int dz = -1; dz <= 1; dz++)
-                                for (int dy = -1; dy <= 1; dy++)
-                                    for (int dx = -1; dx <= 1; dx++)
-                                    {
-                                        Vector3I neighbor = new(x + dx * stride, y + dy * stride, z + dz * stride);
-                                        if (!grid.Inside(neighbor))
-                                            continue;
-                                        Vector3I? candidate = source[Linear(grid, neighbor.X, neighbor.Y, neighbor.Z)];
-                                        float candidateDistance2 = SeedDistance2(voxel, candidate);
-                                        if (candidateDistance2 < bestDistance2)
-                                        {
-                                            bestDistance2 = candidateDistance2;
-                                            best = candidate;
-                                        }
-                                    }
-
-                            dest[Linear(grid, x, y, z)] = best;
+                            bestDistance2 = candidateDistance2;
+                            best = candidate;
                         }
+                    }
+
+                    dest[Linear(grid, x, y, z)] = best;
+                }
 
                 (source, dest) = (dest, source);
             }
 
             ushort[] distances = new ushort[count];
             for (int z = 0; z < grid.Resolution.Z; z++)
-                for (int y = 0; y < grid.Resolution.Y; y++)
-                    for (int x = 0; x < grid.Resolution.X; x++)
-                    {
-                        Vector3I voxel = new(x, y, z);
-                        Vector3I? seed = source[Linear(grid, x, y, z)];
-                        distances[Linear(grid, x, y, z)] = seed.HasValue
-                            ? (ushort)Math.Clamp(MathF.Round(SeedBoxDistance(voxel, seed.Value) * 256.0f), 0.0f, 65535.0f)
-                            : ushort.MaxValue;
-                    }
+            for (int y = 0; y < grid.Resolution.Y; y++)
+            for (int x = 0; x < grid.Resolution.X; x++)
+            {
+                Vector3I voxel = new(x, y, z);
+                Vector3I? seed = source[Linear(grid, x, y, z)];
+                distances[Linear(grid, x, y, z)] = seed.HasValue
+                    ? (ushort)Math.Clamp(MathF.Round(SeedBoxDistance(voxel, seed.Value) * 256.0f), 0.0f, 65535.0f)
+                    : ushort.MaxValue;
+            }
 
             return distances;
         }
@@ -1738,7 +1796,8 @@ namespace Njulf.Tests
 
         private static float SeedBoxDistance(Vector3I voxel, Vector3I seed)
         {
-            Vector3 d = Vector3.Abs(new Vector3(voxel.X - seed.X, voxel.Y - seed.Y, voxel.Z - seed.Z)) - new Vector3(0.5f);
+            Vector3 d = Vector3.Abs(new Vector3(voxel.X - seed.X, voxel.Y - seed.Y, voxel.Z - seed.Z)) -
+                        new Vector3(0.5f);
             return Vector3.Max(d, Vector3.Zero).Length();
         }
 
@@ -1768,7 +1827,8 @@ namespace Njulf.Tests
                 x.Z < edge.Z ? 0.0f : 1.0f);
         }
 
-        private static bool FarFieldTriangleBoxOverlap(Vector3 boxCenter, Vector3 halfSize, Vector3 p0, Vector3 p1, Vector3 p2)
+        private static bool FarFieldTriangleBoxOverlap(Vector3 boxCenter, Vector3 halfSize, Vector3 p0, Vector3 p1,
+            Vector3 p2)
         {
             Vector3 v0 = p0 - boxCenter;
             Vector3 v1 = p1 - boxCenter;
@@ -1791,11 +1851,11 @@ namespace Njulf.Tests
             Vector3[] axes = [Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ];
             Vector3[] edges = [e0, e1, e2];
             foreach (Vector3 edge in edges)
-                foreach (Vector3 axis in axes)
-                {
-                    if (!FarFieldAxisOverlap(Vector3.Cross(edge, axis), v0, v1, v2, halfSize))
-                        return false;
-                }
+            foreach (Vector3 axis in axes)
+            {
+                if (!FarFieldAxisOverlap(Vector3.Cross(edge, axis), v0, v1, v2, halfSize))
+                    return false;
+            }
 
             return true;
         }
@@ -1884,7 +1944,7 @@ namespace Njulf.Tests
             public bool Inside(Vector3I voxel)
             {
                 return voxel.X >= 0 && voxel.Y >= 0 && voxel.Z >= 0 &&
-                    voxel.X < Resolution.X && voxel.Y < Resolution.Y && voxel.Z < Resolution.Z;
+                       voxel.X < Resolution.X && voxel.Y < Resolution.Y && voxel.Z < Resolution.Z;
             }
 
             public bool Get(int x, int y, int z)

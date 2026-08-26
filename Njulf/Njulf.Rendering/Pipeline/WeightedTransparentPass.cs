@@ -15,7 +15,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly PipelineObjects.MeshPipeline _meshPipeline;
         private readonly RenderTargetManager _renderTargets;
         private readonly RaySceneDescriptorBank? _raySceneDescriptors;
-        private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
+
+        private readonly ISimpleDdgiReceiverFeedbackCapture?
             _receiverFeedbackRuntime;
 
         public WeightedTransparentPass(
@@ -25,7 +26,7 @@ namespace Njulf.Rendering.Pipeline
             PipelineObjects.MeshPipeline meshPipeline,
             RenderTargetManager renderTargets,
             RaySceneDescriptorBank? raySceneDescriptors = null,
-            SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime = null)
+            ISimpleDdgiReceiverFeedbackCapture? receiverFeedbackRuntime = null)
             : base("WeightedTransparentPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
@@ -52,9 +53,9 @@ namespace Njulf.Rendering.Pipeline
 
             bool rayVariant =
                 (sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
-                    DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
+                 DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
                  sceneData.EffectiveThickTransmissionMode ==
-                    ThickTransmissionMode.RayQuery) &&
+                 ThickTransmissionMode.RayQuery) &&
                 _meshPipeline.RayTransparentPipelinesAvailable &&
                 _raySceneDescriptors?.IsAvailable == true;
             if (sceneData.TransparentReceiveGlobalIllumination ||
@@ -63,6 +64,7 @@ namespace Njulf.Rendering.Pipeline
             {
                 PublishComputeStorageToFragment(cmd);
             }
+
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
             _renderTargets.SceneDepth.TransitionToDepthReadOnly(cmd);
@@ -164,20 +166,20 @@ namespace Njulf.Rendering.Pipeline
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
                     ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled,
                     globalIlluminationEnabled:
-                        sceneData.TransparentReceiveGlobalIllumination),
+                    sceneData.TransparentReceiveGlobalIllumination),
                 DiagnosticFlags = GPUForwardPushConstants.PackDiagnosticFlags(
                     ddgiForwardEstimateCountersEnabled: false,
                     directionalShadowPreviewCascade: (uint)sceneData.DirectionalShadowPreviewCascade,
                     decalGlobalIlluminationEnabled:
-                        sceneData.DecalReceiveGlobalIllumination,
+                    sceneData.DecalReceiveGlobalIllumination,
                     ddgiLayeredReceiverCountersEnabled:
-                        sceneData.TransparentDdgiReceiverCountersEnabled,
+                    sceneData.TransparentDdgiReceiverCountersEnabled,
                     decalReceiveShadows: sceneData.DecalReceiveShadows,
                     thickTransmissionRayQueryEnabled:
-                        sceneData.EffectiveThickTransmissionMode ==
-                            ThickTransmissionMode.RayQuery,
+                    sceneData.EffectiveThickTransmissionMode ==
+                    ThickTransmissionMode.RayQuery,
                     thickTransmissionDispersionEnabled:
-                        sceneData.ThickTransmissionDispersionEnabled)
+                    sceneData.ThickTransmissionDispersionEnabled)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();
@@ -230,6 +232,7 @@ namespace Njulf.Rendering.Pipeline
             {
                 return false;
             }
+
             if (sceneData.CurrentFrameIndex != checked((uint)frameIndex) ||
                 (rayVariant
                     ? _meshPipeline.RayWeightedOitReceiverFeedbackPipeline.Handle
@@ -239,6 +242,7 @@ namespace Njulf.Rendering.Pipeline
                     "receiver-feedback-weighted-oit-pipeline-or-frame-slot-unavailable");
                 return false;
             }
+
             pipeline = rayVariant
                 ? _meshPipeline.RayWeightedOitReceiverFeedbackPipeline
                 : _meshPipeline.WeightedOitReceiverFeedbackPipeline;

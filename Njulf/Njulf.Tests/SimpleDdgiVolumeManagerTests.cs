@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Njulf.Rendering;
+using Njulf.Rendering.Core;
 using Njulf.Core.Math;
 using Njulf.Rendering.Data;
 
@@ -164,7 +165,8 @@ public sealed class SimpleDdgiVolumeManagerTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                SimpleDdgiVolumeManager.ResolveSimpleDdgiDebugViewMode(GlobalIlluminationDebugView.DdgiSourceCacheRadiance),
+                SimpleDdgiVolumeManager.ResolveSimpleDdgiDebugViewMode(GlobalIlluminationDebugView
+                    .DdgiSourceCacheRadiance),
                 Is.Zero);
             Assert.That(SimpleDdgiVolumeManager.SourceCacheRadianceDebugViewMode, Is.EqualTo(125u));
             Assert.That(
@@ -211,7 +213,10 @@ public sealed class SimpleDdgiVolumeManagerTests
     [TestCase(131_072, 131_072)]
     public void ConfiguredSimpleDdgiPrimaryRayBudget_IsNeverDerivedFromScheduledWork(int configured, int expected)
     {
-        Assert.That(VulkanRenderer.ResolveConfiguredSimpleDdgiPrimaryRayBudget(configured), Is.EqualTo(expected));
+        Assert.That(
+            DdgiFrameDataProjector
+                .ResolveConfiguredSimpleDdgiPrimaryRayBudget(configured),
+            Is.EqualTo(expected));
     }
 
     [TestCase(2_048, 15_368, false, 2_048)]
@@ -725,7 +730,8 @@ public sealed class SimpleDdgiVolumeManagerTests
         {
             Assert.That(source, Does.Contain("private readonly int[] _volumeWorkClassPendingScratch"));
             Assert.That(source, Does.Contain("private readonly byte[] _queuedWorkClassScratch"));
-            Assert.That(source, Does.Contain("public void ReportSchedulingFeedback(in SimpleDdgiSchedulingFeedback feedback)"));
+            Assert.That(source,
+                Does.Contain("public void ReportSchedulingFeedback(in SimpleDdgiSchedulingFeedback feedback)"));
             Assert.That(source, Does.Contain("SimpleDdgiSchedulerPressureReason.FeedbackReducedBudget"));
         });
     }
@@ -967,17 +973,21 @@ public sealed class SimpleDdgiVolumeManagerTests
             "Njulf.Rendering",
             "Resources",
             "SimpleDdgiVolumeManager.cs"));
-        string renderer = File.ReadAllText(FindSourceFile(
+        string projector = File.ReadAllText(FindSourceFile(
             "Njulf.Rendering",
-            "VulkanRenderer.cs"));
+            "Core",
+            "DdgiFrameDataProjector.cs"));
 
         Assert.Multiple(() =>
         {
             Assert.That(manager, Does.Contain("public int EffectiveMaxShadedLights => _effectiveMaxShadedLights;"));
             Assert.That(manager, Does.Contain("_effectiveMaxShadedLights = Math.Max("));
-            Assert.That(renderer, Does.Contain("sceneData.DdgiEffectiveMaxShadedLights = _simpleDdgiVolumeManager.EffectiveMaxShadedLights;"));
-            Assert.That(renderer, Does.Contain("PopulateSimpleDdgiLightSelectionDiagnostics("));
-            Assert.That(renderer, Does.Contain("? \"simple-per-hit-top-n\""));
+            Assert.That(projector,
+                Does.Contain(
+                    "sceneData.DdgiEffectiveMaxShadedLights ="));
+            Assert.That(projector, Does.Contain("manager.EffectiveMaxShadedLights;"));
+            Assert.That(projector, Does.Contain("PopulateSimpleDdgiLightSelectionDiagnostics("));
+            Assert.That(projector, Does.Contain("? \"simple-per-hit-top-n\""));
         });
     }
 
@@ -993,7 +1003,7 @@ public sealed class SimpleDdgiVolumeManagerTests
         ulong expected)
     {
         Assert.That(
-            VulkanRenderer.EstimateSimpleDdgiShadowRayUpperBound(
+            DdgiFrameDataProjector.EstimateSimpleDdgiShadowRayUpperBound(
                 primaryRays,
                 directionalLights,
                 localLights,
@@ -1015,18 +1025,31 @@ public sealed class SimpleDdgiVolumeManagerTests
             IrradianceSize = 64,
             TexturePrecision = EnvironmentTexturePrecision.Float16
         };
-        ulong baselineSignature = VulkanRenderer.CreateSimpleDdgiEnvironmentSignature(baseline);
+        ulong baselineSignature = DdgiSceneInvalidationCoordinator
+            .CreateSimpleDdgiEnvironmentSignature(baseline);
 
         Assert.Multiple(() =>
         {
-            Assert.That(SignatureWith(baseline, environment => environment.Enabled = false), Is.Not.EqualTo(baselineSignature));
-            Assert.That(SignatureWith(baseline, environment => environment.SourceKind = EnvironmentSourceKind.HdrEquirectangular), Is.Not.EqualTo(baselineSignature));
-            Assert.That(SignatureWith(baseline, environment => environment.SourcePath = "alternate.hdr"), Is.Not.EqualTo(baselineSignature));
-            Assert.That(SignatureWith(baseline, environment => environment.SkyIntensity = 0.8f), Is.Not.EqualTo(baselineSignature));
-            Assert.That(SignatureWith(baseline, environment => environment.RotationRadians = 0.5f), Is.Not.EqualTo(baselineSignature));
-            Assert.That(SignatureWith(baseline, environment => environment.EnvironmentSize = 512), Is.Not.EqualTo(baselineSignature));
-            Assert.That(SignatureWith(baseline, environment => environment.IrradianceSize = 32), Is.Not.EqualTo(baselineSignature));
-            Assert.That(SignatureWith(baseline, environment => environment.TexturePrecision = EnvironmentTexturePrecision.Float32), Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.Enabled = false),
+                Is.Not.EqualTo(baselineSignature));
+            Assert.That(
+                SignatureWith(baseline,
+                    environment => environment.SourceKind = EnvironmentSourceKind.HdrEquirectangular),
+                Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.SourcePath = "alternate.hdr"),
+                Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.SkyIntensity = 0.8f),
+                Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.RotationRadians = 0.5f),
+                Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.EnvironmentSize = 512),
+                Is.Not.EqualTo(baselineSignature));
+            Assert.That(SignatureWith(baseline, environment => environment.IrradianceSize = 32),
+                Is.Not.EqualTo(baselineSignature));
+            Assert.That(
+                SignatureWith(baseline,
+                    environment => environment.TexturePrecision = EnvironmentTexturePrecision.Float32),
+                Is.Not.EqualTo(baselineSignature));
         });
     }
 
@@ -1048,24 +1071,33 @@ public sealed class SimpleDdgiVolumeManagerTests
             TexturePrecision = baseline.TexturePrecision
         };
         mutate(copy);
-        return VulkanRenderer.CreateSimpleDdgiEnvironmentSignature(copy);
+        return DdgiSceneInvalidationCoordinator
+            .CreateSimpleDdgiEnvironmentSignature(copy);
     }
 
     [Test]
     public void Renderer_PreparesSimpleDdgiAndPublishesCurrentEmissiveRevision()
     {
-        string renderer = File.ReadAllText(FindSourceFile(
+        string coordinator = File.ReadAllText(FindSourceFile(
             "Njulf.Rendering",
-            "VulkanRenderer.cs"));
-        int methodStart = renderer.IndexOf("private void PrepareDdgiProbeVolumes(", StringComparison.Ordinal);
-        int methodEnd = renderer.IndexOf(
-            "private void ScheduleReflectionProbeRecapturesFromGi(",
+            "Resources",
+            "SimpleDdgiFrameCoordinator.cs"));
+        int methodStart = coordinator.IndexOf(
+            "public SimpleDdgiCoreFrameResult PrepareFrame(",
+            StringComparison.Ordinal);
+        int methodEnd = coordinator.IndexOf(
+            "private SimpleDdgiCoreFrameResult PrepareDisabledFrame(",
             methodStart,
             StringComparison.Ordinal);
-        string method = renderer[methodStart..methodEnd].Replace("\r\n", "\n", StringComparison.Ordinal);
+        string method = coordinator[methodStart..methodEnd]
+            .Replace("\r\n", "\n", StringComparison.Ordinal);
 
-        int emissiveUpload = method.IndexOf("UploadDdgiEmissiveSources(", StringComparison.Ordinal);
-        int simpleDirtySignature = method.IndexOf("CreateSimpleDdgiDirtySignature(", StringComparison.Ordinal);
+        int emissiveUpload = method.IndexOf(
+            "_emissiveTransport.PrepareFrame(",
+            StringComparison.Ordinal);
+        int simpleDirtySignature = method.IndexOf(
+            "_invalidation.ResolveFrameIdentity(",
+            StringComparison.Ordinal);
 
         Assert.Multiple(() =>
         {
@@ -1147,28 +1179,42 @@ public sealed class SimpleDdgiVolumeManagerTests
         string source = File.ReadAllText(FindSourceFile(
             "Njulf.Rendering",
             "VulkanRenderer.cs"));
+        string projector = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Core",
+            "DdgiFrameDataProjector.cs"));
+        string coordinator = File.ReadAllText(FindSourceFile(
+            "Njulf.Rendering",
+            "Resources",
+            "SimpleDdgiFrameCoordinator.cs"));
 
         Assert.Multiple(() =>
         {
             Assert.That(
-                source,
+                projector,
                 Does.Contain("sceneData.DdgiBufferBytes = checked("));
             Assert.That(
-                source,
-                Does.Contain("_simpleDdgiVolumeManager.BufferBytes +"));
+                projector,
+                Does.Contain("manager.BufferBytes +"));
             Assert.That(
-                source,
-                Does.Contain("_forwardPlusPass?.SimpleDdgiReceiverCacheBufferBytes ?? 0"));
+                projector,
+                Does.Contain("input.ReceiverCacheBufferBytes +"));
             Assert.That(
-                source,
-                Does.Contain("_forwardPlusPass?.SimpleDdgiReceiverGatherBufferTotalBytes ?? 0"));
+                projector,
+                Does.Contain("input.ReceiverGatherBufferBytes"));
             Assert.That(
                 source,
                 Does.Not.Contain(
                     "sceneData.DdgiBufferBytes = _simpleDdgiVolumeManager.BufferBytes + (_farFieldClipmapManager?.BufferBytes ?? 0UL);"));
             Assert.That(
-                source,
-                Does.Contain("sceneData.FarFieldCacheBytes = _farFieldClipmapManager.PageCacheBytes;"));
+                projector,
+                Does.Contain("sceneData.FarFieldCacheBytes = farField.PageCacheBytes;"));
+            Assert.That(
+                coordinator,
+                Does.Contain("_farField.PageCacheBytes,"));
+            Assert.That(
+                coordinator,
+                Does.Contain("FarFieldMemoryBudgetBytes"));
         });
     }
 
@@ -1299,7 +1345,7 @@ public sealed class SimpleDdgiVolumeManagerTests
     {
         Vector3 refinementMinimum = new(-0.296875f, 0.1484375f, 0.4453125f);
         Vector3 refinementMaximum = refinementMinimum +
-            new Vector3(2.96875f, 1.78125f, 2.96875f);
+                                    new Vector3(2.96875f, 1.78125f, 2.96875f);
         const float nativeDistance = 3.5625f;
         var completeDomains = new[]
         {

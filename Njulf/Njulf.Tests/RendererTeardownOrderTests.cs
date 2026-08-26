@@ -96,7 +96,7 @@ public sealed class RendererTeardownOrderTests
                 "VulkanRenderer.cs"));
         int planStart =
             source.IndexOf(
-                "private StagedDisposalPlan CreateDisposalPlan()",
+                "private StagedDisposalPlan CreateResourceDisposalPlan()",
                 StringComparison.Ordinal);
         Assert.That(planStart, Is.GreaterThanOrEqualTo(0));
         if (planStart < 0)
@@ -155,17 +155,19 @@ public sealed class RendererTeardownOrderTests
                 "VulkanRenderer.cs"));
         string[] signatures =
         {
+            "public bool TrySetSimpleDdgiProbeResidencyDevelopmentPin(",
+            "public bool SetSimpleDdgiProbeResidencyDevelopmentFreeze(",
             "public void QueueOverlayDrawData(",
             "public int CreateOverlayTexture(",
             "public void RequestScreenshot(",
-            "public bool RequestLinearHdrCapture(",
+            "string captureToken)",
             "public LinearHdrCaptureResult GetLinearHdrCaptureResult(",
+            "RequestReflectionProbeRecapture(string reason)",
             "public void RequestRenderDocCapture(",
             "public string ExportPerformanceSnapshot(",
             "public bool TryFindObjectByName(",
             "public bool TryFindObjectById(",
             "public bool TryInspectObject(",
-            "public void Initialize(",
             "public bool BeginFrame(",
             "public void EndFrame(",
             "public unsafe void Clear(",
@@ -181,48 +183,18 @@ public sealed class RendererTeardownOrderTests
                     source,
                     signature);
             }
-        });
-
-        int planPrepared =
-            source.IndexOf(
-                "StagedDisposalPlan preparedPlan",
-                StringComparison.Ordinal);
-        int planCreated =
-            planPrepared < 0
-                ? -1
-                : source.IndexOf(
-                    "CreateDisposalPlan();",
-                    planPrepared,
-                    StringComparison.Ordinal);
-        int disposalStarted =
-            planCreated < 0
-                ? -1
-                : source.IndexOf(
-                    "_disposeStarted = true;",
-                    planCreated,
-                    StringComparison.Ordinal);
-        int eventUnsubscribe =
-            disposalStarted < 0
-                ? -1
-                : source.IndexOf(
-                    "Settings.QualityPresetChanging -=",
-                    disposalStarted,
-                    StringComparison.Ordinal);
-        int planPublished =
-            disposalStarted < 0
-                ? -1
-                : source.IndexOf(
-                    "_disposalPlan = preparedPlan;",
-                    disposalStarted,
-                    StringComparison.Ordinal);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(planPrepared, Is.GreaterThanOrEqualTo(0));
-            Assert.That(planCreated, Is.GreaterThan(planPrepared));
-            Assert.That(disposalStarted, Is.GreaterThan(planCreated));
-            Assert.That(eventUnsubscribe, Is.GreaterThan(disposalStarted));
-            Assert.That(planPublished, Is.GreaterThan(disposalStarted));
+            AssertMethodStartsWith(
+                source,
+                "public void Initialize(",
+                "if (_lifetime.Initialize(InitializeCore))");
+            Assert.That(
+                source,
+                Does.Contain(
+                    "_lifetime.DrainDisposal("));
+            Assert.That(
+                source,
+                Does.Contain(
+                    "private StagedDisposalPlan CreateResourceDisposalPlan()"));
         });
     }
 
@@ -258,8 +230,33 @@ public sealed class RendererTeardownOrderTests
         Assert.That(
             bodyStart,
             Does.StartWith(
-                "ThrowIfDisposalStarted();"),
+                "_lifetime.ThrowIfDisposalStarted();"),
             $"'{signature}' must fail closed before any work.");
+    }
+
+    private static void AssertMethodStartsWith(
+        string source,
+        string signature,
+        string expected)
+    {
+        int method = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.That(
+            method,
+            Is.GreaterThanOrEqualTo(0),
+            $"Missing method signature '{signature}'.");
+        if (method < 0)
+            return;
+
+        int body = source.IndexOf('{', method);
+        Assert.That(body, Is.GreaterThan(method));
+        if (body <= method)
+            return;
+
+        string bodyStart = source[(body + 1)..].TrimStart();
+        Assert.That(
+            bodyStart,
+            Does.StartWith(expected),
+            $"'{signature}' must start with '{expected}'.");
     }
 
     private static string FindSourceFile(

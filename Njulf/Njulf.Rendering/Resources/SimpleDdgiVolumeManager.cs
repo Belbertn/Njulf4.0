@@ -111,95 +111,95 @@ namespace Njulf.Rendering.Resources
     /// Passing <see cref="DeterministicFixedBudget"/> keeps validation scheduling
     /// exactly at its authored request cap.
     /// </summary>
-public readonly record struct SimpleDdgiSchedulingFeedback(
-        ulong CompletedGpuMicroseconds,
-        ulong TargetGpuMicroseconds,
-    bool DeterministicFixedBudget);
+    public readonly record struct SimpleDdgiSchedulingFeedback(
+            ulong CompletedGpuMicroseconds,
+            ulong TargetGpuMicroseconds,
+        bool DeterministicFixedBudget);
 
-/// <summary>
-/// O(1) atmosphere-cohort feedback exported by the DDGI scheduler.  All counts are maintained
-/// incrementally as probe state changes; a capture/admission caller never scans the probe pool.
-/// </summary>
-public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
-    uint VolumeResourceGeneration,
-    uint SourceCohortGeneration,
-    uint AdmittedSourceCohortGeneration,
-    uint PropagationGeneration,
-    uint PublishedPropagationGeneration,
-    int ParticipatingProbeCount,
-    int StaleParticipatingProbeCount,
-    int VisiblePriorityParticipatingProbeCount,
-    int VisiblePrioritySourceReadyProbeCount,
-    int VisiblePriorityPublishedProbeCount,
-    bool SourceCohortActive,
-    bool VisiblePublicationBoundaryComplete,
-    bool MinimumPropagationBoundaryComplete,
-    bool QuietPeriodComplete,
-    float AchievableSourceSweepSeconds,
-    uint SourceCohortStartFrame = 0U,
-    uint SourceCohortCompletionFrame = 0U,
-    ulong SourceCohortStartCount = 0UL,
-    ulong SourceCohortCompletionCount = 0UL,
-    int TargetSourceProbeCount = 0,
-    int AdmittedSourceProbeCount = 0,
-    int ScheduledSourceProbeCount = 0,
-    ulong TargetSourceRayCount = 0UL,
-    ulong AdmittedSourceRayCount = 0UL,
-    ulong ScheduledSourceRayCount = 0UL,
-    int SourceCapacityShortfall = 0,
-    ulong SourceRayCapacityShortfall = 0UL,
-    uint StaticConvergedGeneration = 0U,
-    bool StaticConvergencePending = false,
-    ulong StaleReadbackRejectionCount = 0UL,
-    ulong ResourceGenerationRejectionCount = 0UL,
-    bool ResidencyFeedbackComplete = true,
-    uint ResidencyEventSourceGeneration = 0U,
-    uint ResidencyEventCohortGeneration = 0U,
-    int ResidencyAdmissionProbeCount = 0,
-    int ResidencyEvictionProbeCount = 0,
-    int ResidencyOtherGenerationEvictionProbeCount = 0)
-{
-    public GiAtmosphereCohortFeedback ToAdmissionFeedback() => new(
-        ConsumesSteppedAtmosphere: true,
-        ParticipatingProbeCount,
-        SourceCohortActive,
-        StaleParticipatingProbeCount,
-        VisiblePublicationBoundaryComplete,
-        MinimumPropagationBoundaryComplete,
-        AchievableSourceSweepSeconds,
-        VolumeResourceGeneration,
-        SourceCohortGeneration,
-        AdmittedSourceCohortGeneration,
-        PropagationGeneration,
-        PublishedPropagationGeneration,
-        VisiblePriorityParticipatingProbeCount,
-        VisiblePrioritySourceReadyProbeCount,
-        VisiblePriorityPublishedProbeCount,
-        QuietPeriodComplete,
-        CandidateStreamActive: false,
-        SourceCohortStartFrame,
-        SourceCohortCompletionFrame,
-        SourceCohortStartCount,
-        SourceCohortCompletionCount,
-        TargetSourceProbeCount,
-        AdmittedSourceProbeCount,
-        ScheduledSourceProbeCount,
-        TargetSourceRayCount,
-        AdmittedSourceRayCount,
-        ScheduledSourceRayCount,
-        SourceCapacityShortfall,
-        SourceRayCapacityShortfall,
-        StaticConvergedGeneration,
-        StaticConvergencePending,
-        StaleReadbackRejectionCount,
-        ResourceGenerationRejectionCount,
-        ResidencyFeedbackComplete,
-        ResidencyEventSourceGeneration,
-        ResidencyEventCohortGeneration,
-        ResidencyAdmissionProbeCount,
-        ResidencyEvictionProbeCount,
-        ResidencyOtherGenerationEvictionProbeCount);
-}
+    /// <summary>
+    /// O(1) atmosphere-cohort feedback exported by the DDGI scheduler.  All counts are maintained
+    /// incrementally as probe state changes; a capture/admission caller never scans the probe pool.
+    /// </summary>
+    public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
+        uint VolumeResourceGeneration,
+        uint SourceCohortGeneration,
+        uint AdmittedSourceCohortGeneration,
+        uint PropagationGeneration,
+        uint PublishedPropagationGeneration,
+        int ParticipatingProbeCount,
+        int StaleParticipatingProbeCount,
+        int VisiblePriorityParticipatingProbeCount,
+        int VisiblePrioritySourceReadyProbeCount,
+        int VisiblePriorityPublishedProbeCount,
+        bool SourceCohortActive,
+        bool VisiblePublicationBoundaryComplete,
+        bool MinimumPropagationBoundaryComplete,
+        bool QuietPeriodComplete,
+        float AchievableSourceSweepSeconds,
+        uint SourceCohortStartFrame = 0U,
+        uint SourceCohortCompletionFrame = 0U,
+        ulong SourceCohortStartCount = 0UL,
+        ulong SourceCohortCompletionCount = 0UL,
+        int TargetSourceProbeCount = 0,
+        int AdmittedSourceProbeCount = 0,
+        int ScheduledSourceProbeCount = 0,
+        ulong TargetSourceRayCount = 0UL,
+        ulong AdmittedSourceRayCount = 0UL,
+        ulong ScheduledSourceRayCount = 0UL,
+        int SourceCapacityShortfall = 0,
+        ulong SourceRayCapacityShortfall = 0UL,
+        uint StaticConvergedGeneration = 0U,
+        bool StaticConvergencePending = false,
+        ulong StaleReadbackRejectionCount = 0UL,
+        ulong ResourceGenerationRejectionCount = 0UL,
+        bool ResidencyFeedbackComplete = true,
+        uint ResidencyEventSourceGeneration = 0U,
+        uint ResidencyEventCohortGeneration = 0U,
+        int ResidencyAdmissionProbeCount = 0,
+        int ResidencyEvictionProbeCount = 0,
+        int ResidencyOtherGenerationEvictionProbeCount = 0)
+    {
+        public GiAtmosphereCohortFeedback ToAdmissionFeedback() => new(
+            ConsumesSteppedAtmosphere: true,
+            ParticipatingProbeCount,
+            SourceCohortActive,
+            StaleParticipatingProbeCount,
+            VisiblePublicationBoundaryComplete,
+            MinimumPropagationBoundaryComplete,
+            AchievableSourceSweepSeconds,
+            VolumeResourceGeneration,
+            SourceCohortGeneration,
+            AdmittedSourceCohortGeneration,
+            PropagationGeneration,
+            PublishedPropagationGeneration,
+            VisiblePriorityParticipatingProbeCount,
+            VisiblePrioritySourceReadyProbeCount,
+            VisiblePriorityPublishedProbeCount,
+            QuietPeriodComplete,
+            CandidateStreamActive: false,
+            SourceCohortStartFrame,
+            SourceCohortCompletionFrame,
+            SourceCohortStartCount,
+            SourceCohortCompletionCount,
+            TargetSourceProbeCount,
+            AdmittedSourceProbeCount,
+            ScheduledSourceProbeCount,
+            TargetSourceRayCount,
+            AdmittedSourceRayCount,
+            ScheduledSourceRayCount,
+            SourceCapacityShortfall,
+            SourceRayCapacityShortfall,
+            StaticConvergedGeneration,
+            StaticConvergencePending,
+            StaleReadbackRejectionCount,
+            ResourceGenerationRejectionCount,
+            ResidencyFeedbackComplete,
+            ResidencyEventSourceGeneration,
+            ResidencyEventCohortGeneration,
+            ResidencyAdmissionProbeCount,
+            ResidencyEvictionProbeCount,
+            ResidencyOtherGenerationEvictionProbeCount);
+    }
 
     /// <summary>
     /// A contiguous update-queue range whose probes all use the same active ray
@@ -9362,7 +9362,8 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
             bool recentered)
         {
             if (recentered ||
-                (dirtyReasonFlags & VulkanRenderer.SimpleDdgiDirtyReasonDynamicGeometry) != 0u)
+                (dirtyReasonFlags & DdgiSceneInvalidationCoordinator
+                    .SimpleDdgiDirtyReasonDynamicGeometry) != 0u)
             {
                 return true;
             }
@@ -9731,26 +9732,26 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
 
                 int firstProbe = FirstProbe(current);
                 for (int z = 0; z < countZ; z++)
-                for (int y = 0; y < countY; y++)
-                for (int x = 0; x < countX; x++)
-                {
-                    int oldX = x - deltaX;
-                    int oldY = y - deltaY;
-                    int oldZ = z - deltaZ;
-                    if (oldX >= 0 && oldX < countX &&
-                        oldY >= 0 && oldY < countY &&
-                        oldZ >= 0 && oldZ < countZ)
-                    {
-                        continue;
-                    }
+                    for (int y = 0; y < countY; y++)
+                        for (int x = 0; x < countX; x++)
+                        {
+                            int oldX = x - deltaX;
+                            int oldY = y - deltaY;
+                            int oldZ = z - deltaZ;
+                            if (oldX >= 0 && oldX < countX &&
+                                oldY >= 0 && oldY < countY &&
+                                oldZ >= 0 && oldZ < countZ)
+                            {
+                                continue;
+                            }
 
-                    int physicalLocal = CalculatePhysicalProbeLocalIndex(
-                        current,
-                        x,
-                        y,
-                        z);
-                    QueueReceiverProbeInvalidation(firstProbe + physicalLocal);
-                }
+                            int physicalLocal = CalculatePhysicalProbeLocalIndex(
+                                current,
+                                x,
+                                y,
+                                z);
+                            QueueReceiverProbeInvalidation(firstProbe + physicalLocal);
+                        }
             }
         }
 
@@ -17192,43 +17193,43 @@ public readonly record struct SimpleDdgiAtmosphereCohortFeedback(
                 }
 
                 for (int z = 0; z < CountZ(current); z++)
-                for (int y = 0; y < CountY(current); y++)
-                for (int x = 0; x < CountX(current); x++)
-                {
-                    int sourceX = checked(x + originDeltaX);
-                    int sourceY = checked(y + originDeltaY);
-                    int sourceZ = checked(z + originDeltaZ);
-                    if ((uint)sourceX >= (uint)cached.CountX ||
-                        (uint)sourceY >= (uint)cached.CountY ||
-                        (uint)sourceZ >= (uint)cached.CountZ)
-                    {
-                        continue;
-                    }
+                    for (int y = 0; y < CountY(current); y++)
+                        for (int x = 0; x < CountX(current); x++)
+                        {
+                            int sourceX = checked(x + originDeltaX);
+                            int sourceY = checked(y + originDeltaY);
+                            int sourceZ = checked(z + originDeltaZ);
+                            if ((uint)sourceX >= (uint)cached.CountX ||
+                                (uint)sourceY >= (uint)cached.CountY ||
+                                (uint)sourceZ >= (uint)cached.CountZ)
+                            {
+                                continue;
+                            }
 
-                    int sourcePhysical = CalculatePersistentWarmStartPhysicalIndex(
-                        sourceX,
-                        sourceY,
-                        sourceZ,
-                        cached.CountX,
-                        cached.CountY,
-                        cached.CountZ,
-                        cached.PhysicalOffsetX,
-                        cached.PhysicalOffsetY,
-                        cached.PhysicalOffsetZ);
-                    int destinationPhysicalLocal =
-                        CalculatePhysicalProbeLocalIndex(current, x, y, z);
-                    int destinationPhysicalProbe = checked(
-                        (int)paging.DensePhysicalFirstProbe +
-                        destinationPhysicalLocal);
-                    int destinationReceiverProbe = checked(
-                        FirstProbe(current) + destinationPhysicalLocal);
-                    _warmStartProbeCopies.Add(
-                        new SimpleDdgiWarmStartProbeCopy(
-                            cached,
-                            sourcePhysical,
-                            destinationPhysicalProbe,
-                            destinationReceiverProbe));
-                }
+                            int sourcePhysical = CalculatePersistentWarmStartPhysicalIndex(
+                                sourceX,
+                                sourceY,
+                                sourceZ,
+                                cached.CountX,
+                                cached.CountY,
+                                cached.CountZ,
+                                cached.PhysicalOffsetX,
+                                cached.PhysicalOffsetY,
+                                cached.PhysicalOffsetZ);
+                            int destinationPhysicalLocal =
+                                CalculatePhysicalProbeLocalIndex(current, x, y, z);
+                            int destinationPhysicalProbe = checked(
+                                (int)paging.DensePhysicalFirstProbe +
+                                destinationPhysicalLocal);
+                            int destinationReceiverProbe = checked(
+                                FirstProbe(current) + destinationPhysicalLocal);
+                            _warmStartProbeCopies.Add(
+                                new SimpleDdgiWarmStartProbeCopy(
+                                    cached,
+                                    sourcePhysical,
+                                    destinationPhysicalProbe,
+                                    destinationReceiverProbe));
+                        }
             }
 
             int appliedProbeCount = _warmStartProbeCopies.Count;

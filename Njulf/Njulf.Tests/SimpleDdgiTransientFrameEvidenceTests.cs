@@ -2,6 +2,7 @@ using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
 using Njulf.Rendering.Pipeline;
+using Njulf.Rendering.Resources;
 using NUnit.Framework;
 using Silk.NET.Vulkan;
 
@@ -1104,51 +1105,42 @@ public sealed class SimpleDdgiTransientFrameEvidenceTests
     }
 
     [Test]
-    public void RendererConsumesFenceCompleteSlotBeforeAnyWorkloadObservation()
+    public void CoordinatorConsumesFenceCompleteSlotBeforeAnyWorkloadObservation()
     {
-        string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
-        int beginFrame = renderer.IndexOf(
-            "public bool BeginFrame()",
-            StringComparison.Ordinal);
-        int consume = renderer.IndexOf(
-            "_simpleDdgiSubmittedFrameRing.TryConsume(",
-            beginFrame,
-            StringComparison.Ordinal);
-        int observe = renderer.IndexOf(
-            "ObserveCompletedSimpleDdgiWorkload(",
-            beginFrame,
-            StringComparison.Ordinal);
-        int complete = renderer.IndexOf(
-            "CompleteSimpleDdgiSubmittedFrame(",
-            beginFrame,
-            StringComparison.Ordinal);
-        int observeMethod = renderer.IndexOf(
-            "private void ObserveCompletedSimpleDdgiWorkload(",
-            StringComparison.Ordinal);
-        int captureMethod = renderer.IndexOf(
-            "private void CapturePendingSimpleDdgiSubmittedFrame(",
-            observeMethod,
-            StringComparison.Ordinal);
-        int completeMethod = renderer.IndexOf(
-            "private void CompleteSimpleDdgiSubmittedFrame(",
-            captureMethod,
-            StringComparison.Ordinal);
-        int nextMethod = renderer.IndexOf(
-            "private void ScheduleReflectionProbeRecapturesFromGi(",
-            completeMethod,
-            StringComparison.Ordinal);
+        int observations = 0;
+        var coordinator = new SimpleDdgiFrameEvidenceCoordinator(
+            framesInFlight: 2,
+            _ =>
+            {
+                observations++;
+                throw new InvalidOperationException("training failed");
+            });
+        SimpleDdgiSubmittedFrameEvidence submitted = CreateSubmitted(
+            frameSlot: 0,
+            frameSerial: 100UL,
+            sourceGeneration: 21u,
+            transportGeneration: 31u,
+            cachedSweepCount: 1);
+        coordinator.CapturePending(
+            0,
+            new SimpleDdgiSubmittedWorkload(submitted));
+        coordinator.CommitSuccessfulSubmission(0);
+        var completed = new SimpleDdgiFenceCompletedEvidence(
+            new FrameTimingSnapshot(Array.Empty<PassTiming>()),
+            default,
+            default,
+            default,
+            SchedulerFeedbackAvailable: false,
+            default,
+            SchedulerFeedbackTransportTopologyGeneration: 0u,
+            SchedulerActiveCanonicalMutationCount: 0u,
+            SchedulerActiveSourceMutationCount: 0u);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(beginFrame, Is.GreaterThanOrEqualTo(0));
-            Assert.That(consume, Is.GreaterThan(beginFrame));
-            Assert.That(observe, Is.GreaterThan(consume));
-            Assert.That(complete, Is.GreaterThan(observe));
-            Assert.That(renderer[observeMethod..captureMethod],
-                Does.Not.Contain("TryPeek("));
-            Assert.That(renderer[completeMethod..nextMethod],
-                Does.Not.Contain("TryConsume("));
-        });
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.CompleteAfterFence(0, completed));
+        Assert.DoesNotThrow(() =>
+            coordinator.CompleteAfterFence(0, completed));
+        Assert.That(observations, Is.EqualTo(1));
     }
 
     [Test]

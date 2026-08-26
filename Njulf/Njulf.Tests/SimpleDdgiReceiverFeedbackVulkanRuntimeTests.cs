@@ -35,14 +35,14 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                VulkanRenderer
-                    .ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
+                SimpleDdgiReceiverFeedbackCoordinator
+                    .ShouldCreateGraphicsPipelines(
                         settings,
                         passed),
                 Is.True);
             Assert.That(
-                VulkanRenderer
-                    .ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
+                SimpleDdgiReceiverFeedbackCoordinator
+                    .ShouldCreateGraphicsPipelines(
                         settings,
                         rejected),
                 Is.True);
@@ -50,22 +50,22 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
             settings.SimpleDdgiReceiverFeedbackMode =
                 SimpleDdgiReceiverFeedbackMode.AutoQualified;
             Assert.That(
-                VulkanRenderer
-                    .ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
+                SimpleDdgiReceiverFeedbackCoordinator
+                    .ShouldCreateGraphicsPipelines(
                         settings,
                         rejected),
                 Is.False);
             Assert.That(
-                VulkanRenderer
-                    .ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
+                SimpleDdgiReceiverFeedbackCoordinator
+                    .ShouldCreateGraphicsPipelines(
                         settings,
                         passed),
                 Is.True);
 
             settings.UseDdgi = false;
             Assert.That(
-                VulkanRenderer
-                    .ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
+                SimpleDdgiReceiverFeedbackCoordinator
+                    .ShouldCreateGraphicsPipelines(
                         settings,
                         passed),
                 Is.False);
@@ -73,11 +73,43 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
             settings.SimpleDdgiReceiverFeedbackMode =
                 SimpleDdgiReceiverFeedbackMode.Off;
             Assert.That(
-                VulkanRenderer
-                    .ShouldCreateSimpleDdgiReceiverFeedbackGraphicsPipelines(
+                SimpleDdgiReceiverFeedbackCoordinator
+                    .ShouldCreateGraphicsPipelines(
                         settings,
                         passed),
                 Is.False);
+        });
+    }
+
+    [Test]
+    public void ProductionWorkload_AccountsForEveryEnabledProducerClass()
+    {
+        var settings = new RenderSettings();
+        settings.Fog.Enabled = true;
+        settings.Particles.Enabled = true;
+        settings.Particles.MaxParticles = 123;
+        settings.GlobalIllumination.SimpleDdgiParticlesEnabled = true;
+        settings.Reflections.Enabled = true;
+        settings.Reflections.CaptureIncludesDdgi = true;
+        settings.Reflections.ProbeResolution = 64;
+        settings.Reflections.MaxProbeCapturesPerFrame = 2;
+        settings.Reflections.MaxProbeCaptureFacesPerFrame = 3;
+
+        SimpleDdgiReceiverFeedbackProductionWorkload workload =
+            SimpleDdgiReceiverFeedbackCoordinator.CompileProductionWorkload(
+                settings,
+                new Extent2D(17u, 9u),
+                screenTileCount: 6UL);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(workload.SourceScreenTileCount, Is.EqualTo(6UL));
+            Assert.That(workload.FogWorkgroupCount, Is.EqualTo(6UL));
+            Assert.That(workload.MaximumParticleCount, Is.EqualTo(123u));
+            Assert.That(workload.ReflectionCaptureTileCount, Is.EqualTo(216UL));
+            Assert.That(workload.MaximumTransparentLayersPerTile,
+                Is.EqualTo(SimpleDdgiReceiverFeedbackProductionWorkload
+                    .DefaultMaximumTransparentLayersPerTile));
         });
     }
 
@@ -166,7 +198,7 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
             Assert.That(layeredMask,
                 Is.EqualTo(SimpleDdgiReceiverFeedbackCaptureSourceAbi.KnownProducerMask));
             Assert.That(layeredMask &
-                ~SimpleDdgiReceiverFeedbackVulkanRuntime.OwnedProducerMask,
+                        ~SimpleDdgiReceiverFeedbackVulkanRuntime.OwnedProducerMask,
                 Is.Zero);
         });
 
@@ -305,7 +337,7 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
             CreateValidContract() with
             {
                 CandidateBufferBindlessIndex =
-                    SimpleDdgiReceiverFeedbackGpuSortAbi.RecordBindlessSlot
+                SimpleDdgiReceiverFeedbackGpuSortAbi.RecordBindlessSlot
             };
         SimpleDdgiReceiverFeedbackCaptureProducerContract oversized =
             CreateValidContract() with { CandidateRecordCount = 15u };
@@ -345,21 +377,18 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                VulkanRenderer
-                    .ShouldReconcileSimpleDdgiReceiverFeedbackAfterUpload(
-                        currentCommandBufferReferencesSummaryBank: false),
+                SimpleDdgiReceiverFeedbackCoordinator.ShouldReconcileAfterUpload(
+                    currentCommandBufferReferencesSummaryBank: false),
                 Is.True,
                 "Initial activation and rejected bindings may reconcile immediately.");
             Assert.That(
-                VulkanRenderer
-                    .ShouldReconcileSimpleDdgiReceiverFeedbackAfterUpload(
-                        currentCommandBufferReferencesSummaryBank: true),
+                SimpleDdgiReceiverFeedbackCoordinator.ShouldReconcileAfterUpload(
+                    currentCommandBufferReferencesSummaryBank: true),
                 Is.False,
                 "A recorded read must keep its allocation alive through submission.");
             Assert.That(
-                VulkanRenderer
-                    .ShouldReconcileSimpleDdgiReceiverFeedbackAfterUpload(
-                        currentCommandBufferReferencesSummaryBank: false),
+                SimpleDdgiReceiverFeedbackCoordinator.ShouldReconcileAfterUpload(
+                    currentCommandBufferReferencesSummaryBank: false),
                 Is.True,
                 "The following frame may retry the deferred transition.");
         });
@@ -586,9 +615,12 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
                 Does.Contain("receiver-feedback-alpha-foliage-completion-failed"));
             Assert.That(forwardPass,
                 Does.Contain("receiverGatherRequired = receiverCacheEligible ||"));
-            Assert.That(forwardPass,
-                Does.Contain(
-                    "_simpleDdgiReceiverFeedbackRuntime?.IsOwnedCaptureReady == true"));
+            Assert.That(
+                typeof(ForwardPlusPass).GetField(
+                    "_simpleDdgiReceiverFeedbackRuntime",
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)?.FieldType,
+                Is.EqualTo(typeof(ISimpleDdgiReceiverFeedbackCapture)));
             Assert.That(forwardPass,
                 Does.Contain("receiverCacheEligible && receiverGatherRecorded"));
         });
@@ -687,9 +719,10 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
             "Njulf.Shaders",
             "particle.vert");
         string fog = ReadRepoText("Njulf.Shaders", "fog.comp");
-        string renderer = ReadRepoText(
+        string coordinator = ReadRepoText(
             "Njulf.Rendering",
-            "VulkanRenderer.cs");
+            "Resources",
+            "SimpleDdgiReceiverFeedbackCoordinator.cs");
 
         Assert.Multiple(() =>
         {
@@ -711,9 +744,9 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
                 Does.Contain("producerPhase < 2u"));
             Assert.That(fog,
                 Does.Contain("exactFeedbackRefinementOrBaseFallback"));
-            Assert.That(renderer,
+            Assert.That(coordinator,
                 Does.Contain("receiver-feedback-refinement-completion-failed"));
-            Assert.That(renderer,
+            Assert.That(coordinator,
                 Does.Contain("RefinementOrBaseFallback"));
         });
     }
@@ -725,25 +758,25 @@ public sealed class SimpleDdgiReceiverFeedbackVulkanRuntimeTests
             CaptureSourceAbiVersion: SimpleDdgiReceiverFeedbackCaptureSourceAbi.Version,
             CandidateBuffer: new BufferHandle(index: 7, generation: 1u),
             CandidateBufferBindlessIndex:
-                SimpleDdgiReceiverFeedbackCaptureSourceAbi.CandidateBindlessSlot,
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi.CandidateBindlessSlot,
             CandidateBufferDescriptorBytes: 512UL * sizeof(uint),
             CandidateControlOffsetWords:
-                SimpleDdgiReceiverFeedbackCaptureSourceAbi.GlobalHeaderWords,
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi.GlobalHeaderWords,
             CandidateRecordOffsetWords:
-                SimpleDdgiReceiverFeedbackCaptureSourceAbi.GlobalHeaderWords +
-                SimpleDdgiReceiverFeedbackCaptureSourceAbi.ControlWords,
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi.GlobalHeaderWords +
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi.ControlWords,
             CandidateRecordCount: 16u,
             CandidateRecordStrideBytes:
-                SimpleDdgiReceiverFeedbackGpuSortAbi.CaptureCandidateByteCount,
+            SimpleDdgiReceiverFeedbackGpuSortAbi.CaptureCandidateByteCount,
             ScreenSamplingPeriod: 4u,
             ScreenSamplingPhase: 1u,
             MaximumUniqueGatherOwnersPerTile:
-                SimpleDdgiReceiverFeedbackCaptureSourceAbi
-                    .MaximumUniqueGatherOwnersPerTile,
+            SimpleDdgiReceiverFeedbackCaptureSourceAbi
+                .MaximumUniqueGatherOwnersPerTile,
             ProducerWriteStageMask: PipelineStageFlags2.ComputeShaderBit,
             ProducerWriteAccessMask: AccessFlags2.ShaderStorageWriteBit,
             RequiredProducerMask:
-                SimpleDdgiReceiverFeedbackVulkanRuntime.OwnedProducerMask);
+            SimpleDdgiReceiverFeedbackVulkanRuntime.OwnedProducerMask);
 
     private static string ReadRepoText(params string[] segments)
     {

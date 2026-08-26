@@ -264,27 +264,27 @@ public sealed class DirectionalShadowContractsTests
     }
 
     [Test]
-    public void Renderer_UploadsDirectionalShadowDataOnlyAfterModeResolution()
+    public void Renderer_UploadsDirectionalShadowDataOnlyAfterFramePlanning()
     {
         string renderer = ReadRepoText("Njulf.Rendering",
             "VulkanRenderer.cs");
         int prepareStart = renderer.IndexOf(
             "private void PrepareDirectionalShadows",
             StringComparison.Ordinal);
-        int resolveStart = renderer.IndexOf(
-            "private void ResolveDirectionalShadowFramePlan",
+        int frameStart = renderer.IndexOf(
+            "private void PrepareDirectionalShadowFrame",
             prepareStart,
             StringComparison.Ordinal);
-        int resolveEnd = renderer.IndexOf(
+        int frameEnd = renderer.IndexOf(
             "private void PrepareAreaRayShadows",
-            resolveStart,
+            frameStart,
             StringComparison.Ordinal);
 
         Assert.That(prepareStart, Is.GreaterThanOrEqualTo(0));
-        Assert.That(resolveStart, Is.GreaterThan(prepareStart));
-        Assert.That(resolveEnd, Is.GreaterThan(resolveStart));
-        string prepare = renderer[prepareStart..resolveStart];
-        string resolve = renderer[resolveStart..resolveEnd];
+        Assert.That(frameStart, Is.GreaterThan(prepareStart));
+        Assert.That(frameEnd, Is.GreaterThan(frameStart));
+        string prepare = renderer[prepareStart..frameStart];
+        string frame = renderer[frameStart..frameEnd];
 
         Assert.Multiple(() =>
         {
@@ -293,10 +293,10 @@ public sealed class DirectionalShadowContractsTests
                     StringSplitOptions.None).Length - 1,
                 Is.EqualTo(1));
             Assert.That(prepare, Does.Not.Contain("UploadShadowData("));
-            Assert.That(resolve, Does.Contain("UploadShadowData("));
-            Assert.That(resolve.IndexOf("sceneData.DirectionalShadowParameters = parameters;",
+            Assert.That(frame, Does.Contain("UploadShadowData("));
+            Assert.That(frame.IndexOf("sceneData.DirectionalShadowParameters = parameters;",
                     StringComparison.Ordinal),
-                Is.LessThan(resolve.IndexOf("UploadShadowData(",
+                Is.LessThan(frame.IndexOf("UploadShadowData(",
                     StringComparison.Ordinal)));
         });
     }

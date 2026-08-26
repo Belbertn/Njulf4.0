@@ -138,10 +138,10 @@ public sealed class TailDdgiQualificationTests
             CreateDiagnostics(1_000, 128, 256) with
             {
                 SimpleDdgiTransportConvergence =
-                    CreateTailTelemetry(certificateCurrent: true) with
-                    {
-                        TailExcludedNotVisibleCount = 9_376u
-                    }
+                CreateTailTelemetry(certificateCurrent: true) with
+                {
+                    TailExcludedNotVisibleCount = 9_376u
+                }
             };
 
         Assert.Multiple(() =>
@@ -156,10 +156,10 @@ public sealed class TailDdgiQualificationTests
                     sparseCertified with
                     {
                         SimpleDdgiTransportConvergence =
-                            sparseCertified.SimpleDdgiTransportConvergence with
-                            {
-                                TailExcludedStaleSourceCount = 1u
-                            }
+                        sparseCertified.SimpleDdgiTransportConvergence with
+                        {
+                            TailExcludedStaleSourceCount = 1u
+                        }
                     }),
                 Is.False);
             Assert.That(
@@ -167,10 +167,10 @@ public sealed class TailDdgiQualificationTests
                     sparseCertified with
                     {
                         SimpleDdgiTransportConvergence =
-                            sparseCertified.SimpleDdgiTransportConvergence with
-                            {
-                                TailCacheIdentityFailureCount = 1u
-                            }
+                        sparseCertified.SimpleDdgiTransportConvergence with
+                        {
+                            TailCacheIdentityFailureCount = 1u
+                        }
                     }),
                 Is.False);
         });
@@ -184,7 +184,7 @@ public sealed class TailDdgiQualificationTests
         {
             SimpleDdgiTrackingState = SimpleDdgiTrackingState.StaticConverged,
             SimpleDdgiTransportConvergence =
-                CreateTailTelemetry(certificateCurrent: false)
+            CreateTailTelemetry(certificateCurrent: false)
         };
 
         observer.Observe(diagnostics);
@@ -283,10 +283,10 @@ public sealed class TailDdgiQualificationTests
             SimpleDdgiSchedulerFeedbackPendingSourceCount = 2u,
             SimpleDdgiSchedulerFeedbackSolveEpoch = 0u,
             SimpleDdgiTransportConvergence =
-                CreateTailTelemetry(certificateCurrent: false) with
-                {
-                    TailSolveEpoch = 0u
-                }
+            CreateTailTelemetry(certificateCurrent: false) with
+            {
+                TailSolveEpoch = 0u
+            }
         };
         RendererDiagnostics solving = sourceRepair with
         {
@@ -294,10 +294,10 @@ public sealed class TailDdgiQualificationTests
             SimpleDdgiSchedulerFeedbackPendingSourceCount = 0u,
             SimpleDdgiSchedulerFeedbackSolveEpoch = 1u,
             SimpleDdgiTransportConvergence =
-                CreateTailTelemetry(certificateCurrent: false) with
-                {
-                    TailSolveEpoch = 1u
-                }
+            CreateTailTelemetry(certificateCurrent: false) with
+            {
+                TailSolveEpoch = 1u
+            }
         };
 
         observer.Observe(sourceRepair);
@@ -308,10 +308,10 @@ public sealed class TailDdgiQualificationTests
         {
             SimpleDdgiTrackingState = SimpleDdgiTrackingState.StaticConverged,
             SimpleDdgiTransportConvergence =
-                solving.SimpleDdgiTransportConvergence with
-                {
-                    TailCertificateCurrent = true
-                }
+            solving.SimpleDdgiTransportConvergence with
+            {
+                TailCertificateCurrent = true
+            }
         });
 
         SampleTailDdgiRunObservation observation = observer.Snapshot();
@@ -457,8 +457,8 @@ public sealed class TailDdgiQualificationTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Passed, Is.True,
-                string.Join(Environment.NewLine, result.Failures.Select(
-                    static failure => failure.Name + ": " + failure.Detail)));
+                string.Join(Environment.NewLine,
+                    result.Failures.Select(static failure => failure.Name + ": " + failure.Detail)));
             Assert.That(result.Failures, Is.Empty);
             Assert.That(result.RuntimeSolveEpochReduction,
                 Is.EqualTo(0.40).Within(1e-9));
@@ -585,12 +585,10 @@ public sealed class TailDdgiQualificationTests
             SampleTailDdgiLongSoakProfile.ProjectBudget(
                 budget,
                 diagnostics);
-        BudgetMetric giGpu = projection.Budget.Metrics.Single(
-            static metric => metric.Name == "GI GPU");
-        BudgetMetric materialCompile = projection.Budget.Metrics.Single(
-            static metric =>
-                metric.Name ==
-                RenderBudgetEvaluator.MaterialGiCompileP95MetricName);
+        BudgetMetric giGpu = projection.Budget.Metrics.Single(static metric => metric.Name == "GI GPU");
+        BudgetMetric materialCompile = projection.Budget.Metrics.Single(static metric =>
+            metric.Name ==
+            RenderBudgetEvaluator.MaterialGiCompileP95MetricName);
 
         Assert.Multiple(() =>
         {
@@ -735,7 +733,7 @@ public sealed class TailDdgiQualificationTests
             "-" + scenario;
         var run = new PerformanceCaptureRunMetadata(
             SceneKind: "GlobalIlluminationTest",
-            Scenario: "GiSimpleDdgiFurnace",
+            Scenario: scenario.ToString(),
             BuildConfiguration: "ShippingPerformance",
             ApplicationVersion: "1.0",
             Commit: "commit",
@@ -770,7 +768,7 @@ public sealed class TailDdgiQualificationTests
                 settingsHash,
                 [
                     "gi.simpleDdgi.transport.accelerationEnabled=" +
-                        accelerationValue,
+                    accelerationValue,
                     "gi.simpleDdgi.transport.tailCertificationEnabled=1",
                     "gi.simpleDdgi.transport.tailRelativeTolerance=0.001"
                 ]),
@@ -778,6 +776,14 @@ public sealed class TailDdgiQualificationTests
             SimpleDdgiTransportTailRelativeTolerance = 0.001f
         };
         SampleBenchmarkTimingStats timing = CompleteTiming("timing", 1.0);
+        const SampleBenchmarkTrajectoryKind trajectory =
+            SampleBenchmarkTrajectoryKind.Stationary;
+        const SampleBistroQualityCaptureVariant bistroVariant =
+            SampleBistroQualityCaptureVariant.SunScaleStep;
+        string trajectoryFingerprint =
+            SampleBenchmarkTrajectory.CreateFingerprint(
+                trajectory,
+                bistroVariant);
         var evidence = new SampleTailDdgiRuntimeEvidence
         {
             Available = true,
@@ -839,6 +845,9 @@ public sealed class TailDdgiQualificationTests
         {
             CapturePairId = "tail-ddgi-production-01",
             CaptureVariant = variant,
+            Trajectory = trajectory,
+            TrajectoryBistroVariant = bistroVariant,
+            TrajectoryFingerprint = trajectoryFingerprint,
             RequireProductionTiming = true,
             HdrReferencePath = "reference.hdr",
             HdrCandidatePath = variant + ".hdr"
@@ -871,7 +880,17 @@ public sealed class TailDdgiQualificationTests
                 IdentityHash: "identity-" + variant,
                 Mismatches: Array.Empty<string>())
             {
-                FullIdentityHash = "full-identity-" + variant
+                FullIdentityHash = "full-identity-" + variant,
+                Trajectory = SampleBenchmarkTrajectory.GetName(trajectory),
+                TrajectoryFingerprint = trajectoryFingerprint,
+                TrajectoryFrameCount =
+                    SampleBenchmarkTrajectory.GetFrameCount(trajectory),
+                TrajectoryRouteHash =
+                    SampleBenchmarkTrajectory.CreateRouteHash(
+                        trajectory,
+                        bistroVariant,
+                        diagnostics.CaptureCamera),
+                TrajectorySequenceHash = Sha256('1')
             },
             DdgiProductionGate = new SampleDdgiProductionGateReport(
                 Passed: true,
@@ -892,7 +911,8 @@ public sealed class TailDdgiQualificationTests
                 MaximumRelativeRmse: 0.12,
                 FailureReason: string.Empty),
             ProducerIdentity = CreateProducerIdentity(),
-            TailDdgiEvidence = evidence
+            TailDdgiEvidence = evidence,
+            ActivationEvidence = CanonicalNoActivationEvidence(120)
         };
         return report;
     }
@@ -912,6 +932,19 @@ public sealed class TailDdgiQualificationTests
             P50Milliseconds = milliseconds,
             P99Milliseconds = milliseconds
         };
+
+    private static SampleBenchmarkActivationEvidence
+        CanonicalNoActivationEvidence(int sampleCount) => new(
+        SampleBenchmarkActivationEvidence.CurrentSchema,
+        SampleBenchmarkActivation.None,
+        SampleBenchmarkActivation.CreateFingerprint(
+            SampleBenchmarkActivation.None),
+        Passed: true,
+        MeasuredSampleCount: sampleCount,
+        Failures: Array.Empty<string>());
+
+    private static string Sha256(char digit) =>
+        "sha256:" + new string(digit, 64);
 
     private static MaterialGiProducerIdentity CreateProducerIdentity() => new()
     {

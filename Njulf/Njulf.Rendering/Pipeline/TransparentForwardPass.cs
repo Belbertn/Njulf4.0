@@ -16,7 +16,8 @@ namespace Njulf.Rendering.Pipeline
         private readonly RenderTargetManager _renderTargets;
         private readonly ForwardPlusPass _forwardPlusPass;
         private readonly RaySceneDescriptorBank? _raySceneDescriptors;
-        private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
+
+        private readonly ISimpleDdgiReceiverFeedbackCapture?
             _receiverFeedbackRuntime;
 
         public TransparentForwardPass(
@@ -27,13 +28,13 @@ namespace Njulf.Rendering.Pipeline
             RenderTargetManager renderTargets,
             ForwardPlusPass forwardPlusPass,
             RaySceneDescriptorBank? raySceneDescriptors = null,
-            SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime = null)
+            ISimpleDdgiReceiverFeedbackCapture? receiverFeedbackRuntime = null)
             : base("TransparentForwardPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _forwardPlusPass = forwardPlusPass ??
-                throw new ArgumentNullException(nameof(forwardPlusPass));
+                               throw new ArgumentNullException(nameof(forwardPlusPass));
             _raySceneDescriptors = raySceneDescriptors;
             _receiverFeedbackRuntime = receiverFeedbackRuntime;
         }
@@ -60,9 +61,9 @@ namespace Njulf.Rendering.Pipeline
                 !allTransparentSurfacesAreThinGlass &&
                 sceneData.TransparentObjectCount > 0 &&
                 (sceneData.DirectionalShadowFramePlan.TransparentReceiverPolicy ==
-                    DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
+                 DirectionalShadowReceiverPolicy.LayeredFragmentRayQuery ||
                  sceneData.EffectiveThickTransmissionMode ==
-                    ThickTransmissionMode.RayQuery) &&
+                 ThickTransmissionMode.RayQuery) &&
                 _meshPipeline.RayTransparentPipelinesAvailable &&
                 _raySceneDescriptors?.IsAvailable == true;
             if (sceneData.TransparentReceiveGlobalIllumination ||
@@ -71,6 +72,7 @@ namespace Njulf.Rendering.Pipeline
             {
                 PublishComputeStorageToFragment(cmd);
             }
+
             Extent2D renderExtent = _renderTargets.SceneColor.Extent;
             SetFullViewportAndScissor(cmd, renderExtent);
             _renderTargets.SceneColor.TransitionToColorAttachment(cmd);
@@ -88,14 +90,14 @@ namespace Njulf.Rendering.Pipeline
                 _meshPipeline.GeometryDecalOverlayPipeline.Handle != 0);
             bool normalDirectionalOnlyThinGlass =
                 ShouldUseDirectionalOnlyThinGlass(
-                sceneData,
-                exactFeedback,
-                rayVariant,
-                _meshPipeline.ThinGlassForwardPipeline.Handle != 0);
+                    sceneData,
+                    exactFeedback,
+                    rayVariant,
+                    _meshPipeline.ThinGlassForwardPipeline.Handle != 0);
             bool exactDirectionalOnlyThinGlass =
                 exactFeedback &&
                 pipeline.Handle ==
-                    _meshPipeline.ThinGlassReceiverFeedbackPipeline.Handle;
+                _meshPipeline.ThinGlassReceiverFeedbackPipeline.Handle;
             bool directionalOnlyThinGlass =
                 normalDirectionalOnlyThinGlass ||
                 exactDirectionalOnlyThinGlass;
@@ -111,6 +113,7 @@ namespace Njulf.Rendering.Pipeline
                 pipeline = _meshPipeline.ThinGlassForwardPipeline;
                 pipelineLayout = _meshPipeline.Layout;
             }
+
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
             BindBindlessStorageAndTextures(cmd, pipelineLayout);
             if (rayVariant)
@@ -193,20 +196,20 @@ namespace Njulf.Rendering.Pipeline
                     transparencyDebugView: (uint)sceneData.TransparencyDebugView,
                     ambientOcclusionForwardSamplingMode: (uint)AmbientOcclusionForwardSamplingMode.Disabled,
                     globalIlluminationEnabled:
-                        sceneData.TransparentReceiveGlobalIllumination),
+                    sceneData.TransparentReceiveGlobalIllumination),
                 DiagnosticFlags = GPUForwardPushConstants.PackDiagnosticFlags(
                     ddgiForwardEstimateCountersEnabled: false,
                     directionalShadowPreviewCascade: (uint)sceneData.DirectionalShadowPreviewCascade,
                     decalGlobalIlluminationEnabled:
-                        sceneData.DecalReceiveGlobalIllumination,
+                    sceneData.DecalReceiveGlobalIllumination,
                     ddgiLayeredReceiverCountersEnabled:
-                        sceneData.TransparentDdgiReceiverCountersEnabled,
+                    sceneData.TransparentDdgiReceiverCountersEnabled,
                     decalReceiveShadows: sceneData.DecalReceiveShadows,
                     thickTransmissionRayQueryEnabled:
-                        sceneData.EffectiveThickTransmissionMode ==
-                            ThickTransmissionMode.RayQuery,
+                    sceneData.EffectiveThickTransmissionMode ==
+                    ThickTransmissionMode.RayQuery,
                     thickTransmissionDispersionEnabled:
-                        sceneData.ThickTransmissionDispersionEnabled)
+                    sceneData.ThickTransmissionDispersionEnabled)
             };
 
             uint size = (uint)Marshal.SizeOf<GPUForwardPushConstants>();
@@ -254,7 +257,7 @@ namespace Njulf.Rendering.Pipeline
             return sceneData.TransparentObjectCount == 0 &&
                    sceneData.TransparentMeshletCount > 0 &&
                    sceneData.GeometryDecalMeshletCount >=
-                       sceneData.TransparentMeshletCount &&
+                   sceneData.TransparentMeshletCount &&
                    sceneData.DebugViewMode == 0u &&
                    sceneData.DecalDebugView == DecalDebugView.None &&
                    sceneData.TransparencyDebugView == TransparencyDebugView.None &&
@@ -281,10 +284,10 @@ namespace Njulf.Rendering.Pipeline
                    sceneData.GeometryDecalMeshletCount == 0 &&
                    sceneData.DebugViewMode == 0u &&
                    sceneData.TransparencyDebugView ==
-                       TransparencyDebugView.None &&
+                   TransparencyDebugView.None &&
                    sceneData.DecalDebugView == DecalDebugView.None &&
                    sceneData.AmbientOcclusionDebugView ==
-                       AmbientOcclusionDebugView.None &&
+                   AmbientOcclusionDebugView.None &&
                    !exactFeedback &&
                    !rayVariant &&
                    pipelineAvailable;
@@ -296,10 +299,10 @@ namespace Njulf.Rendering.Pipeline
             ArgumentNullException.ThrowIfNull(sceneData);
             return sceneData.TransparentObjectCount > 0 &&
                    sceneData.ThinGlassObjectCount ==
-                       sceneData.TransparentObjectCount &&
+                   sceneData.TransparentObjectCount &&
                    sceneData.TransparentMeshletCount > 0 &&
                    sceneData.ThinGlassMeshletCount ==
-                       sceneData.TransparentMeshletCount;
+                   sceneData.TransparentMeshletCount;
         }
 
         private bool TrySelectExactFeedbackPipeline(
@@ -322,6 +325,7 @@ namespace Njulf.Rendering.Pipeline
             {
                 return false;
             }
+
             bool thinGlassVariant = ShouldUseDirectionalOnlyThinGlass(
                 sceneData,
                 exactFeedback: false,
@@ -339,6 +343,7 @@ namespace Njulf.Rendering.Pipeline
                     "receiver-feedback-transparent-pipeline-or-frame-slot-unavailable");
                 return false;
             }
+
             pipeline = exactPipeline;
             return true;
         }

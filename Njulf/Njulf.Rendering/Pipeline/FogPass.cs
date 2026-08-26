@@ -31,8 +31,10 @@ namespace Njulf.Rendering.Pipeline
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
         private VkPipeline _receiverFeedbackPipeline;
-        private readonly SimpleDdgiReceiverFeedbackVulkanRuntime?
+
+        private readonly ISimpleDdgiReceiverFeedbackCapture?
             _receiverFeedbackRuntime;
+
         private readonly FroxelFogRenderer _froxelRenderer;
 
         public FogPass(
@@ -44,7 +46,7 @@ namespace Njulf.Rendering.Pipeline
             RenderSettings settings,
             SimpleDdgiVolumeManager? simpleDdgiVolumeManager,
             RaySceneDescriptorBank raySceneDescriptors,
-            SimpleDdgiReceiverFeedbackVulkanRuntime? receiverFeedbackRuntime = null)
+            ISimpleDdgiReceiverFeedbackCapture? receiverFeedbackRuntime = null)
             : base("FogPass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
@@ -58,7 +60,7 @@ namespace Njulf.Rendering.Pipeline
                 settings,
                 simpleDdgiVolumeManager,
                 raySceneDescriptors ??
-                    throw new ArgumentNullException(nameof(raySceneDescriptors)));
+                throw new ArgumentNullException(nameof(raySceneDescriptors)));
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -73,6 +75,7 @@ namespace Njulf.Rendering.Pipeline
             {
                 _receiverFeedbackPipeline = CreatePipeline("fog_b1.comp.spv");
             }
+
             RecreateDescriptorSet();
             _froxelRenderer.Initialize();
         }
@@ -144,6 +147,7 @@ namespace Njulf.Rendering.Pipeline
                     BindlessIndex.FoggedSceneColorTexture;
                 return;
             }
+
             if (exactFeedback)
             {
                 _froxelRenderer.InvalidateHistory();
@@ -232,6 +236,7 @@ namespace Njulf.Rendering.Pipeline
                 _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
                 _pipeline = default;
             }
+
             if (_receiverFeedbackPipeline.Handle != 0)
             {
                 _context.Api.DestroyPipeline(
@@ -317,6 +322,7 @@ namespace Njulf.Rendering.Pipeline
             {
                 return false;
             }
+
             if (sceneData.CurrentFrameIndex != checked((uint)frameIndex) ||
                 _receiverFeedbackPipeline.Handle == 0)
             {
@@ -324,6 +330,7 @@ namespace Njulf.Rendering.Pipeline
                     "receiver-feedback-fog-pipeline-or-frame-slot-unavailable");
                 return false;
             }
+
             pipeline = _receiverFeedbackPipeline;
             return true;
         }
@@ -345,10 +352,12 @@ namespace Njulf.Rendering.Pipeline
                 PBindings = &binding
             };
 
-            Result result = _context.Api.CreateDescriptorSetLayout(_context.Device, &layoutInfo, null, out _outputSetLayout);
+            Result result =
+                _context.Api.CreateDescriptorSetLayout(_context.Device, &layoutInfo, null, out _outputSetLayout);
             if (result != Result.Success)
                 throw new VulkanException("Failed to create fog output descriptor set layout", result);
-            _context.SetDebugName(_outputSetLayout.Handle, ObjectType.DescriptorSetLayout, "Fog Pass Output Descriptor Set Layout");
+            _context.SetDebugName(_outputSetLayout.Handle, ObjectType.DescriptorSetLayout,
+                "Fog Pass Output Descriptor Set Layout");
         }
 
         private void CreatePipelineCache()
@@ -387,7 +396,8 @@ namespace Njulf.Rendering.Pipeline
                     PPushConstantRanges = &pushConstantRange
                 };
 
-                Result result = _context.Api.CreatePipelineLayout(_context.Device, &layoutInfo, null, out _pipelineLayout);
+                Result result =
+                    _context.Api.CreatePipelineLayout(_context.Device, &layoutInfo, null, out _pipelineLayout);
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create fog pipeline layout", result);
                 _context.SetDebugName(_pipelineLayout.Handle, ObjectType.PipelineLayout, "Fog Pass Pipeline Layout");

@@ -349,7 +349,10 @@ public sealed class DdgiEmissiveTransportCacheTests
         string hitShading = ReadRepoText("Njulf.Shaders", "ddgi_hit_shading.glsl");
         string simpleTrace = ReadRepoText("Njulf.Shaders", "ddgi_simple_trace.comp");
         string simpleTransport = ReadRepoText("Njulf.Shaders", "ddgi_simple_transport.comp");
-        string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+        string emissiveCoordinator = ReadRepoText(
+            "Njulf.Rendering",
+            "Resources",
+            "DdgiEmissiveTransportCoordinator.cs");
         string sceneBuilder = ReadRepoText(
             "Njulf.Rendering",
             "Data",
@@ -364,18 +367,21 @@ public sealed class DdgiEmissiveTransportCacheTests
                 Does.Contain(
                     "if ((firstFlags & (EmissiveSourceTriangleFlag | EmissiveSourceMacroEmitterFlag)) == 0u)"));
             Assert.That(simpleTrace, Does.Contain("different paths. Transport-atlas ownership only gates the"));
-            Assert.That(simpleTrace, Does.Contain("vec3 emissiveDiffuse = surface.EmissiveRadiance + emissiveProxyDiffuse;"));
+            Assert.That(simpleTrace,
+                Does.Contain("vec3 emissiveDiffuse = surface.EmissiveRadiance + emissiveProxyDiffuse;"));
             Assert.That(simpleTrace, Does.Not.Contain("emissiveProxyDiffuse * (1.0 - bounceOwnership)"));
             Assert.That(simpleTransport, Does.Contain("vec3 totalRadiance = source.sourceRadiance;"));
             Assert.That(simpleTransport, Does.Contain("totalRadiance += bounceRadiance;"));
             Assert.That(
-                renderer,
+                emissiveCoordinator,
                 Does.Contain(
-                    "if (Settings.GlobalIllumination.EffectiveGiEmissiveMeshSampling)"));
-            Assert.That(renderer, Does.Contain("return BuildDdgiEmissiveTriangleSources(scene, out signature);"));
-            Assert.That(renderer, Does.Contain("mutually exclusive, so disabling the feature cannot double energy."));
-            Assert.That(renderer, Does.Contain("_materialManager.MaterialDataRevision"));
-            Assert.That(renderer, Does.Contain("_ddgiEmissiveTableCache.TryGet("));
+                    "if (gi.EffectiveGiEmissiveMeshSampling)"));
+            Assert.That(emissiveCoordinator,
+                Does.Contain("return BuildDdgiEmissiveTriangleSources(scene, gi, out signature);"));
+            Assert.That(emissiveCoordinator,
+                Does.Contain("mutually exclusive, so disabling the feature cannot double energy."));
+            Assert.That(emissiveCoordinator, Does.Contain("_materialManager.MaterialDataRevision"));
+            Assert.That(emissiveCoordinator, Does.Contain("_ddgiEmissiveTableCache.TryGet("));
             Assert.That(
                 sceneBuilder.Split("hash.Add(scene.RenderPayloadRevision);").Length - 1,
                 Is.EqualTo(2),
@@ -424,7 +430,7 @@ public sealed class DdgiEmissiveTransportCacheTests
             origin + Vector3.UnitY,
             new Vector3(radiance, materialIndex, radiance),
             DdgiEmissiveSourceFlags.Triangle |
-                DdgiEmissiveSourceFlags.DynamicEmissiveTexture,
+            DdgiEmissiveSourceFlags.DynamicEmissiveTexture,
             stableKey,
             surface);
     }

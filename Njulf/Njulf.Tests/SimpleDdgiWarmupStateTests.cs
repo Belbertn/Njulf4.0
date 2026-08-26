@@ -1,4 +1,5 @@
 using Njulf.Rendering;
+using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
@@ -93,7 +94,7 @@ public sealed class SimpleDdgiWarmupStateTests
         bool certificateCurrent,
         SimpleDdgiTransportPhase phase,
         SimpleDdgiRefinementBrickDiagnostics refinement) =>
-        VulkanRenderer.ResolveSimpleDdgiWarmupState(
+        DdgiFrameDataProjector.ResolveSimpleDdgiWarmupState(
             probes,
             pending,
             certificationEnabled,

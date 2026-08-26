@@ -42,36 +42,68 @@ namespace Njulf.Tests
             var families = new (string Name, int Start, int Count)[]
             {
                 ("meshlet", 0, RendererDiagnosticsBuffer.MeshletCounterCount),
-                ("DDGI forward estimate", RendererDiagnosticsBuffer.DdgiForwardEstimateCounterBase, RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount),
-                ("DDGI trace energy", RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase, RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount),
-                ("DDGI trace early-out", RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase, RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount),
-                ("DDGI blend energy", RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase, RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount),
-                ("DDGI ring mismatch", RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase, RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount),
-                ("far field", RendererDiagnosticsBuffer.FarFieldCounterBase, RendererDiagnosticsBuffer.FarFieldCounterCount),
-                ("DDGI investigation", RendererDiagnosticsBuffer.DdgiInvestigationCounterBase, RendererDiagnosticsBuffer.DdgiInvestigationCounterCount),
-                ("simple DDGI transport", RendererDiagnosticsBuffer.SimpleDdgiTransportCounterBase, RendererDiagnosticsBuffer.SimpleDdgiTransportCounterCount),
-                ("directional shadow receiver", RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterBase, RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterCount),
-                ("far-field material V2", RendererDiagnosticsBuffer.FarFieldMaterialV2CounterBase, RendererDiagnosticsBuffer.FarFieldMaterialV2CounterCount),
-                ("material GI", RendererDiagnosticsBuffer.MaterialGiCounterBase, RendererDiagnosticsBuffer.MaterialGiCounterCount),
-                ("simple DDGI gather rejection", RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterCount),
-                ("simple DDGI gather all failed", RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterCount),
-                ("DDGI delivery failure", RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterBase, RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterCount),
-                ("DDGI shadow visibility", RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterBase, RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount),
-                ("DDGI layered receivers", RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterBase, RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount),
-                ("DDGI thin transport", RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase, RendererDiagnosticsBuffer.ThinSurfaceTransportCounterCount),
-                ("simple DDGI per-volume energy", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterCount),
-                ("DDGI effective albedo", RendererDiagnosticsBuffer.DdgiAlbedoCounterBase, RendererDiagnosticsBuffer.DdgiAlbedoCounterCount),
-                ("simple DDGI gather multiplicity", RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterCount),
-                ("decal fragment attribution", RendererDiagnosticsBuffer.DecalFragmentAttributionCounterBase, RendererDiagnosticsBuffer.DecalFragmentAttributionCounterCount),
-                ("simple DDGI storage validation", RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterBase, RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount),
-                ("simple DDGI per-volume energy evidence", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterBase, RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterCount),
-                ("directional shadow caster attribution", RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterBase, RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterCount),
-                ("DDGI geometry participation", RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterBase, RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterCount),
-                ("DDGI many-light estimator", RendererDiagnosticsBuffer.DdgiManyLightCounterBase, RendererDiagnosticsBuffer.DdgiManyLightCounterCount),
-                ("simple DDGI near visibility", RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterBase, RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterCount),
-                ("DDGI debug overlay", RendererDiagnosticsBuffer.DebugDdgiOverlayCounterBase, RendererDiagnosticsBuffer.DebugDdgiOverlayCounterCount),
-                ("thick transmission", RendererDiagnosticsBuffer.ThickTransmissionCounterBase, RendererDiagnosticsBuffer.ThickTransmissionCounterCount),
-                ("DDGI area-light sampling", RendererDiagnosticsBuffer.DdgiAreaLightCounterBase, RendererDiagnosticsBuffer.DdgiAreaLightCounterCount)
+                ("DDGI forward estimate", RendererDiagnosticsBuffer.DdgiForwardEstimateCounterBase,
+                    RendererDiagnosticsBuffer.DdgiForwardEstimateCounterCount),
+                ("DDGI trace energy", RendererDiagnosticsBuffer.DdgiTraceEnergyCounterBase,
+                    RendererDiagnosticsBuffer.DdgiTraceEnergyCounterCount),
+                ("DDGI trace early-out", RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterBase,
+                    RendererDiagnosticsBuffer.DdgiTraceEarlyOutCounterCount),
+                ("DDGI blend energy", RendererDiagnosticsBuffer.DdgiBlendEnergyCounterBase,
+                    RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount),
+                ("DDGI ring mismatch", RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleBase,
+                    RendererDiagnosticsBuffer.DdgiTraceRingMismatchSampleCount),
+                ("far field", RendererDiagnosticsBuffer.FarFieldCounterBase,
+                    RendererDiagnosticsBuffer.FarFieldCounterCount),
+                ("DDGI investigation", RendererDiagnosticsBuffer.DdgiInvestigationCounterBase,
+                    RendererDiagnosticsBuffer.DdgiInvestigationCounterCount),
+                ("simple DDGI transport", RendererDiagnosticsBuffer.SimpleDdgiTransportCounterBase,
+                    RendererDiagnosticsBuffer.SimpleDdgiTransportCounterCount),
+                ("directional shadow receiver", RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterBase,
+                    RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterCount),
+                ("far-field material V2", RendererDiagnosticsBuffer.FarFieldMaterialV2CounterBase,
+                    RendererDiagnosticsBuffer.FarFieldMaterialV2CounterCount),
+                ("material GI", RendererDiagnosticsBuffer.MaterialGiCounterBase,
+                    RendererDiagnosticsBuffer.MaterialGiCounterCount),
+                ("simple DDGI gather rejection", RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterBase,
+                    RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionCounterCount),
+                ("simple DDGI gather all failed", RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterBase,
+                    RendererDiagnosticsBuffer.SimpleDdgiGatherAllFailedCounterCount),
+                ("DDGI delivery failure", RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterBase,
+                    RendererDiagnosticsBuffer.DdgiDeliveryFailureCounterCount),
+                ("DDGI shadow visibility", RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterBase,
+                    RendererDiagnosticsBuffer.DdgiShadowVisibilityCounterCount),
+                ("DDGI layered receivers", RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterBase,
+                    RendererDiagnosticsBuffer.DdgiLayeredReceiverCounterCount),
+                ("DDGI thin transport", RendererDiagnosticsBuffer.ThinSurfaceTransportCounterBase,
+                    RendererDiagnosticsBuffer.ThinSurfaceTransportCounterCount),
+                ("simple DDGI per-volume energy", RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase,
+                    RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterCount),
+                ("DDGI effective albedo", RendererDiagnosticsBuffer.DdgiAlbedoCounterBase,
+                    RendererDiagnosticsBuffer.DdgiAlbedoCounterCount),
+                ("simple DDGI gather multiplicity", RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterBase,
+                    RendererDiagnosticsBuffer.SimpleDdgiGatherMultiplicityCounterCount),
+                ("decal fragment attribution", RendererDiagnosticsBuffer.DecalFragmentAttributionCounterBase,
+                    RendererDiagnosticsBuffer.DecalFragmentAttributionCounterCount),
+                ("simple DDGI storage validation", RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterBase,
+                    RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount),
+                ("simple DDGI per-volume energy evidence",
+                    RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterBase,
+                    RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyEvidenceCounterCount),
+                ("directional shadow caster attribution",
+                    RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterBase,
+                    RendererDiagnosticsBuffer.DirectionalShadowCasterDiagnosticCounterCount),
+                ("DDGI geometry participation", RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterBase,
+                    RendererDiagnosticsBuffer.DdgiGeometryParticipationCounterCount),
+                ("DDGI many-light estimator", RendererDiagnosticsBuffer.DdgiManyLightCounterBase,
+                    RendererDiagnosticsBuffer.DdgiManyLightCounterCount),
+                ("simple DDGI near visibility", RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterBase,
+                    RendererDiagnosticsBuffer.SimpleDdgiNearVisibilityCounterCount),
+                ("DDGI debug overlay", RendererDiagnosticsBuffer.DebugDdgiOverlayCounterBase,
+                    RendererDiagnosticsBuffer.DebugDdgiOverlayCounterCount),
+                ("thick transmission", RendererDiagnosticsBuffer.ThickTransmissionCounterBase,
+                    RendererDiagnosticsBuffer.ThickTransmissionCounterCount),
+                ("DDGI area-light sampling", RendererDiagnosticsBuffer.DdgiAreaLightCounterBase,
+                    RendererDiagnosticsBuffer.DdgiAreaLightCounterCount)
             };
 
             Assert.Multiple(() =>
@@ -89,13 +121,20 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.DdgiBlendEnergyCounterCount, Is.EqualTo(7));
                 Assert.That(RendererDiagnosticsBuffer.FarFieldCounterCount, Is.EqualTo(10));
                 Assert.That(RendererDiagnosticsBuffer.DdgiInvestigationFixedCounterCount, Is.EqualTo(38));
-                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeGatherCounterCount, Is.EqualTo(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount));
-                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumePrimaryGatherCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.DdgiInvestigationCounterBase + RendererDiagnosticsBuffer.DdgiInvestigationFixedCounterCount));
-                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeSampledGatherCounterBase, Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiVolumePrimaryGatherCounterBase + RendererDiagnosticsBuffer.SimpleDdgiVolumeGatherCounterCount));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeGatherCounterCount,
+                    Is.EqualTo(GlobalIlluminationSettings.MaxSimpleDdgiVolumeCount));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumePrimaryGatherCounterBase,
+                    Is.EqualTo(RendererDiagnosticsBuffer.DdgiInvestigationCounterBase +
+                               RendererDiagnosticsBuffer.DdgiInvestigationFixedCounterCount));
+                Assert.That(RendererDiagnosticsBuffer.SimpleDdgiVolumeSampledGatherCounterBase,
+                    Is.EqualTo(RendererDiagnosticsBuffer.SimpleDdgiVolumePrimaryGatherCounterBase +
+                               RendererDiagnosticsBuffer.SimpleDdgiVolumeGatherCounterCount));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiTransportCounterCount, Is.EqualTo(6));
-                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverCascadeCount, Is.EqualTo(ShadowSettings.MaxDirectionalCascades));
+                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverCascadeCount,
+                    Is.EqualTo(ShadowSettings.MaxDirectionalCascades));
                 Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverCounterFamilyCount, Is.EqualTo(16));
-                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverDepthQuantizationScale, Is.EqualTo(65535.0f));
+                Assert.That(RendererDiagnosticsBuffer.DirectionalShadowReceiverDepthQuantizationScale,
+                    Is.EqualTo(65535.0f));
                 Assert.That(RendererDiagnosticsBuffer.FarFieldMaterialV2CounterCount, Is.EqualTo(2));
                 Assert.That(RendererDiagnosticsBuffer.MaterialGiCounterCount, Is.EqualTo(10));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiGatherRejectionReasonCount, Is.EqualTo(10));
@@ -132,7 +171,8 @@ namespace Njulf.Tests
                 Assert.That(RendererDiagnosticsBuffer.CounterCount,
                     Is.EqualTo(RendererDiagnosticsBuffer.DdgiAreaLightCounterBase + 4));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize,
-                    Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount * sizeof(uint)));
+                    Is.GreaterThanOrEqualTo((ulong)RendererDiagnosticsBuffer.SimpleDdgiStorageValidationCounterCount *
+                                            sizeof(uint)));
                 Assert.That(RendererDiagnosticsBuffer.SimpleDdgiStorageValidationBufferSize % 256ul, Is.Zero);
                 Assert.That(simpleSharedShader, Does.Contain(
                     $"SIMPLE_DDGI_VOLUME_ENERGY_COUNTER_BASE = {RendererDiagnosticsBuffer.SimpleDdgiVolumeEnergyCounterBase}u"));
@@ -176,10 +216,12 @@ namespace Njulf.Tests
                     "AddSimpleDdgiStorageValidationDiagnostic("));
                 Assert.That(renderer, Does.Contain(
                     "ValidationCounters = counters.StorageValidation"));
-                Assert.That(commonShader, Does.Contain("DDGI_THIN_INVALID_TRANSMISSION_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 17u"));
+                Assert.That(commonShader,
+                    Does.Contain("DDGI_THIN_INVALID_TRANSMISSION_COUNTER = DDGI_THIN_TRANSPORT_COUNTER_BASE + 17u"));
                 Assert.That(RendererDiagnosticsBuffer.DdgiShadowHitDistanceScale, Is.EqualTo(256.0f));
                 Assert.That(RendererDiagnosticsBuffer.CounterCount, Is.EqualTo(nextExpectedStart));
-                Assert.That(RendererDiagnosticsBuffer.CounterBufferSize, Is.EqualTo((ulong)nextExpectedStart * sizeof(uint)));
+                Assert.That(RendererDiagnosticsBuffer.CounterBufferSize,
+                    Is.EqualTo((ulong)nextExpectedStart * sizeof(uint)));
             });
         }
 
@@ -347,17 +389,22 @@ namespace Njulf.Tests
             Assert.Multiple(() =>
             {
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.D, ref _cycleDdgiDebugPressed)"));
-                Assert.That(controller, Does.Contain("WasChordPressed(Key.F, ref _toggleDdgiDiagnosticsFilterPressed)"));
-                Assert.That(controller, Does.Contain("ApplyDdgiDiagnosticsCounterState(_getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.FullFrame);"));
+                Assert.That(controller,
+                    Does.Contain("WasChordPressed(Key.F, ref _toggleDdgiDiagnosticsFilterPressed)"));
+                Assert.That(controller,
+                    Does.Contain(
+                        "ApplyDdgiDiagnosticsCounterState(_getDiagnosticsFilter?.Invoke() ?? SampleDiagnosticsFilter.FullFrame);"));
                 Assert.That(controller, Does.Contain("diagnostics.DdgiForwardEstimateCountersEnabled = true;"));
-                Assert.That(controller, Does.Contain("DDGI forward estimate counters: enabled for Simple DDGI diagnostics."));
+                Assert.That(controller,
+                    Does.Contain("DDGI forward estimate counters: enabled for Simple DDGI diagnostics."));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.V, ref _cycleDdgiInvestigationViewPressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.P, ref _resetNormalRenderViewPressed)"));
                 Assert.That(controller, Does.Contain("ResetNormalRenderView()"));
                 Assert.That(controller, Does.Contain("_renderer.Settings.ResetRenderViewOverrides()"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.T, ref _cycleDdgiQualityTierPressed)"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.L, ref _toggleDdgiProbeL1MetadataPressed)"));
-                Assert.That(controller, Does.Contain("gi.DdgiProbeL1MetadataEnabled = !gi.DdgiProbeL1MetadataEnabled;"));
+                Assert.That(controller,
+                    Does.Contain("gi.DdgiProbeL1MetadataEnabled = !gi.DdgiProbeL1MetadataEnabled;"));
                 Assert.That(controller, Does.Contain("PrintGlobalIlluminationSettings(\"DDGI L1 metadata\")"));
                 Assert.That(controller, Does.Contain("WasChordPressed(Key.R, ref _printDdgiDiagnosticsPressed)"));
                 Assert.That(controller, Does.Contain("ConfigureDdgiOnly(gi)"));
@@ -376,7 +423,8 @@ namespace Njulf.Tests
                 Assert.That(reference, Does.Contain("`Ctrl+D` | Enable Simple DDGI and cycle its debug view"));
                 Assert.That(reference, Does.Contain("`Ctrl+F` | Toggle Simple-DDGI diagnostics console filter"));
                 Assert.That(reference, Does.Contain("`Ctrl+V` | Cycle Simple-DDGI investigation views"));
-                Assert.That(reference, Does.Contain("`Ctrl+P` | Restore the current scene/scenario's normal render view"));
+                Assert.That(reference,
+                    Does.Contain("`Ctrl+P` | Restore the current scene/scenario's normal render view"));
                 Assert.That(reference, Does.Contain("`Ctrl+T` | Cycle Simple-DDGI quality tier"));
                 Assert.That(reference, Does.Contain("`Ctrl+L` | Toggle Simple-DDGI compact L1 probe metadata"));
                 Assert.That(reference, Does.Contain("`Ctrl+R` | Print Simple-DDGI diagnostics"));
@@ -664,10 +712,13 @@ namespace Njulf.Tests
 
             Assert.Multiple(() =>
             {
-                Assert.That(controller, Does.Contain("WasChordPressed(Key.Keypad0, ref _requestDiagnosticSnapshotPressed)"));
+                Assert.That(controller,
+                    Does.Contain("WasChordPressed(Key.Keypad0, ref _requestDiagnosticSnapshotPressed)"));
                 Assert.That(controller, Does.Contain("RequestDiagnosticSnapshot()"));
-                Assert.That(controller, Does.Contain("Path.Combine(AppContext.BaseDirectory, \"DiagnosticSnapshots\")"));
-                Assert.That(controller, Does.Contain("ExportPerformanceSnapshotFile(directory, \"Diagnostic output\")"));
+                Assert.That(controller,
+                    Does.Contain("Path.Combine(AppContext.BaseDirectory, \"DiagnosticSnapshots\")"));
+                Assert.That(controller,
+                    Does.Contain("ExportPerformanceSnapshotFile(directory, \"Diagnostic output\")"));
                 Assert.That(controller, Does.Contain("Path.ChangeExtension(diagnosticsPath, \".png\")"));
                 Assert.That(controller, Does.Contain("_requestDiagnosticScreenshotCapture?.Invoke(screenshotPath)"));
                 Assert.That(controller, Does.Contain("Diagnostic snapshot requested: cpuSnapshots=on"));
@@ -680,6 +731,10 @@ namespace Njulf.Tests
         {
             var settings = new RenderSettings();
             string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
+            string ddgiFrames = ReadRepoText(
+                "Njulf.Rendering",
+                "Resources",
+                "SimpleDdgiFrameCoordinator.cs");
 
             Assert.Multiple(() =>
             {
@@ -692,7 +747,8 @@ namespace Njulf.Tests
                 Assert.That(settings.GlobalIllumination.SimpleDdgiStructuredGatherEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiReducedBlendEnabled, Is.False);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiSampledAtlasEnabled, Is.True);
-                Assert.That(settings.GlobalIllumination.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold, Is.EqualTo(1.0f));
+                Assert.That(settings.GlobalIllumination.SimpleDdgiSecondVolumeOwnershipEarlyOutThreshold,
+                    Is.EqualTo(1.0f));
                 Assert.That(settings.GlobalIllumination.SimpleDdgiToroidalScrollingEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.SimpleDdgiRegionalInvalidationEnabled, Is.True);
                 Assert.That(settings.GlobalIllumination.FarFieldSkyVisibilityEnabled, Is.True);
@@ -703,16 +759,20 @@ namespace Njulf.Tests
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.FarFieldSunShadow => 123u"));
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiDirectionalSupport => 124u"));
                 Assert.That(renderer, Does.Contain("GlobalIlluminationDebugView.DdgiSourceCacheRadiance => 125u"));
-                Assert.That(renderer, Does.Contain("ScheduleReflectionProbeRecapturesFromGi(sceneData, simpleDdgiActive: true);"));
-                Assert.That(renderer, Does.Contain("_reflectionProbeManager.RequestRecaptureAll(\"ddgi-ready\")"));
+                Assert.That(
+                    ddgiFrames,
+                    Does.Contain("ResolveReflectionRecaptureIntent("));
+                Assert.That(
+                    ddgiFrames,
+                    Does.Contain("Reason: \"ddgi-ready\""));
                 Assert.That(
                     renderer,
                     Does.Contain(
-                        "this ready edge is the only DDGI-driven recapture admission"));
+                        "_reflectionProbeManager?.RequestRecaptureAll(intent.Reason)"));
                 Assert.That(
-                    renderer,
+                    ddgiFrames,
                     Does.Not.Contain(
-                        "_reflectionProbeManager.RequestRecaptureAll(\"simple-ddgi-dirty\")"),
+                        "simple-ddgi-dirty"),
                     "a dirty edge can expose a partially propagated cubemap source");
             });
         }
@@ -898,25 +958,6 @@ namespace Njulf.Tests
         }
 
         [Test]
-        public void VulkanRenderer_DebugOverlaySupportsSimpleDdgiProbeVolume()
-        {
-            string renderer = ReadRepoText("Njulf.Rendering", "VulkanRenderer.cs");
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(renderer, Does.Contain("PrepareDdgiProbeDebugInstances(sceneData, _simpleDdgiVolumeManager);"));
-                Assert.That(renderer, Does.Contain("Settings.GlobalIllumination.EffectiveUseDdgi"));
-                Assert.That(renderer, Does.Contain("_simpleDdgiVolumeManager.ProbeCount <= 0"));
-                Assert.That(renderer, Does.Contain("ReadOnlySpan<GPUSimpleDdgiVolume> volumes = _simpleDdgiVolumeManager.LastVolumes;"));
-                Assert.That(renderer, Does.Contain("for (int volumeIndex = 0; volumeIndex < volumes.Length; volumeIndex++)"));
-                Assert.That(renderer, Does.Contain("ResolveSimpleDdgiVolumeDebugColor(volumeIndex, volume)"));
-                Assert.That(renderer, Does.Contain("sceneData.DebugDdgiProbeVolumesDrawn++;"));
-                Assert.That(renderer, Does.Contain("CalculatePhysicalProbeLocalIndex("));
-                Assert.That(renderer, Does.Not.Contain("IsProbeScheduledForUpdate(probeIndex)"));
-            });
-        }
-
-        [Test]
         public void DebugOverlayMode_DdgiModesAppendAfterExistingModes()
         {
             Assert.Multiple(() =>
@@ -942,8 +983,8 @@ namespace Njulf.Tests
         [Test]
         public void DdgiProbeDebugMarkerSampling_DistributesMarkersAcrossCameraClipmapVolume()
         {
-            VulkanRenderer.DdgiProbeMarkerSampling sampling =
-                VulkanRenderer.CalculateDdgiProbeMarkerSampling(24, 8, 24, 512);
+            DebugOverlayBuilder.DdgiProbeMarkerSampling sampling =
+                DebugOverlayBuilder.CalculateDdgiProbeMarkerSampling(24, 8, 24, 512);
             int markerCount = 0;
             int negativeXNegativeZ = 0;
             int negativeXPositiveZ = 0;
@@ -961,7 +1002,7 @@ namespace Njulf.Tests
                     bool yUsed = false;
                     for (int x = 0; x < 24; x++)
                     {
-                        if (!VulkanRenderer.ShouldDrawDdgiProbeMarker(x, y, z, sampling))
+                        if (!DebugOverlayBuilder.ShouldDrawDdgiProbeMarker(x, y, z, sampling))
                             continue;
 
                         markerCount++;
@@ -1009,7 +1050,7 @@ namespace Njulf.Tests
 
             for (int i = 0; i < allocations.Length; i++)
             {
-                int allocation = VulkanRenderer.CalculateDdgiProbeMarkerBudget(
+                int allocation = DebugOverlayBuilder.CalculateDdgiProbeMarkerBudget(
                     remainingMarkers,
                     remainingVolumes);
                 allocations[i] = allocation;
@@ -1021,8 +1062,8 @@ namespace Njulf.Tests
             {
                 Assert.That(allocations, Is.EqualTo(new[] { 192, 192, 192, 192 }));
                 Assert.That(remainingMarkers, Is.Zero);
-                Assert.That(VulkanRenderer.CalculateDdgiProbeMarkerBudget(0, 4), Is.Zero);
-                Assert.That(VulkanRenderer.CalculateDdgiProbeMarkerBudget(64, 0), Is.Zero);
+                Assert.That(DebugOverlayBuilder.CalculateDdgiProbeMarkerBudget(0, 4), Is.Zero);
+                Assert.That(DebugOverlayBuilder.CalculateDdgiProbeMarkerBudget(64, 0), Is.Zero);
             });
         }
 
@@ -1113,7 +1154,8 @@ namespace Njulf.Tests
                     Does.Not.Contain("CalculateAmbientOcclusionExtent(extent, 0.5f)"));
                 Assert.That(
                     renderer.ReplaceLineEndings("\n"),
-                    Does.Contain("Settings.AmbientOcclusion.ResolutionScale,\n                Settings.AntiAliasing.EffectiveMode"));
+                    Does.Contain(
+                        "Settings.AmbientOcclusion.ResolutionScale,\n                Settings.AntiAliasing.EffectiveMode"));
                 Assert.That(
                     renderer,
                     Does.Contain("_lastAmbientOcclusionResolutionScale - ambientOcclusionResolutionScale"));

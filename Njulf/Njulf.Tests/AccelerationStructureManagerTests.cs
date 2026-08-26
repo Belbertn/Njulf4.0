@@ -338,12 +338,15 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(masked.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.AlphaMaskTested));
             Assert.That(masked.InstanceFlags, Is.EqualTo(default(GeometryInstanceFlagsKHR)));
             Assert.That(transparent.Include, Is.False);
-            Assert.That(transparent.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.ExcludedTransparent));
+            Assert.That(transparent.VisibilityPolicy,
+                Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.ExcludedTransparent));
             Assert.That(skinned.Include, Is.True);
-            Assert.That(skinned.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.SkinnedBindPoseProxy));
+            Assert.That(skinned.VisibilityPolicy,
+                Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.SkinnedBindPoseProxy));
             Assert.That(skinned.InstanceFlags, Is.EqualTo(GeometryInstanceFlagsKHR.ForceOpaqueBitKhr));
             Assert.That(foliage.Include, Is.False);
-            Assert.That(foliage.VisibilityPolicy, Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.FoliageProxyPending));
+            Assert.That(foliage.VisibilityPolicy,
+                Is.EqualTo(DdgiAccelerationStructureVisibilityPolicy.FoliageProxyPending));
             Assert.That(foliage.Reason, Is.EqualTo(AccelerationStructureManager.FoliageDdgiExclusionReason));
             Assert.That(opaqueThin.Include, Is.True);
             Assert.That(blendThin.Include, Is.True);
@@ -435,7 +438,8 @@ public sealed unsafe class AccelerationStructureManagerTests
         ulong baseSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { baseInstance });
         ulong repeatedSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { baseInstance });
         ulong movedSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { movedInstance });
-        ulong rematerialedSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { rematerialedInstance });
+        ulong rematerialedSignature =
+            AccelerationStructureManager.CreateInstanceSignature(new[] { rematerialedInstance });
         ulong dynamicSignature = AccelerationStructureManager.CreateInstanceSignature(new[] { dynamicInstance });
 
         Assert.Multiple(() =>
@@ -542,19 +546,19 @@ public sealed unsafe class AccelerationStructureManagerTests
             IndexCount = 96u
         };
         var instance = new AccelerationStructureManager.StaticOpaqueInstance(
-            new MeshHandle(7, 2),
-            meshInfo,
-            3u,
-            Matrix4x4.Identity) with
-        {
-            ObjectIdentity =
+                new MeshHandle(7, 2),
+                meshInfo,
+                3u,
+                Matrix4x4.Identity) with
+            {
+                ObjectIdentity =
                 new Guid("a0000000-0000-0000-0000-00000000000a"),
-            FrameSlot = 0,
-            VertexBufferIndex = 17u,
-            RepresentationGeneration = 9u,
-            MaterialRevision = 11u,
-            UsesDynamicBlas = true
-        };
+                FrameSlot = 0,
+                VertexBufferIndex = 17u,
+                RepresentationGeneration = 9u,
+                MaterialRevision = 11u,
+                UsesDynamicBlas = true
+            };
         var rotatedFrameResources = instance with
         {
             FrameSlot = 1,
@@ -617,11 +621,11 @@ public sealed unsafe class AccelerationStructureManagerTests
             Assert.That(SkinningManager.OutputVertexStride, Is.EqualTo(80u));
             Assert.That(
                 SkinningManager.OutputVertexBufferUsage &
-                    BufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKhr,
+                BufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKhr,
                 Is.EqualTo(BufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKhr));
             Assert.That(
                 SkinningManager.OutputVertexBufferUsage &
-                    BufferUsageFlags.ShaderDeviceAddressBit,
+                BufferUsageFlags.ShaderDeviceAddressBit,
                 Is.EqualTo(BufferUsageFlags.ShaderDeviceAddressBit));
         });
     }
@@ -670,7 +674,7 @@ public sealed unsafe class AccelerationStructureManagerTests
                     SkinnedGeometryMode = DdgiSkinnedGeometryMode.Excluded,
                     FoliageGeometryMode = DdgiFoliageGeometryMode.Excluded
                 })
-                    .EffectiveDynamicStorageBudgetBytes,
+                .EffectiveDynamicStorageBudgetBytes,
                 Is.Zero);
         });
     }
@@ -806,7 +810,8 @@ public sealed unsafe class AccelerationStructureManagerTests
     [Test]
     public void AccelerationStructureManager_DoesNotWaitIdleForSteadyGrowthOrStreamingRetirement()
     {
-        string source = File.ReadAllText(FindSourceFile("Njulf.Rendering", "Resources", "AccelerationStructureManager.cs"));
+        string source =
+            File.ReadAllText(FindSourceFile("Njulf.Rendering", "Resources", "AccelerationStructureManager.cs"));
 
         Assert.That(source, Does.Not.Contain(".WaitIdle("));
         Assert.That(source, Does.Contain("RetireAccelerationStructureResource"));
@@ -819,9 +824,10 @@ public sealed unsafe class AccelerationStructureManagerTests
     public void TlasInstanceUpload_IsVisibleAsBuildInputShaderRead()
     {
         string source = File.ReadAllText(FindSourceFile(
-            "Njulf.Rendering",
-            "Resources",
-            "AccelerationStructureManager.cs"));
+                "Njulf.Rendering",
+                "Resources",
+                "AccelerationStructureManager.cs"))
+            .ReplaceLineEndings("\n");
 
         Assert.That(source, Does.Contain(
             "PipelineStageFlags2.AccelerationStructureBuildBitKhr,\n" +
@@ -832,7 +838,8 @@ public sealed unsafe class AccelerationStructureManagerTests
     [Test]
     public void AccelerationStructureManager_NeverPublishesAHolePunchedResidentSet()
     {
-        string source = File.ReadAllText(FindSourceFile("Njulf.Rendering", "Resources", "AccelerationStructureManager.cs"));
+        string source =
+            File.ReadAllText(FindSourceFile("Njulf.Rendering", "Resources", "AccelerationStructureManager.cs"));
 
         Assert.Multiple(() =>
         {
@@ -847,7 +854,8 @@ public sealed unsafe class AccelerationStructureManagerTests
     [Test]
     public void ResidencySizing_CachesBlasBuildSizeQueriesForStableMeshBuffers()
     {
-        string source = File.ReadAllText(FindSourceFile("Njulf.Rendering", "Resources", "AccelerationStructureManager.cs"));
+        string source =
+            File.ReadAllText(FindSourceFile("Njulf.Rendering", "Resources", "AccelerationStructureManager.cs"));
 
         Assert.Multiple(() =>
         {

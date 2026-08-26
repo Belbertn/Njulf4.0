@@ -85,7 +85,8 @@ public sealed class SimpleDdgiSourceRelightTests
         current.Color = new Vector3(0.5f, 2.0f, 0.25f);
         current.Intensity = 8.0f;
 
-        bool eligible = VulkanRenderer.TryComputeSoleDirectionalRelightScale(
+        bool eligible = DdgiSceneInvalidationCoordinator
+            .TryComputeSoleDirectionalRelightScale(
             previous,
             current,
             out CoreVector3 scale);
@@ -113,7 +114,8 @@ public sealed class SimpleDdgiSourceRelightTests
             current.ShadowStrength = 0.75f;
 
         Assert.That(
-            VulkanRenderer.TryComputeSoleDirectionalRelightScale(
+            DdgiSceneInvalidationCoordinator
+                .TryComputeSoleDirectionalRelightScale(
                 previous,
                 current,
                 out _),
@@ -129,7 +131,8 @@ public sealed class SimpleDdgiSourceRelightTests
         current.Color = Vector3.One;
 
         Assert.That(
-            VulkanRenderer.TryComputeSoleDirectionalRelightScale(
+            DdgiSceneInvalidationCoordinator
+                .TryComputeSoleDirectionalRelightScale(
                 previous,
                 current,
                 out _),
@@ -173,14 +176,17 @@ public sealed class SimpleDdgiSourceRelightTests
         LightFrameSnapshot sunChanged = CreateSnapshot(directional, local);
 
         ulong initialSignature =
-            VulkanRenderer.CreateSimpleDdgiGlobalLightSignature(initial);
+            DdgiSceneInvalidationCoordinator
+                .CreateSimpleDdgiGlobalLightSignature(initial);
         Assert.Multiple(() =>
         {
             Assert.That(
-                VulkanRenderer.CreateSimpleDdgiGlobalLightSignature(localMoved),
+                DdgiSceneInvalidationCoordinator
+                    .CreateSimpleDdgiGlobalLightSignature(localMoved),
                 Is.EqualTo(initialSignature));
             Assert.That(
-                VulkanRenderer.CreateSimpleDdgiGlobalLightSignature(sunChanged),
+                DdgiSceneInvalidationCoordinator
+                    .CreateSimpleDdgiGlobalLightSignature(sunChanged),
                 Is.Not.EqualTo(initialSignature));
         });
     }

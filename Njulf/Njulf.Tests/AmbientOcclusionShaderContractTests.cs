@@ -38,8 +38,8 @@ public sealed class AmbientOcclusionShaderContractTests
                 "ambientOcclusionEnabled ? extent : PlaceholderExtent"));
             Assert.That(targets, Does.Contain(
                 "Extent2D resolvedExtent = enabled ? sceneExtent : PlaceholderExtent;"));
-            Assert.That(declaration, Does.Contain(
-                "RenderGraphResourceId.AmbientOcclusionBlurred, \"Ambient occlusion blurred\", RenderTargetManager.AmbientOcclusionFormat, RenderGraphResourceSizePolicy.SceneResolution"));
+            Assert.That(declaration, Does.Match(
+                @"OwnedImageResource\(\s*RenderGraphResourceId\.AmbientOcclusionBlurred,\s*""Ambient occlusion blurred"",\s*RenderTargetManager\.AmbientOcclusionFormat,\s*RenderGraphResourceSizePolicy\.SceneResolution\)"));
             Assert.That(aoPass, Does.Contain(
                 "return AmbientOcclusionForwardSamplingMode.Direct;"));
             Assert.That(aoPass, Does.Contain(
@@ -72,7 +72,7 @@ public sealed class AmbientOcclusionShaderContractTests
             Assert.That(normalBody, Does.Not.Contain("FetchDepth(uv)"),
                 "The validated center texel must not be fetched a second time.");
             Assert.That(normalBody, Does.Not.Contain(
-                "ReconstructViewPosition(uv, centerDepth)"),
+                    "ReconstructViewPosition(uv, centerDepth)"),
                 "The validated center position must not be reconstructed a second time.");
             Assert.That(source, Does.Contain(
                 "ReconstructNormal(\n        uv,\n        max(invSourceSize, invDestinationSize),\n        depth,\n        viewPosition);"));

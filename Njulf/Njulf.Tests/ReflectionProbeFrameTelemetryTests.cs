@@ -2,6 +2,7 @@ using System;
 using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Debug;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using NUnit.Framework;
 
@@ -170,7 +171,8 @@ public sealed class ReflectionProbeFrameTelemetryTests
         {
             Assert.That(sceneData.GpuReflectionProbePublishMicroseconds, Is.EqualTo(17));
             Assert.That(
-                VulkanRenderer.CalculateGpuFrameMicroseconds(sceneData),
+                RendererDiagnosticsAssembler.CalculateGpuFrameMicroseconds(
+                    sceneData),
                 Is.EqualTo(41));
         });
 
@@ -198,7 +200,8 @@ public sealed class ReflectionProbeFrameTelemetryTests
         {
             Assert.That(sceneData.GpuAreaRayShadowMicroseconds, Is.EqualTo(19));
             Assert.That(
-                VulkanRenderer.CalculateGpuFrameMicroseconds(sceneData),
+                RendererDiagnosticsAssembler.CalculateGpuFrameMicroseconds(
+                    sceneData),
                 Is.EqualTo(19));
         });
     }

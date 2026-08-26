@@ -113,6 +113,61 @@ public static class AsyncComputePassCatalog
     public static AsyncComputePathCertificationEvidence GetCertificationEvidence(AsyncComputePath path) =>
         AsyncComputeCertificationEvidence.Get(path);
 
+    internal static bool TryGetPath(string passName, out AsyncComputePath path)
+    {
+        switch (passName)
+        {
+            case "SimpleDdgiSchedulePass":
+            case "SimpleDdgiTracePass":
+            case "SimpleDdgiRelocateClassifyPass":
+            case "SimpleDdgiDirectionalRadiancePass":
+            case "SimpleDdgiAcceleratedSolvePass":
+            case "SimpleDdgiTransportPass":
+            case "SimpleDdgiBlendPass":
+            case "SimpleDdgiPublishPass":
+            case "SimpleDdgiTransportAuditPass":
+            case "SimpleDdgiSchedulerCommitPass":
+                path = AsyncComputePath.SimpleDdgiUpdate;
+                return true;
+            case "FarFieldClipmapBakePass":
+                path = AsyncComputePath.FarFieldClipmapBake;
+                return true;
+            case "AmbientOcclusionBlurPass":
+                path = AsyncComputePath.AmbientOcclusionBlur;
+                return true;
+            case "HiZBuildPass":
+                path = AsyncComputePath.HiZBuild;
+                return true;
+            case "FogPass":
+                path = AsyncComputePath.Fog;
+                return true;
+            case "BloomPass":
+                path = AsyncComputePath.Bloom;
+                return true;
+            case "GpuParticleResetPass":
+            case "GpuParticleSimulatePass":
+            case "GpuParticleSortPass":
+                path = AsyncComputePath.GpuParticles;
+                return true;
+            default:
+                path = default;
+                return false;
+        }
+    }
+
+    internal static string GetRepresentativePass(AsyncComputePath path) =>
+        path switch
+        {
+            AsyncComputePath.SimpleDdgiUpdate => "SimpleDdgiSchedulePass",
+            AsyncComputePath.FarFieldClipmapBake => "FarFieldClipmapBakePass",
+            AsyncComputePath.AmbientOcclusionBlur => "AmbientOcclusionBlurPass",
+            AsyncComputePath.HiZBuild => "HiZBuildPass",
+            AsyncComputePath.Fog => "FogPass",
+            AsyncComputePath.Bloom => "BloomPass",
+            AsyncComputePath.GpuParticles => "GpuParticleSimulatePass",
+            _ => string.Empty
+        };
+
     private static AsyncComputePassAuditEntry Candidate(string passName, string producers, string consumers, string rationale) =>
         new(passName, AsyncComputePassClassification.ProductionAsyncCandidate, producers, consumers, rationale);
 

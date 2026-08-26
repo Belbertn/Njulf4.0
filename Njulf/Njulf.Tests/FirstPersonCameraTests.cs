@@ -1,6 +1,6 @@
 using Njulf.Core.Camera;
 using Njulf.Core.Math;
-using Njulf.Rendering;
+using Njulf.Rendering.Diagnostics;
 using NUnit.Framework;
 
 namespace Njulf.Tests
@@ -39,7 +39,7 @@ namespace Njulf.Tests
                 pitch);
 
             float captured =
-                VulkanRenderer.ExtractPerformanceCapturePitchRadians(
+                PerformanceCaptureHashing.ExtractPitchRadians(
                     camera.Forward);
 
             Assert.That(captured, Is.EqualTo(pitch).Within(1.0e-6f));
@@ -48,8 +48,10 @@ namespace Njulf.Tests
         [Test]
         public void PerformanceCaptureMatrixHash_IsCanonicalSha256Identity()
         {
-            string first = VulkanRenderer.ComputePerformanceCaptureMatrixHash(Matrix4x4.Identity);
-            string second = VulkanRenderer.ComputePerformanceCaptureMatrixHash(Matrix4x4.Identity);
+            string first = PerformanceCaptureHashing.ComputeMatrixHash(
+                Matrix4x4.Identity);
+            string second = PerformanceCaptureHashing.ComputeMatrixHash(
+                Matrix4x4.Identity);
 
             Assert.Multiple(() =>
             {

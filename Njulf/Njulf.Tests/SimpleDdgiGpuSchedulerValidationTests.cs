@@ -11,16 +11,16 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
     [Test]
     public void RuntimeDiagnostics_ExportExactCommitRejections()
     {
-        string renderer = ReadRepoText(
+        string projector = ReadRepoText(
                 "Njulf.Rendering",
-                "VulkanRenderer.cs")
+                "Core",
+                "DdgiFrameDataProjector.cs")
             .ReplaceLineEndings("\n");
 
         Assert.That(
-            renderer,
-            Does.Contain(
-                "SimpleDdgiSchedulerFeedbackFailedCommitCount =\n" +
-                "                schedulerFeedback.FailedCommitCount;"));
+            projector,
+            Does.Match(
+                @"SimpleDdgiSchedulerFeedbackFailedCommitCount\s*=\s*schedulerFeedback\.FailedCommitCount;"));
 
         string feedbackShader = ReadRepoText(
             "Njulf.Shaders",
@@ -49,7 +49,7 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
                 "SIMPLE_DDGI_SCHEDULER_COUNTER_TRANSACTION_PREDICATE_MASK"));
             Assert.That(
                 SimpleDdgiSchedulerAbi.FeedbackCommitFailureOffsetWords +
-                    SimpleDdgiSchedulerAbi.CommitFailureCategoryCount,
+                SimpleDdgiSchedulerAbi.CommitFailureCategoryCount,
                 Is.LessThanOrEqualTo(
                     SimpleDdgiGpuSchedulerLayout.ShippingFeedbackBytes /
                     sizeof(uint)));
@@ -143,7 +143,8 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
             Assert.That(feedback, Does.Contain(
                 "SIMPLE_DDGI_SCHEDULER_FEEDBACK_ELIGIBLE_RING_OFFSET + ring"));
             Assert.That(scheduler, Does.Contain("_lastEligibilityEvidence = new("));
-            Assert.That(scheduler, Does.Contain("public SimpleDdgiSchedulerEligibilityEvidence LastEligibilityEvidence"));
+            Assert.That(scheduler,
+                Does.Contain("public SimpleDdgiSchedulerEligibilityEvidence LastEligibilityEvidence"));
         });
     }
 
@@ -160,7 +161,9 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
                 ExpectedPhysicalGeneration = 1,
                 SequenceOrdinal = (uint)i,
                 WorkClassAndTransport = SimpleDdgiSchedulerAbi.PackCandidateWorkClassAndTransport(
-                    i < 2 ? SimpleDdgiSchedulerWorkClass.FreshExposedVisible : SimpleDdgiSchedulerWorkClass.NearMaintenance,
+                    i < 2
+                        ? SimpleDdgiSchedulerWorkClass.FreshExposedVisible
+                        : SimpleDdgiSchedulerWorkClass.NearMaintenance,
                     i < 2
                         ? SimpleDdgiSchedulerTransportCategory.HardSourceRepair
                         : SimpleDdgiSchedulerTransportCategory.CachedSolverPropagation),
@@ -235,7 +238,7 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
                 RayTierAndReasonFlags = SimpleDdgiSchedulerAbi.PackCandidateRayTierAndReasons(
                     SimpleDdgiSchedulerRayTier.Full,
                     SimpleDdgiSchedulerCandidateReason.Fresh |
-                        SimpleDdgiSchedulerCandidateReason.ScrollExposed),
+                    SimpleDdgiSchedulerCandidateReason.ScrollExposed),
                 ActiveRayCount = 8u,
                 SourceRayCount = 8u
             };
@@ -288,7 +291,7 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
                 RayTierAndReasonFlags = SimpleDdgiSchedulerAbi.PackCandidateRayTierAndReasons(
                     SimpleDdgiSchedulerRayTier.Full,
                     SimpleDdgiSchedulerCandidateReason.RegionalDirty |
-                        SimpleDdgiSchedulerCandidateReason.Visible),
+                    SimpleDdgiSchedulerCandidateReason.Visible),
                 ActiveRayCount = 8u,
                 SourceRayCount = 8u
             };
@@ -404,7 +407,7 @@ public sealed class SimpleDdgiGpuSchedulerValidationTests
             Assert.That(queue[0].SourceRayCount, Is.EqualTo(128u));
             Assert.That(
                 (queue[0].Flags & SimpleDdgiSchedulerAbi.UpdateRayCountMask) >>
-                    (int)SimpleDdgiSchedulerAbi.UpdateRayCountShift,
+                (int)SimpleDdgiSchedulerAbi.UpdateRayCountShift,
                 Is.EqualTo(128u));
             Assert.That(
                 queue[0].Flags & SimpleDdgiSchedulerAbi.UpdateSourceRefreshFlag,

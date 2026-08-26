@@ -1,5 +1,6 @@
 using Njulf.Core.Math;
 using Njulf.Rendering;
+using Njulf.Rendering.Core;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Pipeline;
 using Njulf.Rendering.Resources;
@@ -61,6 +62,7 @@ public sealed class SimpleDdgiTransportTailTests
                     Is.True,
                     $"source-work cause {i} must block audit");
             }
+
             Assert.That(
                 SimpleDdgiVolumeManager.ResolveBlockingTailSourceWorkCount(
                     new GPUSimpleDdgiSchedulerFeedback
@@ -561,8 +563,8 @@ public sealed class SimpleDdgiTransportTailTests
             PublishedCount = 16u
         };
 
-        VulkanRenderer.SimpleDdgiFrameWork work =
-            VulkanRenderer.ResolveSimpleDdgiFrameWork(
+        SimpleDdgiFrameWork work =
+            DdgiFrameDataProjector.ResolveSimpleDdgiFrameWork(
                 rayUpdateActive: true,
                 SimpleDdgiSchedulerMode.GpuResident,
                 gpuFeedbackValid: true,
@@ -574,7 +576,7 @@ public sealed class SimpleDdgiTransportTailTests
                 cpuTransportRayCount: 0UL,
                 cpuPublishedProbeCount: 0);
 
-        Assert.That(work, Is.EqualTo(new VulkanRenderer.SimpleDdgiFrameWork(
+        Assert.That(work, Is.EqualTo(new SimpleDdgiFrameWork(
             ScheduledProbeCount: 17,
             SourceRefreshProbeCount: 5,
             PrimaryRayCount: 640UL,
@@ -600,8 +602,8 @@ public sealed class SimpleDdgiTransportTailTests
             PublishedCount = 99u
         };
 
-        VulkanRenderer.SimpleDdgiFrameWork work =
-            VulkanRenderer.ResolveSimpleDdgiFrameWork(
+        SimpleDdgiFrameWork work =
+            DdgiFrameDataProjector.ResolveSimpleDdgiFrameWork(
                 rayUpdateActive: true,
                 schedulerMode,
                 gpuFeedbackValid,
@@ -613,7 +615,7 @@ public sealed class SimpleDdgiTransportTailTests
                 cpuTransportRayCount: 896UL,
                 cpuPublishedProbeCount: 6);
 
-        Assert.That(work, Is.EqualTo(new VulkanRenderer.SimpleDdgiFrameWork(
+        Assert.That(work, Is.EqualTo(new SimpleDdgiFrameWork(
             ScheduledProbeCount: 7,
             SourceRefreshProbeCount: 3,
             PrimaryRayCount: 384UL,
@@ -625,8 +627,8 @@ public sealed class SimpleDdgiTransportTailTests
     [Test]
     public void InactiveRayProducer_ReportsNoFrameWork()
     {
-        VulkanRenderer.SimpleDdgiFrameWork work =
-            VulkanRenderer.ResolveSimpleDdgiFrameWork(
+        SimpleDdgiFrameWork work =
+            DdgiFrameDataProjector.ResolveSimpleDdgiFrameWork(
                 rayUpdateActive: false,
                 SimpleDdgiSchedulerMode.GpuResident,
                 gpuFeedbackValid: true,
@@ -646,7 +648,7 @@ public sealed class SimpleDdgiTransportTailTests
                 cpuTransportRayCount: 128UL,
                 cpuPublishedProbeCount: 1);
 
-        Assert.That(work, Is.EqualTo(default(VulkanRenderer.SimpleDdgiFrameWork)));
+        Assert.That(work, Is.EqualTo(default(SimpleDdgiFrameWork)));
     }
 
     [Test]
@@ -848,7 +850,7 @@ public sealed class SimpleDdgiTransportTailTests
                 configuredContractionBound: 0.9f,
                 relativeTolerance: 0.02f,
                 observedContractionChannels:
-                    new SimpleDdgiTransportRgbBounds(0.9f, 0.2f, 0.1f),
+                new SimpleDdgiTransportRgbBounds(0.9f, 0.2f, 0.1f),
                 canonicalQuantizationFloorChannels: default);
 
         Assert.Multiple(() =>
@@ -874,7 +876,7 @@ public sealed class SimpleDdgiTransportTailTests
                 configuredContractionBound: 0.99f,
                 relativeTolerance: 0.02f,
                 observedContractionChannels:
-                    new SimpleDdgiTransportRgbBounds(0.2f, 0.991f, 0.2f),
+                new SimpleDdgiTransportRgbBounds(0.2f, 0.991f, 0.2f),
                 canonicalQuantizationFloorChannels: default);
 
         Assert.That(estimate.HasValidContractionBound, Is.False);
@@ -972,9 +974,11 @@ public sealed class SimpleDdgiTransportTailTests
     public void PositiveEstimator_NormalizesCosineMass()
     {
         bool success = SimpleDdgiTransportTailEstimator.TryEvaluatePositiveIrradiance(
-            [new SimpleDdgiTransportTailEstimator.DirectionalSample(
-                Vector3.UnitY,
-                new(2.0f, 3.0f, 4.0f))],
+            [
+                new SimpleDdgiTransportTailEstimator.DirectionalSample(
+                    Vector3.UnitY,
+                    new(2.0f, 3.0f, 4.0f))
+            ],
             Vector3.UnitY,
             out Vector3 irradiance);
 
@@ -1278,14 +1282,14 @@ public sealed class SimpleDdgiTransportTailTests
     {
         var controller = CreateAuditingController(participantCount: 1);
         SimpleDdgiTransportTailSummary invalidCache = CreateFiniteAuditSummary(
-            controller,
-            expectedParticipants: 1u,
-            auditedParticipants: 0u,
-            reason: SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete) with
-        {
-            ExcludedInvalidCacheCount = 1u,
-            CacheIdentityFailureCount = 1u
-        };
+                controller,
+                expectedParticipants: 1u,
+                auditedParticipants: 0u,
+                reason: SimpleDdgiTransportCertificationReason.ParticipantCoverageIncomplete) with
+            {
+                ExcludedInvalidCacheCount = 1u,
+                CacheIdentityFailureCount = 1u
+            };
 
         Assert.That(
             controller.TryAcceptAudit(invalidCache, controller.FrozenGenerations),
@@ -1308,16 +1312,16 @@ public sealed class SimpleDdgiTransportTailTests
         var controller = CreateAuditingController(participantCount: 1);
         uint rejectedSolveEpoch = controller.SolveEpoch;
         SimpleDdgiTransportTailSummary aboveTolerance = CreateFiniteAuditSummary(
-            controller,
-            expectedParticipants: 1u,
-            auditedParticipants: 1u,
-            reason: SimpleDdgiTransportCertificationReason.TailAboveTolerance) with
-        {
-            FixedPointDefect = 0.1f,
-            CertifiedContractionBound = 0.5f,
-            AbsoluteTailBound = 0.2f,
-            RelativeTailBound = 0.2f
-        };
+                controller,
+                expectedParticipants: 1u,
+                auditedParticipants: 1u,
+                reason: SimpleDdgiTransportCertificationReason.TailAboveTolerance) with
+            {
+                FixedPointDefect = 0.1f,
+                CertifiedContractionBound = 0.5f,
+                AbsoluteTailBound = 0.2f,
+                RelativeTailBound = 0.2f
+            };
 
         Assert.That(
             controller.TryAcceptAudit(aboveTolerance, controller.FrozenGenerations),
@@ -1337,14 +1341,14 @@ public sealed class SimpleDdgiTransportTailTests
     {
         var controller = CreateAuditingController(participantCount: 1);
         SimpleDdgiTransportTailSummary nonFinite = CreateFiniteAuditSummary(
-            controller,
-            expectedParticipants: 1u,
-            auditedParticipants: 1u,
-            reason: SimpleDdgiTransportCertificationReason.NonFiniteEvidence) with
-        {
-            FixedPointDefect = float.NaN,
-            NonFiniteCount = 1u
-        };
+                controller,
+                expectedParticipants: 1u,
+                auditedParticipants: 1u,
+                reason: SimpleDdgiTransportCertificationReason.NonFiniteEvidence) with
+            {
+                FixedPointDefect = float.NaN,
+                NonFiniteCount = 1u
+            };
 
         Assert.That(
             controller.TryAcceptAudit(nonFinite, controller.FrozenGenerations),
@@ -1391,14 +1395,14 @@ public sealed class SimpleDdgiTransportTailTests
     {
         var controller = CreateAuditingController(participantCount: 1);
         SimpleDdgiTransportTailSummary limited = CreateFiniteAuditSummary(
-            controller,
-            expectedParticipants: 1u,
-            auditedParticipants: 1u,
-            reason: SimpleDdgiTransportCertificationReason.QuantizationLimited) with
-        {
-            CanonicalQuantizationFloor = 0.05f,
-            Tolerance = 0.025f
-        };
+                controller,
+                expectedParticipants: 1u,
+                auditedParticipants: 1u,
+                reason: SimpleDdgiTransportCertificationReason.QuantizationLimited) with
+            {
+                CanonicalQuantizationFloor = 0.05f,
+                Tolerance = 0.025f
+            };
 
         Assert.That(
             controller.TryAcceptAudit(limited, controller.FrozenGenerations),
@@ -1485,6 +1489,7 @@ public sealed class SimpleDdgiTransportTailTests
             {
                 Assert.That(controller.BeginSolveEpoch(generations, 1), Is.True);
             }
+
             if (controller.Phase == SimpleDdgiTransportPhase.AcceleratedSolve)
             {
                 SimpleDdgiTransportGenerations solve = controller.FrozenGenerations;

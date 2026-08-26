@@ -202,10 +202,10 @@ public sealed class DebugOverlayCatalogTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(VulkanRenderer.IsValidDebugFrustumMatrix(valid), Is.True);
-            Assert.That(VulkanRenderer.IsValidDebugFrustumMatrix(Matrix4x4.Identity), Is.False);
-            Assert.That(VulkanRenderer.IsValidDebugFrustumMatrix(Matrix4x4.Zero), Is.False);
-            Assert.That(VulkanRenderer.IsValidDebugFrustumMatrix(nonFinite), Is.False);
+            Assert.That(DebugOverlayBuilder.IsValidDebugFrustumMatrix(valid), Is.True);
+            Assert.That(DebugOverlayBuilder.IsValidDebugFrustumMatrix(Matrix4x4.Identity), Is.False);
+            Assert.That(DebugOverlayBuilder.IsValidDebugFrustumMatrix(Matrix4x4.Zero), Is.False);
+            Assert.That(DebugOverlayBuilder.IsValidDebugFrustumMatrix(nonFinite), Is.False);
         });
     }
 
@@ -216,7 +216,7 @@ public sealed class DebugOverlayCatalogTests
         float spacing,
         float expectedRadius)
     {
-        GPUDdgiProbeDebugInstance instance = VulkanRenderer.CreateDdgiProbeDebugInstance(
+        GPUDdgiProbeDebugInstance instance = DebugOverlayBuilder.CreateDdgiProbeDebugInstance(
             frameSerial: 0x1122334455667788UL,
             volumeTableGeneration: 7,
             schedulerResourceGeneration: 8,
