@@ -189,7 +189,13 @@ namespace Njulf.Rendering.Pipeline
         GtaoSpatialScratch,
         GtaoHistory,
         GtaoGeometryHistory,
-        GtaoFiltered
+        GtaoFiltered,
+        // Dedicated reduced-resolution depth ownership for C5's production
+        // source raster. Appended to preserve every established capture ID.
+        NearFieldTraceRasterDepth,
+        // Conservative KHR fragment-shading-rate attachment. Append-only so
+        // existing capture/resource identities remain stable.
+        VariableRateShading
     }
 
     public enum RenderGraphResourceKind

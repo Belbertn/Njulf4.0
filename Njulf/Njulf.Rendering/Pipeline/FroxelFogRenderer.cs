@@ -78,6 +78,7 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
     private readonly RenderSettings _settings;
     private readonly SimpleDdgiVolumeManager? _ddgi;
     private readonly RaySceneDescriptorBank _raySceneDescriptors;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly BufferHandle[] _frameBuffers =
         new BufferHandle[RenderingConstants.FramesInFlight];
     private readonly BufferHandle[] _volumeBuffers =
@@ -137,7 +138,8 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
         RenderTargetManager renderTargets,
         RenderSettings settings,
         SimpleDdgiVolumeManager? ddgi,
-        RaySceneDescriptorBank raySceneDescriptors)
+        RaySceneDescriptorBank raySceneDescriptors,
+        GiPipelineCacheService? pipelineCacheService = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
@@ -147,6 +149,7 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
         _ddgi = ddgi;
         _raySceneDescriptors = raySceneDescriptors ??
             throw new ArgumentNullException(nameof(raySceneDescriptors));
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
     }
 
@@ -1327,6 +1330,12 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
 
     private void CreatePipelineCache()
     {
+        if (_pipelineCacheService != null)
+        {
+            _pipelineCache = _pipelineCacheService.Cache;
+            return;
+        }
+
         var info = new PipelineCacheCreateInfo
         {
             SType = StructureType.PipelineCacheCreateInfo
@@ -1384,9 +1393,22 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
                 Layout = _pipelineLayout,
                 BasePipelineIndex = -1
             };
-            Result result = _context.Api.CreateComputePipelines(
-                _context.Device, _pipelineCache, 1u, &info, null,
-                out VkPipeline pipeline);
+            long pipelineStart =
+                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+            Result result;
+            VkPipeline pipeline;
+            try
+            {
+                result = _context.Api.CreateComputePipelines(
+                    _context.Device, _pipelineCache, 1u, &info, null,
+                    out pipeline);
+            }
+            finally
+            {
+                _pipelineCacheService?.EndPipelineCreation(
+                    $"Fog.Froxel:{shaderName}",
+                    pipelineStart);
+            }
             if (result != Result.Success)
                 throw new VulkanException(
                     $"Failed to create froxel pipeline '{shaderName}'.", result);
@@ -1628,7 +1650,7 @@ internal sealed unsafe class FroxelFogRenderer : IDisposable
                 _context.Device, _linearClampSampler, null);
         if (_pipelineLayout.Handle != 0)
             _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService == null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_descriptorSetLayout.Handle != 0)
             _context.Api.DestroyDescriptorSetLayout(

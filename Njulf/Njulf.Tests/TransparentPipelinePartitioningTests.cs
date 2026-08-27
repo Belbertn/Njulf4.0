@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using Njulf.Rendering;
 using Njulf.Rendering.Data;
 using Njulf.Rendering.Descriptors;
 using Njulf.Rendering.Pipeline.PipelineObjects;
@@ -147,6 +148,29 @@ public sealed class TransparentPipelinePartitioningTests
     }
 
     [Test]
+    public void ThickTransmissionAdmission_IgnoresOrdinaryTransparentDraws()
+    {
+        var ordinaryScene = new SceneRenderingData();
+        ordinaryScene.TransparentMaterialRuns.Add(
+            Run(0, 1, TransparentMaterialClass.OrdinaryBlend));
+        var thickScene = new SceneRenderingData();
+        thickScene.TransparentMaterialRuns.Add(
+            Run(0, 1, TransparentMaterialClass.OrdinaryBlend));
+        thickScene.TransparentMaterialRuns.Add(
+            Run(1, 1, TransparentMaterialClass.ThickTransmission));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                VulkanRenderer.HasThickTransmissionDraws(ordinaryScene),
+                Is.False);
+            Assert.That(
+                VulkanRenderer.HasThickTransmissionDraws(thickScene),
+                Is.True);
+        });
+    }
+
+    [Test]
     public void Planner_LayeredPoliciesSelectOnlyTheirReceiverClasses()
     {
         var ordinary = new TransparentDrawClassification(
@@ -278,9 +302,9 @@ public sealed class TransparentPipelinePartitioningTests
         Assert.Multiple(() =>
         {
             Assert.That(common, Does.Contain(
-                "FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_BITS = 14u"));
+                "FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_BITS = 10u"));
             Assert.That(task, Does.Contain(
-                "ForwardTransparentFirstDraw("));
+                "ForwardFirstDraw("));
             Assert.That(mesh, Does.Contain(
                 "ForwardDrawBufferBaseIndex("));
             Assert.That(fragment, Does.Contain(

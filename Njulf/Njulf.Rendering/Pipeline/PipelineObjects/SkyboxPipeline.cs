@@ -15,30 +15,83 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
 
         private VkPipeline _pipeline;
         private PipelineLayout _layout;
         private PipelineCache _pipelineCache;
+        private Format _colorFormat;
+        private Format _depthFormat;
         private bool _disposed;
 
         public SkyboxPipeline(VulkanContext context, BindlessHeap bindlessHeap, Format colorFormat, Format depthFormat)
+            : this(
+                context,
+                bindlessHeap,
+                colorFormat,
+                depthFormat,
+                pipelineCacheService: null,
+                createPipeline: true)
+        {
+        }
+
+        internal SkyboxPipeline(
+            VulkanContext context,
+            BindlessHeap bindlessHeap,
+            Format colorFormat,
+            Format depthFormat,
+            GiPipelineCacheService? pipelineCacheService,
+            bool createPipeline)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
+            _pipelineCacheService = pipelineCacheService;
+            _colorFormat = colorFormat;
+            _depthFormat = depthFormat;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Marshal.SizeOf<GPUSkyboxPushConstants>());
-            CreatePipelineCache();
-            CreatePipelineLayout();
-            CreatePipeline(colorFormat, depthFormat);
+            if (createPipeline)
+                Prepare();
         }
 
-        public VkPipeline Pipeline => _pipeline;
-        public PipelineLayout Layout => _layout;
+        public VkPipeline Pipeline
+        {
+            get
+            {
+                Prepare();
+                return _pipeline;
+            }
+        }
+
+        public PipelineLayout Layout
+        {
+            get
+            {
+                Prepare();
+                return _layout;
+            }
+        }
+
+        internal bool IsPrepared => _pipeline.Handle != 0;
+
+        internal void Prepare()
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_pipeline.Handle != 0)
+                return;
+            CreatePipelineCache();
+            CreatePipelineLayout();
+            CreatePipeline(_colorFormat, _depthFormat);
+        }
 
         public void Recreate(Format colorFormat, Format depthFormat)
         {
+            _colorFormat = colorFormat;
+            _depthFormat = depthFormat;
+            if (!IsPrepared)
+                return;
             DestroyPipeline();
             CreatePipeline(colorFormat, depthFormat);
         }
@@ -53,6 +106,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo
             {
                 SType = StructureType.PipelineCacheCreateInfo
@@ -94,6 +153,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipeline(Format colorFormat, Format depthFormat)
         {
+            long pipelineStart =
+                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule vertexModule = new ShaderModule();
             ShaderModule fragmentModule = new ShaderModule();
 
@@ -111,6 +172,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 DestroyShaderModule(fragmentModule);
                 DestroyShaderModule(vertexModule);
+                _pipelineCacheService?.EndPipelineCreation(
+                    "Skybox",
+                    pipelineStart);
             }
         }
 
@@ -252,7 +316,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline();
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);

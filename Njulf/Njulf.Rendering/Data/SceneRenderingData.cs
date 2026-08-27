@@ -175,6 +175,7 @@ namespace Njulf.Rendering.Data
         public bool HiZBuildEnabled { get; set; } = true;
         public bool ForwardVisibilityCompactionEnabled { get; set; }
         public bool ForwardVisibilityCompactionActive { get; set; }
+        public bool ForwardVisibilitySidedStreamsActive { get; set; }
         public string ForwardVisibilityCompactionSkipReason { get; set; } = string.Empty;
         public int ForwardVisibilitySimpleCapacity { get; set; }
         public int ForwardVisibilitySimpleNormalCapacity { get; set; }
@@ -401,6 +402,15 @@ namespace Njulf.Rendering.Data
         public ulong GpuParticleSortKeyBufferSize { get; set; }
         public float OcclusionBias { get; set; } = 0.0005f;
         public uint DebugViewMode { get; set; }
+        public SpecularAntialiasingMode SpecularAntialiasingMode { get; set; } =
+            SpecularAntialiasingMode.GeometricVariance;
+        public int VariableRateShadingSupported { get; set; }
+        public int VariableRateShadingRequested { get; set; }
+        public int VariableRateShadingActive { get; set; }
+        public uint VariableRateShadingAttachmentTexelWidth { get; set; }
+        public uint VariableRateShadingAttachmentTexelHeight { get; set; }
+        public string VariableRateShadingFallbackReason { get; set; } =
+            string.Empty;
         /// <summary>
         /// Raw <see cref="GlobalIlluminationDebugView"/> value for C5 only.
         /// This is separate from <see cref="DebugViewMode"/>, whose numeric
@@ -433,6 +443,7 @@ namespace Njulf.Rendering.Data
         public long CpuHiZPushDispatchMicroseconds { get; set; }
         public long CpuHiZFinalBarrierMicroseconds { get; set; }
         public long CpuLightCullRecordMicroseconds { get; set; }
+        public long CpuVariableRateShadingRecordMicroseconds { get; set; }
         public long CpuForwardOpaqueRecordMicroseconds { get; set; }
         public long CpuTransparentRecordMicroseconds { get; set; }
         public long CpuBloomExtractRecordMicroseconds { get; set; }
@@ -514,12 +525,22 @@ namespace Njulf.Rendering.Data
         public bool SceneSubmissionGpuCompactionEnabled { get; set; }
         public bool SceneSubmissionIndirectMeshletDispatchEnabled { get; set; }
         public bool SceneSubmissionGpuLodSelectionEnabled { get; set; }
+        public GpuLodSelectionMode SceneSubmissionGpuLodSelectionMode { get; set; } =
+            GpuLodSelectionMode.ScreenSpaceError;
+        public float SceneSubmissionGpuLodTargetPixelError { get; set; } =
+            SceneSubmissionSettings.DefaultGpuLodTargetPixelError;
         public float SceneSubmissionGpuLod1DistanceRatio { get; set; } = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio;
         public float SceneSubmissionGpuLod2DistanceRatio { get; set; } = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio;
         public bool SceneSubmissionGpuShadowCompactionEnabled { get; set; }
         public int SceneSubmissionGpuShadowLodBias { get; set; } = SceneSubmissionSettings.DefaultGpuShadowLodBias;
         public bool SceneSubmissionValidationCompareCpuGpuLists { get; set; }
         public bool SceneSubmissionGpuCompactionActive { get; set; }
+        /// <summary>
+        /// The current GPU-compacted opaque/depth/shadow lists contain dense
+        /// one-sided and double-sided ranges and may use fixed-function culling
+        /// plus strict depth equality.
+        /// </summary>
+        public bool SceneSubmissionSidedRasterSpecializationActive { get; set; }
         public string SceneSubmissionForwardPath { get; set; } = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
         public string SceneSubmissionForwardTaskShader { get; set; } = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
         public string SceneSubmissionCompactionSkipReason { get; set; } = string.Empty;
@@ -532,6 +553,9 @@ namespace Njulf.Rendering.Data
         public int SceneSubmissionGpuIndirectMeshletTaskCount { get; set; }
         public int SceneSubmissionGpuCompactedShadowMeshletCount { get; set; }
         public int SceneSubmissionGpuCompactedOpaqueCapacity { get; set; }
+        public int SceneSubmissionGpuCompactedSimpleOpaqueCapacity { get; set; }
+        public int SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity { get; set; }
+        public int SceneSubmissionGpuCompactedFullOpaqueCapacity { get; set; }
         public int SceneSubmissionGpuDepthSolidCandidateCount { get; set; }
         public int SceneSubmissionGpuDepthMaskedCandidateCount { get; set; }
         public int SceneSubmissionGpuCompactedSolidDepthMeshletCount { get; set; }
@@ -1984,6 +2008,14 @@ namespace Njulf.Rendering.Data
             GpuParticleIndirectDrawBufferSize = 0;
             GpuParticleSortKeyBufferSize = 0;
             DebugViewMode = 0;
+            SpecularAntialiasingMode =
+                SpecularAntialiasingMode.GeometricVariance;
+            VariableRateShadingSupported = 0;
+            VariableRateShadingRequested = 0;
+            VariableRateShadingActive = 0;
+            VariableRateShadingAttachmentTexelWidth = 0;
+            VariableRateShadingAttachmentTexelHeight = 0;
+            VariableRateShadingFallbackReason = string.Empty;
             NearFieldResidualDebugView = 0;
             MaxLightsPerTile = 0;
             MaxLightsInAnyTile = 0;
@@ -2011,6 +2043,7 @@ namespace Njulf.Rendering.Data
             CpuHiZPushDispatchMicroseconds = 0;
             CpuHiZFinalBarrierMicroseconds = 0;
             CpuLightCullRecordMicroseconds = 0;
+            CpuVariableRateShadingRecordMicroseconds = 0;
             CpuForwardOpaqueRecordMicroseconds = 0;
             CpuTransparentRecordMicroseconds = 0;
             CpuBloomExtractRecordMicroseconds = 0;
@@ -2085,6 +2118,7 @@ namespace Njulf.Rendering.Data
             ClusterCountZ = 0;
             ForwardVisibilityCompactionEnabled = false;
             ForwardVisibilityCompactionActive = false;
+            ForwardVisibilitySidedStreamsActive = false;
             ForwardVisibilityCompactionSkipReason = string.Empty;
             ForwardVisibilitySimpleCapacity = 0;
             ForwardVisibilitySimpleNormalCapacity = 0;
@@ -2138,12 +2172,17 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuCompactionEnabled = false;
             SceneSubmissionIndirectMeshletDispatchEnabled = false;
             SceneSubmissionGpuLodSelectionEnabled = false;
+            SceneSubmissionGpuLodSelectionMode =
+                GpuLodSelectionMode.ScreenSpaceError;
+            SceneSubmissionGpuLodTargetPixelError =
+                SceneSubmissionSettings.DefaultGpuLodTargetPixelError;
             SceneSubmissionGpuLod1DistanceRatio = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio;
             SceneSubmissionGpuLod2DistanceRatio = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio;
             SceneSubmissionGpuShadowCompactionEnabled = false;
             SceneSubmissionGpuShadowLodBias = SceneSubmissionSettings.DefaultGpuShadowLodBias;
             SceneSubmissionValidationCompareCpuGpuLists = false;
             SceneSubmissionGpuCompactionActive = false;
+            SceneSubmissionSidedRasterSpecializationActive = false;
             SceneSubmissionForwardPath = SceneSubmissionDiagnosticsPolicy.ForwardPathCpu;
             SceneSubmissionForwardTaskShader = SceneSubmissionDiagnosticsPolicy.ForwardTaskShaderLegacyCull;
             SceneSubmissionCompactionSkipReason = string.Empty;
@@ -2156,6 +2195,9 @@ namespace Njulf.Rendering.Data
             SceneSubmissionGpuIndirectMeshletTaskCount = 0;
             SceneSubmissionGpuCompactedShadowMeshletCount = 0;
             SceneSubmissionGpuCompactedOpaqueCapacity = 0;
+            SceneSubmissionGpuCompactedSimpleOpaqueCapacity = 0;
+            SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity = 0;
+            SceneSubmissionGpuCompactedFullOpaqueCapacity = 0;
             SceneSubmissionGpuDepthSolidCandidateCount = 0;
             SceneSubmissionGpuDepthMaskedCandidateCount = 0;
             SceneSubmissionGpuCompactedSolidDepthMeshletCount = 0;

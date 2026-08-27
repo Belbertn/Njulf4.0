@@ -750,8 +750,11 @@ namespace Njulf.Rendering.Resources
         internal int PrefilterMipsPerFrame =>
             _settings.Environment.SpecularPrefilterMipsPerFrame;
 
+        internal bool PrefilterPipelinesRequired =>
+            _settings.Environment.Enabled && _usesAnalyticSky;
+
         internal bool HasPendingPrefilterWork =>
-            _usesAnalyticSky && _prefilterBuildActive;
+            PrefilterPipelinesRequired && _prefilterBuildActive;
 
         internal uint PrefilterResourceGeneration => _prefilterResourceGeneration;
 

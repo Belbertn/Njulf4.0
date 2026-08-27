@@ -98,7 +98,8 @@ public enum SurfaceHistoryConsumer : uint
     NearFieldResidual = 1u << 3,
     Reflection = 1u << 4,
     SimpleDdgiReceiverCache = 1u << 5,
-    AmbientOcclusionGtao = 1u << 6
+    AmbientOcclusionGtao = 1u << 6,
+    VariableRateShading = 1u << 7
 }
 
 public static class SurfaceHistoryPolicy
@@ -110,7 +111,8 @@ public static class SurfaceHistoryPolicy
         bool directionalRaySoftActive = false,
         bool reflectionActive = false,
         bool simpleDdgiReceiverCacheActive = false,
-        bool ambientOcclusionGtaoActive = false)
+        bool ambientOcclusionGtaoActive = false,
+        bool variableRateShadingActive = false)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -134,6 +136,8 @@ public static class SurfaceHistoryPolicy
             consumers |= SurfaceHistoryConsumer.SimpleDdgiReceiverCache;
         if (ambientOcclusionGtaoActive)
             consumers |= SurfaceHistoryConsumer.AmbientOcclusionGtao;
+        if (variableRateShadingActive)
+            consumers |= SurfaceHistoryConsumer.VariableRateShading;
 
         return consumers;
     }

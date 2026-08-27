@@ -960,7 +960,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
         pipeline = new ForwardNearFieldDirectSourcePipelineConfiguration(
             IsC5EffectivelyEnabled: true,
             sourceContract,
-            ForwardNearFieldDirectSourceContract.ShaderSemanticVersion);
+            ForwardNearFieldDirectSourceContract.ShaderSemanticVersion,
+            plan.Layout.SourceProducerMode);
         if (!ForwardNearFieldDirectSourceContract
                 .TryValidatePipelineConfiguration(pipeline, out failure))
         {
@@ -1054,7 +1055,8 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualCoordinator :
             new ForwardNearFieldDirectSourcePipelineConfiguration(
                 IsC5EffectivelyEnabled: true,
                 sourceContract,
-                ForwardNearFieldDirectSourceContract.ShaderSemanticVersion);
+                ForwardNearFieldDirectSourceContract.ShaderSemanticVersion,
+                Plan.Layout.SourceProducerMode);
     }
 
     private SimpleDdgiNearFieldResidualGpuConfiguration

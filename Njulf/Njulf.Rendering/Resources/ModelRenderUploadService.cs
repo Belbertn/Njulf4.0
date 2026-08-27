@@ -500,7 +500,9 @@ namespace Njulf.Rendering.Resources
                         lod2Count,
                         skinning.Length == 0 ? null : skinning,
                         primitiveProfiles[i],
-                        subMesh.CausticTopologyEvidence);
+                        subMesh.CausticTopologyEvidence,
+                        ResolveLodSimplificationError(subMesh, 1),
+                        ResolveLodSimplificationError(subMesh, 2));
                 }
 
                 MeshHandle[] lifetimeMeshes =
@@ -1052,6 +1054,25 @@ namespace Njulf.Rendering.Resources
                 lod2Count).CopyTo(combined.AsSpan(
                     checked(lod0Count + lod1Count)));
             return combined;
+        }
+
+        private static float ResolveLodSimplificationError(
+            CookedSubMeshRecord subMesh,
+            int lodLevel)
+        {
+            for (int i = 0; i < subMesh.LodRanges.Count; i++)
+            {
+                ProcessedMeshLodRange range = subMesh.LodRanges[i];
+                if (range.Level == lodLevel)
+                {
+                    return float.IsFinite(range.SimplificationError) &&
+                           range.SimplificationError >= 0f
+                        ? range.SimplificationError
+                        : -1f;
+                }
+            }
+
+            return -1f;
         }
 
         private void SetLastUploadDiagnostics(ModelRenderUploadDiagnostics diagnostics)

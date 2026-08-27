@@ -534,7 +534,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
     }
 
     [Test]
-    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV14Contract()
+    public void ShaderAbiVersionAndTemporalHistoryBindingsMatchTheManagedV15Contract()
     {
         string shaderDirectory = FindRepoDirectory("Njulf.Shaders");
         string shared = File.ReadAllText(Path.Combine(shaderDirectory,
@@ -572,7 +572,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(shared, Does.Contain("0x4335000eu"));
+            Assert.That(shared, Does.Contain("0x4335000fu"));
             Assert.That(shared, Does.Contain("uvec2 receiverIdentity;"));
             Assert.That(shared, Does.Contain("uvec2 hitIdentity;"));
             Assert.That(shared, Does.Not.Contain("uvec4 identity;"));
@@ -719,7 +719,7 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
         Assert.Multiple(() =>
         {
             Assert.That(SimpleDdgiNearFieldResidualGpuAbi.Version,
-                Is.EqualTo(0x4335_000Eu));
+                Is.EqualTo(0x4335_000Fu));
             Assert.That(shared, Does.Match(
                 $@"const\s+uint\s+SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION\s*=\s*{Regex.Escape(abiLiteral)}\s*;"));
             Assert.That(shared, Does.Contain("struct SimpleDdgiNearFieldResidualHitMetadata"));
@@ -1227,7 +1227,10 @@ public sealed class SimpleDdgiNearFieldResidualGpuRuntimeTests
                 SchedulerHistory1 = Resource(
                     layout.SchedulerHistoryBytes / 2UL,
                     SimpleDdgiNearFieldResidualGpuResourceKind
-                        .SchedulerHistory1)
+                        .SchedulerHistory1),
+                TraceRasterDepth = Resource(
+                    layout.TraceRasterDepthBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.TraceRasterDepth)
             };
             return ReturnInvalidAllocation
                 ? allocation with { DescriptorCount = 0u }

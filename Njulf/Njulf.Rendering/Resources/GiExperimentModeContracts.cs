@@ -928,6 +928,12 @@ public readonly record struct SimpleDdgiAdvancedExperimentMemoryPlan(
 
         if (layout.TraceSourceBytes == 0UL ||
             layout.ReceiverPayloadBytes == 0UL ||
+            (layout.SourceProducerMode ==
+                 SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster &&
+             layout.TraceRasterDepthBytes == 0UL) ||
+            (layout.SourceProducerMode ==
+                 SimpleDdgiNearFieldSourceProducerMode.ForwardMrt &&
+             layout.TraceRasterDepthBytes != 0UL) ||
             layout.TraceFrameConstantsBytes == 0UL ||
             layout.PreparedDepthFootprintBytes == 0UL ||
             layout.PreparedReceiverPayloadBytes == 0UL ||
@@ -958,6 +964,7 @@ public readonly record struct SimpleDdgiAdvancedExperimentMemoryPlan(
             ulong traceTargets = checked(
                 layout.TraceSourceBytes +
                 layout.ReceiverPayloadBytes +
+                layout.TraceRasterDepthBytes +
                 layout.TraceFrameConstantsBytes +
                 layout.PreparedDepthFootprintBytes +
                 layout.PreparedReceiverPayloadBytes +
@@ -966,6 +973,7 @@ public readonly record struct SimpleDdgiAdvancedExperimentMemoryPlan(
                 layout.RawCandidateBytes +
                 layout.SurfaceTableBytes +
                 layout.ActiveTileAndIndirectBytes +
+                layout.SchedulerHistoryBytes +
                 layout.TileBuffersBytes +
                 layout.TelemetryReadbackBytes);
             ulong historyAndMoments = checked(

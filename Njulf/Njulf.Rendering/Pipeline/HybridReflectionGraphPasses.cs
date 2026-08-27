@@ -35,7 +35,12 @@ internal abstract class HybridReflectionGraphPass : RenderPassBase
     public override string AsyncComputeReason =>
         "Hybrid reflection shares SceneColor and history descriptors with adjacent graphics passes.";
 
-    public override void Initialize() => Runtime.Initialize();
+    // Pipeline materialization is driven by the loaded scene/settings in
+    // VulkanRenderer.PrepareScene. PrepareFrame retains a lazy safety net for
+    // a runtime switch from a non-hybrid reflection mode.
+    public override void Initialize()
+    {
+    }
 
     public override bool ShouldExecute(
         int frameIndex,

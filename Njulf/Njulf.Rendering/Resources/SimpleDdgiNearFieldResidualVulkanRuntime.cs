@@ -106,6 +106,8 @@ internal sealed class SimpleDdgiNearFieldResidualTargetBinding
 
     public RenderTarget NearFieldDirectSource => _generation.DirectSource;
     public RenderTarget NearFieldReceiverPayload => _generation.ReceiverPayload;
+    public RenderTarget? NearFieldTraceRasterDepth =>
+        _generation.TraceRasterDepth;
     public RenderTarget NearFieldResidualRaw => _generation.RawResidual;
     public RenderTarget NearFieldPreparedDepthFootprint =>
         _generation.PreparedDepthFootprint;
@@ -1364,9 +1366,21 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         uint sourceHeight = checked((uint)_layout.SourceHeight);
         uint traceWidth = checked((uint)_layout.TraceWidth);
         uint traceHeight = checked((uint)_layout.TraceHeight);
-        return HasExtent(_renderTargets.NearFieldDirectSource, sourceWidth, sourceHeight) &&
+        bool traceResolutionSource = _layout.SourceProducerMode ==
+            SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster;
+        uint sourceAttachmentWidth = traceResolutionSource
+            ? traceWidth
+            : sourceWidth;
+        uint sourceAttachmentHeight = traceResolutionSource
+            ? traceHeight
+            : sourceHeight;
+        return HasExtent(_renderTargets.NearFieldDirectSource,
+                sourceAttachmentWidth, sourceAttachmentHeight) &&
             HasExtent(_renderTargets.NearFieldReceiverPayload,
-                sourceWidth, sourceHeight) &&
+                sourceAttachmentWidth, sourceAttachmentHeight) &&
+            (!traceResolutionSource ||
+             HasExtent(_renderTargets.NearFieldTraceRasterDepth,
+                 traceWidth, traceHeight)) &&
             HasExtent(_renderTargets.NearFieldPreparedDepthFootprint,
                 traceWidth, traceHeight) &&
             HasExtent(_renderTargets.NearFieldPreparedReceiverPayload,
@@ -1728,6 +1742,7 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
         ulong imageBytes = checked(
             ImageBytes(_renderTargets.NearFieldDirectSource) +
             ImageBytes(_renderTargets.NearFieldReceiverPayload) +
+            ImageBytes(_renderTargets.NearFieldTraceRasterDepth) +
             ImageBytes(_renderTargets.NearFieldPreparedDepthFootprint) +
             ImageBytes(_renderTargets.NearFieldPreparedReceiverPayload) +
             ImageBytes(_renderTargets.NearFieldPreparedMotion) +
@@ -1995,7 +2010,9 @@ public sealed unsafe class SimpleDdgiNearFieldResidualVulkanRuntime : IDisposabl
                 SchedulerHistory0 = Resource(layout.SchedulerHistoryBytes / 2UL,
                     SimpleDdgiNearFieldResidualGpuResourceKind.SchedulerHistory0),
                 SchedulerHistory1 = Resource(layout.SchedulerHistoryBytes / 2UL,
-                    SimpleDdgiNearFieldResidualGpuResourceKind.SchedulerHistory1)
+                    SimpleDdgiNearFieldResidualGpuResourceKind.SchedulerHistory1),
+                TraceRasterDepth = Resource(layout.TraceRasterDepthBytes,
+                    SimpleDdgiNearFieldResidualGpuResourceKind.TraceRasterDepth)
             };
         }
 

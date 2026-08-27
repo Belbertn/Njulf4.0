@@ -18,6 +18,7 @@ namespace Njulf.Rendering.Resources
         SimpleDdgiNearFieldResidualLayout Layout,
         RenderTarget DirectSource,
         RenderTarget ReceiverPayload,
+        RenderTarget? TraceRasterDepth,
         RenderTarget RawResidual,
         RenderTarget PreparedDepthFootprint,
         RenderTarget PreparedReceiverPayload,
@@ -37,6 +38,7 @@ namespace Njulf.Rendering.Resources
         public ulong EstimatedByteSize => checked(
             DirectSource.EstimatedByteSize +
             ReceiverPayload.EstimatedByteSize +
+            (TraceRasterDepth?.EstimatedByteSize ?? 0UL) +
             RawResidual.EstimatedByteSize +
             PreparedDepthFootprint.EstimatedByteSize +
             PreparedReceiverPayload.EstimatedByteSize +
@@ -63,6 +65,7 @@ namespace Njulf.Rendering.Resources
         public const Format SmaaEdgesFormat = Format.R8G8Unorm;
         public const Format SmaaBlendWeightsFormat = Format.R8G8B8A8Unorm;
         public const Format MotionVectorFormat = Format.R16G16Sfloat;
+        public const Format VariableRateShadingFormat = Format.R8Uint;
         public const Format WeightedOitAccumulationFormat = Format.R16G16B16A16Sfloat;
         public const Format WeightedOitRevealageFormat = Format.R8Unorm;
         public const Format NearFieldResidualRadianceFormat = Format.R16G16B16A16Sfloat;
@@ -316,18 +319,32 @@ namespace Njulf.Rendering.Resources
                     Width = checked((uint)nearFieldResidualLayout.TraceWidth),
                     Height = checked((uint)nearFieldResidualLayout.TraceHeight)
                 };
+                bool traceResolutionSource =
+                    nearFieldResidualLayout.SourceProducerMode ==
+                    SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster;
+                Extent2D sourceAttachmentExtent = traceResolutionSource
+                    ? traceExtent
+                    : extent;
                 NearFieldDirectSource = CreateGraphOwnedRenderTarget(
                     RenderGraphResourceId.NearFieldDirectSource,
                     "Near-Field Direct Diffuse and Emissive",
                     ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
-                    extent,
+                    sourceAttachmentExtent,
                     ColorSampledDescriptor);
                 NearFieldReceiverPayload = CreateGraphOwnedRenderTarget(
                     RenderGraphResourceId.NearFieldReceiverPayload,
                     "Near-Field Compact Receiver Payload",
                     ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat,
-                    extent,
+                    sourceAttachmentExtent,
                     ColorSampledDescriptor);
+                NearFieldTraceRasterDepth = traceResolutionSource
+                    ? CreateGraphOwnedRenderTarget(
+                        RenderGraphResourceId.NearFieldTraceRasterDepth,
+                        "Near-Field Trace-Resolution Source Depth",
+                        depthFormat,
+                        traceExtent,
+                        SceneDepthDescriptor)
+                    : null;
 
                 NearFieldResidualRaw = CreateGraphOwnedRenderTarget(
                     RenderGraphResourceId.NearFieldResidualRaw,
@@ -443,6 +460,21 @@ namespace Njulf.Rendering.Resources
                 MotionVectorFormat,
                 motionVectorsEnabled ? extent : PlaceholderExtent,
                 ColorSampledDescriptor);
+            VariableRateShading = CreateGraphOwnedRenderTarget(
+                RenderGraphResourceId.VariableRateShading,
+                "Conservative Fragment Shading Rate",
+                VariableRateShadingFormat,
+                _context.FragmentShadingRateSupported
+                    ? CalculateVariableRateShadingExtent(
+                        extent,
+                        _context.FragmentShadingRateAttachmentTexelSize)
+                    : PlaceholderExtent,
+                new RenderTargetDescriptor(
+                    colorAttachment: false,
+                    sampled: false,
+                    storage: true,
+                    fragmentShadingRateAttachment:
+                        _context.FragmentShadingRateSupported));
             TaaHistoryA = CreateGraphOwnedRenderTarget(
                 RenderGraphResourceId.TaaHistory,
                 "TAA History A",
@@ -486,6 +518,7 @@ namespace Njulf.Rendering.Resources
         public RenderTarget MaterialTransportProvenance { get; }
         public RenderTarget? NearFieldDirectSource { get; private set; }
         public RenderTarget? NearFieldReceiverPayload { get; private set; }
+        public RenderTarget? NearFieldTraceRasterDepth { get; private set; }
         public RenderTarget? NearFieldResidualRaw { get; private set; }
         public RenderTarget? NearFieldPreparedDepthFootprint { get; private set; }
         public RenderTarget? NearFieldPreparedReceiverPayload { get; private set; }
@@ -522,6 +555,7 @@ namespace Njulf.Rendering.Resources
         public RenderTarget SmaaEdges { get; }
         public RenderTarget SmaaBlendWeights { get; }
         public RenderTarget MotionVectors { get; }
+        public RenderTarget VariableRateShading { get; }
         public RenderTarget TaaHistoryA { get; }
         public RenderTarget TaaHistoryB { get; }
         public RenderTarget WeightedOitAccumulation { get; }
@@ -530,9 +564,10 @@ namespace Njulf.Rendering.Resources
         public int BloomMipCount => _bloomMipChain.Count;
         public Extent2D BloomBaseExtent => _bloomMipChain.Count == 0 ? default : _bloomMipChain[0].Extent;
         public int ResizeCount { get; private set; }
-        public int RenderTargetCount => 22 + _bloomMipChain.Count +
+        public int RenderTargetCount => 23 + _bloomMipChain.Count +
             (NearFieldDirectSource is null ? 0 :
                 14 + (NearFieldSourceLuminance is null ? 0 : 1) +
+                (NearFieldTraceRasterDepth is null ? 0 : 1) +
                 (NearFieldResidualFilterScratch0 is null ? 0 : 2)) +
             (GiCausticReceiverPayload is null ? 0 : 3) +
             (HybridReflectionReceiverPayload is null ? 0 : 11);
@@ -545,6 +580,7 @@ namespace Njulf.Rendering.Resources
             GiCausticRenderTargetBytes +
             HybridReflectionRenderTargetBytes +
             NearFieldResidualRenderTargetBytes +
+            VariableRateShadingRenderTargetBytes +
             AntiAliasingRenderTargetBytes +
             WeightedOitRenderTargetBytes +
             BloomRenderTargetBytes;
@@ -563,7 +599,8 @@ namespace Njulf.Rendering.Resources
             SumEnabledBytes(MaterialTransportProvenance);
         public ulong NearFieldResidualSourceRenderTargetBytes => SumEnabledBytes(
             NearFieldDirectSource,
-            NearFieldReceiverPayload);
+            NearFieldReceiverPayload,
+            NearFieldTraceRasterDepth);
         public ulong NearFieldResidualRenderTargetBytes =>
             NearFieldResidualSourceRenderTargetBytes + SumEnabledBytes(
                 NearFieldResidualRaw,
@@ -596,7 +633,7 @@ namespace Njulf.Rendering.Resources
                     nameof(layout));
             }
 
-            var sourceExtent = new Extent2D
+            var fullExtent = new Extent2D
             {
                 Width = checked((uint)layout.SourceWidth),
                 Height = checked((uint)layout.SourceHeight)
@@ -606,8 +643,13 @@ namespace Njulf.Rendering.Resources
                 Width = checked((uint)layout.TraceWidth),
                 Height = checked((uint)layout.TraceHeight)
             };
+            bool traceResolutionSource = layout.SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster;
+            Extent2D sourceExtent = traceResolutionSource
+                ? traceExtent
+                : fullExtent;
             var created = new List<(RenderGraphResourceId Id,
-                RenderTarget Target)>(17);
+                RenderTarget Target)>(18);
             RenderTarget Create(
                 RenderGraphResourceId id,
                 string name,
@@ -641,6 +683,14 @@ namespace Njulf.Rendering.Resources
                         .ReceiverPayloadFormat,
                     sourceExtent,
                     ColorSampledDescriptor);
+                RenderTarget? sourceDepth = traceResolutionSource
+                    ? Create(
+                        RenderGraphResourceId.NearFieldTraceRasterDepth,
+                        "Near-Field Trace-Resolution Source Depth",
+                        SceneDepth.Format,
+                        traceExtent,
+                        SceneDepthDescriptor)
+                    : null;
                 RenderTarget raw = Create(
                     RenderGraphResourceId.NearFieldResidualRaw,
                     "Near-Field Raw Signed Residual",
@@ -737,7 +787,7 @@ namespace Njulf.Rendering.Resources
                         NearFieldStorageSampledDescriptor);
                 }
                 return new SimpleDdgiNearFieldResidualRenderTargetGeneration(
-                    layout, source, receiver, raw, preparedDepth,
+                    layout, source, receiver, sourceDepth, raw, preparedDepth,
                     preparedPayload, preparedMotion, luminance, history0,
                     history1, moments0, moments1, validity0, validity1,
                     normals0, normals1, scratch0, scratch1);
@@ -763,6 +813,7 @@ namespace Njulf.Rendering.Resources
                 generation.Layout.TraceResolutionScale;
             NearFieldDirectSource = generation.DirectSource;
             NearFieldReceiverPayload = generation.ReceiverPayload;
+            NearFieldTraceRasterDepth = generation.TraceRasterDepth;
             NearFieldResidualRaw = generation.RawResidual;
             NearFieldPreparedDepthFootprint =
                 generation.PreparedDepthFootprint;
@@ -793,6 +844,12 @@ namespace Njulf.Rendering.Resources
             ReleaseOrDisposeOwnedTarget(
                 RenderGraphResourceId.NearFieldReceiverPayload,
                 generation.ReceiverPayload);
+            if (generation.TraceRasterDepth is not null)
+            {
+                ReleaseOrDisposeOwnedTarget(
+                    RenderGraphResourceId.NearFieldTraceRasterDepth,
+                    generation.TraceRasterDepth);
+            }
             ReleaseOrDisposeOwnedTarget(
                 RenderGraphResourceId.NearFieldResidualRaw,
                 generation.RawResidual);
@@ -857,6 +914,7 @@ namespace Njulf.Rendering.Resources
                     layout,
                     NearFieldDirectSource!,
                     NearFieldReceiverPayload!,
+                    NearFieldTraceRasterDepth,
                     NearFieldResidualRaw!,
                     NearFieldPreparedDepthFootprint!,
                     NearFieldPreparedReceiverPayload!,
@@ -879,6 +937,7 @@ namespace Njulf.Rendering.Resources
             _nearFieldResidualGeneration = null;
             NearFieldDirectSource = null;
             NearFieldReceiverPayload = null;
+            NearFieldTraceRasterDepth = null;
             NearFieldResidualRaw = null;
             NearFieldPreparedDepthFootprint = null;
             NearFieldPreparedReceiverPayload = null;
@@ -908,6 +967,11 @@ namespace Njulf.Rendering.Resources
             _renderGraph.PublishOwnedRenderTargets(
                 RenderGraphResourceId.NearFieldReceiverPayload,
                 [generation.ReceiverPayload]);
+            _renderGraph.PublishOwnedRenderTargets(
+                RenderGraphResourceId.NearFieldTraceRasterDepth,
+                generation.TraceRasterDepth is null
+                    ? []
+                    : [generation.TraceRasterDepth]);
             _renderGraph.PublishOwnedRenderTargets(
                 RenderGraphResourceId.NearFieldResidualRaw,
                 [generation.RawResidual]);
@@ -952,6 +1016,7 @@ namespace Njulf.Rendering.Resources
             [
                 RenderGraphResourceId.NearFieldDirectSource,
                 RenderGraphResourceId.NearFieldReceiverPayload,
+                RenderGraphResourceId.NearFieldTraceRasterDepth,
                 RenderGraphResourceId.NearFieldResidualRaw,
                 RenderGraphResourceId.NearFieldPreparedDepthFootprint,
                 RenderGraphResourceId.NearFieldPreparedReceiverPayload,
@@ -1008,6 +1073,8 @@ namespace Njulf.Rendering.Resources
             HybridReflectionFilterScratch,
             HybridReflectionDdgiCohorts);
         public ulong AntiAliasingRenderTargetBytes => SumEnabledBytes(LdrSceneColor, SmaaEdges, SmaaBlendWeights, MotionVectors, TaaHistoryA, TaaHistoryB);
+        public ulong VariableRateShadingRenderTargetBytes =>
+            SumEnabledBytes(VariableRateShading);
         public ulong WeightedOitRenderTargetBytes => SumEnabledBytes(WeightedOitAccumulation, WeightedOitRevealage);
         public ulong BloomRenderTargetBytes => SumTargetBytes(_bloomMipChain);
 
@@ -1045,6 +1112,14 @@ namespace Njulf.Rendering.Resources
                 materialTransportProvenanceEnabled ? extent : PlaceholderExtent);
             RecreateGiCausticTargets(extent);
             RecreateHybridReflectionTargets(extent, hybridReflectionsEnabled);
+            RecreateGraphOwnedTarget(
+                RenderGraphResourceId.VariableRateShading,
+                VariableRateShading,
+                _context.FragmentShadingRateSupported
+                    ? CalculateVariableRateShadingExtent(
+                        extent,
+                        _context.FragmentShadingRateAttachmentTexelSize)
+                    : PlaceholderExtent);
             RecreateAntiAliasingTargets(extent, outputExtent, antiAliasingMode, motionVectorsEnabled);
             RecreateWeightedOitTargets(extent, weightedOitEnabled);
             RecreateBloomTargets(extent, bloomMipCount);
@@ -1081,6 +1156,30 @@ namespace Njulf.Rendering.Resources
             {
                 Width = Math.Max(1u, (uint)MathF.Ceiling(sourceExtent.Width * scale)),
                 Height = Math.Max(1u, (uint)MathF.Ceiling(sourceExtent.Height * scale))
+            };
+        }
+
+        public static Extent2D CalculateVariableRateShadingExtent(
+            Extent2D sourceExtent,
+            Extent2D attachmentTexelSize)
+        {
+            if (sourceExtent.Width == 0 || sourceExtent.Height == 0)
+                throw new ArgumentOutOfRangeException(nameof(sourceExtent));
+            if (attachmentTexelSize.Width == 0 ||
+                attachmentTexelSize.Height == 0)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(attachmentTexelSize));
+            }
+
+            return new Extent2D
+            {
+                Width = checked((sourceExtent.Width +
+                    attachmentTexelSize.Width - 1) /
+                    attachmentTexelSize.Width),
+                Height = checked((sourceExtent.Height +
+                    attachmentTexelSize.Height - 1) /
+                    attachmentTexelSize.Height)
             };
         }
 
@@ -1234,12 +1333,24 @@ namespace Njulf.Rendering.Resources
             if (NearFieldDirectSource is null)
                 return;
 
-            RecreateGraphOwnedTarget(RenderGraphResourceId.NearFieldDirectSource,
-                NearFieldDirectSource, extent);
-            RecreateGraphOwnedTarget(RenderGraphResourceId.NearFieldReceiverPayload,
-                NearFieldReceiverPayload!, extent);
-
             Extent2D traceExtent = CalculateNearFieldTraceExtent(extent);
+            bool traceResolutionSource = _nearFieldResidualGeneration?.Layout
+                .SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster;
+            Extent2D sourceExtent = traceResolutionSource
+                ? traceExtent
+                : extent;
+            RecreateGraphOwnedTarget(RenderGraphResourceId.NearFieldDirectSource,
+                NearFieldDirectSource, sourceExtent);
+            RecreateGraphOwnedTarget(RenderGraphResourceId.NearFieldReceiverPayload,
+                NearFieldReceiverPayload!, sourceExtent);
+            if (NearFieldTraceRasterDepth is not null)
+            {
+                RecreateGraphOwnedTarget(
+                    RenderGraphResourceId.NearFieldTraceRasterDepth,
+                    NearFieldTraceRasterDepth,
+                    traceExtent);
+            }
             RecreateGraphOwnedTarget(RenderGraphResourceId.NearFieldResidualRaw,
                 NearFieldResidualRaw!, traceExtent);
             RecreateGraphOwnedTarget(
@@ -1606,6 +1717,8 @@ namespace Njulf.Rendering.Resources
                 NearFieldDirectSource);
             DisposeIfManagerOwned(RenderGraphResourceId.NearFieldReceiverPayload,
                 NearFieldReceiverPayload);
+            DisposeIfManagerOwned(RenderGraphResourceId.NearFieldTraceRasterDepth,
+                NearFieldTraceRasterDepth);
             DisposeIfManagerOwned(RenderGraphResourceId.NearFieldResidualRaw,
                 NearFieldResidualRaw);
             DisposeIfManagerOwned(RenderGraphResourceId.NearFieldPreparedDepthFootprint,
@@ -1668,6 +1781,9 @@ namespace Njulf.Rendering.Resources
             DisposeIfManagerOwned(RenderGraphResourceId.SmaaEdges, SmaaEdges);
             DisposeIfManagerOwned(RenderGraphResourceId.SmaaBlendWeights, SmaaBlendWeights);
             DisposeIfManagerOwned(RenderGraphResourceId.MotionVectors, MotionVectors);
+            DisposeIfManagerOwned(
+                RenderGraphResourceId.VariableRateShading,
+                VariableRateShading);
             DisposeIfManagerOwned(RenderGraphResourceId.TaaHistory, TaaHistoryA);
             DisposeIfManagerOwned(RenderGraphResourceId.TaaHistory, TaaHistoryB);
             DisposeIfManagerOwned(RenderGraphResourceId.WeightedOitAccumulation, WeightedOitAccumulation);

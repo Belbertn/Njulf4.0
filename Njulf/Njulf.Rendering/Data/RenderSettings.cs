@@ -1100,6 +1100,47 @@ namespace Njulf.Rendering.Data
         DdgiHigh = 4
     }
 
+    /// <summary>
+    /// Controls the conservative, attachment-based Vulkan fragment shading-rate
+    /// path. Auto never forces coarse shading: the per-frame safety policy and
+    /// GPU classifier can retain 1x1 shading for every tile.
+    /// </summary>
+    public enum VariableRateShadingMode : uint
+    {
+        Off = 0,
+        Auto = 1
+    }
+
+    public sealed class RasterSettings
+    {
+        private VariableRateShadingMode _variableRateShadingMode;
+
+        public VariableRateShadingMode VariableRateShadingMode
+        {
+            get => _variableRateShadingMode;
+            set => _variableRateShadingMode = Enum.IsDefined(value)
+                ? value
+                : VariableRateShadingMode.Off;
+        }
+    }
+
+    /// <summary>
+    /// Selects the policy used by GPU scene submission to choose a cooked
+    /// meshlet LOD. Screen-space error is resolution and field-of-view aware;
+    /// LegacyDistance preserves the pre-1.5 cooked-content behavior.
+    /// </summary>
+    public enum GpuLodSelectionMode : uint
+    {
+        LegacyDistance = 0,
+        ScreenSpaceError = 1
+    }
+
+    public enum SpecularAntialiasingMode : uint
+    {
+        Off = 0,
+        GeometricVariance = 1
+    }
+
     public enum RenderFeatureIsolationMode : uint
     {
         FullFrame = 0,
@@ -1113,7 +1154,18 @@ namespace Njulf.Rendering.Data
 
     public sealed class MaterialSettings
     {
+        private SpecularAntialiasingMode _specularAntialiasingMode =
+            SpecularAntialiasingMode.GeometricVariance;
+
         public MaterialDebugView DebugView { get; set; } = MaterialDebugView.None;
+
+        public SpecularAntialiasingMode SpecularAntialiasingMode
+        {
+            get => _specularAntialiasingMode;
+            set => _specularAntialiasingMode = Enum.IsDefined(value)
+                ? value
+                : SpecularAntialiasingMode.GeometricVariance;
+        }
     }
 
     public sealed class FoliageSettings
@@ -1221,15 +1273,40 @@ namespace Njulf.Rendering.Data
     {
         public const float DefaultGpuLod1DistanceRatio = 4.0f;
         public const float DefaultGpuLod2DistanceRatio = 10.0f;
+        public const float DefaultGpuLodTargetPixelError = 1.0f;
+        public const float GpuLodHysteresisFraction = 0.15f;
         public const int DefaultGpuShadowLodBias = 1;
 
         private float _gpuLod1DistanceRatio = DefaultGpuLod1DistanceRatio;
         private float _gpuLod2DistanceRatio = DefaultGpuLod2DistanceRatio;
+        private GpuLodSelectionMode _gpuLodSelectionMode =
+            GpuLodSelectionMode.ScreenSpaceError;
+        private float _gpuLodTargetPixelError =
+            DefaultGpuLodTargetPixelError;
         private int _gpuShadowLodBias = DefaultGpuShadowLodBias;
 
         public bool GpuCompactionEnabled { get; set; } = true;
         public bool IndirectMeshletDispatchEnabled { get; set; } = true;
         public bool GpuLodSelectionEnabled { get; set; } = true;
+
+        public GpuLodSelectionMode GpuLodSelectionMode
+        {
+            get => _gpuLodSelectionMode;
+            set => _gpuLodSelectionMode = Enum.IsDefined(value)
+                ? value
+                : GpuLodSelectionMode.ScreenSpaceError;
+        }
+
+        /// <summary>
+        /// Maximum projected geometric deviation admitted for a cooked LOD.
+        /// Lower values retain finer geometry for longer.
+        /// </summary>
+        public float GpuLodTargetPixelError
+        {
+            get => _gpuLodTargetPixelError;
+            set => _gpuLodTargetPixelError =
+                ClampGpuLodTargetPixelError(value);
+        }
 
         /// <summary>
         /// Distance-to-bounding-radius ratio at which GPU scene submission switches from LOD0 to LOD1.
@@ -1278,6 +1355,13 @@ namespace Njulf.Rendering.Data
             Math.Max(
                 ClampGpuLod1DistanceRatio(gpuLod1DistanceRatio),
                 ClampFinite(value, minimum: 1.0f, maximum: 128.0f, fallback: DefaultGpuLod2DistanceRatio));
+
+        internal static float ClampGpuLodTargetPixelError(float value) =>
+            ClampFinite(
+                value,
+                minimum: 0.125f,
+                maximum: 8.0f,
+                fallback: DefaultGpuLodTargetPixelError);
 
         private static float ClampFinite(float value, float minimum, float maximum, float fallback) =>
             float.IsFinite(value) ? Math.Clamp(value, minimum, maximum) : fallback;
@@ -5401,7 +5485,7 @@ namespace Njulf.Rendering.Data
     public sealed class RenderSettings
     {
         /// <summary>Current durable settings-file schema used by capture metadata and persistence.</summary>
-        public const int SerializationVersion = 22;
+        public const int SerializationVersion = 23;
         internal const int MaximumSettingsFileBytes = 4 * 1024 * 1024;
 
         private float _exposure = 1.0f;
@@ -5447,6 +5531,7 @@ namespace Njulf.Rendering.Data
         public FoliageSettings Foliage { get; } = new();
         public SceneSubmissionSettings SceneSubmission { get; } = new();
         public MaterialSettings Materials { get; } = new();
+        public RasterSettings Raster { get; } = new();
         public RenderDiagnosticsSettings Diagnostics { get; } = new();
         public HiZVisibilityPolicySettings HiZVisibilityPolicy { get; } = new();
         public HiZOcclusionSettings HiZOcclusion { get; } = new();
@@ -5571,6 +5656,25 @@ namespace Njulf.Rendering.Data
                     RenderQualityPreset.Ultra;
             MeshletNormalConeCullingEnabled = true;
             Transparency.PipelinePartitioningEnabled = true;
+            SceneSubmission.GpuLodSelectionMode =
+                GpuLodSelectionMode.ScreenSpaceError;
+            SceneSubmission.GpuLodTargetPixelError = preset switch
+            {
+                RenderQualityPreset.Low => 2.0f,
+                RenderQualityPreset.Medium => 1.5f,
+                RenderQualityPreset.Ultra => 0.5f,
+                _ => 1.0f
+            };
+            Materials.SpecularAntialiasingMode = preset ==
+                RenderQualityPreset.Low
+                    ? SpecularAntialiasingMode.Off
+                    : SpecularAntialiasingMode.GeometricVariance;
+            Raster.VariableRateShadingMode = preset is
+                RenderQualityPreset.Low or
+                RenderQualityPreset.Medium or
+                RenderQualityPreset.DdgiHigh
+                    ? VariableRateShadingMode.Auto
+                    : VariableRateShadingMode.Off;
 
             AmbientOcclusion.GtaoQualityPreset = preset switch
             {
@@ -6130,7 +6234,9 @@ namespace Njulf.Rendering.Data
             // default-off bent-normal lighting gate. Version 22 promotes the
             // preset-owned GTAO/bent-normal, receiver-cache, C5 local scheduling,
             // meshlet cone, and transparency partition defaults while retaining
-            // explicit current-schema overrides.
+            // explicit current-schema overrides. Version 23 persists automatic,
+            // resolution-aware cooked LOD selection and its pixel-error budget;
+            // older files retain their distance-based behavior.
             public int? Version { get; init; }
             public RenderQualityPreset QualityPreset { get; init; } = RenderQualityPreset.DdgiHigh;
             public float ResolutionScale { get; init; } = 1.0f;
@@ -6153,6 +6259,8 @@ namespace Njulf.Rendering.Data
             public bool? ShadowsEnabled { get; init; }
             public bool ParticlesEnabled { get; init; } = true;
             public bool? MeshletNormalConeCullingEnabled { get; init; }
+            public SpecularAntialiasingMode? SpecularAntialiasingMode { get; init; }
+            public VariableRateShadingMode? VariableRateShadingMode { get; init; }
             public TransparencySettingsFile? Transparency { get; init; }
             public bool? TransparentReceiveGlobalIllumination { get; init; }
             public bool? DecalReceiveGlobalIllumination { get; init; }
@@ -6190,6 +6298,10 @@ namespace Njulf.Rendering.Data
                     ParticlesEnabled = settings.Particles.Enabled,
                     MeshletNormalConeCullingEnabled =
                         settings.MeshletNormalConeCullingEnabled,
+                    SpecularAntialiasingMode =
+                        settings.Materials.SpecularAntialiasingMode,
+                    VariableRateShadingMode =
+                        settings.Raster.VariableRateShadingMode,
                     Transparency = TransparencySettingsFile.FromSettings(
                         settings.Transparency),
                     TransparentReceiveGlobalIllumination =
@@ -6278,6 +6390,17 @@ namespace Njulf.Rendering.Data
                     settings.MeshletNormalConeCullingEnabled =
                         MeshletNormalConeCullingEnabled.Value;
                 }
+                settings.Materials.SpecularAntialiasingMode =
+                    Version.GetValueOrDefault() >= 23
+                        ? SpecularAntialiasingMode ??
+                            global::Njulf.Rendering.Data.SpecularAntialiasingMode.GeometricVariance
+                        : global::Njulf.Rendering.Data.SpecularAntialiasingMode.Off;
+                if (Version.GetValueOrDefault() >= 23 &&
+                    VariableRateShadingMode.HasValue)
+                {
+                    settings.Raster.VariableRateShadingMode =
+                        VariableRateShadingMode.Value;
+                }
                 if (Version.GetValueOrDefault() >= 18 && Transparency != null)
                 {
                     Transparency.ApplyTo(
@@ -6297,7 +6420,9 @@ namespace Njulf.Rendering.Data
                 if (DecalReceiveShadows.HasValue)
                     settings.Decals.ReceiveShadows = DecalReceiveShadows.Value;
                 Foliage.ApplyTo(settings.Foliage);
-                SceneSubmission.ApplyTo(settings.SceneSubmission);
+                SceneSubmission.ApplyTo(
+                    settings.SceneSubmission,
+                    Version.GetValueOrDefault());
                 HiZOcclusion.ApplyTo(settings.HiZOcclusion);
                 // Version 3 introduced Auto as the fresh-install default. Older files did not
                 // have a trustworthy policy field, so retain their graphics-only behavior when
@@ -8179,6 +8304,8 @@ namespace Njulf.Rendering.Data
             public bool GpuCompactionEnabled { get; init; } = true;
             public bool IndirectMeshletDispatchEnabled { get; init; } = true;
             public bool GpuLodSelectionEnabled { get; init; } = true;
+            public GpuLodSelectionMode? GpuLodSelectionMode { get; init; }
+            public float? GpuLodTargetPixelError { get; init; }
             public float GpuLod1DistanceRatio { get; init; } = SceneSubmissionSettings.DefaultGpuLod1DistanceRatio;
             public float GpuLod2DistanceRatio { get; init; } = SceneSubmissionSettings.DefaultGpuLod2DistanceRatio;
             public bool GpuShadowCompactionEnabled { get; init; } = true;
@@ -8192,6 +8319,9 @@ namespace Njulf.Rendering.Data
                     GpuCompactionEnabled = settings.GpuCompactionEnabled,
                     IndirectMeshletDispatchEnabled = settings.IndirectMeshletDispatchEnabled,
                     GpuLodSelectionEnabled = settings.GpuLodSelectionEnabled,
+                    GpuLodSelectionMode = settings.GpuLodSelectionMode,
+                    GpuLodTargetPixelError =
+                        settings.GpuLodTargetPixelError,
                     GpuLod1DistanceRatio = settings.GpuLod1DistanceRatio,
                     GpuLod2DistanceRatio = settings.GpuLod2DistanceRatio,
                     GpuShadowCompactionEnabled = settings.GpuShadowCompactionEnabled,
@@ -8200,11 +8330,21 @@ namespace Njulf.Rendering.Data
                 };
             }
 
-            public void ApplyTo(SceneSubmissionSettings settings)
+            public void ApplyTo(
+                SceneSubmissionSettings settings,
+                int serializationVersion)
             {
                 settings.GpuCompactionEnabled = GpuCompactionEnabled;
                 settings.IndirectMeshletDispatchEnabled = IndirectMeshletDispatchEnabled;
                 settings.GpuLodSelectionEnabled = GpuLodSelectionEnabled;
+                settings.GpuLodSelectionMode = serializationVersion >= 23
+                    ? GpuLodSelectionMode ??
+                        global::Njulf.Rendering.Data.GpuLodSelectionMode.ScreenSpaceError
+                    : global::Njulf.Rendering.Data.GpuLodSelectionMode.LegacyDistance;
+                settings.GpuLodTargetPixelError = serializationVersion >= 23
+                    ? GpuLodTargetPixelError ??
+                        SceneSubmissionSettings.DefaultGpuLodTargetPixelError
+                    : SceneSubmissionSettings.DefaultGpuLodTargetPixelError;
                 settings.GpuLod1DistanceRatio = GpuLod1DistanceRatio;
                 settings.GpuLod2DistanceRatio = GpuLod2DistanceRatio;
                 settings.GpuShadowCompactionEnabled = GpuShadowCompactionEnabled;

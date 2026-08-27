@@ -19,7 +19,7 @@ public static class SimpleDdgiNearFieldResidualGpuAbi
     /// </summary>
     // V14 gives trace and resolve coverage independent compact lists and adds
     // a separate double-buffered 16-byte per-tile scheduler history.
-    public const uint Version = 0x4335_000Eu;
+    public const uint Version = 0x4335_000Fu;
 
     public const uint DirectDiffuseTraceSourceTerm = 1u << 0;
     public const uint EmissiveTraceSourceTerm = 1u << 1;

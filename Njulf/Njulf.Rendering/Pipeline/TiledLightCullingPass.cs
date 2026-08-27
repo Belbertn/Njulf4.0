@@ -92,11 +92,27 @@ namespace Njulf.Rendering.Pipeline
             uint tileCountX = sceneData.TileCountX;
             uint tileCountY = sceneData.TileCountY;
             uint clusterCountZ = sceneData.ClusterCountZ;
+            uint totalClusterCount = checked(
+                checked(tileCountX * tileCountY) * clusterCountZ);
             if (clusterCountZ !=
                 RenderingConstants.ForwardClusterDepthSliceCount)
             {
                 throw new InvalidOperationException(
                     $"Forward cluster depth-slice count {clusterCountZ} does not match the shader contract {RenderingConstants.ForwardClusterDepthSliceCount}.");
+            }
+            ulong requiredHeaderBytes = checked(
+                (totalClusterCount + 1UL) *
+                (ulong)Marshal.SizeOf<Data.GPUTiledLightHeader>());
+            ulong lightIndexCapacity = sceneData.TiledLightIndexBufferSize /
+                (ulong)Marshal.SizeOf<Data.GPULightIndex>();
+            if (sceneData.TiledLightHeaderBufferSize < requiredHeaderBytes ||
+                lightIndexCapacity < checked(
+                    (ulong)totalClusterCount *
+                    (uint)sceneData.MaxLightsPerTile) ||
+                lightIndexCapacity > uint.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    "Scene tiled light buffers do not satisfy the dense cluster-list contract.");
             }
             
             // Push constants
@@ -118,8 +134,8 @@ namespace Njulf.Rendering.Pipeline
                 TileCountY = tileCountY,
                 DepthTextureIndex = (uint)BindlessIndex.DepthTexture,
                 ClusterCountZ = clusterCountZ,
-                Padding2 = 0,
-                Padding3 = 0
+                TotalClusterCount = totalClusterCount,
+                LightIndexCapacity = checked((uint)lightIndexCapacity)
             };
             
             uint size = (uint)Marshal.SizeOf<Data.GPULightCullPushConstants>();

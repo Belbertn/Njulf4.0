@@ -256,31 +256,35 @@ public sealed class SubsurfaceBacklightingContractTests
     }
 
     [Test]
-    public void DirectShaderContract_SplitsBeforeCapturesAndC5Publication()
+    public void DirectShaderContract_SplitsBeforeTraceAndForwardMrtC5Publication()
     {
         string forward = ReadRepoText("Njulf.Shaders", "forward.frag");
         int split = forward.IndexOf(
             "vec3 originalDirectDiffuseSource = directDiffuseSource;",
             StringComparison.Ordinal);
+        int tracePublication = forward.IndexOf(
+            "C5WriteDirectDiffuseAndEmissiveSource(",
+            split,
+            StringComparison.Ordinal);
         int diffuseCapture = forward.IndexOf(
             "if (debugViewMode == MATERIAL_CAPTURE_LINEAR_DIRECT_DIFFUSE)",
-            split,
+            tracePublication,
             StringComparison.Ordinal);
         int specularCapture = forward.IndexOf(
             "if (debugViewMode == MATERIAL_CAPTURE_LINEAR_DIRECT_SPECULAR)",
             split,
             StringComparison.Ordinal);
-        int c5Write = forward.IndexOf(
-            "outDirectDiffuseAndEmissive = vec4(",
-            split,
+        int forwardMrtPublication = forward.LastIndexOf(
+            "C5WriteDirectDiffuseAndEmissiveSource(",
             StringComparison.Ordinal);
 
         Assert.Multiple(() =>
         {
             Assert.That(split, Is.GreaterThanOrEqualTo(0));
-            Assert.That(diffuseCapture, Is.GreaterThan(split));
+            Assert.That(tracePublication, Is.GreaterThan(split));
+            Assert.That(diffuseCapture, Is.GreaterThan(tracePublication));
             Assert.That(specularCapture, Is.GreaterThan(diffuseCapture));
-            Assert.That(c5Write, Is.GreaterThan(specularCapture));
+            Assert.That(forwardMrtPublication, Is.GreaterThan(specularCapture));
             Assert.That(forward,
                 Does.Contain("directLighting +=\n            directDiffuseSource - originalDirectDiffuseSource;"));
             Assert.That(forward,
@@ -332,7 +336,7 @@ public sealed class SubsurfaceBacklightingContractTests
     }
 
     [Test]
-    public void RayQueryBuildContract_AvoidsGlslangIdOverflowForFourVariants()
+    public void RayQueryBuildContract_AvoidsGlslangIdOverflowForAllVariants()
     {
         string shaderProject = ReadRepoText(
             "Njulf.Shaders",
@@ -345,10 +349,10 @@ public sealed class SubsurfaceBacklightingContractTests
         {
             Assert.That(shaderProject,
                 Does.Contain("<NjulfForwardRayQueryOptimizationOptions>-Od</NjulfForwardRayQueryOptimizationOptions>"));
-            Assert.That(CountOccurrences(
+                Assert.That(CountOccurrences(
                     shaderProject,
                     "<AdditionalCompileOptions>$(NjulfForwardRayQueryOptimizationOptions)</AdditionalCompileOptions>"),
-                Is.EqualTo(4));
+                Is.EqualTo(10));
             Assert.That(shaderProject,
                 Does.Contain("<AdditionalCompileOptions>%(ReceiverFeedbackGraphicsShaderVariant.AdditionalCompileOptions)</AdditionalCompileOptions>"));
             Assert.That(atomicVerification,

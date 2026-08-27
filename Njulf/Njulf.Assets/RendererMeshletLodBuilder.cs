@@ -101,7 +101,12 @@ public sealed class RendererMeshletLodBuilder
             }
             meshletVertices.AddRange(built.MeshletVertices);
             meshletTriangles.AddRange(built.MeshletTriangles);
-            ranges.Add(new ProcessedMeshLodRange(level, firstMeshlet, built.Meshlets.Length, Thresholds[level]));
+            ranges.Add(new ProcessedMeshLodRange(
+                level,
+                firstMeshlet,
+                built.Meshlets.Length,
+                Thresholds[level],
+                Math.Max(0f, resultError)));
             indexCounts.Add(lodIndices.Length);
             simplificationErrors.Add(resultError);
             previous = lodIndices;

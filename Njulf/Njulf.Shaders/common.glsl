@@ -63,7 +63,7 @@ const int MESHLET_DRAW_BUFFER_BASE_INDEX = 10;
 const int MESHLET_DRAW_BUFFER_FRAME1_INDEX = 11;
 const int TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX = 12;
 const int TRANSPARENT_MESHLET_DRAW_BUFFER_FRAME1_INDEX = 13;
-const uint FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_BITS = 14u;
+const uint FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_BITS = 10u;
 const uint FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_MASK =
     (1u << FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_BITS) - 1u;
 
@@ -73,7 +73,7 @@ uint ForwardDrawBufferBaseIndex(uint packedDrawBufferBaseIndex)
         FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_MASK;
 }
 
-uint ForwardTransparentFirstDraw(uint packedDrawBufferBaseIndex)
+uint ForwardFirstDraw(uint packedDrawBufferBaseIndex)
 {
     return packedDrawBufferBaseIndex >>
         FORWARD_TRANSPARENT_DRAW_BUFFER_INDEX_BITS;
@@ -292,7 +292,9 @@ const int AREA_RAY_SHADOW_MASK_BUFFER_BASE_INDEX = 223;
 const int FORWARD_MATERIAL_DATA_BUFFER_INDEX = 225;
 const int SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_BASE_INDEX = 226;
 const int SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_FRAME1_INDEX = 227;
-const int STATIC_BUFFER_COUNT = 228;
+const int SCENE_GPU_LOD_HISTORY_BUFFER_BASE_INDEX = 228;
+const int SCENE_GPU_LOD_HISTORY_BUFFER_FRAME1_INDEX = 229;
+const int STATIC_BUFFER_COUNT = 230;
 const uint GPU_PARTICLE_BLEND_BUCKET_COUNT = 5u;
 
 const uint MESHLET_DRAW_FLAG_NEEDS_GPU_FRUSTUM_TEST = 1u << 0;
@@ -440,8 +442,8 @@ struct GPUMeshInfo
     uint MeshletLod2Offset;
     uint MeshletLod2Count;
     uint MeshletLodGeneratedCount;
-    uint Padding0;
-    uint Padding1;
+    uint MeshletLod1ErrorBits;
+    uint MeshletLod2ErrorBits;
 };
 
 struct GPUVertexSkinningData
@@ -1037,6 +1039,23 @@ struct GPUSceneSubmissionCounters
     uint FullOpaqueOverflowCount;
     uint DirectionalShadowLodFallbackCount;
     uint OpaqueLodDecimatedCount;
+    uint NormalConeCandidateCount;
+    uint NormalConeTestedCount;
+    uint NormalConeRejectedCount;
+    uint NormalConeInvalidCount;
+    uint SimpleOpaqueDoubleSidedAppendCount;
+    uint SimpleNormalOpaqueDoubleSidedAppendCount;
+    uint FullOpaqueDoubleSidedAppendCount;
+    uint SolidDepthDoubleSidedAppendCount;
+    uint MaskedDepthDoubleSidedAppendCount;
+    uint DirectionalStaticShadowCascade0DoubleSidedAppendCount;
+    uint DirectionalStaticShadowCascade1DoubleSidedAppendCount;
+    uint DirectionalStaticShadowCascade2DoubleSidedAppendCount;
+    uint DirectionalStaticShadowCascade3DoubleSidedAppendCount;
+    uint DirectionalDynamicShadowCascade0DoubleSidedAppendCount;
+    uint DirectionalDynamicShadowCascade1DoubleSidedAppendCount;
+    uint DirectionalDynamicShadowCascade2DoubleSidedAppendCount;
+    uint DirectionalDynamicShadowCascade3DoubleSidedAppendCount;
 };
 
 struct GPUSceneOpaqueCompactionPushConstants
@@ -1077,6 +1096,12 @@ struct GPUSceneOpaqueCompactionPushConstants
     uint PreviousHiZFrameValid;
     float GpuLod1DistanceRatio;
     float GpuLod2DistanceRatio;
+    uint GpuLodSelectionMode;
+    float GpuLodTargetPixelError;
+    float GpuLodHysteresisFraction;
+    float GpuLodProjectionScale;
+    uint GpuLodHistoryBufferBaseIndex;
+    uint GpuLodHistoryCapacity;
     uint GpuShadowLodBias;
     uint DirectionalStaticShadowCascadeMask;
     vec4 DirectionalShadowLightDirection;
@@ -1179,7 +1204,7 @@ struct GPUDepthPushConstants
     uint CurrentFrameIndex;
     uint MeshletDrawCount;
     uint MeshletDrawBufferBaseIndex;
-    uint Padding0;
+    uint FirstDraw;
     uint Padding1;
     uint Padding2;
 };
@@ -1283,8 +1308,8 @@ struct GPULightCullPushConstants
     uint TileCountY;
     uint DepthTextureIndex;
     uint ClusterCountZ;
-    uint Padding2;
-    uint Padding3;
+    uint TotalClusterCount;
+    uint LightIndexCapacity;
 };
 
 struct GPUShadowData
@@ -1595,8 +1620,8 @@ const int SIZEOF_GPU_FOLIAGE_COUNTERS = 40;
 const int SIZEOF_GPU_FOLIAGE_DISPATCH_ARGS = 16;
 const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_PATCH = 80;
 const int SIZEOF_GPU_DDGI_FOLIAGE_PROXY_GENERATION_PUSH_CONSTANTS = 32;
-const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 296;
-const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 184;
+const int SIZEOF_GPU_SCENE_SUBMISSION_COUNTERS = 348;
+const int SIZEOF_GPU_SCENE_OPAQUE_COMPACTION_PUSH_CONSTANTS = 208;
 const int SIZEOF_GPU_FORWARD_VISIBILITY_COMPACTION_PUSH_CONSTANTS = 92;
 const int SIZEOF_GPU_FOLIAGE_CULL_PUSH_CONSTANTS = 52;
 const int SIZEOF_GPU_FOLIAGE_DRAW_PUSH_CONSTANTS = 128;
@@ -1958,6 +1983,8 @@ const int OFFSET_GPU_LIGHT_CULL_PUSH_FAR_PLANE = 172;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_LIGHT_COUNT = 176;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_TILE_COUNT_Y = 188;
 const int OFFSET_GPU_LIGHT_CULL_PUSH_DEPTH_TEXTURE_INDEX = 192;
+const int OFFSET_GPU_LIGHT_CULL_PUSH_TOTAL_CLUSTER_COUNT = 200;
+const int OFFSET_GPU_LIGHT_CULL_PUSH_LIGHT_INDEX_CAPACITY = 204;
 
 const int OFFSET_GPU_SHADOW_DATA_LIGHT_VIEW_PROJECTION0 = 0;
 const int OFFSET_GPU_SHADOW_DATA_LIGHT_VIEW_PROJECTION1 = 64;

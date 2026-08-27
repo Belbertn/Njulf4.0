@@ -25,6 +25,9 @@ const uint FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_OVERFLOW = 64u;
 const uint FORWARD_VISIBILITY_COUNTER_FULL_APPEND = 65u;
 const uint FORWARD_VISIBILITY_COUNTER_FULL_EMITTED = 66u;
 const uint FORWARD_VISIBILITY_COUNTER_FULL_OVERFLOW = 67u;
+const uint FORWARD_VISIBILITY_COUNTER_SIMPLE_DOUBLE_SIDED_APPEND = 74u;
+const uint FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_DOUBLE_SIDED_APPEND = 75u;
+const uint FORWARD_VISIBILITY_COUNTER_FULL_DOUBLE_SIDED_APPEND = 76u;
 const uint SCENE_SUBMISSION_COUNTER_SIMPLE_EMITTED = 60u;
 const uint SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_EMITTED = 63u;
 const uint SCENE_SUBMISSION_COUNTER_FULL_EMITTED = 66u;
@@ -35,6 +38,9 @@ const uint FORWARD_VISIBILITY_INDIRECT_WORD_STRIDE = 4u;
 const uint FORWARD_VISIBILITY_INDIRECT_SIMPLE_SLOT = 1u;
 const uint FORWARD_VISIBILITY_INDIRECT_SIMPLE_NORMAL_SLOT = 2u;
 const uint FORWARD_VISIBILITY_INDIRECT_FULL_SLOT = 3u;
+const uint FORWARD_VISIBILITY_INDIRECT_SIMPLE_DOUBLE_SIDED_SLOT = 4u;
+const uint FORWARD_VISIBILITY_INDIRECT_SIMPLE_NORMAL_DOUBLE_SIDED_SLOT = 5u;
+const uint FORWARD_VISIBILITY_INDIRECT_FULL_DOUBLE_SIDED_SLOT = 6u;
 const float CURRENT_FRAME_HIZ_MIN_SELF_OCCLUSION_BIAS = 0.0015;
 
 uint InputCounterBufferIndex()
@@ -79,6 +85,46 @@ uint BucketInputCountWord(uint bucket)
             : SCENE_SUBMISSION_COUNTER_FULL_EMITTED;
 }
 
+uint BucketInputCapacity(uint bucket)
+{
+    return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+        ? pc.Push.SimpleInputCapacity
+        : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+            ? pc.Push.SimpleNormalInputCapacity
+            : pc.Push.FullInputCapacity;
+}
+
+bool SidedStreamsEnabled()
+{
+    return pc.Push.Padding0 != 0u;
+}
+
+uint BucketInputCount(uint bucket, bool doubleSided)
+{
+    if (!SidedStreamsEnabled())
+    {
+        return BindlessStorageBuffers[
+            nonuniformEXT(InputCounterBufferIndex())].Words[
+                BucketInputCountWord(bucket)];
+    }
+
+    uint counterWord = doubleSided
+        ? (bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+            ? FORWARD_VISIBILITY_COUNTER_SIMPLE_DOUBLE_SIDED_APPEND
+            : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+                ? FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_DOUBLE_SIDED_APPEND
+                : FORWARD_VISIBILITY_COUNTER_FULL_DOUBLE_SIDED_APPEND)
+        : (bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+            ? FORWARD_VISIBILITY_COUNTER_SIMPLE_APPEND
+            : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+                ? FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_APPEND
+                : FORWARD_VISIBILITY_COUNTER_FULL_APPEND);
+    return min(
+        BindlessStorageBuffers[
+            nonuniformEXT(InputCounterBufferIndex())].Words[counterWord],
+        BucketInputCapacity(bucket));
+}
+
 uint BucketOutputCapacity(uint bucket)
 {
     return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
@@ -88,8 +134,17 @@ uint BucketOutputCapacity(uint bucket)
             : pc.Push.FullOutputCapacity;
 }
 
-uint BucketAppendCounterWord(uint bucket)
+uint BucketAppendCounterWord(uint bucket, bool doubleSided)
 {
+    if (doubleSided)
+    {
+        return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+            ? FORWARD_VISIBILITY_COUNTER_SIMPLE_DOUBLE_SIDED_APPEND
+            : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+                ? FORWARD_VISIBILITY_COUNTER_SIMPLE_NORMAL_DOUBLE_SIDED_APPEND
+                : FORWARD_VISIBILITY_COUNTER_FULL_DOUBLE_SIDED_APPEND;
+    }
+
     return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
         ? FORWARD_VISIBILITY_COUNTER_SIMPLE_APPEND
         : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
@@ -115,8 +170,17 @@ uint BucketOverflowCounterWord(uint bucket)
             : FORWARD_VISIBILITY_COUNTER_FULL_OVERFLOW;
 }
 
-uint BucketIndirectDispatchSlot(uint bucket)
+uint BucketIndirectDispatchSlot(uint bucket, bool doubleSided)
 {
+    if (doubleSided)
+    {
+        return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
+            ? FORWARD_VISIBILITY_INDIRECT_SIMPLE_DOUBLE_SIDED_SLOT
+            : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
+                ? FORWARD_VISIBILITY_INDIRECT_SIMPLE_NORMAL_DOUBLE_SIDED_SLOT
+                : FORWARD_VISIBILITY_INDIRECT_FULL_DOUBLE_SIDED_SLOT;
+    }
+
     return bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE
         ? FORWARD_VISIBILITY_INDIRECT_SIMPLE_SLOT
         : bucket == FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL
@@ -246,14 +310,16 @@ bool CanHiZTestMeshletDrawCommand(GPUMeshletDrawCommand command)
     return alphaMode < 1.5;
 }
 
-void ProcessBucketCandidate(uint bucket, uint localIndex)
+void ProcessBucketCandidate(uint bucket, uint localIndex, bool doubleSided)
 {
-    uint inputCount = BindlessStorageBuffers[nonuniformEXT(InputCounterBufferIndex())].Words[BucketInputCountWord(bucket)];
+    uint inputCount = BucketInputCount(bucket, doubleSided);
     if (localIndex >= inputCount)
         return;
 
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[FORWARD_VISIBILITY_COUNTER_CANDIDATE], 1u);
-    GPUMeshletDrawCommand command = ReadBucketCommand(bucket, localIndex);
+    GPUMeshletDrawCommand command = ReadBucketCommand(
+        bucket,
+        localIndex + (doubleSided ? BucketInputCapacity(bucket) : 0u));
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);
     uint instanceBufferIndex = uint(INSTANCE_BUFFER_BASE_INDEX) +
         pc.Push.CurrentFrameIndex;
@@ -291,19 +357,24 @@ void ProcessBucketCandidate(uint bucket, uint localIndex)
         }
     }
 
-    uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[BucketAppendCounterWord(bucket)], 1u);
-    if (outputIndex >= BucketOutputCapacity(bucket))
+    uint outputCapacity = BucketOutputCapacity(bucket);
+    uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[BucketAppendCounterWord(bucket, doubleSided)], 1u);
+    if (outputIndex >= outputCapacity)
     {
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[FORWARD_VISIBILITY_COUNTER_OVERFLOW], 1u);
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[BucketOverflowCounterWord(bucket)], 1u);
         return;
     }
 
-    WriteBucketCommand(bucket, outputIndex, command);
+    WriteBucketCommand(
+        bucket,
+        outputIndex + (doubleSided ? outputCapacity : 0u),
+        command);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[FORWARD_VISIBILITY_COUNTER_EMITTED], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(OutputCounterBufferIndex())].Words[BucketEmittedCounterWord(bucket)], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
-        IndirectDispatchCountWord(BucketIndirectDispatchSlot(bucket))], 1u);
+        IndirectDispatchCountWord(
+            BucketIndirectDispatchSlot(bucket, doubleSided))], 1u);
 }
 
 void main()
@@ -311,16 +382,40 @@ void main()
     uint candidateIndex = gl_GlobalInvocationID.x;
     if (candidateIndex < pc.Push.SimpleInputCapacity)
     {
-        ProcessBucketCandidate(FORWARD_VISIBILITY_BUCKET_SIMPLE, candidateIndex);
+        ProcessBucketCandidate(
+            FORWARD_VISIBILITY_BUCKET_SIMPLE,
+            candidateIndex,
+            false);
+        if (SidedStreamsEnabled())
+            ProcessBucketCandidate(
+                FORWARD_VISIBILITY_BUCKET_SIMPLE,
+                candidateIndex,
+                true);
     }
 
     if (candidateIndex < pc.Push.SimpleNormalInputCapacity)
     {
-        ProcessBucketCandidate(FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL, candidateIndex);
+        ProcessBucketCandidate(
+            FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL,
+            candidateIndex,
+            false);
+        if (SidedStreamsEnabled())
+            ProcessBucketCandidate(
+                FORWARD_VISIBILITY_BUCKET_SIMPLE_NORMAL,
+                candidateIndex,
+                true);
     }
 
     if (candidateIndex < pc.Push.FullInputCapacity)
     {
-        ProcessBucketCandidate(FORWARD_VISIBILITY_BUCKET_FULL, candidateIndex);
+        ProcessBucketCandidate(
+            FORWARD_VISIBILITY_BUCKET_FULL,
+            candidateIndex,
+            false);
+        if (SidedStreamsEnabled())
+            ProcessBucketCandidate(
+                FORWARD_VISIBILITY_BUCKET_FULL,
+                candidateIndex,
+                true);
     }
 }

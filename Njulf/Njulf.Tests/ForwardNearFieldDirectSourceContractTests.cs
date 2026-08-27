@@ -37,8 +37,14 @@ public sealed class ForwardNearFieldDirectSourceContractTests
             Assert.That(disabledFailure,
                 Is.EqualTo("near-field-direct-source-disabled"));
             Assert.That(
-                ForwardNearFieldDirectSourcePipelineConfiguration.Disabled,
-                Is.EqualTo(disabled));
+                ForwardNearFieldDirectSourcePipelineConfiguration.Disabled
+                    .IsC5EffectivelyEnabled,
+                Is.False);
+            Assert.That(
+                ForwardNearFieldDirectSourcePipelineConfiguration.Disabled
+                    .SourceProducerMode,
+                Is.EqualTo(
+                    SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster));
             Assert.That(
                 ForwardNearFieldDirectSourceContract.TryValidatePipelineConfiguration(
                     valid,
@@ -75,12 +81,12 @@ public sealed class ForwardNearFieldDirectSourceContractTests
             "Njulf.Rendering", "Pipeline", "ForwardPlusPass.cs");
         string normalizedForward = Regex.Replace(forward, @"\s+", " ");
         const string sourceWrite =
-            "outDirectDiffuseAndEmissive = vec4( clamp(directDiffuseSource + emissive, vec3(0.0), vec3(C5_MAXIMUM_FINITE_FP16)), c5ReceiverPayloadValid ? c5B3FootprintRadius : 0.0);";
+            "outDirectDiffuseAndEmissive = vec4( clamp(directDiffuseSource + emissive, vec3(0.0), vec3(C5_MAXIMUM_FINITE_FP16)), payloadValid ? b3FootprintRadius : 0.0);";
         int sourceWriteIndex = normalizedForward.IndexOf(
             sourceWrite,
             StringComparison.Ordinal);
         int finalColorIndex = normalizedForward.IndexOf(
-            "vec3 color = finalDiffuseIndirect + specularIbl + directLighting + emissive;",
+            "vec3 color = finalDiffuseIndirect + specularIbl * baseLayerSpecularScale + directLighting + emissive;",
             StringComparison.Ordinal);
 
         Assert.Multiple(() =>
@@ -113,7 +119,15 @@ public sealed class ForwardNearFieldDirectSourceContractTests
                          ForwardNearFieldDirectSourceContract
                              .ReceiverCacheSimpleOpaqueFragmentShader,
                          ForwardNearFieldDirectSourceContract
-                             .ReceiverCacheSimpleFullInputOpaqueFragmentShader
+                             .ReceiverCacheSimpleFullInputOpaqueFragmentShader,
+                         ForwardNearFieldDirectSourceContract
+                             .TraceResolutionOpaqueFragmentShader,
+                         ForwardNearFieldDirectSourceContract
+                             .TraceResolutionSimpleOpaqueFragmentShader,
+                         ForwardNearFieldDirectSourceContract
+                             .TraceResolutionSimpleFullInputOpaqueFragmentShader,
+                         ForwardNearFieldDirectSourceContract
+                             .TraceResolutionFoliageFragmentShader
                      })
             {
                 string itemName = artifact[..^".spv".Length];
@@ -123,7 +137,7 @@ public sealed class ForwardNearFieldDirectSourceContractTests
             Assert.That(shaderProject,
                 Does.Contain("-DNJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT=1"));
             Assert.That(shaderProject,
-                Does.Contain("-DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=4"));
+                Does.Contain("-DNJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION=5"));
             Assert.That(shaderProject,
                 Does.Contain("forward_opaque_ddgi_near_field_direct_source_cache_required.frag"));
             Assert.That(shaderProject,
@@ -142,6 +156,8 @@ public sealed class ForwardNearFieldDirectSourceContractTests
                 Does.Contain("ForwardNearFieldDirectSourceContract.ReceiverPayloadFormat"));
             Assert.That(forwardPass,
                 Does.Contain("ReceiverPayload.View"));
+            Assert.That(forwardPass,
+                Does.Contain("RecordTraceResolutionNearFieldSource"));
             foreach (string pipelineVariant in new[]
                      {
                          "_forwardNearFieldDirectSourcePipeline",

@@ -433,6 +433,60 @@ internal sealed class HelloGame : Game
         services.AddInput();
     }
 
+    protected override void ConfigureRendererBeforeInitialize(
+        IRenderer renderer)
+    {
+        if (renderer is not VulkanRenderer vulkanRenderer)
+        {
+            throw new InvalidOperationException(
+                "NjulfHelloGame requires the Vulkan renderer.");
+        }
+
+        vulkanRenderer.CaptureSceneKind =
+            GetPerformanceCaptureSceneKind(_sceneKind);
+        if (ShouldAutoEnableGpuTiming())
+            vulkanRenderer.Settings.Debug.AllowGpuTiming = true;
+
+        // Apply the complete settings transaction before VulkanRenderer creates
+        // settings-dependent render targets, graph resources, or pipelines.
+        // Content loading below may populate scene/managers, but must not need to
+        // repair this startup profile during the first frame.
+        SampleLighting.ConfigureRenderSettings(
+            vulkanRenderer.Settings,
+            ResolveSceneLightingMode());
+        ConfigureSceneEnvironment(vulkanRenderer);
+        ConfigureSceneRenderSettings(vulkanRenderer);
+        ApplySmokeRenderSettings(vulkanRenderer);
+
+        SamplePerformanceScenario startupScenario = ResolveStartupScenario();
+        if (startupScenario != SamplePerformanceScenario.Normal)
+        {
+            SampleGlobalIlluminationValidation.ConfigureRenderSettings(
+                vulkanRenderer.Settings,
+                startupScenario);
+            ApplySmokeRenderSettings(vulkanRenderer);
+        }
+
+        if (!string.IsNullOrWhiteSpace(
+                _smokeOptions.BaselineSnapshotDirectory) &&
+            _sceneKind != SampleSceneKind.Bistro)
+        {
+            SamplePerformanceScenario baselineScenario =
+                ResolveBaselineSnapshotScenario();
+            SampleGlobalIlluminationValidation.ConfigureRenderSettings(
+                vulkanRenderer.Settings,
+                baselineScenario);
+            if (baselineScenario ==
+                SamplePerformanceScenario.GiSponzaRightWallStationary)
+            {
+                vulkanRenderer.Settings.Diagnostics
+                    .DdgiForwardEstimateCountersEnabled = true;
+                vulkanRenderer.Settings.Debug.AllowGpuTiming = false;
+            }
+            ApplySmokeRenderSettings(vulkanRenderer);
+        }
+    }
+
     protected override void Load()
     {
         var camera = Camera as FirstPersonCamera
@@ -450,11 +504,6 @@ internal sealed class HelloGame : Game
         LightManager lightManager = services.GetRequiredService<LightManager>();
         VulkanRenderer renderer = Renderer as VulkanRenderer
             ?? throw new InvalidOperationException("NjulfHelloGame requires the Vulkan renderer.");
-        renderer.CaptureSceneKind = GetPerformanceCaptureSceneKind(_sceneKind);
-        if (ShouldAutoEnableGpuTiming())
-            renderer.Settings.Debug.AllowGpuTiming = true;
-        ConfigureSceneRenderSettings(renderer);
-
         if (_sceneKind == SampleSceneKind.SponzaPlaza)
             SampleAssetValidationGate.Validate(AppContext.BaseDirectory, SponzaAssetManifest);
         SampleInputController.Configure(input);
@@ -469,19 +518,12 @@ internal sealed class HelloGame : Game
             materialManager,
             services.GetService<IModelRenderUploadService>());
         _diagnosticsReporter = diagnosticsReporter;
-        SampleLighting.ConfigureRenderSettings(renderer.Settings, ResolveSceneLightingMode());
-        ApplySmokeRenderSettings(renderer);
         ConfigureSceneLighting(lightManager);
-        ConfigureSceneEnvironment(renderer);
-        ConfigureSceneRenderSettings(renderer);
-        ApplySmokeRenderSettings(renderer);
         SamplePerformanceScenario startupScenario = ResolveStartupScenario();
         if (startupScenario != SamplePerformanceScenario.Normal)
         {
             SamplePerformanceScenarioSummary summary = _performanceScenarioRunner.Apply(startupScenario);
             _sponzaAtmosphereFrozen = false;
-            SampleGlobalIlluminationValidation.ConfigureRenderSettings(renderer.Settings, startupScenario);
-            ApplySmokeRenderSettings(renderer);
             ApplyPerformanceScenarioCamera(camera, startupScenario);
             Console.WriteLine(
                 $"Applied startup scenario: {summary.Scenario} " +
@@ -1557,9 +1599,20 @@ internal sealed class HelloGame : Game
         }
         _materialGiCaptureRunner?.OnFrameRendered();
         _khronosMaterialGiRenderedGateRunner?.OnFrameRendered();
-        _diagnosticsReporter?.PrintFirstFrameDiagnostics(Renderer);
-        if (Camera is FirstPersonCamera firstPersonCamera)
-            _diagnosticsReporter?.PrintMovementFrameDiagnostics(Renderer, firstPersonCamera);
+        // Console formatting and output are diagnostic work, not a
+        // prerequisite for presenting usable pixels. Begin reporting on the
+        // frame after the first present so time-to-first-frame measurements do
+        // not include a multi-page diagnostics dump.
+        if (_drawnFrames > 0)
+        {
+            _diagnosticsReporter?.PrintFirstFrameDiagnostics(Renderer);
+            if (Camera is FirstPersonCamera firstPersonCamera)
+            {
+                _diagnosticsReporter?.PrintMovementFrameDiagnostics(
+                    Renderer,
+                    firstPersonCamera);
+            }
+        }
 
         CaptureBaselineSnapshotIfRequested();
         if (Renderer is VulkanRenderer benchmarkRenderer)

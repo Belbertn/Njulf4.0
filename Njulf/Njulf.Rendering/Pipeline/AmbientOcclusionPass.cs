@@ -20,6 +20,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
         private readonly bool _gtaoRuntimeSupported;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private DescriptorSetLayout _descriptorSetLayout;
         private DescriptorPool _descriptorPool;
@@ -27,6 +28,7 @@ namespace Njulf.Rendering.Pipeline
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
+        private bool _pipelinePrepared;
 
         public AmbientOcclusionPass(
             VulkanContext context,
@@ -35,21 +37,48 @@ namespace Njulf.Rendering.Pipeline
             RenderTargetManager renderTargets,
             RenderSettings settings,
             bool gtaoRuntimeSupported = true)
+            : this(
+                context,
+                swapchain,
+                bindlessHeap,
+                renderTargets,
+                settings,
+                gtaoRuntimeSupported,
+                pipelineCacheService: null)
+        {
+        }
+
+        internal AmbientOcclusionPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderTargetManager renderTargets,
+            RenderSettings settings,
+            bool gtaoRuntimeSupported,
+            GiPipelineCacheService? pipelineCacheService)
             : base("AmbientOcclusionPass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _gtaoRuntimeSupported = gtaoRuntimeSupported;
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
         public override void Initialize()
         {
             CreateDescriptorSetLayout();
-            CreatePipelineCache();
             CreatePipelineLayout();
-            CreatePipeline();
             RecreateDescriptorSet();
+            if (RendererBuildConfiguration.PipelineStartupMode ==
+                    RendererPipelineStartupMode.Exhaustive ||
+                _settings.AmbientOcclusion.Enabled &&
+                ResolveEffectiveMode(
+                    _settings.AmbientOcclusion.Mode,
+                    _gtaoRuntimeSupported) == AmbientOcclusionMode.Ssao)
+            {
+                PreparePipeline();
+            }
         }
 
         public override bool SupportsSecondaryCommandBuffer => true;
@@ -91,7 +120,22 @@ namespace Njulf.Rendering.Pipeline
             sceneData.AmbientOcclusionBias = enabled ? ao.Bias : 0.0f;
             sceneData.AmbientOcclusionSampleCount = enabled ? ao.SampleCount : 0;
             sceneData.AmbientOcclusionBlurRadius = enabled ? ao.BlurRadius : 0;
-            return enabled && effectiveMode == AmbientOcclusionMode.Ssao;
+            bool shouldExecute =
+                enabled && effectiveMode == AmbientOcclusionMode.Ssao;
+            if (shouldExecute)
+                PreparePipeline();
+            return shouldExecute;
+        }
+
+        internal bool IsPrepared => _pipelinePrepared;
+
+        internal void PreparePipeline()
+        {
+            if (_pipelinePrepared)
+                return;
+            CreatePipelineCache();
+            CreatePipeline();
+            _pipelinePrepared = true;
         }
 
         internal static AmbientOcclusionMode ResolveEffectiveMode(
@@ -196,11 +240,13 @@ namespace Njulf.Rendering.Pipeline
                 _descriptorSetLayout = default;
             }
 
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
                 _pipelineCache = default;
             }
+
+            _pipelinePrepared = false;
 
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);
@@ -239,6 +285,12 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
             Result result = _context.Api.CreatePipelineCache(_context.Device, &cacheInfo, null, out _pipelineCache);
             if (result != Result.Success)
@@ -273,6 +325,8 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipeline()
         {
+            long pipelineStart =
+                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule shaderModule = default;
             try
             {
@@ -300,6 +354,9 @@ namespace Njulf.Rendering.Pipeline
             {
                 if (shaderModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
+                _pipelineCacheService?.EndPipelineCreation(
+                    "AmbientOcclusion.Ssao",
+                    pipelineStart);
             }
         }
 

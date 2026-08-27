@@ -36,6 +36,8 @@ namespace Njulf.Rendering.Resources
         public uint MeshletLod2Offset;
         public uint MeshletLod2Count;
         public uint MeshletLodGeneratedCount;
+        public float MeshletLod1SimplificationError;
+        public float MeshletLod2SimplificationError;
         public uint LocalVertexIndexOffset;
         public uint LocalVertexIndexCount;
         public uint LocalTriangleIndexOffset;
@@ -231,7 +233,9 @@ namespace Njulf.Rendering.Resources
                 int lod2MeshletCount,
                 GPUVertexSkinningData[]? skinningData = null,
                 GiPrimitiveTransportProfile? primitiveTransportProfile = null,
-                ModelGiCausticHeroTopologyEvidence causticTopologyEvidence = default)
+                ModelGiCausticHeroTopologyEvidence causticTopologyEvidence = default,
+                float lod1SimplificationError = -1f,
+                float lod2SimplificationError = -1f)
             {
                 Vertices = vertices ?? throw new ArgumentNullException(nameof(vertices));
                 Indices = indices ?? throw new ArgumentNullException(nameof(indices));
@@ -248,6 +252,10 @@ namespace Njulf.Rendering.Resources
                 Lod0MeshletCount = lod0MeshletCount;
                 Lod1MeshletCount = lod1MeshletCount;
                 Lod2MeshletCount = lod2MeshletCount;
+                Lod1SimplificationError =
+                    ValidateSimplificationError(lod1SimplificationError);
+                Lod2SimplificationError =
+                    ValidateSimplificationError(lod2SimplificationError);
                 GenerateMeshlets = false;
                 HasPrebuiltMeshlets = true;
                 SkinningData = skinningData ?? Array.Empty<GPUVertexSkinningData>();
@@ -274,7 +282,9 @@ namespace Njulf.Rendering.Resources
                 int lod2MeshletCount,
                 GPUVertexSkinningData[]? skinningData = null,
                 GiPrimitiveTransportProfile? primitiveTransportProfile = null,
-                ModelGiCausticHeroTopologyEvidence causticTopologyEvidence = default)
+                ModelGiCausticHeroTopologyEvidence causticTopologyEvidence = default,
+                float lod1SimplificationError = -1f,
+                float lod2SimplificationError = -1f)
             {
                 VertexPositions = vertexPositions ?? throw new ArgumentNullException(nameof(vertexPositions));
                 VertexNormalTangents = vertexNormalTangents ?? throw new ArgumentNullException(nameof(vertexNormalTangents));
@@ -293,6 +303,10 @@ namespace Njulf.Rendering.Resources
                 Lod0MeshletCount = lod0MeshletCount;
                 Lod1MeshletCount = lod1MeshletCount;
                 Lod2MeshletCount = lod2MeshletCount;
+                Lod1SimplificationError =
+                    ValidateSimplificationError(lod1SimplificationError);
+                Lod2SimplificationError =
+                    ValidateSimplificationError(lod2SimplificationError);
                 GenerateMeshlets = false;
                 HasPrebuiltMeshlets = true;
                 SkinningData = skinningData ?? Array.Empty<GPUVertexSkinningData>();
@@ -322,8 +336,13 @@ namespace Njulf.Rendering.Resources
             internal int Lod0MeshletCount { get; }
             internal int Lod1MeshletCount { get; }
             internal int Lod2MeshletCount { get; }
+            internal float Lod1SimplificationError { get; }
+            internal float Lod2SimplificationError { get; }
             internal GiPrimitiveTransportProfile? PrimitiveTransportProfile { get; }
             internal ModelGiCausticHeroTopologyEvidence CausticTopologyEvidence { get; }
+
+            private static float ValidateSimplificationError(float value) =>
+                float.IsFinite(value) && value >= 0f ? value : -1f;
 
             private static GiPrimitiveTransportProfile? ValidateAndCloneTransportProfile(
                 GiPrimitiveTransportProfile? profile,
@@ -577,6 +596,10 @@ namespace Njulf.Rendering.Resources
                         meshInfo.MeshletLod1Count = CheckedCount(mesh.Lod1MeshletCount);
                         meshInfo.MeshletLod2Offset = CheckedAdd(meshInfo.MeshletLod1Offset, meshInfo.MeshletLod1Count);
                         meshInfo.MeshletLod2Count = CheckedCount(mesh.Lod2MeshletCount);
+                        meshInfo.MeshletLod1SimplificationError =
+                            mesh.Lod1SimplificationError;
+                        meshInfo.MeshletLod2SimplificationError =
+                            mesh.Lod2SimplificationError;
                         meshInfo.MeshletLodGeneratedCount = CheckedCount(meshlets.Count);
                         ApplyMeshletQualityStats(ref meshInfo, meshlets);
                         ApplyGlobalMeshletOffsets(meshlets, meshInfo);
@@ -848,8 +871,12 @@ namespace Njulf.Rendering.Resources
                 MeshletLod2Offset = meshInfo.MeshletLod2Offset,
                 MeshletLod2Count = meshInfo.MeshletLod2Count,
                 MeshletLodGeneratedCount = meshInfo.MeshletLodGeneratedCount,
-                Padding0 = 0,
-                Padding1 = 0
+                MeshletLod1ErrorBits = unchecked((uint)
+                    BitConverter.SingleToInt32Bits(
+                        meshInfo.MeshletLod1SimplificationError)),
+                MeshletLod2ErrorBits = unchecked((uint)
+                    BitConverter.SingleToInt32Bits(
+                        meshInfo.MeshletLod2SimplificationError))
             };
         }
 
@@ -2854,6 +2881,10 @@ namespace Njulf.Rendering.Resources
             meshInfo.MeshletLod1Count = CheckedCount(lod1.MeshletCount);
             meshInfo.MeshletLod2Offset = CheckedAdd(baseMeshletOffset, CheckedCount(lod2.FirstMeshlet));
             meshInfo.MeshletLod2Count = CheckedCount(lod2.MeshletCount);
+            meshInfo.MeshletLod1SimplificationError =
+                built.SimplificationErrors[1];
+            meshInfo.MeshletLod2SimplificationError =
+                built.SimplificationErrors[2];
             meshInfo.MeshletLodGeneratedCount = CheckedCount(built.Meshlets.Length);
         }
 

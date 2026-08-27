@@ -57,7 +57,9 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.ForwardMaterialDataBuffer, Is.EqualTo(BindlessIndex.AreaRayShadowMaskBufferFrame1 + 1));
             Assert.That(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase, Is.EqualTo(BindlessIndex.ForwardMaterialDataBuffer + 1));
             Assert.That(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase + 1));
-            Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1 + 1));
+            Assert.That(BindlessIndex.SceneGpuLodHistoryBufferBase, Is.EqualTo(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1 + 1));
+            Assert.That(BindlessIndex.SceneGpuLodHistoryBufferFrame1, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferBase + 1));
+            Assert.That(BindlessIndex.StaticBufferCount, Is.EqualTo(BindlessIndex.SceneGpuLodHistoryBufferFrame1 + 1));
             Assert.That(BindlessIndex.AreaLightLtcMatrixTexture, Is.EqualTo(BindlessIndex.PrefilteredEnvironmentNextTexture + 1));
             Assert.That(BindlessIndex.AreaLightLtcAmplitudeTexture, Is.EqualTo(BindlessIndex.AreaLightLtcMatrixTexture + 1));
             Assert.That(BindlessIndex.SimpleDdgiSampledIrradianceTextureBase, Is.EqualTo(BindlessIndex.AreaLightLtcAmplitudeTexture + 1));
@@ -77,6 +79,8 @@ public sealed class BindlessIndexTests
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.ForwardMaterialDataBuffer), Is.EqualTo(nameof(BindlessIndex.ForwardMaterialDataBuffer)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase)));
             Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1), Is.EqualTo(nameof(BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SceneGpuLodHistoryBufferBase), Is.EqualTo(nameof(BindlessIndex.SceneGpuLodHistoryBufferBase)));
+            Assert.That(BindlessIndex.GetIndexName(BindlessIndex.SceneGpuLodHistoryBufferFrame1), Is.EqualTo(nameof(BindlessIndex.SceneGpuLodHistoryBufferFrame1)));
             Assert.That(
                 BindlessIndex.FirstDynamicTextureIndex,
                 Is.EqualTo(BindlessIndex.GtaoDebugTexture + 1));
@@ -148,6 +152,8 @@ public sealed class BindlessIndexTests
             ["FORWARD_MATERIAL_DATA_BUFFER_INDEX"] = BindlessIndex.ForwardMaterialDataBuffer,
             ["SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_BASE_INDEX"] = BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferBase,
             ["SIMPLE_DDGI_RECEIVER_GATHER_SURFACE_BUFFER_FRAME1_INDEX"] = BindlessIndex.SimpleDdgiReceiverGatherSurfaceBufferFrame1,
+            ["SCENE_GPU_LOD_HISTORY_BUFFER_BASE_INDEX"] = BindlessIndex.SceneGpuLodHistoryBufferBase,
+            ["SCENE_GPU_LOD_HISTORY_BUFFER_FRAME1_INDEX"] = BindlessIndex.SceneGpuLodHistoryBufferFrame1,
             ["AREA_LIGHT_LTC_MATRIX_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcMatrixTexture,
             ["AREA_LIGHT_LTC_AMPLITUDE_TEXTURE_INDEX"] = BindlessIndex.AreaLightLtcAmplitudeTexture,
             ["OPAQUE_SCENE_COLOR_SNAPSHOT_TEXTURE_INDEX"] = BindlessIndex.OpaqueSceneColorSnapshotTexture,

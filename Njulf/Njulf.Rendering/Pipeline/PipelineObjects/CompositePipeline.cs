@@ -15,6 +15,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
 
         private VkPipeline _pipeline;
@@ -23,13 +24,30 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private bool _disposed;
 
         public CompositePipeline(VulkanContext context, BindlessHeap bindlessHeap, Format colorFormat)
+            : this(
+                context,
+                bindlessHeap,
+                colorFormat,
+                pipelineCacheService: null)
+        {
+        }
+
+        internal CompositePipeline(
+            VulkanContext context,
+            BindlessHeap bindlessHeap,
+            Format colorFormat,
+            GiPipelineCacheService? pipelineCacheService)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             GraphicsPipelineFactory.ValidatePushConstantRange(_context, (uint)Marshal.SizeOf<GPUCompositePushConstants>(), "Composite pass");
-            _pipelineCache = GraphicsPipelineFactory.CreatePipelineCache(_context, "Tone Map Composite Pipeline Cache");
+            _pipelineCache = _pipelineCacheService?.Cache ??
+                GraphicsPipelineFactory.CreatePipelineCache(
+                    _context,
+                    "Tone Map Composite Pipeline Cache");
             CreatePipelineLayout();
             CreatePipeline(colorFormat);
         }
@@ -61,6 +79,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipeline(Format colorFormat)
         {
+            long pipelineStart =
+                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule vertexModule = new ShaderModule();
             ShaderModule fragmentModule = new ShaderModule();
 
@@ -78,6 +98,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 DestroyShaderModule(fragmentModule);
                 DestroyShaderModule(vertexModule);
+                _pipelineCacheService?.EndPipelineCreation(
+                    "Composite.ToneMap",
+                    pipelineStart);
             }
         }
 
@@ -179,7 +202,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline();
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);

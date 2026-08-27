@@ -52,7 +52,7 @@ public sealed class SimpleDdgiSampledAtlasTests
             Assert.That(BindlessIndex.SimpleDdgiSampledVisibilityTextureBase +
                 BindlessIndex.MaxSimpleDdgiSampledAtlasTextureGroups,
                 Is.EqualTo(BindlessIndex.OpaqueSceneColorSnapshotTexture));
-            Assert.That(BindlessIndex.OpaqueSceneColorSnapshotTexture + 1,
+            Assert.That(BindlessIndex.GtaoDebugTexture + 1,
                 Is.EqualTo(BindlessIndex.FirstDynamicTextureIndex));
         });
     }

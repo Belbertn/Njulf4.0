@@ -318,7 +318,8 @@ public enum SimpleDdgiNearFieldResidualGpuResourceKind : byte
     SurfaceTable = 25,
     ActiveTileAndIndirect = 26,
     SchedulerHistory0 = 27,
-    SchedulerHistory1 = 28
+    SchedulerHistory1 = 28,
+    TraceRasterDepth = 29
 }
 
 /// <summary>
@@ -397,6 +398,10 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         { get; init; } = new(0UL, 0UL,
             SimpleDdgiNearFieldResidualGpuResourceKind.SchedulerHistory1);
 
+    public SimpleDdgiNearFieldResidualGpuResource TraceRasterDepth
+        { get; init; } = new(0UL, 0UL,
+            SimpleDdgiNearFieldResidualGpuResourceKind.TraceRasterDepth);
+
     public void Validate(in SimpleDdgiNearFieldResidualLayout layout)
     {
         if (AllocationId == 0UL)
@@ -434,6 +439,9 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
         ValidateResource(ReceiverPayload, layout.ReceiverPayloadBytes,
             SimpleDdgiNearFieldResidualGpuResourceKind.ReceiverPayload,
             nameof(ReceiverPayload));
+        ValidateResource(TraceRasterDepth, layout.TraceRasterDepthBytes,
+            SimpleDdgiNearFieldResidualGpuResourceKind.TraceRasterDepth,
+            nameof(TraceRasterDepth));
         ValidateResource(TraceFrameConstants0, layout.TraceFrameConstantsBytes / 2UL,
             SimpleDdgiNearFieldResidualGpuResourceKind.TraceFrameConstants0,
             nameof(TraceFrameConstants0));
@@ -537,6 +545,7 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
 
         ulong actualBytes = checked(
             DirectDiffuseEmissiveSource.Bytes + ReceiverPayload.Bytes +
+            TraceRasterDepth.Bytes +
             TraceFrameConstants0.Bytes + TraceFrameConstants1.Bytes +
             PreparedDepthFootprint.Bytes + PreparedReceiverPayload.Bytes +
             PreparedMotion.Bytes + SourceLuminance.Bytes + RawCandidate.Bytes +
@@ -568,6 +577,7 @@ public sealed record SimpleDdgiNearFieldResidualGpuAllocation(
     {
         yield return DirectDiffuseEmissiveSource;
         yield return ReceiverPayload;
+        yield return TraceRasterDepth;
         yield return TraceFrameConstants0;
         yield return TraceFrameConstants1;
         yield return PreparedDepthFootprint;

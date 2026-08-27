@@ -59,11 +59,7 @@ void main()
     uint drawBufferBaseIndex = ForwardDrawBufferBaseIndex(
         pc.Push.MeshletDrawBufferBaseIndex);
     uint drawCommandIndex = localDrawIndex +
-        (drawBufferBaseIndex ==
-             uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX)
-            ? ForwardTransparentFirstDraw(
-                pc.Push.MeshletDrawBufferBaseIndex)
-            : 0u);
+        ForwardFirstDraw(pc.Push.MeshletDrawBufferBaseIndex);
 #else
     if (forwardPayload.Visible == 0u)
     {

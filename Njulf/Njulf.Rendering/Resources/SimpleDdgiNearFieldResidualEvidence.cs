@@ -13,7 +13,7 @@ public static class SimpleDdgiNearFieldResidualEvidenceAbi
     // V6 additionally binds device/tier identity and the production P95 GPU
     // time ceiling. Prior artifacts could be reused across incompatible
     // hardware or hide frame spikes behind an equal-cost average.
-    public const uint Version = 0x4335_0106u;
+    public const uint Version = 0x4335_0107u;
 
     // These values deliberately live in the evidence ABI rather than in a
     // preset.  Changing a promotion floor invalidates prior evidence.
@@ -723,6 +723,7 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
         ulong hash = FnvOffsetBasis;
         hash = Add(hash, (ulong)(uint)SimpleDdgiNearFieldResidualEvidenceAbi.Version);
         hash = Add(hash, (ulong)(uint)profile.SourceFormat);
+        hash = Add(hash, (ulong)(uint)profile.SourceProducerMode);
         hash = Add(hash, (ulong)(uint)profile.Preset);
         hash = Add(hash, BitConverter.SingleToUInt32Bits(profile.ResolutionScale));
         hash = Add(hash, BitConverter.SingleToUInt32Bits(
@@ -745,10 +746,12 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
         ulong hash = FnvOffsetBasis;
         hash = Add(hash, (ulong)(uint)SimpleDdgiNearFieldResidualEvidenceAbi.Version);
         hash = Add(hash, (ulong)(uint)layout.SourceFormat);
+        hash = Add(hash, (ulong)(uint)layout.SourceProducerMode);
         hash = Add(hash, BitConverter.SingleToUInt32Bits(layout.TraceResolutionScale));
         hash = Add(hash, (ulong)(uint)layout.FilterIterationCount);
         hash = Add(hash, layout.TraceSourceBytes != 0UL ? 1UL : 0UL);
         hash = Add(hash, layout.ReceiverPayloadBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.TraceRasterDepthBytes != 0UL ? 1UL : 0UL);
         hash = Add(hash, layout.TraceFrameConstantsBytes != 0UL ? 1UL : 0UL);
         hash = Add(hash, layout.PreparedDepthFootprintBytes != 0UL ? 1UL : 0UL);
         hash = Add(hash, layout.PreparedReceiverPayloadBytes != 0UL ? 1UL : 0UL);
@@ -764,6 +767,7 @@ public static class SimpleDdgiNearFieldResidualEvidenceEvaluator
         hash = Add(hash, layout.FilterScratchBytes != 0UL ? 1UL : 0UL);
         hash = Add(hash, layout.SurfaceTableBytes != 0UL ? 1UL : 0UL);
         hash = Add(hash, layout.ActiveTileAndIndirectBytes != 0UL ? 1UL : 0UL);
+        hash = Add(hash, layout.SchedulerHistoryBytes != 0UL ? 1UL : 0UL);
         hash = Add(hash, layout.TileBuffersBytes != 0UL ? 1UL : 0UL);
         hash = Add(hash, layout.TelemetryReadbackBytes != 0UL ? 1UL : 0UL);
         return Add(hash, layout.IsValid ? 1UL : 0UL);

@@ -412,7 +412,13 @@ internal sealed unsafe class SimpleDdgiNearFieldResidualGpuCommandRecorder : IDi
                     SimpleDdgiNearFieldResidualGpuAbi
                         .MaximumSurfaceTableEntryCount) << 16)),
             TileCapacity = tileCapacity,
-            RaysPerPixel = checked((uint)_configuration.RaysPerPixel),
+            // The high bit is an ABI-stamped prepare-only producer selector;
+            // the low byte retains the exact 1..4 ray count.
+            RaysPerPixel = checked((uint)_configuration.RaysPerPixel) |
+                (_layout.SourceProducerMode ==
+                    SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster
+                    ? 0x8000_0000u
+                    : 0u),
             NearPlane = MathF.Max(nearPlane, 0.001f),
             FarPlane = MathF.Max(farPlane, MathF.Max(nearPlane, 0.001f) + 0.01f),
             ActiveTileHeaderWords =

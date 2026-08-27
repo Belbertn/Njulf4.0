@@ -54,7 +54,8 @@ public sealed record ProcessedMeshLodRange(
     int Level,
     int FirstMeshlet,
     int MeshletCount,
-    float ScreenCoverageThreshold);
+    float ScreenCoverageThreshold,
+    float SimplificationError = -1f);
 
 public sealed record ProcessedSubMeshAsset(
     string Name,

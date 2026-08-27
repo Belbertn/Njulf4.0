@@ -932,6 +932,8 @@ namespace Njulf.Tests
                 AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.FarPlane), "OFFSET_GPU_LIGHT_CULL_PUSH_FAR_PLANE");
                 AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.LightCount), "OFFSET_GPU_LIGHT_CULL_PUSH_LIGHT_COUNT");
                 AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.TileCountY), "OFFSET_GPU_LIGHT_CULL_PUSH_TILE_COUNT_Y");
+                AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.TotalClusterCount), "OFFSET_GPU_LIGHT_CULL_PUSH_TOTAL_CLUSTER_COUNT");
+                AssertFieldOffset<GPULightCullPushConstants>(nameof(GPULightCullPushConstants.LightIndexCapacity), "OFFSET_GPU_LIGHT_CULL_PUSH_LIGHT_INDEX_CAPACITY");
 
                 AssertFieldOffset<GPUShadowData>(nameof(GPUShadowData.LightViewProjection0), "OFFSET_GPU_SHADOW_DATA_LIGHT_VIEW_PROJECTION0");
                 AssertFieldOffset<GPUShadowData>(nameof(GPUShadowData.LightViewProjection1), "OFFSET_GPU_SHADOW_DATA_LIGHT_VIEW_PROJECTION1");

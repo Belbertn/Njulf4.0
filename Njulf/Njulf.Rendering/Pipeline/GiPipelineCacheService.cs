@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Njulf.Rendering.Core;
 using Silk.NET.Vulkan;
 
@@ -11,6 +13,8 @@ namespace Njulf.Rendering.Pipeline;
 
 public readonly record struct GiPipelineCacheTelemetry(
     bool CacheLoaded,
+    bool RuntimeCacheLoaded,
+    bool SeedCacheLoaded,
     bool CacheRejected,
     bool CacheSaved,
     ulong LoadedPayloadBytes,
@@ -22,8 +26,20 @@ public readonly record struct GiPipelineCacheTelemetry(
     string LoadStatus,
     string LastCreatedPipeline)
 {
+    public bool ShaderBundleChanged { get; init; }
+
+    public bool BuildConfigurationChanged { get; init; }
+
+    public bool LegacyEnvelopeLoaded { get; init; }
+
+    public bool WarmEligible =>
+        RuntimeCacheLoaded &&
+        !ShaderBundleChanged &&
+        !BuildConfigurationChanged &&
+        !LegacyEnvelopeLoaded;
+
     public static GiPipelineCacheTelemetry Empty { get; } =
-        new(false, false, false, 0, 0, 0, 0, 0,
+        new(false, false, false, false, false, 0, 0, 0, 0, 0,
             string.Empty, "Not initialized", string.Empty);
 }
 
@@ -34,7 +50,8 @@ internal sealed record GiPipelineCacheIdentity(
     uint ApiVersion,
     byte[] PipelineCacheUuid,
     byte[] ShaderBundleHash,
-    byte[] EngineAbiHash);
+    byte[] EngineAbiHash,
+    byte[] BuildConfigurationHash);
 
 /// <summary>
 /// Fixed, checksummed envelope around the opaque Vulkan cache blob. Vulkan's
@@ -45,9 +62,12 @@ internal sealed record GiPipelineCacheIdentity(
 internal static class GiPipelineCacheFileCodec
 {
     private static ReadOnlySpan<byte> Magic => "NJGIPC01"u8;
-    internal const uint FormatVersion = 1;
-    internal const int HeaderSize = 152;
-    internal const int MaximumPayloadBytes = 256 * 1024 * 1024;
+    internal const uint LegacyFormatVersion = 1;
+    internal const int LegacyHeaderSize = 152;
+    internal const uint FormatVersion = 2;
+    internal const int HeaderSize = 184;
+    internal const int MinimumHeaderSize = LegacyHeaderSize;
+    internal const int MaximumPayloadBytes = 512 * 1024 * 1024;
 
     internal static byte[] Encode(
         GiPipelineCacheIdentity identity,
@@ -69,10 +89,11 @@ internal static class GiPipelineCacheFileCodec
         identity.PipelineCacheUuid.CopyTo(header[32..48]);
         identity.ShaderBundleHash.CopyTo(header[48..80]);
         identity.EngineAbiHash.CopyTo(header[80..112]);
+        identity.BuildConfigurationHash.CopyTo(header[112..144]);
         BinaryPrimitives.WriteUInt64LittleEndian(
-            header[112..],
+            header[144..],
             checked((ulong)payload.Length));
-        SHA256.HashData(payload, header[120..152]);
+        SHA256.HashData(payload, header[152..184]);
         payload.CopyTo(encoded.AsSpan(HeaderSize));
         return encoded;
     }
@@ -82,10 +103,14 @@ internal static class GiPipelineCacheFileCodec
         GiPipelineCacheIdentity expected,
         out byte[] payload,
         out bool shaderBundleChanged,
+        out bool buildConfigurationChanged,
+        out bool legacyEnvelopeLoaded,
         out string reason)
     {
         payload = Array.Empty<byte>();
         shaderBundleChanged = false;
+        buildConfigurationChanged = false;
+        legacyEnvelopeLoaded = false;
         reason = string.Empty;
         try
         {
@@ -97,14 +122,43 @@ internal static class GiPipelineCacheFileCodec
             return false;
         }
 
-        if (encoded.Length < HeaderSize)
+        if (encoded.Length < MinimumHeaderSize)
             return Reject("Cache file is truncated.", out reason);
         if (!encoded[..8].SequenceEqual(Magic))
             return Reject("Cache magic is not recognized.", out reason);
-        if (BinaryPrimitives.ReadUInt32LittleEndian(encoded[8..]) != FormatVersion)
-            return Reject("Cache envelope version does not match.", out reason);
-        if (BinaryPrimitives.ReadUInt32LittleEndian(encoded[12..]) != HeaderSize)
+
+        uint formatVersion =
+            BinaryPrimitives.ReadUInt32LittleEndian(encoded[8..]);
+        int headerSize;
+        int payloadLengthOffset;
+        int payloadChecksumOffset;
+        switch (formatVersion)
+        {
+            case LegacyFormatVersion:
+                headerSize = LegacyHeaderSize;
+                payloadLengthOffset = 112;
+                payloadChecksumOffset = 120;
+                legacyEnvelopeLoaded = true;
+                buildConfigurationChanged = true;
+                break;
+            case FormatVersion:
+                headerSize = HeaderSize;
+                payloadLengthOffset = 144;
+                payloadChecksumOffset = 152;
+                break;
+            default:
+                return Reject(
+                    "Cache envelope version does not match.",
+                    out reason);
+        }
+
+        if (encoded.Length < headerSize)
+            return Reject("Cache file is truncated.", out reason);
+        if (BinaryPrimitives.ReadUInt32LittleEndian(encoded[12..]) !=
+            headerSize)
+        {
             return Reject("Cache header size does not match.", out reason);
+        }
         if (BinaryPrimitives.ReadUInt32LittleEndian(encoded[16..]) != expected.VendorId ||
             BinaryPrimitives.ReadUInt32LittleEndian(encoded[20..]) != expected.DeviceId ||
             BinaryPrimitives.ReadUInt32LittleEndian(encoded[24..]) != expected.DriverVersion ||
@@ -118,29 +172,69 @@ internal static class GiPipelineCacheFileCodec
         if (!CryptographicOperations.FixedTimeEquals(
                 encoded[80..112], expected.EngineAbiHash))
             return Reject("GI engine ABI changed.", out reason);
+        if (!legacyEnvelopeLoaded)
+        {
+            buildConfigurationChanged =
+                !CryptographicOperations.FixedTimeEquals(
+                    encoded[112..144],
+                    expected.BuildConfigurationHash);
+        }
 
         ulong declaredLength =
-            BinaryPrimitives.ReadUInt64LittleEndian(encoded[112..]);
+            BinaryPrimitives.ReadUInt64LittleEndian(
+                encoded[payloadLengthOffset..]);
         if (declaredLength > MaximumPayloadBytes ||
-            declaredLength != checked((ulong)(encoded.Length - HeaderSize)))
+            declaredLength != checked((ulong)(encoded.Length - headerSize)))
         {
             return Reject("Cache payload length is invalid.", out reason);
         }
 
-        ReadOnlySpan<byte> sourcePayload = encoded[HeaderSize..];
+        ReadOnlySpan<byte> sourcePayload = encoded[headerSize..];
         Span<byte> actualHash = stackalloc byte[32];
         SHA256.HashData(sourcePayload, actualHash);
         if (!CryptographicOperations.FixedTimeEquals(
-                encoded[120..152], actualHash))
+                encoded[payloadChecksumOffset..(payloadChecksumOffset + 32)],
+                actualHash))
             return Reject("Cache payload checksum failed.", out reason);
 
         payload = sourcePayload.ToArray();
         shaderBundleChanged = !CryptographicOperations.FixedTimeEquals(
             encoded[48..80], expected.ShaderBundleHash);
-        reason = shaderBundleChanged
-            ? "Compatible cache loaded from a different shader bundle."
-            : "Compatible cache loaded.";
+        reason = DescribeCompatibleCache(
+            shaderBundleChanged,
+            buildConfigurationChanged,
+            legacyEnvelopeLoaded);
         return true;
+    }
+
+    private static string DescribeCompatibleCache(
+        bool shaderBundleChanged,
+        bool buildConfigurationChanged,
+        bool legacyEnvelopeLoaded)
+    {
+        if (legacyEnvelopeLoaded && shaderBundleChanged)
+        {
+            return "Compatible legacy cache loaded from a different shader " +
+                   "bundle; build configuration provenance is unavailable.";
+        }
+        if (legacyEnvelopeLoaded)
+        {
+            return "Compatible legacy cache loaded; build configuration " +
+                   "provenance is unavailable.";
+        }
+        if (shaderBundleChanged && buildConfigurationChanged)
+        {
+            return "Compatible cache loaded from a different shader bundle " +
+                   "and build configuration.";
+        }
+        if (shaderBundleChanged)
+            return "Compatible cache loaded from a different shader bundle.";
+        if (buildConfigurationChanged)
+        {
+            return "Compatible cache loaded from a different build " +
+                   "configuration.";
+        }
+        return "Compatible cache loaded.";
     }
 
     private static bool Reject(string message, out string reason)
@@ -158,6 +252,12 @@ internal static class GiPipelineCacheFileCodec
             throw new ArgumentException("Shader hash must be 32 bytes.", nameof(identity));
         if (identity.EngineAbiHash is not { Length: 32 })
             throw new ArgumentException("Engine ABI hash must be 32 bytes.", nameof(identity));
+        if (identity.BuildConfigurationHash is not { Length: 32 })
+        {
+            throw new ArgumentException(
+                "Build configuration hash must be 32 bytes.",
+                nameof(identity));
+        }
     }
 }
 
@@ -172,32 +272,57 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
     private const string EngineAbi =
         "Njulf.GI.PipelineCache/1;SimpleDdgiPush=136;BindlessABI=20260809";
     private readonly object _gate = new();
+    private readonly object _pipelineCreationGate = new();
     private readonly VulkanContext _context;
     private readonly GiPipelineCacheIdentity _identity;
     private readonly string _cachePath;
+    private readonly string _seedCachePath;
     private PipelineCache _cache;
     private bool _renderCriticalFramesStarted;
     private bool _dirty;
     private bool _disposed;
+    private bool _disposeStarted;
     private bool _cacheLoaded;
+    private bool _runtimeCacheLoaded;
+    private bool _seedCacheLoaded;
     private bool _cacheRejected;
     private bool _cacheSaved;
     private bool _loadedFromDifferentShaderBundle;
+    private bool _loadedFromDifferentBuildConfiguration;
+    private bool _legacyEnvelopeLoaded;
     private ulong _loadedPayloadBytes;
     private ulong _savedPayloadBytes;
     private ulong _pipelineCreationCount;
     private long _pipelineCreationMicroseconds;
     private ulong _renderCriticalPipelineCreationCount;
+    private ulong _cacheMutationGeneration;
     private string _loadStatus = "Empty cache created.";
     private string _lastCreatedPipeline = string.Empty;
+    private Task<bool>? _scheduledPersistTask;
 
     public GiPipelineCacheService(
         VulkanContext context,
         string shaderBundleHash,
         string? cacheDirectory = null)
+        : this(
+            context,
+            shaderBundleHash,
+            "unknown",
+            cacheDirectory)
+    {
+    }
+
+    public GiPipelineCacheService(
+        VulkanContext context,
+        string shaderBundleHash,
+        string compileConfiguration,
+        string? cacheDirectory)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
-        _identity = CreateIdentity(context, shaderBundleHash);
+        _identity = CreateIdentity(
+            context,
+            shaderBundleHash,
+            compileConfiguration);
         string? configuredCacheDirectory =
             string.IsNullOrWhiteSpace(cacheDirectory)
                 ? Environment.GetEnvironmentVariable(
@@ -213,6 +338,14 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         _cachePath = Path.Combine(
             root,
             $"gi-{_identity.VendorId:x8}-{_identity.DeviceId:x8}.njvkcache");
+        string? configuredSeedDirectory = Environment.GetEnvironmentVariable(
+            "NJULF_VULKAN_PIPELINE_CACHE_SEED_DIRECTORY");
+        string seedRoot = string.IsNullOrWhiteSpace(configuredSeedDirectory)
+            ? Path.Combine(AppContext.BaseDirectory, "PipelineCacheSeeds")
+            : Path.GetFullPath(configuredSeedDirectory);
+        _seedCachePath = Path.Combine(
+            seedRoot,
+            $"gi-{_identity.VendorId:x8}-{_identity.DeviceId:x8}.njvkcache");
 
         byte[] initialData = TryLoadCompatiblePayload();
         Result result = CreateCache(initialData, out _cache);
@@ -220,7 +353,11 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         {
             _cacheRejected = true;
             _cacheLoaded = false;
+            _runtimeCacheLoaded = false;
+            _seedCacheLoaded = false;
             _loadedFromDifferentShaderBundle = false;
+            _loadedFromDifferentBuildConfiguration = false;
+            _legacyEnvelopeLoaded = false;
             _loadedPayloadBytes = 0;
             _loadStatus = $"Driver rejected cached data ({result}); using an empty cache.";
             result = CreateCache(Array.Empty<byte>(), out _cache);
@@ -254,6 +391,8 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             {
                 return new GiPipelineCacheTelemetry(
                     _cacheLoaded,
+                    _runtimeCacheLoaded,
+                    _seedCacheLoaded,
                     _cacheRejected,
                     _cacheSaved,
                     _loadedPayloadBytes,
@@ -263,33 +402,66 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
                     _renderCriticalPipelineCreationCount,
                     _cachePath,
                     _loadStatus,
-                    _lastCreatedPipeline);
+                    _lastCreatedPipeline)
+                {
+                    ShaderBundleChanged =
+                        _loadedFromDifferentShaderBundle,
+                    BuildConfigurationChanged =
+                        _loadedFromDifferentBuildConfiguration,
+                    LegacyEnvelopeLoaded = _legacyEnvelopeLoaded
+                };
             }
         }
     }
 
-    public long BeginPipelineCreation() => Stopwatch.GetTimestamp();
+    public long BeginPipelineCreation()
+    {
+        Monitor.Enter(_pipelineCreationGate);
+        try
+        {
+            lock (_gate)
+                ObjectDisposedException.ThrowIf(_disposed || _disposeStarted, this);
+            return Stopwatch.GetTimestamp();
+        }
+        catch
+        {
+            Monitor.Exit(_pipelineCreationGate);
+            throw;
+        }
+    }
 
     public void EndPipelineCreation(string pipelineName, long startedTimestamp)
     {
-        long elapsedTicks = Math.Max(0L, Stopwatch.GetTimestamp() - startedTimestamp);
-        long microseconds = checked((long)Math.Round(
-            elapsedTicks * 1_000_000.0 / Stopwatch.Frequency));
-        lock (_gate)
+        try
         {
-            if (_disposed)
-                return;
-            _pipelineCreationCount = SaturatingIncrement(_pipelineCreationCount);
-            _pipelineCreationMicroseconds = SaturatingAdd(
-                _pipelineCreationMicroseconds,
-                microseconds);
-            if (_renderCriticalFramesStarted)
+            long elapsedTicks = Math.Max(
+                0L,
+                Stopwatch.GetTimestamp() - startedTimestamp);
+            long microseconds = checked((long)Math.Round(
+                elapsedTicks * 1_000_000.0 / Stopwatch.Frequency));
+            lock (_gate)
             {
-                _renderCriticalPipelineCreationCount = SaturatingIncrement(
-                    _renderCriticalPipelineCreationCount);
+                if (_disposed)
+                    return;
+                _pipelineCreationCount = SaturatingIncrement(
+                    _pipelineCreationCount);
+                _pipelineCreationMicroseconds = SaturatingAdd(
+                    _pipelineCreationMicroseconds,
+                    microseconds);
+                if (_renderCriticalFramesStarted)
+                {
+                    _renderCriticalPipelineCreationCount = SaturatingIncrement(
+                        _renderCriticalPipelineCreationCount);
+                }
+                _lastCreatedPipeline = pipelineName ?? string.Empty;
+                _dirty = true;
+                _cacheMutationGeneration = SaturatingIncrement(
+                    _cacheMutationGeneration);
             }
-            _lastCreatedPipeline = pipelineName ?? string.Empty;
-            _dirty = true;
+        }
+        finally
+        {
+            Monitor.Exit(_pipelineCreationGate);
         }
     }
 
@@ -307,43 +479,50 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (!_dirty && _cacheSaved)
+            if (!_dirty)
                 return true;
         }
 
         try
         {
-            nuint size = 0;
-            Result result = _context.Api.GetPipelineCacheData(
-                _context.Device,
-                _cache,
-                &size,
-                null);
-            if (result != Result.Success || size == 0 ||
-                size > GiPipelineCacheFileCodec.MaximumPayloadBytes)
+            byte[] payload;
+            ulong serializedGeneration;
+            lock (_pipelineCreationGate)
             {
-                lock (_gate)
-                    _loadStatus = $"Pipeline cache serialization unavailable ({result}, {size} bytes).";
-                return false;
-            }
-
-            byte[] payload = new byte[checked((int)size)];
-            fixed (byte* data = payload)
-            {
-                result = _context.Api.GetPipelineCacheData(
+                nuint size = 0;
+                Result result = _context.Api.GetPipelineCacheData(
                     _context.Device,
                     _cache,
                     &size,
-                    data);
-            }
-            if (result != Result.Success)
-            {
+                    null);
+                if (result != Result.Success || size == 0 ||
+                    size > GiPipelineCacheFileCodec.MaximumPayloadBytes)
+                {
+                    lock (_gate)
+                        _loadStatus = $"Pipeline cache serialization unavailable ({result}, {size} bytes).";
+                    return false;
+                }
+
+                payload = new byte[checked((int)size)];
+                fixed (byte* data = payload)
+                {
+                    result = _context.Api.GetPipelineCacheData(
+                        _context.Device,
+                        _cache,
+                        &size,
+                        data);
+                }
+                if (result != Result.Success)
+                {
+                    lock (_gate)
+                        _loadStatus = $"vkGetPipelineCacheData failed ({result}).";
+                    return false;
+                }
+                if (size != checked((nuint)payload.Length))
+                    Array.Resize(ref payload, checked((int)size));
                 lock (_gate)
-                    _loadStatus = $"vkGetPipelineCacheData failed ({result}).";
-                return false;
+                    serializedGeneration = _cacheMutationGeneration;
             }
-            if (size != checked((nuint)payload.Length))
-                Array.Resize(ref payload, checked((int)size));
 
             byte[] encoded = GiPipelineCacheFileCodec.Encode(_identity, payload);
             WriteAtomically(_cachePath, encoded);
@@ -351,10 +530,11 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             {
                 _cacheSaved = true;
                 _savedPayloadBytes = checked((ulong)payload.Length);
-                _dirty = false;
+                if (_cacheMutationGeneration == serializedGeneration)
+                    _dirty = false;
                 _loadStatus = _cacheLoaded
-                    ? _loadedFromDifferentShaderBundle
-                        ? "Compatible cache from a different shader bundle loaded and refreshed."
+                    ? HasLoadedProvenanceMismatch
+                        ? "Compatible cache with stale or legacy provenance loaded and refreshed."
                         : "Compatible cache loaded and refreshed."
                     : "Pipeline cache saved.";
             }
@@ -370,52 +550,112 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Schedules cache serialization after the first present so disk I/O and
+    /// hashing are not part of time-to-first-frame. Repeated requests coalesce.
+    /// </summary>
+    public void SchedulePersist()
+    {
+        lock (_gate)
+        {
+            if (_disposed || _disposeStarted || !_dirty)
+                return;
+            if (_scheduledPersistTask is { IsCompleted: false })
+                return;
+            _scheduledPersistTask = Task.Run(Persist);
+        }
+    }
+
     private byte[] TryLoadCompatiblePayload()
     {
+        bool runtimePresent = File.Exists(_cachePath);
+        if (runtimePresent && TryLoadCompatiblePayloadFromPath(
+                _cachePath,
+                "Writable pipeline cache",
+                runtimeCache: true,
+                out byte[] runtimePayload))
+        {
+            return runtimePayload;
+        }
+
+        bool distinctSeed = !string.Equals(
+            Path.GetFullPath(_cachePath),
+            Path.GetFullPath(_seedCachePath),
+            StringComparison.OrdinalIgnoreCase);
+        bool seedPresent = distinctSeed && File.Exists(_seedCachePath);
+        if (seedPresent && TryLoadCompatiblePayloadFromPath(
+                _seedCachePath,
+                "Read-only pipeline cache seed",
+                runtimeCache: false,
+                out byte[] seedPayload))
+        {
+            return seedPayload;
+        }
+
+        if (!runtimePresent && !seedPresent)
+        {
+            _loadStatus =
+                "No writable pipeline cache or compatible read-only seed was present.";
+        }
+        return Array.Empty<byte>();
+    }
+
+    private bool TryLoadCompatiblePayloadFromPath(
+        string path,
+        string source,
+        bool runtimeCache,
+        out byte[] payload)
+    {
+        payload = Array.Empty<byte>();
         try
         {
-            if (!File.Exists(_cachePath))
-            {
-                _loadStatus = "No compatible cache file was present.";
-                return Array.Empty<byte>();
-            }
-
-            var info = new FileInfo(_cachePath);
-            if (info.Length < GiPipelineCacheFileCodec.HeaderSize ||
+            var info = new FileInfo(path);
+            if (info.Length < GiPipelineCacheFileCodec.MinimumHeaderSize ||
                 info.Length > GiPipelineCacheFileCodec.HeaderSize +
                     (long)GiPipelineCacheFileCodec.MaximumPayloadBytes)
             {
                 _cacheRejected = true;
-                _loadStatus = "Cache file length is outside the admitted range.";
-                return Array.Empty<byte>();
+                _loadStatus =
+                    $"{source}: file length is outside the admitted range.";
+                return false;
             }
 
-            byte[] encoded = File.ReadAllBytes(_cachePath);
+            byte[] encoded = File.ReadAllBytes(path);
             if (!GiPipelineCacheFileCodec.TryDecode(
                     encoded,
                     _identity,
-                    out byte[] payload,
+                    out payload,
                     out bool shaderBundleChanged,
+                    out bool buildConfigurationChanged,
+                    out bool legacyEnvelopeLoaded,
                     out string reason))
             {
                 _cacheRejected = true;
-                _loadStatus = reason;
-                return Array.Empty<byte>();
+                _loadStatus = $"{source}: {reason}";
+                payload = Array.Empty<byte>();
+                return false;
             }
 
             _cacheLoaded = true;
+            _runtimeCacheLoaded = runtimeCache;
+            _seedCacheLoaded = !runtimeCache;
             _loadedFromDifferentShaderBundle = shaderBundleChanged;
+            _loadedFromDifferentBuildConfiguration =
+                buildConfigurationChanged;
+            _legacyEnvelopeLoaded = legacyEnvelopeLoaded;
             _loadedPayloadBytes = checked((ulong)payload.Length);
-            _loadStatus = reason;
-            return payload;
+            _loadStatus = $"{source}: {reason}";
+            _dirty = HasLoadedProvenanceMismatch;
+            return true;
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or
                 ArgumentException or CryptographicException)
         {
             _cacheRejected = true;
-            _loadStatus = $"Cache load skipped: {ex.Message}";
-            return Array.Empty<byte>();
+            _loadStatus = $"{source}: load skipped: {ex.Message}";
+            payload = Array.Empty<byte>();
+            return false;
         }
     }
 
@@ -439,7 +679,8 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
 
     private static GiPipelineCacheIdentity CreateIdentity(
         VulkanContext context,
-        string shaderBundleHash)
+        string shaderBundleHash,
+        string compileConfiguration)
     {
         PhysicalDeviceProperties properties = default;
         context.Api.GetPhysicalDeviceProperties(context.PhysicalDevice, &properties);
@@ -460,8 +701,18 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
             uuid,
             SHA256.HashData(Encoding.UTF8.GetBytes(
                 shaderBundleHash ?? string.Empty)),
-            SHA256.HashData(Encoding.UTF8.GetBytes(EngineAbi)));
+            SHA256.HashData(Encoding.UTF8.GetBytes(EngineAbi)),
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                NormalizeCompileConfiguration(compileConfiguration))));
     }
+
+    private bool HasLoadedProvenanceMismatch =>
+        _loadedFromDifferentShaderBundle ||
+        _loadedFromDifferentBuildConfiguration ||
+        _legacyEnvelopeLoaded;
+
+    private static string NormalizeCompileConfiguration(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim();
 
     private static void WriteAtomically(string path, ReadOnlySpan<byte> data)
     {
@@ -497,20 +748,42 @@ public sealed unsafe class GiPipelineCacheService : IDisposable
 
     public void Dispose()
     {
+        Task<bool>? scheduledPersistTask;
         lock (_gate)
         {
-            if (_disposed)
+            if (_disposed || _disposeStarted)
                 return;
+            _disposeStarted = true;
+            scheduledPersistTask = _scheduledPersistTask;
+        }
+        if (scheduledPersistTask != null)
+        {
+            try
+            {
+                scheduledPersistTask.GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                lock (_gate)
+                    _loadStatus =
+                        $"Scheduled pipeline cache save failed: {exception.Message}";
+            }
         }
         Persist();
-        lock (_gate)
+        lock (_pipelineCreationGate)
         {
-            if (_disposed)
-                return;
-            if (_cache.Handle != 0)
-                _context.Api.DestroyPipelineCache(_context.Device, _cache, null);
-            _cache = default;
-            _disposed = true;
+            lock (_gate)
+            {
+                if (_disposed)
+                    return;
+                if (_cache.Handle != 0)
+                    _context.Api.DestroyPipelineCache(
+                        _context.Device,
+                        _cache,
+                        null);
+                _cache = default;
+                _disposed = true;
+            }
         }
     }
 }

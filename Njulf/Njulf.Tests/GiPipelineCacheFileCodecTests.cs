@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.Linq;
+using System.Security.Cryptography;
 using Njulf.Rendering.Pipeline;
 using NUnit.Framework;
 
@@ -21,6 +23,8 @@ public sealed class GiPipelineCacheFileCodecTests
             identity,
             out byte[] restored,
             out bool shaderBundleChanged,
+            out bool buildConfigurationChanged,
+            out bool legacyEnvelopeLoaded,
             out string reason);
 
         Assert.Multiple(() =>
@@ -28,6 +32,8 @@ public sealed class GiPipelineCacheFileCodecTests
             Assert.That(decoded, Is.True, reason);
             Assert.That(restored, Is.EqualTo(payload));
             Assert.That(shaderBundleChanged, Is.False);
+            Assert.That(buildConfigurationChanged, Is.False);
+            Assert.That(legacyEnvelopeLoaded, Is.False);
             Assert.That(encoded.Length,
                 Is.EqualTo(GiPipelineCacheFileCodec.HeaderSize + payload.Length));
         });
@@ -48,6 +54,8 @@ public sealed class GiPipelineCacheFileCodecTests
             changedShader,
             out byte[] shaderPayload,
             out bool shaderBundleChanged,
+            out bool buildConfigurationChanged,
+            out bool legacyEnvelopeLoaded,
             out string shaderReason);
 
         Assert.Multiple(() =>
@@ -55,6 +63,8 @@ public sealed class GiPipelineCacheFileCodecTests
             Assert.That(shaderAccepted, Is.True, shaderReason);
             Assert.That(shaderPayload, Is.EqualTo(new byte[] { 1, 2, 3 }));
             Assert.That(shaderBundleChanged, Is.True);
+            Assert.That(buildConfigurationChanged, Is.False);
+            Assert.That(legacyEnvelopeLoaded, Is.False);
             Assert.That(shaderReason,
                 Does.Contain("different shader bundle").IgnoreCase);
         });
@@ -93,11 +103,15 @@ public sealed class GiPipelineCacheFileCodecTests
                     changed,
                     out byte[] payload,
                     out bool shaderBundleChanged,
+                    out bool buildConfigurationChanged,
+                    out bool legacyEnvelopeLoaded,
                     out string reason);
 
                 Assert.That(accepted, Is.False, name);
                 Assert.That(payload, Is.Empty, name);
                 Assert.That(shaderBundleChanged, Is.False, name);
+                Assert.That(buildConfigurationChanged, Is.False, name);
+                Assert.That(legacyEnvelopeLoaded, Is.False, name);
                 Assert.That(reason, Is.Not.Empty, name);
             }
         });
@@ -117,6 +131,8 @@ public sealed class GiPipelineCacheFileCodecTests
             identity,
             out byte[] payload,
             out bool shaderBundleChanged,
+            out bool buildConfigurationChanged,
+            out bool legacyEnvelopeLoaded,
             out string reason);
 
         Assert.Multiple(() =>
@@ -124,7 +140,69 @@ public sealed class GiPipelineCacheFileCodecTests
             Assert.That(accepted, Is.False);
             Assert.That(payload, Is.Empty);
             Assert.That(shaderBundleChanged, Is.False);
+            Assert.That(buildConfigurationChanged, Is.False);
+            Assert.That(legacyEnvelopeLoaded, Is.False);
             Assert.That(reason, Does.Contain("checksum").IgnoreCase);
+        });
+    }
+
+    [Test]
+    public void BuildConfigurationMismatch_IsAcceptedAndReportedAsProvenance()
+    {
+        GiPipelineCacheIdentity identity = CreateIdentity();
+        byte[] encoded = GiPipelineCacheFileCodec.Encode(
+            identity,
+            [5, 6, 7]);
+        GiPipelineCacheIdentity changedBuild = identity with
+        {
+            BuildConfigurationHash =
+                Enumerable.Repeat((byte)0x3C, 32).ToArray()
+        };
+
+        bool decoded = GiPipelineCacheFileCodec.TryDecode(
+            encoded,
+            changedBuild,
+            out byte[] payload,
+            out bool shaderBundleChanged,
+            out bool buildConfigurationChanged,
+            out bool legacyEnvelopeLoaded,
+            out string reason);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded, Is.True, reason);
+            Assert.That(payload, Is.EqualTo(new byte[] { 5, 6, 7 }));
+            Assert.That(shaderBundleChanged, Is.False);
+            Assert.That(buildConfigurationChanged, Is.True);
+            Assert.That(legacyEnvelopeLoaded, Is.False);
+            Assert.That(reason,
+                Does.Contain("build configuration").IgnoreCase);
+        });
+    }
+
+    [Test]
+    public void LegacyEnvelope_IsAcceptedAndRequiresColdMigration()
+    {
+        GiPipelineCacheIdentity identity = CreateIdentity();
+        byte[] encoded = EncodeLegacy(identity, [8, 9, 10]);
+
+        bool decoded = GiPipelineCacheFileCodec.TryDecode(
+            encoded,
+            identity,
+            out byte[] payload,
+            out bool shaderBundleChanged,
+            out bool buildConfigurationChanged,
+            out bool legacyEnvelopeLoaded,
+            out string reason);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded, Is.True, reason);
+            Assert.That(payload, Is.EqualTo(new byte[] { 8, 9, 10 }));
+            Assert.That(shaderBundleChanged, Is.False);
+            Assert.That(buildConfigurationChanged, Is.True);
+            Assert.That(legacyEnvelopeLoaded, Is.True);
+            Assert.That(reason, Does.Contain("legacy").IgnoreCase);
         });
     }
 
@@ -137,7 +215,41 @@ public sealed class GiPipelineCacheFileCodecTests
             .Select(value => (byte)value)
             .ToArray(),
         ShaderBundleHash: Enumerable.Repeat((byte)0x5A, 32).ToArray(),
-        EngineAbiHash: Enumerable.Repeat((byte)0xA5, 32).ToArray());
+        EngineAbiHash: Enumerable.Repeat((byte)0xA5, 32).ToArray(),
+        BuildConfigurationHash:
+            Enumerable.Repeat((byte)0xC3, 32).ToArray());
+
+    private static byte[] EncodeLegacy(
+        GiPipelineCacheIdentity identity,
+        ReadOnlySpan<byte> payload)
+    {
+        byte[] encoded = new byte[
+            GiPipelineCacheFileCodec.LegacyHeaderSize + payload.Length];
+        Span<byte> header = encoded.AsSpan(
+            0,
+            GiPipelineCacheFileCodec.LegacyHeaderSize);
+        "NJGIPC01"u8.CopyTo(header);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            header[8..],
+            GiPipelineCacheFileCodec.LegacyFormatVersion);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            header[12..],
+            GiPipelineCacheFileCodec.LegacyHeaderSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[16..], identity.VendorId);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[20..], identity.DeviceId);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[24..], identity.DriverVersion);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[28..], identity.ApiVersion);
+        identity.PipelineCacheUuid.CopyTo(header[32..48]);
+        identity.ShaderBundleHash.CopyTo(header[48..80]);
+        identity.EngineAbiHash.CopyTo(header[80..112]);
+        BinaryPrimitives.WriteUInt64LittleEndian(
+            header[112..],
+            checked((ulong)payload.Length));
+        SHA256.HashData(payload, header[120..152]);
+        payload.CopyTo(encoded.AsSpan(
+            GiPipelineCacheFileCodec.LegacyHeaderSize));
+        return encoded;
+    }
 
     private static byte[] ChangedCopy(byte[] source)
     {

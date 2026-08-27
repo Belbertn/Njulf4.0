@@ -22,6 +22,7 @@ namespace Njulf.Rendering.Pipeline
 
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private DescriptorSetLayout _outputSetLayout;
         private DescriptorPool _descriptorPool;
@@ -31,6 +32,7 @@ namespace Njulf.Rendering.Pipeline
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
         private VkPipeline _receiverFeedbackPipeline;
+        private bool _pipelinesPrepared;
 
         private readonly ISimpleDdgiReceiverFeedbackCapture?
             _receiverFeedbackRuntime;
@@ -47,11 +49,37 @@ namespace Njulf.Rendering.Pipeline
             SimpleDdgiVolumeManager? simpleDdgiVolumeManager,
             RaySceneDescriptorBank raySceneDescriptors,
             ISimpleDdgiReceiverFeedbackCapture? receiverFeedbackRuntime = null)
+            : this(
+                context,
+                swapchain,
+                bindlessHeap,
+                bufferManager,
+                renderTargets,
+                settings,
+                simpleDdgiVolumeManager,
+                raySceneDescriptors,
+                receiverFeedbackRuntime,
+                pipelineCacheService: null)
+        {
+        }
+
+        internal FogPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            BufferManager bufferManager,
+            RenderTargetManager renderTargets,
+            RenderSettings settings,
+            SimpleDdgiVolumeManager? simpleDdgiVolumeManager,
+            RaySceneDescriptorBank raySceneDescriptors,
+            ISimpleDdgiReceiverFeedbackCapture? receiverFeedbackRuntime,
+            GiPipelineCacheService? pipelineCacheService)
             : base("FogPass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _receiverFeedbackRuntime = receiverFeedbackRuntime;
+            _pipelineCacheService = pipelineCacheService;
             _froxelRenderer = new FroxelFogRenderer(
                 context,
                 bindlessHeap,
@@ -60,7 +88,8 @@ namespace Njulf.Rendering.Pipeline
                 settings,
                 simpleDdgiVolumeManager,
                 raySceneDescriptors ??
-                throw new ArgumentNullException(nameof(raySceneDescriptors)));
+                throw new ArgumentNullException(nameof(raySceneDescriptors)),
+                pipelineCacheService);
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -69,15 +98,34 @@ namespace Njulf.Rendering.Pipeline
             CreateOutputSetLayout();
             CreatePipelineCache();
             CreatePipelineLayout();
-            _pipeline = CreatePipeline("fog.comp.spv");
-            if (_settings.GlobalIllumination.SimpleDdgiReceiverFeedbackMode ==
-                SimpleDdgiReceiverFeedbackMode.ExactCompacted)
-            {
-                _receiverFeedbackPipeline = CreatePipeline("fog_b1.comp.spv");
-            }
-
             RecreateDescriptorSet();
-            _froxelRenderer.Initialize();
+        }
+
+        internal bool IsPrepared => _pipelinesPrepared;
+
+        internal void PreparePipelines()
+        {
+            if (_pipelinesPrepared)
+                return;
+
+            try
+            {
+                _pipeline = CreatePipeline("fog.comp.spv");
+                if (_settings.GlobalIllumination.SimpleDdgiReceiverFeedbackMode ==
+                    SimpleDdgiReceiverFeedbackMode.ExactCompacted)
+                {
+                    _receiverFeedbackPipeline = CreatePipeline("fog_b1.comp.spv");
+                }
+
+                _froxelRenderer.Initialize();
+                _pipelinesPrepared = true;
+            }
+            catch
+            {
+                DestroyPipeline(ref _receiverFeedbackPipeline);
+                DestroyPipeline(ref _pipeline);
+                throw;
+            }
         }
 
         public override bool SupportsSecondaryCommandBuffer => true;
@@ -130,6 +178,8 @@ namespace Njulf.Rendering.Pipeline
                 _froxelRenderer.InvalidateHistory();
                 return;
             }
+
+            PreparePipelines();
 
             bool exactFeedback = TrySelectExactFeedbackPipeline(
                 frameIndex,
@@ -231,20 +281,9 @@ namespace Njulf.Rendering.Pipeline
         public override void Cleanup()
         {
             _froxelRenderer.Dispose();
-            if (_pipeline.Handle != 0)
-            {
-                _context.Api.DestroyPipeline(_context.Device, _pipeline, null);
-                _pipeline = default;
-            }
-
-            if (_receiverFeedbackPipeline.Handle != 0)
-            {
-                _context.Api.DestroyPipeline(
-                    _context.Device,
-                    _receiverFeedbackPipeline,
-                    null);
-                _receiverFeedbackPipeline = default;
-            }
+            DestroyPipeline(ref _pipeline);
+            DestroyPipeline(ref _receiverFeedbackPipeline);
+            _pipelinesPrepared = false;
 
             DestroyDescriptorPool();
 
@@ -260,7 +299,7 @@ namespace Njulf.Rendering.Pipeline
                 _outputSetLayout = default;
             }
 
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService == null && _pipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
                 _pipelineCache = default;
@@ -362,6 +401,12 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
             Result result = _context.Api.CreatePipelineCache(_context.Device, &cacheInfo, null, out _pipelineCache);
             if (result != Result.Success)
@@ -429,13 +474,26 @@ namespace Njulf.Rendering.Pipeline
                     BasePipelineIndex = -1
                 };
 
-                Result result = _context.Api.CreateComputePipelines(
-                    _context.Device,
-                    _pipelineCache,
-                    1,
-                    &pipelineInfo,
-                    null,
-                    out VkPipeline pipeline);
+                long pipelineStart =
+                    _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+                Result result;
+                VkPipeline pipeline;
+                try
+                {
+                    result = _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out pipeline);
+                }
+                finally
+                {
+                    _pipelineCacheService?.EndPipelineCreation(
+                        $"Fog:{shaderName}",
+                        pipelineStart);
+                }
 
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create fog pass pipeline", result);
@@ -447,6 +505,15 @@ namespace Njulf.Rendering.Pipeline
                 if (shaderModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
             }
+        }
+
+        private void DestroyPipeline(ref VkPipeline pipeline)
+        {
+            if (pipeline.Handle == 0)
+                return;
+
+            _context.Api.DestroyPipeline(_context.Device, pipeline, null);
+            pipeline = default;
         }
 
         private void RecreateDescriptorSet()

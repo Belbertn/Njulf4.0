@@ -9,6 +9,17 @@ public enum SimpleDdgiNearFieldResidualFormat
     B10G11R11UfloatPack32
 }
 
+/// <summary>
+/// Selects the sole producer of C5's pre-indirect direct-light source.  The
+/// trace-resolution raster path is the production default; ForwardMrt keeps
+/// the canonical full-resolution producer available as an explicit fallback.
+/// </summary>
+public enum SimpleDdgiNearFieldSourceProducerMode : byte
+{
+    ForwardMrt = 0,
+    TraceResolutionRaster = 1
+}
+
 [Flags]
 public enum SimpleDdgiNearFieldResidualResolutionScales : uint
 {
@@ -33,6 +44,10 @@ public readonly record struct SimpleDdgiNearFieldResidualProfile(
     uint ImageRowAlignment,
     uint ImageAllocationGranularity)
 {
+    public SimpleDdgiNearFieldSourceProducerMode SourceProducerMode
+        { get; init; } =
+            SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster;
+
     public SimpleDdgiNearFieldResidualQualityPreset Preset { get; init; } =
         SimpleDdgiNearFieldResidualQualityPreset.Balanced;
 
@@ -167,8 +182,10 @@ public readonly record struct SimpleDdgiNearFieldResidualLayout(
     int TraceWidth,
     int TraceHeight,
     int FilterIterationCount,
+    SimpleDdgiNearFieldSourceProducerMode SourceProducerMode,
     ulong TraceSourceBytes,
     ulong ReceiverPayloadBytes,
+    ulong TraceRasterDepthBytes,
     ulong TraceFrameConstantsBytes,
     ulong PreparedDepthFootprintBytes,
     ulong PreparedReceiverPayloadBytes,
@@ -199,8 +216,11 @@ public readonly record struct SimpleDdgiNearFieldResidualLayout(
         TraceWidth: 0,
         TraceHeight: 0,
         FilterIterationCount: 0,
+        SourceProducerMode:
+            SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster,
         TraceSourceBytes: 0UL,
         ReceiverPayloadBytes: 0UL,
+        TraceRasterDepthBytes: 0UL,
         TraceFrameConstantsBytes: 0UL,
         PreparedDepthFootprintBytes: 0UL,
         PreparedReceiverPayloadBytes: 0UL,
@@ -229,7 +249,8 @@ public readonly record struct SimpleDdgiNearFieldResidualLayout(
         SchedulerHistoryBytes);
 
     public ulong TransientBytes => checked(
-        TraceSourceBytes + ReceiverPayloadBytes + TraceFrameConstantsBytes +
+        TraceSourceBytes + ReceiverPayloadBytes + TraceRasterDepthBytes +
+        TraceFrameConstantsBytes +
         PreparedDepthFootprintBytes + PreparedReceiverPayloadBytes +
         PreparedMotionBytes + SourceLuminanceBytes + RawCandidateBytes +
         HitMetadataBytes + FilterScratchBytes + ActiveTileAndIndirectBytes +
@@ -240,6 +261,7 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
 {
     private const int Rgba16FloatBytesPerPixel = 8;
     private const int Rgba32UintBytesPerPixel = 16;
+    private const int Depth32BytesPerPixel = 4;
     private const int Rg16FloatBytesPerPixel = 4;
     private const int Rg32FloatBytesPerPixel = 8;
     private const int R16FloatBytesPerPixel = 2;
@@ -265,6 +287,7 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
             profile.ResolutionScale < 0.125f || profile.ResolutionScale > 1.0f ||
             profile.SourceFormat !=
                 SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat ||
+            !Enum.IsDefined(profile.SourceProducerMode) ||
             !Enum.IsDefined(profile.Preset) ||
             !profile.AllowsResolutionScale(profile.ResolutionScale) ||
             !float.IsFinite(profile.FullWeightTraceDistanceMeters) ||
@@ -290,16 +313,32 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
             int traceHeight = Math.Max(1, checked((int)Math.Ceiling(sourceHeight * profile.ResolutionScale)));
             const int sourceBpp = Rgba16FloatBytesPerPixel;
 
+            bool traceResolutionSource = profile.SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster;
+            int sourceAttachmentWidth = traceResolutionSource
+                ? traceWidth
+                : sourceWidth;
+            int sourceAttachmentHeight = traceResolutionSource
+                ? traceHeight
+                : sourceHeight;
             ulong traceSource = CalculateImageBytes(
-                sourceWidth, sourceHeight, sourceBpp, profile.ImageRowAlignment,
+                sourceAttachmentWidth, sourceAttachmentHeight, sourceBpp,
+                profile.ImageRowAlignment,
                 profile.ImageAllocationGranularity);
             // One compact payload replaces four full-resolution MRTs. It owns
             // packed geometric/shading normals, object/material identity, and
             // RGB9E5 receiver diffuse throughput. Stable rays are reconstructed
             // from depth and the per-frame matrix block in the trace pass.
             ulong receiverPayload = CalculateImageBytes(
-                sourceWidth, sourceHeight, Rgba32UintBytesPerPixel,
+                sourceAttachmentWidth, sourceAttachmentHeight,
+                Rgba32UintBytesPerPixel,
                 profile.ImageRowAlignment, profile.ImageAllocationGranularity);
+            ulong traceRasterDepth = traceResolutionSource
+                ? CalculateImageBytes(
+                    traceWidth, traceHeight, Depth32BytesPerPixel,
+                    profile.ImageRowAlignment,
+                    profile.ImageAllocationGranularity)
+                : 0UL;
             ulong traceFrameConstants = checked(2UL * AlignUp(
                 SimpleDdgiNearFieldResidualGpuAbi.TraceFrameConstantsByteCount,
                 256u));
@@ -383,7 +422,8 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
             // envelope so diagnostics never become hidden allocations.
             ulong telemetryReadback = checked(
                 tileBuffers * (ulong)RenderingConstants.FramesInFlight);
-            ulong total = checked(traceSource + receiverPayload + traceFrameConstants +
+            ulong total = checked(traceSource + receiverPayload +
+                traceRasterDepth + traceFrameConstants +
                 preparedDepthFootprint + preparedReceiverPayload + preparedMotion +
                 sourceLuminance + rawCandidate + hitMetadata + historyRadiance + moments +
                 historyValidity + historyMetadata + historyNormals + filterScratch +
@@ -403,8 +443,10 @@ public static class SimpleDdgiNearFieldResidualLayoutCompiler
                 traceWidth,
                 traceHeight,
                 profile.FilterIterationCount,
+                profile.SourceProducerMode,
                 traceSource,
                 receiverPayload,
+                traceRasterDepth,
                 traceFrameConstants,
                 preparedDepthFootprint,
                 preparedReceiverPayload,

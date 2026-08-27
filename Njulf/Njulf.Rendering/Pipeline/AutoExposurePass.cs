@@ -23,11 +23,13 @@ namespace Njulf.Rendering.Pipeline
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
         private readonly AutoExposureManager _autoExposure;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
         private long _lastTimestamp;
+        private bool _pipelinePrepared;
 
         public AutoExposurePass(
             VulkanContext context,
@@ -36,11 +38,31 @@ namespace Njulf.Rendering.Pipeline
             RenderTargetManager renderTargets,
             RenderSettings settings,
             AutoExposureManager autoExposure)
+            : this(
+                context,
+                swapchain,
+                bindlessHeap,
+                renderTargets,
+                settings,
+                autoExposure,
+                pipelineCacheService: null)
+        {
+        }
+
+        internal AutoExposurePass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderTargetManager renderTargets,
+            RenderSettings settings,
+            AutoExposureManager autoExposure,
+            GiPipelineCacheService? pipelineCacheService)
             : base("AutoExposurePass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _autoExposure = autoExposure ?? throw new ArgumentNullException(nameof(autoExposure));
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -48,9 +70,24 @@ namespace Njulf.Rendering.Pipeline
 
         public override void Initialize()
         {
+            if (RendererBuildConfiguration.PipelineStartupMode ==
+                    RendererPipelineStartupMode.Exhaustive ||
+                _settings.AutoExposure.Enabled)
+            {
+                PreparePipeline();
+            }
+        }
+
+        internal bool IsPrepared => _pipelinePrepared;
+
+        internal void PreparePipeline()
+        {
+            if (_pipelinePrepared)
+                return;
             CreatePipelineCache();
             CreatePipelineLayout();
             _pipeline = CreatePipeline();
+            _pipelinePrepared = true;
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -73,6 +110,8 @@ namespace Njulf.Rendering.Pipeline
 
             if (!settings.Enabled || displayReferredFogDebug)
                 return;
+
+            PreparePipeline();
 
             int activeSceneColorTextureIndex = sceneData.ActiveSceneColorTextureIndex == BindlessIndex.FoggedSceneColorTexture
                 ? BindlessIndex.FoggedSceneColorTexture
@@ -145,11 +184,13 @@ namespace Njulf.Rendering.Pipeline
                 _pipelineLayout = default;
             }
 
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
                 _pipelineCache = default;
             }
+
+            _pipelinePrepared = false;
 
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);
@@ -212,6 +253,12 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
             Result result = _context.Api.CreatePipelineCache(_context.Device, &cacheInfo, null, out _pipelineCache);
             if (result != Result.Success)
@@ -249,6 +296,8 @@ namespace Njulf.Rendering.Pipeline
 
         private VkPipeline CreatePipeline()
         {
+            long pipelineStart =
+                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule shaderModule = default;
             try
             {
@@ -288,6 +337,9 @@ namespace Njulf.Rendering.Pipeline
             {
                 if (shaderModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
+                _pipelineCacheService?.EndPipelineCreation(
+                    "AutoExposure",
+                    pipelineStart);
             }
         }
     }

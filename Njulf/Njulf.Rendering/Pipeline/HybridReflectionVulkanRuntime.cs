@@ -207,10 +207,18 @@ internal sealed unsafe class HybridReflectionVulkanRuntime : IDisposable
     public bool PrepareFrame(SceneRenderingData sceneData)
     {
         ArgumentNullException.ThrowIfNull(sceneData);
-        if (!ScreenPipelinesAvailable ||
-            sceneData.EffectiveReflectionMode is not
+        if (sceneData.EffectiveReflectionMode is not
                 (ReflectionMode.StaticProbesAndSsr or
                  ReflectionMode.HybridRayQuery))
+        {
+            InvalidateHistory();
+            sceneData.HybridReflectionPassEnabled = false;
+            return false;
+        }
+
+        if (!_initialized)
+            Initialize();
+        if (!ScreenPipelinesAvailable)
         {
             InvalidateHistory();
             sceneData.HybridReflectionPassEnabled = false;

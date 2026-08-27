@@ -578,6 +578,7 @@ public sealed class GiRoadmapExperimentTests
             Assert.That(plan.TraceBytes, Is.EqualTo(
                 plan.Layout.TraceSourceBytes +
                 plan.Layout.ReceiverPayloadBytes +
+                plan.Layout.TraceRasterDepthBytes +
                 plan.Layout.TraceFrameConstantsBytes +
                 plan.Layout.PreparedDepthFootprintBytes +
                 plan.Layout.PreparedReceiverPayloadBytes +
@@ -586,6 +587,7 @@ public sealed class GiRoadmapExperimentTests
                 plan.Layout.RawCandidateBytes +
                 plan.Layout.SurfaceTableBytes +
                 plan.Layout.ActiveTileAndIndirectBytes +
+                plan.Layout.SchedulerHistoryBytes +
                 plan.Layout.TileBuffersBytes +
                 plan.Layout.TelemetryReadbackBytes));
             Assert.That(plan.HistoryBytes, Is.EqualTo(

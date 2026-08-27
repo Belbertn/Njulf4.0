@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using Njulf.Core.Interfaces;
 using Njulf.Rendering.Data;
 
@@ -8,6 +10,10 @@ internal sealed class PerformanceCaptureMetadataProvider
 {
     private readonly PerformanceCaptureHostIdentityResolver
         _hostIdentityResolver;
+    private readonly object _postStartupIdentityGate = new();
+    private PerformanceCaptureBuildIdentity _buildIdentity =
+        PerformanceCaptureBuildIdentity.Uninitialized;
+    private Task? _postStartupIdentityTask;
     private ulong _sceneLoadFrameSerial;
     private ulong _cameraCutSerial;
 
@@ -20,33 +26,43 @@ internal sealed class PerformanceCaptureMetadataProvider
 
     internal string SceneKind { get; set; } = string.Empty;
     internal string Scenario { get; set; } = string.Empty;
-    internal PerformanceCaptureBuildIdentity BuildIdentity { get; private set; } =
-        PerformanceCaptureBuildIdentity.Uninitialized;
+    internal PerformanceCaptureBuildIdentity BuildIdentity =>
+        Volatile.Read(ref _buildIdentity);
     internal ulong ObservedSceneRevision { get; private set; } = ulong.MaxValue;
 
     internal void ResolveStartupIdentity()
     {
         PerformanceCaptureStartupIdentity identity =
             _hostIdentityResolver.ResolveStartupIdentity();
-        BuildIdentity = new PerformanceCaptureBuildIdentity(
+        Volatile.Write(ref _buildIdentity, new PerformanceCaptureBuildIdentity(
             identity.ApplicationVersion,
             identity.Commit,
             identity.ShaderBundleHash,
             "unavailable:executable-hash-not-initialized",
             "unavailable:dirty-worktree-state-not-initialized",
             identity.CompileConfiguration,
-            identity.TargetFramework);
+            identity.TargetFramework));
     }
 
     internal void ResolvePostPipelineIdentity()
     {
         PerformanceCapturePostPipelineIdentity identity =
             _hostIdentityResolver.ResolvePostPipelineIdentity();
-        BuildIdentity = BuildIdentity with
+        Volatile.Write(ref _buildIdentity, BuildIdentity with
         {
             ExecutableHash = identity.ExecutableHash,
             DirtyWorktreeState = identity.DirtyWorktreeState
-        };
+        });
+    }
+
+    internal void SchedulePostStartupIdentityResolution()
+    {
+        lock (_postStartupIdentityGate)
+        {
+            if (_postStartupIdentityTask != null)
+                return;
+            _postStartupIdentityTask = Task.Run(ResolvePostPipelineIdentity);
+        }
     }
 
     internal void ApplySceneLabels(

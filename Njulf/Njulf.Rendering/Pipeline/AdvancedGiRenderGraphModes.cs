@@ -1,3 +1,4 @@
+using System;
 using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Pipeline;
@@ -10,17 +11,22 @@ namespace Njulf.Rendering.Pipeline;
 internal readonly record struct AdvancedGiNearFieldGraphProfile(
     float ResolutionScale,
     SimpleDdgiNearFieldResidualFormat SourceFormat,
-    int FilterIterationCount)
+    int FilterIterationCount,
+    SimpleDdgiNearFieldSourceProducerMode SourceProducerMode =
+        SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster)
 {
     public static AdvancedGiNearFieldGraphProfile HalfResolutionReference { get; } = new(
         ResolutionScale: 0.5f,
         SourceFormat: SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat,
-        FilterIterationCount: 2);
+        FilterIterationCount: 2,
+        SourceProducerMode:
+            SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster);
 
     public bool IsSupported =>
         float.IsFinite(ResolutionScale) &&
         ResolutionScale is 0.5f or 0.25f or 0.125f &&
         SourceFormat == SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat &&
+        Enum.IsDefined(SourceProducerMode) &&
         FilterIterationCount is >= 0 and <= 8;
 
     public RenderGraphResourceSizePolicy TraceSizePolicy => ResolutionScale switch
@@ -35,7 +41,8 @@ internal readonly record struct AdvancedGiNearFieldGraphProfile(
         in SimpleDdgiNearFieldResidualProfile profile) => new(
         profile.ResolutionScale,
         profile.SourceFormat,
-        profile.FilterIterationCount);
+        profile.FilterIterationCount,
+        profile.SourceProducerMode);
 }
 
 /// <summary>

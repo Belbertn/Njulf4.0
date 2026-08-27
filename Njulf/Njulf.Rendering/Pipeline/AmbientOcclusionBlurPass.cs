@@ -18,6 +18,7 @@ namespace Njulf.Rendering.Pipeline
 
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private DescriptorSetLayout _descriptorSetLayout;
         private DescriptorPool _descriptorPool;
@@ -27,6 +28,7 @@ namespace Njulf.Rendering.Pipeline
         private PipelineLayout _pipelineLayout;
         private PipelineCache _pipelineCache;
         private VkPipeline _pipeline;
+        private bool _pipelinePrepared;
 
         public AmbientOcclusionBlurPass(
             VulkanContext context,
@@ -34,20 +36,43 @@ namespace Njulf.Rendering.Pipeline
             BindlessHeap bindlessHeap,
             RenderTargetManager renderTargets,
             RenderSettings settings)
+            : this(
+                context,
+                swapchain,
+                bindlessHeap,
+                renderTargets,
+                settings,
+                pipelineCacheService: null)
+        {
+        }
+
+        internal AmbientOcclusionBlurPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderTargetManager renderTargets,
+            RenderSettings settings,
+            GiPipelineCacheService? pipelineCacheService)
             : base("AmbientOcclusionBlurPass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
         public override void Initialize()
         {
             CreateDescriptorSetLayout();
-            CreatePipelineCache();
             CreatePipelineLayout();
-            CreatePipeline();
             RecreateDescriptorSets();
+            if (RendererBuildConfiguration.PipelineStartupMode ==
+                    RendererPipelineStartupMode.Exhaustive ||
+                _settings.AmbientOcclusion.Enabled &&
+                _settings.AmbientOcclusion.Mode == AmbientOcclusionMode.Ssao)
+            {
+                PreparePipeline();
+            }
         }
 
         // The pass contains an intra-pass compute dependency followed by a
@@ -79,7 +104,19 @@ namespace Njulf.Rendering.Pipeline
             }
 
             RegisterBlurredAoTexture(_renderTargets.AmbientOcclusionBlurred.View);
+            PreparePipeline();
             return true;
+        }
+
+        internal bool IsPrepared => _pipelinePrepared;
+
+        internal void PreparePipeline()
+        {
+            if (_pipelinePrepared)
+                return;
+            CreatePipelineCache();
+            CreatePipeline();
+            _pipelinePrepared = true;
         }
 
         public override void Execute(CommandBuffer cmd, int frameIndex, SceneRenderingData sceneData)
@@ -151,11 +188,13 @@ namespace Njulf.Rendering.Pipeline
                 _descriptorSetLayout = default;
             }
 
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
                 _pipelineCache = default;
             }
+
+            _pipelinePrepared = false;
 
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);
@@ -232,6 +271,12 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
             Result result = _context.Api.CreatePipelineCache(_context.Device, &cacheInfo, null, out _pipelineCache);
             if (result != Result.Success)
@@ -264,6 +309,8 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipeline()
         {
+            long pipelineStart =
+                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule shaderModule = default;
             try
             {
@@ -291,6 +338,9 @@ namespace Njulf.Rendering.Pipeline
             {
                 if (shaderModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
+                _pipelineCacheService?.EndPipelineCreation(
+                    "AmbientOcclusion.Blur",
+                    pipelineStart);
             }
         }
 

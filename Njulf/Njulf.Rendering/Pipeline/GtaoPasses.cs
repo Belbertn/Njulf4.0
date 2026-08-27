@@ -76,6 +76,7 @@ internal abstract unsafe class GtaoComputePassBase : RenderPassBase
     private readonly int _setCount;
     private readonly uint _pushConstantBytes;
     private readonly nint _entryPointName;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private DescriptorSetLayout _descriptorSetLayout;
     private DescriptorPool _descriptorPool;
     private DescriptorSet[] _descriptorSets = Array.Empty<DescriptorSet>();
@@ -91,13 +92,15 @@ internal abstract unsafe class GtaoComputePassBase : RenderPassBase
         BindlessHeap bindlessHeap,
         DescriptorSetLayoutBinding[] bindings,
         int setCount,
-        uint pushConstantBytes)
+        uint pushConstantBytes,
+        GiPipelineCacheService? pipelineCacheService)
         : base(passName, context, swapchain, bindlessHeap)
     {
         _shaderName = shaderName;
         _bindings = bindings;
         _setCount = setCount;
         _pushConstantBytes = pushConstantBytes;
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
     }
 
@@ -188,7 +191,7 @@ internal abstract unsafe class GtaoComputePassBase : RenderPassBase
         if (_descriptorSetLayout.Handle != 0)
             _context.Api.DestroyDescriptorSetLayout(_context.Device,
                 _descriptorSetLayout, null);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device,
                 _pipelineCache, null);
         if (_entryPointName != 0)
@@ -224,6 +227,12 @@ internal abstract unsafe class GtaoComputePassBase : RenderPassBase
 
     private void CreatePipelineCache()
     {
+        if (_pipelineCacheService != null)
+        {
+            _pipelineCache = _pipelineCacheService.Cache;
+            return;
+        }
+
         var createInfo = new PipelineCacheCreateInfo
         {
             SType = StructureType.PipelineCacheCreateInfo
@@ -260,6 +269,8 @@ internal abstract unsafe class GtaoComputePassBase : RenderPassBase
 
     private void CreatePipeline()
     {
+        long pipelineStart =
+            _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
         ShaderModule shaderModule = default;
         try
         {
@@ -291,6 +302,9 @@ internal abstract unsafe class GtaoComputePassBase : RenderPassBase
             if (shaderModule.Handle != 0)
                 _context.Api.DestroyShaderModule(_context.Device,
                     shaderModule, null);
+            _pipelineCacheService?.EndPipelineCreation(
+                $"AmbientOcclusion.{Name}",
+                pipelineStart);
         }
         _context.SetDebugName(_pipeline.Handle, ObjectType.Pipeline,
             $"{Name} Compute Pipeline");
@@ -381,6 +395,19 @@ internal sealed unsafe class GtaoPass : GtaoComputePassBase
         RenderTargetManager renderTargets,
         HiZDepthPyramid hiZ,
         RenderSettings settings)
+        : this(context, swapchain, bindlessHeap, renderTargets, hiZ,
+            settings, pipelineCacheService: null)
+    {
+    }
+
+    internal GtaoPass(
+        VulkanContext context,
+        SwapchainManager swapchain,
+        BindlessHeap bindlessHeap,
+        RenderTargetManager renderTargets,
+        HiZDepthPyramid hiZ,
+        RenderSettings settings,
+        GiPipelineCacheService? pipelineCacheService)
         : base("GtaoPass", "gtao.comp.spv", context, swapchain,
             bindlessHeap,
             [
@@ -389,7 +416,8 @@ internal sealed unsafe class GtaoPass : GtaoComputePassBase
                 Binding(2, DescriptorType.StorageImage)
             ],
             1,
-            (uint)Marshal.SizeOf<GPUGtaoPushConstants>())
+            (uint)Marshal.SizeOf<GPUGtaoPushConstants>(),
+            pipelineCacheService)
     {
         _renderTargets = renderTargets;
         _hiZ = hiZ;
@@ -464,6 +492,19 @@ internal sealed unsafe class GtaoTemporalPass : GtaoComputePassBase
         RenderTargetManager renderTargets,
         RenderSettings settings,
         GtaoHistoryState historyState)
+        : this(context, swapchain, bindlessHeap, renderTargets, settings,
+            historyState, pipelineCacheService: null)
+    {
+    }
+
+    internal GtaoTemporalPass(
+        VulkanContext context,
+        SwapchainManager swapchain,
+        BindlessHeap bindlessHeap,
+        RenderTargetManager renderTargets,
+        RenderSettings settings,
+        GtaoHistoryState historyState,
+        GiPipelineCacheService? pipelineCacheService)
         : base("GtaoTemporalPass", "gtao_temporal.comp.spv", context,
             swapchain, bindlessHeap,
             [
@@ -476,7 +517,8 @@ internal sealed unsafe class GtaoTemporalPass : GtaoComputePassBase
                 Binding(6, DescriptorType.StorageImage)
             ],
             2,
-            (uint)Marshal.SizeOf<GPUGtaoTemporalPushConstants>())
+            (uint)Marshal.SizeOf<GPUGtaoTemporalPushConstants>(),
+            pipelineCacheService)
     {
         _renderTargets = renderTargets;
         _settings = settings;
@@ -585,6 +627,18 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
         BindlessHeap bindlessHeap,
         RenderTargetManager renderTargets,
         RenderSettings settings)
+        : this(context, swapchain, bindlessHeap, renderTargets, settings,
+            pipelineCacheService: null)
+    {
+    }
+
+    internal GtaoSpatialPass(
+        VulkanContext context,
+        SwapchainManager swapchain,
+        BindlessHeap bindlessHeap,
+        RenderTargetManager renderTargets,
+        RenderSettings settings,
+        GiPipelineCacheService? pipelineCacheService)
         : base("GtaoSpatialPass", "gtao_spatial.comp.spv", context,
             swapchain, bindlessHeap,
             [
@@ -597,7 +651,8 @@ internal sealed unsafe class GtaoSpatialPass : GtaoComputePassBase
                 Binding(6, DescriptorType.StorageImage)
             ],
             2,
-            (uint)Marshal.SizeOf<GPUGtaoSpatialPushConstants>())
+            (uint)Marshal.SizeOf<GPUGtaoSpatialPushConstants>(),
+            pipelineCacheService)
     {
         _renderTargets = renderTargets;
         _settings = settings;

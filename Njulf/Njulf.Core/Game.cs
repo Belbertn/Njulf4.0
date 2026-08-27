@@ -26,6 +26,7 @@ namespace Njulf.Core
         private bool _isRenderingFrame = false;
         private bool _exitRequestedAfterFrame = false;
         private bool _firstFrameLogged = false;
+        private long _runStartedTimestamp;
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "IDE0052:Remove unread private members", Justification = "Used for initialization tracking")]
         private bool _isInitialized = false;
 
@@ -55,6 +56,7 @@ namespace Njulf.Core
             if (_isRunning) return;
             _isRunning = true;
             _isShuttingDown = false;
+            _runStartedTimestamp = Stopwatch.GetTimestamp();
 
             try
             {
@@ -95,7 +97,12 @@ namespace Njulf.Core
             _camera = _services.GetService<ICamera>() ?? CreateDefaultCamera();
 
             if (_renderer != null)
+            {
+                RunStartupStep(
+                    "Game.ConfigureRendererBeforeInitialize",
+                    () => ConfigureRendererBeforeInitialize(_renderer));
                 RunStartupStep("VulkanRenderer.Initialize", _renderer.Initialize);
+            }
         }
 
         protected virtual void ConfigureServices(IServiceCollection services)
@@ -105,6 +112,16 @@ namespace Njulf.Core
         protected virtual ICamera CreateDefaultCamera()
         {
             return new FirstPersonCamera(new Vector3(0, 0, 5));
+        }
+
+        /// <summary>
+        /// Gives the application a final opportunity to establish renderer
+        /// settings after device-backed services exist but before immutable
+        /// render targets, graph resources, and pipelines are created.
+        /// </summary>
+        protected virtual void ConfigureRendererBeforeInitialize(
+            IRenderer renderer)
+        {
         }
 
         protected virtual void Load()
@@ -214,6 +231,13 @@ namespace Njulf.Core
             Initialize();
             _isInitialized = true;
             RunStartupStep("Content.LoadInitialScene", Load);
+            if (_renderer is IScenePipelinePreparer pipelinePreparer &&
+                _camera != null)
+            {
+                RunStartupStep(
+                    "Renderer.PrepareInitialScene",
+                    () => pipelinePreparer.PrepareScene(_scene, _camera));
+            }
         }
 
         private void OnWindowUpdate(double deltaSeconds)
@@ -263,8 +287,18 @@ namespace Njulf.Core
                     renderer.EndFrame();
                     if (!_firstFrameLogged)
                     {
+                        long firstPresentElapsedMicroseconds = checked((long)System.Math.Round(
+                            (Stopwatch.GetTimestamp() - _runStartedTimestamp) *
+                            1_000_000.0 / Stopwatch.Frequency));
                         RunStartupStep("FirstFrame.End", () => { });
                         _firstFrameLogged = true;
+                        if (renderer is IStartupLatencyReporter latencyReporter)
+                        {
+                            RunStartupStep(
+                                "StartupLatency.Evaluate",
+                                () => latencyReporter.ReportFirstPresent(
+                                    firstPresentElapsedMicroseconds));
+                        }
                     }
                 }
                 finally

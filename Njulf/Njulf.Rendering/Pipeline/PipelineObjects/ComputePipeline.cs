@@ -15,6 +15,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
 
         private VkPipeline _pipeline;
@@ -23,9 +24,18 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private bool _disposed;
 
         public ComputePipeline(VulkanContext context, BindlessHeap bindlessHeap)
+            : this(context, bindlessHeap, pipelineCacheService: null)
+        {
+        }
+
+        internal ComputePipeline(
+            VulkanContext context,
+            BindlessHeap bindlessHeap,
+            GiPipelineCacheService? pipelineCacheService)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
 
             ValidatePushConstantRange((uint)Marshal.SizeOf<GPULightCullPushConstants>());
@@ -52,6 +62,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo
             {
                 SType = StructureType.PipelineCacheCreateInfo
@@ -103,6 +119,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipeline()
         {
+            long pipelineStart =
+                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule shaderModule = new ShaderModule();
 
             try
@@ -143,6 +161,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             {
                 if (shaderModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, shaderModule, null);
+                _pipelineCacheService?.EndPipelineCreation(
+                    "LightCulling.Compute",
+                    pipelineStart);
             }
         }
 
@@ -163,7 +184,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
 
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
 
             if (_entryPointName != 0)

@@ -24,6 +24,7 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
         RenderingConstants.FramesInFlight * MaximumMipsPerFrame;
 
     private readonly EnvironmentManager _environment;
+    private readonly GiPipelineCacheService? _pipelineCacheService;
     private readonly nint _entryPointName;
     private readonly DescriptorSet[] _outputSets = new DescriptorSet[DescriptorSetCount];
     private DescriptorSetLayout _outputSetLayout;
@@ -32,16 +33,33 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
     private PipelineCache _pipelineCache;
     private VkPipeline _float16Pipeline;
     private VkPipeline _float32Pipeline;
+    private bool _pipelinesPrepared;
 
     public EnvironmentPrefilterPass(
         VulkanContext context,
         SwapchainManager swapchain,
         BindlessHeap bindlessHeap,
         EnvironmentManager environment)
+        : this(
+            context,
+            swapchain,
+            bindlessHeap,
+            environment,
+            pipelineCacheService: null)
+    {
+    }
+
+    internal EnvironmentPrefilterPass(
+        VulkanContext context,
+        SwapchainManager swapchain,
+        BindlessHeap bindlessHeap,
+        EnvironmentManager environment,
+        GiPipelineCacheService? pipelineCacheService)
         : base("EnvironmentPrefilterPass", context, swapchain, bindlessHeap)
     {
         _environment = environment ??
             throw new ArgumentNullException(nameof(environment));
+        _pipelineCacheService = pipelineCacheService;
         _entryPointName = SilkMarshal.StringToPtr("main");
     }
 
@@ -58,13 +76,33 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
         CreateDescriptorSetLayout();
         CreateDescriptorPoolAndSets();
         CreatePipelineLayout();
+        if (RendererBuildConfiguration.PipelineStartupMode ==
+                RendererPipelineStartupMode.Exhaustive ||
+            _environment.PrefilterPipelinesRequired)
+        {
+            PreparePipelines();
+        }
+    }
+
+    public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData)
+    {
+        if (!_environment.HasPendingPrefilterWork)
+            return false;
+        PreparePipelines();
+        return true;
+    }
+
+    internal bool IsPrepared => _pipelinesPrepared;
+
+    internal void PreparePipelines()
+    {
+        if (_pipelinesPrepared)
+            return;
         CreatePipelineCache();
         _float16Pipeline = CreatePipeline("environment_prefilter.comp.spv");
         _float32Pipeline = CreatePipeline("environment_prefilter_float.comp.spv");
+        _pipelinesPrepared = true;
     }
-
-    public override bool ShouldExecute(int frameIndex, SceneRenderingData sceneData) =>
-        _environment.HasPendingPrefilterWork;
 
     public override void Execute(
         CommandBuffer commandBuffer,
@@ -165,7 +203,7 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
             _context.Api.DestroyPipeline(_context.Device, _float32Pipeline, null);
         if (_pipelineLayout.Handle != 0)
             _context.Api.DestroyPipelineLayout(_context.Device, _pipelineLayout, null);
-        if (_pipelineCache.Handle != 0)
+        if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
         if (_descriptorPool.Handle != 0)
             _context.Api.DestroyDescriptorPool(_context.Device, _descriptorPool, null);
@@ -185,6 +223,7 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
         _pipelineCache = default;
         _descriptorPool = default;
         _outputSetLayout = default;
+        _pipelinesPrepared = false;
         Array.Clear(_outputSets);
     }
 
@@ -292,6 +331,12 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
 
     private void CreatePipelineCache()
     {
+        if (_pipelineCacheService != null)
+        {
+            _pipelineCache = _pipelineCacheService.Cache;
+            return;
+        }
+
         var info = new PipelineCacheCreateInfo
         {
             SType = StructureType.PipelineCacheCreateInfo
@@ -307,6 +352,8 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
 
     private VkPipeline CreatePipeline(string shaderName)
     {
+        long pipelineStart =
+            _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
         ShaderModule shader = default;
         try
         {
@@ -340,6 +387,9 @@ internal sealed unsafe class EnvironmentPrefilterPass : RenderPassBase
         {
             if (shader.Handle != 0)
                 _context.Api.DestroyShaderModule(_context.Device, shader, null);
+            _pipelineCacheService?.EndPipelineCreation(
+                "EnvironmentPrefilter." + shaderName,
+                pipelineStart);
         }
     }
 

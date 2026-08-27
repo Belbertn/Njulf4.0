@@ -39,13 +39,15 @@ layout(push_constant) uniform ForwardPushConstantBlock
 void main()
 {
 #ifdef FORWARD_COMPACTED_MESH
-    uint drawCommandIndex = gl_WorkGroupID.x;
-    if (drawCommandIndex >= pc.Push.MeshletDrawCount)
+    uint localDrawIndex = gl_WorkGroupID.x;
+    if (localDrawIndex >= pc.Push.MeshletDrawCount)
     {
         if (gl_LocalInvocationIndex == 0u)
             SetMeshOutputsEXT(0u, 0u);
         return;
     }
+    uint drawCommandIndex = localDrawIndex +
+        ForwardFirstDraw(pc.Push.MeshletDrawBufferBaseIndex);
 #else
     if (forwardPayload.Visible == 0u)
     {
@@ -56,8 +58,10 @@ void main()
     uint drawCommandIndex = forwardPayload.DrawCommandIndex;
 #endif
 
+    uint drawBufferBaseIndex = ForwardDrawBufferBaseIndex(
+        pc.Push.MeshletDrawBufferBaseIndex);
     GPUMeshletDrawCommand command = ReadMeshletDrawCommandFromBase(
-        pc.Push.MeshletDrawBufferBaseIndex,
+        drawBufferBaseIndex,
         pc.Push.CurrentFrameIndex,
         drawCommandIndex);
     GPUMeshlet meshlet = ReadMeshlet(command.MeshletIndex);

@@ -13,6 +13,10 @@
 #define NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION 0
 #endif
 
+#ifndef NJULF_C5_TRACE_RESOLUTION_SOURCE
+#define NJULF_C5_TRACE_RESOLUTION_SOURCE 0
+#endif
+
 #ifndef NJULF_C4_RECEIVER_OUTPUT
 #define NJULF_C4_RECEIVER_OUTPUT 0
 #endif
@@ -26,8 +30,16 @@
 #endif
 
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT && \
-    NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 4
-#error "C5 foliage source requires semantic version 4."
+    NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 5
+#error "C5 foliage source requires semantic version 5."
+#endif
+
+#if NJULF_C5_TRACE_RESOLUTION_SOURCE && \
+    (!NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT || \
+     NJULF_C4_RECEIVER_OUTPUT || \
+     NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT || \
+     NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT)
+#error "The C5 trace-resolution foliage source owns exactly two attachments."
 #endif
 
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION || \
@@ -96,6 +108,10 @@ layout(location = 7) flat in uint fragDebugMeshletIndex;
 layout(location = 8) flat in vec4 fragColorVariation;
 layout(location = 9) flat in vec4 fragDdgiIrradianceCoverage;
 
+#if NJULF_C5_TRACE_RESOLUTION_SOURCE
+layout(location = 0) out vec4 outC5DirectDiffuseEmissive;
+layout(location = 1) out uvec4 outC5ReceiverPayload;
+#else
 layout(location = 0) out vec4 outColor;
 #if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 layout(location = 1) out float outMaterialTransportProvenance;
@@ -110,6 +126,7 @@ layout(location = 3) out uvec4 outC5ReceiverPayload;
 #else
 layout(location = 1) out vec4 outC5DirectDiffuseEmissive;
 layout(location = 2) out uvec4 outC5ReceiverPayload;
+#endif
 #endif
 #endif
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
@@ -131,7 +148,24 @@ layout(push_constant) uniform FoliageDrawPushConstantBlock
 
 void WriteFoliageForwardColor(vec4 color)
 {
+#if !NJULF_C5_TRACE_RESOLUTION_SOURCE
     outColor = color;
+#endif
+}
+
+vec2 FoliageScreenPixel()
+{
+#if NJULF_C5_TRACE_RESOLUTION_SOURCE
+    uint scaleCode = pc.Push.Flags & 0x3u;
+    float scale = scaleCode == 2u
+        ? 0.5
+        : (scaleCode == 1u ? 0.25 : 0.125);
+    vec2 fullExtent = max(pc.Push.ScreenDimensions.xy, vec2(1.0));
+    vec2 traceExtent = max(ceil(fullExtent * scale), vec2(1.0));
+    return gl_FragCoord.xy * fullExtent / traceExtent;
+#else
+    return gl_FragCoord.xy;
+#endif
 }
 
 void WriteFoliageMaterialTransportProvenance(uint sourcePath)
@@ -251,6 +285,29 @@ bool C5CreateFoliagePayload(
         NjulfC5PackRgb9E5(diffuseBase));
     return surfaceToken < 65534u;
 }
+
+void C5WriteFoliageDirectDiffuseAndEmissiveSource(
+    vec3 geometricNormal,
+    vec3 shadingNormal,
+    vec3 diffuseBase,
+    vec3 directLighting,
+    vec3 emissive)
+{
+    float c5Footprint = C5FoliageB3FootprintRadius();
+    uvec4 c5Payload;
+    if (c5Footprint > 0.0 && C5CreateFoliagePayload(
+            geometricNormal,
+            shadingNormal,
+            max(diffuseBase, vec3(0.0)),
+            c5Payload))
+    {
+        outC5DirectDiffuseEmissive = vec4(clamp(
+            directLighting + max(emissive, vec3(0.0)),
+            vec3(0.0),
+            vec3(65504.0)), c5Footprint);
+        outC5ReceiverPayload = c5Payload;
+    }
+}
 #endif
 
 void main()
@@ -276,10 +333,11 @@ void main()
             fragGeometryMode,
             fragClusterIndex,
             fragLodBand,
-            gl_FragCoord.xy,
+            FoliageScreenPixel(),
             sampledAlbedo))
         discard;
 
+#if !NJULF_C5_TRACE_RESOLUTION_SOURCE
     if (pc.Push.DebugView == 1u)
     {
         uint debugId = fragGeometryMode == 1u ? fragDebugMeshletIndex : fragClusterIndex;
@@ -295,6 +353,7 @@ void main()
         WriteFoliageForwardColor(vec4(lodColor, 1.0));
         return;
     }
+#endif
 
     GPUFoliageCluster cluster = ReadFoliageCluster(fragClusterIndex);
     GPUFoliagePatch foliagePatch = ReadFoliagePatch(cluster.PatchIndex);
@@ -307,6 +366,15 @@ void main()
     vec3 viewDirection = SafeNormalize(pc.Push.CameraPositionTime.xyz - fragWorldPosition, vec3(0.0, 0.0, 1.0));
     vec3 normal = ComputeBentNormal(fragNormal, viewDirection, cluster, prototype);
     vec3 foliageDirectLighting = ApplyFoliageLighting(baseColor, normal, viewDirection, prototype);
+#if NJULF_C5_TRACE_RESOLUTION_SOURCE
+    C5WriteFoliageDirectDiffuseAndEmissiveSource(
+        fragNormal,
+        normal,
+        baseColor,
+        foliageDirectLighting,
+        material.Emissive.rgb);
+    return;
+#endif
     vec4 ddgiIrradianceCoverage = fragDdgiIrradianceCoverage;
 #if NJULF_SIMPLE_DDGI_EXACT_FEEDBACK_ATTRIBUTION
     SimpleDdgiParams simpleDdgiParams = ReadSimpleDdgiParams(
@@ -362,16 +430,12 @@ void main()
         outHybridReflectionReceiverPayload);
 #endif
 #if NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
-    float c5Footprint = C5FoliageB3FootprintRadius();
-    uvec4 c5Payload;
-    if (c5Footprint > 0.0 && C5CreateFoliagePayload(
-            fragNormal, normal, max(baseColor, vec3(0.0)), c5Payload))
-    {
-        outC5DirectDiffuseEmissive = vec4(clamp(
-            foliageDirectLighting + max(material.Emissive.rgb, vec3(0.0)),
-            vec3(0.0), vec3(65504.0)), c5Footprint);
-        outC5ReceiverPayload = c5Payload;
-    }
+    C5WriteFoliageDirectDiffuseAndEmissiveSource(
+        fragNormal,
+        normal,
+        baseColor,
+        foliageDirectLighting,
+        material.Emissive.rgb);
 #endif
     // Foliage carries a precomputed DDGI estimate rather than enough per-probe
     // metadata to identify a compact/far contributor. Mark covered foliage as
@@ -396,7 +460,7 @@ void main()
             tileNamespaceBase);
     float physicalSurfaceWeight = reflectionFeedback
         ? SimpleDdgiCubemapTexelSolidAngle(
-              gl_FragCoord.xy,
+              FoliageScreenPixel(),
               pc.Push.ScreenDimensions.xy) *
           SimpleDdgiRoughSpecularWeight(
               simpleDdgiParams.residencyFlags,

@@ -262,6 +262,7 @@ namespace Njulf.Rendering.Pipeline
                 _foliagePipeline == null ||
                 _bufferManager == null ||
                 _foliageManager == null ||
+                sceneData.FoliageClusterCount <= 0 ||
                 sceneData.FoliageDrawBufferBytes == 0)
             {
                 return;

@@ -10,13 +10,38 @@ namespace Njulf.Tests;
 public sealed class BuildConfigurationContractTests
 {
     [Test]
-    public void RendererStartupPolicyMatchesBuildTier()
+    public void RendererStartupPolicyUsesActiveSceneAndReportingDefaults()
     {
-#if NJULF_DEVELOPMENT
         Assert.That(RendererBuildConfiguration.FastPipelineStartup, Is.True);
-#else
-        Assert.That(RendererBuildConfiguration.FastPipelineStartup, Is.False);
-#endif
+        Assert.That(
+            RendererBuildConfiguration.PipelineStartupMode,
+            Is.EqualTo(RendererPipelineStartupMode.ActiveScene));
+        Assert.That(
+            RendererBuildConfiguration.EnforceStartupLatencyByDefault,
+            Is.False);
+        Assert.That(
+            RendererBuildConfiguration.ResolveStartupLatencyGateMode(
+                requested: null,
+                enforceByDefault:
+                    RendererBuildConfiguration.EnforceStartupLatencyByDefault),
+            Is.EqualTo(RendererStartupLatencyGateMode.TimingOnly));
+    }
+
+    [TestCase(null, false, 1)]
+    [TestCase(null, true, 2)]
+    [TestCase("off", true, 0)]
+    [TestCase("timing", true, 1)]
+    [TestCase("enforce", false, 2)]
+    public void StartupLatencyGateModeSupportsTierDefaultsAndExplicitOverrides(
+        string? requested,
+        bool enforceByDefault,
+        int expected)
+    {
+        Assert.That(
+            RendererBuildConfiguration.ResolveStartupLatencyGateMode(
+                requested,
+                enforceByDefault),
+            Is.EqualTo((RendererStartupLatencyGateMode)expected));
     }
 
     [Test]
@@ -79,17 +104,22 @@ public sealed class BuildConfigurationContractTests
             meshPipeline,
             "private void CreateReceiverFeedbackPipelines(",
             "internal bool TryEnsureAlphaMaskReceiverFeedbackPipelines()");
-        int eagerTransparent = meshPipeline.IndexOf(
-            "_transparentForwardPipeline = CreateGraphicsPipeline(",
-            StringComparison.Ordinal);
-        int rayAdmissionCall = meshPipeline.IndexOf(
-            "AdmitRayTransparentPipelines();",
-            StringComparison.Ordinal);
+        string transparentProperty = SliceBetween(
+            meshPipeline,
+            "public VkPipeline TransparentForwardPipeline",
+            "public VkPipeline ThinGlassForwardPipeline");
+        string pipelineCreation = SliceBetween(
+            meshPipeline,
+            "private void CreatePipelines(Format colorFormat, Format depthFormat)",
+            "private void EnsureTransparentForwardPipeline()");
 
         Assert.Multiple(() =>
         {
-            Assert.That(eagerTransparent, Is.GreaterThanOrEqualTo(0));
-            Assert.That(rayAdmissionCall, Is.GreaterThan(eagerTransparent));
+            Assert.That(transparentProperty,
+                Does.Contain("EnsureTransparentForwardPipeline();"));
+            Assert.That(pipelineCreation,
+                Does.Match(
+                    "if \\(!RendererBuildConfiguration\\.FastPipelineStartup\\)\\s+\\{[\\s\\S]*?EnsureTransparentForwardPipeline\\(\\);[\\s\\S]*?AdmitRayTransparentPipelines\\(\\);"));
             Assert.That(rayAdmission,
                 Does.Match(
                     "if \\(RendererBuildConfiguration\\.FastPipelineStartup\\)\\s+return;\\s+\\r?\\n?\\s*if \\(TryEnsureRayTransparentPipelines\\(\\)"));

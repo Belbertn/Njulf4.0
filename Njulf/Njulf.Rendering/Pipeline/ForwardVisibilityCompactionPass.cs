@@ -18,7 +18,10 @@ namespace Njulf.Rendering.Pipeline
         private const int SimpleOpaqueIndirectDispatchSlot = 1;
         private const int SimpleNormalOpaqueIndirectDispatchSlot = 2;
         private const int FullOpaqueIndirectDispatchSlot = 3;
-        private const int IndirectDispatchSlotCount = 4;
+        private const int SimpleOpaqueDoubleSidedIndirectDispatchSlot = 4;
+        private const int SimpleNormalOpaqueDoubleSidedIndirectDispatchSlot = 5;
+        private const int FullOpaqueDoubleSidedIndirectDispatchSlot = 6;
+        private const int IndirectDispatchSlotCount = 7;
         private static readonly ulong DrawCommandStride = (ulong)Marshal.SizeOf<GPUMeshletDrawCommand>();
         private static readonly ulong CounterStride = (ulong)Marshal.SizeOf<GPUSceneSubmissionCounters>();
         private static readonly ulong IndirectDispatchStride = (ulong)Marshal.SizeOf<GPUFoliageDispatchArgs>();
@@ -101,7 +104,14 @@ namespace Njulf.Rendering.Pipeline
                 return;
             }
 
-            EnsureRuntimeBuffers(frameIndex, simpleCapacity, simpleNormalCapacity, fullCapacity);
+            bool sidedStreams =
+                sceneData.SceneSubmissionSidedRasterSpecializationActive;
+            EnsureRuntimeBuffers(
+                frameIndex,
+                simpleCapacity,
+                simpleNormalCapacity,
+                fullCapacity,
+                sidedStreams);
             RuntimeBuffer simpleVisible = _simpleVisibleDrawBuffers[frameIndex];
             RuntimeBuffer simpleNormalVisible = _simpleNormalVisibleDrawBuffers[frameIndex];
             RuntimeBuffer fullVisible = _fullVisibleDrawBuffers[frameIndex];
@@ -119,10 +129,26 @@ namespace Njulf.Rendering.Pipeline
             }
 
             sceneData.ForwardVisibilityCompactionActive = true;
+            sceneData.ForwardVisibilitySidedStreamsActive = sidedStreams;
             sceneData.ForwardVisibilityCompactionSkipReason = string.Empty;
-            sceneData.ForwardVisibilitySimpleCapacity = (int)Math.Min(simpleVisible.ElementCapacity, int.MaxValue);
-            sceneData.ForwardVisibilitySimpleNormalCapacity = (int)Math.Min(simpleNormalVisible.ElementCapacity, int.MaxValue);
-            sceneData.ForwardVisibilityFullCapacity = (int)Math.Min(fullVisible.ElementCapacity, int.MaxValue);
+            uint simpleOutputCapacity = ResolveStreamCapacity(
+                simpleVisible,
+                simpleCapacity,
+                sidedStreams);
+            uint simpleNormalOutputCapacity = ResolveStreamCapacity(
+                simpleNormalVisible,
+                simpleNormalCapacity,
+                sidedStreams);
+            uint fullOutputCapacity = ResolveStreamCapacity(
+                fullVisible,
+                fullCapacity,
+                sidedStreams);
+            sceneData.ForwardVisibilitySimpleCapacity =
+                checked((int)simpleOutputCapacity);
+            sceneData.ForwardVisibilitySimpleNormalCapacity =
+                checked((int)simpleNormalOutputCapacity);
+            sceneData.ForwardVisibilityFullCapacity =
+                checked((int)fullOutputCapacity);
             sceneData.ForwardVisibilityCounterBuffer = counterBuffer.Handle;
             sceneData.ForwardVisibilityIndirectDispatchBuffer = indirectDispatchBuffer.Handle;
             sceneData.ForwardVisibilityBufferBytes = checked(
@@ -151,12 +177,18 @@ namespace Njulf.Rendering.Pipeline
             var pushConstants = new GPUForwardVisibilityCompactionPushConstants
             {
                 CurrentFrameIndex = (uint)frameIndex,
-                SimpleInputCapacity = checked((uint)Math.Max(0, simpleCapacity)),
-                SimpleNormalInputCapacity = checked((uint)Math.Max(0, simpleNormalCapacity)),
-                FullInputCapacity = checked((uint)Math.Max(0, fullCapacity)),
-                SimpleOutputCapacity = simpleVisible.ElementCapacity,
-                SimpleNormalOutputCapacity = simpleNormalVisible.ElementCapacity,
-                FullOutputCapacity = fullVisible.ElementCapacity,
+                SimpleInputCapacity = sidedStreams
+                    ? checked((uint)sceneData.SceneSubmissionGpuCompactedSimpleOpaqueCapacity)
+                    : checked((uint)Math.Max(0, simpleCapacity)),
+                SimpleNormalInputCapacity = sidedStreams
+                    ? checked((uint)sceneData.SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity)
+                    : checked((uint)Math.Max(0, simpleNormalCapacity)),
+                FullInputCapacity = sidedStreams
+                    ? checked((uint)sceneData.SceneSubmissionGpuCompactedFullOpaqueCapacity)
+                    : checked((uint)Math.Max(0, fullCapacity)),
+                SimpleOutputCapacity = simpleOutputCapacity,
+                SimpleNormalOutputCapacity = simpleNormalOutputCapacity,
+                FullOutputCapacity = fullOutputCapacity,
                 InputCounterBufferBaseIndex = (uint)BindlessIndex.SceneSubmissionCounterBufferBase,
                 OutputCounterBufferBaseIndex = (uint)BindlessIndex.ForwardVisibilityCounterBufferBase,
                 InputSimpleBufferBaseIndex = (uint)BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
@@ -170,7 +202,8 @@ namespace Njulf.Rendering.Pipeline
                 HiZTextureIndex = (uint)BindlessIndex.HiZDepthTexture,
                 HiZMipCount = sceneData.HiZMipCount,
                 OcclusionCullingEnabled = sceneData.OcclusionCullingEnabled ? (uint)sceneData.HiZTestMode : (uint)HiZTestMode.Off,
-                OcclusionBias = sceneData.OcclusionBias
+                OcclusionBias = sceneData.OcclusionBias,
+                Padding0 = sidedStreams ? 1u : 0u
             };
             _context.Api.CmdPushConstants(
                 cmd,
@@ -201,27 +234,44 @@ namespace Njulf.Rendering.Pipeline
             return GetIndirectDispatchOffset(FullOpaqueIndirectDispatchSlot);
         }
 
+        public static ulong GetSimpleOpaqueDoubleSidedIndirectDispatchOffset() =>
+            GetIndirectDispatchOffset(
+                SimpleOpaqueDoubleSidedIndirectDispatchSlot);
+
+        public static ulong GetSimpleNormalOpaqueDoubleSidedIndirectDispatchOffset() =>
+            GetIndirectDispatchOffset(
+                SimpleNormalOpaqueDoubleSidedIndirectDispatchSlot);
+
+        public static ulong GetFullOpaqueDoubleSidedIndirectDispatchOffset() =>
+            GetIndirectDispatchOffset(
+                FullOpaqueDoubleSidedIndirectDispatchSlot);
+
         private static ulong GetIndirectDispatchOffset(int slot)
         {
             return checked((ulong)slot * IndirectDispatchStride);
         }
 
-        private void EnsureRuntimeBuffers(int frameIndex, int simpleCapacity, int simpleNormalCapacity, int fullCapacity)
+        private void EnsureRuntimeBuffers(
+            int frameIndex,
+            int simpleCapacity,
+            int simpleNormalCapacity,
+            int fullCapacity,
+            bool sidedStreams)
         {
             ValidateFrameIndex(frameIndex);
             EnsureCapacity(
                 ref _simpleVisibleDrawBuffers[frameIndex],
-                checked((uint)Math.Max(1, simpleCapacity)),
+                RequiredStreamElements(simpleCapacity, sidedStreams),
                 DrawCommandStride,
                 $"ForwardVisibility.SimpleOpaqueVisibleMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _simpleNormalVisibleDrawBuffers[frameIndex],
-                checked((uint)Math.Max(1, simpleNormalCapacity)),
+                RequiredStreamElements(simpleNormalCapacity, sidedStreams),
                 DrawCommandStride,
                 $"ForwardVisibility.SimpleNormalOpaqueVisibleMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
                 ref _fullVisibleDrawBuffers[frameIndex],
-                checked((uint)Math.Max(1, fullCapacity)),
+                RequiredStreamElements(fullCapacity, sidedStreams),
                 DrawCommandStride,
                 $"ForwardVisibility.FullOpaqueVisibleMeshletDraw.Frame{frameIndex}");
             EnsureCapacity(
@@ -237,6 +287,24 @@ namespace Njulf.Rendering.Pipeline
                 BufferUsageFlags.IndirectBufferBit);
             UpdateRegisteredBindlessBuffers(frameIndex);
         }
+
+        private static uint RequiredStreamElements(
+            int candidateCount,
+            bool sidedStreams)
+        {
+            uint logicalCapacity = checked((uint)Math.Max(1, candidateCount));
+            return sidedStreams
+                ? checked(logicalCapacity * 2u)
+                : logicalCapacity;
+        }
+
+        private static uint ResolveStreamCapacity(
+            RuntimeBuffer buffer,
+            int candidateCount,
+            bool sidedStreams) =>
+            sidedStreams
+                ? checked((uint)Math.Max(1, candidateCount))
+                : buffer.ElementCapacity;
 
         private void EnsureCapacity(
             ref RuntimeBuffer buffer,

@@ -19,6 +19,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
         private readonly bool _receiverFeedbackPipelinesEnabled;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private PipelineLayout _computeLayout;
         private PipelineLayout _graphicsLayout;
@@ -42,11 +43,15 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             new VkPipeline[4, 2];
         private readonly ForwardHybridReflectionReceiverPipelineConfiguration
             _hybridReflectionConfiguration;
+        private readonly ForwardNearFieldDirectSourcePipelineConfiguration
+            _nearFieldDirectSourceConfiguration;
         private Format _colorFormat;
+        private Format _motionVectorFormat;
         private Format _depthFormat;
         private VkPipeline _shadowPipeline;
         private VkPipeline _authoredShadowPipeline;
         private VkPipeline _authoredMotionVectorPipeline;
+        private bool _pipelinesPrepared;
         private bool _disposed;
 
         public FoliagePipeline(
@@ -63,12 +68,47 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 giCausticReceiverConfiguration = default,
             ForwardHybridReflectionReceiverPipelineConfiguration
                 hybridReflectionConfiguration = default)
+            : this(
+                context,
+                bindlessHeap,
+                colorFormat,
+                motionVectorFormat,
+                depthFormat,
+                settings,
+                receiverFeedbackPipelinesEnabled,
+                nearFieldDirectSourceConfiguration,
+                giCausticReceiverConfiguration,
+                hybridReflectionConfiguration,
+                pipelineCacheService: null,
+                createPipelines: true)
+        {
+        }
+
+        internal FoliagePipeline(
+            VulkanContext context,
+            BindlessHeap bindlessHeap,
+            Format colorFormat,
+            Format motionVectorFormat,
+            Format depthFormat,
+            RenderSettings settings,
+            bool receiverFeedbackPipelinesEnabled,
+            ForwardNearFieldDirectSourcePipelineConfiguration
+                nearFieldDirectSourceConfiguration,
+            ForwardGiCausticReceiverPipelineConfiguration
+                giCausticReceiverConfiguration,
+            ForwardHybridReflectionReceiverPipelineConfiguration
+                hybridReflectionConfiguration,
+            GiPipelineCacheService? pipelineCacheService,
+            bool createPipelines)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
             Settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _pipelineCacheService = pipelineCacheService;
             _receiverFeedbackPipelinesEnabled =
                 receiverFeedbackPipelinesEnabled;
+            _nearFieldDirectSourceConfiguration =
+                nearFieldDirectSourceConfiguration;
             NearFieldDirectSourcePipelinesRequested =
                 ForwardNearFieldDirectSourceContract
                     .TryValidatePipelineConfiguration(
@@ -76,6 +116,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         out _);
             CombinedAdvancedGiPipelinesRequested =
                 NearFieldDirectSourcePipelinesRequested &&
+                nearFieldDirectSourceConfiguration.SourceProducerMode ==
+                    SimpleDdgiNearFieldSourceProducerMode.ForwardMrt &&
                 ForwardAdvancedGiCombinedContract
                     .TryValidatePipelineConfigurations(
                         giCausticReceiverConfiguration,
@@ -83,6 +125,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         out _);
             _hybridReflectionConfiguration = hybridReflectionConfiguration;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
+            _colorFormat = colorFormat;
+            _motionVectorFormat = motionVectorFormat;
+            _depthFormat = depthFormat;
 
             ValidatePushConstantRange((uint)Math.Max(
                 Marshal.SizeOf<GPUFoliageCullPushConstants>(),
@@ -91,7 +136,8 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     Marshal.SizeOf<GPUMotionVectorPushConstants>())));
             CreatePipelineCache();
             CreateLayouts();
-            CreatePipelines(colorFormat, motionVectorFormat, depthFormat);
+            if (createPipelines)
+                Prepare();
         }
 
         public PipelineLayout ComputeLayout => _computeLayout;
@@ -110,7 +156,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public bool NearFieldDirectSourcePipelinesAvailable =>
             _forwardNearFieldDirectSourcePipeline.Handle != 0 &&
             _authoredForwardNearFieldDirectSourcePipeline.Handle != 0 &&
-            (!_receiverFeedbackPipelinesEnabled ||
+            (_nearFieldDirectSourceConfiguration.SourceProducerMode ==
+                 SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster ||
+             !_receiverFeedbackPipelinesEnabled ||
              _forwardReceiverFeedbackNearFieldDirectSourcePipeline.Handle != 0 &&
              _authoredForwardReceiverFeedbackNearFieldDirectSourcePipeline.Handle != 0);
         public bool CombinedAdvancedGiPipelinesAvailable =>
@@ -140,6 +188,29 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         public bool HybridReflectionPipelinesAvailable { get; private set; }
         public string HybridReflectionPipelineFailureReason { get; private set; } =
             "hybrid-reflection-foliage-pipelines-not-requested";
+
+        internal bool IsPrepared => _pipelinesPrepared;
+
+        internal void Prepare()
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_pipelinesPrepared)
+                return;
+
+            try
+            {
+                CreatePipelines(
+                    _colorFormat,
+                    _motionVectorFormat,
+                    _depthFormat);
+                _pipelinesPrepared = true;
+            }
+            catch
+            {
+                DestroyPipelines();
+                throw;
+            }
+        }
 
         public bool TryResolveHybridReflectionPipeline(
             bool authored,
@@ -222,8 +293,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         public void Recreate(Format colorFormat, Format motionVectorFormat, Format depthFormat)
         {
+            _colorFormat = colorFormat;
+            _motionVectorFormat = motionVectorFormat;
+            _depthFormat = depthFormat;
+            if (!_pipelinesPrepared)
+                return;
+
             DestroyPipelines();
-            CreatePipelines(colorFormat, motionVectorFormat, depthFormat);
+            Prepare();
         }
 
         private void ValidatePushConstantRange(uint requiredSize)
@@ -239,6 +316,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo
             {
                 SType = StructureType.PipelineCacheCreateInfo
@@ -482,6 +565,40 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
             try
             {
+                if (_nearFieldDirectSourceConfiguration.SourceProducerMode ==
+                    SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster)
+                {
+                    _forwardNearFieldDirectSourcePipeline = CreateGraphicsPipeline(
+                        "foliage_grass.task.spv",
+                        "foliage_grass.mesh.spv",
+                        ForwardNearFieldDirectSourceContract
+                            .TraceResolutionFoliageFragmentShader,
+                        ForwardNearFieldDirectSourceContract.RequiredAttachmentFormat,
+                        depthFormat,
+                        hasColorAttachment: true,
+                        depthWriteEnable: true,
+                        secondaryColorFormat:
+                            ForwardNearFieldDirectSourceContract
+                                .ReceiverPayloadFormat);
+                    _authoredForwardNearFieldDirectSourcePipeline =
+                        CreateGraphicsPipeline(
+                            "foliage_mesh.task.spv",
+                            "foliage_mesh.mesh.spv",
+                            ForwardNearFieldDirectSourceContract
+                                .TraceResolutionFoliageFragmentShader,
+                            ForwardNearFieldDirectSourceContract
+                                .RequiredAttachmentFormat,
+                            depthFormat,
+                            hasColorAttachment: true,
+                            depthWriteEnable: true,
+                            secondaryColorFormat:
+                                ForwardNearFieldDirectSourceContract
+                                    .ReceiverPayloadFormat);
+                    NearFieldDirectSourcePipelineFailureReason =
+                        "near-field-trace-foliage-pipelines-ready";
+                    return;
+                }
+
                 _forwardNearFieldDirectSourcePipeline = CreateGraphicsPipeline(
                     "foliage_grass.task.spv",
                     "foliage_grass.mesh.spv",
@@ -736,13 +853,26 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     BasePipelineIndex = -1
                 };
 
-                Result result = _context.Api.CreateComputePipelines(
-                    _context.Device,
-                    _pipelineCache,
-                    1,
-                    &pipelineInfo,
-                    null,
-                    out VkPipeline pipeline);
+                long pipelineStart =
+                    _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+                Result result;
+                VkPipeline pipeline;
+                try
+                {
+                    result = _context.Api.CreateComputePipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out pipeline);
+                }
+                finally
+                {
+                    _pipelineCacheService?.EndPipelineCreation(
+                        $"Foliage:{shaderName}",
+                        pipelineStart);
+                }
                 if (result != Result.Success)
                     throw new VulkanException("Failed to create foliage compute pipeline", result);
                 return pipeline;
@@ -909,6 +1039,23 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     DepthAttachmentFormat = depthFormat,
                     StencilAttachmentFormat = Format.Undefined
                 };
+                var fragmentShadingRateState =
+                    new PipelineFragmentShadingRateStateCreateInfoKHR
+                    {
+                        SType = StructureType
+                            .PipelineFragmentShadingRateStateCreateInfoKhr,
+                        FragmentSize = new Extent2D
+                        {
+                            Width = 1,
+                            Height = 1
+                        }
+                    };
+                fragmentShadingRateState.CombinerOps.Element0 =
+                    FragmentShadingRateCombinerOpKHR.KeepKhr;
+                fragmentShadingRateState.CombinerOps.Element1 =
+                    FragmentShadingRateCombinerOpKHR.ReplaceKhr;
+                if (_context.FragmentShadingRateSupported)
+                    renderingInfo.PNext = &fragmentShadingRateState;
                 var pipelineInfo = new GraphicsPipelineCreateInfo
                 {
                     SType = StructureType.GraphicsPipelineCreateInfo,
@@ -930,13 +1077,27 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     BasePipelineIndex = -1
                 };
 
-                Result result = _context.Api.CreateGraphicsPipelines(
-                    _context.Device,
-                    _pipelineCache,
-                    1,
-                    &pipelineInfo,
-                    null,
-                    out VkPipeline pipeline);
+                long pipelineStart =
+                    _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+                Result result;
+                VkPipeline pipeline;
+                try
+                {
+                    result = _context.Api.CreateGraphicsPipelines(
+                        _context.Device,
+                        _pipelineCache,
+                        1,
+                        &pipelineInfo,
+                        null,
+                        out pipeline);
+                }
+                finally
+                {
+                    _pipelineCacheService?.EndPipelineCreation(
+                        $"Foliage:{taskShaderName}+{meshShaderName}+" +
+                        fragmentShaderName,
+                        pipelineStart);
+                }
                 if (result != Result.Success)
                 {
                     throw new VulkanException(
@@ -987,6 +1148,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline(ref _shadowPipeline);
             DestroyPipeline(ref _authoredShadowPipeline);
             DestroyPipeline(ref _authoredMotionVectorPipeline);
+            _pipelinesPrepared = false;
         }
 
         private void DestroyNearFieldDirectSourcePipelines(bool includeCombined)
@@ -1054,7 +1216,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _context.Api.DestroyPipelineLayout(_context.Device, _computeLayout, null);
             if (_graphicsLayout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _graphicsLayout, null);
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService == null && _pipelineCache.Handle != 0)
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
             SilkMarshal.Free(_entryPointName);
         }

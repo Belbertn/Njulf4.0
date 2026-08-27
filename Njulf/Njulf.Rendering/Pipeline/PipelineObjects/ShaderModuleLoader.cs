@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using Njulf.Rendering.Core;
+using Njulf.Rendering.Diagnostics;
 using Njulf.Shaders;
 using Silk.NET.Vulkan;
 
@@ -61,6 +62,29 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         {
             Assembly assembly = typeof(ShaderLibrary).Assembly;
             string resourceName = EmbeddedResourcePrefix + shaderFileName;
+            string? overrideDirectory = Environment.GetEnvironmentVariable(
+                PerformanceCaptureHostIdentityResolver
+                    .ShaderOverrideDirectoryEnvironmentVariable);
+            if (!string.IsNullOrWhiteSpace(overrideDirectory))
+            {
+                string overridePath = Path.Combine(
+                    Path.GetFullPath(overrideDirectory),
+                    shaderFileName);
+                if (File.Exists(overridePath))
+                {
+                    using var input = new FileStream(
+                        overridePath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read,
+                        64 * 1024,
+                        FileOptions.SequentialScan);
+                    return ReadBoundedSnapshot(
+                        input,
+                        $"shader override '{overridePath}'");
+                }
+            }
+
             using Stream? stream = assembly.GetManifestResourceStream(resourceName) ??
                                    assembly.GetManifestResourceStream(EmbeddedResourcePrefix + Path.GetFileNameWithoutExtension(shaderFileName));
             if (stream != null)
@@ -68,10 +92,9 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                     stream,
                     $"embedded shader '{resourceName}'");
 
-            // The build-pinned embedded bundle is authoritative. A deployment may
-            // provide a local file only when a resource is genuinely absent; never
-            // walk parent directories or mix Debug and Release outputs from a
-            // developer workspace.
+            // The build-pinned embedded bundle is authoritative unless an explicit
+            // override directory is configured. A deployment may still provide a
+            // same-directory fallback when a resource is genuinely absent.
             string[] fileCandidates = GetFileCandidates(shaderFileName).ToArray();
             foreach (string candidate in fileCandidates)
             {

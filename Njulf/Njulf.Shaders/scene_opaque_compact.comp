@@ -15,6 +15,10 @@ layout(push_constant) uniform SceneOpaqueCompactionPushConstantBlock
 const uint SCENE_OPAQUE_COMPACTION_FLAG_FRUSTUM_TEST = 1u << 0u;
 const uint SCENE_OPAQUE_COMPACTION_FLAG_GPU_LOD_SELECTION = 1u << 1u;
 const uint SCENE_OPAQUE_COMPACTION_FLAG_DIRECTIONAL_SHADOW_COMPACTION = 1u << 2u;
+const uint SCENE_OPAQUE_COMPACTION_FLAG_SIDED_STREAMS = 1u << 3u;
+const uint GPU_LOD_SELECTION_MODE_LEGACY_DISTANCE = 0u;
+const uint GPU_LOD_SELECTION_MODE_SCREEN_SPACE_ERROR = 1u;
+const uint GPU_LOD_HISTORY_FRAME_COUNT = 2u;
 const uint SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT = 4u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_CANDIDATE = 0u;
 const uint SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED = 1u;
@@ -60,6 +64,13 @@ const uint SCENE_SUBMISSION_COUNTER_NORMAL_CONE_CANDIDATE = 70u;
 const uint SCENE_SUBMISSION_COUNTER_NORMAL_CONE_TESTED = 71u;
 const uint SCENE_SUBMISSION_COUNTER_NORMAL_CONE_REJECTED = 72u;
 const uint SCENE_SUBMISSION_COUNTER_NORMAL_CONE_INVALID = 73u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_DOUBLE_SIDED_APPEND = 74u;
+const uint SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_DOUBLE_SIDED_APPEND = 75u;
+const uint SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_DOUBLE_SIDED_APPEND = 76u;
+const uint SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_DOUBLE_SIDED_APPEND = 77u;
+const uint SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_DOUBLE_SIDED_APPEND = 78u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_DOUBLE_SIDED_BASE = 79u;
+const uint SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_DOUBLE_SIDED_BASE = 83u;
 const uint SCENE_INDIRECT_DISPATCH_WORD_STRIDE = 4u;
 const uint SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT = 0u;
 const uint SCENE_INDIRECT_DISPATCH_SIMPLE_OPAQUE_SLOT = 1u;
@@ -70,6 +81,15 @@ const uint SCENE_INDIRECT_DISPATCH_MASKED_DEPTH_SLOT = 5u;
 const uint SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_SLOT_BASE = 6u;
 const uint SCENE_INDIRECT_DISPATCH_DIRECTIONAL_DYNAMIC_SHADOW_SLOT_BASE =
     SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_SLOT_BASE + SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT;
+const uint SCENE_INDIRECT_DISPATCH_SIMPLE_OPAQUE_DOUBLE_SIDED_SLOT = 14u;
+const uint SCENE_INDIRECT_DISPATCH_SIMPLE_NORMAL_OPAQUE_DOUBLE_SIDED_SLOT = 15u;
+const uint SCENE_INDIRECT_DISPATCH_FULL_OPAQUE_DOUBLE_SIDED_SLOT = 16u;
+const uint SCENE_INDIRECT_DISPATCH_SOLID_DEPTH_DOUBLE_SIDED_SLOT = 17u;
+const uint SCENE_INDIRECT_DISPATCH_MASKED_DEPTH_DOUBLE_SIDED_SLOT = 18u;
+const uint SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_DOUBLE_SIDED_SLOT_BASE = 19u;
+const uint SCENE_INDIRECT_DISPATCH_DIRECTIONAL_DYNAMIC_SHADOW_DOUBLE_SIDED_SLOT_BASE =
+    SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_DOUBLE_SIDED_SLOT_BASE +
+        SCENE_DIRECTIONAL_SHADOW_CASCADE_COUNT;
 const uint SCENE_OPAQUE_BUCKET_SIMPLE = 0u;
 const uint SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL = 1u;
 const uint SCENE_OPAQUE_BUCKET_FULL = 2u;
@@ -133,6 +153,18 @@ uint IndirectDispatchCountWord(uint slot)
     return slot * SCENE_INDIRECT_DISPATCH_WORD_STRIDE;
 }
 
+bool SidedStreamsEnabled()
+{
+    return (pc.Push.Flags &
+        SCENE_OPAQUE_COMPACTION_FLAG_SIDED_STREAMS) != 0u;
+}
+
+bool IsDoubleSided(GPUMeshletDrawCommand command)
+{
+    return SidedStreamsEnabled() &&
+        (command.Flags & MESHLET_COMMAND_FLAG_MATERIAL_DOUBLE_SIDED) != 0u;
+}
+
 uint CandidateBufferBaseIndex(uint candidateIndex, out uint localDrawIndex, out uint bucket)
 {
     if (candidateIndex < pc.Push.SimpleCandidateCount)
@@ -171,8 +203,8 @@ GPUMeshInfo ReadMeshInfo(uint meshIndex)
     info.MeshletLod2Offset = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 11u);
     info.MeshletLod2Count = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 12u);
     info.MeshletLodGeneratedCount = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 13u);
-    info.Padding0 = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 14u);
-    info.Padding1 = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 15u);
+    info.MeshletLod1ErrorBits = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 14u);
+    info.MeshletLod2ErrorBits = ReadStorageWord(uint(SCENE_MESH_METADATA_BUFFER_INDEX), baseWord + 15u);
     return info;
 }
 
@@ -209,8 +241,17 @@ uint OpaqueBucketOutputCapacity(uint bucket)
             : pc.Push.FullOutputCapacity;
 }
 
-uint OpaqueBucketAppendCounterWord(uint bucket)
+uint OpaqueBucketAppendCounterWord(uint bucket, bool doubleSided)
 {
+    if (doubleSided)
+    {
+        return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
+            ? SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_DOUBLE_SIDED_APPEND
+            : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
+                ? SCENE_SUBMISSION_COUNTER_SIMPLE_NORMAL_OPAQUE_DOUBLE_SIDED_APPEND
+                : SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_DOUBLE_SIDED_APPEND;
+    }
+
     return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
         ? SCENE_SUBMISSION_COUNTER_SIMPLE_OPAQUE_APPEND
         : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
@@ -236,8 +277,17 @@ uint OpaqueBucketOverflowCounterWord(uint bucket)
             : SCENE_SUBMISSION_COUNTER_FULL_OPAQUE_OVERFLOW;
 }
 
-uint OpaqueBucketIndirectDispatchSlot(uint bucket)
+uint OpaqueBucketIndirectDispatchSlot(uint bucket, bool doubleSided)
 {
+    if (doubleSided)
+    {
+        return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
+            ? SCENE_INDIRECT_DISPATCH_SIMPLE_OPAQUE_DOUBLE_SIDED_SLOT
+            : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
+                ? SCENE_INDIRECT_DISPATCH_SIMPLE_NORMAL_OPAQUE_DOUBLE_SIDED_SLOT
+                : SCENE_INDIRECT_DISPATCH_FULL_OPAQUE_DOUBLE_SIDED_SLOT;
+    }
+
     return bucket == SCENE_OPAQUE_BUCKET_SIMPLE
         ? SCENE_INDIRECT_DISPATCH_SIMPLE_OPAQUE_SLOT
         : bucket == SCENE_OPAQUE_BUCKET_SIMPLE_NORMAL
@@ -427,7 +477,10 @@ bool CanHiZTestMeshletDrawCommand(GPUMeshletDrawCommand command)
     return alphaMode < 1.5;
 }
 
-uint SelectLodLevel(vec3 cameraPosition, vec3 worldCenter, float worldRadius)
+uint SelectLegacyDistanceLodLevel(
+    vec3 cameraPosition,
+    vec3 worldCenter,
+    float worldRadius)
 {
     float effectiveRadius = max(worldRadius, 1.0);
     float distanceFromSurface = max(0.0, length(cameraPosition - worldCenter) - effectiveRadius);
@@ -439,6 +492,135 @@ uint SelectLodLevel(vec3 cameraPosition, vec3 worldCenter, float worldRadius)
     if (distanceRatio >= lod1DistanceRatio)
         return 1u;
     return 0u;
+}
+
+float ProjectedLodErrorPixels(
+    float relativeError,
+    vec3 cameraPosition,
+    vec3 worldCenter,
+    float worldRadius)
+{
+    float centerDistance = max(
+        length(cameraPosition - worldCenter),
+        max(worldRadius, 1e-4));
+    float worldError = max(relativeError, 0.0) *
+        max(2.0 * worldRadius, 1e-4);
+    return worldError * max(pc.Push.GpuLodProjectionScale, 1.0) /
+        centerDistance;
+}
+
+uint SelectLodForPixelThreshold(
+    GPUMeshInfo meshInfo,
+    float lod1ErrorPixels,
+    float lod2ErrorPixels,
+    float threshold)
+{
+    bool lod2ErrorValid = uintBitsToFloat(
+        meshInfo.MeshletLod2ErrorBits) >= 0.0;
+    bool lod1ErrorValid = uintBitsToFloat(
+        meshInfo.MeshletLod1ErrorBits) >= 0.0;
+    if (meshInfo.MeshletLod2Count > 0u && lod2ErrorValid &&
+        lod2ErrorPixels <= threshold)
+    {
+        return 2u;
+    }
+    if (meshInfo.MeshletLod1Count > 0u && lod1ErrorValid &&
+        lod1ErrorPixels <= threshold)
+    {
+        return 1u;
+    }
+    return 0u;
+}
+
+uint SelectScreenSpaceErrorLodLevel(
+    GPUMeshInfo meshInfo,
+    uint instanceId,
+    vec3 cameraPosition,
+    vec3 worldCenter,
+    float worldRadius)
+{
+    float lod1Error = uintBitsToFloat(meshInfo.MeshletLod1ErrorBits);
+    float lod2Error = uintBitsToFloat(meshInfo.MeshletLod2ErrorBits);
+    if (lod1Error < 0.0 && lod2Error < 0.0)
+    {
+        return SelectLegacyDistanceLodLevel(
+            cameraPosition,
+            worldCenter,
+            worldRadius);
+    }
+
+    float lod1ErrorPixels = ProjectedLodErrorPixels(
+        lod1Error,
+        cameraPosition,
+        worldCenter,
+        worldRadius);
+    float lod2ErrorPixels = ProjectedLodErrorPixels(
+        lod2Error,
+        cameraPosition,
+        worldCenter,
+        worldRadius);
+    float target = max(pc.Push.GpuLodTargetPixelError, 0.125);
+    uint selected = SelectLodForPixelThreshold(
+        meshInfo,
+        lod1ErrorPixels,
+        lod2ErrorPixels,
+        target);
+
+    if (instanceId < pc.Push.GpuLodHistoryCapacity)
+    {
+        uint previousFrame =
+            (pc.Push.CurrentFrameIndex + GPU_LOD_HISTORY_FRAME_COUNT - 1u) %
+            GPU_LOD_HISTORY_FRAME_COUNT;
+        uint previous = ReadStorageWord(
+            pc.Push.GpuLodHistoryBufferBaseIndex + previousFrame,
+            instanceId);
+        if (previous <= 2u && selected != previous)
+        {
+            float hysteresis = clamp(
+                pc.Push.GpuLodHysteresisFraction,
+                0.0,
+                0.5);
+            float stableThreshold = selected > previous
+                ? target * (1.0 - hysteresis)
+                : target * (1.0 + hysteresis);
+            selected = SelectLodForPixelThreshold(
+                meshInfo,
+                lod1ErrorPixels,
+                lod2ErrorPixels,
+                stableThreshold);
+        }
+
+        uint outputBuffer = pc.Push.GpuLodHistoryBufferBaseIndex +
+            pc.Push.CurrentFrameIndex;
+        atomicExchange(
+            BindlessStorageBuffers[nonuniformEXT(outputBuffer)].Words[
+                instanceId],
+            selected);
+    }
+    return selected;
+}
+
+uint SelectLodLevel(
+    GPUMeshInfo meshInfo,
+    uint instanceId,
+    vec3 cameraPosition,
+    vec3 worldCenter,
+    float worldRadius)
+{
+    if (pc.Push.GpuLodSelectionMode ==
+        GPU_LOD_SELECTION_MODE_SCREEN_SPACE_ERROR)
+    {
+        return SelectScreenSpaceErrorLodLevel(
+            meshInfo,
+            instanceId,
+            cameraPosition,
+            worldCenter,
+            worldRadius);
+    }
+    return SelectLegacyDistanceLodLevel(
+        cameraPosition,
+        worldCenter,
+        worldRadius);
 }
 
 void SelectMeshletRange(GPUMeshInfo meshInfo, uint requestedLod, out uint firstMeshlet, out uint meshletCount, out uint effectiveLod)
@@ -517,7 +699,12 @@ bool ApplyGpuLodSelection(inout GPUMeshletDrawCommand command, out uint effectiv
     vec4 worldCenter = TransformRowMajorPoint(meshInfo.BoundingSphere.xyz, instanceBufferIndex, objectWordOffset);
     float worldRadius = meshInfo.BoundingSphere.w * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
     uint requestedLod = min(
-        SelectLodLevel(pc.Push.CameraPosition.xyz, worldCenter.xyz, worldRadius) + lodBias,
+        SelectLodLevel(
+            meshInfo,
+            command.InstanceId,
+            pc.Push.CameraPosition.xyz,
+            worldCenter.xyz,
+            worldRadius) + lodBias,
         2u);
 
     uint firstMeshlet = 0u;
@@ -577,7 +764,12 @@ bool ApplyConservativeDirectionalShadowLodSelection(
     vec4 worldCenter = TransformRowMajorPoint(meshInfo.BoundingSphere.xyz, instanceBufferIndex, objectWordOffset);
     float worldRadius = meshInfo.BoundingSphere.w * ReadInstanceMaxScale(instanceBufferIndex, objectWordOffset);
     uint requestedLod = min(
-        SelectLodLevel(pc.Push.CameraPosition.xyz, worldCenter.xyz, worldRadius) + lodBias,
+        SelectLodLevel(
+            meshInfo,
+            command.InstanceId,
+            pc.Push.CameraPosition.xyz,
+            worldCenter.xyz,
+            worldRadius) + lodBias,
         2u);
     if (requestedLod > 0u)
     {
@@ -678,8 +870,13 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
         return;
     }
 
-    uint bucketOutputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[OpaqueBucketAppendCounterWord(bucket)], 1u);
-    if (bucketOutputIndex >= OpaqueBucketOutputCapacity(bucket))
+    bool doubleSided = IsDoubleSided(command);
+    uint bucketCapacity = OpaqueBucketOutputCapacity(bucket);
+    uint bucketOutputIndex = atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+            OpaqueBucketAppendCounterWord(bucket, doubleSided)],
+        1u);
+    if (bucketOutputIndex >= bucketCapacity)
     {
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_OVERFLOW], 1u);
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[OpaqueBucketOverflowCounterWord(bucket)], 1u);
@@ -687,13 +884,17 @@ void ProcessOpaqueCandidate(uint candidateIndex, vec4 frustumPlanes[6])
     }
 
     WriteMeshletDrawCommand(aggregateOutputIndex, command);
-    WriteOpaqueBucketMeshletDrawCommand(bucket, bucketOutputIndex, command);
+    WriteOpaqueBucketMeshletDrawCommand(
+        bucket,
+        bucketOutputIndex + (doubleSided ? bucketCapacity : 0u),
+        command);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_OPAQUE_EMITTED], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[OpaqueBucketEmittedCounterWord(bucket)], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
         IndirectDispatchCountWord(SCENE_INDIRECT_DISPATCH_OPAQUE_SLOT)], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
-        IndirectDispatchCountWord(OpaqueBucketIndirectDispatchSlot(bucket))], 1u);
+        IndirectDispatchCountWord(
+            OpaqueBucketIndirectDispatchSlot(bucket, doubleSided))], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[SCENE_SUBMISSION_COUNTER_LOD0_EMITTED + min(effectiveLod, 2u)], 1u);
 }
 
@@ -705,9 +906,11 @@ void ProcessDepthCandidate(
     uint outputCapacity,
     uint candidateCounterWord,
     uint appendCounterWord,
+    uint doubleSidedAppendCounterWord,
     uint emittedCounterWord,
     uint overflowCounterWord,
     uint indirectDispatchSlot,
+    uint doubleSidedIndirectDispatchSlot,
     vec4 frustumPlanes[6])
 {
     if (candidateIndex >= candidateCount)
@@ -747,17 +950,29 @@ void ProcessDepthCandidate(
             pc.Push.CameraPosition.xyz))
         return;
 
-    uint outputIndex = atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[appendCounterWord], 1u);
+    bool doubleSided = IsDoubleSided(command);
+    uint selectedAppendCounterWord = doubleSided
+        ? doubleSidedAppendCounterWord
+        : appendCounterWord;
+    uint outputIndex = atomicAdd(
+        BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
+            selectedAppendCounterWord],
+        1u);
     if (outputIndex >= outputCapacity)
     {
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[overflowCounterWord], 1u);
         return;
     }
 
-    WriteMeshletDrawCommandToBase(outputBufferIndex, outputIndex, command);
+    WriteMeshletDrawCommandToBase(
+        outputBufferIndex,
+        outputIndex + (doubleSided ? outputCapacity : 0u),
+        command);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[emittedCounterWord], 1u);
     atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
-        IndirectDispatchCountWord(indirectDispatchSlot)], 1u);
+        IndirectDispatchCountWord(doubleSided
+            ? doubleSidedIndirectDispatchSlot
+            : indirectDispatchSlot)], 1u);
 }
 
 void ProcessDirectionalShadowCandidate(
@@ -832,9 +1047,16 @@ void ProcessDirectionalShadowCandidate(
             continue;
         }
 
+        bool doubleSided = IsDoubleSided(command);
+        uint appendCounterWord = doubleSided
+            ? (dynamicShadow
+                ? SCENE_SUBMISSION_COUNTER_DIRECTIONAL_DYNAMIC_SHADOW_DOUBLE_SIDED_BASE
+                : SCENE_SUBMISSION_COUNTER_DIRECTIONAL_STATIC_SHADOW_DOUBLE_SIDED_BASE) + cascade
+            : cascadeCounterBase +
+                SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_APPEND_OFFSET;
         uint outputIndex = atomicAdd(
             BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
-                cascadeCounterBase + SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_APPEND_OFFSET],
+                appendCounterWord],
             1u);
         if (outputIndex >= outputCapacity)
         {
@@ -848,14 +1070,21 @@ void ProcessDirectionalShadowCandidate(
         uint outputBufferIndex = dynamicShadow
             ? DirectionalDynamicShadowOutputBufferIndex(cascade)
             : DirectionalStaticShadowOutputBufferIndex(cascade);
-        WriteMeshletDrawCommandToBase(outputBufferIndex, outputIndex, command);
+        WriteMeshletDrawCommandToBase(
+            outputBufferIndex,
+            outputIndex + (doubleSided ? outputCapacity : 0u),
+            command);
         atomicAdd(
             BindlessStorageBuffers[nonuniformEXT(CounterBufferIndex())].Words[
                 cascadeCounterBase + SCENE_SUBMISSION_COUNTER_DIRECTIONAL_SHADOW_EMITTED_OFFSET],
             1u);
-        uint indirectDispatchSlot = dynamicShadow
-            ? SCENE_INDIRECT_DISPATCH_DIRECTIONAL_DYNAMIC_SHADOW_SLOT_BASE + cascade
-            : SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_SLOT_BASE + cascade;
+        uint indirectDispatchSlot = doubleSided
+            ? (dynamicShadow
+                ? SCENE_INDIRECT_DISPATCH_DIRECTIONAL_DYNAMIC_SHADOW_DOUBLE_SIDED_SLOT_BASE
+                : SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_DOUBLE_SIDED_SLOT_BASE) + cascade
+            : (dynamicShadow
+                ? SCENE_INDIRECT_DISPATCH_DIRECTIONAL_DYNAMIC_SHADOW_SLOT_BASE
+                : SCENE_INDIRECT_DISPATCH_DIRECTIONAL_STATIC_SHADOW_SLOT_BASE) + cascade;
         atomicAdd(BindlessStorageBuffers[nonuniformEXT(IndirectDispatchBufferIndex())].Words[
             IndirectDispatchCountWord(indirectDispatchSlot)], 1u);
     }
@@ -876,9 +1105,11 @@ void main()
         pc.Push.SolidDepthOutputCapacity,
         SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_CANDIDATE,
         SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_APPEND,
+        SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_DOUBLE_SIDED_APPEND,
         SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_EMITTED,
         SCENE_SUBMISSION_COUNTER_SOLID_DEPTH_OVERFLOW,
         SCENE_INDIRECT_DISPATCH_SOLID_DEPTH_SLOT,
+        SCENE_INDIRECT_DISPATCH_SOLID_DEPTH_DOUBLE_SIDED_SLOT,
         frustumPlanes);
     ProcessDepthCandidate(
         candidateIndex,
@@ -888,9 +1119,11 @@ void main()
         pc.Push.MaskedDepthOutputCapacity,
         SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_CANDIDATE,
         SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_APPEND,
+        SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_DOUBLE_SIDED_APPEND,
         SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_EMITTED,
         SCENE_SUBMISSION_COUNTER_MASKED_DEPTH_OVERFLOW,
         SCENE_INDIRECT_DISPATCH_MASKED_DEPTH_SLOT,
+        SCENE_INDIRECT_DISPATCH_MASKED_DEPTH_DOUBLE_SIDED_SLOT,
         frustumPlanes);
     ProcessDirectionalShadowCandidate(
         candidateIndex,

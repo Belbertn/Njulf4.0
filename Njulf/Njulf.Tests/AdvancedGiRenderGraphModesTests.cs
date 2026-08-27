@@ -395,7 +395,11 @@ public sealed class AdvancedGiRenderGraphModesTests
             Assert.That(descriptors[RenderGraphResourceId.NearFieldResidualHistory]
                 .SizePolicy, Is.EqualTo(RenderGraphResourceSizePolicy.EighthResolution));
             Assert.That(descriptors[RenderGraphResourceId.NearFieldReceiverPayload]
-                .SizePolicy, Is.EqualTo(RenderGraphResourceSizePolicy.SceneResolution));
+                .SizePolicy, Is.EqualTo(RenderGraphResourceSizePolicy.EighthResolution));
+            Assert.That(descriptors[RenderGraphResourceId.NearFieldDirectSource]
+                .SizePolicy, Is.EqualTo(RenderGraphResourceSizePolicy.EighthResolution));
+            Assert.That(descriptors[RenderGraphResourceId.NearFieldTraceRasterDepth]
+                .SizePolicy, Is.EqualTo(RenderGraphResourceSizePolicy.EighthResolution));
             Assert.That(descriptors.ContainsKey(
                 RenderGraphResourceId.NearFieldResidualTraceFrameConstants), Is.True);
             Assert.That(trace.Usages.Any(static usage => usage.Resource ==

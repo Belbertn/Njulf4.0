@@ -28,7 +28,7 @@ public static class ForwardNearFieldDirectSourceContract
     /// Compile-time semantic stamp required by every dedicated fragment
     /// variant.  Bump this whenever the source ownership expression changes.
     /// </summary>
-    public const uint ShaderSemanticVersion = 4u;
+    public const uint ShaderSemanticVersion = 5u;
 
     // SceneColor plus radiance and a compact 128-bit receiver payload. The
     // payload packs two octahedral normals, a 16-bit frame-local surface-table
@@ -51,6 +51,15 @@ public static class ForwardNearFieldDirectSourceContract
         "forward_opaque_simple_ddgi_near_field_direct_source.frag.spv";
     public const string SimpleFullInputOpaqueFragmentShader =
         "forward_opaque_simple_full_input_ddgi_near_field_direct_source.frag.spv";
+
+    public const string TraceResolutionOpaqueFragmentShader =
+        "forward_opaque_ddgi_near_field_trace_source.frag.spv";
+    public const string TraceResolutionSimpleOpaqueFragmentShader =
+        "forward_opaque_simple_ddgi_near_field_trace_source.frag.spv";
+    public const string TraceResolutionSimpleFullInputOpaqueFragmentShader =
+        "forward_opaque_simple_full_input_ddgi_near_field_trace_source.frag.spv";
+    public const string TraceResolutionFoliageFragmentShader =
+        "foliage_forward_ddgi_near_field_trace_source.frag.spv";
 
     // C5 must not evict the production DDGI receiver cache merely because it
     // adds two MRT outputs. Keep exact-gather fallbacks above, and select these
@@ -88,6 +97,12 @@ public static class ForwardNearFieldDirectSourceContract
             SimpleDdgiNearFieldResidualFormat.R16G16B16A16Sfloat)
         {
             failure = "near-field-direct-source-r16g16b16a16-sfloat-required";
+            return false;
+        }
+
+        if (!Enum.IsDefined(configuration.SourceProducerMode))
+        {
+            failure = "near-field-direct-source-producer-mode-invalid";
             return false;
         }
 
@@ -175,10 +190,24 @@ public static class ForwardNearFieldDirectSourceContract
 
         SimpleDdgiNearFieldTraceSourceScaledExtent contractExtent =
             pipelineConfiguration.TraceSourceContract.Extent;
-        if (contractExtent.FullWidth != checked((int)expectedExtent.Width) ||
-            contractExtent.FullHeight != checked((int)expectedExtent.Height))
+        if (contractExtent.FullWidth != checked((int)sceneColor.Extent.Width) ||
+            contractExtent.FullHeight != checked((int)sceneColor.Extent.Height))
         {
             failure = "near-field-direct-source-contract-full-extent-mismatch";
+            return false;
+        }
+        int expectedSourceWidth = pipelineConfiguration.SourceProducerMode ==
+            SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster
+                ? contractExtent.ScaledWidth
+                : contractExtent.FullWidth;
+        int expectedSourceHeight = pipelineConfiguration.SourceProducerMode ==
+            SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster
+                ? contractExtent.ScaledHeight
+                : contractExtent.FullHeight;
+        if (expectedSourceWidth != checked((int)expectedExtent.Width) ||
+            expectedSourceHeight != checked((int)expectedExtent.Height))
+        {
+            failure = "near-field-direct-source-producer-extent-mismatch";
             return false;
         }
 
@@ -195,10 +224,13 @@ public static class ForwardNearFieldDirectSourceContract
 public readonly record struct ForwardNearFieldDirectSourcePipelineConfiguration(
     bool IsC5EffectivelyEnabled,
     SimpleDdgiNearFieldTraceSourceContract TraceSourceContract,
-    uint ShaderSemanticVersion)
+    uint ShaderSemanticVersion,
+    SimpleDdgiNearFieldSourceProducerMode SourceProducerMode =
+        SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster)
 {
     public static ForwardNearFieldDirectSourcePipelineConfiguration Disabled { get; } =
-        new(false, default, 0u);
+        new(false, default, 0u,
+            SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster);
 }
 
 /// <summary>
@@ -214,12 +246,20 @@ public sealed class ForwardNearFieldDirectSourceAttachmentBinding
     public ForwardNearFieldDirectSourceAttachmentBinding(
         RenderTarget directSource,
         RenderTarget receiverPayload,
+        RenderTarget? traceRasterDepth,
         ForwardNearFieldDirectSourcePipelineConfiguration configuration)
     {
         DirectSource = directSource ??
             throw new ArgumentNullException(nameof(directSource));
         ReceiverPayload = receiverPayload ??
             throw new ArgumentNullException(nameof(receiverPayload));
+        TraceRasterDepth = traceRasterDepth;
+        if (configuration.SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster &&
+            TraceRasterDepth is null)
+        {
+            throw new ArgumentNullException(nameof(traceRasterDepth));
+        }
         _targets =
         [
             DirectSource,
@@ -232,6 +272,7 @@ public sealed class ForwardNearFieldDirectSourceAttachmentBinding
     public RenderTarget Target => DirectSource;
     public RenderTarget DirectSource { get; }
     public RenderTarget ReceiverPayload { get; }
+    public RenderTarget? TraceRasterDepth { get; }
     public IReadOnlyList<RenderTarget> Targets => _targets;
     public ForwardNearFieldDirectSourcePipelineConfiguration Configuration { get; }
 }

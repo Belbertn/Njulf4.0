@@ -149,6 +149,7 @@ namespace Njulf.Rendering.Pipeline
                     Math.Min(sceneData.SceneSubmissionGpuDepthSolidCandidateCount, sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity),
                     BindlessIndex.SceneSolidDepthCompactedMeshletDrawBufferBase,
                     SceneOpaqueCompactionPass.GetSolidDepthIndirectDispatchOffset(),
+                    SceneOpaqueCompactionPass.GetSolidDepthDoubleSidedIndirectDispatchOffset(),
                     sceneData.SceneSubmissionGpuCompactedSolidDepthMeshletCount);
 
                 DrawSceneCompactedDepthList(
@@ -159,6 +160,7 @@ namespace Njulf.Rendering.Pipeline
                     Math.Min(sceneData.SceneSubmissionGpuDepthMaskedCandidateCount, sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity),
                     BindlessIndex.SceneMaskedDepthCompactedMeshletDrawBufferBase,
                     SceneOpaqueCompactionPass.GetMaskedDepthIndirectDispatchOffset(),
+                    SceneOpaqueCompactionPass.GetMaskedDepthDoubleSidedIndirectDispatchOffset(),
                     sceneData.SceneSubmissionGpuCompactedMaskedDepthMeshletCount);
             }
             else
@@ -201,8 +203,21 @@ namespace Njulf.Rendering.Pipeline
                                sceneData.SceneSubmissionGpuCompactedSolidDepthCapacity > 0);
             bool maskedReady = !hasMaskedDepthCandidates ||
                                (sceneData.SceneSubmissionMaskedDepthCompactedMeshletDrawBuffer.IsValid &&
-                                sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity > 0);
-            return solidReady && maskedReady;
+                               sceneData.SceneSubmissionGpuCompactedMaskedDepthCapacity > 0);
+            if (!solidReady || !maskedReady)
+                return false;
+
+            if (!sceneData.SceneSubmissionSidedRasterSpecializationActive)
+                return true;
+
+            ulong requiredBytes = checked(
+                SceneOpaqueCompactionPass
+                    .GetMaskedDepthDoubleSidedIndirectDispatchOffset() +
+                (ulong)Marshal.SizeOf<DrawMeshTasksIndirectCommandEXT>());
+            return sceneData.SceneSubmissionIndirectMeshletDispatchEnabled &&
+                   sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer.IsValid &&
+                   sceneData.SceneSubmissionOpaqueIndirectDispatchBufferSize >=
+                   requiredBytes;
         }
 
         private void DrawDepthList(
@@ -247,6 +262,7 @@ namespace Njulf.Rendering.Pipeline
             int meshletCapacity,
             int meshletDrawBufferBaseIndex,
             ulong indirectDispatchOffset,
+            ulong doubleSidedIndirectDispatchOffset,
             int completedEmittedCount)
         {
             if (CanUseSceneIndirectDispatch(sceneData, indirectDispatchOffset))
@@ -258,7 +274,23 @@ namespace Njulf.Rendering.Pipeline
                     meshletCapacity,
                     meshletDrawBufferBaseIndex,
                     indirectDispatchOffset,
-                    completedEmittedCount);
+                    completedEmittedCount,
+                    firstDraw: 0u,
+                    oneSided: sceneData
+                        .SceneSubmissionSidedRasterSpecializationActive);
+                if (sceneData.SceneSubmissionSidedRasterSpecializationActive)
+                {
+                    DrawDepthListIndirect(
+                        cmd,
+                        sceneData,
+                        compactedPipeline,
+                        meshletCapacity,
+                        meshletDrawBufferBaseIndex,
+                        doubleSidedIndirectDispatchOffset,
+                        completedEmittedCount,
+                        firstDraw: checked((uint)meshletCapacity),
+                        oneSided: false);
+                }
                 return;
             }
 
@@ -277,12 +309,18 @@ namespace Njulf.Rendering.Pipeline
             int meshletCapacity,
             int meshletDrawBufferBaseIndex,
             ulong indirectDispatchOffset,
-            int completedEmittedCount)
+            int completedEmittedCount,
+            uint firstDraw,
+            bool oneSided)
         {
             if (meshletCapacity <= 0 || _bufferManager == null)
                 return;
 
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+            _context.Api.CmdSetCullMode(
+                cmd,
+                oneSided ? CullModeFlags.BackBit : CullModeFlags.None);
+            _context.Api.CmdSetDepthCompareOp(cmd, CompareOp.GreaterOrEqual);
 
             var pushConstants = new GPUDepthPushConstants
             {
@@ -290,7 +328,8 @@ namespace Njulf.Rendering.Pipeline
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 MeshletDrawCount = (uint)meshletCapacity,
-                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex
+                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
+                FirstDraw = firstDraw
             };
 
             uint size = (uint)Marshal.SizeOf<GPUDepthPushConstants>();

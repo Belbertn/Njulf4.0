@@ -99,6 +99,7 @@ public static class SampleSmokeOptionsParser
         "--benchmark-quality-sequence-hdr-max-relative-rmse",
         "--benchmark-quality-sequence-hdr-max-flip-p95",
         "--startup-log",
+        "--pipeline-startup",
         "--validation",
         "--force-missing-assets",
         "--fail-on-validation-message",
@@ -922,6 +923,18 @@ public static class SampleSmokeOptionsParser
                     break;
                 case "--startup-log":
                     startupLogPath = RequirePath(value, "--startup-log");
+                    break;
+                case "--pipeline-startup":
+                    if (!value.Equals(
+                            "active-scene",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        !value.Equals(
+                            "exhaustive",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new ArgumentException(
+                            "--pipeline-startup must be active-scene or exhaustive.");
+                    }
                     break;
                 case "--validation":
                     if (!RendererValidationSettings.TryParseMode(value, out validationMode, out validationError))

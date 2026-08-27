@@ -269,6 +269,21 @@ namespace Njulf.Rendering.Resources
                 AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit);
         }
 
+        public void TransitionToFragmentShadingRateAttachment(
+            CommandBuffer cmd)
+        {
+            EnsureUsage(
+                ImageUsageFlags.FragmentShadingRateAttachmentBitKhr,
+                ImageLayout.FragmentShadingRateAttachmentOptimalKhr);
+            Transition(
+                cmd,
+                ImageLayout.FragmentShadingRateAttachmentOptimalKhr,
+                GetSourceStageForLayout(Layout),
+                GetSourceAccessForLayout(Layout),
+                PipelineStageFlags2.FragmentShadingRateAttachmentBitKhr,
+                AccessFlags2.FragmentShadingRateAttachmentReadBitKhr);
+        }
+
         /// <summary>
         /// Transitions a read/write storage image using scopes valid for a compute-only command
         /// buffer.
@@ -385,6 +400,8 @@ namespace Njulf.Rendering.Resources
                 ImageLayout.DepthStencilReadOnlyOptimal => PipelineStageFlags2.FragmentShaderBit | PipelineStageFlags2.ComputeShaderBit | PipelineStageFlags2.EarlyFragmentTestsBit,
                 ImageLayout.General => PipelineStageFlags2.ComputeShaderBit,
                 ImageLayout.TransferSrcOptimal or ImageLayout.TransferDstOptimal => PipelineStageFlags2.TransferBit,
+                ImageLayout.FragmentShadingRateAttachmentOptimalKhr =>
+                    PipelineStageFlags2.FragmentShadingRateAttachmentBitKhr,
                 _ => PipelineStageFlags2.AllCommandsBit
             };
         }
@@ -401,6 +418,8 @@ namespace Njulf.Rendering.Resources
                 ImageLayout.General => AccessFlags2.ShaderStorageReadBit | AccessFlags2.ShaderStorageWriteBit,
                 ImageLayout.TransferSrcOptimal => AccessFlags2.TransferReadBit,
                 ImageLayout.TransferDstOptimal => AccessFlags2.TransferWriteBit,
+                ImageLayout.FragmentShadingRateAttachmentOptimalKhr =>
+                    AccessFlags2.FragmentShadingRateAttachmentReadBitKhr,
                 _ => AccessFlags2.MemoryReadBit
             };
         }
@@ -443,6 +462,9 @@ namespace Njulf.Rendering.Resources
                 required |= FormatFeatureFlags.SampledImageBit;
             if (Descriptor.Storage)
                 required |= FormatFeatureFlags.StorageImageBit;
+            if (Descriptor.FragmentShadingRateAttachment)
+                required |= FormatFeatureFlags
+                    .FragmentShadingRateAttachmentBitKhr;
             if ((properties.OptimalTilingFeatures & required) != required)
                 throw new VulkanException($"Format {Format} does not support required render target features {required}.");
         }
@@ -478,6 +500,11 @@ namespace Njulf.Rendering.Resources
                     break;
                 case ImageLayout.TransferDstOptimal:
                     EnsureUsage(ImageUsageFlags.TransferDstBit, layout);
+                    break;
+                case ImageLayout.FragmentShadingRateAttachmentOptimalKhr:
+                    EnsureUsage(
+                        ImageUsageFlags.FragmentShadingRateAttachmentBitKhr,
+                        layout);
                     break;
             }
         }
@@ -521,7 +548,7 @@ namespace Njulf.Rendering.Resources
                 Format.R32Sfloat or Format.R32Uint => 4,
                 Format.R32G32Sfloat or Format.R32G32Uint => 8,
                 Format.R32G32B32A32Sfloat or Format.R32G32B32A32Uint => 16,
-                Format.R8Unorm => 1,
+                Format.R8Unorm or Format.R8Uint => 1,
                 Format.R8G8Unorm => 2,
                 Format.R8G8B8A8Unorm or Format.R8G8B8A8Srgb => 4,
                 Format.B8G8R8A8Unorm or Format.B8G8R8A8Srgb => 4,

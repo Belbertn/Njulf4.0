@@ -36,13 +36,14 @@ layout(push_constant) uniform ShadowDepthPushConstantBlock
 void main()
 {
 #ifdef SHADOW_COMPACTED_MESH
-    uint drawCommandIndex = gl_WorkGroupID.x;
-    if (drawCommandIndex >= pc.Push.MeshletDrawCount)
+    uint localDrawIndex = gl_WorkGroupID.x;
+    if (localDrawIndex >= pc.Push.MeshletDrawCount)
     {
         if (gl_LocalInvocationIndex == 0u)
             SetMeshOutputsEXT(0u, 0u);
         return;
     }
+    uint drawCommandIndex = localDrawIndex + pc.Push.FirstDraw;
 #else
     if (shadowPayload.Visible == 0u)
     {

@@ -529,7 +529,7 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
     }
 
     [Test]
-    public void Layout_IsCompleteOrEmptyAndAccountsForFullResolutionSource()
+    public void Layout_IsCompleteOrEmptyAndAccountsForTraceResolutionSource()
     {
         SimpleDdgiNearFieldResidualProfile profile =
             SimpleDdgiNearFieldResidualProfile.HalfResolutionReference;
@@ -545,9 +545,18 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
             Assert.That(valid.IsValid, Is.True);
             Assert.That(valid.TraceWidth, Is.EqualTo(960));
             Assert.That(valid.TraceHeight, Is.EqualTo(540));
-            Assert.That(valid.TraceSourceBytes, Is.GreaterThan(1_920UL * 1_080UL * 7UL));
+            Assert.That(valid.SourceProducerMode,
+                Is.EqualTo(SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster));
+            Assert.That(valid.TraceSourceBytes,
+                Is.GreaterThanOrEqualTo(960UL * 540UL * 8UL));
+            Assert.That(valid.TraceSourceBytes,
+                Is.LessThan(1_920UL * 1_080UL * 8UL));
             Assert.That(valid.ReceiverPayloadBytes,
-                Is.GreaterThanOrEqualTo(1_920UL * 1_080UL * 16UL));
+                Is.GreaterThanOrEqualTo(960UL * 540UL * 16UL));
+            Assert.That(valid.ReceiverPayloadBytes,
+                Is.LessThan(1_920UL * 1_080UL * 16UL));
+            Assert.That(valid.TraceRasterDepthBytes,
+                Is.GreaterThanOrEqualTo(960UL * 540UL * 4UL));
             Assert.That(valid.TraceFrameConstantsBytes,
                 Is.EqualTo(1_024UL));
             Assert.That(valid.TelemetryReadbackBytes,
@@ -598,10 +607,12 @@ public sealed class SimpleDdgiNearFieldResidualReferenceTests
             Assert.That(hdQuarter.IsValid, Is.True);
             Assert.That(hdQuarter.TraceWidth, Is.EqualTo(480));
             Assert.That(hdQuarter.TraceHeight, Is.EqualTo(270));
-            Assert.That(qhdQuarter.IsValid, Is.False);
-            Assert.That(qhdEighth.IsValid, Is.False,
-                "The full-resolution 128-bit payload is never silently dropped to fit.");
-            Assert.That(uhdEighth.IsValid, Is.False);
+            Assert.That(qhdQuarter.IsValid, Is.True);
+            Assert.That(qhdQuarter.TotalBytes, Is.LessThanOrEqualTo(budget));
+            Assert.That(qhdEighth.IsValid, Is.True);
+            Assert.That(qhdEighth.TotalBytes, Is.LessThanOrEqualTo(budget));
+            Assert.That(uhdEighth.IsValid, Is.True);
+            Assert.That(uhdEighth.TotalBytes, Is.LessThanOrEqualTo(budget));
         });
     }
 

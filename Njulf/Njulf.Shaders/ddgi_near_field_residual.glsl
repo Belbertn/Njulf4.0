@@ -9,7 +9,7 @@
 // V14 separates trace work from resolve coverage and owns a distinct 16-byte
 // double-buffered scheduler history.
 // Keep this in lockstep with SimpleDdgiNearFieldResidualGpuAbi.
-const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000eu;
+const uint SIMPLE_DDGI_NEAR_FIELD_RESIDUAL_ABI_VERSION = 0x4335000fu;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_MAGIC = 0x4335544du;
 const uint SIMPLE_DDGI_NEAR_FIELD_TELEMETRY_HEADER_WORDS = 32u;
 const uint SIMPLE_DDGI_NEAR_FIELD_ACTIVE_TILE_HEADER_WORDS = 64u;

@@ -21,6 +21,7 @@ namespace Njulf.Rendering.Pipeline
         private readonly RenderTargetManager _renderTargets;
         private readonly RenderSettings _settings;
         private readonly Func<bool> _smaaLookupsReady;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private DescriptorSetLayout[] _setLayouts = Array.Empty<DescriptorSetLayout>();
         private PipelineLayout _pipelineLayout;
@@ -44,11 +45,31 @@ namespace Njulf.Rendering.Pipeline
             RenderTargetManager renderTargets,
             RenderSettings settings,
             Func<bool> smaaLookupsReady)
+            : this(
+                context,
+                swapchain,
+                bindlessHeap,
+                renderTargets,
+                settings,
+                smaaLookupsReady,
+                pipelineCacheService: null)
+        {
+        }
+
+        internal AntiAliasingPass(
+            VulkanContext context,
+            SwapchainManager swapchain,
+            BindlessHeap bindlessHeap,
+            RenderTargetManager renderTargets,
+            RenderSettings settings,
+            Func<bool> smaaLookupsReady,
+            GiPipelineCacheService? pipelineCacheService)
             : base("AntiAliasingPass", context, swapchain, bindlessHeap)
         {
             _renderTargets = renderTargets ?? throw new ArgumentNullException(nameof(renderTargets));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _smaaLookupsReady = smaaLookupsReady ?? throw new ArgumentNullException(nameof(smaaLookupsReady));
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
         }
 
@@ -169,7 +190,7 @@ namespace Njulf.Rendering.Pipeline
                 _pipelineLayout = default;
             }
 
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService is null && _pipelineCache.Handle != 0)
             {
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
                 _pipelineCache = default;
@@ -432,6 +453,12 @@ namespace Njulf.Rendering.Pipeline
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo { SType = StructureType.PipelineCacheCreateInfo };
             Result result = _context.Api.CreatePipelineCache(_context.Device, &cacheInfo, null, out _pipelineCache);
             if (result != Result.Success)
@@ -469,6 +496,8 @@ namespace Njulf.Rendering.Pipeline
 
         private VkPipeline CreatePipeline(string fragmentShaderName, Format colorFormat, string debugName)
         {
+            long pipelineStart =
+                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule vertexModule = default;
             ShaderModule fragmentModule = default;
             try
@@ -485,11 +514,16 @@ namespace Njulf.Rendering.Pipeline
                     _context.Api.DestroyShaderModule(_context.Device, fragmentModule, null);
                 if (vertexModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, vertexModule, null);
+                _pipelineCacheService?.EndPipelineCreation(
+                    "AntiAliasing." + debugName,
+                    pipelineStart);
             }
         }
 
         private VkPipeline CreateTaaPipeline()
         {
+            long pipelineStart =
+                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
             ShaderModule vertexModule = default;
             ShaderModule fragmentModule = default;
             try
@@ -509,6 +543,9 @@ namespace Njulf.Rendering.Pipeline
                     _context.Api.DestroyShaderModule(_context.Device, fragmentModule, null);
                 if (vertexModule.Handle != 0)
                     _context.Api.DestroyShaderModule(_context.Device, vertexModule, null);
+                _pipelineCacheService?.EndPipelineCreation(
+                    "AntiAliasing.TAA",
+                    pipelineStart);
             }
         }
 

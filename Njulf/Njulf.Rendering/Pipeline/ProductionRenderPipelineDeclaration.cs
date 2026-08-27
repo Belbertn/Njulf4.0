@@ -35,6 +35,7 @@ internal sealed class ProductionRenderPipelineDeclaration
         "SimpleDdgiLightTreePass",
         "EnvironmentPrefilterPass",
         "SimpleDdgiUrgentRelightPass",
+        "VariableRateShadingPass",
         "ForwardPlusPass",
         "SimpleDdgiPageDemandPass",
         "SimpleDdgiPageResidencyPass",
@@ -400,6 +401,14 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadWriteComputeBuffer(RenderGraphResourceId.RendererDiagnosticsBuffer)));
 
         declarations.Add(
+            Pass("VariableRateShadingPass",
+                ReadComputeDepth(RenderGraphResourceId.SceneDepth),
+                ReadComputeSampled(RenderGraphResourceId.MotionVectors),
+                WriteComputeStorage(
+                    RenderGraphResourceId.VariableRateShading,
+                    ImageLayout.FragmentShadingRateAttachmentOptimalKhr)));
+
+        declarations.Add(
             Pass("ForwardPlusPass",
                 ReadDepthAttachmentAndCompute(RenderGraphResourceId.SceneDepth),
                 Read(RenderGraphResourceId.SceneSubmissionBuffers),
@@ -421,6 +430,8 @@ internal sealed class ProductionRenderPipelineDeclaration
                 ReadGraphicsStorage(RenderGraphResourceId.MaterialBuffers),
                 ReadFragmentSampled(RenderGraphResourceId.MaterialTextures),
                 ReadGraphicsStorage(RenderGraphResourceId.LightBuffers),
+                ReadFragmentShadingRate(
+                    RenderGraphResourceId.VariableRateShading),
                 ReadGraphicsStorage(RenderGraphResourceId.EnvironmentData),
                 ReadGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiParameters),
                 ReadGraphicsAndComputeStorage(RenderGraphResourceId.SimpleDdgiIrradianceAtlas),
@@ -941,6 +952,12 @@ internal sealed class ProductionRenderPipelineDeclaration
                 WriteColorAttachment(RenderGraphResourceId.NearFieldDirectSource),
                 WriteColorAttachment(RenderGraphResourceId.NearFieldReceiverPayload)
             };
+            if (modes.NearFieldProfile.SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster)
+            {
+                usages.Add(WriteDepthAttachment(
+                    RenderGraphResourceId.NearFieldTraceRasterDepth));
+            }
             declarations[forwardIndex] = forward with { Usages = usages.ToArray() };
         }
 
@@ -1269,6 +1286,11 @@ internal sealed class ProductionRenderPipelineDeclaration
                 RenderGraphResourceSizePolicy.SceneResolution),
             OwnedImageResource(RenderGraphResourceId.MotionVectors, "Motion vectors",
                 RenderTargetManager.MotionVectorFormat, RenderGraphResourceSizePolicy.Swapchain),
+            OwnedImageResource(
+                RenderGraphResourceId.VariableRateShading,
+                "Conservative fragment shading rate",
+                RenderTargetManager.VariableRateShadingFormat,
+                RenderGraphResourceSizePolicy.Dynamic),
             OwnedImageChainResource(RenderGraphResourceId.BloomChain, "Bloom chain",
                 RenderTargetManager.SceneColorFormat, RenderGraphResourceSizePolicy.BloomMipChain),
             OwnedImageResource(RenderGraphResourceId.AmbientOcclusionRaw, "Ambient occlusion raw",
@@ -1527,11 +1549,25 @@ internal sealed class ProductionRenderPipelineDeclaration
         {
             RenderGraphResourceSizePolicy traceSizePolicy =
                 modes.NearFieldProfile.TraceSizePolicy;
+            RenderGraphResourceSizePolicy sourceSizePolicy =
+                modes.NearFieldProfile.SourceProducerMode ==
+                    SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster
+                    ? traceSizePolicy
+                    : RenderGraphResourceSizePolicy.SceneResolution;
             descriptors.Add(TransientImageResource(
                 RenderGraphResourceId.NearFieldDirectSource,
                 "Near-field direct-diffuse plus emissive source",
                 Format.R16G16B16A16Sfloat,
-                RenderGraphResourceSizePolicy.SceneResolution));
+                sourceSizePolicy));
+            if (modes.NearFieldProfile.SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster)
+            {
+                descriptors.Add(TransientImageResource(
+                    RenderGraphResourceId.NearFieldTraceRasterDepth,
+                    "Near-field trace-resolution source depth",
+                    depthFormat,
+                    traceSizePolicy));
+            }
             descriptors.Add(TransientImageResource(
                 RenderGraphResourceId.NearFieldResidualRaw,
                 "Near-field residual raw candidates",
@@ -1588,7 +1624,7 @@ internal sealed class ProductionRenderPipelineDeclaration
                 RenderGraphResourceId.NearFieldReceiverPayload,
                 "Near-field C5 compact receiver payload",
                 Format.R32G32B32A32Uint,
-                RenderGraphResourceSizePolicy.SceneResolution));
+                sourceSizePolicy));
             descriptors.Add(TransientImageResource(
                 RenderGraphResourceId.NearFieldPreparedDepthFootprint,
                 "Near-field prepared linear depth and B3 footprint",
@@ -1929,6 +1965,18 @@ internal sealed class ProductionRenderPipelineDeclaration
             PipelineStageFlags2.FragmentShaderBit,
             AccessFlags2.ShaderSampledReadBit,
             ImageLayout.ShaderReadOnlyOptimal,
+            RenderGraphQueueIntent.Graphics);
+    }
+
+    private static RenderGraphResourceUsage ReadFragmentShadingRate(
+        RenderGraphResourceId resource)
+    {
+        return new RenderGraphResourceUsage(
+            resource,
+            RenderGraphResourceAccess.Read,
+            PipelineStageFlags2.FragmentShadingRateAttachmentBitKhr,
+            AccessFlags2.FragmentShadingRateAttachmentReadBitKhr,
+            ImageLayout.FragmentShadingRateAttachmentOptimalKhr,
             RenderGraphQueueIntent.Graphics);
     }
 

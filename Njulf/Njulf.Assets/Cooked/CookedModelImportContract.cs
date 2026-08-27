@@ -9,12 +9,12 @@ namespace Njulf.Assets.Cooked;
 /// </summary>
 public static class CookedModelImportContract
 {
-    public const ushort MinimumFormatMinor = 4;
+    public const ushort MinimumFormatMinor = 5;
     public const int SchemaVersion = 1;
 
     internal const int MaterialTransportMetadataRevision = 3;
     internal const int MaterialTexturePolicyRevision = 2;
-    internal const int MeshLodAlgorithmRevision = 2;
+    internal const int MeshLodAlgorithmRevision = 3;
 
     public static ulong Compute(string sourcePath, ImporterOptions? options = null)
     {

@@ -209,11 +209,8 @@ void main()
     uint localDrawIndex = gl_WorkGroupID.x;
     uint drawBufferBaseIndex = ForwardDrawBufferBaseIndex(
         pc.Push.MeshletDrawBufferBaseIndex);
-    uint firstDraw = drawBufferBaseIndex ==
-            uint(TRANSPARENT_MESHLET_DRAW_BUFFER_BASE_INDEX)
-        ? ForwardTransparentFirstDraw(
-            pc.Push.MeshletDrawBufferBaseIndex)
-        : 0u;
+    uint firstDraw = ForwardFirstDraw(
+        pc.Push.MeshletDrawBufferBaseIndex);
     uint drawIndex = firstDraw + localDrawIndex;
     forwardPayload.DrawCommandIndex = drawIndex;
     forwardPayload.Visible = 0u;

@@ -11,6 +11,7 @@ public sealed class ShaderBuildTests
     private static readonly string[] RequiredShaders =
     [
         "ambient_occlusion.comp",
+        "variable_rate_shading.comp",
         "gtao.comp",
         "gtao_temporal.comp",
         "gtao_spatial.comp",
@@ -81,7 +82,7 @@ public sealed class ShaderBuildTests
             .ToArray();
         byte[] magicBytes = new byte[4];
 
-            Assert.That(shaderResourceNames, Has.Length.EqualTo(351));
+        Assert.That(shaderResourceNames, Has.Length.EqualTo(356));
 
         foreach (string shaderName in RequiredShaders)
         {

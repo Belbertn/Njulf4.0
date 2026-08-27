@@ -402,12 +402,11 @@ public sealed class ProceduralSkyModelTests
                 Is.EqualTo(BindlessIndex.SimpleDdgiStorageValidationBufferBase + 1));
             // Fixed slots are append-only so existing environment/DDGI
             // bindings keep their historical indices while the heap grows at
-            // the tail. Keep this tied to the compact forward-material buffer,
-            // which is the current terminal reservation.
+            // the tail. GPU LOD history is the current terminal reservation.
             Assert.That(
                 BindlessIndex.StaticBufferCount,
                 Is.EqualTo(
-                    BindlessIndex.ForwardMaterialDataBuffer + 1));
+                    BindlessIndex.SceneGpuLodHistoryBufferFrame1 + 1));
         });
     }
 

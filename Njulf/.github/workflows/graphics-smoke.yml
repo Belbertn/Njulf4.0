@@ -34,6 +34,8 @@ jobs:
       - name: Build
         run: dotnet build Njulf.sln --configuration Release --no-restore
       - name: Startup smoke
+        env:
+          NJULF_STARTUP_LATENCY_GATE: enforce
         run: >
           dotnet run --project NjulfHelloGame -c Release --
           --smoke-mode startup
@@ -43,6 +45,8 @@ jobs:
           --health-report artifacts/renderer-health.json
       - name: Forced async-compute synchronization and GPU-assisted validation smoke
         if: inputs.async_compute == 'force'
+        env:
+          NJULF_STARTUP_LATENCY_GATE: enforce
         run: >
           dotnet run --project NjulfHelloGame -c Release --
           --smoke-mode startup

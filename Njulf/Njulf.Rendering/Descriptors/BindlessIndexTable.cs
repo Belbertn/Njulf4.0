@@ -923,8 +923,20 @@ namespace Njulf.Rendering.Descriptors
         public const int SimpleDdgiReceiverGatherSurfaceBufferFrame1 =
             SimpleDdgiReceiverGatherSurfaceBufferBase + 1;
 
-        public const int StaticBufferCount =
+        /// <summary>
+        /// Per-object GPU LOD selected for frame 0. Frame N reads the opposite
+        /// slot and writes this slot, providing deterministic temporal
+        /// hysteresis without CPU-authored distance bands.
+        /// </summary>
+        public const int SceneGpuLodHistoryBufferBase =
             SimpleDdgiReceiverGatherSurfaceBufferFrame1 + 1;
+
+        /// <summary>Per-object GPU LOD selected for frame 1.</summary>
+        public const int SceneGpuLodHistoryBufferFrame1 =
+            SceneGpuLodHistoryBufferBase + 1;
+
+        public const int StaticBufferCount =
+            SceneGpuLodHistoryBufferFrame1 + 1;
 
         // ============================================
         // UTILITY METHODS
@@ -958,6 +970,8 @@ namespace Njulf.Rendering.Descriptors
                     ForwardMaterialDataBuffer => nameof(ForwardMaterialDataBuffer),
                     SimpleDdgiReceiverGatherSurfaceBufferBase => nameof(SimpleDdgiReceiverGatherSurfaceBufferBase),
                     SimpleDdgiReceiverGatherSurfaceBufferFrame1 => nameof(SimpleDdgiReceiverGatherSurfaceBufferFrame1),
+                    SceneGpuLodHistoryBufferBase => nameof(SceneGpuLodHistoryBufferBase),
+                    SceneGpuLodHistoryBufferFrame1 => nameof(SceneGpuLodHistoryBufferFrame1),
                     SceneMeshMetadataBuffer => nameof(SceneMeshMetadataBuffer),
                     VertexBuffer => nameof(VertexBuffer),
                     IndexBuffer => nameof(IndexBuffer),

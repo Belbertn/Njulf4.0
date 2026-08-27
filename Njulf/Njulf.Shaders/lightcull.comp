@@ -279,19 +279,48 @@ void FinalizeCluster(uvec2 tile, uint slice)
 
     uint clusterIndex =
         (slice * pc.Push.TileCountY + tile.y) * pc.Push.TileCountX + tile.x;
-    uint clusterLightOffset = clusterIndex * pc.Push.MaxLightsPerTile;
-    for (uint slot = 0u; slot < selectedCount; slot++)
+    if (clusterIndex >= pc.Push.TotalClusterCount)
+        return;
+
+    // The header immediately after the visible cluster range is a zeroed,
+    // frame-local allocator control block. Reserving only the selected records
+    // keeps every cluster list dense while preserving the existing header ABI.
+    uint controlWord = pc.Push.TotalClusterCount *
+        uint(SIZEOF_GPU_TILED_LIGHT_HEADER / 4);
+    uint reservedOffset = atomicAdd(
+        BindlessStorageBuffers[uint(TILED_LIGHT_HEADER_BUFFER_INDEX)]
+            .Words[controlWord + 0u],
+        selectedCount);
+    uint writableCount = reservedOffset < pc.Push.LightIndexCapacity
+        ? min(selectedCount, pc.Push.LightIndexCapacity - reservedOffset)
+        : 0u;
+    uint clusterLightOffset = min(
+        reservedOffset,
+        pc.Push.LightIndexCapacity);
+    for (uint slot = 0u; slot < writableCount; slot++)
     {
         WriteTiledLightIndex(
             clusterLightOffset + slot,
             SharedSelectedLightIndices[baseEntry + slot]);
     }
-    uint overflowCount = candidateCount > selectedCount
-        ? candidateCount - selectedCount
+    uint overflowCount = candidateCount > writableCount
+        ? candidateCount - writableCount
         : 0u;
+    atomicAdd(
+        BindlessStorageBuffers[uint(TILED_LIGHT_HEADER_BUFFER_INDEX)]
+            .Words[controlWord + 1u],
+        selectedCount - writableCount);
+    atomicMax(
+        BindlessStorageBuffers[uint(TILED_LIGHT_HEADER_BUFFER_INDEX)]
+            .Words[controlWord + 2u],
+        writableCount);
+    atomicAdd(
+        BindlessStorageBuffers[uint(TILED_LIGHT_HEADER_BUFFER_INDEX)]
+            .Words[controlWord + 3u],
+        candidateCount - selectedCount);
     WriteTiledLightHeader(
         clusterIndex,
-        selectedCount,
+        writableCount,
         clusterLightOffset,
         overflowCount);
 }

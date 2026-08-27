@@ -718,13 +718,18 @@ namespace Njulf.Rendering.Pipeline
             else
                 CreatePipelineCache();
             CreatePipelineLayout();
-            // Prewarm only variants reachable by this immutable graph. Storage
-            // alternatives remain available through the lazy runtime cache.
-            IReadOnlyList<string> admittedShaders = ResolvePrewarmShaderNames(
-                _settings.GlobalIllumination.SimpleDdgiStoragePackingMode,
-                _prewarmDirectionalGuiding);
-            foreach (string shaderName in admittedShaders)
-                _ = GetOrCreatePipeline(shaderName);
+            if (RendererBuildConfiguration.PipelineStartupMode ==
+                RendererPipelineStartupMode.Exhaustive)
+            {
+                // Exhaustive tooling prewarms every variant reachable by this
+                // immutable graph. Active-scene startup admits the audit only
+                // when its tail-certification transaction is actually ready.
+                IReadOnlyList<string> admittedShaders = ResolvePrewarmShaderNames(
+                    _settings.GlobalIllumination.SimpleDdgiStoragePackingMode,
+                    _prewarmDirectionalGuiding);
+                foreach (string shaderName in admittedShaders)
+                    _ = GetOrCreatePipeline(shaderName);
+            }
             _volumeManager.SetGuidedTransportAuditAvailable(true);
         }
 

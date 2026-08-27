@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -48,6 +49,9 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
 
     [Output]
     public string BundleManifestPath { get; private set; } = string.Empty;
+
+    [Output]
+    public string BundleHash { get; private set; } = string.Empty;
 
     [Output]
     public int CompiledCount { get; private set; }
@@ -563,13 +567,46 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
 
     private string WriteBundleManifest(string outputDirectory, IReadOnlyList<Artifact> artifacts)
     {
+        List<BundleArtifact> bundleArtifacts = artifacts
+            .Select(artifact => new BundleArtifact(
+                artifact.OutputName,
+                HashFile(artifact.OutputPath)))
+            .OrderBy(artifact => artifact.Name, StringComparer.Ordinal)
+            .ToList();
+        BundleHash = ComputeBundleHash(bundleArtifacts);
         var manifest = new BundleManifest(
             SchemaVersion,
-            artifacts.Select(artifact => new BundleArtifact(artifact.OutputName, HashFile(artifact.OutputPath))).ToList());
+            BundleHash,
+            bundleArtifacts);
         string path = Path.Combine(outputDirectory, "njulf-shaders.manifest.json");
         string json = JsonSerializer.Serialize(manifest, JsonOptions);
         WriteTextIfChanged(path, json);
         return path;
+    }
+
+    private static string ComputeBundleHash(
+        IReadOnlyList<BundleArtifact> artifacts)
+    {
+        using IncrementalHash hash =
+            IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendBundleHashText(hash, "njulf-effective-shader-bundle-v1");
+        foreach (BundleArtifact artifact in artifacts)
+        {
+            AppendBundleHashText(hash, artifact.Name);
+            hash.AppendData(Convert.FromHexString(artifact.Hash));
+        }
+        return "sha256:" + Convert.ToHexStringLower(hash.GetHashAndReset());
+    }
+
+    private static void AppendBundleHashText(
+        IncrementalHash hash,
+        string value)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(value);
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(length, bytes.Length);
+        hash.AppendData(length);
+        hash.AppendData(bytes);
     }
 
     private void RemoveObsoleteActiveOutputs(string outputDirectory, IReadOnlyList<Artifact> artifacts)
@@ -946,7 +983,10 @@ public sealed class CompileNjulfShaderArtifacts : MsBuildTask
 
     private sealed record BundleArtifact(string Name, string Hash);
 
-    private sealed record BundleManifest(int SchemaVersion, List<BundleArtifact> Artifacts);
+    private sealed record BundleManifest(
+        int SchemaVersion,
+        string BundleHash,
+        List<BundleArtifact> Artifacts);
 
     private enum WorkDisposition
     {

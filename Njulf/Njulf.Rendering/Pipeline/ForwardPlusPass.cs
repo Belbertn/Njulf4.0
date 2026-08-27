@@ -58,6 +58,11 @@ namespace Njulf.Rendering.Pipeline
             _nearFieldDirectSourceBinding;
 
         private readonly Func<bool>? _nearFieldDirectSourceRuntimeAvailable;
+        private readonly Func<SimpleDdgiNearFieldResidualExecutionExtent>?
+            _nearFieldDirectSourceExecutionExtent;
+        private bool _recordingTraceResolutionNearFieldSource;
+        private SimpleDdgiNearFieldResidualExecutionScale
+            _traceResolutionNearFieldSourceScale;
 
         private readonly ForwardGiCausticReceiverAttachmentBinding?
             _giCausticReceiverBinding;
@@ -320,7 +325,9 @@ namespace Njulf.Rendering.Pipeline
             ForwardHybridReflectionReceiverAttachmentBinding?
                 hybridReflectionReceiverBinding = null,
             ISimpleDdgiReceiverFeedbackCapture?
-                simpleDdgiReceiverFeedbackRuntime = null)
+                simpleDdgiReceiverFeedbackRuntime = null,
+            Func<SimpleDdgiNearFieldResidualExecutionExtent>?
+                nearFieldDirectSourceExecutionExtent = null)
             : base("ForwardPlusPass", context, swapchain, bindlessHeap)
         {
             _meshPipeline = meshPipeline ?? throw new ArgumentNullException(nameof(meshPipeline));
@@ -334,6 +341,8 @@ namespace Njulf.Rendering.Pipeline
             _nearFieldDirectSourceBinding = nearFieldDirectSourceBinding;
             _nearFieldDirectSourceRuntimeAvailable =
                 nearFieldDirectSourceRuntimeAvailable;
+            _nearFieldDirectSourceExecutionExtent =
+                nearFieldDirectSourceExecutionExtent;
             _giCausticReceiverBinding = giCausticReceiverBinding;
             _giCausticRuntimeAvailable = giCausticRuntimeAvailable;
             _hybridReflectionReceiverBinding = hybridReflectionReceiverBinding;
@@ -958,12 +967,19 @@ namespace Njulf.Rendering.Pipeline
                 Extent2D renderExtent = _renderTargets.SceneColor.Extent;
                 bool materialTransportProvenanceEnabled =
                     ShouldWriteMaterialTransportProvenance();
-                bool nearFieldDirectSourceEnabled = TryGetNearFieldDirectSourceBinding(
+                bool nearFieldSourceEnabled = TryGetNearFieldDirectSourceBinding(
                     sceneData,
                     renderExtent,
                     materialTransportProvenanceEnabled,
                     out ForwardNearFieldDirectSourceAttachmentBinding?
                         nearFieldDirectSourceBinding);
+                bool nearFieldTraceResolutionEnabled =
+                    nearFieldSourceEnabled &&
+                    _meshPipeline.NearFieldDirectSourceConfiguration
+                        .SourceProducerMode ==
+                    SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster;
+                bool nearFieldDirectSourceEnabled =
+                    nearFieldSourceEnabled && !nearFieldTraceResolutionEnabled;
                 ForwardGiCausticReceiverAttachmentBinding?
                     giCausticReceiverBinding = null;
                 bool giCausticReceiverEnabled =
@@ -1428,6 +1444,28 @@ namespace Njulf.Rendering.Pipeline
                     PStencilAttachment = null
                 };
 
+                var fragmentShadingRateAttachment =
+                    new RenderingFragmentShadingRateAttachmentInfoKHR
+                    {
+                        SType = StructureType
+                            .RenderingFragmentShadingRateAttachmentInfoKhr
+                    };
+                if (sceneData.VariableRateShadingActive != 0 &&
+                    _context.FragmentShadingRateSupported)
+                {
+                    Extent2D attachmentTexel = _context
+                        .FragmentShadingRateAttachmentTexelSize;
+                    fragmentShadingRateAttachment.ImageView =
+                        _renderTargets.VariableRateShading.View;
+                    fragmentShadingRateAttachment.ImageLayout =
+                        ImageLayout
+                            .FragmentShadingRateAttachmentOptimalKhr;
+                    fragmentShadingRateAttachment
+                        .ShadingRateAttachmentTexelSize = attachmentTexel;
+                    renderingInfo.PNext =
+                        &fragmentShadingRateAttachment;
+                }
+
                 _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
 
                 sceneData.ForwardTaskInvocations = 0;
@@ -1601,6 +1639,14 @@ namespace Njulf.Rendering.Pipeline
                 {
                     DrawFoliageForward(cmd, sceneData);
                     _context.KhrDynamicRendering.CmdEndRendering(cmd);
+                }
+
+                if (nearFieldTraceResolutionEnabled)
+                {
+                    RecordTraceResolutionNearFieldSource(
+                        cmd,
+                        sceneData,
+                        nearFieldDirectSourceBinding!);
                 }
 
                 if (hybridReflectionReceiverEnabled)
@@ -1805,11 +1851,13 @@ namespace Njulf.Rendering.Pipeline
             if (meshletCount <= 0)
                 return;
 
-            bool receiverCacheEnabled = !giCausticReceiverEnabled &&
+            bool receiverCacheEnabled = !_recordingTraceResolutionNearFieldSource &&
+                                        !giCausticReceiverEnabled &&
                                         !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                                         !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                                         ShouldUseSimpleDdgiReceiverCacheForDraw();
             bool disabledBenchmarkPipeline =
+                !_recordingTraceResolutionNearFieldSource &&
                 ShouldUseForwardGiDisabledBenchmarkPipeline();
             ForwardOpaquePipelineKey pipelineKey = BuildForwardPipelineKey(
                 sceneData,
@@ -1851,16 +1899,23 @@ namespace Njulf.Rendering.Pipeline
                 ForwardOpaquePipelineFeatures.GlobalIlluminationDisabled);
             bool receiverCachePipeline = pipelineKey.Has(
                 ForwardOpaquePipelineFeatures.ReceiverCache);
-            _simpleDdgiReceiverCacheConsumedForCurrentView |=
-                receiverCachePipeline;
-            _forwardGiDisabledBenchmarkPipelineUsedForCurrentView |=
-                giDisabledPipeline;
-            _forwardGiExactGatherUsedForCurrentView |=
-                !giDisabledPipeline &&
-                !receiverCachePipeline &&
-                sceneData.SimpleDdgiActive != 0 &&
-                ShouldApplyGlobalIllumination(sceneData);
+            if (!_recordingTraceResolutionNearFieldSource)
+            {
+                _simpleDdgiReceiverCacheConsumedForCurrentView |=
+                    receiverCachePipeline;
+                _forwardGiDisabledBenchmarkPipelineUsedForCurrentView |=
+                    giDisabledPipeline;
+                _forwardGiExactGatherUsedForCurrentView |=
+                    !giDisabledPipeline &&
+                    !receiverCachePipeline &&
+                    sceneData.SimpleDdgiActive != 0 &&
+                    ShouldApplyGlobalIllumination(sceneData);
+            }
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+            _context.Api.CmdSetCullMode(cmd, CullModeFlags.None);
+            _context.Api.CmdSetDepthCompareOp(
+                cmd,
+                CompareOp.GreaterOrEqual);
 
             var pushConstants = new Data.GPUForwardPushConstants
             {
@@ -1901,7 +1956,9 @@ namespace Njulf.Rendering.Pipeline
                     screenSpaceGlobalIlluminationEnabled: false,
                     ambientOcclusionBentNormalMode:
                         (uint)sceneData.AmbientOcclusionBentNormalMode),
-                DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
+                DiagnosticFlags = _recordingTraceResolutionNearFieldSource
+                    ? 0u
+                    : Data.GPUForwardPushConstants.PackDiagnosticFlags(
                     ShouldCollectDdgiForwardEstimateCounters(sceneData),
                     ShouldCollectDdgiClipmapCoverageCounters(sceneData),
                     ShouldCollectDirectionalShadowReceiverCounters(sceneData),
@@ -1910,11 +1967,21 @@ namespace Njulf.Rendering.Pipeline
                     !nearFieldDirectSourceEnabled &&
                     !giCausticReceiverEnabled &&
                     ShouldWriteMaterialTransportProvenance(),
-                    ddgiReceiverCacheEnabled: receiverCachePipeline),
+                    ddgiReceiverCacheEnabled: receiverCachePipeline,
+                    geometricSpecularAntialiasingEnabled:
+                        sceneData.SpecularAntialiasingMode ==
+                        SpecularAntialiasingMode.GeometricVariance),
                 CaptureFlags = Data.GPUForwardPushConstants.PackCaptureFlags(
+                    !_recordingTraceResolutionNearFieldSource &&
                     _recordingReflectionCapture,
                     _reflectionFeedbackCubemapArrayLayer)
             };
+            if (_recordingTraceResolutionNearFieldSource)
+            {
+                pushConstants.DiagnosticFlags |=
+                    Data.GPUForwardPushConstants.PackTraceResolutionScale(
+                        _traceResolutionNearFieldSourceScale);
+            }
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
             _context.Api.CmdPushConstants(
@@ -1925,7 +1992,8 @@ namespace Njulf.Rendering.Pipeline
                 size,
                 &pushConstants);
 
-            sceneData.ForwardTaskInvocations += meshletCount;
+            if (!_recordingTraceResolutionNearFieldSource)
+                sceneData.ForwardTaskInvocations += meshletCount;
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)meshletCount, 1, 1);
         }
 
@@ -1942,9 +2010,12 @@ namespace Njulf.Rendering.Pipeline
                 useSimpleGlobalIblPipeline
                     ? ForwardOpaquePipelineFamily.CompactedSimple
                     : ForwardOpaquePipelineFamily.CompactedFull,
-                Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
+                sceneData.SceneSubmissionSidedRasterSpecializationActive
+                    ? sceneData.SceneSubmissionGpuCompactedSimpleOpaqueCapacity
+                    : Math.Max(0, sceneData.SimpleOpaqueMeshletCount),
                 BindlessIndex.SceneSimpleOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
+                SceneOpaqueCompactionPass.GetSimpleOpaqueDoubleSidedIndirectDispatchOffset(),
                 sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer,
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled);
@@ -1954,9 +2025,12 @@ namespace Njulf.Rendering.Pipeline
                 useSimpleGlobalIblPipeline
                     ? ForwardOpaquePipelineFamily.CompactedSimpleFullInput
                     : ForwardOpaquePipelineFamily.CompactedFull,
-                Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
+                sceneData.SceneSubmissionSidedRasterSpecializationActive
+                    ? sceneData.SceneSubmissionGpuCompactedSimpleNormalOpaqueCapacity
+                    : Math.Max(0, sceneData.SimpleNormalOpaqueMeshletCount),
                 BindlessIndex.SceneSimpleNormalOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
+                SceneOpaqueCompactionPass.GetSimpleNormalOpaqueDoubleSidedIndirectDispatchOffset(),
                 sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer,
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled);
@@ -1964,9 +2038,12 @@ namespace Njulf.Rendering.Pipeline
                 cmd,
                 sceneData,
                 ForwardOpaquePipelineFamily.CompactedFull,
-                Math.Max(0, sceneData.FullOpaqueMeshletCount),
+                sceneData.SceneSubmissionSidedRasterSpecializationActive
+                    ? sceneData.SceneSubmissionGpuCompactedFullOpaqueCapacity
+                    : Math.Max(0, sceneData.FullOpaqueMeshletCount),
                 BindlessIndex.SceneFullOpaqueCompactedMeshletDrawBufferBase,
                 SceneOpaqueCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
+                SceneOpaqueCompactionPass.GetFullOpaqueDoubleSidedIndirectDispatchOffset(),
                 sceneData.SceneSubmissionOpaqueIndirectDispatchBuffer,
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled);
@@ -1988,6 +2065,7 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(0, sceneData.ForwardVisibilitySimpleCapacity),
                 BindlessIndex.ForwardVisibleSimpleOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetSimpleOpaqueIndirectDispatchOffset(),
+                ForwardVisibilityCompactionPass.GetSimpleOpaqueDoubleSidedIndirectDispatchOffset(),
                 sceneData.ForwardVisibilityIndirectDispatchBuffer,
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled);
@@ -2000,6 +2078,7 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(0, sceneData.ForwardVisibilitySimpleNormalCapacity),
                 BindlessIndex.ForwardVisibleSimpleNormalOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetSimpleNormalOpaqueIndirectDispatchOffset(),
+                ForwardVisibilityCompactionPass.GetSimpleNormalOpaqueDoubleSidedIndirectDispatchOffset(),
                 sceneData.ForwardVisibilityIndirectDispatchBuffer,
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled);
@@ -2010,6 +2089,7 @@ namespace Njulf.Rendering.Pipeline
                 Math.Max(0, sceneData.ForwardVisibilityFullCapacity),
                 BindlessIndex.ForwardVisibleFullOpaqueMeshletDrawBufferBase,
                 ForwardVisibilityCompactionPass.GetFullOpaqueIndirectDispatchOffset(),
+                ForwardVisibilityCompactionPass.GetFullOpaqueDoubleSidedIndirectDispatchOffset(),
                 sceneData.ForwardVisibilityIndirectDispatchBuffer,
                 nearFieldDirectSourceEnabled,
                 giCausticReceiverEnabled);
@@ -2059,6 +2139,7 @@ namespace Njulf.Rendering.Pipeline
             int meshletCapacity,
             int meshletDrawBufferBaseIndex,
             ulong indirectOffset,
+            ulong doubleSidedIndirectOffset,
             BufferHandle indirectBufferHandle,
             bool nearFieldDirectSourceEnabled = false,
             bool giCausticReceiverEnabled = false)
@@ -2066,11 +2147,64 @@ namespace Njulf.Rendering.Pipeline
             if (meshletCapacity <= 0 || _bufferManager == null)
                 return;
 
-            bool receiverCacheEnabled = !giCausticReceiverEnabled &&
+            bool sidedStreams = sceneData.ForwardVisibilityCompactionActive
+                ? sceneData.ForwardVisibilitySidedStreamsActive
+                : sceneData.SceneSubmissionSidedRasterSpecializationActive;
+            DrawForwardBucketIndirectCore(
+                cmd,
+                sceneData,
+                pipelineFamily,
+                meshletCapacity,
+                meshletDrawBufferBaseIndex,
+                indirectOffset,
+                indirectBufferHandle,
+                firstDraw: 0u,
+                oneSided: sidedStreams,
+                depthEqual: sidedStreams,
+                nearFieldDirectSourceEnabled,
+                giCausticReceiverEnabled);
+            if (sidedStreams)
+            {
+                DrawForwardBucketIndirectCore(
+                    cmd,
+                    sceneData,
+                    pipelineFamily,
+                    meshletCapacity,
+                    meshletDrawBufferBaseIndex,
+                    doubleSidedIndirectOffset,
+                    indirectBufferHandle,
+                    firstDraw: checked((uint)meshletCapacity),
+                    oneSided: false,
+                    depthEqual: true,
+                    nearFieldDirectSourceEnabled,
+                    giCausticReceiverEnabled);
+            }
+        }
+
+        private void DrawForwardBucketIndirectCore(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData,
+            ForwardOpaquePipelineFamily pipelineFamily,
+            int meshletCapacity,
+            int meshletDrawBufferBaseIndex,
+            ulong indirectOffset,
+            BufferHandle indirectBufferHandle,
+            uint firstDraw,
+            bool oneSided,
+            bool depthEqual,
+            bool nearFieldDirectSourceEnabled,
+            bool giCausticReceiverEnabled)
+        {
+            if (meshletCapacity <= 0 || _bufferManager == null)
+                return;
+
+            bool receiverCacheEnabled = !_recordingTraceResolutionNearFieldSource &&
+                                        !giCausticReceiverEnabled &&
                                         !_simpleDdgiAlphaMaskFeedbackRequiredForCurrentView &&
                                         !_simpleDdgiReflectionFeedbackRequiredForCurrentView &&
                                         ShouldUseSimpleDdgiReceiverCacheForDraw();
             bool disabledBenchmarkPipeline =
+                !_recordingTraceResolutionNearFieldSource &&
                 ShouldUseForwardGiDisabledBenchmarkPipeline();
             ForwardOpaquePipelineKey pipelineKey = BuildForwardPipelineKey(
                 sceneData,
@@ -2112,16 +2246,37 @@ namespace Njulf.Rendering.Pipeline
                 ForwardOpaquePipelineFeatures.GlobalIlluminationDisabled);
             bool receiverCachePipeline = pipelineKey.Has(
                 ForwardOpaquePipelineFeatures.ReceiverCache);
-            _simpleDdgiReceiverCacheConsumedForCurrentView |=
-                receiverCachePipeline;
-            _forwardGiDisabledBenchmarkPipelineUsedForCurrentView |=
-                giDisabledPipeline;
-            _forwardGiExactGatherUsedForCurrentView |=
-                !giDisabledPipeline &&
-                !receiverCachePipeline &&
-                sceneData.SimpleDdgiActive != 0 &&
-                ShouldApplyGlobalIllumination(sceneData);
+            if (!_recordingTraceResolutionNearFieldSource)
+            {
+                _simpleDdgiReceiverCacheConsumedForCurrentView |=
+                    receiverCachePipeline;
+                _forwardGiDisabledBenchmarkPipelineUsedForCurrentView |=
+                    giDisabledPipeline;
+                _forwardGiExactGatherUsedForCurrentView |=
+                    !giDisabledPipeline &&
+                    !receiverCachePipeline &&
+                    sceneData.SimpleDdgiActive != 0 &&
+                    ShouldApplyGlobalIllumination(sceneData);
+            }
             _context.Api.CmdBindPipeline(cmd, PipelineBindPoint.Graphics, pipeline);
+            _context.Api.CmdSetCullMode(
+                cmd,
+                oneSided ? CullModeFlags.BackBit : CullModeFlags.None);
+            _context.Api.CmdSetDepthCompareOp(
+                cmd,
+                !_recordingTraceResolutionNearFieldSource && depthEqual
+                    ? CompareOp.Equal
+                    : CompareOp.GreaterOrEqual);
+
+            if (!Data.GPUForwardPushConstants.TryPackTransparentDrawRange(
+                    checked((uint)meshletDrawBufferBaseIndex),
+                    firstDraw,
+                    out uint packedDrawBufferBaseIndex))
+            {
+                throw new InvalidOperationException(
+                    "The compacted Forward+ sided range cannot be represented " +
+                    "by the packed draw-buffer push constant.");
+            }
 
             var pushConstants = new Data.GPUForwardPushConstants
             {
@@ -2135,7 +2290,7 @@ namespace Njulf.Rendering.Pipeline
                 ScreenDimensions = new Vector2(sceneData.ScreenWidth, sceneData.ScreenHeight),
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 MeshletDrawCount = (uint)meshletCapacity,
-                MeshletDrawBufferBaseIndex = (uint)meshletDrawBufferBaseIndex,
+                MeshletDrawBufferBaseIndex = packedDrawBufferBaseIndex,
                 PackedLightDispatch = Data.GPUForwardPushConstants
                     .PackLightDispatch(
                         sceneData.LightCount,
@@ -2159,7 +2314,9 @@ namespace Njulf.Rendering.Pipeline
                     screenSpaceGlobalIlluminationEnabled: false,
                     ambientOcclusionBentNormalMode:
                         (uint)sceneData.AmbientOcclusionBentNormalMode),
-                DiagnosticFlags = Data.GPUForwardPushConstants.PackDiagnosticFlags(
+                DiagnosticFlags = _recordingTraceResolutionNearFieldSource
+                    ? 0u
+                    : Data.GPUForwardPushConstants.PackDiagnosticFlags(
                     ShouldCollectDdgiForwardEstimateCounters(sceneData),
                     ShouldCollectDdgiClipmapCoverageCounters(sceneData),
                     ShouldCollectDirectionalShadowReceiverCounters(sceneData),
@@ -2168,11 +2325,21 @@ namespace Njulf.Rendering.Pipeline
                     !nearFieldDirectSourceEnabled &&
                     !giCausticReceiverEnabled &&
                     ShouldWriteMaterialTransportProvenance(),
-                    ddgiReceiverCacheEnabled: receiverCachePipeline),
+                    ddgiReceiverCacheEnabled: receiverCachePipeline,
+                    geometricSpecularAntialiasingEnabled:
+                        sceneData.SpecularAntialiasingMode ==
+                        SpecularAntialiasingMode.GeometricVariance),
                 CaptureFlags = Data.GPUForwardPushConstants.PackCaptureFlags(
+                    !_recordingTraceResolutionNearFieldSource &&
                     _recordingReflectionCapture,
                     _reflectionFeedbackCubemapArrayLayer)
             };
+            if (_recordingTraceResolutionNearFieldSource)
+            {
+                pushConstants.DiagnosticFlags |=
+                    Data.GPUForwardPushConstants.PackTraceResolutionScale(
+                        _traceResolutionNearFieldSourceScale);
+            }
 
             uint size = (uint)Marshal.SizeOf<Data.GPUForwardPushConstants>();
             _context.Api.CmdPushConstants(
@@ -2188,10 +2355,13 @@ namespace Njulf.Rendering.Pipeline
             // legacy ForwardTaskInvocations diagnostic as a submitted-workgroup
             // compatibility metric even though this indirect path is mesh-only.
             // The fence-safe readback corrects it to the exact emitted count.
-            sceneData.ForwardTaskInvocations = Math.Max(
-                sceneData.ForwardTaskInvocations,
-                sceneData.SceneSubmissionGpuIndirectMeshletTaskCount);
-            sceneData.ForwardMeshOnlyIndirectDrawCount++;
+            if (!_recordingTraceResolutionNearFieldSource)
+            {
+                sceneData.ForwardTaskInvocations = Math.Max(
+                    sceneData.ForwardTaskInvocations,
+                    sceneData.SceneSubmissionGpuIndirectMeshletTaskCount);
+                sceneData.ForwardMeshOnlyIndirectDrawCount++;
+            }
             _context.ExtMeshShader.CmdDrawMeshTasksIndirect(
                 cmd,
                 indirect,
@@ -2979,10 +3149,13 @@ namespace Njulf.Rendering.Pipeline
             bool disabledBenchmarkPipeline)
         {
             bool hybridReflection =
+                !_recordingTraceResolutionNearFieldSource &&
                 _hybridReflectionReceiverEnabledForCurrentView &&
                 !_recordingReflectionCapture;
             bool feedbackRequired =
+                !_recordingTraceResolutionNearFieldSource &&
                 _simpleDdgiAlphaMaskFeedbackRequiredForCurrentView ||
+                !_recordingTraceResolutionNearFieldSource &&
                 _simpleDdgiReflectionFeedbackRequiredForCurrentView;
             bool advancedOutput = hybridReflection ||
                                   nearFieldDirectSourceEnabled || giCausticReceiverEnabled;
@@ -3230,11 +3403,39 @@ namespace Njulf.Rendering.Pipeline
                     _nearFieldDirectSourceBinding,
                     _meshPipeline.NearFieldDirectSourceConfiguration,
                     _renderTargets.SceneColor,
-                    renderExtent,
+                    _meshPipeline.NearFieldDirectSourceConfiguration
+                            .SourceProducerMode ==
+                        SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster
+                        ? _nearFieldDirectSourceBinding.DirectSource.Extent
+                        : renderExtent,
                     out string failure))
             {
                 NearFieldDirectSourceFailureReason = failure;
                 return false;
+            }
+
+            if (_meshPipeline.NearFieldDirectSourceConfiguration
+                    .SourceProducerMode ==
+                SimpleDdgiNearFieldSourceProducerMode.TraceResolutionRaster)
+            {
+                if (!TryResolveTraceResolutionExecutionExtent(
+                        _nearFieldDirectSourceBinding,
+                        out _,
+                        out failure))
+                {
+                    NearFieldDirectSourceFailureReason = failure;
+                    return false;
+                }
+
+                if (_foliagePipeline is not null &&
+                    sceneData.FoliageClusterCount > 0 &&
+                    sceneData.FoliageDrawBufferBytes > 0 &&
+                    !_foliagePipeline.NearFieldDirectSourcePipelinesAvailable)
+                {
+                    NearFieldDirectSourceFailureReason =
+                        _foliagePipeline.NearFieldDirectSourcePipelineFailureReason;
+                    return false;
+                }
             }
 
             binding = _nearFieldDirectSourceBinding;
@@ -3399,6 +3600,250 @@ namespace Njulf.Rendering.Pipeline
                    sceneData.DepthPrePassEnabled;
         }
 
+        private bool TryResolveTraceResolutionExecutionExtent(
+            ForwardNearFieldDirectSourceAttachmentBinding binding,
+            out SimpleDdgiNearFieldResidualExecutionExtent executionExtent,
+            out string failure)
+        {
+            executionExtent = default;
+            RenderTarget? traceDepth = binding.TraceRasterDepth;
+            if (traceDepth is null)
+            {
+                failure = "near-field-trace-raster-depth-unavailable";
+                return false;
+            }
+
+            try
+            {
+                if (_nearFieldDirectSourceExecutionExtent is not null)
+                {
+                    executionExtent = _nearFieldDirectSourceExecutionExtent();
+                }
+                else
+                {
+                    SimpleDdgiNearFieldTraceSourceScaledExtent contractExtent =
+                        binding.Configuration.TraceSourceContract.Extent;
+                    executionExtent = new SimpleDdgiNearFieldResidualExecutionExtent(
+                        contractExtent.ScaledWidth,
+                        contractExtent.ScaledHeight,
+                        ResolveTraceResolutionScale(
+                            contractExtent.ResolutionScale),
+                        1u);
+                }
+            }
+            catch (Exception exception)
+            {
+                failure = "near-field-trace-execution-extent-unavailable:" +
+                          exception.GetType().Name;
+                return false;
+            }
+
+            if (!executionExtent.IsValid ||
+                !Enum.IsDefined(executionExtent.Scale))
+            {
+                failure = "near-field-trace-execution-extent-invalid";
+                return false;
+            }
+
+            SimpleDdgiNearFieldTraceSourceScaledExtent sourceExtent =
+                binding.Configuration.TraceSourceContract.Extent;
+            float scale = TraceResolutionScaleFactor(executionExtent.Scale);
+            int expectedWidth = Math.Max(1, checked((int)Math.Ceiling(
+                sourceExtent.FullWidth * scale)));
+            int expectedHeight = Math.Max(1, checked((int)Math.Ceiling(
+                sourceExtent.FullHeight * scale)));
+            if (executionExtent.Width != expectedWidth ||
+                executionExtent.Height != expectedHeight)
+            {
+                failure = "near-field-trace-execution-extent-scale-mismatch";
+                return false;
+            }
+
+            if (scale > sourceExtent.ResolutionScale ||
+                executionExtent.Width > binding.DirectSource.Extent.Width ||
+                executionExtent.Height > binding.DirectSource.Extent.Height ||
+                binding.ReceiverPayload.Extent.Width !=
+                    binding.DirectSource.Extent.Width ||
+                binding.ReceiverPayload.Extent.Height !=
+                    binding.DirectSource.Extent.Height ||
+                traceDepth.Extent.Width != binding.DirectSource.Extent.Width ||
+                traceDepth.Extent.Height != binding.DirectSource.Extent.Height)
+            {
+                failure = "near-field-trace-execution-extent-exceeds-generation";
+                return false;
+            }
+
+            failure = "valid";
+            return true;
+        }
+
+        private static SimpleDdgiNearFieldResidualExecutionScale
+            ResolveTraceResolutionScale(float scale) => scale >= 0.5f
+                ? SimpleDdgiNearFieldResidualExecutionScale.Half
+                : scale >= 0.25f
+                    ? SimpleDdgiNearFieldResidualExecutionScale.Quarter
+                    : SimpleDdgiNearFieldResidualExecutionScale.Eighth;
+
+        private static float TraceResolutionScaleFactor(
+            SimpleDdgiNearFieldResidualExecutionScale scale) => scale switch
+            {
+                SimpleDdgiNearFieldResidualExecutionScale.Half => 0.5f,
+                SimpleDdgiNearFieldResidualExecutionScale.Quarter => 0.25f,
+                SimpleDdgiNearFieldResidualExecutionScale.Eighth => 0.125f,
+                _ => throw new ArgumentOutOfRangeException(nameof(scale))
+            };
+
+        private void RecordTraceResolutionNearFieldSource(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData,
+            ForwardNearFieldDirectSourceAttachmentBinding binding)
+        {
+            if (!TryResolveTraceResolutionExecutionExtent(
+                    binding,
+                    out SimpleDdgiNearFieldResidualExecutionExtent execution,
+                    out string failure))
+            {
+                throw new InvalidOperationException(failure);
+            }
+
+            RenderTarget traceDepth = binding.TraceRasterDepth ??
+                throw new InvalidOperationException(
+                    "The admitted trace-resolution source has no depth target.");
+            var traceExtent = new Extent2D(
+                checked((uint)execution.Width),
+                checked((uint)execution.Height));
+
+            binding.DirectSource.TransitionToColorAttachment(cmd);
+            binding.ReceiverPayload.TransitionToColorAttachment(cmd);
+            traceDepth.TransitionToDepthAttachment(cmd);
+
+            var colorAttachments = stackalloc RenderingAttachmentInfo[2];
+            colorAttachments[0] = ColorAttachment(
+                binding.DirectSource.View,
+                ImageLayout.ColorAttachmentOptimal,
+                AttachmentLoadOp.Clear,
+                AttachmentStoreOp.Store,
+                new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+            colorAttachments[1] = ColorAttachment(
+                binding.ReceiverPayload.View,
+                ImageLayout.ColorAttachmentOptimal,
+                AttachmentLoadOp.Clear,
+                AttachmentStoreOp.Store,
+                new ClearValue(new ClearColorValue(0.0f, 0.0f, 0.0f, 0.0f)));
+            RenderingAttachmentInfo depthAttachment = DepthAttachment(
+                traceDepth.View,
+                ImageLayout.DepthStencilAttachmentOptimal,
+                AttachmentLoadOp.Clear,
+                AttachmentStoreOp.Store,
+                new ClearValue(null, new ClearDepthStencilValue(0.0f, 0)));
+            var renderingInfo = new RenderingInfo
+            {
+                SType = StructureType.RenderingInfo,
+                RenderArea = new Rect2D
+                {
+                    Offset = new Offset2D { X = 0, Y = 0 },
+                    Extent = traceExtent
+                },
+                LayerCount = 1,
+                ColorAttachmentCount = 2u,
+                PColorAttachments = colorAttachments,
+                PDepthAttachment = &depthAttachment,
+                PStencilAttachment = null
+            };
+
+            SetFullViewportAndScissor(cmd, traceExtent);
+            BindBindlessStorageAndTextures(cmd, _meshPipeline.Layout);
+            _context.KhrDynamicRendering.CmdBeginRendering(cmd, &renderingInfo);
+            _recordingTraceResolutionNearFieldSource = true;
+            _traceResolutionNearFieldSourceScale = execution.Scale;
+            try
+            {
+                DrawTraceResolutionOpaqueBuckets(cmd, sceneData);
+                if (!DrawFoliageForward(
+                        cmd,
+                        sceneData,
+                        nearFieldDirectSource: true))
+                {
+                    throw new InvalidOperationException(
+                        "The trace-resolution foliage source pipelines became unavailable during recording.");
+                }
+            }
+            finally
+            {
+                _recordingTraceResolutionNearFieldSource = false;
+                _context.KhrDynamicRendering.CmdEndRendering(cmd);
+            }
+
+            binding.DirectSource.TransitionToShaderRead(cmd);
+            binding.ReceiverPayload.TransitionToShaderRead(cmd);
+            traceDepth.TransitionToDepthReadOnly(cmd);
+            NearFieldDirectSourceFailureReason =
+                "valid; trace-resolution raster source recorded";
+        }
+
+        private void DrawTraceResolutionOpaqueBuckets(
+            CommandBuffer cmd,
+            Data.SceneRenderingData sceneData)
+        {
+            if (sceneData.SceneSubmissionForwardPath ==
+                SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedIndirect)
+            {
+                if (sceneData.ForwardVisibilityCompactionActive)
+                {
+                    DrawForwardVisibilityBucketsIndirect(
+                        cmd,
+                        sceneData,
+                        nearFieldDirectSourceEnabled: true);
+                }
+                else
+                {
+                    DrawCompactedForwardBucketsIndirect(
+                        cmd,
+                        sceneData,
+                        nearFieldDirectSourceEnabled: true);
+                }
+                return;
+            }
+
+            if (sceneData.SceneSubmissionForwardPath ==
+                SceneSubmissionDiagnosticsPolicy.ForwardPathGpuCompactedDirect)
+            {
+                DrawCompactedForwardBucketsDirect(
+                    cmd,
+                    sceneData,
+                    nearFieldDirectSourceEnabled: true);
+                return;
+            }
+
+            ForwardOpaqueVariantSelection variants =
+                ResolveOpaqueVariantSelection(sceneData);
+            DrawForwardBucket(
+                cmd,
+                sceneData,
+                variants.UseSimpleGlobalIblPipeline
+                    ? ForwardOpaquePipelineFamily.Simple
+                    : ForwardOpaquePipelineFamily.Full,
+                sceneData.SimpleOpaqueMeshletCount,
+                BindlessIndex.MeshletDrawBufferBase,
+                nearFieldDirectSourceEnabled: true);
+            DrawForwardBucket(
+                cmd,
+                sceneData,
+                variants.UseSimpleGlobalIblPipeline
+                    ? ForwardOpaquePipelineFamily.SimpleFullInput
+                    : ForwardOpaquePipelineFamily.Full,
+                sceneData.SimpleNormalOpaqueMeshletCount,
+                BindlessIndex.SimpleNormalOpaqueMeshletDrawBufferBase,
+                nearFieldDirectSourceEnabled: true);
+            DrawForwardBucket(
+                cmd,
+                sceneData,
+                ForwardOpaquePipelineFamily.Full,
+                sceneData.FullOpaqueMeshletCount,
+                BindlessIndex.FullOpaqueMeshletDrawBufferBase,
+                nearFieldDirectSourceEnabled: true);
+        }
+
         private bool DrawFoliageForward(
             CommandBuffer cmd,
             Data.SceneRenderingData sceneData,
@@ -3409,11 +3854,13 @@ namespace Njulf.Rendering.Pipeline
                 return true;
 
             bool receiverFeedback =
-                _simpleDdgiFoliageFeedbackRequiredForCurrentView ||
-                _simpleDdgiReflectionFeedbackRequiredForCurrentView;
+                !_recordingTraceResolutionNearFieldSource &&
+                (_simpleDdgiFoliageFeedbackRequiredForCurrentView ||
+                 _simpleDdgiReflectionFeedbackRequiredForCurrentView);
             VkPipeline foliagePipeline = default;
             VkPipeline authoredFoliagePipeline = default;
             bool pipelinesResolved =
+                !_recordingTraceResolutionNearFieldSource &&
                 _hybridReflectionReceiverEnabledForCurrentView &&
                 !_recordingReflectionCapture
                     ? _foliagePipeline.TryResolveHybridReflectionPipeline(
@@ -3459,11 +3906,16 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 ClusterDrawCount = checked((uint)sceneData.FoliageClusterCount),
                 VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
-                Flags = GPUFoliageDrawPushConstants.PackFlags(
-                    ShouldWriteMaterialTransportProvenance(),
-                    _simpleDdgiReflectionFeedbackRequiredForCurrentView,
-                    _reflectionFeedbackCubemapArrayLayer),
-                DebugView = sceneData.FoliageDebugView,
+                Flags = _recordingTraceResolutionNearFieldSource
+                    ? GPUFoliageDrawPushConstants.PackTraceResolutionScale(
+                        _traceResolutionNearFieldSourceScale)
+                    : GPUFoliageDrawPushConstants.PackFlags(
+                        ShouldWriteMaterialTransportProvenance(),
+                        _simpleDdgiReflectionFeedbackRequiredForCurrentView,
+                        _reflectionFeedbackCubemapArrayLayer),
+                DebugView = _recordingTraceResolutionNearFieldSource
+                    ? 0u
+                    : sceneData.FoliageDebugView,
                 ShadowDensityScale = 1.0f,
                 Padding2 = checked((uint)Math.Min(
                     sceneData.ObjectCount,
@@ -3479,7 +3931,8 @@ namespace Njulf.Rendering.Pipeline
                 (uint)Marshal.SizeOf<GPUFoliageDrawPushConstants>(),
                 &pushConstants);
 
-            sceneData.ForwardTaskInvocations += sceneData.FoliageClusterCount;
+            if (!_recordingTraceResolutionNearFieldSource)
+                sceneData.ForwardTaskInvocations += sceneData.FoliageClusterCount;
             _context.ExtMeshShader.CmdDrawMeshTask(cmd, (uint)sceneData.FoliageClusterCount, 1, 1);
 
             DrawAuthoredFoliageForward(
@@ -3573,11 +4026,16 @@ namespace Njulf.Rendering.Pipeline
                 CurrentFrameIndex = sceneData.CurrentFrameIndex,
                 ClusterDrawCount = checked((uint)buffers.MeshletDrawCapacity),
                 VisibleClusterBufferBaseIndex = (uint)BindlessIndex.FoliageVisibleClusterBufferBase,
-                Flags = GPUFoliageDrawPushConstants.PackFlags(
-                    ShouldWriteMaterialTransportProvenance(),
-                    _simpleDdgiReflectionFeedbackRequiredForCurrentView,
-                    _reflectionFeedbackCubemapArrayLayer),
-                DebugView = sceneData.FoliageDebugView,
+                Flags = _recordingTraceResolutionNearFieldSource
+                    ? GPUFoliageDrawPushConstants.PackTraceResolutionScale(
+                        _traceResolutionNearFieldSourceScale)
+                    : GPUFoliageDrawPushConstants.PackFlags(
+                        ShouldWriteMaterialTransportProvenance(),
+                        _simpleDdgiReflectionFeedbackRequiredForCurrentView,
+                        _reflectionFeedbackCubemapArrayLayer),
+                DebugView = _recordingTraceResolutionNearFieldSource
+                    ? 0u
+                    : sceneData.FoliageDebugView,
                 ShadowDensityScale = 1.0f,
                 Padding2 = checked((uint)Math.Min(
                     sceneData.ObjectCount,

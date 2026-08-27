@@ -50,11 +50,13 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #endif
 
-// Every forward variant consumes the current frame's depth prepass and keeps
-// depth writes disabled.  Make that contract explicit so helper functions with
-// diagnostic atomics cannot force late depth testing and shade hidden Sponza
-// layers before the depth comparison rejects them.
+// Ordinary forward variants consume the current frame's depth prepass. The
+// reduced C5 source owns a fresh depth target and must run coverage before its
+// late depth write so discarded alpha-mask samples cannot occlude later work.
+#if !defined(NJULF_C5_TRACE_RESOLUTION_SOURCE) || \
+    !NJULF_C5_TRACE_RESOLUTION_SOURCE
 layout(early_fragment_tests) in;
+#endif
 
 #ifndef NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 #define NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT 0
@@ -69,6 +71,10 @@ layout(early_fragment_tests) in;
 
 #ifndef NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION
 #define NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION 0
+#endif
+
+#ifndef NJULF_C5_TRACE_RESOLUTION_SOURCE
+#define NJULF_C5_TRACE_RESOLUTION_SOURCE 0
 #endif
 
 #ifndef NJULF_C4_RECEIVER_OUTPUT
@@ -95,7 +101,7 @@ layout(early_fragment_tests) in;
 #if NJULF_MATERIAL_TRANSPORT_PROVENANCE_OUTPUT
 #error "C5 direct source cannot share the forward MRT variant with material provenance."
 #endif
-#if NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 4
+#if NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 5
 #error "C5 direct source shader semantics version mismatch."
 #endif
 #elif NJULF_C5_DIRECT_SOURCE_SEMANTICS_VERSION != 0
@@ -280,6 +286,9 @@ layout(location = 8) in vec4 fragVertexColor;
 #if FORWARD_WEIGHTED_OIT
 layout(location = 0) out vec4 outOitAccumulation;
 layout(location = 1) out vec4 outOitRevealage;
+#elif NJULF_C5_TRACE_RESOLUTION_SOURCE
+layout(location = 0) out vec4 outDirectDiffuseAndEmissive;
+layout(location = 1) out uvec4 outNearFieldReceiverPayload;
 #else
 layout(location = 0) out vec4 outColor;
 #if NJULF_C4_RECEIVER_OUTPUT && NJULF_C5_DIRECT_DIFFUSE_EMISSIVE_OUTPUT
@@ -314,6 +323,21 @@ layout(push_constant) uniform ForwardPushConstantBlock
 {
     GPUForwardPushConstants Push;
 } pc;
+
+vec2 ForwardScreenPixel()
+{
+#if NJULF_C5_TRACE_RESOLUTION_SOURCE
+    uint scaleCode = (pc.Push.DiagnosticFlags >> 26u) & 0x3u;
+    float scale = scaleCode == 2u
+        ? 0.5
+        : scaleCode == 1u ? 0.25 : 0.125;
+    vec2 fullExtent = max(pc.Push.ScreenDimensions, vec2(1.0));
+    vec2 traceExtent = max(ceil(fullExtent * scale), vec2(1.0));
+    return gl_FragCoord.xy * fullExtent / traceExtent;
+#else
+    return gl_FragCoord.xy;
+#endif
+}
 
 const float PI = 3.14159265359;
 // R8_UNORM material-transport provenance attachment ABI. Keep synchronized
@@ -606,6 +630,11 @@ bool ForwardDdgiReceiverCacheEnabled()
     return (pc.Push.DiagnosticFlags & (1u << 30u)) != 0u;
 }
 
+bool ForwardGeometricSpecularAntialiasingEnabled()
+{
+    return (pc.Push.DiagnosticFlags & (1u << 29u)) != 0u;
+}
+
 bool DdgiForwardEstimateCountersEnabled()
 {
     return (pc.Push.DiagnosticFlags & 1u) != 0u;
@@ -727,7 +756,7 @@ bool ForwardLayeredReceiverAcceptsShadows(bool geometryDecal)
 
 bool DdgiSparseDiagnosticPixel()
 {
-    uvec2 pixel = uvec2(max(gl_FragCoord.xy, vec2(0.0)));
+    uvec2 pixel = uvec2(max(ForwardScreenPixel(), vec2(0.0)));
     return (pixel.x & 15u) == 0u && (pixel.y & 15u) == 0u;
 }
 
@@ -996,7 +1025,7 @@ vec3 ReconstructNormalFromDepth(vec2 uv)
 float SampleScreenSpaceAoDirect()
 {
     vec2 uv = clamp(
-        gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)),
+        ForwardScreenPixel() / max(pc.Push.ScreenDimensions, vec2(1.0)),
         vec2(0.0),
         vec2(1.0));
     return clamp(textureLod(
@@ -1036,7 +1065,7 @@ bool TryResolveIndirectDiffuseNormal(
     if (ForwardAmbientOcclusionBentNormalMode() == 0u)
         return false;
     vec2 uv = clamp(
-        gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)),
+        ForwardScreenPixel() / max(pc.Push.ScreenDimensions, vec2(1.0)),
         vec2(0.0),
         vec2(1.0));
     vec4 payload = textureLod(
@@ -1832,7 +1861,7 @@ float EvaluateDirectionalTransparentRay(
     uint totalAlphaSamples = 0u;
     uint hitCount = 0u;
     bool capHit = false;
-    uvec2 pixel = uvec2(max(floor(gl_FragCoord.xy), vec2(0.0)));
+    uvec2 pixel = uvec2(max(floor(ForwardScreenPixel()), vec2(0.0)));
     for (uint sampleIndex = 0u; sampleIndex < sampleCount; sampleIndex++)
     {
         vec3 direction = DirectionalSampleSunDirection(
@@ -1907,7 +1936,7 @@ bool DirectionalRayShadowMaskSupportsReceiver(bool geometryDecal)
     if (!geometryDecal)
         return false;
 #endif
-    ivec2 pixel = ivec2(gl_FragCoord.xy);
+    ivec2 pixel = ivec2(ForwardScreenPixel());
     float ownerDepth = texelFetch(
         BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)],
         pixel,
@@ -1930,7 +1959,7 @@ float EvaluateDirectionalCsmTemporalMask(
 
     uvec2 dimensions = uvec2(max(round(pc.Push.ScreenDimensions), vec2(1.0)));
     uvec2 pixel = uvec2(clamp(
-        floor(gl_FragCoord.xy),
+        floor(ForwardScreenPixel()),
         vec2(0.0),
         vec2(dimensions - uvec2(1u))));
     uint pixelIndex = pixel.y * dimensions.x + pixel.x;
@@ -1958,7 +1987,7 @@ float EvaluateDirectionalRayShadowMask(
         round(pc.Push.ScreenDimensions),
         vec2(1.0)));
     uvec2 pixel = uvec2(clamp(
-        floor(gl_FragCoord.xy),
+        floor(ForwardScreenPixel()),
         vec2(0.0),
         vec2(dimensions - uvec2(1u))));
     uint pixelIndex = pixel.y * dimensions.x + pixel.x;
@@ -1992,7 +2021,7 @@ float EvaluateAreaRayShadowMask(
         round(pc.Push.ScreenDimensions),
         vec2(1.0)));
     uvec2 pixel = uvec2(clamp(
-        floor(gl_FragCoord.xy),
+        floor(ForwardScreenPixel()),
         vec2(0.0),
         vec2(dimensions - uvec2(1u))));
     uint pixelIndex = pixel.y * dimensions.x + pixel.x;
@@ -2365,7 +2394,7 @@ uint DirectionalShadowScreenPixelIndex(out uint frameSlot)
         round(pc.Push.ScreenDimensions),
         vec2(1.0)));
     uvec2 pixel = uvec2(clamp(
-        floor(gl_FragCoord.xy),
+        floor(ForwardScreenPixel()),
         vec2(0.0),
         vec2(dimensions - uvec2(1u))));
     frameSlot = min(
@@ -2763,6 +2792,30 @@ float GeometrySmith(float nDotV, float nDotL, float roughness)
     return GeometrySchlickGGX(nDotV, roughness) * GeometrySchlickGGX(nDotL, roughness);
 }
 
+float ApplyGeometricSpecularAntialiasing(
+    float perceptualRoughness,
+    vec3 shadingNormal)
+{
+    if (!ForwardGeometricSpecularAntialiasingEnabled())
+        return perceptualRoughness;
+
+    vec3 normalDx = dFdx(shadingNormal);
+    vec3 normalDy = dFdy(shadingNormal);
+    // Filter GGX in alpha-squared space. The bounded variance is deliberately
+    // conservative: it removes sub-pixel normal-map/glancing-triangle fireflies
+    // without turning a genuinely smooth continuous surface into matte paint.
+    float geometricVariance = clamp(
+        0.5 * (dot(normalDx, normalDx) + dot(normalDy, normalDy)),
+        0.0,
+        0.25);
+    float alpha = max(perceptualRoughness * perceptualRoughness, 0.0016);
+    float filteredAlphaSquared = clamp(
+        alpha * alpha + geometricVariance,
+        0.00000256,
+        1.0);
+    return sqrt(sqrt(filteredAlphaSquared));
+}
+
 float EstimateReflectionSchedulingRoughness(
     float physicalRoughness,
     float conservativeFootprintRoughness,
@@ -2939,12 +2992,69 @@ vec3 ReflectionFaceColor(vec3 direction)
     return direction.z >= 0.0 ? vec3(0.2, 0.4, 1.0) : vec3(1.0, 0.85, 0.1);
 }
 
+float DistributionCharlie(float nDotH, float roughness)
+{
+    float alpha = max(roughness, 0.07);
+    float inverseAlpha = 1.0 / alpha;
+    float sinThetaSquared = max(1.0 - nDotH * nDotH, 0.000001);
+    return (2.0 + inverseAlpha) *
+        pow(sinThetaSquared, 0.5 * inverseAlpha) /
+        (2.0 * PI);
+}
+
+float VisibilitySheen(float nDotV, float nDotL)
+{
+    return 1.0 / max(
+        4.0 * (nDotL + nDotV - nDotL * nDotV),
+        0.000001);
+}
+
+float SheenDirectionalAlbedo(
+    float nDotDirection,
+    float roughness)
+{
+    float grazing = pow(
+        clamp(1.0 - nDotDirection, 0.0, 1.0),
+        5.0);
+    return clamp(
+        mix(0.35, 0.75, grazing) * mix(1.0, 0.65, roughness),
+        0.0,
+        1.0);
+}
+
+float LayeredBaseSpecularScale(
+    float nDotV,
+    float nDotL,
+    float hDotV,
+    float clearcoatFactor,
+    vec3 sheenColor,
+    float sheenRoughness)
+{
+    float clearcoatFresnel = clearcoatFactor *
+        FresnelSchlick(hDotV, vec3(0.04)).x;
+    float sheenEnergy = MaxComponent(clamp(
+        sheenColor,
+        vec3(0.0),
+        vec3(1.0))) * max(
+            SheenDirectionalAlbedo(nDotV, sheenRoughness),
+            SheenDirectionalAlbedo(nDotL, sheenRoughness));
+    return clamp(
+        (1.0 - clearcoatFresnel) * (1.0 - sheenEnergy),
+        0.0,
+        1.0);
+}
+
 vec3 EvaluatePbrLight(
     vec3 albedo,
     float metallic,
     vec3 directionalDiffuseBase,
     float roughness,
     vec3 dielectricF0,
+    float clearcoatFactor,
+    float clearcoatRoughness,
+    vec3 clearcoatNormal,
+    vec3 sheenColor,
+    float sheenRoughness,
     vec3 normal,
     vec3 viewDirection,
     vec3 lightDirection,
@@ -2975,7 +3085,7 @@ vec3 ForwardReflectionSourceColor(uint source)
 
 bool ForwardTransparentReflectionDiagnosticSample()
 {
-    uvec2 pixel = uvec2(max(floor(gl_FragCoord.xy), vec2(0.0)));
+    uvec2 pixel = uvec2(max(floor(ForwardScreenPixel()), vec2(0.0)));
     return (pixel.x & 7u) == 0u && (pixel.y & 7u) == 0u;
 }
 
@@ -3083,7 +3193,7 @@ bool ForwardTraceTransparentSsr(
     float maximumDistance = header.SsrMaximumDistance;
     int mipCount = max(textureQueryLevels(
         BindlessTextures[nonuniformEXT(HIZ_DEPTH_TEXTURE_INDEX)]), 1);
-    float jitter = fract(sin(dot(gl_FragCoord.xy,
+    float jitter = fract(sin(dot(ForwardScreenPixel(),
         vec2(12.9898, 78.233))) * 43758.5453);
     for (uint stepIndex = 0u; stepIndex < stepCount; ++stepIndex)
     {
@@ -3309,6 +3419,11 @@ vec3 ForwardShadeTransparentReflectionHit(
             diffuseBase,
             roughness,
             dielectricF0,
+            0.0,
+            0.04,
+            normal,
+            vec3(0.0),
+            0.0,
             normal,
             viewDirection,
             lightDirection,
@@ -3885,6 +4000,11 @@ vec3 EvaluatePbrLight(
     vec3 directionalDiffuseBase,
     float roughness,
     vec3 dielectricF0,
+    float clearcoatFactor,
+    float clearcoatRoughness,
+    vec3 clearcoatNormal,
+    vec3 sheenColor,
+    float sheenRoughness,
     vec3 normal,
     vec3 viewDirection,
     vec3 lightDirection,
@@ -3914,7 +4034,55 @@ vec3 EvaluatePbrLight(
         nDotV);
     diffuseContribution = diffuse * radiance * nDotL;
 
-    return diffuseContribution + specular * radiance * nDotL;
+    float baseSpecularScale = LayeredBaseSpecularScale(
+        nDotV,
+        nDotL,
+        hDotV,
+        clearcoatFactor,
+        sheenColor,
+        sheenRoughness);
+    vec3 layeredSpecular = specular * baseSpecularScale;
+
+    float clearcoatNdotL = max(dot(clearcoatNormal, lightDirection), 0.0);
+    float clearcoatNdotV = max(dot(clearcoatNormal, viewDirection), 0.0);
+    if (clearcoatFactor > 0.0 && clearcoatNdotL > 0.0 &&
+        clearcoatNdotV > 0.0)
+    {
+        vec3 clearcoatHalf = normalize(viewDirection + lightDirection);
+        float clearcoatNdotH = max(
+            dot(clearcoatNormal, clearcoatHalf),
+            0.0);
+        float clearcoatHdotV = max(
+            dot(clearcoatHalf, viewDirection),
+            0.0);
+        float clearcoatDistribution = DistributionGGX(
+            clearcoatNdotH,
+            clearcoatRoughness);
+        float clearcoatGeometry = GeometrySmith(
+            clearcoatNdotV,
+            clearcoatNdotL,
+            clearcoatRoughness);
+        vec3 clearcoatFresnel = FresnelSchlick(
+            clearcoatHdotV,
+            vec3(0.04));
+        layeredSpecular += clearcoatFactor *
+            clearcoatDistribution * clearcoatGeometry *
+            clearcoatFresnel /
+            max(4.0 * clearcoatNdotV * clearcoatNdotL, 0.000001) *
+            (clearcoatNdotL / nDotL);
+    }
+
+    if (MaxComponent(sheenColor) > 0.0)
+    {
+        float sheenDistribution = DistributionCharlie(
+            nDotH,
+            sheenRoughness);
+        float sheenVisibility = VisibilitySheen(nDotV, nDotL);
+        layeredSpecular += sheenColor * sheenDistribution *
+            sheenVisibility;
+    }
+
+    return diffuseContribution + layeredSpecular * radiance * nDotL;
 }
 
 void AccumulateLight(
@@ -3926,6 +4094,11 @@ void AccumulateLight(
     bool subsurfaceBacklightingActive,
     float roughness,
     vec3 dielectricF0,
+    float clearcoatFactor,
+    float clearcoatRoughness,
+    vec3 clearcoatNormal,
+    vec3 sheenColor,
+    float sheenRoughness,
     vec3 normal,
     vec3 shadowNormal,
     vec3 viewDirection,
@@ -4006,7 +4179,59 @@ void AccumulateLight(
             lightIndex,
             light,
             geometryDecal);
-        directLighting += area.lighting * shadowFactor;
+        vec3 representativeDirection = normalize(
+            area.representativeDirection);
+        float representativeNdotL = max(
+            dot(normal, representativeDirection),
+            0.0);
+        vec3 representativeHalf = normalize(
+            viewDirection + representativeDirection);
+        float representativeHdotV = max(
+            dot(representativeHalf, viewDirection),
+            0.0);
+        float baseSpecularScale = LayeredBaseSpecularScale(
+            nDotV,
+            representativeNdotL,
+            representativeHdotV,
+            clearcoatFactor,
+            sheenColor,
+            sheenRoughness);
+        vec3 layeredAreaLighting = area.diffuse +
+            max(area.lighting - area.diffuse, vec3(0.0)) *
+            baseSpecularScale;
+
+        if (clearcoatFactor > 0.0)
+        {
+            NjulfAreaLightResult clearcoatArea =
+                EvaluateNjulfAreaLightLtc(
+                    light,
+                    worldPosition,
+                    clearcoatNormal,
+                    viewDirection,
+                    clearcoatRoughness,
+                    vec3(0.0),
+                    vec3(0.04));
+            layeredAreaLighting += clearcoatArea.lighting *
+                clearcoatFactor;
+        }
+        if (MaxComponent(sheenColor) > 0.0)
+        {
+            NjulfAreaLightResult unitDiffuseArea =
+                EvaluateNjulfAreaLightLtc(
+                    light,
+                    worldPosition,
+                    normal,
+                    viewDirection,
+                    max(sheenRoughness, 0.07),
+                    vec3(1.0),
+                    vec3(0.0));
+            float sheenDirectional = SheenDirectionalAlbedo(
+                nDotV,
+                sheenRoughness);
+            layeredAreaLighting += unitDiffuseArea.diffuse *
+                sheenColor * sheenDirectional;
+        }
+        directLighting += layeredAreaLighting * shadowFactor;
         directDiffuseSource += area.diffuse * shadowFactor;
         lightDirection = area.representativeDirection;
         return;
@@ -4091,6 +4316,11 @@ void AccumulateLight(
         directionalDiffuseBase,
         roughness,
         dielectricF0,
+        clearcoatFactor,
+        clearcoatRoughness,
+        clearcoatNormal,
+        sheenColor,
+        sheenRoughness,
         normal,
         viewDirection,
         lightDirection,
@@ -4105,7 +4335,7 @@ uint ForwardThickTransmissionSeed(
     uint stableObjectIdentity,
     uint materialRevision)
 {
-    uvec2 pixel = uvec2(max(floor(gl_FragCoord.xy), vec2(0.0)));
+    uvec2 pixel = uvec2(max(floor(ForwardScreenPixel()), vec2(0.0)));
     return ThickTransmissionHash(
         stableObjectIdentity ^ materialRevision ^
         pixel.x * 0x9e3779b9u ^ pixel.y * 0x85ebca6bu);
@@ -4390,6 +4620,11 @@ vec3 ForwardEvaluateThickTerminalRadiance(
             false,
             roughness,
             dielectricF0,
+            0.0,
+            0.04,
+            normal,
+            vec3(0.0),
+            0.0,
             normal,
             normal,
             viewDirection,
@@ -4493,7 +4728,12 @@ bool ForwardTraceThickTransmissionChannel(
 
 void WriteForwardColor(vec4 color)
 {
-#if FORWARD_WEIGHTED_OIT
+#if NJULF_C5_TRACE_RESOLUTION_SOURCE
+    // The source-only program has no SceneColor attachment. Debug paths are
+    // rejected by admission; retaining this no-op keeps shared material
+    // control flow well-formed without publishing indirect lighting.
+    color = color;
+#elif FORWARD_WEIGHTED_OIT
     float alpha = clamp(color.a, 0.0, 1.0);
     if (alpha <= 0.001)
         discard;
@@ -4585,7 +4825,7 @@ vec3 ApplyDdgiDebugIdentity(vec3 color, uint view)
     if (!IsDdgiDebugView(view))
         return color;
 
-    vec2 p = gl_FragCoord.xy;
+    vec2 p = ForwardScreenPixel();
     vec2 screen = max(pc.Push.ScreenDimensions, vec2(1.0));
     vec3 category = DdgiDebugCategoryColor(view);
 
@@ -4769,7 +5009,7 @@ void EmitSimpleDdgiAlphaMaskReceiverFeedback(
             tileNamespaceBase);
     float physicalSurfaceWeight = reflectionFeedback
         ? SimpleDdgiCubemapTexelSolidAngle(
-              gl_FragCoord.xy,
+              ForwardScreenPixel(),
               pc.Push.ScreenDimensions) *
           clamp(roughDdgiOwnership, 0.0, 1.0)
         : clamp(survivingCoverage, 0.0, 1.0);
@@ -4869,6 +5109,32 @@ float C5ResolveB3FootprintRadius()
     return !isnan(spacing) && !isinf(spacing) && spacing > 0.0
         ? spacing * 0.25
         : 0.0;
+}
+
+void C5WriteDirectDiffuseAndEmissiveSource(
+    vec3 geometricNormal,
+    vec3 shadingNormal,
+    vec3 directionalDiffuseBase,
+    vec3 dielectricF0,
+    vec3 directDiffuseSource,
+    vec3 emissive)
+{
+    bool payloadValid = C5CreateReceiverPayload(
+        geometricNormal,
+        shadingNormal,
+        directionalDiffuseBase,
+        dielectricF0,
+        outNearFieldReceiverPayload);
+    float b3FootprintRadius = payloadValid
+        ? C5ResolveB3FootprintRadius()
+        : 0.0;
+    payloadValid = payloadValid && b3FootprintRadius > 0.0;
+    if (!payloadValid)
+        outNearFieldReceiverPayload = uvec4(0u);
+    outDirectDiffuseAndEmissive = vec4(
+        clamp(directDiffuseSource + emissive,
+            vec3(0.0), vec3(C5_MAXIMUM_FINITE_FP16)),
+        payloadValid ? b3FootprintRadius : 0.0);
 }
 #endif
 
@@ -5325,11 +5591,7 @@ void main()
     // Preserve the isotropic lobe width for reflection scheduling. The
     // anisotropic BRDF adjustment below sharpens one axis, but a brushed lobe
     // remains broad overall and does not warrant isotropic full-rate tracing.
-    float reflectionSchedulingRoughness =
-        EstimateReflectionSchedulingRoughness(
-            roughness,
-            reflectionFootprintRoughness,
-            normal);
+    float reflectionSchedulingRoughness = roughness;
     float sampledOcclusion = material.OcclusionTextureIndex == DEFAULT_WHITE_TEXTURE
         ? 1.0
         : SampleMaterialTexture(
@@ -5368,6 +5630,7 @@ void main()
     float iridescenceThickness = 0.0;
     float dispersion = 0.0;
     vec3 thinTransmissionTint = vec3(1.0);
+    vec3 clearcoatNormal = normal;
     // ThinSurface is normally a GI-only transport contract (for example,
     // opaque curtains). ThinGlass is the explicit visible dielectric opt-in;
     // keeping these independent prevents cloth from becoming accidental glass.
@@ -5423,6 +5686,33 @@ void main()
                 clearcoatFactor *= SampleMaterialTexture(materialExtension.ClearcoatTextureIndex, ExtensionUv(materialExtension.ClearcoatOffsetScale, materialExtension.ExtensionTextureRotations0.x, materialExtension.ExtensionTextureTexCoordSets0.x)).r;
             if ((material.FeatureFlags & MATERIAL_FEATURE_CLEARCOAT_ROUGHNESS_TEXTURE) != 0u)
                 clearcoatRoughness = clamp(clearcoatRoughness * SampleMaterialTexture(materialExtension.ClearcoatRoughnessTextureIndex, ExtensionUv(materialExtension.ClearcoatRoughnessOffsetScale, materialExtension.ExtensionTextureRotations0.y, materialExtension.ExtensionTextureTexCoordSets0.y)).g, 0.04, 1.0);
+            if ((material.FeatureFlags &
+                    MATERIAL_FEATURE_CLEARCOAT_NORMAL_TEXTURE) != 0u)
+            {
+                vec2 clearcoatUv = ExtensionUv(
+                    materialExtension.ClearcoatNormalOffsetScale,
+                    materialExtension.ExtensionTextureRotations0.z,
+                    materialExtension.ExtensionTextureTexCoordSets0.z);
+                vec3 clearcoatTangentNormal =
+                    SampleMaterialTextureFootprint(
+                        materialExtension.ClearcoatNormalTextureIndex,
+                        clearcoatUv,
+                        4.0).xyz * 2.0 - 1.0;
+                clearcoatTangentNormal.xy *=
+                    materialExtension.Clearcoat.z;
+                clearcoatTangentNormal.z = sqrt(max(
+                    0.0,
+                    1.0 - dot(
+                        clearcoatTangentNormal.xy,
+                        clearcoatTangentNormal.xy)));
+                float facingSign = gl_FrontFacing ? 1.0 : -1.0;
+                clearcoatNormal = normalize(
+                    BuildOrthonormalTbn(
+                        fragNormal,
+                        fragWorldTangent,
+                        facingSign) *
+                    normalize(clearcoatTangentNormal));
+            }
         }
 
         if ((material.FeatureFlags & MATERIAL_FEATURE_SHEEN) != 0u)
@@ -5501,6 +5791,19 @@ void main()
             vec3(0.0),
             vec3(1.0));
     }
+
+    roughness = ApplyGeometricSpecularAntialiasing(
+        roughness,
+        normal);
+    clearcoatRoughness = ApplyGeometricSpecularAntialiasing(
+        clearcoatRoughness,
+        clearcoatNormal);
+    reflectionSchedulingRoughness = max(
+        roughness,
+        EstimateReflectionSchedulingRoughness(
+            roughness,
+            reflectionFootprintRoughness,
+            normal));
 
     bool reflectsIndirectDiffuse = GiMaterialHasFlag(
         material.TransportFlags,
@@ -5827,7 +6130,7 @@ void main()
 #if FORWARD_DDGI_RECEIVER_CACHE_LEGACY
     ForwardDdgiReceiverCacheAdmission receiverCacheAdmission;
     receiverCacheAdmission.EntryIndex = ForwardDdgiReceiverCacheEntryIndex(
-        gl_FragCoord.xy,
+        ForwardScreenPixel(),
         pc.Push.ScreenDimensions);
     receiverCacheAdmission.Reason = SIMPLE_DDGI_RECEIVER_SURFACE_ACCEPTED;
     bool receiverCacheAccepted = true;
@@ -5836,7 +6139,7 @@ void main()
 #else
     ForwardDdgiReceiverCacheAdmission receiverCacheAdmission =
         EvaluateForwardDdgiReceiverCacheAdmission(
-            gl_FragCoord.xy,
+            ForwardScreenPixel(),
             gl_FragCoord.z,
             fragWorldPosition,
             geometricNormal,
@@ -5899,7 +6202,7 @@ void main()
             float compactDirectionalConfidence;
             receiverCompactDirectionalResolved =
                 SampleForwardDdgiCompactDirectionalRadiance(
-                    gl_FragCoord.xy,
+                    ForwardScreenPixel(),
                     gl_FragCoord.z,
                     fragWorldPosition,
                     ddgiNormal,
@@ -6005,7 +6308,7 @@ void main()
 
     if (ambientOcclusionDebugView == AO_DEBUG_RECONSTRUCTED_NORMAL)
     {
-        vec2 uv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
+        vec2 uv = ForwardScreenPixel() / max(pc.Push.ScreenDimensions, vec2(1.0));
         WriteForwardColor(vec4(ReconstructNormalFromDepth(uv) * 0.5 + vec3(0.5), 1.0));
         return;
     }
@@ -6013,7 +6316,7 @@ void main()
     if (ambientOcclusionDebugView == AO_DEBUG_LINEAR_DEPTH)
     {
         ivec2 depthSize = textureSize(BindlessTextures[nonuniformEXT(DEPTH_TEXTURE_INDEX)], 0);
-        ivec2 pixel = ivec2(clamp(gl_FragCoord.xy, vec2(0.0), vec2(depthSize - ivec2(1))));
+        ivec2 pixel = ivec2(clamp(ForwardScreenPixel(), vec2(0.0), vec2(depthSize - ivec2(1))));
         vec2 screenUv = (vec2(pixel) + vec2(0.5)) / vec2(depthSize);
         float depth = FetchDepthAtPixel(pixel, depthSize);
         vec3 viewPosition = ReconstructViewPositionFromDepth(screenUv, depth);
@@ -6027,7 +6330,7 @@ void main()
 
     if (debugViewMode == DEBUG_VIEW_SHADOW_MAP_PREVIEW)
     {
-        vec2 previewUv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
+        vec2 previewUv = ForwardScreenPixel() / max(pc.Push.ScreenDimensions, vec2(1.0));
         uint cascadeCount = max(uint(ReadShadowIndices().y + 0.5), 1u);
         uint previewCascade = min(ForwardDirectionalShadowPreviewCascade(), cascadeCount - 1u);
         uint textureIndex = uint(DIRECTIONAL_SHADOW_TEXTURE_BASE) + previewCascade;
@@ -6038,7 +6341,7 @@ void main()
 
     if (debugViewMode == DEBUG_VIEW_SPOT_ATLAS_PREVIEW)
     {
-        vec2 previewUv = gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0));
+        vec2 previewUv = ForwardScreenPixel() / max(pc.Push.ScreenDimensions, vec2(1.0));
         float depth = texture(BindlessTextures[nonuniformEXT(SPOT_SHADOW_ATLAS_TEXTURE_INDEX)], previewUv).r;
         WriteForwardColor(vec4(vec3(depth), 1.0));
         return;
@@ -6063,6 +6366,11 @@ void main()
             subsurfaceBacklightingActive,
             roughness,
             dielectricF0,
+            clearcoatFactor,
+            clearcoatRoughness,
+            clearcoatNormal,
+            sheenColor,
+            sheenRoughness,
             normal,
             shadowNormal,
             viewDirection,
@@ -6097,6 +6405,11 @@ void main()
             subsurfaceBacklightingActive,
             roughness,
             dielectricF0,
+            clearcoatFactor,
+            clearcoatRoughness,
+            clearcoatNormal,
+            sheenColor,
+            sheenRoughness,
             normal,
             shadowNormal,
             viewDirection,
@@ -6141,7 +6454,10 @@ void main()
     else
     {
         vec2 safeScreenSize = max(pc.Push.ScreenDimensions, vec2(1.0));
-        uvec2 pixel = uvec2(clamp(gl_FragCoord.xy, vec2(0.0), safeScreenSize - vec2(1.0)));
+        uvec2 pixel = uvec2(clamp(
+            ForwardScreenPixel(),
+            vec2(0.0),
+            safeScreenSize - vec2(1.0)));
         uvec2 tile = pixel / uvec2(
             FORWARD_CLUSTER_TILE_SIZE,
             FORWARD_CLUSTER_TILE_SIZE);
@@ -6180,6 +6496,11 @@ void main()
                 subsurfaceBacklightingActive,
                 roughness,
                 dielectricF0,
+                clearcoatFactor,
+                clearcoatRoughness,
+                clearcoatNormal,
+                sheenColor,
+                sheenRoughness,
                 normal,
                 shadowNormal,
                 viewDirection,
@@ -6204,6 +6525,17 @@ void main()
         directLighting +=
             directDiffuseSource - originalDirectDiffuseSource;
     }
+
+#if NJULF_C5_TRACE_RESOLUTION_SOURCE
+    C5WriteDirectDiffuseAndEmissiveSource(
+        geometricNormal,
+        normal,
+        directionalDiffuseBase,
+        dielectricF0,
+        directDiffuseSource,
+        emissive);
+    return;
+#endif
 
     if (debugViewMode == MATERIAL_CAPTURE_LINEAR_DIRECT_DIFFUSE)
     {
@@ -6700,7 +7032,7 @@ void main()
         return;
     }
 
-    vec2 giDebugUv = clamp(gl_FragCoord.xy / max(pc.Push.ScreenDimensions, vec2(1.0)), vec2(0.0), vec2(1.0));
+    vec2 giDebugUv = clamp(ForwardScreenPixel() / max(pc.Push.ScreenDimensions, vec2(1.0)), vec2(0.0), vec2(1.0));
     if (debugViewMode == GLOBAL_ILLUMINATION_DEBUG_FAR_FIELD_OCCUPANCY_SLICE)
     {
         FarFieldClipmapParams farField = ReadFarFieldClipmapParams(uint(FAR_FIELD_CLIPMAP_PARAMS_BUFFER_INDEX));
@@ -7212,23 +7544,13 @@ void main()
     // owner. AccumulateLight has already applied the exact shadow factor to
     // directDiffuseSource, while emissive follows the frozen material
     // photometric convention.
-    bool c5ReceiverPayloadValid = C5CreateReceiverPayload(
+    C5WriteDirectDiffuseAndEmissiveSource(
         geometricNormal,
         normal,
         directionalDiffuseBase,
         dielectricF0,
-        outNearFieldReceiverPayload);
-    float c5B3FootprintRadius = c5ReceiverPayloadValid
-        ? C5ResolveB3FootprintRadius()
-        : 0.0;
-    c5ReceiverPayloadValid = c5ReceiverPayloadValid &&
-        c5B3FootprintRadius > 0.0;
-    if (!c5ReceiverPayloadValid)
-        outNearFieldReceiverPayload = uvec4(0u);
-    outDirectDiffuseAndEmissive = vec4(
-        clamp(directDiffuseSource + emissive,
-            vec3(0.0), vec3(C5_MAXIMUM_FINITE_FP16)),
-        c5ReceiverPayloadValid ? c5B3FootprintRadius : 0.0);
+        directDiffuseSource,
+        emissive);
 #endif
 
 #if NJULF_C4_RECEIVER_OUTPUT
@@ -7247,10 +7569,24 @@ void main()
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
     // The deferred reflection pass owns only base indirect specular. Direct
     // light, diffuse GI, emissive, and material extensions remain in SceneColor.
+    float layerNdotV = max(dot(normal, viewDirection), 0.0);
+    float clearcoatViewFresnel = clearcoatFactor *
+        FresnelSchlick(layerNdotV, vec3(0.04)).x;
+    float sheenViewEnergy = MaxComponent(clamp(
+        sheenColor,
+        vec3(0.0),
+        vec3(1.0))) * SheenDirectionalAlbedo(
+            layerNdotV,
+            sheenRoughness);
+    float baseLayerSpecularScale = clamp(
+        (1.0 - clearcoatViewFresnel) *
+        (1.0 - sheenViewEnergy),
+        0.0,
+        1.0);
     float hybridSpecularOcclusion = clamp(
         pow(indirectAo, 1.0 + roughness) * indirectSpecularVisibility,
         0.0,
-        1.0);
+        1.0) * baseLayerSpecularScale;
     uint hybridReflectionLobeFlags = 0u;
     if (transmissionFactor >= 0.05)
     {
@@ -7280,7 +7616,23 @@ void main()
 #if NJULF_HYBRID_REFLECTION_RECEIVER_OUTPUT
     vec3 color = finalDiffuseIndirect + directLighting + emissive;
 #else
-    vec3 color = finalDiffuseIndirect + specularIbl + directLighting + emissive;
+    float layerNdotV = max(dot(normal, viewDirection), 0.0);
+    float clearcoatViewFresnel = clearcoatFactor *
+        FresnelSchlick(layerNdotV, vec3(0.04)).x;
+    float sheenViewEnergy = MaxComponent(clamp(
+        sheenColor,
+        vec3(0.0),
+        vec3(1.0))) * SheenDirectionalAlbedo(
+            layerNdotV,
+            sheenRoughness);
+    float baseLayerSpecularScale = clamp(
+        (1.0 - clearcoatViewFresnel) *
+        (1.0 - sheenViewEnergy),
+        0.0,
+        1.0);
+    vec3 color = finalDiffuseIndirect +
+        specularIbl * baseLayerSpecularScale +
+        directLighting + emissive;
 #endif
 
     if (hasMaterialExtension)
@@ -7289,21 +7641,46 @@ void main()
         GPUEnvironmentData extensionEnvironment = environment;
         if (clearcoatFactor > 0.0 && extensionEnvironment.Enabled != 0u)
         {
-            vec3 clearcoatReflection = reflect(-viewDirection, normal);
+            float clearcoatNdotV = max(
+                dot(clearcoatNormal, viewDirection),
+                0.0);
+            vec3 clearcoatReflection = reflect(
+                -viewDirection,
+                clearcoatNormal);
             float clearcoatMaxLod = max(float(extensionEnvironment.PrefilteredMipCount) - 1.0, 0.0);
             vec3 clearcoatPrefiltered = SampleEnvironmentPrefilteredRadiance(
                 extensionEnvironment,
                 clearcoatReflection,
                 clearcoatRoughness * clearcoatMaxLod);
-            vec3 clearcoatFresnel = FresnelSchlickRoughness(nDotV, vec3(0.04), clearcoatRoughness);
-            color += clearcoatPrefiltered * clearcoatFresnel * clearcoatFactor * extensionEnvironment.SpecularIntensity * indirectAo;
+            vec3 clearcoatFresnel = FresnelSchlickRoughness(
+                clearcoatNdotV,
+                vec3(0.04),
+                clearcoatRoughness);
+            vec2 clearcoatBrdf = texture(
+                BindlessTextures[nonuniformEXT(
+                    extensionEnvironment.BrdfLutTextureIndex)],
+                vec2(clearcoatNdotV, clearcoatRoughness)).rg;
+            color += clearcoatPrefiltered *
+                (clearcoatFresnel * clearcoatBrdf.x +
+                    clearcoatBrdf.y) *
+                clearcoatFactor *
+                extensionEnvironment.SpecularIntensity * indirectAo;
         }
 
-        if (dot(sheenColor, vec3(1.0)) > 0.0)
+        if (MaxComponent(sheenColor) > 0.0 &&
+            extensionEnvironment.Enabled != 0u)
         {
-            float sheenPower = mix(4.0, 1.25, sheenRoughness);
-            float sheenRim = pow(clamp(1.0 - nDotV, 0.0, 1.0), sheenPower);
-            color += sheenColor * sheenRim * (1.0 - metallic) * indirectAo;
+            vec3 sheenReflection = reflect(-viewDirection, normal);
+            float sheenMaxLod = max(
+                float(extensionEnvironment.PrefilteredMipCount) - 1.0,
+                0.0);
+            vec3 sheenRadiance = SampleEnvironmentPrefilteredRadiance(
+                extensionEnvironment,
+                sheenReflection,
+                max(sheenRoughness, 0.07) * sheenMaxLod);
+            color += sheenRadiance * sheenColor *
+                SheenDirectionalAlbedo(nDotV, sheenRoughness) *
+                extensionEnvironment.SpecularIntensity * indirectAo;
         }
 
         if (iridescenceFactor > 0.0 && metallic < 0.5)

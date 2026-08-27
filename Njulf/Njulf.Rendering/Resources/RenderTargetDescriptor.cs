@@ -12,7 +12,8 @@ namespace Njulf.Rendering.Resources
             bool storage = false,
             bool transferSource = false,
             bool transferDestination = false,
-            bool allowDriverCompression = false)
+            bool allowDriverCompression = false,
+            bool fragmentShadingRateAttachment = false)
         {
             ColorAttachment = colorAttachment;
             Sampled = sampled;
@@ -21,6 +22,8 @@ namespace Njulf.Rendering.Resources
             TransferSource = transferSource;
             TransferDestination = transferDestination;
             AllowDriverCompression = allowDriverCompression;
+            FragmentShadingRateAttachment =
+                fragmentShadingRateAttachment;
 
             if (Usage == ImageUsageFlags.None)
                 throw new ArgumentException("Render target usage cannot be empty.");
@@ -33,6 +36,7 @@ namespace Njulf.Rendering.Resources
         public bool TransferSource { get; }
         public bool TransferDestination { get; }
         public bool AllowDriverCompression { get; }
+        public bool FragmentShadingRateAttachment { get; }
 
         public ImageUsageFlags Usage
         {
@@ -51,6 +55,9 @@ namespace Njulf.Rendering.Resources
                     usage |= ImageUsageFlags.TransferSrcBit;
                 if (TransferDestination)
                     usage |= ImageUsageFlags.TransferDstBit;
+                if (FragmentShadingRateAttachment)
+                    usage |= ImageUsageFlags
+                        .FragmentShadingRateAttachmentBitKhr;
                 return usage;
             }
         }

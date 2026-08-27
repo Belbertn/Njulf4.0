@@ -233,6 +233,8 @@ void main()
     else
     {
     ivec2 fullExtent = ivec2(pc.fullWidth, pc.fullHeight);
+    bool traceResolutionRasterSource =
+        (pc.raysPerPixel & 0x80000000u) != 0u;
     ivec2 begin = ivec2(
         (uint(tracePixel.x) * pc.fullWidth) / pc.traceWidth,
         (uint(tracePixel.y) * pc.fullHeight) / pc.traceHeight);
@@ -246,27 +248,55 @@ void main()
     float nearestDepth = 3.402823466e+38;
     ivec2 selectedPixel = ivec2(-1);
     vec4 selectedSource = vec4(0.0);
-    // The production scales bound a trace footprint to at most 8x8 pixels.
-    for (int y = 0; y < 8; ++y)
+    if (traceResolutionRasterSource)
     {
-        if (begin.y + y >= end.y)
-            break;
-        for (int x = 0; x < 8; ++x)
+        // The source raster already resolved visibility and alpha coverage at
+        // this exact execution extent. Motion and linear depth remain sampled
+        // from the corresponding full-resolution pixel so temporal rejection
+        // stays in the canonical scene-depth domain.
+        ivec2 fullPixel = clamp(ivec2(
+            ((uint(tracePixel.x) * 2u + 1u) * pc.fullWidth) /
+                (pc.traceWidth * 2u),
+            ((uint(tracePixel.y) * 2u + 1u) * pc.fullHeight) /
+                (pc.traceHeight * 2u)), ivec2(0), fullExtent - ivec2(1));
+        vec4 source = texelFetch(fullSourceInput, tracePixel, 0);
+        uvec4 payload = texelFetch(fullPayloadInput, tracePixel, 0);
+        float linearDepth = PositiveLinearDepth(
+            texelFetch(fullDepthInput, fullPixel, 0).r);
+        if (SimpleDdgiNearFieldFinite(linearDepth) && linearDepth > 0.0 &&
+            ValidPayloadAndSource(payload, source))
         {
-            if (begin.x + x >= end.x)
-                break;
-            ivec2 fullPixel = begin + ivec2(x, y);
-            float storedDepth = texelFetch(fullDepthInput, fullPixel, 0).r;
-            vec4 source = texelFetch(fullSourceInput, fullPixel, 0);
-            uvec4 payload = texelFetch(fullPayloadInput, fullPixel, 0);
-            float linearDepth = PositiveLinearDepth(storedDepth);
-            if (!SimpleDdgiNearFieldFinite(linearDepth) || linearDepth <= 0.0 ||
-                !ValidPayloadAndSource(payload, source) ||
-                linearDepth >= nearestDepth)
-                continue;
             nearestDepth = linearDepth;
             selectedPixel = fullPixel;
             selectedSource = source;
+        }
+    }
+    else
+    {
+        // The canonical fallback chooses the nearest valid full-resolution
+        // receiver in each trace footprint.
+        for (int y = 0; y < 8; ++y)
+        {
+            if (begin.y + y >= end.y)
+                break;
+            for (int x = 0; x < 8; ++x)
+            {
+                if (begin.x + x >= end.x)
+                    break;
+                ivec2 fullPixel = begin + ivec2(x, y);
+                float storedDepth = texelFetch(fullDepthInput, fullPixel, 0).r;
+                vec4 source = texelFetch(fullSourceInput, fullPixel, 0);
+                uvec4 payload = texelFetch(fullPayloadInput, fullPixel, 0);
+                float linearDepth = PositiveLinearDepth(storedDepth);
+                if (!SimpleDdgiNearFieldFinite(linearDepth) ||
+                    linearDepth <= 0.0 ||
+                    !ValidPayloadAndSource(payload, source) ||
+                    linearDepth >= nearestDepth)
+                    continue;
+                nearestDepth = linearDepth;
+                selectedPixel = fullPixel;
+                selectedSource = source;
+            }
         }
     }
 
@@ -357,7 +387,7 @@ void main()
         SIMPLE_DDGI_NEAR_FIELD_REQUESTED_PIXEL_COUNT_WORD], tilePixels);
     atomicAdd(activeTiles.words[
         SIMPLE_DDGI_NEAR_FIELD_REQUESTED_RAY_COUNT_WORD],
-        tilePixels * pc.raysPerPixel);
+        tilePixels * (pc.raysPerPixel & 0xffu));
     // Trace consumes its own list; every later stage consumes resolve.
     for (uint stage = 0u; stage < pc.indirectStageCount; ++stage)
     {

@@ -20,9 +20,38 @@ function Invoke-Dotnet {
         [string[]] $DotnetArguments
     )
 
-    & dotnet @DotnetArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "dotnet exited with code $LASTEXITCODE while running: dotnet $($DotnetArguments -join ' ')"
+    $gateVariable = 'NJULF_STARTUP_LATENCY_GATE'
+    $hadGateOverride = Test-Path -LiteralPath "Env:$gateVariable"
+    $previousGateOverride = [Environment]::GetEnvironmentVariable(
+        $gateVariable,
+        [EnvironmentVariableTarget]::Process)
+    $runsRendererHost = $DotnetArguments -contains `
+        'NjulfHelloGame/NjulfHelloGame.csproj'
+    $exitCode = -1
+    try {
+        if ($runsRendererHost) {
+            [Environment]::SetEnvironmentVariable(
+                $gateVariable,
+                'enforce',
+                [EnvironmentVariableTarget]::Process)
+        }
+        & dotnet @DotnetArguments
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        if ($hadGateOverride) {
+            [Environment]::SetEnvironmentVariable(
+                $gateVariable,
+                $previousGateOverride,
+                [EnvironmentVariableTarget]::Process)
+        }
+        else {
+            Remove-Item -LiteralPath "Env:$gateVariable" `
+                -ErrorAction SilentlyContinue
+        }
+    }
+    if ($exitCode -ne 0) {
+        throw "dotnet exited with code $exitCode while running: dotnet $($DotnetArguments -join ' ')"
     }
 }
 

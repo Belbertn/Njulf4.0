@@ -54,11 +54,12 @@ public sealed class ProductionRenderPipelineDeclarationTests
     }
 
     [Test]
-    public void UrgentRelightLane_IsImmediatelyPreForwardAndHasNoRaySceneDependency()
+    public void UrgentRelightLane_PrecedesVrsAndHasNoRaySceneDependency()
     {
         var order = ProductionRenderPipelineDeclaration.Instance.PassOrder.ToList();
         int environmentPrefilter = order.IndexOf("EnvironmentPrefilterPass");
         int urgent = order.IndexOf("SimpleDdgiUrgentRelightPass");
+        int vrs = order.IndexOf("VariableRateShadingPass");
         int forward = order.IndexOf("ForwardPlusPass");
         int ordinarySchedule = order.IndexOf("SimpleDdgiSchedulePass");
         RenderGraphPassResourceDeclaration declaration =
@@ -83,7 +84,8 @@ public sealed class ProductionRenderPipelineDeclarationTests
         Assert.Multiple(() =>
         {
             Assert.That(urgent, Is.EqualTo(environmentPrefilter + 1));
-            Assert.That(forward, Is.EqualTo(urgent + 1));
+            Assert.That(vrs, Is.EqualTo(urgent + 1));
+            Assert.That(forward, Is.EqualTo(vrs + 1));
             Assert.That(ordinarySchedule, Is.GreaterThan(forward));
             Assert.That(
                 declaration.Usages.Where(usage =>

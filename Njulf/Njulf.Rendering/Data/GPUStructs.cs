@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using Njulf.Core.Math;
+using Njulf.Rendering.Resources;
 
 namespace Njulf.Rendering.Data
 {
@@ -58,8 +59,8 @@ namespace Njulf.Rendering.Data
         public uint MeshletLod2Offset;
         public uint MeshletLod2Count;
         public uint MeshletLodGeneratedCount;
-        public uint Padding0;
-        public uint Padding1;
+        public uint MeshletLod1ErrorBits;
+        public uint MeshletLod2ErrorBits;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -930,6 +931,23 @@ namespace Njulf.Rendering.Data
         public uint NormalConeTestedCount;
         public uint NormalConeRejectedCount;
         public uint NormalConeInvalidCount;
+        // Sided-stream append counters are intentionally separate from the
+        // aggregate emitted counters above.  The indirect draw arguments are
+        // the authoritative executable counts while these words provide the
+        // fixed second-range offsets used by compaction and validation.
+        public uint SimpleOpaqueDoubleSidedAppendCount;
+        public uint SimpleNormalOpaqueDoubleSidedAppendCount;
+        public uint FullOpaqueDoubleSidedAppendCount;
+        public uint SolidDepthDoubleSidedAppendCount;
+        public uint MaskedDepthDoubleSidedAppendCount;
+        public uint DirectionalStaticShadowCascade0DoubleSidedAppendCount;
+        public uint DirectionalStaticShadowCascade1DoubleSidedAppendCount;
+        public uint DirectionalStaticShadowCascade2DoubleSidedAppendCount;
+        public uint DirectionalStaticShadowCascade3DoubleSidedAppendCount;
+        public uint DirectionalDynamicShadowCascade0DoubleSidedAppendCount;
+        public uint DirectionalDynamicShadowCascade1DoubleSidedAppendCount;
+        public uint DirectionalDynamicShadowCascade2DoubleSidedAppendCount;
+        public uint DirectionalDynamicShadowCascade3DoubleSidedAppendCount;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -971,6 +989,12 @@ namespace Njulf.Rendering.Data
         public uint PreviousHiZFrameValid;
         public float GpuLod1DistanceRatio;
         public float GpuLod2DistanceRatio;
+        public uint GpuLodSelectionMode;
+        public float GpuLodTargetPixelError;
+        public float GpuLodHysteresisFraction;
+        public float GpuLodProjectionScale;
+        public uint GpuLodHistoryBufferBaseIndex;
+        public uint GpuLodHistoryCapacity;
         public uint GpuShadowLodBias;
         public uint DirectionalStaticShadowCascadeMask;
         public Vector4 DirectionalShadowLightDirection;
@@ -1021,6 +1045,7 @@ namespace Njulf.Rendering.Data
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
     public struct GPUFoliageDrawPushConstants
     {
+        private const uint TraceResolutionScaleMask = 0x3u;
         private const uint MaterialTransportProvenanceFlag = 1u << 2;
         private const uint ReflectionFeedbackFlag = 1u << 3;
         private const int ReflectionCaptureLayerShift = 8;
@@ -1060,6 +1085,14 @@ namespace Njulf.Rendering.Data
                        : 0u) |
                    ReflectionFeedbackFlag |
                    ((uint)reflectionCaptureLayer << ReflectionCaptureLayerShift);
+        }
+
+        public static uint PackTraceResolutionScale(
+            SimpleDdgiNearFieldResidualExecutionScale scale)
+        {
+            if (!Enum.IsDefined(scale))
+                throw new ArgumentOutOfRangeException(nameof(scale));
+            return (uint)scale & TraceResolutionScaleMask;
         }
     }
 
@@ -1111,7 +1144,12 @@ namespace Njulf.Rendering.Data
         public uint CurrentFrameIndex;
         public uint MeshletDrawCount;
         public uint MeshletDrawBufferBaseIndex;
-        public uint Padding0;
+        /// <summary>
+        /// First command in a compacted buffer.  Zero preserves the canonical
+        /// task/mesh path; sided streams use the logical stream capacity for
+        /// the dense double-sided range.
+        /// </summary>
+        public uint FirstDraw;
         public uint Padding1;
         public uint Padding2;
     }
@@ -1122,8 +1160,12 @@ namespace Njulf.Rendering.Data
         public const int MaximumReflectionCaptureLayer = 0x1FFF;
         public const int MaximumPackedLightCount = 1024;
         public const int MaximumDirectionalLightCount = 2;
-        public const int TransparentDrawBufferIndexBits = 14;
-        public const int TransparentFirstDrawBits = 18;
+        // Every bindless draw-command buffer currently fits in ten bits.  Keep
+        // the established packed word but devote the remaining bits to a
+        // general first-draw range so GPU-compacted sided streams can address
+        // multi-million-meshlet scenes without another push-constant word.
+        public const int TransparentDrawBufferIndexBits = 10;
+        public const int TransparentFirstDrawBits = 22;
         public const uint MaximumTransparentDrawBufferIndex =
             (1u << TransparentDrawBufferIndexBits) - 1u;
         public const int MaximumTransparentFirstDraw =
@@ -1162,6 +1204,9 @@ namespace Njulf.Rendering.Data
         private const uint EffectiveReflectionModeMask = 0x07u;
         private const uint TransparentSampleReflectionsFlag = 1u << 14;
         private const uint OpaqueSceneColorSnapshotAvailableFlag = 1u << 15;
+        private const uint GeometricSpecularAntialiasingFlag = 1u << 29;
+        private const int TraceResolutionScaleShift = 26;
+        private const uint TraceResolutionScaleMask = 0x3u;
         // Keep the forward push-constant ABI at 256 bytes. The low diagnostic
         // bits are already part of the shader contract. Bit 30 selects the
         // frame-local opaque DDGI receiver cache. Bit 31 enables reflection
@@ -1353,6 +1398,15 @@ namespace Njulf.Rendering.Data
                    ((uint)reflectionCaptureLayer << ReflectionCaptureLayerShift);
         }
 
+        public static uint PackTraceResolutionScale(
+            SimpleDdgiNearFieldResidualExecutionScale scale)
+        {
+            if (!Enum.IsDefined(scale))
+                throw new ArgumentOutOfRangeException(nameof(scale));
+            return ((uint)scale & TraceResolutionScaleMask) <<
+                   TraceResolutionScaleShift;
+        }
+
         public static uint PackDebugAndAoFlags(
             uint debugViewMode,
             bool ambientOcclusionEnabled,
@@ -1390,7 +1444,8 @@ namespace Njulf.Rendering.Data
             bool thickTransmissionDispersionEnabled = false,
             ReflectionMode effectiveReflectionMode = ReflectionMode.Disabled,
             bool transparentSampleReflections = false,
-            bool opaqueSceneColorSnapshotAvailable = false)
+            bool opaqueSceneColorSnapshotAvailable = false,
+            bool geometricSpecularAntialiasingEnabled = false)
         {
             return (ddgiForwardEstimateCountersEnabled ? DdgiForwardEstimateCountersEnabledFlag : 0u) |
                    (ddgiClipmapCoverageCountersEnabled ? DdgiClipmapCoverageCountersEnabledFlag : 0u) |
@@ -1410,6 +1465,8 @@ namespace Njulf.Rendering.Data
                        ? TransparentSampleReflectionsFlag : 0u) |
                    (opaqueSceneColorSnapshotAvailable
                        ? OpaqueSceneColorSnapshotAvailableFlag : 0u) |
+                   (geometricSpecularAntialiasingEnabled
+                       ? GeometricSpecularAntialiasingFlag : 0u) |
                    (ddgiReceiverCacheEnabled ? DdgiReceiverCacheEnabledFlag : 0u) |
                    ((directionalShadowPreviewCascade & DirectionalShadowPreviewCascadeMask) <<
                     DirectionalShadowPreviewCascadeShift);
@@ -1503,8 +1560,10 @@ namespace Njulf.Rendering.Data
         public uint TileCountY;
         public uint DepthTextureIndex;
         public uint ClusterCountZ;
-        public uint Padding2;
-        public uint Padding3;
+        /// <summary>Number of visible cluster headers; the following header is the dense-list allocator control block.</summary>
+        public uint TotalClusterCount;
+        /// <summary>Physical number of GPULightIndex records available to the dense allocator.</summary>
+        public uint LightIndexCapacity;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -3352,6 +3411,24 @@ namespace Njulf.Rendering.Data
         public uint StepCount;
         public uint FrameIndex;
         public uint HiZMipCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    public struct GPUVariableRateShadingPushConstants
+    {
+        public Matrix4x4 InverseProjectionMatrix;
+        public Vector2 SourceDimensions;
+        public Vector2 RateImageDimensions;
+        public uint AttachmentTexelWidth;
+        public uint AttachmentTexelHeight;
+        public float ForegroundDistanceMeters;
+        public float MotionThresholdPixels;
+        public float AbsoluteDepthThresholdMeters;
+        public float RelativeDepthThreshold;
+        public float NormalDotThreshold;
+        public uint FineRateEncoding;
+        public uint CoarseRateEncoding;
+        public uint Padding0;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 4)]

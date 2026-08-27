@@ -1,0 +1,203 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D DepthTexture;
+layout(set = 0, binding = 1) uniform sampler2D MotionTexture;
+layout(r8ui, set = 0, binding = 2) uniform writeonly uimage2D RateOutput;
+
+layout(push_constant) uniform VariableRateShadingPushBlock
+{
+    mat4 InverseProjectionMatrix;
+    vec2 SourceDimensions;
+    vec2 RateImageDimensions;
+    uint AttachmentTexelWidth;
+    uint AttachmentTexelHeight;
+    float ForegroundDistanceMeters;
+    float MotionThresholdPixels;
+    float AbsoluteDepthThresholdMeters;
+    float RelativeDepthThreshold;
+    float NormalDotThreshold;
+    uint FineRateEncoding;
+    uint CoarseRateEncoding;
+    uint Padding0;
+} pc;
+
+bool Finite(float value)
+{
+    return !isnan(value) && !isinf(value);
+}
+
+bool Finite(vec3 value)
+{
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+vec4 MulRowMajor(vec4 value, mat4 matrix)
+{
+    return vec4(
+        dot(value, vec4(matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0])),
+        dot(value, vec4(matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1])),
+        dot(value, vec4(matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2])),
+        dot(value, vec4(matrix[0][3], matrix[1][3], matrix[2][3], matrix[3][3])));
+}
+
+float FetchDepth(ivec2 pixel, ivec2 extent)
+{
+    return texelFetch(DepthTexture, clamp(pixel, ivec2(0), extent - 1), 0).r;
+}
+
+vec3 ReconstructViewPosition(ivec2 pixel, float depth, ivec2 extent)
+{
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(max(extent, ivec2(1)));
+    vec4 clip = vec4(uv * 2.0 - vec2(1.0), depth, 1.0);
+    vec4 view = MulRowMajor(clip, pc.InverseProjectionMatrix);
+    float reciprocalW = 1.0 / max(abs(view.w), 1.0e-6);
+    return view.xyz * reciprocalW;
+}
+
+bool ReconstructNormal(
+    ivec2 pixel,
+    float centerDepth,
+    ivec2 extent,
+    out vec3 normal)
+{
+    vec3 center = ReconstructViewPosition(pixel, centerDepth, extent);
+    ivec2 rightPixel = min(pixel + ivec2(1, 0), extent - 1);
+    ivec2 leftPixel = max(pixel - ivec2(1, 0), ivec2(0));
+    ivec2 upPixel = min(pixel + ivec2(0, 1), extent - 1);
+    ivec2 downPixel = max(pixel - ivec2(0, 1), ivec2(0));
+    float rightDepth = FetchDepth(rightPixel, extent);
+    float leftDepth = FetchDepth(leftPixel, extent);
+    float upDepth = FetchDepth(upPixel, extent);
+    float downDepth = FetchDepth(downPixel, extent);
+    if (rightDepth <= 1.0e-6 || leftDepth <= 1.0e-6 ||
+        upDepth <= 1.0e-6 || downDepth <= 1.0e-6)
+    {
+        normal = vec3(0.0);
+        return false;
+    }
+
+    vec3 dx = ReconstructViewPosition(rightPixel, rightDepth, extent) -
+        ReconstructViewPosition(leftPixel, leftDepth, extent);
+    vec3 dy = ReconstructViewPosition(upPixel, upDepth, extent) -
+        ReconstructViewPosition(downPixel, downDepth, extent);
+    normal = cross(dy, dx);
+    float lengthSquared = dot(normal, normal);
+    if (!Finite(center) || !Finite(normal) || lengthSquared <= 1.0e-16)
+        return false;
+    normal *= inversesqrt(lengthSquared);
+    if (dot(normal, -center) < 0.0)
+        normal = -normal;
+    return true;
+}
+
+void main()
+{
+    ivec2 ratePixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 rateExtent = imageSize(RateOutput);
+    if (any(greaterThanEqual(ratePixel, rateExtent)))
+        return;
+
+    ivec2 sourceExtent = textureSize(DepthTexture, 0);
+    ivec2 attachmentTexel = ivec2(
+        max(pc.AttachmentTexelWidth, 1u),
+        max(pc.AttachmentTexelHeight, 1u));
+    ivec2 tileMinimum = ratePixel * attachmentTexel;
+    // Inspect a one-screen-pixel halo. A single unsafe sample therefore keeps
+    // every coarse fragment whose footprint could cross that boundary at 1x1.
+    ivec2 sampleMinimum = max(tileMinimum - ivec2(1), ivec2(0));
+    ivec2 sampleMaximum = min(
+        tileMinimum + attachmentTexel + ivec2(1),
+        sourceExtent);
+
+    bool unsafeTile = false;
+    bool sawGeometry = false;
+    bool sawBackground = false;
+    float referenceViewDepth = 0.0;
+    vec3 referenceNormal = vec3(0.0);
+    bool hasReference = false;
+
+    for (int y = sampleMinimum.y; y < sampleMaximum.y && !unsafeTile; ++y)
+    {
+        for (int x = sampleMinimum.x; x < sampleMaximum.x; ++x)
+        {
+            ivec2 pixel = ivec2(x, y);
+            float depth = FetchDepth(pixel, sourceExtent);
+            if (depth <= 1.0e-6)
+            {
+                sawBackground = true;
+                if (sawGeometry)
+                {
+                    unsafeTile = true;
+                    break;
+                }
+                continue;
+            }
+
+            sawGeometry = true;
+            if (sawBackground)
+            {
+                unsafeTile = true;
+                break;
+            }
+
+            vec3 viewPosition =
+                ReconstructViewPosition(pixel, depth, sourceExtent);
+            float viewDepth = abs(viewPosition.z);
+            if (!Finite(viewPosition) || !Finite(viewDepth) ||
+                viewDepth <= pc.ForegroundDistanceMeters)
+            {
+                unsafeTile = true;
+                break;
+            }
+
+            vec2 motionPixels = texelFetch(MotionTexture, pixel, 0).xy *
+                pc.SourceDimensions;
+            if (any(isnan(motionPixels)) || any(isinf(motionPixels)) ||
+                length(motionPixels) > pc.MotionThresholdPixels)
+            {
+                unsafeTile = true;
+                break;
+            }
+
+            vec3 normal;
+            if (!ReconstructNormal(
+                    pixel,
+                    depth,
+                    sourceExtent,
+                    normal))
+            {
+                unsafeTile = true;
+                break;
+            }
+
+            if (!hasReference)
+            {
+                referenceViewDepth = viewDepth;
+                referenceNormal = normal;
+                hasReference = true;
+                continue;
+            }
+
+            float allowedDepthDelta = max(
+                pc.AbsoluteDepthThresholdMeters,
+                pc.RelativeDepthThreshold *
+                    min(referenceViewDepth, viewDepth));
+            if (abs(viewDepth - referenceViewDepth) > allowedDepthDelta ||
+                dot(normal, referenceNormal) < pc.NormalDotThreshold)
+            {
+                unsafeTile = true;
+                break;
+            }
+        }
+    }
+
+    imageStore(
+        RateOutput,
+        ratePixel,
+        uvec4(unsafeTile ? pc.FineRateEncoding : pc.CoarseRateEncoding,
+            0u,
+            0u,
+            0u));
+}

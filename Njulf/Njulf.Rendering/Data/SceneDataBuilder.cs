@@ -50,6 +50,7 @@ namespace Njulf.Rendering.Data
         private static readonly ulong MeshletTaskFrameDataStride = (ulong)Marshal.SizeOf<GPUMeshletTaskFrameData>();
         private static readonly ulong TiledLightHeaderStride = (ulong)Marshal.SizeOf<GPUTiledLightHeader>();
         private static readonly ulong TiledLightIndexStride = (ulong)Marshal.SizeOf<GPULightIndex>();
+        private const uint TiledLightDenseControlHeaderCount = 1u;
 
         private readonly VulkanContext _context;
         private readonly MeshManager _meshManager;
@@ -2418,28 +2419,31 @@ namespace Njulf.Rendering.Data
             return true;
         }
 
-        private void EnsureTiledLightBuffers(uint totalTiles, CommandBuffer commandBuffer)
+        private void EnsureTiledLightBuffers(uint totalClusters, CommandBuffer commandBuffer)
         {
-            if (totalTiles == 0)
-                throw new ArgumentOutOfRangeException(nameof(totalTiles));
+            if (totalClusters == 0)
+                throw new ArgumentOutOfRangeException(nameof(totalClusters));
+
+            uint headerCount = checked(
+                totalClusters + TiledLightDenseControlHeaderCount);
 
             if (!_tiledLightHeaderBuffer.Handle.IsValid || !_tiledLightIndexBuffer.Handle.IsValid)
             {
                 // The pair is allocated and retired atomically: the compute pass always
                 // consumes matching header and index ranges.
                 ReleaseTiledLightBuffers();
-                _tiledLightHeaderBuffer = CreateSceneBuffer(totalTiles, TiledLightHeaderStride, "Tiled Light Header Buffer");
+                _tiledLightHeaderBuffer = CreateSceneBuffer(headerCount, TiledLightHeaderStride, "Tiled Light Header Buffer");
                 _tiledLightIndexBuffer = CreateSceneBuffer(
-                    checked(totalTiles * MaxLightsPerTile),
+                    checked(totalClusters * MaxLightsPerTile),
                     TiledLightIndexStride,
                     "Tiled Light Index Buffer");
                 return;
             }
 
-            EnsureCapacity(ref _tiledLightHeaderBuffer, totalTiles, TiledLightHeaderStride, commandBuffer);
+            EnsureCapacity(ref _tiledLightHeaderBuffer, headerCount, TiledLightHeaderStride, commandBuffer);
             EnsureCapacity(
                 ref _tiledLightIndexBuffer,
-                checked(totalTiles * MaxLightsPerTile),
+                checked(totalClusters * MaxLightsPerTile),
                 TiledLightIndexStride,
                 commandBuffer);
         }
@@ -2637,9 +2641,11 @@ namespace Njulf.Rendering.Data
             }
         }
 
-        private void ClearTiledLightBuffers(CommandBuffer commandBuffer, uint totalTiles)
+        private void ClearTiledLightBuffers(CommandBuffer commandBuffer, uint totalClusters)
         {
-            ulong headerBytes = checked(totalTiles * TiledLightHeaderStride);
+            ulong headerBytes = checked(
+                (totalClusters + TiledLightDenseControlHeaderCount) *
+                TiledLightHeaderStride);
             _lastTiledLightHeaderBufferClearBytes = headerBytes;
             _lastTiledLightIndexBufferClearBytes = 0;
 

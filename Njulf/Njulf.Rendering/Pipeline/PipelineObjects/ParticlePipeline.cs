@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using Njulf.Core.Vfx;
@@ -14,10 +15,19 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
     public sealed unsafe class ParticlePipeline : IDisposable
     {
         private const string EntryPoint = "main";
+        private const uint AlphaBlendFamily = 1u << 0;
+        private const uint PremultipliedBlendFamily = 1u << 1;
+        private const uint AdditiveBlendFamily = 1u << 2;
+        private const uint SoftAdditiveBlendFamily = 1u << 3;
+        private const uint AllBlendFamilies = AlphaBlendFamily |
+                                                PremultipliedBlendFamily |
+                                                AdditiveBlendFamily |
+                                                SoftAdditiveBlendFamily;
 
         private readonly VulkanContext _context;
         private readonly BindlessHeap _bindlessHeap;
         private readonly bool _receiverFeedbackEnabled;
+        private readonly GiPipelineCacheService? _pipelineCacheService;
         private readonly nint _entryPointName;
         private VkPipeline _alphaPipeline;
         private VkPipeline _premultipliedPipeline;
@@ -29,6 +39,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
         private VkPipeline _softAdditiveReceiverFeedbackPipeline;
         private PipelineLayout _layout;
         private PipelineCache _pipelineCache;
+        private Format _colorFormat;
+        private Format _depthFormat;
+        private uint _preparedBlendFamilies;
+        private bool _receiverFeedbackCreationFailed;
         private bool _disposed;
 
         public ParticlePipeline(
@@ -37,26 +51,48 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             Format colorFormat,
             Format depthFormat,
             bool receiverFeedbackEnabled = false)
+            : this(
+                context,
+                bindlessHeap,
+                colorFormat,
+                depthFormat,
+                receiverFeedbackEnabled,
+                pipelineCacheService: null,
+                createPipelines: true)
+        {
+        }
+
+        internal ParticlePipeline(
+            VulkanContext context,
+            BindlessHeap bindlessHeap,
+            Format colorFormat,
+            Format depthFormat,
+            bool receiverFeedbackEnabled,
+            GiPipelineCacheService? pipelineCacheService,
+            bool createPipelines)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _bindlessHeap = bindlessHeap ?? throw new ArgumentNullException(nameof(bindlessHeap));
             _receiverFeedbackEnabled = receiverFeedbackEnabled;
+            _pipelineCacheService = pipelineCacheService;
             _entryPointName = SilkMarshal.StringToPtr(EntryPoint);
+            _colorFormat = colorFormat;
+            _depthFormat = depthFormat;
 
             ValidatePushConstantRange((uint)Marshal.SizeOf<GPUParticlePushConstants>());
             CreatePipelineCache();
             CreatePipelineLayout();
-            CreatePipelines(colorFormat, depthFormat);
+            if (createPipelines)
+                PrepareAll();
         }
 
         public PipelineLayout Layout => _layout;
 
         public bool ReceiverFeedbackPipelinesAvailable =>
             _receiverFeedbackEnabled &&
-            _alphaReceiverFeedbackPipeline.Handle != 0 &&
-            _premultipliedReceiverFeedbackPipeline.Handle != 0 &&
-            _additiveReceiverFeedbackPipeline.Handle != 0 &&
-            _softAdditiveReceiverFeedbackPipeline.Handle != 0;
+            !_receiverFeedbackCreationFailed &&
+            _preparedBlendFamilies != 0 &&
+            HasRequiredReceiverFeedbackPipelines();
         public string ReceiverFeedbackPipelineFailureReason { get; private set; } =
             "receiver-feedback-pipelines-not-admitted-at-startup";
 
@@ -64,6 +100,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             ParticleBlendMode blendMode,
             bool receiverFeedback = false)
         {
+            PrepareBlendMode(blendMode);
             if (receiverFeedback && !ReceiverFeedbackPipelinesAvailable)
             {
                 throw new InvalidOperationException(
@@ -90,8 +127,63 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         public void Recreate(Format colorFormat, Format depthFormat)
         {
+            _colorFormat = colorFormat;
+            _depthFormat = depthFormat;
+            uint preparedBlendFamilies = _preparedBlendFamilies;
             DestroyPipelines();
-            CreatePipelines(colorFormat, depthFormat);
+            if (preparedBlendFamilies != 0)
+                Prepare(preparedBlendFamilies);
+        }
+
+        internal bool IsPrepared => _preparedBlendFamilies != 0;
+
+        internal bool RequiresPreparation(
+            IEnumerable<ParticleBlendMode> blendModes)
+        {
+            ArgumentNullException.ThrowIfNull(blendModes);
+            foreach (ParticleBlendMode blendMode in blendModes)
+            {
+                if ((_preparedBlendFamilies & GetBlendFamily(blendMode)) == 0)
+                    return true;
+            }
+            return false;
+        }
+
+        internal void Prepare(IEnumerable<ParticleBlendMode> blendModes)
+        {
+            ArgumentNullException.ThrowIfNull(blendModes);
+            uint requestedBlendFamilies = 0;
+            foreach (ParticleBlendMode blendMode in blendModes)
+                requestedBlendFamilies |= GetBlendFamily(blendMode);
+            Prepare(requestedBlendFamilies);
+        }
+
+        internal void PrepareAll() => Prepare(AllBlendFamilies);
+
+        private void PrepareBlendMode(ParticleBlendMode blendMode) =>
+            Prepare(GetBlendFamily(blendMode));
+
+        private void Prepare(uint requestedBlendFamilies)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            uint pendingBlendFamilies =
+                requestedBlendFamilies & ~_preparedBlendFamilies;
+            if (pendingBlendFamilies == 0)
+                return;
+
+            try
+            {
+                CreatePipelines(
+                    _colorFormat,
+                    _depthFormat,
+                    pendingBlendFamilies);
+                _preparedBlendFamilies |= pendingBlendFamilies;
+            }
+            catch
+            {
+                DestroyPipelines();
+                throw;
+            }
         }
 
         private void ValidatePushConstantRange(uint requiredSize)
@@ -104,6 +196,12 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
 
         private void CreatePipelineCache()
         {
+            if (_pipelineCacheService != null)
+            {
+                _pipelineCache = _pipelineCacheService.Cache;
+                return;
+            }
+
             var cacheInfo = new PipelineCacheCreateInfo
             {
                 SType = StructureType.PipelineCacheCreateInfo
@@ -143,7 +241,10 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             _context.SetDebugName(_layout.Handle, ObjectType.PipelineLayout, "Particle Pipeline Layout");
         }
 
-        private void CreatePipelines(Format colorFormat, Format depthFormat)
+        private void CreatePipelines(
+            Format colorFormat,
+            Format depthFormat,
+            uint blendFamilies)
         {
             ShaderModule vertexModule = default;
             ShaderModule receiverFeedbackVertexModule = default;
@@ -156,10 +257,14 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 _context.SetDebugName(vertexModule.Handle, ObjectType.ShaderModule, "particle.vert.spv");
                 _context.SetDebugName(fragmentModule.Handle, ObjectType.ShaderModule, "particle.frag.spv");
 
-                _alphaPipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.SrcAlpha, BlendFactor.OneMinusSrcAlpha, "Particle Alpha Pipeline");
-                _premultipliedPipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.One, BlendFactor.OneMinusSrcAlpha, "Particle Premultiplied Pipeline");
-                _additivePipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.One, BlendFactor.One, "Particle Additive Pipeline");
-                _softAdditivePipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.One, BlendFactor.One, "Particle Soft Additive Pipeline");
+                if ((blendFamilies & AlphaBlendFamily) != 0)
+                    _alphaPipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.SrcAlpha, BlendFactor.OneMinusSrcAlpha, "Particle Alpha Pipeline");
+                if ((blendFamilies & PremultipliedBlendFamily) != 0)
+                    _premultipliedPipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.One, BlendFactor.OneMinusSrcAlpha, "Particle Premultiplied Pipeline");
+                if ((blendFamilies & AdditiveBlendFamily) != 0)
+                    _additivePipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.One, BlendFactor.One, "Particle Additive Pipeline");
+                if ((blendFamilies & SoftAdditiveBlendFamily) != 0)
+                    _softAdditivePipeline = CreateGraphicsPipeline(vertexModule, fragmentModule, colorFormat, depthFormat, BlendFactor.One, BlendFactor.One, "Particle Soft Additive Pipeline");
 
                 if (_receiverFeedbackEnabled)
                 {
@@ -172,40 +277,44 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                             receiverFeedbackVertexModule.Handle,
                             ObjectType.ShaderModule,
                             "particle_b1.vert.spv");
-                        _alphaReceiverFeedbackPipeline = CreateGraphicsPipeline(
-                            receiverFeedbackVertexModule,
-                            fragmentModule,
-                            colorFormat,
-                            depthFormat,
-                            BlendFactor.SrcAlpha,
-                            BlendFactor.OneMinusSrcAlpha,
-                            "Particle Alpha B1 Receiver Feedback Pipeline");
-                        _premultipliedReceiverFeedbackPipeline =
-                            CreateGraphicsPipeline(
+                        if ((blendFamilies & AlphaBlendFamily) != 0)
+                            _alphaReceiverFeedbackPipeline = CreateGraphicsPipeline(
                                 receiverFeedbackVertexModule,
                                 fragmentModule,
                                 colorFormat,
                                 depthFormat,
-                                BlendFactor.One,
+                                BlendFactor.SrcAlpha,
                                 BlendFactor.OneMinusSrcAlpha,
-                                "Particle Premultiplied B1 Receiver Feedback Pipeline");
-                        _additiveReceiverFeedbackPipeline = CreateGraphicsPipeline(
-                            receiverFeedbackVertexModule,
-                            fragmentModule,
-                            colorFormat,
-                            depthFormat,
-                            BlendFactor.One,
-                            BlendFactor.One,
-                            "Particle Additive B1 Receiver Feedback Pipeline");
-                        _softAdditiveReceiverFeedbackPipeline =
-                            CreateGraphicsPipeline(
+                                "Particle Alpha B1 Receiver Feedback Pipeline");
+                        if ((blendFamilies & PremultipliedBlendFamily) != 0)
+                            _premultipliedReceiverFeedbackPipeline =
+                                CreateGraphicsPipeline(
+                                    receiverFeedbackVertexModule,
+                                    fragmentModule,
+                                    colorFormat,
+                                    depthFormat,
+                                    BlendFactor.One,
+                                    BlendFactor.OneMinusSrcAlpha,
+                                    "Particle Premultiplied B1 Receiver Feedback Pipeline");
+                        if ((blendFamilies & AdditiveBlendFamily) != 0)
+                            _additiveReceiverFeedbackPipeline = CreateGraphicsPipeline(
                                 receiverFeedbackVertexModule,
                                 fragmentModule,
                                 colorFormat,
                                 depthFormat,
                                 BlendFactor.One,
                                 BlendFactor.One,
-                                "Particle Soft Additive B1 Receiver Feedback Pipeline");
+                                "Particle Additive B1 Receiver Feedback Pipeline");
+                        if ((blendFamilies & SoftAdditiveBlendFamily) != 0)
+                            _softAdditiveReceiverFeedbackPipeline =
+                                CreateGraphicsPipeline(
+                                    receiverFeedbackVertexModule,
+                                    fragmentModule,
+                                    colorFormat,
+                                    depthFormat,
+                                    BlendFactor.One,
+                                    BlendFactor.One,
+                                    "Particle Soft Additive B1 Receiver Feedback Pipeline");
                         ReceiverFeedbackPipelineFailureReason =
                             "receiver-feedback-pipelines-ready";
                     }
@@ -219,6 +328,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                         DestroyPipeline(ref _additiveReceiverFeedbackPipeline);
                         DestroyPipeline(
                             ref _softAdditiveReceiverFeedbackPipeline);
+                        _receiverFeedbackCreationFailed = true;
                         ReceiverFeedbackPipelineFailureReason =
                             "receiver-feedback-particle-pipeline-creation-failed:" +
                             exception.GetType().Name + ":" + exception.Message;
@@ -362,7 +472,26 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
                 BasePipelineIndex = -1
             };
 
-            Result result = _context.Api.CreateGraphicsPipelines(_context.Device, _pipelineCache, 1, &pipelineInfo, null, out VkPipeline pipeline);
+            long pipelineStart =
+                _pipelineCacheService?.BeginPipelineCreation() ?? 0L;
+            Result result;
+            VkPipeline pipeline;
+            try
+            {
+                result = _context.Api.CreateGraphicsPipelines(
+                    _context.Device,
+                    _pipelineCache,
+                    1,
+                    &pipelineInfo,
+                    null,
+                    out pipeline);
+            }
+            finally
+            {
+                _pipelineCacheService?.EndPipelineCreation(
+                    debugName,
+                    pipelineStart);
+            }
             if (result != Result.Success)
                 throw new VulkanException($"Failed to create {debugName}", result);
 
@@ -391,6 +520,34 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipeline(ref _premultipliedReceiverFeedbackPipeline);
             DestroyPipeline(ref _additiveReceiverFeedbackPipeline);
             DestroyPipeline(ref _softAdditiveReceiverFeedbackPipeline);
+            _preparedBlendFamilies = 0;
+            _receiverFeedbackCreationFailed = false;
+            ReceiverFeedbackPipelineFailureReason =
+                "receiver-feedback-pipelines-not-admitted-at-startup";
+        }
+
+        private bool HasRequiredReceiverFeedbackPipelines()
+        {
+            return ((_preparedBlendFamilies & AlphaBlendFamily) == 0 ||
+                    _alphaReceiverFeedbackPipeline.Handle != 0) &&
+                   ((_preparedBlendFamilies & PremultipliedBlendFamily) == 0 ||
+                    _premultipliedReceiverFeedbackPipeline.Handle != 0) &&
+                   ((_preparedBlendFamilies & AdditiveBlendFamily) == 0 ||
+                    _additiveReceiverFeedbackPipeline.Handle != 0) &&
+                   ((_preparedBlendFamilies & SoftAdditiveBlendFamily) == 0 ||
+                    _softAdditiveReceiverFeedbackPipeline.Handle != 0);
+        }
+
+        private static uint GetBlendFamily(ParticleBlendMode blendMode)
+        {
+            return blendMode switch
+            {
+                ParticleBlendMode.AlphaBlend or ParticleBlendMode.AlphaClip =>
+                    AlphaBlendFamily,
+                ParticleBlendMode.Additive => AdditiveBlendFamily,
+                ParticleBlendMode.SoftAdditive => SoftAdditiveBlendFamily,
+                _ => PremultipliedBlendFamily
+            };
         }
 
         private void DestroyPipeline(ref VkPipeline pipeline)
@@ -417,7 +574,7 @@ namespace Njulf.Rendering.Pipeline.PipelineObjects
             DestroyPipelines();
             if (_layout.Handle != 0)
                 _context.Api.DestroyPipelineLayout(_context.Device, _layout, null);
-            if (_pipelineCache.Handle != 0)
+            if (_pipelineCacheService == null && _pipelineCache.Handle != 0)
                 _context.Api.DestroyPipelineCache(_context.Device, _pipelineCache, null);
             if (_entryPointName != 0)
                 SilkMarshal.Free(_entryPointName);

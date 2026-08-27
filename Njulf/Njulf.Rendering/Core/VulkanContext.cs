@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using Njulf.Rendering.Diagnostics;
 using Njulf.Rendering.Resources;
 using Silk.NET.Core;
+using Silk.NET.Core.Contexts;
 using Silk.NET.Core.Native;
 using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
@@ -22,6 +23,8 @@ namespace Njulf.Rendering.Core
         private static readonly string[] ValidationLayers = { "VK_LAYER_KHRONOS_validation" };
         private const string MemoryBudgetExtensionName = "VK_EXT_memory_budget";
         private const string ImageCompressionControlExtensionName = "VK_EXT_image_compression_control";
+        private const string FragmentShadingRateExtensionName =
+            "VK_KHR_fragment_shading_rate";
         internal const string AccelerationStructureExtensionName = "VK_KHR_acceleration_structure";
         internal const string RayQueryExtensionName = "VK_KHR_ray_query";
         internal const string Spirv14ExtensionName = "VK_KHR_spirv_1_4";
@@ -78,6 +81,11 @@ namespace Njulf.Rendering.Core
         private bool _memoryBudgetExtensionEnabled;
         private bool _imageCompressionControlEnabled;
         private bool _rayQuerySupported;
+        private FragmentShadingRateDeviceSupport
+            _fragmentShadingRatePhysicalSupport;
+        private bool _fragmentShadingRateExtensionEnabled;
+        private bool _fragmentShadingRateSupported;
+        private Extent2D _fragmentShadingRateAttachmentTexelSize;
         private VulkanExtOpacityMicromapDeviceSupport
             _opacityMicromapPhysicalSupport;
         private bool _opacityMicromapExtensionEnabled;
@@ -97,6 +105,7 @@ namespace Njulf.Rendering.Core
         private ExtMeshShader _extMeshShader = null!;
         private KhrDynamicRendering _khrDynamicRendering = null!;
         private KhrSynchronization2 _khrSync2 = null!;
+        private KhrFragmentShadingRate? _khrFragmentShadingRate;
         private KhrAccelerationStructure? _khrAccelerationStructure;
         private KhrDeferredHostOperations? _khrDeferredHostOps;
         private ExtOpacityMicromap? _extOpacityMicromap;
@@ -137,6 +146,10 @@ namespace Njulf.Rendering.Core
         public bool MemoryBudgetExtensionEnabled => _memoryBudgetExtensionEnabled;
         public bool ImageCompressionControlEnabled => _imageCompressionControlEnabled;
         public bool RayQuerySupported => _rayQuerySupported;
+        public bool FragmentShadingRateSupported =>
+            _fragmentShadingRateSupported;
+        public Extent2D FragmentShadingRateAttachmentTexelSize =>
+            _fragmentShadingRateAttachmentTexelSize;
         /// <summary>
         /// The device-enabled C1 state.  Physical-device discovery alone never
         /// makes this report usable: it stays fail-closed unless the optional
@@ -606,6 +619,8 @@ namespace Njulf.Rendering.Core
                 shaderStorageImageArrayNonUniformIndexingSupported;
             _opacityMicromapPhysicalSupport =
                 QueryOpacityMicromapDeviceSupport(_physicalDevice);
+            _fragmentShadingRatePhysicalSupport =
+                QueryFragmentShadingRateDeviceSupport(_physicalDevice);
             _giHardwareResearchCapabilities =
                 QueryGiHardwareResearchCapabilities(_physicalDevice);
 
@@ -657,6 +672,13 @@ namespace Njulf.Rendering.Core
             {
                 SType = StructureType.PhysicalDeviceMeshShaderFeaturesExt
             };
+
+            var extendedDynamicStateFeatures =
+                new PhysicalDeviceExtendedDynamicStateFeaturesEXT
+                {
+                    SType = StructureType
+                        .PhysicalDeviceExtendedDynamicStateFeaturesExt
+                };
 
             var dynamicRenderingFeatures = new PhysicalDeviceDynamicRenderingFeatures
             {
@@ -724,7 +746,8 @@ namespace Njulf.Rendering.Core
             sync2Features.PNext = &timelineSemaphoreFeatures;
             timelineSemaphoreFeatures.PNext = &dynamicRenderingFeatures;
             dynamicRenderingFeatures.PNext = &meshShaderFeatures;
-            meshShaderFeatures.PNext = &maintenance4Features;
+            meshShaderFeatures.PNext = &extendedDynamicStateFeatures;
+            extendedDynamicStateFeatures.PNext = &maintenance4Features;
             maintenance4Features.PNext = &shaderDemoteFeatures;
             shaderDemoteFeatures.PNext = features2.PNext;
             if (imageCompressionControlExtensionAvailable)
@@ -751,6 +774,8 @@ namespace Njulf.Rendering.Core
                 missingFeatures.Add("meshShader");
             if (!meshShaderFeatures.TaskShader)
                 missingFeatures.Add("taskShader");
+            if (!extendedDynamicStateFeatures.ExtendedDynamicState)
+                missingFeatures.Add("extendedDynamicState");
             if (!dynamicRenderingFeatures.DynamicRendering)
                 missingFeatures.Add("dynamicRendering");
             if (!sync2Features.Synchronization2)
@@ -999,6 +1024,81 @@ namespace Njulf.Rendering.Core
                     opacityProperties.MaxOpacity4StateSubdivisionLevel);
         }
 
+        private FragmentShadingRateDeviceSupport
+            QueryFragmentShadingRateDeviceSupport(PhysicalDevice device)
+        {
+            bool extensionAdvertised = GetDeviceExtensionNames(device)
+                .Contains(FragmentShadingRateExtensionName);
+            if (!extensionAdvertised)
+                return default;
+
+            var features2 = new PhysicalDeviceFeatures2
+            {
+                SType = StructureType.PhysicalDeviceFeatures2
+            };
+            var fragmentShadingRateFeatures =
+                new PhysicalDeviceFragmentShadingRateFeaturesKHR
+                {
+                    SType = StructureType
+                        .PhysicalDeviceFragmentShadingRateFeaturesKhr
+                };
+            features2.PNext = &fragmentShadingRateFeatures;
+            _vk.GetPhysicalDeviceFeatures2(device, &features2);
+
+            var properties2 = new PhysicalDeviceProperties2
+            {
+                SType = StructureType.PhysicalDeviceProperties2
+            };
+            var fragmentShadingRateProperties =
+                new PhysicalDeviceFragmentShadingRatePropertiesKHR
+                {
+                    SType = StructureType
+                        .PhysicalDeviceFragmentShadingRatePropertiesKhr
+                };
+            properties2.PNext = &fragmentShadingRateProperties;
+            _vk.GetPhysicalDeviceProperties2(device, &properties2);
+
+            FormatProperties formatProperties;
+            _vk.GetPhysicalDeviceFormatProperties(
+                device,
+                Format.R8Uint,
+                &formatProperties);
+            const FormatFeatureFlags requiredFormatFeatures =
+                FormatFeatureFlags.StorageImageBit |
+                FormatFeatureFlags.FragmentShadingRateAttachmentBitKhr;
+            bool formatSupported =
+                (formatProperties.OptimalTilingFeatures &
+                 requiredFormatFeatures) == requiredFormatFeatures;
+
+            return new FragmentShadingRateDeviceSupport(
+                extensionAdvertised,
+                fragmentShadingRateFeatures.PipelineFragmentShadingRate,
+                fragmentShadingRateFeatures.AttachmentFragmentShadingRate,
+                formatSupported,
+                fragmentShadingRateProperties
+                    .MinFragmentShadingRateAttachmentTexelSize,
+                fragmentShadingRateProperties.MaxFragmentSize);
+        }
+
+        private readonly record struct FragmentShadingRateDeviceSupport(
+            bool ExtensionAdvertised,
+            bool PipelineFeatureSupported,
+            bool AttachmentFeatureSupported,
+            bool R8UintFormatSupported,
+            Extent2D MinimumAttachmentTexelSize,
+            Extent2D MaximumFragmentSize)
+        {
+            public bool CanEnable =>
+                ExtensionAdvertised &&
+                PipelineFeatureSupported &&
+                AttachmentFeatureSupported &&
+                R8UintFormatSupported &&
+                MinimumAttachmentTexelSize.Width != 0 &&
+                MinimumAttachmentTexelSize.Height != 0 &&
+                MaximumFragmentSize.Width >= 2 &&
+                MaximumFragmentSize.Height >= 2;
+        }
+
         private GiHardwareResearchCapabilities
             QueryGiHardwareResearchCapabilities(PhysicalDevice device)
         {
@@ -1162,6 +1262,14 @@ namespace Njulf.Rendering.Core
                 TaskShader = true
             };
 
+            var extendedDynamicStateFeatures =
+                new PhysicalDeviceExtendedDynamicStateFeaturesEXT
+                {
+                    SType = StructureType
+                        .PhysicalDeviceExtendedDynamicStateFeaturesExt,
+                    ExtendedDynamicState = true
+                };
+
             // This renderer requires Vulkan 1.3. Enable features promoted into
             // 1.2/1.3 through the aggregate core structs instead of chaining
             // their legacy extension structs beside them. Capture layers such
@@ -1212,6 +1320,19 @@ namespace Njulf.Rendering.Core
                 RayQuery = true
             };
 
+            bool enableFragmentShadingRate =
+                _fragmentShadingRatePhysicalSupport.CanEnable;
+            var fragmentShadingRateFeatures =
+                new PhysicalDeviceFragmentShadingRateFeaturesKHR
+                {
+                    SType = StructureType
+                        .PhysicalDeviceFragmentShadingRateFeaturesKhr,
+                    PipelineFragmentShadingRate =
+                        enableFragmentShadingRate,
+                    AttachmentFragmentShadingRate =
+                        enableFragmentShadingRate
+                };
+
             bool enableOpacityMicromapExt = ShouldEnableOpacityMicromapExt(
                 _optionalDeviceFeatures,
                 _opacityMicromapPhysicalSupport,
@@ -1228,7 +1349,8 @@ namespace Njulf.Rendering.Core
             // optional, non-promoted extension features.
             vulkan13Features.PNext = &vulkan12Features;
             vulkan12Features.PNext = &meshShaderFeatures;
-            meshShaderFeatures.PNext = deviceFeatures2.PNext;
+            meshShaderFeatures.PNext = &extendedDynamicStateFeatures;
+            extendedDynamicStateFeatures.PNext = deviceFeatures2.PNext;
             if (_imageCompressionControlEnabled)
             {
                 imageCompressionControlFeatures.PNext = meshShaderFeatures.PNext;
@@ -1239,6 +1361,12 @@ namespace Njulf.Rendering.Core
                 accelerationStructureFeatures.PNext = meshShaderFeatures.PNext;
                 rayQueryFeatures.PNext = &accelerationStructureFeatures;
                 meshShaderFeatures.PNext = &rayQueryFeatures;
+            }
+            if (enableFragmentShadingRate)
+            {
+                fragmentShadingRateFeatures.PNext =
+                    meshShaderFeatures.PNext;
+                meshShaderFeatures.PNext = &fragmentShadingRateFeatures;
             }
             if (enableOpacityMicromapExt)
             {
@@ -1267,9 +1395,13 @@ namespace Njulf.Rendering.Core
             }
             if (enableOpacityMicromapExt)
                 deviceExtensions.Add(OpacityMicromapExtensionName);
+            if (enableFragmentShadingRate)
+                deviceExtensions.Add(FragmentShadingRateExtensionName);
 
             _opacityMicromapExtensionEnabled = enableOpacityMicromapExt;
             _opacityMicromapFeatureEnabled = enableOpacityMicromapExt;
+            _fragmentShadingRateExtensionEnabled =
+                enableFragmentShadingRate;
 
             var deviceCreateInfo = new DeviceCreateInfo
             {
@@ -1489,6 +1621,35 @@ namespace Njulf.Rendering.Core
 
             _vk.TryGetDeviceExtension(_instance, _device, out _khrDeferredHostOps);
 
+            // VK_KHR_fragment_shading_rate mixes instance- and device-dispatched
+            // commands. Silk rejects this device extension in
+            // TryGetInstanceExtension, so load its physical-device query through
+            // vkGetInstanceProcAddr explicitly and keep the device wrapper for
+            // command-buffer calls.
+            var fragmentShadingRateQueries =
+                new KhrFragmentShadingRate(
+                    new LamdaNativeContext(
+                        name => _vk.GetInstanceProcAddr(_instance, name)));
+            if (_fragmentShadingRateExtensionEnabled &&
+                _vk.TryGetDeviceExtension(
+                    _instance,
+                    _device,
+                    out KhrFragmentShadingRate fragmentShadingRateCommands) &&
+                SupportsTwoByTwoFragmentRate(fragmentShadingRateQueries))
+            {
+                _khrFragmentShadingRate = fragmentShadingRateCommands;
+                _fragmentShadingRateSupported = true;
+                _fragmentShadingRateAttachmentTexelSize =
+                    _fragmentShadingRatePhysicalSupport
+                        .MinimumAttachmentTexelSize;
+            }
+            else
+            {
+                _khrFragmentShadingRate = null;
+                _fragmentShadingRateSupported = false;
+                _fragmentShadingRateAttachmentTexelSize = default;
+            }
+
             if (_opacityMicromapExtensionEnabled &&
                 _vk.TryGetDeviceExtension(
                     _instance,
@@ -1506,6 +1667,48 @@ namespace Njulf.Rendering.Core
             RefreshOpacityMicromapExtCapability();
 
             System.Diagnostics.Debug.WriteLine("All required Vulkan extensions loaded.");
+        }
+
+        private bool SupportsTwoByTwoFragmentRate(
+            KhrFragmentShadingRate extension)
+        {
+            uint count = 0;
+            Result result = extension.GetPhysicalDeviceFragmentShadingRates(
+                _physicalDevice,
+                &count,
+                null);
+            if (result != Result.Success || count == 0)
+                return false;
+
+            var rates = new PhysicalDeviceFragmentShadingRateKHR[count];
+            for (int index = 0; index < rates.Length; index++)
+            {
+                rates[index].SType =
+                    StructureType.PhysicalDeviceFragmentShadingRateKhr;
+            }
+            fixed (PhysicalDeviceFragmentShadingRateKHR* ratePointer = rates)
+            {
+                result = extension.GetPhysicalDeviceFragmentShadingRates(
+                    _physicalDevice,
+                    &count,
+                    ratePointer);
+            }
+            if (result != Result.Success)
+                return false;
+
+            int returnedCount = Math.Min(checked((int)count), rates.Length);
+            for (int index = 0; index < returnedCount; index++)
+            {
+                PhysicalDeviceFragmentShadingRateKHR rate = rates[index];
+                if (rate.FragmentSize.Width == 2 &&
+                    rate.FragmentSize.Height == 2 &&
+                    (rate.SampleCounts & SampleCountFlags.Count1Bit) != 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void RefreshOpacityMicromapExtCapability()

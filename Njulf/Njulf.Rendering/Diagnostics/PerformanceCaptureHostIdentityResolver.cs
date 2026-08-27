@@ -74,6 +74,10 @@ internal sealed class PerformanceCaptureGitStatusProbe :
 internal sealed class PerformanceCaptureHostIdentityResolver
 {
     private const string ShaderResourcePrefix = "Njulf.Shaders.";
+    private const string ShaderBundleHashMetadataKey =
+        "NjulfShaderBundleHash";
+    internal const string ShaderOverrideDirectoryEnvironmentVariable =
+        "NJULF_SHADER_OVERRIDE_DIRECTORY";
     private readonly Assembly _applicationAssembly;
     private readonly Assembly _shaderAssembly;
     private readonly IPerformanceCaptureGitStatusProbe _gitStatusProbe;
@@ -299,8 +303,17 @@ internal sealed class PerformanceCaptureHostIdentityResolver
     internal static string ResolveShaderBundleHash(Assembly shaderAssembly)
     {
         ArgumentNullException.ThrowIfNull(shaderAssembly);
+        string? overrideDirectory = Environment.GetEnvironmentVariable(
+            ShaderOverrideDirectoryEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(overrideDirectory))
+            return ResolveEmbeddedShaderBundleHash(shaderAssembly);
+
         try
         {
+            overrideDirectory = Path.GetFullPath(overrideDirectory);
+            if (!Directory.Exists(overrideDirectory))
+                return "unavailable:shader-override-directory-not-found";
+
             string[] resourceNames = shaderAssembly.GetManifestResourceNames();
             Array.Sort(resourceNames, StringComparer.Ordinal);
 
@@ -322,7 +335,8 @@ internal sealed class PerformanceCaptureHostIdentityResolver
                 using Stream? stream = OpenEffectiveShaderStream(
                     shaderAssembly,
                     resourceName,
-                    shaderFileName);
+                    shaderFileName,
+                    overrideDirectory);
                 if (stream == null)
                     return "unavailable:shader-resource-missing";
 
@@ -355,6 +369,47 @@ internal sealed class PerformanceCaptureHostIdentityResolver
         }
     }
 
+    private static string ResolveEmbeddedShaderBundleHash(
+        Assembly shaderAssembly)
+    {
+        foreach (AssemblyMetadataAttribute attribute in
+                 shaderAssembly.GetCustomAttributes<AssemblyMetadataAttribute>())
+        {
+            if (!string.Equals(
+                    attribute.Key,
+                    ShaderBundleHashMetadataKey,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string value = attribute.Value?.Trim().ToLowerInvariant() ??
+                           string.Empty;
+            if (value.Length == 71 &&
+                value.StartsWith("sha256:", StringComparison.Ordinal) &&
+                IsLowerHex(value.AsSpan(7)))
+            {
+                return value;
+            }
+            return "unavailable:shader-bundle-hash-metadata-invalid";
+        }
+
+        return "unavailable:shader-bundle-hash-not-embedded";
+    }
+
+    private static bool IsLowerHex(ReadOnlySpan<char> value)
+    {
+        foreach (char character in value)
+        {
+            if (character is not (>= '0' and <= '9') and
+                not (>= 'a' and <= 'f'))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     internal static string ResolveTargetFramework(Assembly applicationAssembly)
     {
         string? framework = applicationAssembly
@@ -368,49 +423,18 @@ internal sealed class PerformanceCaptureHostIdentityResolver
     private static Stream? OpenEffectiveShaderStream(
         Assembly shaderAssembly,
         string resourceName,
-        string shaderFileName)
+        string shaderFileName,
+        string overrideDirectory)
     {
-        foreach (string candidate in GetShaderFileCandidates(shaderFileName))
-        {
-            if (File.Exists(candidate))
-                return new FileStream(
-                    candidate,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.Read);
-        }
+        string candidate = Path.Combine(overrideDirectory, shaderFileName);
+        if (File.Exists(candidate))
+            return new FileStream(
+                candidate,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read);
 
         return shaderAssembly.GetManifestResourceStream(resourceName);
-    }
-
-    private static IEnumerable<string> GetShaderFileCandidates(
-        string shaderFileName)
-    {
-        string baseDirectory = AppContext.BaseDirectory;
-        yield return Path.Combine(baseDirectory, "Shaders", shaderFileName);
-        yield return Path.Combine(baseDirectory, shaderFileName);
-
-        DirectoryInfo? directory = new(baseDirectory);
-        while (directory != null)
-        {
-            yield return Path.Combine(
-                directory.FullName,
-                "Njulf.Shaders",
-                "bin",
-                "Debug",
-                "net10.0",
-                "Shaders",
-                shaderFileName);
-            yield return Path.Combine(
-                directory.FullName,
-                "Njulf.Shaders",
-                "bin",
-                "Release",
-                "net10.0",
-                "Shaders",
-                shaderFileName);
-            directory = directory.Parent;
-        }
     }
 
     private static void AppendHashText(IncrementalHash hash, string value)
